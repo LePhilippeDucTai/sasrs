@@ -14,7 +14,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/parser/mod.rs` — StatementStream, découpeur de blocs, récupération d'erreur (Opus, élevé)
 - [x] `src/parser/expr.rs` — Pratt, précédence SAS, littéraux date, missings `.a` (Opus, élevé)
 - [ ] `src/parser/datastep.rs` — statements M1 (Opus, moyen)
-- [ ] ⫽ `src/parser/global.rs` — LIBNAME/TITLE/OPTIONS (Sonnet, faible)
+- [x] ⫽ `src/parser/global.rs` — LIBNAME/TITLE/OPTIONS (Sonnet, faible)
 - [ ] `src/datastep/pdv.rs` — PDV (Sonnet, moyen)
 - [ ] `src/datastep/mod.rs` — compilation PDV, inférence types (Fable, élevé)
 - [ ] `src/datastep/eval.rs` — évaluateur, coercitions (Opus, moyen-élevé)
