@@ -135,10 +135,16 @@ pub struct LengthSpec {
 /// M2+ ajoutera DO iterative, ARRAY, MERGE, BY...).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsStmt {
-    /// `set lib.a;` / `set lib.a(keep=... drop=... rename=(...)
-    /// where=(...));` — un seul dataset en M2 (plusieurs → erreur "not yet
-    /// implemented").
-    Set(DatasetSpec),
+    /// `set lib.a [lib.b ...];` — un ou plusieurs datasets, chacun avec
+    /// ses options `(keep=... drop=... rename=(...) where=(...))`. Sans
+    /// BY, plusieurs datasets = CONCATÉNATION (a en entier puis b) ; avec
+    /// BY = INTERCLASSEMENT (M3).
+    Set(Vec<DatasetSpec>),
+    /// `by [descending] v1 [descending] v2 ...;` — clés d'interclassement
+    /// du SET (M3). Chaque paire = (nom, descending). Le statement est
+    /// purement déclaratif : la sémantique (tri, FIRST./LAST.) est résolue
+    /// à la compilation/exécution.
+    By(Vec<(String, bool)>),
     Assign {
         var: String,
         expr: Expr,

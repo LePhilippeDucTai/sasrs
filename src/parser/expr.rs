@@ -320,6 +320,33 @@ fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
         TokenKind::Ident(name) => {
             let name = name.clone();
             ts.next();
+            // `first.var` / `last.var` (insensible casse) : variables
+            // automatiques de groupe BY → `Expr::Var("FIRST.<VAR>")`, nom
+            // canonique MAJUSCULE. L'adjacence des tokens n'est PAS requise
+            // (SAS tolère `first. age`). Tout AUTRE ident suivi d'un `.`
+            // reste une erreur de syntaxe (pas de lib.member en expression) :
+            // le `.` non consommé fait échouer l'appelant.
+            if ts.peek().kind == TokenKind::Dot
+                && (name.eq_ignore_ascii_case("first") || name.eq_ignore_ascii_case("last"))
+            {
+                ts.next(); // `.`
+                let var_tok = ts.peek().clone();
+                let Some(v) = var_tok.ident().map(str::to_string) else {
+                    return Err(SasError::parse(
+                        format!(
+                            "expected a BY variable name after {}.",
+                            name.to_uppercase()
+                        ),
+                        var_tok.span,
+                    ));
+                };
+                ts.next();
+                return Ok(Expr::Var(format!(
+                    "{}.{}",
+                    name.to_uppercase(),
+                    v.to_uppercase()
+                )));
+            }
             match ts.peek().kind {
                 TokenKind::LParen => parse_call(ts, name),
                 // `arr{i}` / `arr[i]` : référence d'array indexée. La forme
@@ -587,6 +614,40 @@ mod tests {
     }
     fn var(s: &str) -> Expr {
         Expr::Var(s.to_string())
+    }
+
+    #[test]
+    fn first_last_dot_become_canonical_vars() {
+        // Insensible à la casse, nom canonique MAJUSCULE.
+        assert_eq!(ok("first.grp"), var("FIRST.GRP"));
+        assert_eq!(ok("LAST.Age"), var("LAST.AGE"));
+        // L'adjacence n'est pas requise.
+        assert_eq!(ok("first . grp"), var("FIRST.GRP"));
+        // Combinable dans une expression.
+        assert_eq!(
+            ok("first.grp and last.grp"),
+            bin(BinaryOp::And, var("FIRST.GRP"), var("LAST.GRP"))
+        );
+        // `first` seul reste une variable ordinaire ; `first(x)` un appel.
+        assert_eq!(ok("first"), var("first"));
+        assert_eq!(
+            ok("first(x)"),
+            Expr::Call {
+                name: "first".to_string(),
+                args: vec![var("x")],
+            }
+        );
+    }
+
+    #[test]
+    fn other_ident_followed_by_dot_is_not_merged() {
+        // Pas de lib.member en expression : seul `lib` est consommé — le
+        // `.` orphelin fera échouer le statement appelant (expect_semi),
+        // cf. test côté parser de l'étape DATA.
+        assert_eq!(ok("lib.member"), var("lib"));
+        // FIRST. sans nom de variable : erreur dédiée.
+        let err = parse("first. + 1").unwrap_err();
+        assert!(err.to_string().contains("BY variable"), "got: {err}");
     }
 
     #[test]

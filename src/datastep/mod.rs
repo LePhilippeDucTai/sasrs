@@ -53,7 +53,15 @@
 //! - `put(x, fmt)` : largeur = chiffres finaux du nom de format si
 //!   disponibles, sinon 200 (le parser M1 ne sait pas encore produire un
 //!   littéral de format ; best-effort documenté).
-//! - Un seul SET par étape en M1 ; le second → erreur "not yet implemented".
+//! - Un seul statement SET par étape (le second → erreur "not yet
+//!   implemented"), mais un SET peut lister PLUSIEURS datasets (M3) : le
+//!   PDV reçoit l'UNION de leurs variables en ordre de première
+//!   apparition ; une variable présente avec des types incompatibles →
+//!   ERROR "Variable X has been defined as both character and numeric.".
+//!   Le statement BY est résolu en fin de compilation (`build_input`) :
+//!   chaque clé doit exister dans CHAQUE dataset du SET, et toute
+//!   référence FIRST.x/LAST.x exige que x soit une clé BY. FIRST./LAST.
+//!   ne créent jamais de slot PDV (comme _N_/_ERROR_).
 
 pub mod eval;
 pub mod exec;
@@ -68,8 +76,8 @@ use crate::value::{Value, VarType};
 use pdv::{Pdv, PdvVar};
 use std::collections::{HashMap, HashSet};
 
-/// Données d'entrée matérialisées (M2 : un seul SET).
-pub struct InputData {
+/// Un dataset matérialisé d'un statement SET.
+pub struct InputDataset {
     /// "WORK.B" pour les NOTEs du log.
     pub display: String,
     /// Colonnes décodées en `Value` (via `missing::num_to_value`), une
@@ -80,14 +88,40 @@ pub struct InputData {
     /// Slot PDV de chaque colonne (parallèle à `columns`).
     pub var_slots: Vec<usize>,
     pub n_rows: usize,
-    /// `WHERE=` du SET : évalué à l'EXÉCUTION après chargement de chaque
-    /// ligne dans le PDV ; une ligne qui échoue est sautée SANS exécuter le
-    /// reste de l'itération et ne compte PAS dans les observations lues
-    /// (comme la NOTE SAS "There were N observations read"). NB : comme
-    /// l'évaluation se fait sur le PDV, un WHERE= combiné à RENAME=
-    /// référence les NOUVEAUX noms (divergence documentée — SAS applique
-    /// WHERE= avant RENAME= en entrée).
+    /// `WHERE=` du SET : sans BY, évalué à l'EXÉCUTION après chargement de
+    /// chaque ligne dans le PDV ; une ligne qui échoue est sautée SANS
+    /// exécuter le reste de l'itération et ne compte PAS dans les
+    /// observations lues (comme la NOTE SAS "There were N observations
+    /// read"). Avec BY, le filtre est PRÉ-APPLIQUÉ par l'exécuteur avant
+    /// l'interclassement (mêmes règles). NB : comme l'évaluation se fait
+    /// sur le PDV, un WHERE= combiné à RENAME= référence les NOUVEAUX noms
+    /// (divergence documentée — SAS applique WHERE= avant RENAME= en
+    /// entrée).
     pub where_: Option<Expr>,
+    /// Index dans `columns` de chaque variable BY (parallèle à
+    /// `InputData::by`) ; vide sans BY. Chaque variable BY doit exister
+    /// dans CHAQUE dataset du SET (vérifié à la compilation).
+    pub by_cols: Vec<usize>,
+}
+
+/// Une clé du statement BY, résolue à la compilation.
+pub struct ByVar {
+    /// Nom canonique MAJUSCULE (sert les variables FIRST.x / LAST.x).
+    pub name: String,
+    /// Slot PDV de la variable.
+    pub slot: usize,
+    pub descending: bool,
+}
+
+/// Données d'entrée matérialisées du statement SET (M3 : un ou plusieurs
+/// datasets, BY optionnel).
+pub struct InputData {
+    /// Les datasets, dans l'ordre du statement SET. Sans BY, ils sont lus
+    /// en CONCATÉNATION (le premier en entier, puis le suivant) ; avec BY,
+    /// en INTERCLASSEMENT par clés croissantes (cf. exec.rs).
+    pub datasets: Vec<InputDataset>,
+    /// Clés du BY (vide = pas de BY).
+    pub by: Vec<ByVar>,
 }
 
 /// Une sortie : où écrire et quels slots du PDV.
@@ -130,7 +164,10 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     let mut c = Compiler {
         pdv: Pdv::new(),
         session,
-        input: None,
+        input_datasets: Vec::new(),
+        seen_set: false,
+        by: None,
+        first_last_refs: Vec::new(),
         keeps: Vec::new(),
         drops: Vec::new(),
         output_displays: ast.outputs.iter().map(|s| s.display()).collect(),
@@ -176,6 +213,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         c.pdv = rebuild_with_retained(&c.pdv, &c.retained_slots);
     }
 
+    let input = c.build_input()?;
     let outputs = c.resolve_outputs(&ast.outputs)?;
     let uninitialized = c
         .pdv
@@ -187,7 +225,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     Ok(StepProgram {
         pdv: c.pdv,
         stmts: ast.stmts.clone(),
-        input: c.input,
+        input,
         outputs,
         has_explicit_output: c.has_explicit_output,
         uninitialized,
@@ -217,7 +255,17 @@ fn rebuild_with_retained(pdv: &Pdv, retained: &HashSet<usize>) -> Pdv {
 struct Compiler<'a> {
     pdv: Pdv,
     session: &'a mut Session,
-    input: Option<InputData>,
+    /// Datasets du SET, dans l'ordre du statement (vide = pas de SET).
+    input_datasets: Vec<InputDataset>,
+    /// Un statement SET a déjà été rencontré (un second → erreur).
+    seen_set: bool,
+    /// Items du statement BY `(nom, descending)` ; résolus en `ByVar` en
+    /// fin de compilation (un second BY écrase le premier).
+    by: Option<Vec<(String, bool)>>,
+    /// Noms canoniques "FIRST.X"/"LAST.X" référencés dans les expressions :
+    /// validés contre les variables BY en fin de compilation. Ils ne
+    /// créent JAMAIS de slot PDV (comme _N_/_ERROR_).
+    first_last_refs: Vec<String>,
     keeps: Vec<String>,
     drops: Vec<String>,
     /// Displays ("WORK.A") des sorties du statement DATA, pour valider les
@@ -242,7 +290,25 @@ struct Compiler<'a> {
 impl Compiler<'_> {
     fn walk_stmt(&mut self, stmt: &DsStmt) -> Result<()> {
         match stmt {
-            DsStmt::Set(r) => self.compile_set(r),
+            DsStmt::Set(specs) => {
+                if self.seen_set {
+                    return Err(SasError::runtime(
+                        "Multiple SET statements are not yet implemented.",
+                    ));
+                }
+                self.seen_set = true;
+                for spec in specs {
+                    self.compile_set(spec)?;
+                }
+                Ok(())
+            }
+            // BY : purement déclaratif ici ; résolu en fin de compilation
+            // (`build_input`). Les variables BY doivent venir des inputs —
+            // on ne crée donc AUCUN slot ici.
+            DsStmt::By(items) => {
+                self.by = Some(items.clone());
+                Ok(())
+            }
             DsStmt::Assign { var, expr } => {
                 // Un nom d'array n'est pas une variable : `arr = e;` est
                 // une référence illégale, pas la création d'une variable.
@@ -449,6 +515,15 @@ impl Compiler<'_> {
                 if upper == "_N_" || upper == "_ERROR_" {
                     return Ok(());
                 }
+                // FIRST.x / LAST.x : variables automatiques de groupe BY,
+                // servies par l'évaluateur depuis les flags du Runner —
+                // jamais de slot PDV (donc jamais écrites en sortie). On
+                // mémorise la référence pour la valider contre le BY en
+                // fin de compilation.
+                if upper.starts_with("FIRST.") || upper.starts_with("LAST.") {
+                    self.first_last_refs.push(upper);
+                    return Ok(());
+                }
                 if self.arrays.contains_key(&upper) {
                     return Err(SasError::runtime(format!(
                         "Illegal reference to the array {name}."
@@ -577,12 +652,10 @@ impl Compiler<'_> {
         }
     }
 
+    /// Compile UN dataset d'un statement SET : lecture, options de
+    /// dataset, entrée des variables au PDV (union en ordre de première
+    /// apparition), matérialisation des colonnes.
     fn compile_set(&mut self, spec: &DatasetSpec) -> Result<()> {
-        if self.input.is_some() {
-            return Err(SasError::runtime(
-                "Multiple SET statements are not yet implemented.",
-            ));
-        }
         let r = &spec.dref;
         let opts = &spec.options;
         let libref = r.libref_or_work();
@@ -649,6 +722,16 @@ impl Compiler<'_> {
                 .get(&upper)
                 .cloned()
                 .unwrap_or_else(|| meta.name.clone());
+            // Une variable déjà au PDV avec un type INCOMPATIBLE (présente
+            // dans un autre dataset du SET, ou référencée avant) → erreur
+            // de compilation, comme SAS.
+            if let Some(slot) = self.pdv.slot(&pdv_name) {
+                if self.pdv.vars()[slot].ty != meta.ty {
+                    return Err(SasError::runtime(format!(
+                        "Variable {pdv_name} has been defined as both character and numeric."
+                    )));
+                }
+            }
             let slot = self.pdv.add_var(PdvVar {
                 name: pdv_name,
                 ty: meta.ty,
@@ -684,14 +767,74 @@ impl Compiler<'_> {
             self.validate_where_vars(w, &r.display())?;
         }
 
-        self.input = Some(InputData {
+        self.input_datasets.push(InputDataset {
             display: r.display(),
             columns,
             var_slots,
             n_rows: ds.n_obs(),
             where_: opts.where_.clone(),
+            by_cols: Vec::new(),
         });
         Ok(())
+    }
+
+    /// Assemble l'`InputData` final : résolution des clés BY en slots PDV,
+    /// localisation de chaque clé dans CHAQUE dataset (`by_cols`),
+    /// validation des références FIRST./LAST. contre les variables BY.
+    fn build_input(&mut self) -> Result<Option<InputData>> {
+        let mut datasets = std::mem::take(&mut self.input_datasets);
+        let by_items = self.by.take();
+        if datasets.is_empty() {
+            // BY ou FIRST./LAST. sans SET : message SAS.
+            if by_items.is_some() || !self.first_last_refs.is_empty() {
+                return Err(SasError::runtime(
+                    "No SET, MERGE, UPDATE, or MODIFY statement.",
+                ));
+            }
+            return Ok(None);
+        }
+        let mut by: Vec<ByVar> = Vec::new();
+        if let Some(items) = by_items {
+            for (name, descending) in items {
+                let Some(slot) = self.pdv.slot(&name) else {
+                    return Err(SasError::runtime(format!(
+                        "BY variable {name} is not on input data set {}.",
+                        datasets[0].display
+                    )));
+                };
+                by.push(ByVar {
+                    name: name.to_uppercase(),
+                    slot,
+                    descending,
+                });
+            }
+            // Chaque variable BY doit exister dans CHAQUE dataset du SET
+            // (après keep=/drop=/rename=).
+            for ds in &mut datasets {
+                for bv in &by {
+                    let Some(pos) = ds.var_slots.iter().position(|&s| s == bv.slot) else {
+                        return Err(SasError::runtime(format!(
+                            "BY variable {} is not on input data set {}.",
+                            bv.name, ds.display
+                        )));
+                    };
+                    ds.by_cols.push(pos);
+                }
+            }
+        }
+        // FIRST.x / LAST.x : x doit être une variable BY.
+        for full in &self.first_last_refs {
+            let suffix = full
+                .split_once('.')
+                .map(|(_, s)| s)
+                .unwrap_or(full.as_str());
+            if !by.iter().any(|b| b.name == suffix) {
+                return Err(SasError::runtime(format!(
+                    "Variable {full} is not defined: {suffix} is not a BY variable."
+                )));
+            }
+        }
+        Ok(Some(InputData { datasets, by }))
     }
 
     /// Toute variable d'un WHERE= de SET doit déjà être au PDV (= une
@@ -996,13 +1139,15 @@ mod tests {
         assert_eq!(prog.pdv.vars()[1].length, 7);
 
         let input = prog.input.as_ref().unwrap();
-        assert_eq!(input.n_rows, 3);
-        assert_eq!(input.display, "WORK.INP");
-        assert_eq!(input.var_slots, vec![0, 1]);
+        assert!(input.by.is_empty());
+        let ds0 = &input.datasets[0];
+        assert_eq!(ds0.n_rows, 3);
+        assert_eq!(ds0.display, "WORK.INP");
+        assert_eq!(ds0.var_slots, vec![0, 1]);
         // Colonnes décodées en Value, missing `.` inclus.
-        assert_eq!(input.columns[0][0], Value::Num(14.0));
-        assert_eq!(input.columns[0][1], Value::missing());
-        assert_eq!(input.columns[1][2], Value::Char("Barbara".into()));
+        assert_eq!(ds0.columns[0][0], Value::Num(14.0));
+        assert_eq!(ds0.columns[0][1], Value::missing());
+        assert_eq!(ds0.columns[1][2], Value::Char("Barbara".into()));
 
         // Implicit output : pas de OUTPUT explicite.
         assert!(!prog.has_explicit_output);
@@ -1512,7 +1657,7 @@ mod tests {
         // Seule Name entre au PDV (Age filtrée AVANT le PDV).
         let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, vec!["Name"]);
-        let input = prog.input.as_ref().unwrap();
+        let input = &prog.input.as_ref().unwrap().datasets[0];
         assert_eq!(input.columns.len(), 1);
         assert_eq!(input.var_slots, vec![0]);
         assert_eq!(prog.outputs[0].kept_slots, vec![0]);
@@ -1545,7 +1690,7 @@ mod tests {
         let mut s = session();
         write_class(&s, "inp");
         let prog = compile_src("data o; set inp(where=(age > 13)); run;", &mut s).unwrap();
-        let input = prog.input.as_ref().unwrap();
+        let input = &prog.input.as_ref().unwrap().datasets[0];
         // Pas de filtrage à la compilation : toutes les lignes présentes.
         assert_eq!(input.n_rows, 3);
         assert!(input.where_.is_some());
@@ -1656,6 +1801,159 @@ mod tests {
             .unwrap();
         assert!(
             err.to_string().contains("has never been referenced"),
+            "got: {err}"
+        );
+    }
+
+    // ── SET multi-datasets + BY + FIRST./LAST. (M3) ──────────────────────
+
+    /// Petit dataset numérique (Age, Weight) pour les unions de variables.
+    fn write_weights(session: &Session, table: &str) {
+        let df = df!(
+            "Age" => [11.0, 12.0],
+            "Weight" => [50.0, 60.0],
+        )
+        .unwrap();
+        let vars = vec![
+            VarMeta {
+                name: "Age".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "Weight".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ];
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write(table, &SasDataset { df, vars })
+            .unwrap();
+    }
+
+    #[test]
+    fn set_two_datasets_union_of_variables_in_first_appearance_order() {
+        let mut s = session();
+        write_class(&s, "a"); // Age, Name
+        write_weights(&s, "b"); // Age, Weight
+        let prog = compile_src("data o; set a b; run;", &mut s).unwrap();
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        // Variables de a, puis les NOUVELLES de b.
+        assert_eq!(names, vec!["Age", "Name", "Weight"]);
+        assert!(prog.pdv.vars().iter().all(|v| v.from_input));
+        let input = prog.input.as_ref().unwrap();
+        assert_eq!(input.datasets.len(), 2);
+        assert!(input.by.is_empty());
+        // Age de b pointe le slot partagé 0.
+        assert_eq!(input.datasets[1].var_slots, vec![0, 2]);
+    }
+
+    #[test]
+    fn first_last_have_no_pdv_slot_and_by_is_resolved() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let prog = compile_src(
+            "data o; set inp; by age; f = first.age; l = last.age; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Pas de slot PDV pour FIRST./LAST. (comme _N_/_ERROR_) : ni
+        // colonne de sortie ni NOTE uninitialized.
+        assert!(prog.pdv.slot("FIRST.AGE").is_none());
+        assert!(prog.pdv.slot("LAST.AGE").is_none());
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["Age", "Name", "f", "l"]);
+        assert!(prog.uninitialized.is_empty());
+        let input = prog.input.as_ref().unwrap();
+        assert_eq!(input.by.len(), 1);
+        assert_eq!(input.by[0].name, "AGE");
+        assert_eq!(input.by[0].slot, 0);
+        assert!(!input.by[0].descending);
+        assert_eq!(input.datasets[0].by_cols, vec![0]);
+    }
+
+    #[test]
+    fn incompatible_types_across_set_datasets_error() {
+        let mut s = session();
+        write_class(&s, "a"); // Age numérique
+        // Dataset où Age est CARACTÈRE.
+        let df = df!("Age" => ["x", "y"]).unwrap();
+        let vars = vec![VarMeta {
+            name: "Age".into(),
+            ty: VarType::Char,
+            length: 1,
+            format: None,
+            label: None,
+        }];
+        s.libs
+            .get("WORK")
+            .unwrap()
+            .write("cage", &SasDataset { df, vars })
+            .unwrap();
+        let err = compile_src("data o; set a cage; run;", &mut s).err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "Variable Age has been defined as both character and numeric."
+        );
+    }
+
+    #[test]
+    fn by_without_set_errors() {
+        let mut s = session();
+        let err = compile_src("data o; by x; x = 1; run;", &mut s).err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "No SET, MERGE, UPDATE, or MODIFY statement."
+        );
+    }
+
+    #[test]
+    fn by_variable_missing_from_one_dataset_errors() {
+        let mut s = session();
+        write_class(&s, "a"); // Age, Name
+        write_weights(&s, "b"); // Age, Weight (pas de Name)
+        let err = compile_src("data o; set a b; by name; run;", &mut s)
+            .err()
+            .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "BY variable NAME is not on input data set WORK.B."
+        );
+        // Variable BY absente de TOUS les inputs.
+        let err = compile_src("data o; set a; by nosuch; run;", &mut s)
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("BY variable nosuch is not on input data set"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn first_last_on_non_by_variable_errors() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // Pas de BY du tout.
+        let err = compile_src("data o; set inp; f = first.age; run;", &mut s)
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("AGE is not a BY variable"),
+            "got: {err}"
+        );
+        // BY présent mais sur une autre variable.
+        let err = compile_src("data o; set inp; by age; f = last.name; run;", &mut s)
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("NAME is not a BY variable"),
             "got: {err}"
         );
     }

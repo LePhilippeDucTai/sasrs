@@ -50,6 +50,11 @@ pub struct EvalCtx {
     /// Arrays 1-D de l'étape : nom UPPERCASE → slots PDV des éléments
     /// (copié depuis `StepProgram.arrays` par l'exécuteur).
     pub arrays: HashMap<String, Vec<usize>>,
+    /// Flags de groupe BY `(nom UPPERCASE, first, last)`, dans l'ordre du
+    /// BY — mis à jour par le Runner à chaque observation servie par
+    /// l'interclassement. Servent les variables automatiques FIRST.x /
+    /// LAST.x (jamais de slot PDV, donc jamais écrites en sortie).
+    pub by_flags: Vec<(String, bool, bool)>,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,
@@ -164,6 +169,31 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     }
     if upper == "_ERROR_" {
         return Value::Num(if pdv.error_ { 1.0 } else { 0.0 });
+    }
+    // FIRST.x / LAST.x : servies depuis les flags BY du contexte (0/1).
+    // La compilation a validé que x est une variable BY ; un nom inconnu
+    // ici est un garde-fou.
+    if let Some(var) = upper.strip_prefix("FIRST.") {
+        return match ctx.by_flags.iter().find(|(n, _, _)| n == var) {
+            Some((_, first, _)) => Value::Num(if *first { 1.0 } else { 0.0 }),
+            None => {
+                ctx.fatal = Some(format!(
+                    "ERROR: Variable {name} is not on the program data vector."
+                ));
+                Value::missing()
+            }
+        };
+    }
+    if let Some(var) = upper.strip_prefix("LAST.") {
+        return match ctx.by_flags.iter().find(|(n, _, _)| n == var) {
+            Some((_, _, last)) => Value::Num(if *last { 1.0 } else { 0.0 }),
+            None => {
+                ctx.fatal = Some(format!(
+                    "ERROR: Variable {name} is not on the program data vector."
+                ));
+                Value::missing()
+            }
+        };
     }
     match pdv.slot(name) {
         Some(slot) => pdv.get(slot).clone(),

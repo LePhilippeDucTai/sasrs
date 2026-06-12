@@ -10,10 +10,10 @@
 //! `data _null_;` → zéro sortie (reconnaître `_NULL_`, insensible casse).
 //!
 //! ## Statements du corps (boucle jusqu'à `run;` ou frontière implicite)
-//! - `set spec ;`                 → `DsStmt::Set` (M2 : un seul dataset,
-//!                                  options de dataset acceptées ;
-//!                                  plusieurs → ERROR "not yet
-//!                                  implemented")
+//! - `set spec [spec]* ;`         → `DsStmt::Set` (M3 : un ou plusieurs
+//!                                  datasets, options de dataset
+//!                                  acceptées sur chacun)
+//! - `by [descending] v ... ;`    → `DsStmt::By` (M3)
 //! - `ident = expr ;`             → `DsStmt::Assign`
 //! - `if expr then stmt [else stmt]` → `DsStmt::If` ; les branches sont
 //!   UN statement (récunsion sur le parseur de statement) ; `do; ...
@@ -53,8 +53,8 @@
 //! par robustesse, mais DATA emploie `run;`.
 //!
 //! ### Resynchronisation sur erreur
-//! Une erreur dans le corps (statement non implémenté, syntaxe invalide,
-//! `set` multi-dataset, `do` itératif...) n'interrompt PAS le parsing : on
+//! Une erreur dans le corps (statement non implémenté, syntaxe
+//! invalide...) n'interrompt PAS le parsing : on
 //! mémorise la première erreur rencontrée puis on saute jusqu'au `;` du
 //! statement fautif (`skip_to_semi`) et on poursuit la boucle. Ainsi, à la
 //! fin, le stream est positionné APRÈS le `run;` (ou sur la frontière
@@ -196,6 +196,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
 
     match head.as_str() {
         "set" => parse_set(ts),
+        "by" => parse_by(ts),
         "if" => parse_if(ts),
         "do" => parse_do(ts),
         "output" => {
@@ -311,27 +312,78 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
     }
 }
 
-/// `set spec ;` — M2 : exactement un dataset, options de dataset acceptées.
+/// `set spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
+/// options de dataset.
 fn parse_set(ts: &mut StatementStream) -> Result<DsStmt> {
     let set_tok = ts.peek().clone();
     ts.next(); // `set`
     if ts.peek().kind == TokenKind::Semi {
-        // `set;` sans dataset : non supporté en M2.
+        // `set;` sans dataset : non supporté.
         return Err(SasError::parse(
             "Statement SET without a dataset is not yet implemented.",
             set_tok.span,
         ));
     }
-    let ds = ts.parse_dataset_spec()?;
-    // Un seul dataset : le token suivant doit être `;`.
-    if ts.peek().kind != TokenKind::Semi {
-        return Err(SasError::parse(
-            "SET with multiple datasets is not yet implemented.",
-            ts.peek().span,
-        ));
+    let mut specs = Vec::new();
+    while ts.peek().ident().is_some() {
+        specs.push(ts.parse_dataset_spec()?);
     }
     ts.expect_semi()?;
-    Ok(DsStmt::Set(ds))
+    Ok(DsStmt::Set(specs))
+}
+
+/// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le
+/// mot-clé DESCENDING s'applique à la variable qui le SUIT. La validité
+/// (présence d'un SET, variables sur les inputs) est tranchée à la
+/// compilation.
+fn parse_by(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `by`
+    let mut items: Vec<(String, bool)> = Vec::new();
+    let mut descending = false;
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                if descending {
+                    return Err(SasError::parse(
+                        "expected a variable name after DESCENDING in the BY statement",
+                        tok.span,
+                    ));
+                }
+                if items.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a variable name in the BY statement",
+                        tok.span,
+                    ));
+                }
+                ts.next();
+                return Ok(DsStmt::By(items));
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                if name.eq_ignore_ascii_case("descending") {
+                    if descending {
+                        return Err(SasError::parse(
+                            "expected a variable name after DESCENDING in the BY statement",
+                            tok.span,
+                        ));
+                    }
+                    descending = true;
+                } else {
+                    validate_sas_name(&name, tok.span)?;
+                    items.push((name, descending));
+                    descending = false;
+                }
+                ts.next();
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name in the BY statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
 }
 
 /// `if expr then stmt [else stmt]` ou `if expr ;` (subsetting).
@@ -1013,7 +1065,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dspec("inp")),
+                DsStmt::Set(vec![dspec("inp")]),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -1143,7 +1195,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dspec("i")),
+                DsStmt::Set(vec![dspec("i")]),
                 DsStmt::Output(vec![]),
                 DsStmt::Keep(vec!["a".to_string(), "b".to_string()]),
                 DsStmt::Drop(vec!["c".to_string()]),
@@ -1153,9 +1205,90 @@ mod tests {
     }
 
     #[test]
-    fn set_two_datasets_errors() {
-        let err = parse("data o; set a b; run;").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+    fn set_two_datasets_parses() {
+        let ast = parse("data o; set a lib.b; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Set(vec![
+                dspec("a"),
+                DatasetSpec::plain(DatasetRef {
+                    libref: Some("lib".to_string()),
+                    name: "b".to_string(),
+                }),
+            ])]
+        );
+    }
+
+    // ── BY + FIRST./LAST. (M3) ───────────────────────────────────────────
+
+    #[test]
+    fn by_single_variable() {
+        let ast = parse("data o; set a b; by x; run;").unwrap();
+        assert_eq!(ast.stmts.len(), 2);
+        assert_eq!(ast.stmts[1], DsStmt::By(vec![("x".to_string(), false)]));
+    }
+
+    #[test]
+    fn by_two_variables_with_descending() {
+        let ast = parse("data o; set a; by grp descending age; run;").unwrap();
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::By(vec![
+                ("grp".to_string(), false),
+                ("age".to_string(), true),
+            ])
+        );
+        // DESCENDING ne porte que sur la variable qui le SUIT.
+        let ast = parse("data o; set a; by descending grp age; run;").unwrap();
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::By(vec![
+                ("grp".to_string(), true),
+                ("age".to_string(), false),
+            ])
+        );
+    }
+
+    #[test]
+    fn by_without_set_parses() {
+        // Accepté au parse : c'est la compilation qui tranche.
+        let ast = parse("data o; by x; run;").unwrap();
+        assert_eq!(ast.stmts, vec![DsStmt::By(vec![("x".to_string(), false)])]);
+    }
+
+    #[test]
+    fn by_trailing_descending_or_empty_errors() {
+        let err = parse("data o; set a; by x descending; run;").unwrap_err();
+        assert!(err.to_string().contains("DESCENDING"), "got: {err}");
+        let err = parse("data o; set a; by; run;").unwrap_err();
+        assert!(err.to_string().contains("variable name"), "got: {err}");
+    }
+
+    #[test]
+    fn first_last_in_expressions() {
+        let ast = parse("data o; set a; by grp; if first.grp then n = 0; run;").unwrap();
+        let DsStmt::If { cond, .. } = &ast.stmts[2] else {
+            panic!("expected an IF statement");
+        };
+        // Nom canonique MAJUSCULE "FIRST.<VAR>".
+        assert_eq!(*cond, var("FIRST.GRP"));
+        let ast = parse("data o; set a; by grp; l = Last.Grp; run;").unwrap();
+        assert_eq!(
+            ast.stmts[2],
+            DsStmt::Assign {
+                var: "l".to_string(),
+                expr: var("LAST.GRP"),
+            }
+        );
+    }
+
+    #[test]
+    fn lib_member_in_expression_is_an_error() {
+        // Un ident autre que first/last suivi de `.ident` n'est pas une
+        // référence valide en expression : le `.` orphelin fait échouer le
+        // statement.
+        let err = parse("data o; x = a.b; run;").unwrap_err();
+        assert!(err.to_string().contains("';'"), "got: {err}");
     }
 
     #[test]
@@ -1329,13 +1462,13 @@ mod tests {
         assert!(ts.next().is_kw("data"));
         let ast1 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast1.outputs, vec![dspec("a")]);
-        assert_eq!(ast1.stmts, vec![DsStmt::Set(dspec("x"))]);
+        assert_eq!(ast1.stmts, vec![DsStmt::Set(vec![dspec("x")])]);
         // Frontière implicite : `data` non consommé.
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast2.outputs, vec![dspec("b")]);
-        assert_eq!(ast2.stmts, vec![DsStmt::Set(dspec("y"))]);
+        assert_eq!(ast2.stmts, vec![DsStmt::Set(vec![dspec("y")])]);
     }
 
     // ── DO itératif / conditionnel (M2) ──────────────────────────────────
@@ -1698,7 +1831,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dspec("i")),
+                DsStmt::Set(vec![dspec("i")]),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -1757,9 +1890,10 @@ mod tests {
             "data o; set inp(keep=name age where=(age > 13) rename=(age=years)); run;",
         )
         .unwrap();
-        let DsStmt::Set(spec) = &ast.stmts[0] else {
+        let DsStmt::Set(specs) = &ast.stmts[0] else {
             panic!("expected a SET statement");
         };
+        let spec = &specs[0];
         assert_eq!(spec.dref, dsref("inp"));
         assert_eq!(
             spec.options.keep,
@@ -1783,9 +1917,10 @@ mod tests {
         );
         // Plage numérotée, forme nue.
         let ast = parse("data o; set i(drop=v1-v3 keep=w); run;").unwrap();
-        let DsStmt::Set(spec) = &ast.stmts[0] else {
+        let DsStmt::Set(specs) = &ast.stmts[0] else {
             panic!("expected a SET statement");
         };
+        let spec = &specs[0];
         assert_eq!(
             spec.options.drop,
             Some(vec!["v1".to_string(), "v2".to_string(), "v3".to_string()])
@@ -1849,8 +1984,13 @@ mod tests {
     }
 
     #[test]
-    fn set_options_then_second_dataset_errors() {
-        let err = parse("data o; set a(keep=x) b; run;").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    fn set_options_then_second_dataset_parses() {
+        let ast = parse("data o; set a(keep=x) b; run;").unwrap();
+        let DsStmt::Set(specs) = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].options.keep, Some(vec!["x".to_string()]));
+        assert_eq!(specs[1], dspec("b"));
     }
 }

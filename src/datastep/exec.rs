@@ -2,7 +2,7 @@
 //!
 //! # Plan du fichier — voir PLAN.md  (difficulté : ÉLEVÉE — cœur du langage)
 //!
-//! ## Boucle implicite (M1, un seul SET)
+//! ## Boucle implicite
 //! ```text
 //! boucle :
 //!   pdv.n_ += 1
@@ -15,6 +15,28 @@
 //! ```
 //! Étape SANS instruction de lecture (ni SET) : UNE seule itération puis
 //! stop (sinon boucle infinie — règle SAS).
+//!
+//! ## SET multi-datasets + BY (M3)
+//! - Sans BY : CONCATÉNATION — chaque exécution du SET sert la ligne
+//!   suivante du dataset courant, puis passe au dataset suivant ; tous
+//!   épuisés → EndStep. WHERE= est évalué à la volée (skip interne).
+//! - Avec BY : INTERCLASSEMENT — à chaque exécution, parmi les datasets
+//!   non épuisés, servir celui dont la tête porte la PLUS PETITE clé BY
+//!   (`Value::sas_cmp` clé par clé, DESCENDING respecté ; égalité →
+//!   l'ordre du statement SET). Les WHERE= sont PRÉ-APPLIQUÉS avant la
+//!   boucle (cf. `Runner::prefilter` — divergence mineure : leurs NOTEs
+//!   de conversion peuvent couvrir des lignes jamais servies, et le
+//!   `_ERROR_` qu'ils lèveraient n'est pas reporté à l'itération).
+//! - RETAIN implicite des variables de SET : une variable absente du
+//!   dataset de l'obs courante GARDE sa valeur précédente (SAS ne la
+//!   remet PAS à missing) ; elle reste missing avant sa première lecture.
+//! - FIRST.v_i / LAST.v_i : recalculés à chaque obs servie en comparant
+//!   le PRÉFIXE de clés 0..=i avec l'obs précédente (FIRST.) et la tête
+//!   suivante de l'interclassement (LAST.) ; 1 aux bornes du step. Servis
+//!   par `EvalCtx::by_flags`, jamais écrits en sortie.
+//! - Désordre : la clé servie ne peut que croître ; si elle régresse
+//!   (input non trié selon le BY), ERROR "BY variables are not properly
+//!   sorted on data set X." et l'étape s'arrête.
 //!
 //! ## Flux de contrôle intra-itération
 //! `enum Flow { Normal, NextIter, EndStep }` :
@@ -77,7 +99,7 @@
 
 use super::eval::{coerce_num, eval, EvalCtx};
 use super::pdv::Pdv;
-use super::{InputData, OutputSpec, StepProgram};
+use super::{ByVar, InputData, InputDataset, OutputSpec, StepProgram};
 use crate::ast::DsStmt;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
@@ -85,6 +107,7 @@ use crate::missing::value_to_num;
 use crate::session::Session;
 use crate::value::{format_best, Value, VarType};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
+use std::cmp::Ordering;
 
 pub struct StepStats {
     /// (display, lignes lues) par input.
@@ -108,13 +131,22 @@ enum ColBuilder {
 struct Runner {
     pdv: Pdv,
     input: Option<InputData>,
-    /// Prochaine ligne d'input à lire (lignes CHARGÉES, y compris celles
-    /// rejetées par WHERE=).
-    row_idx: usize,
-    /// Lignes lues au sens SAS : celles qui PASSENT le WHERE= (sans
-    /// WHERE=, identique à `row_idx`). C'est ce compteur qu'affiche la
-    /// NOTE "There were N observations read".
-    rows_read: usize,
+    /// Mode CONCATÉNATION (sans BY) : index du dataset en cours de lecture.
+    cur_ds: usize,
+    /// Curseur PAR dataset : sans BY, prochaine ligne brute à charger (y
+    /// compris celles rejetées par WHERE=) ; avec BY, position dans
+    /// `filtered`.
+    cursors: Vec<usize>,
+    /// Mode INTERCLASSEMENT (avec BY) : indices des lignes qui passent le
+    /// WHERE= (pré-filtrage), par dataset. Sans WHERE=, toutes les lignes.
+    filtered: Vec<Vec<usize>>,
+    /// Clés BY de la dernière observation servie : FIRST. et détection de
+    /// désordre.
+    prev_keys: Option<Vec<Value>>,
+    /// Lignes lues au sens SAS, PAR dataset : celles qui PASSENT le WHERE=.
+    /// C'est ce compteur qu'affiche la NOTE "There were N observations
+    /// read".
+    rows_read: Vec<usize>,
     ctx: EvalCtx,
     outputs: Vec<OutputSpec>,
     /// builders[output][colonne], parallèle à outputs[o].kept_slots.
@@ -154,21 +186,42 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         .collect();
 
     let single_iteration = input.is_none();
-    let n_rows = input.as_ref().map_or(0, |i| i.n_rows);
+    let n_rows: usize = input
+        .as_ref()
+        .map_or(0, |i| i.datasets.iter().map(|d| d.n_rows).sum());
+    let n_datasets = input.as_ref().map_or(0, |i| i.datasets.len());
+    // FIRST./LAST. valent 1 tant qu'aucune observation n'a été servie.
+    let by_flags = input
+        .as_ref()
+        .map_or(Vec::new(), |i| {
+            i.by.iter().map(|b| (b.name.clone(), true, true)).collect()
+        });
     let n_outputs = outputs.len();
     let mut r = Runner {
         pdv,
         input,
-        row_idx: 0,
-        rows_read: 0,
+        cur_ds: 0,
+        cursors: vec![0; n_datasets],
+        filtered: vec![Vec::new(); n_datasets],
+        prev_keys: None,
+        rows_read: vec![0; n_datasets],
         ctx: EvalCtx {
             arrays,
+            by_flags,
             ..EvalCtx::default()
         },
         outputs,
         builders,
         out_rows: vec![0; n_outputs],
     };
+
+    // Interclassement : pré-application des WHERE= par dataset (les
+    // lignes rejetées ne comptent pas comme lues), AVANT la boucle. Les
+    // NOTEs de conversion d'un WHERE= peuvent donc être émises pour des
+    // lignes jamais atteintes (STOP précoce) — divergence mineure assumée.
+    if r.input.as_ref().is_some_and(|i| !i.by.is_empty()) {
+        r.prefilter()?;
+    }
 
     // Valeurs initiales (RETAIN avec init, sum statements) : posées AVANT
     // la première itération via `pdv.set` (la troncature char des inits
@@ -238,12 +291,15 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     };
     if let Some(input) = &r.input {
         // Avec WHERE=, seules les lignes qui PASSENT comptent comme lues
-        // (fidèle à la NOTE SAS).
-        session.log.note(&format!(
-            "There were {} observations read from the data set {}.",
-            r.rows_read, input.display
-        ));
-        stats.read.push((input.display.clone(), r.rows_read));
+        // (fidèle à la NOTE SAS). Une NOTE par dataset, dans l'ordre du
+        // statement SET.
+        for (ds, n) in input.datasets.iter().zip(&r.rows_read) {
+            session.log.note(&format!(
+                "There were {} observations read from the data set {}.",
+                n, ds.display
+            ));
+            stats.read.push((ds.display.clone(), *n));
+        }
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).
@@ -293,38 +349,10 @@ impl Runner {
                     // Impossible après compile() ; garde-fou.
                     return Err(SasError::runtime("SET statement without input data."));
                 };
-                // Boucle de skip interne au SET : charge des lignes jusqu'à
-                // en trouver une qui passe le WHERE= (faux/missing → ligne
-                // suivante SANS exécuter le reste de l'itération). Les
-                // lignes rejetées ne comptent pas dans `rows_read`.
-                loop {
-                    if self.row_idx >= input.n_rows {
-                        // Fin de l'input : l'étape se termine IMMÉDIATEMENT.
-                        return Ok(Flow::EndStep);
-                    }
-                    for (col, slot) in input.columns.iter().zip(&input.var_slots) {
-                        self.pdv.set(*slot, col[self.row_idx].clone());
-                    }
-                    self.row_idx += 1;
-                    let Some(w) = &input.where_ else {
-                        self.rows_read += 1;
-                        return Ok(Flow::Normal);
-                    };
-                    // Évaluation inline (emprunts disjoints : `input` tient
-                    // self.input, eval n'utilise que pdv et ctx).
-                    let v = eval(w, &self.pdv, &mut self.ctx);
-                    if let Some(msg) = self.ctx.fatal.take() {
-                        let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-                        return Err(SasError::runtime(msg));
-                    }
-                    if self.ctx.error_flag {
-                        self.pdv.error_ = true;
-                        self.ctx.error_flag = false;
-                    }
-                    if v.truthy() {
-                        self.rows_read += 1;
-                        return Ok(Flow::Normal);
-                    }
+                if input.by.is_empty() {
+                    self.exec_set_concat()
+                } else {
+                    self.exec_set_interleave()
                 }
             }
             DsStmt::Assign { var, expr } => {
@@ -446,8 +474,161 @@ impl Runner {
             | DsStmt::Drop(_)
             | DsStmt::Retain(_)
             | DsStmt::Length(_)
+            | DsStmt::By(_)
             | DsStmt::Array { .. } => Ok(Flow::Normal),
         }
+    }
+
+    /// SET sans BY = CONCATÉNATION : le premier dataset en entier, puis le
+    /// suivant. Boucle de skip interne : charge des lignes jusqu'à en
+    /// trouver une qui passe le WHERE= (faux/missing → ligne suivante SANS
+    /// exécuter le reste de l'itération). Les lignes rejetées ne comptent
+    /// pas dans `rows_read`. Tous les datasets épuisés → l'étape se
+    /// termine IMMÉDIATEMENT (EndStep). Au passage d'un dataset au
+    /// suivant, les variables absentes du nouveau dataset GARDENT leur
+    /// valeur (RETAIN implicite des variables de SET — règle SAS, pas de
+    /// remise à missing).
+    fn exec_set_concat(&mut self) -> Result<Flow> {
+        loop {
+            let Some(input) = &self.input else {
+                return Err(SasError::runtime("SET statement without input data."));
+            };
+            let Some(ds) = input.datasets.get(self.cur_ds) else {
+                // Fin de TOUS les inputs : fin d'étape immédiate.
+                return Ok(Flow::EndStep);
+            };
+            let row = self.cursors[self.cur_ds];
+            if row >= ds.n_rows {
+                self.cur_ds += 1;
+                continue;
+            }
+            for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+                self.pdv.set(*slot, col[row].clone());
+            }
+            self.cursors[self.cur_ds] += 1;
+            let Some(w) = &ds.where_ else {
+                self.rows_read[self.cur_ds] += 1;
+                return Ok(Flow::Normal);
+            };
+            // Évaluation inline (emprunts disjoints : `input` tient
+            // self.input, eval n'utilise que pdv et ctx).
+            let v = eval(w, &self.pdv, &mut self.ctx);
+            if let Some(msg) = self.ctx.fatal.take() {
+                let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
+                return Err(SasError::runtime(msg));
+            }
+            if self.ctx.error_flag {
+                self.pdv.error_ = true;
+                self.ctx.error_flag = false;
+            }
+            if v.truthy() {
+                self.rows_read[self.cur_ds] += 1;
+                return Ok(Flow::Normal);
+            }
+        }
+    }
+
+    /// SET avec BY = INTERCLASSEMENT : parmi les datasets non épuisés,
+    /// servir celui dont la prochaine observation (après pré-filtrage
+    /// WHERE=) porte la PLUS PETITE clé BY (`sas_cmp`, DESCENDING par clé
+    /// respecté) ; égalité → ordre du statement SET. Met à jour les flags
+    /// FIRST./LAST. (comparaison des préfixes de clés avec l'observation
+    /// précédente / suivante) et détecte le désordre (clé servie < clé
+    /// précédente → ERROR, l'étape s'arrête).
+    fn exec_set_interleave(&mut self) -> Result<Flow> {
+        let Some(input) = &self.input else {
+            return Err(SasError::runtime("SET statement without input data."));
+        };
+        let Some((d, cur_keys)) = choose_next(input, &self.filtered, &self.cursors) else {
+            // Tous les datasets épuisés : fin d'étape immédiate.
+            return Ok(Flow::EndStep);
+        };
+        let ds = &input.datasets[d];
+        // Détection de désordre : l'interclassement choisit toujours la
+        // plus petite clé disponible ; si elle régresse, c'est qu'un input
+        // n'est pas trié selon le BY.
+        if let Some(prev) = &self.prev_keys {
+            if compare_keys(&cur_keys, prev, &input.by) == Ordering::Less {
+                return Err(SasError::runtime(format!(
+                    "BY variables are not properly sorted on data set {}.",
+                    ds.display
+                )));
+            }
+        }
+        let row = self.filtered[d][self.cursors[d]];
+        // Les variables absentes du dataset servi GARDENT leur valeur
+        // précédente (RETAIN implicite des variables de SET — règle SAS,
+        // pas de remise à missing).
+        for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+            self.pdv.set(*slot, col[row].clone());
+        }
+        self.cursors[d] += 1;
+        self.rows_read[d] += 1;
+        // FIRST.var_i : première obs, ou clé j ≤ i différente de l'obs
+        // précédente. LAST.var_i : dernière obs, ou clé j ≤ i différente
+        // de l'obs SUIVANTE (la tête du prochain choix d'interclassement).
+        let next_keys = choose_next(input, &self.filtered, &self.cursors).map(|(_, k)| k);
+        for (i, flags) in self.ctx.by_flags.iter_mut().enumerate() {
+            flags.1 = match &self.prev_keys {
+                None => true,
+                Some(prev) => prefix_changed(&cur_keys, prev, i),
+            };
+            flags.2 = match &next_keys {
+                None => true,
+                Some(next) => prefix_changed(&cur_keys, next, i),
+            };
+        }
+        self.prev_keys = Some(cur_keys);
+        Ok(Flow::Normal)
+    }
+
+    /// Pré-applique les WHERE= des datasets d'un SET avec BY : remplit
+    /// `filtered` (indices des lignes retenues) en évaluant chaque ligne
+    /// sur le PDV, puis remet les slots d'input à leur état initial
+    /// (missing / chaîne vide). Un `_ERROR_` levé pendant ce pré-filtrage
+    /// n'est pas reporté aux itérations (divergence mineure documentée) ;
+    /// les compteurs de NOTEs (conversions, invalid data) sont conservés.
+    fn prefilter(&mut self) -> Result<()> {
+        let Some(input) = &self.input else {
+            return Ok(());
+        };
+        for (d, ds) in input.datasets.iter().enumerate() {
+            let Some(w) = &ds.where_ else {
+                self.filtered[d] = (0..ds.n_rows).collect();
+                continue;
+            };
+            let mut keep = Vec::new();
+            for row in 0..ds.n_rows {
+                for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+                    self.pdv.set(*slot, col[row].clone());
+                }
+                let v = eval(w, &self.pdv, &mut self.ctx);
+                if let Some(msg) = self.ctx.fatal.take() {
+                    let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
+                    return Err(SasError::runtime(msg));
+                }
+                self.ctx.error_flag = false;
+                if v.truthy() {
+                    keep.push(row);
+                }
+            }
+            self.filtered[d] = keep;
+        }
+        // Restaurer l'état initial des slots d'input touchés par le
+        // pré-filtrage.
+        for ds in &input.datasets {
+            if ds.where_.is_none() {
+                continue;
+            }
+            for &slot in &ds.var_slots {
+                let init = match self.pdv.vars()[slot].ty {
+                    VarType::Num => Value::missing(),
+                    VarType::Char => Value::Char(String::new()),
+                };
+                self.pdv.set(slot, init);
+            }
+        }
+        Ok(())
     }
 
     /// Résout l'indice d'une assignation indexée en slot PDV : coercition
@@ -694,6 +875,61 @@ impl Runner {
         }
         self.out_rows[o] += 1;
     }
+}
+
+/// Clés BY de la ligne `row` d'un dataset (dans l'ordre du BY).
+fn keys_at(ds: &InputDataset, row: usize) -> Vec<Value> {
+    ds.by_cols.iter().map(|&c| ds.columns[c][row].clone()).collect()
+}
+
+/// Comparaison de deux jeux de clés BY : `sas_cmp` clé par clé (les
+/// missings SONT ordonnés : `._ < . < .a < nombres`), inversée pour les
+/// clés DESCENDING.
+fn compare_keys(a: &[Value], b: &[Value], by: &[ByVar]) -> Ordering {
+    for (i, bv) in by.iter().enumerate() {
+        let mut ord = a[i].sas_cmp(&b[i]);
+        if bv.descending {
+            ord = ord.reverse();
+        }
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+/// Le préfixe de clés `0..=i` diffère-t-il entre deux observations ?
+/// (Égalité pure : DESCENDING est sans effet ici.)
+fn prefix_changed(a: &[Value], b: &[Value], i: usize) -> bool {
+    (0..=i).any(|j| a[j].sas_cmp(&b[j]) != Ordering::Equal)
+}
+
+/// Choisit la prochaine observation de l'interclassement : parmi les
+/// datasets non épuisés (curseur dans `filtered`), celui dont la tête
+/// porte la plus petite clé BY ; égalité stricte → le premier dans
+/// l'ordre du SET. Renvoie (index du dataset, clés de sa tête).
+fn choose_next(
+    input: &InputData,
+    filtered: &[Vec<usize>],
+    cursors: &[usize],
+) -> Option<(usize, Vec<Value>)> {
+    let mut best: Option<(usize, Vec<Value>)> = None;
+    for (d, ds) in input.datasets.iter().enumerate() {
+        let Some(&row) = filtered[d].get(cursors[d]) else {
+            continue;
+        };
+        let keys = keys_at(ds, row);
+        let better = match &best {
+            None => true,
+            // Strictement plus petit seulement : à égalité le premier
+            // dataset du SET gagne.
+            Some((_, bk)) => compare_keys(&keys, bk, &input.by) == Ordering::Less,
+        };
+        if better {
+            best = Some((d, keys));
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -1572,6 +1808,227 @@ mod tests {
         assert_eq!(ds.n_obs(), 2);
         assert_eq!(n.get(0), Some(1.0));
         assert_eq!(n.get(1), Some(2.0));
+    }
+
+    // ── SET multi-datasets + BY + FIRST./LAST. (M3) ──────────────────────
+
+    /// Écrit un dataset entièrement numérique : colonnes (nom, valeurs).
+    fn write_num_ds(session: &Session, table: &str, cols: &[(&str, Vec<Option<f64>>)]) {
+        let mut columns: Vec<Column> = Vec::new();
+        let mut vars: Vec<VarMeta> = Vec::new();
+        for (name, vals) in cols {
+            columns.push(Series::new((*name).into(), vals.clone()).into());
+            vars.push(VarMeta {
+                name: (*name).to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            });
+        }
+        let df = DataFrame::new(columns).unwrap();
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write(table, &SasDataset { df, vars })
+            .unwrap();
+    }
+
+    fn some(vals: &[f64]) -> Vec<Option<f64>> {
+        vals.iter().copied().map(Some).collect()
+    }
+
+    /// Colonne f64 complète de WORK.`table`.
+    fn col(session: &Session, table: &str, col: &str) -> Vec<Option<f64>> {
+        read_work(session, table)
+            .df
+            .column(col)
+            .unwrap()
+            .f64()
+            .unwrap()
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn set_two_datasets_without_by_concatenates() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("x", some(&[1.0, 3.0, 5.0]))]);
+        write_num_ds(&s, "b", &[("x", some(&[2.0, 3.0, 4.0]))]);
+        let stats = run("data out; set a b; run;", &mut s).unwrap();
+        // Tout a, puis tout b.
+        assert_eq!(
+            col(&s, "out", "x"),
+            some(&[1.0, 3.0, 5.0, 2.0, 3.0, 4.0])
+        );
+        assert_eq!(
+            stats.read,
+            vec![("WORK.A".to_string(), 3), ("WORK.B".to_string(), 3)]
+        );
+        let log = s.log.into_string();
+        assert!(log.contains("There were 3 observations read from the data set WORK.A."));
+        assert!(log.contains("There were 3 observations read from the data set WORK.B."));
+    }
+
+    #[test]
+    fn set_by_interleaves_sorted_datasets_with_union_and_retained_vars() {
+        let mut s = session();
+        // u n'existe que dans a, v que dans b.
+        write_num_ds(
+            &s,
+            "a",
+            &[("x", some(&[1.0, 3.0, 5.0])), ("u", some(&[10.0, 30.0, 50.0]))],
+        );
+        write_num_ds(
+            &s,
+            "b",
+            &[("x", some(&[2.0, 3.0, 4.0])), ("v", some(&[200.0, 300.0, 400.0]))],
+        );
+        let stats = run(
+            "data out; set a b; by x; f = first.x; l = last.x; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Interclassement par x croissant ; égalité (x=3) → a (premier du
+        // SET) avant b.
+        assert_eq!(
+            col(&s, "out", "x"),
+            some(&[1.0, 2.0, 3.0, 3.0, 4.0, 5.0])
+        );
+        // u/v : RETAIN implicite des variables de SET — une variable
+        // absente du dataset de l'obs courante GARDE sa valeur précédente
+        // (et reste missing avant sa première lecture).
+        assert_eq!(
+            col(&s, "out", "u"),
+            vec![Some(10.0), Some(10.0), Some(30.0), Some(30.0), Some(30.0), Some(50.0)]
+        );
+        assert_eq!(
+            col(&s, "out", "v"),
+            vec![None, Some(200.0), Some(200.0), Some(300.0), Some(400.0), Some(400.0)]
+        );
+        // FIRST.x / LAST.x : le groupe x=3 a deux obs ; LAST. de la
+        // dernière obs globale vaut 1.
+        assert_eq!(
+            col(&s, "out", "f"),
+            some(&[1.0, 1.0, 1.0, 0.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            col(&s, "out", "l"),
+            some(&[1.0, 1.0, 0.0, 1.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            stats.read,
+            vec![("WORK.A".to_string(), 3), ("WORK.B".to_string(), 3)]
+        );
+    }
+
+    #[test]
+    fn first_last_group_count_per_group() {
+        let mut s = session();
+        write_num_ds(
+            &s,
+            "g",
+            &[
+                ("grp", some(&[1.0, 1.0, 1.0, 2.0, 2.0])),
+                ("val", some(&[5.0, 6.0, 7.0, 8.0, 9.0])),
+            ],
+        );
+        // Idiome SAS canonique : compteur remis à zéro en tête de groupe,
+        // une obs émise par groupe (subsetting IF sur last.grp).
+        run(
+            "data out; set g; by grp; if first.grp then n = 0; n + 1; if last.grp; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "grp"), some(&[1.0, 2.0]));
+        assert_eq!(col(&s, "out", "n"), some(&[3.0, 2.0]));
+    }
+
+    #[test]
+    fn two_by_keys_first_last_prefix_rule() {
+        let mut s = session();
+        write_num_ds(
+            &s,
+            "g",
+            &[
+                ("a", some(&[1.0, 1.0, 2.0])),
+                ("b", some(&[7.0, 8.0, 8.0])),
+            ],
+        );
+        run(
+            "data out; set g; by a b; fa = first.a; fb = first.b; la = last.a; lb = last.b; run;",
+            &mut s,
+        )
+        .unwrap();
+        // first.b = 1 dès que a OU b change (préfixe de clés).
+        assert_eq!(col(&s, "out", "fa"), some(&[1.0, 0.0, 1.0]));
+        assert_eq!(col(&s, "out", "fb"), some(&[1.0, 1.0, 1.0]));
+        // last.b suit le même préfixe vers l'obs suivante ; b=8 ne forme
+        // PAS un groupe à cheval sur a=1/a=2.
+        assert_eq!(col(&s, "out", "la"), some(&[0.0, 1.0, 1.0]));
+        assert_eq!(col(&s, "out", "lb"), some(&[1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn missing_by_key_collates_first() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("x", vec![None, Some(2.0)])]);
+        write_num_ds(&s, "b", &[("x", some(&[1.0]))]);
+        run("data out; set a b; by x; f = first.x; run;", &mut s).unwrap();
+        // `.` < 1 < 2 (les missings se collationnent en premier).
+        assert_eq!(col(&s, "out", "x"), vec![None, Some(1.0), Some(2.0)]);
+        assert_eq!(col(&s, "out", "f"), some(&[1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn descending_by_interleaves_in_decreasing_order() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("x", some(&[3.0, 1.0]))]);
+        write_num_ds(&s, "b", &[("x", some(&[2.0]))]);
+        run("data out; set a b; by descending x; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "out", "x"), some(&[3.0, 2.0, 1.0]));
+    }
+
+    #[test]
+    fn unsorted_by_data_stops_with_error() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[2.0, 1.0]))]);
+        let err = run("data out; set d; by x; run;", &mut s).err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "BY variables are not properly sorted on data set WORK.D."
+        );
+    }
+
+    #[test]
+    fn where_option_is_prefiltered_before_interleave() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0, 3.0]))]);
+        write_num_ds(&s, "b", &[("x", some(&[2.0]))]);
+        // a filtré sur x ne 2 : l'interclassement voit 1,3 côté a.
+        let stats = run(
+            "data out; set a(where=(x ne 2)) b; by x; l = last.x; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "x"), some(&[1.0, 2.0, 3.0]));
+        assert_eq!(col(&s, "out", "l"), some(&[1.0, 1.0, 1.0]));
+        // Les lignes rejetées par WHERE= ne comptent pas comme lues.
+        assert_eq!(
+            stats.read,
+            vec![("WORK.A".to_string(), 2), ("WORK.B".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn single_dataset_by_groups_match_simple_set() {
+        let mut s = session();
+        write_class(&s, "inp"); // Age = 14, ., 13 — PAS trié.
+        // Un SET simple sans BY reste inchangé (chemin M1/M2 intact).
+        let stats = run("data out; set inp; run;", &mut s).unwrap();
+        assert_eq!(stats.read, vec![("WORK.INP".to_string(), 3)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 3, 2)]);
     }
 
     // ── Missings spéciaux bout en bout + _ERROR_ + NOTEs (M2, lot 5) ─────
