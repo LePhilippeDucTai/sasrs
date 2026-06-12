@@ -30,7 +30,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] RETAIN, sum statement, LENGTH (compile+exec+parser)
 - [x] DO itératif (TO/BY/WHILE/UNTIL), DELETE
 - [x] ARRAY + indexation
-- [ ] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé
+- [x] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé
 - [ ] Missings spéciaux bout en bout (round-trip parquet testé), `_ERROR_` + NOTEs d'erreurs runtime
 - [ ] Fixtures m2/ + snapshots ; DoD : cargo test vert
 

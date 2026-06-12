@@ -27,6 +27,44 @@ impl DatasetRef {
     }
 }
 
+/// Options de dataset `(keep=... drop=... rename=(...) where=(...))` (M2).
+/// `keep`/`drop` : `None` = option absente (≠ liste vide). `rename` :
+/// paires (ancien, nouveau). `where_` : expression filtrante (valide en
+/// entrée SET seulement ; en sortie DATA → erreur de compilation).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DatasetOptions {
+    pub keep: Option<Vec<String>>,
+    pub drop: Option<Vec<String>>,
+    pub rename: Vec<(String, String)>,
+    pub where_: Option<Expr>,
+}
+
+/// Référence de dataset accompagnée de ses options : `lib.a(keep=x y)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatasetSpec {
+    pub dref: DatasetRef,
+    pub options: DatasetOptions,
+}
+
+impl DatasetSpec {
+    /// Spec sans options (helper pour les constructions simples / tests).
+    pub fn plain(dref: DatasetRef) -> Self {
+        DatasetSpec {
+            dref,
+            options: DatasetOptions::default(),
+        }
+    }
+
+    /// Display form "WORK.A" (délégué à `DatasetRef`).
+    pub fn display(&self) -> String {
+        self.dref.display()
+    }
+
+    pub fn libref_or_work(&self) -> String {
+        self.dref.libref_or_work()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     Minus,
@@ -97,8 +135,10 @@ pub struct LengthSpec {
 /// M2+ ajoutera DO iterative, ARRAY, MERGE, BY...).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsStmt {
-    /// `set lib.a;` — M1: single dataset, no options.
-    Set(DatasetRef),
+    /// `set lib.a;` / `set lib.a(keep=... drop=... rename=(...)
+    /// where=(...));` — un seul dataset en M2 (plusieurs → erreur "not yet
+    /// implemented").
+    Set(DatasetSpec),
     Assign {
         var: String,
         expr: Expr,
@@ -129,7 +169,12 @@ pub enum DsStmt {
     /// `delete;` — termine l'itération courante sans output implicite
     /// (même effet qu'un subsetting IF faux).
     Delete,
-    Output,
+    /// `output;` (liste vide = TOUTES les sorties du DATA) ou
+    /// `output a [b...];` (sorties ciblées — `output a b;` écrit dans a ET
+    /// b). Seul le nom (lib.table) compte ici, sans options ; chaque nom
+    /// doit correspondre à une sortie du statement DATA (vérifié à la
+    /// compilation).
+    Output(Vec<DatasetRef>),
     Keep(Vec<String>),
     Drop(Vec<String>),
     Stop,
@@ -165,7 +210,7 @@ pub enum DsStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataStepAst {
-    pub outputs: Vec<DatasetRef>,
+    pub outputs: Vec<DatasetSpec>,
     pub stmts: Vec<DsStmt>,
     pub span: Span,
 }

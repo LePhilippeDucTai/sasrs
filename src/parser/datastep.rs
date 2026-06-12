@@ -5,13 +5,15 @@
 //! Appelé par `parser::next_block()` APRÈS consommation du mot-clé `data`.
 //!
 //! ## Statement DATA
-//! `data ref [ref]* ;` — une ou plusieurs sorties (`DatasetRef`).
+//! `data spec [spec]* ;` — une ou plusieurs sorties (`DatasetSpec`,
+//! chacune avec ses options de dataset `(keep=/drop=/rename=/where=)`).
 //! `data _null_;` → zéro sortie (reconnaître `_NULL_`, insensible casse).
 //!
 //! ## Statements du corps (boucle jusqu'à `run;` ou frontière implicite)
-//! - `set ref ;`                  → `DsStmt::Set` (M1 : un seul dataset,
-//!                                  pas d'options ; plusieurs → ERROR
-//!                                  "not yet implemented")
+//! - `set spec ;`                 → `DsStmt::Set` (M2 : un seul dataset,
+//!                                  options de dataset acceptées ;
+//!                                  plusieurs → ERROR "not yet
+//!                                  implemented")
 //! - `ident = expr ;`             → `DsStmt::Assign`
 //! - `if expr then stmt [else stmt]` → `DsStmt::If` ; les branches sont
 //!   UN statement (récunsion sur le parseur de statement) ; `do; ...
@@ -22,7 +24,8 @@
 //!   `do while(c); ... end;`, `do until(c); ... end;` → `DsStmt::DoLoop`
 //!   (M2) ; liste de valeurs `do i = 1, 5, 9;` → ERROR "not yet
 //!   implemented"
-//! - `output ;`                   → `DsStmt::Output` (M1 : sans cible)
+//! - `output [ref...] ;`          → `DsStmt::Output(Vec<DatasetRef>)`
+//!   (liste vide = toutes les sorties ; `output a b;` écrit dans a ET b)
 //! - `delete ;`                   → `DsStmt::Delete` (M2)
 //! - `keep v1 v2... ;` / `drop ... ;`
 //! - `stop ;`
@@ -149,8 +152,9 @@ pub fn parse_data_step(ts: &mut StatementStream) -> Result<DataStepAst> {
 }
 
 /// Parse la liste de sorties du statement `data` (jusqu'au `;`, non
-/// consommé). `_NULL_` (insensible casse) → zéro sortie.
-fn parse_data_outputs(ts: &mut StatementStream) -> Result<Vec<crate::ast::DatasetRef>> {
+/// consommé). Chaque sortie est un `DatasetSpec` (options de dataset
+/// acceptées). `_NULL_` (insensible casse) → zéro sortie.
+fn parse_data_outputs(ts: &mut StatementStream) -> Result<Vec<crate::ast::DatasetSpec>> {
     // Cas `data _null_;`.
     if ts.peek().is_kw("_null_") {
         ts.next();
@@ -160,7 +164,7 @@ fn parse_data_outputs(ts: &mut StatementStream) -> Result<Vec<crate::ast::Datase
     while ts.peek().ident().is_some() {
         // `_null_` ne peut apparaître qu'en première position seule ; ici
         // tout ident est traité comme un nom de dataset de sortie.
-        outputs.push(ts.parse_dataset_ref()?);
+        outputs.push(ts.parse_dataset_spec()?);
     }
     if outputs.is_empty() {
         return Err(SasError::parse(
@@ -195,9 +199,17 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "if" => parse_if(ts),
         "do" => parse_do(ts),
         "output" => {
+            // `output;` → toutes les sorties (liste vide) ;
+            // `output a [b...];` → sorties ciblées (noms seuls, sans
+            // options — la validation contre la liste du DATA est faite à
+            // la compilation).
             ts.next();
+            let mut targets = Vec::new();
+            while ts.peek().ident().is_some() {
+                targets.push(ts.parse_dataset_ref()?);
+            }
             ts.expect_semi()?;
-            Ok(DsStmt::Output)
+            Ok(DsStmt::Output(targets))
         }
         "delete" => {
             ts.next();
@@ -299,22 +311,22 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
     }
 }
 
-/// `set ref ;` — M1 : exactement un dataset, sans options.
+/// `set spec ;` — M2 : exactement un dataset, options de dataset acceptées.
 fn parse_set(ts: &mut StatementStream) -> Result<DsStmt> {
     let set_tok = ts.peek().clone();
     ts.next(); // `set`
     if ts.peek().kind == TokenKind::Semi {
-        // `set;` sans dataset : non supporté en M1.
+        // `set;` sans dataset : non supporté en M2.
         return Err(SasError::parse(
             "Statement SET without a dataset is not yet implemented.",
             set_tok.span,
         ));
     }
-    let ds = ts.parse_dataset_ref()?;
-    // Un seul dataset, sans options : le token suivant doit être `;`.
+    let ds = ts.parse_dataset_spec()?;
+    // Un seul dataset : le token suivant doit être `;`.
     if ts.peek().kind != TokenKind::Semi {
         return Err(SasError::parse(
-            "SET with multiple datasets or data set options is not yet implemented.",
+            "SET with multiple datasets is not yet implemented.",
             ts.peek().span,
         ));
     }
@@ -759,8 +771,9 @@ fn split_numbered(name: &str) -> Option<(&str, &str)> {
 /// Expanse la plage numérotée `x1-x3` en x1 x2 x3 : même préfixe (insensible
 /// à la casse — la casse du premier nom est conservée), suffixes numériques,
 /// bornes croissantes ; la largeur du suffixe de départ est conservée
-/// (`x01-x03` → x01 x02 x03). Sinon, erreur claire.
-fn expand_numbered_range(
+/// (`x01-x03` → x01 x02 x03). Sinon, erreur claire. Partagée entre ARRAY et
+/// les listes des options de dataset KEEP=/DROP= (`pub(super)`).
+pub(super) fn expand_numbered_range(
     start: &str,
     end: &str,
     span: Span,
@@ -769,7 +782,7 @@ fn expand_numbered_range(
     let err = || {
         SasError::parse(
             format!(
-                "invalid variable range {start}-{end} in the ARRAY statement \
+                "invalid variable range {start}-{end} \
                  (expected the same prefix with increasing numeric suffixes, e.g. x1-x3)"
             ),
             span,
@@ -964,7 +977,7 @@ fn parse_length(ts: &mut StatementStream) -> Result<DsStmt> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinaryOp, DatasetRef, Expr};
+    use crate::ast::{BinaryOp, DatasetRef, DatasetSpec, Expr};
     use crate::source::SourceFile;
 
     /// Parse une étape DATA en supposant le mot-clé `data` déjà consommé.
@@ -984,6 +997,11 @@ mod tests {
         }
     }
 
+    /// Spec sans options.
+    fn dspec(name: &str) -> DatasetSpec {
+        DatasetSpec::plain(dsref(name))
+    }
+
     fn var(s: &str) -> Expr {
         Expr::Var(s.to_string())
     }
@@ -991,11 +1009,11 @@ mod tests {
     #[test]
     fn simple_set_assign_run() {
         let ast = parse("data out; set inp; x = 1; run;").unwrap();
-        assert_eq!(ast.outputs, vec![dsref("out")]);
+        assert_eq!(ast.outputs, vec![dspec("out")]);
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dsref("inp")),
+                DsStmt::Set(dspec("inp")),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -1025,12 +1043,12 @@ mod tests {
         assert_eq!(
             ast.outputs,
             vec![
-                dsref("a"),
-                dsref("b"),
-                DatasetRef {
+                dspec("a"),
+                dspec("b"),
+                DatasetSpec::plain(DatasetRef {
                     libref: Some("lib".to_string()),
                     name: "c".to_string(),
-                },
+                }),
             ]
         );
     }
@@ -1114,7 +1132,7 @@ mod tests {
                     var: "y".to_string(),
                     expr: Expr::Num(1.0),
                 },
-                DsStmt::Output,
+                DsStmt::Output(vec![]),
             ])
         );
     }
@@ -1125,8 +1143,8 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dsref("i")),
-                DsStmt::Output,
+                DsStmt::Set(dspec("i")),
+                DsStmt::Output(vec![]),
                 DsStmt::Keep(vec!["a".to_string(), "b".to_string()]),
                 DsStmt::Drop(vec!["c".to_string()]),
                 DsStmt::Stop,
@@ -1154,7 +1172,7 @@ mod tests {
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
-        assert_eq!(ast2.outputs, vec![dsref("b")]);
+        assert_eq!(ast2.outputs, vec![dspec("b")]);
     }
 
     // ── RETAIN (M2) ──────────────────────────────────────────────────────
@@ -1310,14 +1328,14 @@ mod tests {
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         let ast1 = parse_data_step(&mut ts).unwrap();
-        assert_eq!(ast1.outputs, vec![dsref("a")]);
-        assert_eq!(ast1.stmts, vec![DsStmt::Set(dsref("x"))]);
+        assert_eq!(ast1.outputs, vec![dspec("a")]);
+        assert_eq!(ast1.stmts, vec![DsStmt::Set(dspec("x"))]);
         // Frontière implicite : `data` non consommé.
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
-        assert_eq!(ast2.outputs, vec![dsref("b")]);
-        assert_eq!(ast2.stmts, vec![DsStmt::Set(dsref("y"))]);
+        assert_eq!(ast2.outputs, vec![dspec("b")]);
+        assert_eq!(ast2.stmts, vec![DsStmt::Set(dspec("y"))]);
     }
 
     // ── DO itératif / conditionnel (M2) ──────────────────────────────────
@@ -1680,7 +1698,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(dsref("i")),
+                DsStmt::Set(dspec("i")),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -1701,5 +1719,138 @@ mod tests {
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         assert!(parse_data_step(&mut ts).is_err());
+    }
+
+    // ── Options de dataset + OUTPUT ciblé (M2, lot 4) ────────────────────
+
+    #[test]
+    fn data_with_keep_drop_rename_where_options() {
+        let ast = parse(
+            "data out(keep=a b drop=c rename=(a=aa) where=(a > 1)); run;",
+        )
+        .unwrap();
+        assert_eq!(ast.outputs.len(), 1);
+        let spec = &ast.outputs[0];
+        assert_eq!(spec.dref, dsref("out"));
+        assert_eq!(
+            spec.options.keep,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(spec.options.drop, Some(vec!["c".to_string()]));
+        assert_eq!(
+            spec.options.rename,
+            vec![("a".to_string(), "aa".to_string())]
+        );
+        assert_eq!(
+            spec.options.where_,
+            Some(Expr::Binary {
+                op: BinaryOp::Gt,
+                left: Box::new(var("a")),
+                right: Box::new(Expr::Num(1.0)),
+            })
+        );
+    }
+
+    #[test]
+    fn set_with_options_parses() {
+        let ast = parse(
+            "data o; set inp(keep=name age where=(age > 13) rename=(age=years)); run;",
+        )
+        .unwrap();
+        let DsStmt::Set(spec) = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(spec.dref, dsref("inp"));
+        assert_eq!(
+            spec.options.keep,
+            Some(vec!["name".to_string(), "age".to_string()])
+        );
+        assert!(spec.options.drop.is_none());
+        assert_eq!(
+            spec.options.rename,
+            vec![("age".to_string(), "years".to_string())]
+        );
+        assert!(spec.options.where_.is_some());
+    }
+
+    #[test]
+    fn keep_accepts_parenthesized_list_and_ranges() {
+        // Forme parenthésée.
+        let ast = parse("data o(keep=(x y)); run;").unwrap();
+        assert_eq!(
+            ast.outputs[0].options.keep,
+            Some(vec!["x".to_string(), "y".to_string()])
+        );
+        // Plage numérotée, forme nue.
+        let ast = parse("data o; set i(drop=v1-v3 keep=w); run;").unwrap();
+        let DsStmt::Set(spec) = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(
+            spec.options.drop,
+            Some(vec!["v1".to_string(), "v2".to_string(), "v3".to_string()])
+        );
+        assert_eq!(spec.options.keep, Some(vec!["w".to_string()]));
+    }
+
+    #[test]
+    fn output_targeted_one_and_two_names() {
+        let ast = parse("data a b; output a; output a b; output; run;").unwrap();
+        assert_eq!(ast.outputs, vec![dspec("a"), dspec("b")]);
+        assert_eq!(ast.stmts[0], DsStmt::Output(vec![dsref("a")]));
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::Output(vec![dsref("a"), dsref("b")])
+        );
+        assert_eq!(ast.stmts[2], DsStmt::Output(vec![]));
+    }
+
+    #[test]
+    fn unknown_dataset_option_errors() {
+        let err = parse("data o(obs=5); run;").unwrap_err();
+        assert!(
+            err.to_string().contains("Dataset option OBS is not supported."),
+            "got: {err}"
+        );
+        let err = parse("data o; set i(firstobs=2); run;").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Dataset option FIRSTOBS is not supported."),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rename_without_parens_errors() {
+        let err = parse("data o(rename=a=b); run;").unwrap_err();
+        assert!(
+            err.to_string().contains("RENAME= dataset option requires"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn where_without_parens_errors() {
+        let err = parse("data o; set i(where=age > 1); run;").unwrap_err();
+        assert!(
+            err.to_string().contains("WHERE= dataset option requires"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_keep_list_errors() {
+        let err = parse("data o(keep=); run;").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expected a variable name in the KEEP= dataset option"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn set_options_then_second_dataset_errors() {
+        let err = parse("data o; set a(keep=x) b; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
     }
 }

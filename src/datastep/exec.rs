@@ -108,14 +108,20 @@ enum ColBuilder {
 struct Runner {
     pdv: Pdv,
     input: Option<InputData>,
-    /// Prochaine ligne d'input à lire (== lignes déjà lues).
+    /// Prochaine ligne d'input à lire (lignes CHARGÉES, y compris celles
+    /// rejetées par WHERE=).
     row_idx: usize,
+    /// Lignes lues au sens SAS : celles qui PASSENT le WHERE= (sans
+    /// WHERE=, identique à `row_idx`). C'est ce compteur qu'affiche la
+    /// NOTE "There were N observations read".
+    rows_read: usize,
     ctx: EvalCtx,
     outputs: Vec<OutputSpec>,
     /// builders[output][colonne], parallèle à outputs[o].kept_slots.
     builders: Vec<Vec<ColBuilder>>,
-    /// Nombre d'observations poussées (identique pour toutes les sorties).
-    out_rows: usize,
+    /// Observations poussées PAR sortie (l'OUTPUT ciblé rend les comptes
+    /// indépendants).
+    out_rows: Vec<usize>,
 }
 
 pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
@@ -149,17 +155,19 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
 
     let single_iteration = input.is_none();
     let n_rows = input.as_ref().map_or(0, |i| i.n_rows);
+    let n_outputs = outputs.len();
     let mut r = Runner {
         pdv,
         input,
         row_idx: 0,
+        rows_read: 0,
         ctx: EvalCtx {
             arrays,
             ..EvalCtx::default()
         },
         outputs,
         builders,
-        out_rows: 0,
+        out_rows: vec![0; n_outputs],
     };
 
     // Valeurs initiales (RETAIN avec init, sum statements) : posées AVANT
@@ -229,26 +237,30 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         written: Vec::new(),
     };
     if let Some(input) = &r.input {
+        // Avec WHERE=, seules les lignes qui PASSENT comptent comme lues
+        // (fidèle à la NOTE SAS).
         session.log.note(&format!(
             "There were {} observations read from the data set {}.",
-            r.row_idx, input.display
+            r.rows_read, input.display
         ));
-        stats.read.push((input.display.clone(), r.row_idx));
+        stats.read.push((input.display.clone(), r.rows_read));
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).
-    for (spec, bset) in r.outputs.iter().zip(r.builders) {
+    for ((spec, bset), n_out) in r.outputs.iter().zip(r.builders).zip(&r.out_rows) {
         let mut columns: Vec<Column> = Vec::with_capacity(spec.kept_slots.len());
         let mut vars: Vec<VarMeta> = Vec::with_capacity(spec.kept_slots.len());
-        for (slot, b) in spec.kept_slots.iter().zip(bset) {
+        for ((slot, b), out_name) in spec.kept_slots.iter().zip(bset).zip(&spec.out_names) {
             let v = &r.pdv.vars()[*slot];
+            // RENAME= de sortie : la colonne écrite porte `out_name` (le
+            // slot PDV garde son nom).
             let series = match b {
-                ColBuilder::Num(vals) => Series::new(v.name.as_str().into(), vals),
-                ColBuilder::Char(vals) => Series::new(v.name.as_str().into(), vals),
+                ColBuilder::Num(vals) => Series::new(out_name.as_str().into(), vals),
+                ColBuilder::Char(vals) => Series::new(out_name.as_str().into(), vals),
             };
             columns.push(series.into());
             vars.push(VarMeta {
-                name: v.name.clone(),
+                name: out_name.clone(),
                 ty: v.ty,
                 length: v.length,
                 format: v.format.clone(),
@@ -262,12 +274,12 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         session.log.note(&format!(
             "The data set {} has {} observations and {} variables.",
             spec.display,
-            r.out_rows,
+            n_out,
             spec.kept_slots.len()
         ));
         stats
             .written
-            .push((spec.display.clone(), r.out_rows, spec.kept_slots.len()));
+            .push((spec.display.clone(), *n_out, spec.kept_slots.len()));
     }
 
     Ok(stats)
@@ -281,15 +293,39 @@ impl Runner {
                     // Impossible après compile() ; garde-fou.
                     return Err(SasError::runtime("SET statement without input data."));
                 };
-                if self.row_idx >= input.n_rows {
-                    // Fin de l'input : l'étape se termine IMMÉDIATEMENT.
-                    return Ok(Flow::EndStep);
+                // Boucle de skip interne au SET : charge des lignes jusqu'à
+                // en trouver une qui passe le WHERE= (faux/missing → ligne
+                // suivante SANS exécuter le reste de l'itération). Les
+                // lignes rejetées ne comptent pas dans `rows_read`.
+                loop {
+                    if self.row_idx >= input.n_rows {
+                        // Fin de l'input : l'étape se termine IMMÉDIATEMENT.
+                        return Ok(Flow::EndStep);
+                    }
+                    for (col, slot) in input.columns.iter().zip(&input.var_slots) {
+                        self.pdv.set(*slot, col[self.row_idx].clone());
+                    }
+                    self.row_idx += 1;
+                    let Some(w) = &input.where_ else {
+                        self.rows_read += 1;
+                        return Ok(Flow::Normal);
+                    };
+                    // Évaluation inline (emprunts disjoints : `input` tient
+                    // self.input, eval n'utilise que pdv et ctx).
+                    let v = eval(w, &self.pdv, &mut self.ctx);
+                    if let Some(msg) = self.ctx.fatal.take() {
+                        let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
+                        return Err(SasError::runtime(msg));
+                    }
+                    if self.ctx.error_flag {
+                        self.pdv.error_ = true;
+                        self.ctx.error_flag = false;
+                    }
+                    if v.truthy() {
+                        self.rows_read += 1;
+                        return Ok(Flow::Normal);
+                    }
                 }
-                for (col, slot) in input.columns.iter().zip(&input.var_slots) {
-                    self.pdv.set(*slot, col[self.row_idx].clone());
-                }
-                self.row_idx += 1;
-                Ok(Flow::Normal)
             }
             DsStmt::Assign { var, expr } => {
                 let value = self.eval_checked(expr)?;
@@ -349,8 +385,27 @@ impl Runner {
                 body,
             ),
             DsStmt::Delete => Ok(Flow::NextIter),
-            DsStmt::Output => {
-                self.push_outputs();
+            DsStmt::Output(targets) => {
+                if targets.is_empty() {
+                    // `output;` : toutes les sorties.
+                    self.push_outputs();
+                } else {
+                    // OUTPUT ciblé : uniquement les sorties nommées
+                    // (résolues par display "WORK.A" — la compilation a
+                    // validé qu'elles existent).
+                    for t in targets {
+                        let disp = t.display();
+                        let Some(o) =
+                            self.outputs.iter().position(|s| s.display == disp)
+                        else {
+                            // Impossible après compile() ; garde-fou.
+                            return Err(SasError::runtime(format!(
+                                "Output dataset {disp} is not in the DATA statement output list."
+                            )));
+                        };
+                        self.push_one(o);
+                    }
+                }
                 Ok(Flow::Normal)
             }
             DsStmt::Stop => Ok(Flow::EndStep),
@@ -615,22 +670,29 @@ impl Runner {
         }
     }
 
+    /// Pousse la ligne courante du PDV dans TOUTES les sorties.
     fn push_outputs(&mut self) {
-        for (spec, bset) in self.outputs.iter().zip(self.builders.iter_mut()) {
-            for (slot, b) in spec.kept_slots.iter().zip(bset.iter_mut()) {
-                let v = self.pdv.get(*slot);
-                match b {
-                    ColBuilder::Num(vals) => vals.push(value_to_num(v)),
-                    ColBuilder::Char(vals) => vals.push(match v {
-                        Value::Char(s) => s.clone(),
-                        // Une variable char ne contient jamais autre chose
-                        // après pdv.set ; blanc par sûreté.
-                        _ => String::new(),
-                    }),
-                }
+        for o in 0..self.outputs.len() {
+            self.push_one(o);
+        }
+    }
+
+    /// Pousse la ligne courante du PDV dans la sortie d'indice `o`.
+    fn push_one(&mut self, o: usize) {
+        let spec = &self.outputs[o];
+        for (slot, b) in spec.kept_slots.iter().zip(self.builders[o].iter_mut()) {
+            let v = self.pdv.get(*slot);
+            match b {
+                ColBuilder::Num(vals) => vals.push(value_to_num(v)),
+                ColBuilder::Char(vals) => vals.push(match v {
+                    Value::Char(s) => s.clone(),
+                    // Une variable char ne contient jamais autre chose
+                    // après pdv.set ; blanc par sûreté.
+                    _ => String::new(),
+                }),
             }
         }
-        self.out_rows += 1;
+        self.out_rows[o] += 1;
     }
 }
 
@@ -1327,5 +1389,188 @@ mod tests {
         assert!(s.libs.get("WORK").unwrap().exists("b"));
         // _LAST_ = dernière sortie.
         assert_eq!(s.last_dataset.as_deref(), Some("WORK.B"));
+    }
+
+    // ── Options de dataset + OUTPUT ciblé (M2, lot 4) ────────────────────
+
+    /// Mini-CLASS à trois variables (Name char, Sex char, Age num) pour les
+    /// tests d'options de dataset et de sorties multiples.
+    fn write_class_full(session: &Session, table: &str) {
+        let df = df!(
+            "Name" => ["Alfred", "Alice", "Barbara", "Henry"],
+            "Sex" => ["M", "F", "F", "M"],
+            "Age" => [Some(14.0), None, Some(13.0), Some(15.0)],
+        )
+        .unwrap();
+        let vars = vec![
+            VarMeta {
+                name: "Name".into(),
+                ty: VarType::Char,
+                length: 7,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "Sex".into(),
+                ty: VarType::Char,
+                length: 1,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "Age".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ];
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write(table, &SasDataset { df, vars })
+            .unwrap();
+    }
+
+    #[test]
+    fn set_keep_outputs_only_kept_variables() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        let stats = run("data out; set class(keep=name age); run;", &mut s).unwrap();
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 4, 2)]);
+        let ds = read_work(&s, "out");
+        let cols: Vec<&str> = ds.df.get_column_names_str();
+        assert_eq!(cols, vec!["Name", "Age"]);
+    }
+
+    #[test]
+    fn set_where_filters_rows_and_read_counter() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        let stats = run("data out; set class(where=(age > 13)); run;", &mut s).unwrap();
+        // 14, ., 13, 15 : seuls 14 et 15 passent ; le compteur d'obs LUES
+        // est réduit aux lignes qui passent (fidèle à la NOTE SAS).
+        assert_eq!(stats.read, vec![("WORK.CLASS".to_string(), 2)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 2, 3)]);
+        let ds = read_work(&s, "out");
+        let name = ds.df.column("Name").unwrap().str().unwrap();
+        assert_eq!(name.get(0), Some("Alfred"));
+        assert_eq!(name.get(1), Some("Henry"));
+        let log = s.log.into_string();
+        assert!(
+            log.contains("There were 2 observations read from the data set WORK.CLASS."),
+            "log was: {log}"
+        );
+    }
+
+    #[test]
+    fn set_rename_exposes_new_name_only() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        run(
+            "data out; set class(rename=(age=years)); next = years + 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let cols: Vec<&str> = ds.df.get_column_names_str();
+        assert!(cols.contains(&"years"), "columns were: {cols:?}");
+        assert!(!cols.contains(&"Age"), "columns were: {cols:?}");
+        let years = ds.df.column("years").unwrap().f64().unwrap();
+        assert_eq!(years.get(0), Some(14.0));
+        let next = ds.df.column("next").unwrap().f64().unwrap();
+        assert_eq!(next.get(0), Some(15.0));
+    }
+
+    #[test]
+    fn output_drop_option_removes_work_variable() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        run(
+            "data out(drop=tmp); set class; tmp = age * 2; final = tmp + 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let cols: Vec<&str> = ds.df.get_column_names_str();
+        assert!(!cols.contains(&"tmp"), "columns were: {cols:?}");
+        let final_ = ds.df.column("final").unwrap().f64().unwrap();
+        assert_eq!(final_.get(0), Some(29.0));
+    }
+
+    #[test]
+    fn targeted_outputs_split_disjoint_datasets() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        let stats = run(
+            "data m f; set class; if sex = 'M' then output m; else output f; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Deux datasets disjoints, total = obs d'origine, comptes PAR
+        // sortie indépendants.
+        assert_eq!(
+            stats.written,
+            vec![
+                ("WORK.M".to_string(), 2, 3),
+                ("WORK.F".to_string(), 2, 3),
+            ]
+        );
+        let m = read_work(&s, "m");
+        let f = read_work(&s, "f");
+        assert_eq!(m.n_obs() + f.n_obs(), 4);
+        let m_names = m.df.column("Name").unwrap().str().unwrap();
+        assert_eq!(m_names.get(0), Some("Alfred"));
+        assert_eq!(m_names.get(1), Some("Henry"));
+        let f_names = f.df.column("Name").unwrap().str().unwrap();
+        assert_eq!(f_names.get(0), Some("Alice"));
+        assert_eq!(f_names.get(1), Some("Barbara"));
+        let log = s.log.into_string();
+        assert!(log.contains("The data set WORK.M has 2 observations and 3 variables."));
+        assert!(log.contains("The data set WORK.F has 2 observations and 3 variables."));
+    }
+
+    #[test]
+    fn targeted_output_two_names_writes_both() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let stats = run("data a b; set inp; output a b; run;", &mut s).unwrap();
+        assert_eq!(
+            stats.written,
+            vec![("WORK.A".to_string(), 3, 2), ("WORK.B".to_string(), 3, 2)]
+        );
+    }
+
+    #[test]
+    fn output_rename_option_writes_renamed_column() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        run("data out(rename=(age=years)); set class; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        // La colonne du parquet (et son VarMeta) porte le nouveau nom.
+        let cols: Vec<&str> = ds.df.get_column_names_str();
+        assert_eq!(cols, vec!["Name", "Sex", "years"]);
+        assert_eq!(ds.vars[2].name, "years");
+        let years = ds.df.column("years").unwrap().f64().unwrap();
+        assert_eq!(years.get(3), Some(15.0));
+    }
+
+    #[test]
+    fn where_skip_does_not_run_rest_of_iteration() {
+        let mut s = session();
+        write_class_full(&s, "class");
+        // n compte les itérations qui exécutent le corps : avec WHERE=,
+        // seules les lignes qui passent y arrivent.
+        run(
+            "data out; set class(where=(sex = 'F')); n + 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let n = ds.df.column("n").unwrap().f64().unwrap();
+        assert_eq!(ds.n_obs(), 2);
+        assert_eq!(n.get(0), Some(1.0));
+        assert_eq!(n.get(1), Some(2.0));
     }
 }
