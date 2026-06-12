@@ -124,6 +124,13 @@ impl Pdv {
         self.values[slot] = stored;
     }
 
+    /// Marque une variable comme issue d'un input (SET) après coup — cas
+    /// d'une variable créée par une référence textuelle antérieure au SET ;
+    /// elle ne doit pas être remise à missing à chaque itération.
+    pub fn mark_from_input(&mut self, slot: usize) {
+        self.vars[slot].from_input = true;
+    }
+
     /// Réinitialise à missing les variables NON retenues ET NON issues
     /// d'un input (`from_input`). Appelé au début de chaque itération.
     ///
