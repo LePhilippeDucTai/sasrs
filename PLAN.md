@@ -75,10 +75,10 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/parser/datastep.rs` | ✅ | **Opus** | moyen | statements M1 (SET/assign/IF/DO/OUTPUT/KEEP/DROP/STOP), erreurs "not yet implemented" propres |
 | `src/parser/global.rs` | ✅ | **Sonnet** | faible | LIBNAME / TITLE / OPTIONS |
 | `src/datastep/pdv.rs` | ✅ | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
-| `src/datastep/mod.rs` | 🦴 | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
+| `src/datastep/mod.rs` | ✅ | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
 | `src/datastep/exec.rs` | 🦴 | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
 | `src/datastep/eval.rs` | 🦴 | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
-| `src/datastep/functions.rs` | 🦴 | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
+| `src/datastep/functions.rs` | ✅ | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
 | `src/executor.rs` | 🦴 | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
 | `src/procs/mod.rs` | 🦴 | **Sonnet** | faible | registre parse/execute des procs |
 | `src/procs/print.rs` | 🦴 | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
