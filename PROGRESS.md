@@ -22,7 +22,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/datastep/exec.rs` — boucle implicite, builders, NOTEs (Fable, élevé)
 - [x] ⫽ `src/procs/mod.rs` — registre (Sonnet, faible)
 - [x] `src/procs/print.rs` — PROC PRINT (Sonnet, moyen)
-- [ ] `src/executor.rs` — boucle blocs, statements globaux, timing (Opus, moyen)
+- [x] `src/executor.rs` — boucle blocs, statements globaux, timing (Opus, moyen)
 - [ ] Activer `tests/snapshot.rs` (retirer `#[ignore]`), générer/relire les snapshots des 3 fixtures m1/, les vérifier à la main contre le comportement SAS attendu, les committer
 - [ ] DoD M1 : `cargo test -p sas_interpreter` vert snapshots inclus ; `sasrs tests/fixtures/m1/set_filter.sas` plausible ; mettre à jour les ✅ dans PLAN.md
 

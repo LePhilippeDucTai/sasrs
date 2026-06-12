@@ -79,7 +79,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/datastep/exec.rs` | ✅ | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
 | `src/datastep/eval.rs` | ✅ | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
 | `src/datastep/functions.rs` | ✅ | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
-| `src/executor.rs` | 🦴 | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
+| `src/executor.rs` | ✅ | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
 | `src/procs/mod.rs` | ✅ | **Sonnet** | faible | registre parse/execute des procs |
 | `src/procs/print.rs` | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
 | `tests/snapshot.rs` | ✅* | **Sonnet** | faible | *écrit mais `#[ignore]` — retirer l'ignore à la fin de M1, `cargo insta review`, vérifier les 3 fixtures m1/ |
