@@ -27,7 +27,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] DoD M1 : `cargo test -p sas_interpreter` vert snapshots inclus ; `sasrs tests/fixtures/m1/set_filter.sas` plausible ; mettre à jour les ✅ dans PLAN.md
 
 ## M2 — cœur de l'étape DATA
-- [ ] RETAIN, sum statement, LENGTH (compile+exec+parser)
+- [x] RETAIN, sum statement, LENGTH (compile+exec+parser)
 - [ ] DO itératif (TO/BY/WHILE/UNTIL), DELETE
 - [ ] ARRAY + indexation
 - [ ] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé

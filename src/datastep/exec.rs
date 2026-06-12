@@ -107,6 +107,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         outputs,
         has_explicit_output,
         uninitialized,
+        initial_values,
     } = prog;
 
     for name in &uninitialized {
@@ -137,6 +138,16 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         builders,
         out_rows: 0,
     };
+
+    // Valeurs initiales (RETAIN avec init, sum statements) : posées AVANT
+    // la première itération via `pdv.set` (la troncature char des inits
+    // trop longues s'applique donc normalement). Ces slots sont retenus,
+    // `reset_non_retained` ne les touchera jamais. Une entrée ultérieure
+    // pour le même slot écrase la précédente (le RETAIN gagne sur le 0
+    // implicite d'un sum statement).
+    for (slot, v) in initial_values {
+        r.pdv.set(slot, v);
+    }
 
     loop {
         r.pdv.n_ += 1;
@@ -304,8 +315,58 @@ impl Runner {
                 Ok(Flow::Normal)
             }
             DsStmt::Stop => Ok(Flow::EndStep),
+            DsStmt::Sum { var, expr } => {
+                // Sum statement `var + expr;` — sémantique SUM de SAS : les
+                // missings sont IGNORÉS, jamais propagés. Un incrément
+                // missing ajoute 0 (sans `missing_generated`), et un
+                // accumulateur missing (l'utilisateur a pu assigner `.`)
+                // est traité comme 0 : `total=.; total+x;` donne x.
+                let value = self.eval_checked(expr)?;
+                let incr = self.coerce_sum_operand(value);
+                let Some(slot) = self.pdv.slot(var) else {
+                    return Err(SasError::runtime(format!(
+                        "Variable {var} is not addressable."
+                    )));
+                };
+                let acc = match self.pdv.get(slot) {
+                    Value::Num(f) => *f,
+                    // Missing (ou char dégénéré) : repart de 0.
+                    _ => 0.0,
+                };
+                self.pdv.set(slot, Value::Num(acc + incr));
+                Ok(Flow::Normal)
+            }
             // Directives de compilation : rien à exécuter.
-            DsStmt::Keep(_) | DsStmt::Drop(_) => Ok(Flow::Normal),
+            DsStmt::Keep(_) | DsStmt::Drop(_) | DsStmt::Retain(_) | DsStmt::Length(_) => {
+                Ok(Flow::Normal)
+            }
+        }
+    }
+
+    /// Coercition numérique d'un opérande de sum statement. Mêmes règles de
+    /// conversion char→num que l'évaluateur (note + invalid data + _ERROR_
+    /// sur une chaîne invalide), MAIS un résultat missing contribue 0 sans
+    /// incrémenter `missing_generated` (le SUM ignore les missings).
+    fn coerce_sum_operand(&mut self, value: Value) -> f64 {
+        match value {
+            Value::Num(f) => f,
+            Value::Missing(_) => 0.0,
+            Value::Char(s) => {
+                self.ctx.note_char_to_num = true;
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    0.0
+                } else {
+                    match trimmed.parse::<f64>() {
+                        Ok(f) => f,
+                        Err(_) => {
+                            self.ctx.invalid_data += 1;
+                            self.pdv.error_ = true;
+                            0.0
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -567,6 +628,117 @@ mod tests {
             crate::missing::num_to_value(raw),
             Value::Missing(MissingKind::Letter(0))
         );
+    }
+
+    // ── RETAIN / sum statement / LENGTH (M2) ─────────────────────────────
+
+    #[test]
+    fn sum_statement_counter_increments_per_obs() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run("data out; set inp; n + 1; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let n = ds.df.column("n").unwrap().f64().unwrap();
+        assert_eq!(n.get(0), Some(1.0));
+        assert_eq!(n.get(1), Some(2.0));
+        assert_eq!(n.get(2), Some(3.0));
+    }
+
+    #[test]
+    fn sum_statement_ignores_missing_increment() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // age = 14, ., 13 : le missing du milieu ajoute 0 (PAS propagé).
+        run("data out; set inp; total + age; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let total = ds.df.column("total").unwrap().f64().unwrap();
+        assert_eq!(total.get(0), Some(14.0));
+        assert_eq!(total.get(1), Some(14.0));
+        assert_eq!(total.get(2), Some(27.0));
+        // Aucun missing généré par le sum statement.
+        let log = s.log.into_string();
+        assert!(
+            !log.contains("Missing values were generated"),
+            "log was: {log}"
+        );
+    }
+
+    #[test]
+    fn sum_statement_missing_accumulator_restarts_from_zero() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // total remis à `.` à chaque itération : total + age repart de 0.
+        run("data out; set inp; total = .; total + age; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let total = ds.df.column("total").unwrap().f64().unwrap();
+        assert_eq!(total.get(0), Some(14.0));
+        assert_eq!(total.get(1), Some(0.0));
+        assert_eq!(total.get(2), Some(13.0));
+    }
+
+    #[test]
+    fn retain_with_init_accumulates_max() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data out; set inp; retain maxage 0; if age > maxage then maxage = age; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let maxage = ds.df.column("maxage").unwrap().f64().unwrap();
+        // 14 dès la 1re obs, retenu ensuite (. > 14 faux, 13 > 14 faux).
+        assert_eq!(maxage.get(0), Some(14.0));
+        assert_eq!(maxage.get(1), Some(14.0));
+        assert_eq!(maxage.get(2), Some(14.0));
+    }
+
+    #[test]
+    fn retain_initial_value_wins_over_sum_zero() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run("data out; set inp; n + 1; retain n 100; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let n = ds.df.column("n").unwrap().f64().unwrap();
+        assert_eq!(n.get(0), Some(101.0));
+        assert_eq!(n.get(2), Some(103.0));
+    }
+
+    #[test]
+    fn retain_without_init_keeps_value_across_iterations() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // prev : Name de l'observation précédente ('' à la 1re itération).
+        run(
+            "data out; set inp; retain prev; output; prev = name; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let prev = ds.df.column("prev").unwrap().str().unwrap();
+        assert_eq!(prev.get(0), Some(""));
+        assert_eq!(prev.get(1), Some("Alfred"));
+        assert_eq!(prev.get(2), Some("Alice"));
+    }
+
+    #[test]
+    fn length_truncates_longer_assignment() {
+        let mut s = session();
+        let stats = run("data out; length c $ 3; c = 'abcdef'; run;", &mut s).unwrap();
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 1, 1)]);
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("c").unwrap().str().unwrap().get(0), Some("abc"));
+        assert_eq!(ds.vars[0].length, 3);
+    }
+
+    #[test]
+    fn retain_char_init_truncated_to_fixed_length() {
+        let mut s = session();
+        // c figée Char(3) par LENGTH ; l'init RETAIN 'abcdef' est tronquée
+        // par le pdv.set normal au moment de poser les valeurs initiales.
+        run("data out; length c $ 3; retain c 'abcdef'; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("c").unwrap().str().unwrap().get(0), Some("abc"));
     }
 
     #[test]

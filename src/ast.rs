@@ -78,8 +78,15 @@ pub enum Expr {
     },
 }
 
-/// DATA step statements (M1 subset; M2+ adds RETAIN, DO iterative, ARRAY,
-/// MERGE, BY, LENGTH, sum statement...).
+/// Spec d'une variable dans un statement LENGTH : `$ n` (char) ou `n` (num).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LengthSpec {
+    pub char: bool,
+    pub len: usize,
+}
+
+/// DATA step statements (M1 subset + M2 : RETAIN, sum statement, LENGTH ;
+/// M2+ ajoutera DO iterative, ARRAY, MERGE, BY...).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsStmt {
     /// `set lib.a;` — M1: single dataset, no options.
@@ -101,6 +108,15 @@ pub enum DsStmt {
     Keep(Vec<String>),
     Drop(Vec<String>),
     Stop,
+    /// `retain v1 v2;` / `retain v 100;` / `retain a 1 b 'x' c;` /
+    /// `retain;` (liste vide = toutes les variables du PDV). La valeur
+    /// initiale optionnelle est un LITTÉRAL (`Expr::Num`, `Expr::Str` ou
+    /// `Expr::Missing` — un `-5` est replié en `Num(-5.0)` par le parser).
+    Retain(Vec<(String, Option<Expr>)>),
+    /// Sum statement `var + expr;` (ex. `total + x;`). PAS de forme `-`.
+    Sum { var: String, expr: Expr },
+    /// `length v1 v2 $ 20 v3 5;`
+    Length(Vec<(String, LengthSpec)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

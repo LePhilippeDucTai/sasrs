@@ -226,6 +226,10 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 TokenKind::Eq
             }
+            b'$' => {
+                self.pos += 1;
+                TokenKind::Dollar
+            }
             other => {
                 self.pos += 1;
                 return Err(SasError::parse(
@@ -456,6 +460,29 @@ mod tests {
         // `*` en PLEIN statement reste la multiplication.
         let k = kinds("x = 2 * 3;");
         assert!(k.contains(&TokenKind::Star));
+    }
+
+    #[test]
+    fn dollar_token_in_length_statement() {
+        // `$` collé ou non au nombre : toujours un token Dollar distinct.
+        let k = kinds("length a b $ 12 c 5;");
+        assert_eq!(
+            k,
+            vec![
+                TokenKind::Ident("length".into()),
+                TokenKind::Ident("a".into()),
+                TokenKind::Ident("b".into()),
+                TokenKind::Dollar,
+                TokenKind::Num(12.0),
+                TokenKind::Ident("c".into()),
+                TokenKind::Num(5.0),
+                TokenKind::Semi,
+                TokenKind::Eof,
+            ]
+        );
+        let k = kinds("length x $20;");
+        assert!(k.contains(&TokenKind::Dollar));
+        assert!(k.contains(&TokenKind::Num(20.0)));
     }
 
     #[test]

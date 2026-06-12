@@ -22,7 +22,11 @@
 //! - `output ;`                   → `DsStmt::Output` (M1 : sans cible)
 //! - `keep v1 v2... ;` / `drop ... ;`
 //! - `stop ;`
-//! - mot-clé inconnu (retain, merge, array, length, where, ...) → ERROR
+//! - `retain [v [init]]... ;`     → `DsStmt::Retain` (M2) ; init = littéral
+//!   Num (avec `-` unaire replié), Str ou missing (`.`/`.a`...)
+//! - `length v... [$] n ... ;`    → `DsStmt::Length` (M2)
+//! - `var + expr ;`               → `DsStmt::Sum` (M2 ; PAS de forme `-`)
+//! - mot-clé inconnu (merge, array, where, ...) → ERROR
 //!   "Statement XXX is not yet implemented", l'étape entière est invalide
 //!   (comme une erreur de compilation SAS : "step not executed") mais on
 //!   CONTINUE de parser jusqu'à la frontière pour ne pas désynchroniser.
@@ -61,10 +65,11 @@
 
 #![allow(unused_variables, dead_code)]
 
-use super::{is_block_head_kw, StatementStream};
-use crate::ast::{DataStepAst, DsStmt};
+use super::{is_block_head_kw, validate_sas_name, StatementStream};
+use crate::ast::{DataStepAst, DsStmt, Expr, LengthSpec};
 use crate::error::{Result, SasError};
-use crate::token::{Span, TokenKind};
+use crate::token::{Span, StrSuffix, TokenKind};
+use crate::value::MissingKind;
 
 pub fn parse_data_step(ts: &mut StatementStream) -> Result<DataStepAst> {
     let start = ts.peek().span.start;
@@ -207,17 +212,22 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
             ts.expect_semi()?;
             Ok(DsStmt::Drop(names))
         }
+        "retain" => parse_retain(ts),
+        "length" => parse_length(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
             "no matching DO for END.",
             tok.span,
         )),
         _ => {
-            // Mot-clé connu de SAS mais non implémenté en M1, OU assignation
-            // `ident = expr;`. `StatementStream` n'expose pas de peek2, donc
-            // on consomme l'ident de tête puis on inspecte le token suivant :
-            // un `=` → assignation ; sinon → statement non implémenté. Le
-            // span d'erreur est celui de l'ident de tête (déjà cloné).
+            // Mot-clé connu de SAS mais non implémenté, assignation
+            // `ident = expr;` OU sum statement `ident + expr;`.
+            // `StatementStream` n'expose pas de peek2, donc on consomme
+            // l'ident de tête puis on inspecte le token suivant : un `=` →
+            // assignation, un `+` → sum statement ; sinon → statement non
+            // implémenté. (La forme `var - expr;` N'EXISTE PAS en SAS — un
+            // `-` après l'ident tombe dans l'erreur.) Le span d'erreur est
+            // celui de l'ident de tête (déjà cloné).
             let var = tok
                 .ident()
                 .expect("matched an Ident head above")
@@ -228,6 +238,11 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
                 let expr = super::expr::parse_expr(ts)?;
                 ts.expect_semi()?;
                 Ok(DsStmt::Assign { var, expr })
+            } else if ts.peek().kind == TokenKind::Plus {
+                ts.next(); // `+`
+                let expr = super::expr::parse_expr(ts)?;
+                ts.expect_semi()?;
+                Ok(DsStmt::Sum { var, expr })
             } else {
                 Err(SasError::parse(
                     format!(
@@ -358,6 +373,173 @@ fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
             _ => {
                 return Err(SasError::parse(
                     "expected a DATA step statement inside DO block",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// `retain [v [init]]... ;` — la liste peut être vide (`retain;` = toutes
+/// les variables du PDV). Chaque nom peut être suivi d'une valeur initiale
+/// LITTÉRALE : nombre (avec `-` unaire, replié en `Expr::Num` négatif),
+/// chaîne, ou missing (`.` / `.a`.. / `._`, adjacence vérifiée par spans
+/// comme dans le parser d'expressions).
+fn parse_retain(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `retain`
+    let mut items: Vec<(String, Option<Expr>)> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                ts.next();
+                return Ok(DsStmt::Retain(items));
+            }
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                validate_sas_name(&name, tok.span)?;
+                ts.next();
+                let init = parse_retain_init(ts)?;
+                items.push((name, init));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name in the RETAIN statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Valeur initiale optionnelle d'un élément de RETAIN : un littéral, ou
+/// rien (le token suivant est alors un autre nom ou le `;`).
+fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Num(n) => {
+            ts.next();
+            Ok(Some(Expr::Num(*n)))
+        }
+        TokenKind::Minus => {
+            // `-5` : moins unaire sur littéral numérique, replié.
+            ts.next(); // `-`
+            let num_tok = ts.peek().clone();
+            let TokenKind::Num(n) = num_tok.kind else {
+                return Err(SasError::parse(
+                    "expected a numeric literal after '-' in the RETAIN statement",
+                    num_tok.span,
+                ));
+            };
+            ts.next();
+            Ok(Some(Expr::Num(-n)))
+        }
+        TokenKind::Str { value, suffix } => {
+            // M2 : seuls les littéraux simples sont acceptés comme valeur
+            // initiale (pas de '...'d/'...'t — viendront avec les formats).
+            match suffix {
+                StrSuffix::None | StrSuffix::Name => {
+                    let s = value.clone();
+                    ts.next();
+                    Ok(Some(Expr::Str(s)))
+                }
+                _ => Err(SasError::parse(
+                    "date/time literals are not yet implemented as RETAIN initial values",
+                    tok.span,
+                )),
+            }
+        }
+        TokenKind::Dot => {
+            // `.` seul, ou missing spécial `.a`.. / `._` si l'ident d'UNE
+            // lettre/`_` est ADJACENT (spans jointifs, comme expr.rs).
+            let dot_end = tok.span.end;
+            ts.next(); // `.`
+            if let TokenKind::Ident(s) = &ts.peek().kind {
+                if ts.peek().span.start == dot_end && s.chars().count() == 1 {
+                    if let Some(kind) = MissingKind::from_letter(s.chars().next().unwrap()) {
+                        ts.next();
+                        return Ok(Some(Expr::Missing(kind)));
+                    }
+                }
+            }
+            Ok(Some(Expr::Missing(MissingKind::Dot)))
+        }
+        // Pas de littéral : l'élément n'a pas de valeur initiale.
+        _ => Ok(None),
+    }
+}
+
+/// `length v1 v2 $ 20 v3 5;` — suites répétables de « noms... [$] n » ; le
+/// `$` s'applique au groupe de noms qui précède le nombre. La validation
+/// des PLAGES de longueur (char 1..=32767, num 3..=8) est faite à la
+/// compilation ; ici on exige seulement un entier positif.
+fn parse_length(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `length`
+    let mut items: Vec<(String, LengthSpec)> = Vec::new();
+    let mut group: Vec<String> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                validate_sas_name(&name, tok.span)?;
+                ts.next();
+                group.push(name);
+            }
+            TokenKind::Dollar | TokenKind::Num(_) => {
+                let is_char = tok.kind == TokenKind::Dollar;
+                if is_char {
+                    ts.next(); // `$`
+                }
+                let num_tok = ts.peek().clone();
+                let TokenKind::Num(n) = num_tok.kind else {
+                    return Err(SasError::parse(
+                        "expected a length after '$' in the LENGTH statement",
+                        num_tok.span,
+                    ));
+                };
+                if group.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a variable name before the length in the LENGTH statement",
+                        tok.span,
+                    ));
+                }
+                if n.fract() != 0.0 || n < 1.0 {
+                    return Err(SasError::parse(
+                        "the length in a LENGTH statement must be a positive integer",
+                        num_tok.span,
+                    ));
+                }
+                ts.next(); // le nombre
+                let spec = LengthSpec {
+                    char: is_char,
+                    len: n as usize,
+                };
+                for name in group.drain(..) {
+                    items.push((name, spec));
+                }
+            }
+            TokenKind::Semi => {
+                // Noms restés sans longueur → erreur AVANT de consommer le
+                // `;` (la resynchronisation de l'appelant le consommera).
+                if !group.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a length in the LENGTH statement",
+                        tok.span,
+                    ));
+                }
+                if items.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a variable name in the LENGTH statement",
+                        tok.span,
+                    ));
+                }
+                ts.next();
+                return Ok(DsStmt::Length(items));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name or a length in the LENGTH statement",
                     tok.span,
                 ));
             }
@@ -546,19 +728,164 @@ mod tests {
 
     #[test]
     fn unimplemented_statement_errors_but_resyncs() {
-        // `retain` n'est pas implémenté en M1. L'étape doit échouer MAIS le
+        // `merge` n'est pas implémenté en M2. L'étape doit échouer MAIS le
         // stream doit être positionné après le `run;` pour le bloc suivant.
-        let file = SourceFile::new("data o; retain x 0; set i; run; data b; run;");
+        let file = SourceFile::new("data o; merge x y; set i; run; data b; run;");
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         let err = parse_data_step(&mut ts).unwrap_err();
-        assert!(err.to_string().to_uppercase().contains("RETAIN"));
+        assert!(err.to_string().to_uppercase().contains("MERGE"));
         assert!(err.to_string().contains("not yet implemented"));
         // Resynchronisation : on est sur le `data` de la deuxième étape.
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast2.outputs, vec![dsref("b")]);
+    }
+
+    // ── RETAIN (M2) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn retain_empty_list() {
+        let ast = parse("data o; retain; run;").unwrap();
+        assert_eq!(ast.stmts, vec![DsStmt::Retain(vec![])]);
+    }
+
+    #[test]
+    fn retain_mixed_inits() {
+        let ast = parse("data o; retain x 0 y 'ab' z; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![
+                ("x".to_string(), Some(Expr::Num(0.0))),
+                ("y".to_string(), Some(Expr::Str("ab".to_string()))),
+                ("z".to_string(), None),
+            ])]
+        );
+    }
+
+    #[test]
+    fn retain_negative_and_missing_inits() {
+        use crate::value::MissingKind;
+        let ast = parse("data o; retain a -5 b . c .z; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![
+                ("a".to_string(), Some(Expr::Num(-5.0))),
+                ("b".to_string(), Some(Expr::Missing(MissingKind::Dot))),
+                ("c".to_string(), Some(Expr::Missing(MissingKind::Letter(25)))),
+            ])]
+        );
+    }
+
+    #[test]
+    fn retain_dot_then_separate_name_is_plain_missing() {
+        use crate::value::MissingKind;
+        // `. a` (espace) : missing ordinaire pour x, puis variable a.
+        let ast = parse("data o; retain x . a 5; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![
+                ("x".to_string(), Some(Expr::Missing(MissingKind::Dot))),
+                ("a".to_string(), Some(Expr::Num(5.0))),
+            ])]
+        );
+    }
+
+    #[test]
+    fn retain_minus_without_number_errors() {
+        let err = parse("data o; retain x -; run;").unwrap_err();
+        assert!(err.to_string().contains("numeric literal"));
+    }
+
+    // ── Sum statement (M2) ───────────────────────────────────────────────
+
+    #[test]
+    fn sum_statement_parses() {
+        let ast = parse("data o; n + 1; total + x * 2; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![
+                DsStmt::Sum {
+                    var: "n".to_string(),
+                    expr: Expr::Num(1.0),
+                },
+                DsStmt::Sum {
+                    var: "total".to_string(),
+                    expr: Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(var("x")),
+                        right: Box::new(Expr::Num(2.0)),
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sum_statement_is_not_confused_with_assignment() {
+        let ast = parse("data o; n = 1; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Assign {
+                var: "n".to_string(),
+                expr: Expr::Num(1.0),
+            }]
+        );
+    }
+
+    #[test]
+    fn sum_statement_minus_form_is_rejected() {
+        // `var - expr;` n'existe pas en SAS.
+        let err = parse("data o; total - x; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"));
+    }
+
+    // ── LENGTH (M2) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn length_groups_char_and_num() {
+        let ast = parse("data o; length a b $ 12 c 5; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Length(vec![
+                ("a".to_string(), LengthSpec { char: true, len: 12 }),
+                ("b".to_string(), LengthSpec { char: true, len: 12 }),
+                ("c".to_string(), LengthSpec { char: false, len: 5 }),
+            ])]
+        );
+    }
+
+    #[test]
+    fn length_dollar_glued_to_number() {
+        let ast = parse("data o; length nm $20; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Length(vec![(
+                "nm".to_string(),
+                LengthSpec { char: true, len: 20 },
+            )])]
+        );
+    }
+
+    #[test]
+    fn length_without_trailing_number_errors() {
+        let err = parse("data o; length a b; run;").unwrap_err();
+        assert!(err.to_string().contains("expected a length"));
+    }
+
+    #[test]
+    fn length_without_names_errors() {
+        let err = parse("data o; length $ 4; run;").unwrap_err();
+        assert!(err.to_string().contains("variable name"));
+        let err = parse("data o; length; run;").unwrap_err();
+        assert!(err.to_string().contains("variable name"));
+    }
+
+    #[test]
+    fn length_non_integer_errors() {
+        let err = parse("data o; length a $ 2.5; run;").unwrap_err();
+        assert!(err.to_string().contains("positive integer"));
     }
 
     #[test]

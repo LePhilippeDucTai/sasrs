@@ -53,6 +53,8 @@ pub enum TokenKind {
     Le,
     Gt,
     Ge,
+    /// `$` (char marker in LENGTH/INPUT/FORMAT statements)
+    Dollar,
     /// `=` (assignment or comparison depending on context)
     Eq,
     /// `^=`, `~=`, `ne`

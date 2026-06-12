@@ -100,6 +100,12 @@ pub struct StepProgram {
     /// assignées ni lues d'un input : l'exécuteur émet la NOTE
     /// "Variable x is uninitialized." à la première itération.
     pub uninitialized: Vec<String>,
+    /// Valeurs initiales (slot, valeur) issues de RETAIN avec init et des
+    /// sum statements (0) : l'exécuteur les applique via `pdv.set` AVANT la
+    /// première itération (la troncature char s'applique donc normalement).
+    /// Appliquées dans l'ordre — une entrée ultérieure pour le même slot
+    /// gagne (cas `n + 1; retain n 100;` : le RETAIN l'emporte).
+    pub initial_values: Vec<(usize, Value)>,
 }
 
 pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> {
@@ -111,10 +117,45 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         drops: Vec::new(),
         assigned: HashSet::new(),
         has_explicit_output: false,
+        retain_all: false,
+        retain_pending: Vec::new(),
+        retained_slots: HashSet::new(),
+        initial_values: Vec::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
     }
+
+    // RETAIN sans valeur initiale — SIMPLIFICATION M2 ASSUMÉE : en vrai
+    // SAS, `retain x;` ne fige PAS le type — la variable le prend à sa
+    // prochaine référence. Pour approcher ça sans bouleverser la passe
+    // unique, le statement n'a fait que mémoriser le nom ; ICI (fin de
+    // compilation) on applique le flag `retained` à la variable, qui doit
+    // alors exister (créée par une autre référence). Sinon on la crée Num
+    // + uninitialized — elle arrive donc en FIN d'ordre PDV (divergence
+    // mineure assumée par rapport à l'ordre de première référence SAS).
+    let pending = std::mem::take(&mut c.retain_pending);
+    for name in &pending {
+        let slot = match c.pdv.slot(name) {
+            Some(slot) => slot,
+            None => c.add_var(name, VarType::Num, 8),
+        };
+        c.retained_slots.insert(slot);
+    }
+    // `retain;` seul — SIMPLIFICATION M2 : retient TOUT le PDV (en vrai
+    // SAS, seulement ce qui est connu au point du statement).
+    if c.retain_all {
+        c.retained_slots.extend(0..c.pdv.vars().len());
+    }
+    // Le PDV ne permet pas de modifier une variable existante (première
+    // référence fige tout, et `pdv.rs` n'expose pas de mutateur) : on le
+    // reconstruit à l'identique en appliquant les flags `retained`. Les
+    // slots sont préservés (même ordre d'insertion) et aucune valeur n'a
+    // encore été posée à la compilation.
+    if !c.retained_slots.is_empty() {
+        c.pdv = rebuild_with_retained(&c.pdv, &c.retained_slots);
+    }
+
     let outputs = c.resolve_outputs(&ast.outputs)?;
     let uninitialized = c
         .pdv
@@ -130,7 +171,26 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         outputs,
         has_explicit_output: c.has_explicit_output,
         uninitialized,
+        initial_values: c.initial_values,
     })
+}
+
+/// Reconstruit le PDV en marquant `retained` les slots donnés (les autres
+/// attributs sont copiés tels quels ; les indices de slots sont stables).
+fn rebuild_with_retained(pdv: &Pdv, retained: &HashSet<usize>) -> Pdv {
+    let mut rebuilt = Pdv::new();
+    for (i, v) in pdv.vars().iter().enumerate() {
+        let slot = rebuilt.add_var(PdvVar {
+            name: v.name.clone(),
+            ty: v.ty,
+            length: v.length,
+            retained: v.retained || retained.contains(&i),
+            from_input: v.from_input,
+            format: v.format.clone(),
+        });
+        debug_assert_eq!(slot, i, "rebuild must preserve slot indices");
+    }
+    rebuilt
 }
 
 struct Compiler<'a> {
@@ -142,6 +202,15 @@ struct Compiler<'a> {
     /// Noms (uppercase) ayant au moins une assignation dans l'étape.
     assigned: HashSet<String>,
     has_explicit_output: bool,
+    /// `retain;` sans liste rencontré : tout le PDV sera retenu.
+    retain_all: bool,
+    /// Noms d'un RETAIN SANS init : flag appliqué en fin de compilation.
+    retain_pending: Vec<String>,
+    /// Slots à marquer `retained` en fin de compilation (RETAIN avec init,
+    /// sum statements, RETAIN sans init résolus).
+    retained_slots: HashSet<usize>,
+    /// Valeurs initiales (slot, valeur) appliquées avant la 1re itération.
+    initial_values: Vec<(usize, Value)>,
 }
 
 impl Compiler<'_> {
@@ -193,6 +262,82 @@ impl Compiler<'_> {
                 Ok(())
             }
             DsStmt::Stop => Ok(()),
+            DsStmt::Retain(items) => {
+                if items.is_empty() {
+                    // `retain;` seul : tout le PDV (cf. fin de compile()).
+                    self.retain_all = true;
+                    return Ok(());
+                }
+                for (name, init) in items {
+                    match init {
+                        // AVEC init : la variable entre au PDV ICI (ordre de
+                        // première référence), type/longueur du littéral, et
+                        // sa valeur initiale part dans `initial_values`. Elle
+                        // compte comme initialisée (pas de NOTE
+                        // "uninitialized" — comme SAS).
+                        Some(expr) => {
+                            let (ty, length, value) = retain_literal(expr)?;
+                            let slot = self.add_var(name, ty, length);
+                            self.retained_slots.insert(slot);
+                            self.assigned.insert(name.to_uppercase());
+                            self.initial_values.push((slot, value));
+                        }
+                        // SANS init : ne crée PAS la variable (le type sera
+                        // figé par sa prochaine référence) — voir compile().
+                        None => self.retain_pending.push(name.clone()),
+                    }
+                }
+                Ok(())
+            }
+            DsStmt::Sum { var, expr } => {
+                // `var + expr;` : var entre au PDV (Num, 8), retenue, valeur
+                // initiale 0 — SAUF si un RETAIN avec init a déjà posé une
+                // valeur pour ce slot (le RETAIN gagne, comme SAS). La cible
+                // entre avant les variables de l'expression (ordre textuel).
+                let slot = self.add_var(var, VarType::Num, 8);
+                self.retained_slots.insert(slot);
+                self.assigned.insert(var.to_uppercase());
+                if !self.initial_values.iter().any(|(s, _)| *s == slot) {
+                    self.initial_values.push((slot, Value::Num(0.0)));
+                }
+                self.walk_expr(expr);
+                Ok(())
+            }
+            DsStmt::Length(items) => {
+                for (name, spec) in items {
+                    // Plages SAS : char 1..=32767, num 3..=8.
+                    let (lo, hi) = if spec.char { (1, 32767) } else { (3, 8) };
+                    if spec.len < lo || spec.len > hi {
+                        return Err(SasError::runtime(format!(
+                            "The length {} specified for the variable {} is out of range ({}-{}).",
+                            spec.len, name, lo, hi
+                        )));
+                    }
+                    match self.pdv.slot(name) {
+                        // LENGTH précède la première référence : crée la
+                        // variable avec cette longueur. Pour une numérique,
+                        // la longueur (3..=8) est une simple MÉTADONNÉE en
+                        // M2 — le stockage reste f64 sur 8 octets.
+                        None => {
+                            let ty = if spec.char { VarType::Char } else { VarType::Num };
+                            self.add_var(name, ty, spec.len);
+                        }
+                        // Déjà au PDV : la longueur est figée. SAS n'émet le
+                        // WARNING que pour les variables CHAR dont la
+                        // longueur demandée diffère ; num : silencieux.
+                        Some(slot) => {
+                            let v = &self.pdv.vars()[slot];
+                            if v.ty == VarType::Char && spec.char && v.length != spec.len {
+                                let name = v.name.clone();
+                                self.session.log.warning(&format!(
+                                    "Length of character variable {name} has already been set."
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -390,6 +535,24 @@ impl Compiler<'_> {
                 kept_slots: kept_slots.clone(),
             })
             .collect())
+    }
+}
+
+/// Type, longueur et valeur d'un littéral d'init RETAIN. Le parser ne
+/// produit que `Num` (le `-` unaire y est replié), `Str` ou `Missing` ;
+/// tout autre nœud est un garde-fou.
+fn retain_literal(expr: &Expr) -> Result<(VarType, usize, Value)> {
+    match expr {
+        Expr::Num(n) => Ok((VarType::Num, 8, Value::Num(*n))),
+        Expr::Missing(k) => Ok((VarType::Num, 8, Value::Missing(*k))),
+        Expr::Str(s) => Ok((
+            VarType::Char,
+            s.chars().count().max(1),
+            Value::Char(s.clone()),
+        )),
+        _ => Err(SasError::runtime(
+            "RETAIN initial values must be literals.",
+        )),
     }
 }
 
@@ -639,6 +802,159 @@ mod tests {
         assert!(prog.pdv.vars()[slot].from_input);
         // Et l'ordre de première référence place age en tête.
         assert_eq!(prog.pdv.vars()[0].name, "age");
+    }
+
+    // ── RETAIN (M2) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn retain_with_init_creates_retained_var_with_initial_value() {
+        let mut s = session();
+        let prog = compile_src("data o; retain x 5 s 'ab'; y = 1; run;", &mut s).unwrap();
+        // Ordre de première référence : x et s entrent au RETAIN, avant y.
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "s", "y"]);
+        assert!(prog.pdv.vars()[0].retained);
+        assert!(prog.pdv.vars()[1].retained);
+        assert!(!prog.pdv.vars()[2].retained);
+        // Types/longueurs des littéraux.
+        assert_eq!(prog.pdv.vars()[0].ty, VarType::Num);
+        assert_eq!(prog.pdv.vars()[1].ty, VarType::Char);
+        assert_eq!(prog.pdv.vars()[1].length, 2);
+        // Valeurs initiales.
+        assert_eq!(
+            prog.initial_values,
+            vec![(0, Value::Num(5.0)), (1, Value::Char("ab".into()))]
+        );
+        // RETAIN avec init = initialisée : pas de NOTE uninitialized.
+        assert!(prog.uninitialized.is_empty());
+    }
+
+    #[test]
+    fn retain_without_init_flags_later_reference_or_creates_num() {
+        let mut s = session();
+        // k : retenue sans init, type figé par l'assignation ultérieure.
+        // j : retenue sans init, jamais référencée → Num + uninitialized,
+        // créée en FIN d'ordre PDV (simplification M2 documentée).
+        let prog = compile_src("data o; retain k j; x = 1; k = 'ab'; run;", &mut s).unwrap();
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "k", "j"]);
+        let var = |n: &str| &prog.pdv.vars()[prog.pdv.slot(n).unwrap()];
+        assert!(var("k").retained);
+        assert_eq!(var("k").ty, VarType::Char);
+        assert_eq!(var("k").length, 2);
+        assert!(var("j").retained);
+        assert_eq!(var("j").ty, VarType::Num);
+        assert!(!var("x").retained);
+        assert_eq!(prog.uninitialized, vec!["j".to_string()]);
+        // Pas de valeur initiale sans init.
+        assert!(prog.initial_values.is_empty());
+    }
+
+    #[test]
+    fn retain_bare_retains_whole_pdv() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let prog = compile_src("data o; set inp; retain; x = 1; run;", &mut s).unwrap();
+        assert!(prog.pdv.vars().iter().all(|v| v.retained));
+    }
+
+    // ── Sum statement (M2) ───────────────────────────────────────────────
+
+    #[test]
+    fn sum_statement_compiles_retained_num_with_initial_zero() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let prog = compile_src("data o; set inp; total + age; run;", &mut s).unwrap();
+        let slot = prog.pdv.slot("total").unwrap();
+        let v = &prog.pdv.vars()[slot];
+        assert_eq!(v.ty, VarType::Num);
+        assert_eq!(v.length, 8);
+        assert!(v.retained);
+        assert_eq!(prog.initial_values, vec![(slot, Value::Num(0.0))]);
+        // La cible d'un sum statement compte comme initialisée.
+        assert!(prog.uninitialized.is_empty());
+    }
+
+    #[test]
+    fn retain_init_wins_over_sum_zero_in_both_orders() {
+        let mut s = session();
+        // RETAIN d'abord : le sum statement ne pousse pas son 0.
+        let prog = compile_src("data o; retain n 100; n + 1; run;", &mut s).unwrap();
+        let slot = prog.pdv.slot("n").unwrap();
+        assert_eq!(prog.initial_values, vec![(slot, Value::Num(100.0))]);
+        // Sum d'abord : les deux entrées coexistent, le RETAIN (appliqué en
+        // dernier par l'exécuteur) gagne.
+        let prog = compile_src("data o; n + 1; retain n 100; run;", &mut s).unwrap();
+        let slot = prog.pdv.slot("n").unwrap();
+        assert_eq!(
+            prog.initial_values,
+            vec![(slot, Value::Num(0.0)), (slot, Value::Num(100.0))]
+        );
+    }
+
+    // ── LENGTH (M2) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn length_before_first_reference_fixes_type_and_length() {
+        let mut s = session();
+        let prog = compile_src(
+            "data o; length c $ 3 n 4; c = 'abcdef'; n = 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["c", "n"]);
+        let c = &prog.pdv.vars()[0];
+        assert_eq!(c.ty, VarType::Char);
+        // La longueur du LENGTH gagne sur celle du littéral assigné.
+        assert_eq!(c.length, 3);
+        let n = &prog.pdv.vars()[1];
+        assert_eq!(n.ty, VarType::Num);
+        // Pour une numérique, la longueur est une métadonnée (stockage f64).
+        assert_eq!(n.length, 4);
+        assert!(prog.uninitialized.is_empty());
+    }
+
+    #[test]
+    fn length_after_reference_warns_for_differing_char() {
+        let mut s = session();
+        let prog = compile_src("data o; c = 'ab'; length c $ 10; run;", &mut s).unwrap();
+        // La longueur reste figée par la première référence.
+        assert_eq!(prog.pdv.vars()[0].length, 2);
+        let log = s.log.into_string();
+        assert!(
+            log.contains("WARNING: Length of character variable c has already been set."),
+            "log was: {log}"
+        );
+    }
+
+    #[test]
+    fn length_after_reference_is_silent_for_num_and_same_char_length() {
+        let mut s = session();
+        let prog = compile_src(
+            "data o; x = 1; length x 5; c = 'ab'; length c $ 2; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(prog.pdv.vars()[0].length, 8);
+        let log = s.log.into_string();
+        assert!(!log.contains("WARNING"), "log was: {log}");
+    }
+
+    #[test]
+    fn length_out_of_range_errors() {
+        let mut s = session();
+        let err = compile_src("data o; length n 9; run;", &mut s).err().unwrap();
+        assert!(err.to_string().contains("out of range (3-8)"), "got: {err}");
+        let err = compile_src("data o; length c $ 40000; run;", &mut s)
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("out of range (1-32767)"),
+            "got: {err}"
+        );
+        let err = compile_src("data o; length n 2; run;", &mut s).err().unwrap();
+        assert!(err.to_string().contains("out of range"), "got: {err}");
     }
 
     #[test]
