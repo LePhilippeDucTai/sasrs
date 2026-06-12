@@ -35,7 +35,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m2/ + snapshots ; DoD : cargo test vert
 
 ## M3 — monde BY
-- [ ] `src/procs/sort.rs` (collation missings, NODUPKEY, DESCENDING, OUT=)
+- [x] `src/procs/sort.rs` (collation missings, NODUPKEY, DESCENDING, OUT=)
 - [ ] SET avec BY (interclassement), FIRST./LAST.
 - [ ] MERGE avec BY (match-merge exact, IN=, détection désordre) — tests contre sorties SAS calculées à la main
 - [ ] Fixtures m3/ + snapshots
