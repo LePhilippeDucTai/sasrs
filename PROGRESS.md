@@ -17,11 +17,11 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] ⫽ `src/parser/global.rs` — LIBNAME/TITLE/OPTIONS (Sonnet, faible)
 - [x] `src/datastep/pdv.rs` — PDV (Sonnet, moyen)
 - [x] `src/datastep/mod.rs` — compilation PDV, inférence types (Fable, élevé)
-- [ ] `src/datastep/eval.rs` — évaluateur, coercitions (Opus, moyen-élevé)
+- [x] `src/datastep/eval.rs` — évaluateur, coercitions (Opus, moyen-élevé)
 - [x] ⫽ `src/datastep/functions.rs` — ~25 fonctions table-driven (Sonnet, moyen)
-- [ ] `src/datastep/exec.rs` — boucle implicite, builders, NOTEs (Fable, élevé)
-- [ ] ⫽ `src/procs/mod.rs` — registre (Sonnet, faible)
-- [ ] `src/procs/print.rs` — PROC PRINT (Sonnet, moyen)
+- [x] `src/datastep/exec.rs` — boucle implicite, builders, NOTEs (Fable, élevé)
+- [x] ⫽ `src/procs/mod.rs` — registre (Sonnet, faible)
+- [x] `src/procs/print.rs` — PROC PRINT (Sonnet, moyen)
 - [ ] `src/executor.rs` — boucle blocs, statements globaux, timing (Opus, moyen)
 - [ ] Activer `tests/snapshot.rs` (retirer `#[ignore]`), générer/relire les snapshots des 3 fixtures m1/, les vérifier à la main contre le comportement SAS attendu, les committer
 - [ ] DoD M1 : `cargo test -p sas_interpreter` vert snapshots inclus ; `sasrs tests/fixtures/m1/set_filter.sas` plausible ; mettre à jour les ✅ dans PLAN.md
