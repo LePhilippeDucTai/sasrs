@@ -82,7 +82,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/executor.rs` | ✅ | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
 | `src/procs/mod.rs` | ✅ | **Sonnet** | faible | registre parse/execute des procs |
 | `src/procs/print.rs` | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
-| `tests/snapshot.rs` | ✅* | **Sonnet** | faible | *écrit mais `#[ignore]` — retirer l'ignore à la fin de M1, `cargo insta review`, vérifier les 3 fixtures m1/ |
+| `tests/snapshot.rs` | ✅ | **Sonnet** | faible | actif — les 3 fixtures m1/ sont verrouillées (log + listing + exit), vérifiées à la main |
 
 **Definition of done M1** : `cargo test -p sas_interpreter` vert avec les snapshots activés ;
 `sasrs tests/fixtures/m1/set_filter.sas` affiche les ados de CLASS avec une log plausible.

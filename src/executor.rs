@@ -77,11 +77,17 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             } else {
                 session.base_dir.join(p)
             };
-            match session.libs.assign(libref, abs.clone()) {
+            // Sous --deterministic, le chemin affiché est celui du source
+            // (un chemin absolu de tempdir casserait les snapshots).
+            let shown = if session.deterministic {
+                path.clone()
+            } else {
+                abs.display().to_string()
+            };
+            match session.libs.assign(libref, abs) {
                 Ok(()) => session.log.note(&format!(
-                    "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {}",
-                    libref.to_uppercase(),
-                    abs.display()
+                    "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {shown}",
+                    libref.to_uppercase()
                 )),
                 Err(e) => session.log.error(&e.to_string()),
             }

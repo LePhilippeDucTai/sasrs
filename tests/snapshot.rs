@@ -10,7 +10,6 @@ mod common;
 use sas_interpreter::{RunOptions, run};
 
 #[test]
-#[ignore = "activer à la fin du jalon M1 (executor implémenté)"]
 fn fixtures() {
     insta::glob!("fixtures/**/*.sas", |path| {
         let source = std::fs::read_to_string(path).unwrap();

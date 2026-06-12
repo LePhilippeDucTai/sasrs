@@ -8,6 +8,11 @@ pub struct Lexer<'a> {
     src: &'a str,
     bytes: &'a [u8],
     pos: usize,
+    /// Vrai en début de statement (début de source ou après `;`) : un `*`
+    /// y ouvre un commentaire-statement `* texte ;`, consommé comme trivia
+    /// (son contenu peut contenir n'importe quoi sauf `;`, y compris des
+    /// caractères qui ne se lexent pas — fidèle à SAS).
+    at_stmt_start: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -16,6 +21,7 @@ impl<'a> Lexer<'a> {
             src,
             bytes: src.as_bytes(),
             pos: 0,
+            at_stmt_start: true,
         }
     }
 
@@ -76,7 +82,25 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Token> {
+        let tok = self.next_token_inner()?;
+        // Un `*` en tête du PROCHAIN statement ouvrira un commentaire.
+        self.at_stmt_start = tok.kind == TokenKind::Semi;
+        Ok(tok)
+    }
+
+    fn next_token_inner(&mut self) -> Result<Token> {
         self.skip_trivia()?;
+        // Commentaire-statement : `* texte ;` en début de statement, consommé
+        // jusqu'au `;` inclus (ou EOF), puis on recommence.
+        while self.at_stmt_start && self.peek() == Some(b'*') {
+            while self.peek().is_some_and(|c| c != b';') {
+                self.pos += 1;
+            }
+            if self.peek() == Some(b';') {
+                self.pos += 1;
+            }
+            self.skip_trivia()?;
+        }
         let start = self.pos;
         let Some(b) = self.peek() else {
             return Ok(Token {
@@ -403,6 +427,35 @@ mod tests {
         let k = kinds("x = /* note */ 2 ** 3;");
         assert!(k.contains(&TokenKind::Power));
         assert_eq!(k.iter().filter(|k| **k == TokenKind::Num(2.0)).count(), 1);
+    }
+
+    #[test]
+    fn star_comment_statement_is_trivia() {
+        // Contenu arbitraire (`:`, apostrophe) toléré dans `* ... ;`.
+        let k = kinds("* commentaire : avec l'apostrophe ; x = 1;");
+        assert_eq!(
+            k,
+            vec![
+                TokenKind::Ident("x".into()),
+                TokenKind::Eq,
+                TokenKind::Num(1.0),
+                TokenKind::Semi,
+                TokenKind::Eof,
+            ]
+        );
+        // Après un `;`, donc en début de statement, y compris en fin de source.
+        let k = kinds("run; * fini ;");
+        assert_eq!(
+            k,
+            vec![
+                TokenKind::Ident("run".into()),
+                TokenKind::Semi,
+                TokenKind::Eof
+            ]
+        );
+        // `*` en PLEIN statement reste la multiplication.
+        let k = kinds("x = 2 * 3;");
+        assert!(k.contains(&TokenKind::Star));
     }
 
     #[test]

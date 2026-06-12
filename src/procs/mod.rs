@@ -57,9 +57,13 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             Ok(ProcAst::Print(ast))
         }
         // Procs connues du périmètre, pas encore implémentées : consommer
-        // le bloc pour rester synchronisé, puis ERROR.
+        // le bloc pour rester synchronisé, puis ERROR. Finir d'abord le
+        // statement courant (on est au MILIEU du statement PROC : un ident
+        // comme `data` dans `proc sort data=x;` serait sinon pris pour une
+        // frontière par skip_to_step_boundary).
         "sort" | "means" | "summary" | "freq" | "transpose" | "univariate" | "contents"
         | "datasets" | "append" | "format" | "sql" => {
+            ts.skip_to_semi();
             ts.skip_to_step_boundary();
             Err(SasError::runtime(format!(
                 "Procedure {} is not yet implemented.",
@@ -67,8 +71,9 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             )))
         }
         _ => {
-            // Unknown proc — do NOT skip here; the caller (parser::parse_block)
-            // will call skip_to_step_boundary() on error.
+            // Proc inconnue : finir le statement courant ; le caller
+            // (parser::parse_block) saute ensuite jusqu'à la frontière.
+            ts.skip_to_semi();
             Err(SasError::runtime(format!(
                 "Procedure {} not found.",
                 name.to_uppercase()

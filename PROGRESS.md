@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M1**
+Jalon courant : **M2**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -23,8 +23,8 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] ⫽ `src/procs/mod.rs` — registre (Sonnet, faible)
 - [x] `src/procs/print.rs` — PROC PRINT (Sonnet, moyen)
 - [x] `src/executor.rs` — boucle blocs, statements globaux, timing (Opus, moyen)
-- [ ] Activer `tests/snapshot.rs` (retirer `#[ignore]`), générer/relire les snapshots des 3 fixtures m1/, les vérifier à la main contre le comportement SAS attendu, les committer
-- [ ] DoD M1 : `cargo test -p sas_interpreter` vert snapshots inclus ; `sasrs tests/fixtures/m1/set_filter.sas` plausible ; mettre à jour les ✅ dans PLAN.md
+- [x] Activer `tests/snapshot.rs` (retirer `#[ignore]`), générer/relire les snapshots des 3 fixtures m1/, les vérifier à la main contre le comportement SAS attendu, les committer
+- [x] DoD M1 : `cargo test -p sas_interpreter` vert snapshots inclus ; `sasrs tests/fixtures/m1/set_filter.sas` plausible ; mettre à jour les ✅ dans PLAN.md
 
 ## M2 — cœur de l'étape DATA
 - [ ] RETAIN, sum statement, LENGTH (compile+exec+parser)
