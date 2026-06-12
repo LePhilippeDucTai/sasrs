@@ -104,6 +104,23 @@ pub enum DsStmt {
     SubsettingIf(Expr),
     /// Non-iterative `do; ... end;`
     Block(Vec<DsStmt>),
+    /// DO itératif / conditionnel (M2) : `do i = e1 [to e2] [by e3]
+    /// [while(c)] [until(c)]; ... end;`, `do while(c); ... end;`,
+    /// `do until(c); ... end;`. `index` porte le nom de la variable
+    /// d'index et son expression de départ (from). Les listes de valeurs
+    /// (`do i = 1, 5, 9;`) ne sont pas encore implémentées (erreur de
+    /// parsing propre).
+    DoLoop {
+        index: Option<(String, Expr)>,
+        to: Option<Expr>,
+        by: Option<Expr>,
+        while_: Option<Expr>,
+        until: Option<Expr>,
+        body: Vec<DsStmt>,
+    },
+    /// `delete;` — termine l'itération courante sans output implicite
+    /// (même effet qu'un subsetting IF faux).
+    Delete,
     Output,
     Keep(Vec<String>),
     Drop(Vec<String>),

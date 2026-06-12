@@ -249,6 +249,33 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
+            DsStmt::DoLoop {
+                index,
+                to,
+                by,
+                while_,
+                until,
+                body,
+            } => {
+                // L'index entre au PDV au point du DO (ordre de première
+                // référence) : Num 8, NON retenu, et il compte comme
+                // assigné (pas de NOTE "uninitialized"). Puis les bornes
+                // et conditions en ordre textuel, puis le corps.
+                if let Some((name, from)) = index {
+                    self.add_var(name, VarType::Num, 8);
+                    self.assigned.insert(name.to_uppercase());
+                    self.walk_expr(from);
+                }
+                for e in [to, by, while_, until].into_iter().flatten() {
+                    self.walk_expr(e);
+                }
+                for s in body {
+                    self.walk_stmt(s)?;
+                }
+                Ok(())
+            }
+            // DELETE : purement exécutif, rien à compiler.
+            DsStmt::Delete => Ok(()),
             DsStmt::Output => {
                 self.has_explicit_output = true;
                 Ok(())
@@ -955,6 +982,57 @@ mod tests {
         );
         let err = compile_src("data o; length n 2; run;", &mut s).err().unwrap();
         assert!(err.to_string().contains("out of range"), "got: {err}");
+    }
+
+    // ── DO itératif / DELETE (M2) ────────────────────────────────────────
+
+    #[test]
+    fn do_loop_index_enters_pdv_not_retained_and_assigned() {
+        let mut s = session();
+        let prog = compile_src("data o; do i = 1 to 3; x = i; end; run;", &mut s).unwrap();
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        // L'index entre au point du DO, avant les variables du corps.
+        assert_eq!(names, vec!["i", "x"]);
+        let i = &prog.pdv.vars()[0];
+        assert_eq!(i.ty, VarType::Num);
+        assert_eq!(i.length, 8);
+        assert!(!i.retained);
+        // L'index compte comme assigné : pas de NOTE uninitialized.
+        assert!(prog.uninitialized.is_empty());
+    }
+
+    #[test]
+    fn do_loop_bound_and_condition_vars_enter_pdv() {
+        let mut s = session();
+        let prog = compile_src(
+            "data o; do i = a to b by c while(w) until(u); end; run;",
+            &mut s,
+        )
+        .unwrap();
+        let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
+        // Index d'abord, puis from/to/by/while/until en ordre textuel.
+        assert_eq!(names, vec!["i", "a", "b", "c", "w", "u"]);
+        // Les bornes sont référencées jamais assignées → uninitialized.
+        assert_eq!(
+            prog.uninitialized,
+            vec!["a", "b", "c", "w", "u"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn delete_compiles_and_output_in_do_body_is_detected() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let prog = compile_src(
+            "data o; set inp; if age = . then delete; do i = 1 to 2; output; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert!(prog.has_explicit_output);
+        assert!(prog.pdv.slot("i").is_some());
     }
 
     #[test]

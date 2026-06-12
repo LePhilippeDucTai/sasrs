@@ -17,9 +17,13 @@
 //!   UN statement (récunsion sur le parseur de statement) ; `do; ...
 //!   end;` permet les blocs.
 //! - `if expr ;`                  → `DsStmt::SubsettingIf`
-//! - `do ; stmts end ;`           → `DsStmt::Block` (M1 : non itératif
-//!                                  seulement ; `do i = ...` → ERROR M2)
+//! - `do ; stmts end ;`           → `DsStmt::Block` (non itératif)
+//! - `do i = e1 [to e2] [by e3] [while(c)] [until(c)]; ... end;`,
+//!   `do while(c); ... end;`, `do until(c); ... end;` → `DsStmt::DoLoop`
+//!   (M2) ; liste de valeurs `do i = 1, 5, 9;` → ERROR "not yet
+//!   implemented"
 //! - `output ;`                   → `DsStmt::Output` (M1 : sans cible)
+//! - `delete ;`                   → `DsStmt::Delete` (M2)
 //! - `keep v1 v2... ;` / `drop ... ;`
 //! - `stop ;`
 //! - `retain [v [init]]... ;`     → `DsStmt::Retain` (M2) ; init = littéral
@@ -195,6 +199,11 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
             ts.expect_semi()?;
             Ok(DsStmt::Output)
         }
+        "delete" => {
+            ts.next();
+            ts.expect_semi()?;
+            Ok(DsStmt::Delete)
+        }
         "stop" => {
             ts.next();
             ts.expect_semi()?;
@@ -324,20 +333,162 @@ fn parse_branch_statement(ts: &mut StatementStream) -> Result<DsStmt> {
     parse_statement(ts)
 }
 
-/// `do ; stmts end ;` — M1 : bloc non itératif uniquement. `do i = ...`,
-/// `do while (...)`, `do until (...)` → ERROR M2.
+/// `do ...; stmts end ;` — quatre formes :
+/// - `do;` : bloc non itératif → `DsStmt::Block` (chemin M1 conservé) ;
+/// - `do i = e1 [to e2] [by e3] [while(c)] [until(c)];` : itératif ;
+/// - `do while(c);` / `do until(c);` : conditionnel pur.
+///
+/// `do i = 1, 5, 9;` (liste de valeurs, y compris à UNE valeur sans
+/// clause TO/BY/WHILE/UNTIL) → ERROR "not yet implemented" propre.
+/// `while` et `until` ne sont pas réservés : `do while = 1 to 2;` reste
+/// un DO itératif d'index `while` (le `=` est inspecté avant le `(`).
 fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
-    let do_tok = ts.peek().clone();
     ts.next(); // `do`
-    // Forme non itérative : `do` immédiatement suivi de `;`.
-    if ts.peek().kind != TokenKind::Semi {
-        // `do i = ...`, `do while`, `do until` : itératif/conditionnel.
+    let head = ts.peek().clone();
+    match &head.kind {
+        // Forme non itérative : `do` immédiatement suivi de `;`.
+        TokenKind::Semi => {
+            ts.next(); // `;`
+            Ok(DsStmt::Block(parse_do_body(ts)?))
+        }
+        TokenKind::Ident(name) => {
+            let name = name.clone();
+            let lower = name.to_ascii_lowercase();
+            ts.next(); // l'ident (index potentiel, ou while/until)
+            if ts.peek().kind == TokenKind::Eq {
+                // `do i = ...` : itératif.
+                validate_sas_name(&name, head.span)?;
+                ts.next(); // `=`
+                parse_iterative_do(ts, name, head.span)
+            } else if (lower == "while" || lower == "until")
+                && ts.peek().kind == TokenKind::LParen
+            {
+                // `do while(c);` / `do until(c);` : conditionnel pur.
+                let cond = parse_paren_cond(ts)?;
+                ts.expect_semi()?;
+                let body = parse_do_body(ts)?;
+                let (while_, until) = if lower == "while" {
+                    (Some(cond), None)
+                } else {
+                    (None, Some(cond))
+                };
+                Ok(DsStmt::DoLoop {
+                    index: None,
+                    to: None,
+                    by: None,
+                    while_,
+                    until,
+                    body,
+                })
+            } else {
+                Err(SasError::parse(
+                    "expected '=', WHILE(...) or UNTIL(...) after DO",
+                    head.span,
+                ))
+            }
+        }
+        _ => Err(SasError::parse(
+            "expected ';', an index variable, WHILE(...) or UNTIL(...) after DO",
+            head.span,
+        )),
+    }
+}
+
+/// Clauses d'un DO itératif après `do index =` : `from [to e] [by e]`
+/// (TO/BY acceptés dans les deux ordres, comme SAS) puis WHILE/UNTIL en
+/// ordre quelconque, UN seul de chaque. Termine sur le `;` puis parse le
+/// corps jusqu'à `end;`.
+fn parse_iterative_do(
+    ts: &mut StatementStream,
+    index_name: String,
+    index_span: Span,
+) -> Result<DsStmt> {
+    let from = super::expr::parse_expr(ts)?;
+    if ts.peek().kind == TokenKind::Comma {
         return Err(SasError::parse(
-            "Iterative and conditional DO loops are not yet implemented.",
-            do_tok.span,
+            "DO loops over a list of values are not yet implemented.",
+            ts.peek().span,
         ));
     }
-    ts.next(); // `;`
+    let mut to: Option<Expr> = None;
+    let mut by: Option<Expr> = None;
+    let mut while_: Option<Expr> = None;
+    let mut until: Option<Expr> = None;
+    loop {
+        let tok = ts.peek().clone();
+        let Some(kw) = tok.ident().map(str::to_ascii_lowercase) else {
+            break;
+        };
+        match kw.as_str() {
+            "to" if to.is_none() => {
+                ts.next();
+                to = Some(super::expr::parse_expr(ts)?);
+            }
+            "by" if by.is_none() => {
+                ts.next();
+                by = Some(super::expr::parse_expr(ts)?);
+            }
+            "while" if while_.is_none() => {
+                ts.next();
+                while_ = Some(parse_paren_cond(ts)?);
+            }
+            "until" if until.is_none() => {
+                ts.next();
+                until = Some(parse_paren_cond(ts)?);
+            }
+            "to" | "by" | "while" | "until" => {
+                return Err(SasError::parse(
+                    format!("duplicate {} clause in the DO statement", kw.to_uppercase()),
+                    tok.span,
+                ));
+            }
+            _ => break,
+        }
+    }
+    // Pas de clause du tout : `do i = 1;` est une liste de valeurs à un
+    // élément → même erreur "not yet implemented" que la forme à virgules.
+    if to.is_none() && by.is_none() && while_.is_none() && until.is_none() {
+        return Err(SasError::parse(
+            "DO loops over a list of values are not yet implemented.",
+            index_span,
+        ));
+    }
+    ts.expect_semi()?;
+    let body = parse_do_body(ts)?;
+    Ok(DsStmt::DoLoop {
+        index: Some((index_name, from)),
+        to,
+        by,
+        while_,
+        until,
+        body,
+    })
+}
+
+/// `( expr )` après WHILE/UNTIL.
+fn parse_paren_cond(ts: &mut StatementStream) -> Result<Expr> {
+    let tok = ts.peek().clone();
+    if tok.kind != TokenKind::LParen {
+        return Err(SasError::parse(
+            "expected '(' after WHILE/UNTIL in the DO statement",
+            tok.span,
+        ));
+    }
+    ts.next(); // `(`
+    let cond = super::expr::parse_expr(ts)?;
+    let tok = ts.peek().clone();
+    if tok.kind != TokenKind::RParen {
+        return Err(SasError::parse(
+            "expected ')' after the WHILE/UNTIL condition",
+            tok.span,
+        ));
+    }
+    ts.next(); // `)`
+    Ok(cond)
+}
+
+/// Corps d'un DO (toutes formes) : statements jusqu'au `end ;` (consommé).
+fn parse_do_body(ts: &mut StatementStream) -> Result<Vec<DsStmt>> {
     let mut body = Vec::new();
     loop {
         let tok = ts.peek().clone();
@@ -357,7 +508,7 @@ fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
             TokenKind::Ident(s) if s.eq_ignore_ascii_case("end") => {
                 ts.next(); // `end`
                 ts.expect_semi()?;
-                return Ok(DsStmt::Block(body));
+                return Ok(body);
             }
             TokenKind::Ident(s) => {
                 let lower = s.to_ascii_lowercase();
@@ -906,10 +1057,173 @@ mod tests {
         assert_eq!(ast2.stmts, vec![DsStmt::Set(dsref("y"))]);
     }
 
+    // ── DO itératif / conditionnel (M2) ──────────────────────────────────
+
+    /// Déstructure un DoLoop ou panique.
+    fn as_do_loop(
+        stmt: &DsStmt,
+    ) -> (
+        &Option<(String, Expr)>,
+        &Option<Expr>,
+        &Option<Expr>,
+        &Option<Expr>,
+        &Option<Expr>,
+        &Vec<DsStmt>,
+    ) {
+        let DsStmt::DoLoop {
+            index,
+            to,
+            by,
+            while_,
+            until,
+            body,
+        } = stmt
+        else {
+            panic!("expected a DoLoop, got {stmt:?}");
+        };
+        (index, to, by, while_, until, body)
+    }
+
     #[test]
-    fn iterative_do_errors_m2() {
-        let err = parse("data o; do i = 1 to 10; output; end; run;").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+    fn iterative_do_to_by() {
+        let ast = parse("data o; do i = 1 to 10 by 2; x = i; end; run;").unwrap();
+        let (index, to, by, while_, until, body) = as_do_loop(&ast.stmts[0]);
+        assert_eq!(*index, Some(("i".to_string(), Expr::Num(1.0))));
+        assert_eq!(*to, Some(Expr::Num(10.0)));
+        assert_eq!(*by, Some(Expr::Num(2.0)));
+        assert!(while_.is_none() && until.is_none());
+        assert_eq!(
+            *body,
+            vec![DsStmt::Assign {
+                var: "x".to_string(),
+                expr: var("i"),
+            }]
+        );
+    }
+
+    #[test]
+    fn iterative_do_to_without_by() {
+        let ast = parse("data o; do i = 1 to n; end; run;").unwrap();
+        let (index, to, by, ..) = as_do_loop(&ast.stmts[0]);
+        assert_eq!(*index, Some(("i".to_string(), Expr::Num(1.0))));
+        assert_eq!(*to, Some(var("n")));
+        assert!(by.is_none());
+    }
+
+    #[test]
+    fn iterative_do_with_while() {
+        let ast = parse("data o; do i = 1 to 10 while(x < 5); end; run;").unwrap();
+        let (_, to, _, while_, until, _) = as_do_loop(&ast.stmts[0]);
+        assert_eq!(*to, Some(Expr::Num(10.0)));
+        assert_eq!(
+            *while_,
+            Some(Expr::Binary {
+                op: BinaryOp::Lt,
+                left: Box::new(var("x")),
+                right: Box::new(Expr::Num(5.0)),
+            })
+        );
+        assert!(until.is_none());
+    }
+
+    #[test]
+    fn iterative_do_with_until() {
+        let ast = parse("data o; do i = 1 to 10 until(x); end; run;").unwrap();
+        let (_, _, _, while_, until, _) = as_do_loop(&ast.stmts[0]);
+        assert!(while_.is_none());
+        assert_eq!(*until, Some(var("x")));
+    }
+
+    #[test]
+    fn pure_do_while() {
+        let ast = parse("data o; do while(x < 3); x + 1; end; run;").unwrap();
+        let (index, to, by, while_, until, body) = as_do_loop(&ast.stmts[0]);
+        assert!(index.is_none() && to.is_none() && by.is_none() && until.is_none());
+        assert!(while_.is_some());
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn pure_do_until() {
+        let ast = parse("data o; do until(x >= 3); x + 1; end; run;").unwrap();
+        let (index, to, by, while_, until, _) = as_do_loop(&ast.stmts[0]);
+        assert!(index.is_none() && to.is_none() && by.is_none() && while_.is_none());
+        assert!(until.is_some());
+    }
+
+    #[test]
+    fn iterative_do_to_by_while_until_combined() {
+        let ast =
+            parse("data o; do i = 0 to 8 by 2 while(a) until(b); end; run;").unwrap();
+        let (index, to, by, while_, until, body) = as_do_loop(&ast.stmts[0]);
+        assert_eq!(*index, Some(("i".to_string(), Expr::Num(0.0))));
+        assert_eq!(*to, Some(Expr::Num(8.0)));
+        assert_eq!(*by, Some(Expr::Num(2.0)));
+        assert_eq!(*while_, Some(var("a")));
+        assert_eq!(*until, Some(var("b")));
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn do_value_list_errors() {
+        let err = parse("data o; do i = 1, 5; end; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+        // Une seule valeur sans clause = liste à un élément : même erreur.
+        let err = parse("data o; do i = 1; end; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn do_duplicate_clause_errors() {
+        let err = parse("data o; do i = 1 to 2 to 3; end; run;").unwrap_err();
+        assert!(err.to_string().contains("duplicate TO"), "got: {err}");
+    }
+
+    #[test]
+    fn do_missing_end_errors() {
+        let err = parse("data o; do i = 1 to 3; x = i; run;").unwrap_err();
+        assert!(err.to_string().contains("missing END"), "got: {err}");
+        let err = parse("data o; do while(1); x = 1;").unwrap_err();
+        assert!(err.to_string().contains("missing END"), "got: {err}");
+    }
+
+    #[test]
+    fn do_while_without_paren_errors() {
+        // `do while ;` sans parenthèse : ni `=` ni `(`.
+        let err = parse("data o; do while; end; run;").unwrap_err();
+        assert!(err.to_string().contains("WHILE"), "got: {err}");
+    }
+
+    #[test]
+    fn do_index_named_while_is_iterative() {
+        // `while` n'est pas réservé : `do while = 1 to 2;` est un DO
+        // itératif d'index `while`.
+        let ast = parse("data o; do while = 1 to 2; end; run;").unwrap();
+        let (index, to, ..) = as_do_loop(&ast.stmts[0]);
+        assert_eq!(*index, Some(("while".to_string(), Expr::Num(1.0))));
+        assert_eq!(*to, Some(Expr::Num(2.0)));
+    }
+
+    #[test]
+    fn nested_do_loops_parse() {
+        let ast = parse("data o; do i = 1 to 2; do j = 1 to 3; n + 1; end; end; run;")
+            .unwrap();
+        let (.., body) = as_do_loop(&ast.stmts[0]);
+        let (index, .., inner_body) = as_do_loop(&body[0]);
+        assert_eq!(index.as_ref().unwrap().0, "j");
+        assert_eq!(inner_body.len(), 1);
+    }
+
+    // ── DELETE (M2) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn delete_parses_alone_and_in_if() {
+        let ast = parse("data o; set i; if age = . then delete; delete; run;").unwrap();
+        let DsStmt::If { then_branch, .. } = &ast.stmts[1] else {
+            panic!("expected an IF");
+        };
+        assert_eq!(**then_branch, DsStmt::Delete);
+        assert_eq!(ast.stmts[2], DsStmt::Delete);
     }
 
     #[test]

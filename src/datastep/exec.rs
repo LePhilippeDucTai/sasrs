@@ -19,9 +19,28 @@
 //! ## Flux de contrôle intra-itération
 //! `enum Flow { Normal, NextIter, EndStep }` :
 //! - `SubsettingIf` faux → NextIter (pas d'output implicite)
+//! - `Delete` → NextIter (même effet qu'un subsetting IF faux)
 //! - `Output` → pousser les valeurs des `kept_slots` dans les builders
 //! - `Stop` → EndStep
-//! - `If/Block` propagent le Flow de leurs branches.
+//! - `If/Block/DoLoop` propagent le Flow de leurs branches (un DELETE,
+//!   STOP ou SET épuisé dans un corps de DO sort de la boucle ET remonte).
+//!
+//! ## DO itératif (M2) — sémantique SAS exacte
+//! from/to/by sont évalués UNE SEULE FOIS à l'entrée (les modifier dans
+//! le corps ne change pas les bornes) ; BY défaut 1. L'INDEX, lui, est
+//! une variable normale du PDV : le corps peut le modifier et cela
+//! affecte le test et l'incrément. Ordre par tour : (1) test TO
+//! (by>0 → i<=to, by<0 → i>=to ; by==0 → pas de sortie par TO),
+//! (2) WHILE, (3) corps, (4) UNTIL, (5) i += by. À la sortie par le test
+//! TO, l'index garde la PREMIÈRE valeur qui dépasse (`do i = 1 to 3;` →
+//! i == 4 après la boucle — règle SAS).
+//! DIVERGENCES DOCUMENTÉES :
+//! - from/to/by évaluant à missing → SasError::runtime("Invalid DO loop
+//!   control information.") qui stoppe l'étape (SAS émet une erreur
+//!   d'exécution équivalente) ;
+//! - garde-fou anti-boucle infinie : plus de 10 000 000 itérations pour
+//!   UNE exécution de la boucle → erreur runtime (SAS bouclerait sans
+//!   fin).
 //!
 //! ## Erreurs d'exécution (style SAS : on continue !)
 //! Division par zéro, argument invalide, conversion char→num ratée :
@@ -310,6 +329,22 @@ impl Runner {
                 }
                 Ok(Flow::Normal)
             }
+            DsStmt::DoLoop {
+                index,
+                to,
+                by,
+                while_,
+                until,
+                body,
+            } => self.exec_do_loop(
+                index.as_ref(),
+                to.as_ref(),
+                by.as_ref(),
+                while_.as_ref(),
+                until.as_ref(),
+                body,
+            ),
+            DsStmt::Delete => Ok(Flow::NextIter),
             DsStmt::Output => {
                 self.push_outputs();
                 Ok(Flow::Normal)
@@ -339,6 +374,127 @@ impl Runner {
             // Directives de compilation : rien à exécuter.
             DsStmt::Keep(_) | DsStmt::Drop(_) | DsStmt::Retain(_) | DsStmt::Length(_) => {
                 Ok(Flow::Normal)
+            }
+        }
+    }
+
+    /// DO itératif / conditionnel — sémantique SAS exacte (cf. en-tête).
+    /// from/to/by sont évalués UNE FOIS à l'entrée ; l'index vit au PDV
+    /// (le corps peut le modifier). Tout Flow non Normal du corps sort de
+    /// la boucle ET remonte (DELETE/STOP/subsetting-IF/SET épuisé).
+    #[allow(clippy::too_many_arguments)]
+    fn exec_do_loop(
+        &mut self,
+        index: Option<&(String, crate::ast::Expr)>,
+        to: Option<&crate::ast::Expr>,
+        by: Option<&crate::ast::Expr>,
+        while_: Option<&crate::ast::Expr>,
+        until: Option<&crate::ast::Expr>,
+        body: &[DsStmt],
+    ) -> Result<Flow> {
+        // Bornes figées à l'entrée (règle SAS). BY défaut 1.0.
+        let idx_slot = match index {
+            Some((name, from_expr)) => {
+                let from = self.loop_control(from_expr)?;
+                let Some(slot) = self.pdv.slot(name) else {
+                    return Err(SasError::runtime(format!(
+                        "Variable {name} is not addressable."
+                    )));
+                };
+                self.pdv.set(slot, Value::Num(from));
+                Some(slot)
+            }
+            None => None,
+        };
+        let to_v = match to {
+            Some(e) => Some(self.loop_control(e)?),
+            None => None,
+        };
+        let by_v = match by {
+            Some(e) => self.loop_control(e)?,
+            None => 1.0,
+        };
+
+        // Garde-fou anti-boucle infinie, PAR exécution de la boucle.
+        let mut iters: u64 = 0;
+        loop {
+            // (1) Test TO : by>0 → i<=to, by<0 → i>=to ; by==0 → jamais de
+            // sortie par TO (boucle potentiellement infinie, comme SAS —
+            // couverte par le garde-fou).
+            if let (Some(slot), Some(stop)) = (idx_slot, to_v) {
+                let cur = self.index_value(slot);
+                if (by_v > 0.0 && cur > stop) || (by_v < 0.0 && cur < stop) {
+                    break;
+                }
+            }
+            // (2) Test WHILE (avant le corps).
+            if let Some(cond) = while_ {
+                if !self.eval_checked(cond)?.truthy() {
+                    break;
+                }
+            }
+            // (3) Corps : un Flow non Normal traverse le DO et remonte.
+            for s in body {
+                let f = self.exec_stmt(s)?;
+                if f != Flow::Normal {
+                    return Ok(f);
+                }
+            }
+            // (4) Test UNTIL (après le corps : au moins un tour exécuté).
+            if let Some(cond) = until {
+                if self.eval_checked(cond)?.truthy() {
+                    break;
+                }
+            }
+            // (5) Incrément de l'index (missing + by = missing, comme
+            // l'arithmétique SAS).
+            if let Some(slot) = idx_slot {
+                if let Value::Num(f) = self.pdv.get(slot) {
+                    let next = f + by_v;
+                    self.pdv.set(slot, Value::Num(next));
+                }
+            }
+            iters += 1;
+            if iters > 10_000_000 {
+                return Err(SasError::runtime(
+                    "DO loop exceeded 10000000 iterations; stopping (possible infinite loop).",
+                ));
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// Valeur courante de l'index pour le test TO. Un index rendu missing
+    /// par le corps se classe SOUS tous les nombres (ordre SAS) :
+    /// -inf fait sortir avec by<0 et continuer avec by>0.
+    fn index_value(&self, slot: usize) -> f64 {
+        match self.pdv.get(slot) {
+            Value::Num(f) => *f,
+            Value::Missing(_) => f64::NEG_INFINITY,
+            // Impossible : l'index est créé Num par la compilation.
+            Value::Char(_) => 0.0,
+        }
+    }
+
+    /// Évalue une borne de DO (from/to/by) en numérique. Missing (ou char
+    /// vide/invalide) → erreur runtime "Invalid DO loop control
+    /// information." qui stoppe l'étape (divergence documentée : SAS émet
+    /// une erreur d'exécution équivalente et stoppe l'étape aussi).
+    fn loop_control(&mut self, expr: &crate::ast::Expr) -> Result<f64> {
+        let v = self.eval_checked(expr)?;
+        match v {
+            Value::Num(f) => Ok(f),
+            Value::Char(s) => {
+                self.ctx.note_char_to_num = true;
+                if let Ok(f) = s.trim().parse::<f64>() {
+                    return Ok(f);
+                }
+                self.ctx.invalid_data += 1;
+                self.pdv.error_ = true;
+                Err(SasError::runtime("Invalid DO loop control information."))
+            }
+            Value::Missing(_) => {
+                Err(SasError::runtime("Invalid DO loop control information."))
             }
         }
     }
@@ -739,6 +895,210 @@ mod tests {
         run("data out; length c $ 3; retain c 'abcdef'; run;", &mut s).unwrap();
         let ds = read_work(&s, "out");
         assert_eq!(ds.df.column("c").unwrap().str().unwrap().get(0), Some("abc"));
+    }
+
+    // ── DO itératif / DELETE (M2) ────────────────────────────────────────
+
+    /// Lit la valeur f64 de la colonne `col`, ligne 0, de WORK.`table`.
+    fn num_at(session: &Session, table: &str, col: &str, row: usize) -> Option<f64> {
+        read_work(session, table)
+            .df
+            .column(col)
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(row)
+    }
+
+    #[test]
+    fn do_to_sums_one_to_ten() {
+        let mut s = session();
+        run("data out; s = 0; do i = 1 to 10; s = s + i; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "s", 0), Some(55.0));
+    }
+
+    #[test]
+    fn index_is_four_after_do_one_to_three() {
+        let mut s = session();
+        // Règle SAS célèbre : à la sortie par le test TO, i vaut la
+        // PREMIÈRE valeur qui dépasse.
+        run("data out; do i = 1 to 3; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "i", 0), Some(4.0));
+    }
+
+    #[test]
+    fn do_negative_by_runs_three_times() {
+        let mut s = session();
+        run("data out; do i = 3 to 1 by -1; n + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(3.0));
+        // Sortie par le test TO : i a dépassé vers le bas.
+        assert_eq!(num_at(&s, "out", "i", 0), Some(0.0));
+    }
+
+    #[test]
+    fn do_fractional_by() {
+        let mut s = session();
+        // 1, 1.5, 2, 2.5, 3 → 5 tours ; i == 3.5 après.
+        run("data out; do i = 1 to 3 by 0.5; n + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(5.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(3.5));
+    }
+
+    #[test]
+    fn do_while_clause_cuts_iteration() {
+        let mut s = session();
+        // WHILE testé avant chaque tour : coupe à i = 4 (3 tours).
+        run(
+            "data out; do i = 1 to 10 while(i < 4); n + 1; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(3.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(4.0));
+    }
+
+    #[test]
+    fn do_until_runs_at_least_once() {
+        let mut s = session();
+        run("data out; do until(1); n + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(1.0));
+    }
+
+    #[test]
+    fn do_while_false_runs_zero_times() {
+        let mut s = session();
+        run("data out; n = 0; do while(0); n + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(0.0));
+    }
+
+    #[test]
+    fn pure_do_while_loops_until_condition_false() {
+        let mut s = session();
+        run("data out; x = 0; do while(x < 3); x = x + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "x", 0), Some(3.0));
+    }
+
+    #[test]
+    fn delete_filters_missing_age() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // 3 obs dont 1 age missing → 2 obs en sortie.
+        let stats = run("data out; set inp; if age = . then delete; run;", &mut s).unwrap();
+        assert_eq!(stats.read, vec![("WORK.INP".to_string(), 3)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 2, 2)]);
+        let ds = read_work(&s, "out");
+        let name = ds.df.column("Name").unwrap().str().unwrap();
+        assert_eq!(name.get(0), Some("Alfred"));
+        assert_eq!(name.get(1), Some("Barbara"));
+    }
+
+    #[test]
+    fn delete_inside_do_exits_loop_and_iteration() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // Chaque itération entre dans le DO et DELETE à i = 2 : le Flow
+        // NextIter traverse la boucle → aucune obs en sortie, tout est lu.
+        let stats = run(
+            "data out; set inp; do i = 1 to 10; if i = 2 then delete; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(stats.read, vec![("WORK.INP".to_string(), 3)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 0, 3)]);
+    }
+
+    #[test]
+    fn nested_do_loops() {
+        let mut s = session();
+        run(
+            "data out; do i = 1 to 3; do j = 1 to 2; n + 1; end; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(6.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(4.0));
+        assert_eq!(num_at(&s, "out", "j", 0), Some(3.0));
+    }
+
+    #[test]
+    fn do_bounds_are_evaluated_once_at_entry() {
+        let mut s = session();
+        // n modifié dans le corps : la borne TO reste celle de l'entrée
+        // (3) — règle SAS, les bornes sont figées.
+        run(
+            "data out; n = 3; do i = 1 to n; n = 0; c + 1; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "c", 0), Some(3.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(4.0));
+    }
+
+    #[test]
+    fn stop_inside_do_ends_step() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let stats = run(
+            "data out; set inp; do i = 1 to 10; stop; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        // STOP au premier tour de la première itération : rien d'écrit,
+        // une seule ligne lue.
+        assert_eq!(stats.read, vec![("WORK.INP".to_string(), 1)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 0, 3)]);
+    }
+
+    #[test]
+    fn set_exhausted_inside_do_ends_step() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // Le SET vit DANS la boucle : à l'épuisement de l'input (4e tour),
+        // EndStep traverse le DO et termine l'étape. 3 outputs explicites.
+        let stats = run(
+            "data out; do i = 1 to 10; set inp; output; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(stats.read, vec![("WORK.INP".to_string(), 3)]);
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 3, 3)]);
+    }
+
+    #[test]
+    fn missing_do_bound_is_runtime_error() {
+        let mut s = session();
+        // m jamais assignée → missing : erreur de contrôle de boucle
+        // (divergence documentée : stoppe l'étape).
+        let err = run("data out; do i = 1 to m; end; run;", &mut s)
+            .err()
+            .unwrap();
+        assert_eq!(err.to_string(), "Invalid DO loop control information.");
+    }
+
+    #[test]
+    fn modifying_index_in_body_affects_loop() {
+        let mut s = session();
+        // L'index est une variable normale du PDV : i = i + 1 dans le
+        // corps saute une valeur sur deux → 5 tours (1,3,5,7,9).
+        run(
+            "data out; do i = 1 to 10; i = i + 1; n + 1; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(5.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(11.0));
+    }
+
+    #[test]
+    fn infinite_do_loop_guard_trips() {
+        let mut s = session();
+        let err = run("data out; do while(1); end; run;", &mut s)
+            .err()
+            .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "DO loop exceeded 10000000 iterations; stopping (possible infinite loop)."
+        );
     }
 
     #[test]
