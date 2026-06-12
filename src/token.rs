@@ -39,6 +39,14 @@ pub enum TokenKind {
     Semi,
     LParen,
     RParen,
+    /// `{` (array dimension/subscript delimiter)
+    LBrace,
+    /// `}`
+    RBrace,
+    /// `[` (array dimension/subscript delimiter)
+    LBracket,
+    /// `]`
+    RBracket,
     Comma,
     Dot,
     Plus,

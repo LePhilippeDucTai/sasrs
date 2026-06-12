@@ -29,7 +29,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 ## M2 — cœur de l'étape DATA
 - [x] RETAIN, sum statement, LENGTH (compile+exec+parser)
 - [x] DO itératif (TO/BY/WHILE/UNTIL), DELETE
-- [ ] ARRAY + indexation
+- [x] ARRAY + indexation
 - [ ] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé
 - [ ] Missings spéciaux bout en bout (round-trip parquet testé), `_ERROR_` + NOTEs d'erreurs runtime
 - [ ] Fixtures m2/ + snapshots ; DoD : cargo test vert

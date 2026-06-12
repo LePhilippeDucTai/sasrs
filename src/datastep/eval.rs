@@ -34,6 +34,7 @@ use super::functions;
 use super::pdv::Pdv;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::value::Value;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct EvalCtx {
@@ -43,8 +44,12 @@ pub struct EvalCtx {
     pub note_char_to_num: bool,
     pub invalid_data: u32,
     pub error_flag: bool,
-    /// Erreur fatale (fonction inconnue...) — stoppe l'étape.
+    /// Erreur fatale (fonction inconnue, indice d'array hors bornes...) —
+    /// stoppe l'étape.
     pub fatal: Option<String>,
+    /// Arrays 1-D de l'étape : nom UPPERCASE → slots PDV des éléments
+    /// (copié depuis `StepProgram.arrays` par l'exécuteur).
+    pub arrays: HashMap<String, Vec<usize>>,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,
@@ -64,7 +69,7 @@ pub struct EvalCtx {
 /// Char vide/invalide tombés à `None`) — utile pour distinguer un missing
 /// d'entrée d'une simple absence dans les agrégats. Ici on renvoie juste
 /// l'`Option<f64>` ; `None` couvre les deux cas (missing propagé).
-fn coerce_num(v: &Value, ctx: &mut EvalCtx) -> Option<f64> {
+pub(super) fn coerce_num(v: &Value, ctx: &mut EvalCtx) -> Option<f64> {
     match v {
         Value::Num(f) => Some(*f),
         Value::Missing(_) => None,
@@ -122,6 +127,33 @@ pub fn eval(expr: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         Expr::Binary { op, left, right } => eval_binary(*op, left, right, pdv, ctx),
         Expr::In { expr, list } => eval_in(expr, list, pdv, ctx),
         Expr::Call { name, args } => eval_call(name, args, pdv, ctx),
+        Expr::Index { name, index } => eval_array_ref(name, index, pdv, ctx),
+    }
+}
+
+/// Référence d'array indexée `arr{i}` (rvalue). L'indice est coercé en
+/// numérique puis ARRONDI au plus proche ; missing ou hors 1..=dim →
+/// erreur fatale "Array subscript out of range." qui stoppe l'étape
+/// (comme SAS).
+fn eval_array_ref(name: &str, index: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+    let idx_val = eval(index, pdv, ctx);
+    if ctx.fatal.is_some() {
+        return Value::missing();
+    }
+    let idx = coerce_num(&idx_val, ctx).map(f64::round);
+    let Some(slots) = ctx.arrays.get(&name.to_uppercase()) else {
+        // Impossible après compile() ; garde-fou.
+        ctx.fatal = Some(format!("ERROR: Undeclared array referenced: {name}."));
+        return Value::missing();
+    };
+    match idx {
+        Some(i) if i >= 1.0 && i <= slots.len() as f64 => {
+            pdv.get(slots[i as usize - 1]).clone()
+        }
+        _ => {
+            ctx.fatal = Some("ERROR: Array subscript out of range.".to_string());
+            Value::missing()
+        }
     }
 }
 
@@ -317,8 +349,25 @@ fn eval_in(expr: &Expr, list: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     Value::Num(0.0)
 }
 
-/// `Call` : déléguer à `functions::call`. Fonction inconnue → ERROR fatal.
+/// `Call` : `dim(arr)` et les références d'array à parenthèses sont
+/// interceptés AVANT l'évaluation des arguments (un nom d'array n'est pas
+/// une variable du PDV) ; sinon déléguer à `functions::call`. Fonction
+/// inconnue → ERROR fatal.
 fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+    // `dim(arr)` : 1 argument dont le nom est un array déclaré → dimension.
+    // Sinon, délégation normale (les fonctions ne connaissent pas DIM →
+    // erreur fonction inconnue).
+    if name.eq_ignore_ascii_case("dim")
+        && args.len() == 1
+        && let Expr::Var(n) | Expr::Index { name: n, .. } = &args[0]
+        && let Some(slots) = ctx.arrays.get(&n.to_uppercase())
+    {
+        return Value::Num(slots.len() as f64);
+    }
+    // `arr(i)` : l'array masque la fonction homonyme (résolution SAS).
+    if args.len() == 1 && ctx.arrays.contains_key(&name.to_uppercase()) {
+        return eval_array_ref(name, &args[0], pdv, ctx);
+    }
     let mut arg_vals = Vec::with_capacity(args.len());
     for a in args {
         let v = eval(a, pdv, ctx);

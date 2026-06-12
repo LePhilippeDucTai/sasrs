@@ -76,6 +76,14 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    /// Référence d'array indexée `arr{i}` / `arr[i]` (M2). La forme à
+    /// parenthèses `arr(i)` reste un `Call` : l'ambiguïté avec un appel de
+    /// fonction est résolue à l'ÉVALUATION (l'array masque la fonction,
+    /// comme SAS).
+    Index {
+        name: String,
+        index: Box<Expr>,
+    },
 }
 
 /// Spec d'une variable dans un statement LENGTH : `$ n` (char) ou `n` (num).
@@ -134,6 +142,25 @@ pub enum DsStmt {
     Sum { var: String, expr: Expr },
     /// `length v1 v2 $ 20 v3 5;`
     Length(Vec<(String, LengthSpec)>),
+    /// `array arr{3} x y z;` (M2, 1-D). `size: None` = `{*}` (taille
+    /// déduite de la liste) ; `char_len: Some(n)` = array caractère
+    /// (`$ n`, défaut 8) ; `vars` vide = éléments auto-nommés arr1..arrN
+    /// (expansés à la compilation). Les plages numérotées `x1-x3` sont
+    /// DÉJÀ expansées par le parser.
+    Array {
+        name: String,
+        size: Option<usize>,
+        char_len: Option<usize>,
+        vars: Vec<String>,
+    },
+    /// `arr{i} = expr;` / `arr[i] = expr;` / `arr(i) = expr;` —
+    /// assignation à un élément d'array. Pour la forme à parenthèses, le
+    /// nom est validé array à la COMPILATION.
+    AssignIndexed {
+        array: String,
+        index: Expr,
+        expr: Expr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

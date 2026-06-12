@@ -320,10 +320,12 @@ fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
         TokenKind::Ident(name) => {
             let name = name.clone();
             ts.next();
-            if ts.peek().kind == TokenKind::LParen {
-                parse_call(ts, name)
-            } else {
-                Ok(Expr::Var(name))
+            match ts.peek().kind {
+                TokenKind::LParen => parse_call(ts, name),
+                // `arr{i}` / `arr[i]` : référence d'array indexée. La forme
+                // `arr(i)` reste un Call (ambiguïté résolue à l'évaluation).
+                TokenKind::LBrace | TokenKind::LBracket => parse_index(ts, name),
+                _ => Ok(Expr::Var(name)),
             }
         }
         _ => Err(SasError::parse(
@@ -378,6 +380,40 @@ fn parse_call(ts: &mut StatementStream, name: String) -> Result<Expr> {
     }
     ts.next(); // )
     Ok(Expr::Call { name, args })
+}
+
+/// Référence d'array indexée : `{`/`[` en tête de stream, `name` déjà
+/// consommé. Le délimiteur fermant doit être assorti à l'ouvrant. Un seul
+/// indice en M2 : une virgule → erreur multi-dimensions propre.
+pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr> {
+    let open = ts.next(); // `{` ou `[`
+    let closer = match open.kind {
+        TokenKind::LBrace => TokenKind::RBrace,
+        TokenKind::LBracket => TokenKind::RBracket,
+        _ => unreachable!("parse_index called without an opening brace/bracket"),
+    };
+    let index = parse_expr(ts)?;
+    if ts.peek().kind == TokenKind::Comma {
+        return Err(SasError::parse(
+            "Multi-dimensional arrays are not yet implemented.",
+            ts.peek().span,
+        ));
+    }
+    if ts.peek().kind != closer {
+        return Err(SasError::parse(
+            format!(
+                "expected '{}' to close the array subscript of {}",
+                if closer == TokenKind::RBrace { "}" } else { "]" },
+                name.to_uppercase()
+            ),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // fermant
+    Ok(Expr::Index {
+        name,
+        index: Box::new(index),
+    })
 }
 
 /// Convertit un littéral chaîne (avec son suffixe) en `Expr`.
@@ -864,6 +900,62 @@ mod tests {
     #[test]
     fn unmatched_paren_errors() {
         assert!(parse("(1 + 2").is_err());
+    }
+
+    // ── Références d'array indexées (M2) ─────────────────────────────────
+
+    #[test]
+    fn index_with_braces_and_brackets() {
+        let expected = Expr::Index {
+            name: "a".to_string(),
+            index: Box::new(bin(BinaryOp::Add, var("i"), num(1.0))),
+        };
+        assert_eq!(ok("a{i + 1}"), expected);
+        assert_eq!(ok("a[i + 1]"), expected);
+    }
+
+    #[test]
+    fn index_paren_form_stays_a_call() {
+        // `a(i)` reste un Call : l'ambiguïté array/fonction est résolue à
+        // l'évaluation.
+        assert_eq!(
+            ok("a(i)"),
+            Expr::Call {
+                name: "a".to_string(),
+                args: vec![var("i")]
+            }
+        );
+    }
+
+    #[test]
+    fn index_in_larger_expression() {
+        assert_eq!(
+            ok("a{1} + a{2}"),
+            bin(
+                BinaryOp::Add,
+                Expr::Index {
+                    name: "a".to_string(),
+                    index: Box::new(num(1.0))
+                },
+                Expr::Index {
+                    name: "a".to_string(),
+                    index: Box::new(num(2.0))
+                },
+            )
+        );
+    }
+
+    #[test]
+    fn index_multi_dim_errors() {
+        let err = parse("a{1, 2}").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn index_mismatched_closer_errors() {
+        assert!(parse("a{1]").is_err());
+        assert!(parse("a[1}").is_err());
+        assert!(parse("a{1").is_err());
     }
 
     #[test]

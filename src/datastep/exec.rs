@@ -75,7 +75,7 @@
 //!   existe) : n_ > n_rows + 10_000 → erreur d'exécution. SAS bouclerait
 //!   sans fin ; divergence assumée.
 
-use super::eval::{eval, EvalCtx};
+use super::eval::{coerce_num, eval, EvalCtx};
 use super::pdv::Pdv;
 use super::{InputData, OutputSpec, StepProgram};
 use crate::ast::DsStmt;
@@ -127,6 +127,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         has_explicit_output,
         uninitialized,
         initial_values,
+        arrays,
     } = prog;
 
     for name in &uninitialized {
@@ -152,7 +153,10 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         pdv,
         input,
         row_idx: 0,
-        ctx: EvalCtx::default(),
+        ctx: EvalCtx {
+            arrays,
+            ..EvalCtx::default()
+        },
         outputs,
         builders,
         out_rows: 0,
@@ -371,10 +375,44 @@ impl Runner {
                 self.pdv.set(slot, Value::Num(acc + incr));
                 Ok(Flow::Normal)
             }
-            // Directives de compilation : rien à exécuter.
-            DsStmt::Keep(_) | DsStmt::Drop(_) | DsStmt::Retain(_) | DsStmt::Length(_) => {
+            DsStmt::AssignIndexed { array, index, expr } => {
+                // Indice évalué avec les MÊMES règles que les rvalues
+                // (coercition num + arrondi ; missing/hors bornes → l'étape
+                // s'arrête), puis coercition vers le type de l'élément.
+                let idx_val = self.eval_checked(index)?;
+                let slot = self.resolve_subscript(array, idx_val)?;
+                let value = self.eval_checked(expr)?;
+                let coerced = self.coerce_assign(value, self.pdv.vars()[slot].ty);
+                self.pdv.set(slot, coerced);
                 Ok(Flow::Normal)
             }
+            // Directives de compilation : rien à exécuter.
+            DsStmt::Keep(_)
+            | DsStmt::Drop(_)
+            | DsStmt::Retain(_)
+            | DsStmt::Length(_)
+            | DsStmt::Array { .. } => Ok(Flow::Normal),
+        }
+    }
+
+    /// Résout l'indice d'une assignation indexée en slot PDV : coercition
+    /// numérique (mêmes règles que `eval::coerce_num`), arrondi au plus
+    /// proche ; missing ou hors 1..=dim → erreur qui stoppe l'étape.
+    fn resolve_subscript(&mut self, array: &str, idx_val: Value) -> Result<usize> {
+        let idx = coerce_num(&idx_val, &mut self.ctx).map(f64::round);
+        if self.ctx.error_flag {
+            self.pdv.error_ = true;
+            self.ctx.error_flag = false;
+        }
+        let Some(slots) = self.ctx.arrays.get(&array.to_uppercase()) else {
+            // Impossible après compile() ; garde-fou.
+            return Err(SasError::runtime(format!(
+                "Undeclared array referenced: {array}."
+            )));
+        };
+        match idx {
+            Some(i) if i >= 1.0 && i <= slots.len() as f64 => Ok(slots[i as usize - 1]),
+            _ => Err(SasError::runtime("Array subscript out of range.")),
         }
     }
 
@@ -530,6 +568,10 @@ impl Runner {
     fn eval_checked(&mut self, expr: &crate::ast::Expr) -> Result<Value> {
         let v = eval(expr, &self.pdv, &mut self.ctx);
         if let Some(msg) = self.ctx.fatal.take() {
+            // Les fatals de l'évaluateur portent déjà le préfixe "ERROR: " ;
+            // on l'enlève pour que `log.error` (qui le rajoute) ne le double
+            // pas.
+            let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
             return Err(SasError::runtime(msg));
         }
         if self.ctx.error_flag {
@@ -1099,6 +1141,180 @@ mod tests {
             err.to_string(),
             "DO loop exceeded 10000000 iterations; stopping (possible infinite loop)."
         );
+    }
+
+    // ── ARRAY 1-D + indexation (M2, lot 3) ───────────────────────────────
+
+    #[test]
+    fn array_fill_via_do_loop_braces() {
+        let mut s = session();
+        run(
+            "data out; array a{3} x y z; do i = 1 to 3; a{i} = i * 10; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "x", 0), Some(10.0));
+        assert_eq!(num_at(&s, "out", "y", 0), Some(20.0));
+        assert_eq!(num_at(&s, "out", "z", 0), Some(30.0));
+    }
+
+    #[test]
+    fn array_paren_form_lvalue_and_rvalue() {
+        let mut s = session();
+        // Lvalue `a(i) = ...` et rvalue `a(i)` (l'array masque la
+        // fonction) ; lecture croisée via t = a(1) + a(3).
+        run(
+            "data out; array a(3) x y z; do i = 1 to 3; a(i) = i * 10; end; \
+             t = a(1) + a(3); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "x", 0), Some(10.0));
+        assert_eq!(num_at(&s, "out", "y", 0), Some(20.0));
+        assert_eq!(num_at(&s, "out", "z", 0), Some(30.0));
+        assert_eq!(num_at(&s, "out", "t", 0), Some(40.0));
+    }
+
+    #[test]
+    fn array_sum_via_dim() {
+        let mut s = session();
+        run(
+            "data out; array a{3} x y z; do i = 1 to 3; a{i} = i; end; \
+             do i = 1 to dim(a); s + a{i}; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "s", 0), Some(6.0));
+    }
+
+    #[test]
+    fn array_index_rounds_to_nearest() {
+        let mut s = session();
+        // 1.4 → 1, 2.6 → 3 (arrondi au plus proche, comme SAS).
+        run(
+            "data out; array a{3} x y z; a{1.4} = 7; a{2.6} = 9; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "x", 0), Some(7.0));
+        assert_eq!(num_at(&s, "out", "z", 0), Some(9.0));
+        assert_eq!(num_at(&s, "out", "y", 0), None);
+    }
+
+    #[test]
+    fn char_array_with_truncation() {
+        let mut s = session();
+        run(
+            "data out; array c{2} $ 3 u v; c{1} = 'abcdef'; c{2} = 'xy'; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // Longueur fixe 3 : troncature silencieuse à l'assignation.
+        assert_eq!(ds.df.column("u").unwrap().str().unwrap().get(0), Some("abc"));
+        assert_eq!(ds.df.column("v").unwrap().str().unwrap().get(0), Some("xy"));
+        assert_eq!(ds.vars[0].length, 3);
+    }
+
+    #[test]
+    fn char_array_default_length_is_8() {
+        let mut s = session();
+        run("data out; array c{1} $ u; c{1} = 'abcdefghij'; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(
+            ds.df.column("u").unwrap().str().unwrap().get(0),
+            Some("abcdefgh")
+        );
+        assert_eq!(ds.vars[0].length, 8);
+    }
+
+    #[test]
+    fn out_of_range_subscript_stops_step_with_error() {
+        // Lvalue hors bornes : l'étape s'arrête avec ERROR (exit code 2).
+        let out = crate::run(
+            "data out; array a{3} x y z; a{4} = 1; run;",
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+            },
+        );
+        assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
+        assert!(
+            out.log.contains("ERROR: Array subscript out of range."),
+            "log was:\n{}",
+            out.log
+        );
+        assert!(out
+            .log
+            .contains("The SAS System stopped processing this step because of errors."));
+
+        // Rvalue hors bornes (y compris indice 0) : même arrêt.
+        let out = crate::run(
+            "data out; array a{3} x y z; t = a{0}; run;",
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+            },
+        );
+        assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
+        assert!(
+            out.log.contains("ERROR: Array subscript out of range."),
+            "log was:\n{}",
+            out.log
+        );
+    }
+
+    #[test]
+    fn missing_subscript_stops_step_with_error() {
+        let out = crate::run(
+            "data out; array a{3} x y z; i = .; a{i} = 1; run;",
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+            },
+        );
+        assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
+        assert!(
+            out.log.contains("ERROR: Array subscript out of range."),
+            "log was:\n{}",
+            out.log
+        );
+    }
+
+    #[test]
+    fn auto_named_elements_are_usable_as_variables() {
+        let mut s = session();
+        // a1 a2 a3 auto-nommés : adressables par indice ET par nom.
+        run(
+            "data out; array a{3}; do i = 1 to 3; a{i} = i; end; t = a1 + a2 + a3; \
+             a2 = 20; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "a1", 0), Some(1.0));
+        assert_eq!(num_at(&s, "out", "a2", 0), Some(20.0));
+        assert_eq!(num_at(&s, "out", "a3", 0), Some(3.0));
+        assert_eq!(num_at(&s, "out", "t", 0), Some(6.0));
+    }
+
+    #[test]
+    fn array_over_input_variables_updates_them() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // Array sur une variable d'input : l'élément référence le slot
+        // existant (type/longueur de l'input conservés).
+        run(
+            "data out; set inp; array nums{1} age; nums{1} = nums{1} * 2; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        let age = ds.df.column("Age").unwrap().f64().unwrap();
+        assert_eq!(age.get(0), Some(28.0));
+        assert_eq!(age.get(2), Some(26.0));
     }
 
     #[test]

@@ -144,6 +144,22 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 TokenKind::RParen
             }
+            b'{' => {
+                self.pos += 1;
+                TokenKind::LBrace
+            }
+            b'}' => {
+                self.pos += 1;
+                TokenKind::RBrace
+            }
+            b'[' => {
+                self.pos += 1;
+                TokenKind::LBracket
+            }
+            b']' => {
+                self.pos += 1;
+                TokenKind::RBracket
+            }
             b',' => {
                 self.pos += 1;
                 TokenKind::Comma
@@ -483,6 +499,28 @@ mod tests {
         let k = kinds("length x $20;");
         assert!(k.contains(&TokenKind::Dollar));
         assert!(k.contains(&TokenKind::Num(20.0)));
+    }
+
+    #[test]
+    fn braces_and_brackets_tokens() {
+        // Les 4 délimiteurs d'array (M2) : accolades et crochets.
+        let k = kinds("array a{3} b[2];");
+        assert_eq!(
+            k,
+            vec![
+                TokenKind::Ident("array".into()),
+                TokenKind::Ident("a".into()),
+                TokenKind::LBrace,
+                TokenKind::Num(3.0),
+                TokenKind::RBrace,
+                TokenKind::Ident("b".into()),
+                TokenKind::LBracket,
+                TokenKind::Num(2.0),
+                TokenKind::RBracket,
+                TokenKind::Semi,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]

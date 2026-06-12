@@ -223,6 +223,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         }
         "retain" => parse_retain(ts),
         "length" => parse_length(ts),
+        "array" => parse_array(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
             "no matching DO for END.",
@@ -242,24 +243,57 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
                 .expect("matched an Ident head above")
                 .to_string();
             ts.next(); // ident de tête
-            if ts.peek().kind == TokenKind::Eq {
-                ts.next(); // `=`
-                let expr = super::expr::parse_expr(ts)?;
-                ts.expect_semi()?;
-                Ok(DsStmt::Assign { var, expr })
-            } else if ts.peek().kind == TokenKind::Plus {
-                ts.next(); // `+`
-                let expr = super::expr::parse_expr(ts)?;
-                ts.expect_semi()?;
-                Ok(DsStmt::Sum { var, expr })
-            } else {
-                Err(SasError::parse(
+            match ts.peek().kind {
+                TokenKind::Eq => {
+                    ts.next(); // `=`
+                    let expr = super::expr::parse_expr(ts)?;
+                    ts.expect_semi()?;
+                    Ok(DsStmt::Assign { var, expr })
+                }
+                TokenKind::Plus => {
+                    ts.next(); // `+`
+                    let expr = super::expr::parse_expr(ts)?;
+                    ts.expect_semi()?;
+                    Ok(DsStmt::Sum { var, expr })
+                }
+                // `arr{i} = e;` / `arr[i] = e;` : assignation indexée.
+                TokenKind::LBrace | TokenKind::LBracket => {
+                    let Expr::Index { name, index } = super::expr::parse_index(ts, var)?
+                    else {
+                        unreachable!("parse_index always returns Expr::Index");
+                    };
+                    parse_assign_indexed_tail(ts, name, *index)
+                }
+                // `arr(i) = e;` : forme à parenthèses — le nom sera validé
+                // array à la COMPILATION (ici on parse l'indice).
+                TokenKind::LParen => {
+                    ts.next(); // `(`
+                    let index = super::expr::parse_expr(ts)?;
+                    if ts.peek().kind == TokenKind::Comma {
+                        return Err(SasError::parse(
+                            "Multi-dimensional arrays are not yet implemented.",
+                            ts.peek().span,
+                        ));
+                    }
+                    if ts.peek().kind != TokenKind::RParen {
+                        return Err(SasError::parse(
+                            format!(
+                                "expected ')' to close the array subscript of {}",
+                                var.to_uppercase()
+                            ),
+                            ts.peek().span,
+                        ));
+                    }
+                    ts.next(); // `)`
+                    parse_assign_indexed_tail(ts, var, index)
+                }
+                _ => Err(SasError::parse(
                     format!(
                         "Statement {} is not yet implemented.",
                         head.to_uppercase()
                     ),
                     tok.span,
-                ))
+                )),
             }
         }
     }
@@ -529,6 +563,235 @@ fn parse_do_body(ts: &mut StatementStream) -> Result<Vec<DsStmt>> {
             }
         }
     }
+}
+
+/// Fin commune d'une assignation indexée : l'indice est parsé, il reste
+/// `= expr ;`.
+fn parse_assign_indexed_tail(
+    ts: &mut StatementStream,
+    array: String,
+    index: Expr,
+) -> Result<DsStmt> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!(
+                "expected '=' after the array reference {}",
+                array.to_uppercase()
+            ),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `=`
+    let expr = super::expr::parse_expr(ts)?;
+    ts.expect_semi()?;
+    Ok(DsStmt::AssignIndexed { array, index, expr })
+}
+
+/// `array arr{3} x y z;` — déclaration d'array 1-D (M2). Délimiteurs de
+/// dimension interchangeables (`{}`, `[]`, `()` — fermant assorti).
+/// Formes : `{n}` taille explicite, `{*}` taille déduite de la liste ;
+/// `$ [len]` array caractère (longueur défaut 8) ; liste de variables
+/// optionnelle (vide → éléments auto-nommés à la compilation), plages
+/// numérotées `x1-x3` expansées ICI. Hors périmètre M2 → erreurs propres :
+/// multi-dimensions, valeurs initiales `(...)`, `_temporary_` et listes
+/// spéciales `_numeric_`/`_character_`/`_all_`.
+fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `array`
+    let name_tok = ts.peek().clone();
+    let Some(name) = name_tok.ident().map(str::to_string) else {
+        return Err(SasError::parse(
+            "expected an array name in the ARRAY statement",
+            name_tok.span,
+        ));
+    };
+    validate_sas_name(&name, name_tok.span)?;
+    ts.next();
+
+    // ── Dimension : `{n}`, `[n]`, `(n)` ou `{*}`... ─────────────────────
+    let open = ts.peek().clone();
+    let closer = match open.kind {
+        TokenKind::LBrace => TokenKind::RBrace,
+        TokenKind::LBracket => TokenKind::RBracket,
+        TokenKind::LParen => TokenKind::RParen,
+        _ => {
+            return Err(SasError::parse(
+                "expected '{', '[' or '(' after the array name",
+                open.span,
+            ));
+        }
+    };
+    ts.next(); // ouvrant
+    let dim_tok = ts.peek().clone();
+    let size = match dim_tok.kind {
+        TokenKind::Star => {
+            ts.next();
+            None
+        }
+        TokenKind::Num(n) => {
+            if n.fract() != 0.0 || n < 1.0 {
+                return Err(SasError::parse(
+                    "the array dimension must be a positive integer",
+                    dim_tok.span,
+                ));
+            }
+            ts.next();
+            Some(n as usize)
+        }
+        _ => {
+            return Err(SasError::parse(
+                "expected a dimension or '*' in the ARRAY statement",
+                dim_tok.span,
+            ));
+        }
+    };
+    if ts.peek().kind == TokenKind::Comma {
+        return Err(SasError::parse(
+            "Multi-dimensional arrays are not yet implemented.",
+            ts.peek().span,
+        ));
+    }
+    if ts.peek().kind != closer {
+        return Err(SasError::parse(
+            "expected the matching closing delimiter of the array dimension",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // fermant
+
+    // ── `$ [len]` : array caractère, longueur défaut 8 ──────────────────
+    let mut char_len: Option<usize> = None;
+    if ts.peek().kind == TokenKind::Dollar {
+        ts.next(); // `$`
+        char_len = Some(8);
+        if let TokenKind::Num(n) = ts.peek().kind {
+            let num_span = ts.peek().span;
+            if n.fract() != 0.0 || n < 1.0 {
+                return Err(SasError::parse(
+                    "the length in an ARRAY statement must be a positive integer",
+                    num_span,
+                ));
+            }
+            ts.next();
+            char_len = Some(n as usize);
+        }
+    }
+
+    // ── Liste de variables (plages x1-x3 expansées ici) ──────────────────
+    let mut vars: Vec<String> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                ts.next();
+                return Ok(DsStmt::Array {
+                    name,
+                    size,
+                    char_len,
+                    vars,
+                });
+            }
+            TokenKind::Ident(v) => {
+                let v = v.clone();
+                let lower = v.to_ascii_lowercase();
+                if matches!(
+                    lower.as_str(),
+                    "_temporary_" | "_numeric_" | "_character_" | "_all_"
+                ) {
+                    return Err(SasError::parse(
+                        format!(
+                            "{} in the ARRAY statement is not yet implemented.",
+                            v.to_uppercase()
+                        ),
+                        tok.span,
+                    ));
+                }
+                validate_sas_name(&v, tok.span)?;
+                ts.next();
+                if ts.peek().kind == TokenKind::Minus {
+                    // Plage numérotée `x1-x3`.
+                    ts.next(); // `-`
+                    let end_tok = ts.peek().clone();
+                    let Some(end_name) = end_tok.ident().map(str::to_string) else {
+                        return Err(SasError::parse(
+                            "expected a variable name after '-' in the ARRAY statement",
+                            end_tok.span,
+                        ));
+                    };
+                    validate_sas_name(&end_name, end_tok.span)?;
+                    ts.next();
+                    expand_numbered_range(&v, &end_name, tok.span.merge(end_tok.span), &mut vars)?;
+                } else {
+                    vars.push(v);
+                }
+            }
+            // `(1 2 3)` : valeurs initiales — hors périmètre M2.
+            TokenKind::LParen => {
+                return Err(SasError::parse(
+                    "Array initial values are not yet implemented.",
+                    tok.span,
+                ));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name in the ARRAY statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Découpe `x12` en (`x`, `12`) : préfixe + suffixe numérique FINAL.
+/// `None` si le nom ne se termine pas par un chiffre (ou n'a pas de
+/// préfixe).
+fn split_numbered(name: &str) -> Option<(&str, &str)> {
+    let bytes = name.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i == bytes.len() || i == 0 {
+        return None;
+    }
+    Some((&name[..i], &name[i..]))
+}
+
+/// Expanse la plage numérotée `x1-x3` en x1 x2 x3 : même préfixe (insensible
+/// à la casse — la casse du premier nom est conservée), suffixes numériques,
+/// bornes croissantes ; la largeur du suffixe de départ est conservée
+/// (`x01-x03` → x01 x02 x03). Sinon, erreur claire.
+fn expand_numbered_range(
+    start: &str,
+    end: &str,
+    span: Span,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    let err = || {
+        SasError::parse(
+            format!(
+                "invalid variable range {start}-{end} in the ARRAY statement \
+                 (expected the same prefix with increasing numeric suffixes, e.g. x1-x3)"
+            ),
+            span,
+        )
+    };
+    let (Some((p1, s1)), Some((p2, s2))) = (split_numbered(start), split_numbered(end)) else {
+        return Err(err());
+    };
+    if !p1.eq_ignore_ascii_case(p2) {
+        return Err(err());
+    }
+    let (Ok(a), Ok(b)) = (s1.parse::<u64>(), s2.parse::<u64>()) else {
+        return Err(err());
+    };
+    if a > b {
+        return Err(err());
+    }
+    let width = s1.len();
+    for n in a..=b {
+        out.push(format!("{p1}{n:0width$}"));
+    }
+    Ok(())
 }
 
 /// `retain [v [init]]... ;` — la liste peut être vide (`retain;` = toutes
@@ -1224,6 +1487,191 @@ mod tests {
         };
         assert_eq!(**then_branch, DsStmt::Delete);
         assert_eq!(ast.stmts[2], DsStmt::Delete);
+    }
+
+    // ── ARRAY (M2, lot 3) ────────────────────────────────────────────────
+
+    #[test]
+    fn array_declaration_three_delimiter_forms() {
+        let expected = vec![DsStmt::Array {
+            name: "a".to_string(),
+            size: Some(3),
+            char_len: None,
+            vars: vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        }];
+        for src in [
+            "data o; array a{3} x y z; run;",
+            "data o; array a[3] x y z; run;",
+            "data o; array a(3) x y z; run;",
+        ] {
+            let ast = parse(src).unwrap();
+            assert_eq!(ast.stmts, expected, "source: {src}");
+        }
+    }
+
+    #[test]
+    fn array_star_size_is_none() {
+        let ast = parse("data o; array a{*} x y z; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Array {
+                name: "a".to_string(),
+                size: None,
+                char_len: None,
+                vars: vec!["x".to_string(), "y".to_string(), "z".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn array_auto_named_elements_empty_var_list() {
+        // `array a{3};` : la liste reste vide (auto-noms a1 a2 a3 à la
+        // compilation).
+        let ast = parse("data o; array a{3}; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Array {
+                name: "a".to_string(),
+                size: Some(3),
+                char_len: None,
+                vars: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn array_char_with_and_without_length() {
+        let ast = parse("data o; array c{3} $ 8 c1 c2 c3; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Array {
+                name: "c".to_string(),
+                size: Some(3),
+                char_len: Some(8),
+                vars: vec!["c1".to_string(), "c2".to_string(), "c3".to_string()],
+            }]
+        );
+        // `$` sans longueur : défaut 8.
+        let ast = parse("data o; array c{2} $ u v; run;").unwrap();
+        let DsStmt::Array { char_len, .. } = &ast.stmts[0] else {
+            panic!("expected an ARRAY statement");
+        };
+        assert_eq!(*char_len, Some(8));
+    }
+
+    #[test]
+    fn array_numbered_range_is_expanded() {
+        let ast = parse("data o; array a{3} x1-x3; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Array {
+                name: "a".to_string(),
+                size: Some(3),
+                char_len: None,
+                vars: vec!["x1".to_string(), "x2".to_string(), "x3".to_string()],
+            }]
+        );
+        // Largeur de suffixe conservée et plage mêlée à d'autres noms.
+        let ast = parse("data o; array a{*} w q01-q03 z; run;").unwrap();
+        let DsStmt::Array { vars, .. } = &ast.stmts[0] else {
+            panic!("expected an ARRAY statement");
+        };
+        assert_eq!(*vars, vec!["w", "q01", "q02", "q03", "z"]);
+    }
+
+    #[test]
+    fn array_invalid_range_errors() {
+        // Préfixes différents.
+        let err = parse("data o; array a{3} x1-y3; run;").unwrap_err();
+        assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+        // Bornes décroissantes.
+        let err = parse("data o; array a{3} x3-x1; run;").unwrap_err();
+        assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+        // Pas de suffixe numérique.
+        let err = parse("data o; array a{3} x-y; run;").unwrap_err();
+        assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+    }
+
+    #[test]
+    fn array_multi_dimension_errors() {
+        let err = parse("data o; array a{2,3} x1-x6; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("Multi-dimensional arrays are not yet implemented."),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn array_initial_values_errors() {
+        let err = parse("data o; array a{3} x y z (1 2 3); run;").unwrap_err();
+        assert!(
+            err.to_string().contains("initial values are not yet implemented"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn array_special_lists_error() {
+        for src in [
+            "data o; array a{3} _temporary_; run;",
+            "data o; array a{*} _numeric_; run;",
+            "data o; array a{*} _character_; run;",
+            "data o; array a{*} _all_; run;",
+        ] {
+            let err = parse(src).unwrap_err();
+            assert!(err.to_string().contains("not yet implemented"), "source: {src}, got: {err}");
+        }
+    }
+
+    #[test]
+    fn array_indexed_rvalue_in_assignment() {
+        let ast = parse("data o; x = a{i + 1}; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Assign {
+                var: "x".to_string(),
+                expr: Expr::Index {
+                    name: "a".to_string(),
+                    index: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(var("i")),
+                        right: Box::new(Expr::Num(1.0)),
+                    }),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn array_indexed_lvalue_braces_and_brackets() {
+        let expected = vec![DsStmt::AssignIndexed {
+            array: "a".to_string(),
+            index: var("i"),
+            expr: Expr::Num(0.0),
+        }];
+        let ast = parse("data o; a{i} = 0; run;").unwrap();
+        assert_eq!(ast.stmts, expected);
+        let ast = parse("data o; a[i] = 0; run;").unwrap();
+        assert_eq!(ast.stmts, expected);
+    }
+
+    #[test]
+    fn array_indexed_lvalue_paren_form() {
+        // `a(i) = e;` : la forme à parenthèses est dispatchée en
+        // AssignIndexed (le nom sera validé array à la compilation).
+        let ast = parse("data o; a(i) = i * 10; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::AssignIndexed {
+                array: "a".to_string(),
+                index: var("i"),
+                expr: Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(var("i")),
+                    right: Box::new(Expr::Num(10.0)),
+                },
+            }]
+        );
     }
 
     #[test]
