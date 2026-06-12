@@ -15,7 +15,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/parser/expr.rs` — Pratt, précédence SAS, littéraux date, missings `.a` (Opus, élevé)
 - [ ] `src/parser/datastep.rs` — statements M1 (Opus, moyen)
 - [x] ⫽ `src/parser/global.rs` — LIBNAME/TITLE/OPTIONS (Sonnet, faible)
-- [ ] `src/datastep/pdv.rs` — PDV (Sonnet, moyen)
+- [x] `src/datastep/pdv.rs` — PDV (Sonnet, moyen)
 - [ ] `src/datastep/mod.rs` — compilation PDV, inférence types (Fable, élevé)
 - [ ] `src/datastep/eval.rs` — évaluateur, coercitions (Opus, moyen-élevé)
 - [ ] ⫽ `src/datastep/functions.rs` — ~25 fonctions table-driven (Sonnet, moyen)

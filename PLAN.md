@@ -74,7 +74,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/parser/expr.rs` | ✅ | **Opus** | élevé | Pratt avec la précédence SAS *inhabituelle* (`NOT` lie fort, `**` droite-associatif), littéraux date, missings spéciaux `.a` |
 | `src/parser/datastep.rs` | 🦴 | **Opus** | moyen | statements M1 (SET/assign/IF/DO/OUTPUT/KEEP/DROP/STOP), erreurs "not yet implemented" propres |
 | `src/parser/global.rs` | ✅ | **Sonnet** | faible | LIBNAME / TITLE / OPTIONS |
-| `src/datastep/pdv.rs` | 🦴 | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
+| `src/datastep/pdv.rs` | ✅ | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
 | `src/datastep/mod.rs` | 🦴 | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
 | `src/datastep/exec.rs` | 🦴 | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
 | `src/datastep/eval.rs` | 🦴 | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
