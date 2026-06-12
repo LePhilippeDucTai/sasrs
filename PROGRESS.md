@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M2**
+Jalon courant : **M3**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -32,7 +32,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] ARRAY + indexation
 - [x] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé
 - [x] Missings spéciaux bout en bout (round-trip parquet testé), `_ERROR_` + NOTEs d'erreurs runtime
-- [ ] Fixtures m2/ + snapshots ; DoD : cargo test vert
+- [x] Fixtures m2/ + snapshots ; DoD : cargo test vert
 
 ## M3 — monde BY
 - [ ] `src/procs/sort.rs` (collation missings, NODUPKEY, DESCENDING, OUT=)

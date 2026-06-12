@@ -1,0 +1,52 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m1/set_filter.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data work.teens;
+3       set d.class;
+4       if age >= 13;
+5       ratio = weight / height;
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.TEENS has 12 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Teenagers from CLASS';
+
+8     proc print data=work.teens;
+9       var name sex age ratio;
+10    run;
+NOTE: There were 12 observations read from the data set WORK.TEENS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                      Teenagers from CLASS
+
+                          Obs    name       sex    age           ratio
+
+                            1    Alfred     M       14    1.6304347826
+                            2    Alice      F       13    1.4867256637
+                            3    Barbara    F       13    1.5007656968
+                            4    Carol      F       14    1.6321656051
+                            5    Henry      M       14    1.6141732283
+                            6    Janet      F       15             1.8
+                            7    Jeffrey    M       13           1.344
+                            8    Judy       F       14     1.399688958
+                            9    Mary       F       15    1.6842105263
+                           10    Philip     M       16    2.0833333333
+                           11    Ronald     M       15    1.9850746269
+                           12    William    M       15    1.6842105263
+
+==== EXIT 0 ====
