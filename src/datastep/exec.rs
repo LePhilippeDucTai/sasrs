@@ -1573,4 +1573,143 @@ mod tests {
         assert_eq!(n.get(0), Some(1.0));
         assert_eq!(n.get(1), Some(2.0));
     }
+
+    // ── Missings spéciaux bout en bout + _ERROR_ + NOTEs (M2, lot 5) ─────
+
+    #[test]
+    fn special_missings_keep_identity_through_parquet_roundtrip() {
+        use crate::missing::num_to_value;
+        let mut s = session();
+        // Étape 1 : assigne les trois familles de missing et écrit en
+        // parquet (WORK est une DirLibrary : écriture/lecture RÉELLES).
+        run("data a; x = .a; y = ._; z = .; run;", &mut s).unwrap();
+
+        // Le parquet de A relu directement : x/y sont des NaN (PAS des
+        // nulls), z est un null (`.` ordinaire ⇔ null Polars).
+        let a = read_work(&s, "a");
+        let at = |c: &str| a.df.column(c).unwrap().f64().unwrap().get(0);
+        assert!(at("x").is_some_and(f64::is_nan));
+        assert!(at("y").is_some_and(f64::is_nan));
+        assert_eq!(at("z"), None);
+        // Et chaque missing garde SON IDENTITÉ au décodage.
+        assert_eq!(num_to_value(at("x")), Value::Missing(MissingKind::Letter(0)));
+        assert_eq!(num_to_value(at("y")), Value::Missing(MissingKind::Underscore));
+        assert_eq!(num_to_value(at("z")), Value::missing());
+        // x ≠ y ≠ z par sas_cmp (ordre total : ._ < . < .a).
+        let (x, y, z) = (num_to_value(at("x")), num_to_value(at("y")), num_to_value(at("z")));
+        assert_ne!(x.sas_cmp(&y), std::cmp::Ordering::Equal);
+        assert_ne!(x.sas_cmp(&z), std::cmp::Ordering::Equal);
+        assert_ne!(y.sas_cmp(&z), std::cmp::Ordering::Equal);
+
+        // Étape 2 : relecture via SET — `.a` relu == `.a`, distinct de
+        // `.b` et de `.`.
+        run(
+            "data b; set a; xa = (x = .a); xb = (x = .b); xd = (x = .); \
+             xy = (x = y); yu = (y = ._); run;",
+            &mut s,
+        )
+        .unwrap();
+        let b = read_work(&s, "b");
+        let bt = |c: &str| b.df.column(c).unwrap().f64().unwrap().get(0);
+        assert_eq!(bt("xa"), Some(1.0), ".a relu doit valoir .a");
+        assert_eq!(bt("xb"), Some(0.0), ".a relu doit rester distinct de .b");
+        assert_eq!(bt("xd"), Some(0.0), ".a relu doit rester distinct de .");
+        assert_eq!(bt("xy"), Some(0.0), ".a et ._ doivent rester distincts");
+        assert_eq!(bt("yu"), Some(1.0), "._ relu doit valoir ._");
+    }
+
+    #[test]
+    fn division_by_zero_sets_error_only_for_nonmissing_numerator() {
+        let mut s = session();
+        write_class(&s, "inp"); // age = 14, ., 13
+        run("data out; set inp; r = age / 0; e = _error_; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let e = ds.df.column("e").unwrap().f64().unwrap();
+        // 14/0 → division par zéro → _ERROR_=1 ; ./0 → missing propagé
+        // (opérande missing AVANT le test du diviseur) SANS _ERROR_ — ce
+        // 0 prouve aussi le RESET de _ERROR_ entre itérations ; 13/0 → 1.
+        assert_eq!(e.get(0), Some(1.0));
+        assert_eq!(e.get(1), Some(0.0));
+        assert_eq!(e.get(2), Some(1.0));
+        // Le résultat est `.` ordinaire dans tous les cas → nulls.
+        let r = ds.df.column("r").unwrap().f64().unwrap();
+        assert_eq!(r.null_count(), 3);
+        // NOTE émise UNE fois malgré deux divisions par zéro, plus la
+        // NOTE de missing généré (./0).
+        let log = s.log.into_string();
+        assert_eq!(
+            log.matches("NOTE: Division by zero detected.").count(),
+            1,
+            "log was: {log}"
+        );
+        assert_eq!(
+            log.matches(
+                "NOTE: Missing values were generated as a result of \
+                 performing an operation on missing values."
+            )
+            .count(),
+            1,
+            "log was: {log}"
+        );
+    }
+
+    #[test]
+    fn missing_over_zero_does_not_emit_division_note() {
+        let mut s = session();
+        run("data out; m = .; r = m / 0; e = _error_; run;", &mut s).unwrap();
+        // missing/0 : propagation missing, PAS une division par zéro.
+        assert_eq!(num_at(&s, "out", "e", 0), Some(0.0));
+        assert_eq!(num_at(&s, "out", "r", 0), None);
+        let log = s.log.into_string();
+        assert!(!log.contains("Division by zero"), "log was: {log}");
+        assert!(log.contains("Missing values were generated"), "log was: {log}");
+    }
+
+    #[test]
+    fn automatic_variables_readable_but_never_output_columns() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let stats = run("data out; set inp; n = _n_; e = _error_; run;", &mut s).unwrap();
+        // 4 colonnes seulement : ni _N_ ni _ERROR_ ne sont écrites.
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 3, 4)]);
+        let ds = read_work(&s, "out");
+        let cols: Vec<&str> = ds.df.get_column_names_str();
+        assert_eq!(cols, vec!["Age", "Name", "n", "e"]);
+        // _N_ == numéro d'observation avec un simple SET.
+        let n = ds.df.column("n").unwrap().f64().unwrap();
+        assert_eq!(n.get(0), Some(1.0));
+        assert_eq!(n.get(1), Some(2.0));
+        assert_eq!(n.get(2), Some(3.0));
+        // Pas d'erreur : _ERROR_ = 0 partout.
+        let e = ds.df.column("e").unwrap().f64().unwrap();
+        assert!(e.iter().all(|v| v == Some(0.0)));
+        // Et surtout pas de NOTE "uninitialized" parasite pour les
+        // variables automatiques.
+        let log = s.log.into_string();
+        assert!(!log.contains("uninitialized"), "log was: {log}");
+    }
+
+    #[test]
+    fn invalid_numeric_data_sets_error_with_single_note() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // name + 0 : conversion char→num invalide à chaque ligne →
+        // _ERROR_=1 partout, mais chaque NOTE n'apparaît qu'UNE fois.
+        run("data out; set inp; v = name + 0; e = _error_; run;", &mut s).unwrap();
+        let ds = read_work(&s, "out");
+        let e = ds.df.column("e").unwrap().f64().unwrap();
+        assert!(e.iter().all(|v| v == Some(1.0)));
+        let log = s.log.into_string();
+        assert_eq!(
+            log.matches("NOTE: Invalid numeric data.").count(),
+            1,
+            "log was: {log}"
+        );
+        assert_eq!(
+            log.matches("NOTE: Character values have been converted to numeric values.")
+                .count(),
+            1,
+            "log was: {log}"
+        );
+    }
 }

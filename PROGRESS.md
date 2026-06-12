@@ -31,7 +31,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] DO itératif (TO/BY/WHILE/UNTIL), DELETE
 - [x] ARRAY + indexation
 - [x] KEEP/DROP/RENAME/WHERE en options de dataset (entrées ET sorties), sorties multiples avec OUTPUT ciblé
-- [ ] Missings spéciaux bout en bout (round-trip parquet testé), `_ERROR_` + NOTEs d'erreurs runtime
+- [x] Missings spéciaux bout en bout (round-trip parquet testé), `_ERROR_` + NOTEs d'erreurs runtime
 - [ ] Fixtures m2/ + snapshots ; DoD : cargo test vert
 
 ## M3 — monde BY

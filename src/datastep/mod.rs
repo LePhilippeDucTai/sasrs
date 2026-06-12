@@ -441,7 +441,15 @@ impl Compiler<'_> {
         match expr {
             Expr::Num(_) | Expr::Str(_) | Expr::Missing(_) => Ok(()),
             Expr::Var(name) => {
-                if self.arrays.contains_key(&name.to_uppercase()) {
+                let upper = name.to_uppercase();
+                // Variables automatiques (_N_, _ERROR_) : servies par
+                // l'évaluateur depuis les champs dédiés du PDV — elles ne
+                // doivent JAMAIS créer de slot (sinon elles deviendraient
+                // des colonnes de sortie + NOTE "uninitialized" parasite).
+                if upper == "_N_" || upper == "_ERROR_" {
+                    return Ok(());
+                }
+                if self.arrays.contains_key(&upper) {
                     return Err(SasError::runtime(format!(
                         "Illegal reference to the array {name}."
                     )));
