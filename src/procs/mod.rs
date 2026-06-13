@@ -19,8 +19,10 @@ pub mod common;
 pub mod contents;
 pub mod corr;
 pub mod datasets;
+pub mod export;
 pub mod format;
 pub mod freq;
+pub mod import;
 pub mod means;
 pub mod print;
 pub mod rank;
@@ -50,6 +52,8 @@ pub enum ProcAst {
     Format(format::FormatAst),
     Tabulate(tabulate::TabulateAst),
     Report(report::ReportAst),
+    Import(import::ImportAst),
+    Export(export::ExportAst),
     Sql(crate::sql::ast::SqlProgram),
 }
 
@@ -135,6 +139,14 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = datasets::parse(ts)?;
             Ok(ProcAst::Datasets(ast))
         }
+        "import" => {
+            let ast = import::parse(ts)?;
+            Ok(ProcAst::Import(ast))
+        }
+        "export" => {
+            let ast = export::parse(ts)?;
+            Ok(ProcAst::Export(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -167,6 +179,8 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Format(a) => format::execute(a, session),
         ProcAst::Tabulate(a) => tabulate::execute(a, session),
         ProcAst::Report(a) => report::execute(a, session),
+        ProcAst::Import(a) => import::execute(a, session),
+        ProcAst::Export(a) => export::execute(a, session),
         ProcAst::Sql(a) => crate::sql::execute(a, session),
     };
 
@@ -405,5 +419,76 @@ mod tests {
             log.contains("There were 3 observations read from the data set WORK.TEST"),
             "log: {log}"
         );
+    }
+
+    /// Round-trip : dataset SAS → PROC EXPORT CSV → fichier → PROC IMPORT → dataset.
+    /// Vérifie que les valeurs survivent au cycle export/import.
+    #[test]
+    fn import_export_csv_round_trip() {
+        use crate::procs::common::decode_column;
+        use crate::value::Value;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let csv_path = dir.path().join("rt.csv");
+
+        // 1. Créer un dataset source WORK.SRC
+        let mut session = Session::new(None, dir.path().to_path_buf(), true).unwrap();
+        write_test_dataset(&mut session); // WORK.TEST avec x=[1,2,3], y=["a","b","c"]
+
+        // 2. PROC EXPORT → CSV
+        let export_ast = ProcAst::Export(export::ExportAst {
+            data: Some(crate::ast::DatasetRef {
+                libref: Some("WORK".into()),
+                name: "TEST".into(),
+            }),
+            outfile: csv_path.to_str().unwrap().to_string(),
+            dbms: export::ExportDbms::Csv,
+            replace: false,
+            delimiter: None,
+            sheet: None,
+        });
+        execute_proc("export", &export_ast, &mut session).unwrap();
+        assert!(csv_path.exists(), "CSV file should have been created");
+
+        // 3. PROC IMPORT ← CSV → WORK.IMPORTED
+        let import_ast = ProcAst::Import(import::ImportAst {
+            datafile: csv_path.to_str().unwrap().to_string(),
+            out: crate::ast::DatasetRef {
+                libref: Some("WORK".into()),
+                name: "IMPORTED".into(),
+            },
+            dbms: import::Dbms::Csv,
+            replace: false,
+            getnames: true,
+            delimiter: None,
+            datarow: None,
+            sheet: None,
+        });
+        execute_proc("import", &import_ast, &mut session).unwrap();
+
+        // 4. Vérifier le dataset importé
+        let provider = session.libs.get("WORK").unwrap();
+        let (imported, _) = provider.read("IMPORTED").unwrap();
+        assert_eq!(imported.n_obs(), 3, "should have 3 observations");
+
+        // Les variables x (num) et y (char) doivent être présentes
+        let xi = imported.vars.iter().position(|v| v.name.eq_ignore_ascii_case("x")).expect("var x not found");
+        let yi = imported.vars.iter().position(|v| v.name.eq_ignore_ascii_case("y")).expect("var y not found");
+
+        let x_col = decode_column(&imported, xi).unwrap();
+        assert_eq!(x_col[0], Value::Num(1.0), "x[0] should be 1.0");
+        assert_eq!(x_col[1], Value::Num(2.0), "x[1] should be 2.0");
+        assert_eq!(x_col[2], Value::Num(3.0), "x[2] should be 3.0");
+
+        let y_col = decode_column(&imported, yi).unwrap();
+        assert_eq!(y_col[0], Value::Char("a".to_string()), "y[0] should be 'a'");
+        assert_eq!(y_col[1], Value::Char("b".to_string()), "y[1] should be 'b'");
+        assert_eq!(y_col[2], Value::Char("c".to_string()), "y[2] should be 'c'");
+
+        // Vérifier les NOTEs de log
+        let log = session.log.into_string();
+        assert!(log.contains("PROCEDURE EXPORT used"), "log: {log}");
+        assert!(log.contains("PROCEDURE IMPORT used"), "log: {log}");
     }
 }
