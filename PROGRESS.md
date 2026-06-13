@@ -37,7 +37,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 ## M3 — monde BY
 - [x] `src/procs/sort.rs` (collation missings, NODUPKEY, DESCENDING, OUT=)
 - [x] SET avec BY (interclassement), FIRST./LAST.
-- [ ] MERGE avec BY (match-merge exact, IN=, détection désordre) — tests contre sorties SAS calculées à la main
+- [x] MERGE avec BY (match-merge exact, IN=, détection désordre) — tests contre sorties SAS calculées à la main
 - [ ] Fixtures m3/ + snapshots
 
 ## M4 — formats

@@ -37,6 +37,11 @@ pub struct DatasetOptions {
     pub drop: Option<Vec<String>>,
     pub rename: Vec<(String, String)>,
     pub where_: Option<Expr>,
+    /// `in=nom` (M3) : variable automatique temporaire 0/1 indiquant si le
+    /// dataset a participé au groupe de clé BY courant d'un MERGE. Valide
+    /// uniquement en INPUT de MERGE ; en sortie DATA → erreur de
+    /// compilation. Jamais écrite en sortie (comme FIRST./LAST.).
+    pub in_: Option<String>,
 }
 
 /// Référence de dataset accompagnée de ses options : `lib.a(keep=x y)`.
@@ -145,6 +150,12 @@ pub enum DsStmt {
     /// purement déclaratif : la sémantique (tri, FIRST./LAST.) est résolue
     /// à la compilation/exécution.
     By(Vec<(String, bool)>),
+    /// `merge ds1[(in=a)] ds2[(in=b)] ...;` (M3) — match-merge SAS par BY.
+    /// Comme SET, chaque dataset porte ses options `(keep=/drop=/rename=/
+    /// where=/in=)`. Une étape ne peut avoir qu'UN SET ou MERGE. Les
+    /// datasets doivent être triés par BY ; la sémantique (persistance du
+    /// côté court, IN=, FIRST./LAST.) est résolue à la compilation/exécution.
+    Merge(Vec<DatasetSpec>),
     Assign {
         var: String,
         expr: Expr,

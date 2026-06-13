@@ -122,6 +122,13 @@ pub struct InputData {
     pub datasets: Vec<InputDataset>,
     /// Clés du BY (vide = pas de BY).
     pub by: Vec<ByVar>,
+    /// MERGE (M3) : `true` = match-merge SAS par BY (au lieu de SET).
+    /// L'exécuteur pré-calcule la séquence des obs de sortie groupe par
+    /// groupe (cf. exec.rs).
+    pub merge: bool,
+    /// Variables IN= du MERGE : `(nom UPPERCASE, index dataset)`. Servies
+    /// par `EvalCtx::in_flags` (jamais de slot PDV, comme FIRST./LAST.).
+    pub in_flags: Vec<(String, usize)>,
 }
 
 /// Une sortie : où écrire et quels slots du PDV.
@@ -166,6 +173,8 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         session,
         input_datasets: Vec::new(),
         seen_set: false,
+        seen_merge: false,
+        in_flags: Vec::new(),
         by: None,
         first_last_refs: Vec::new(),
         keeps: Vec::new(),
@@ -259,6 +268,12 @@ struct Compiler<'a> {
     input_datasets: Vec<InputDataset>,
     /// Un statement SET a déjà été rencontré (un second → erreur).
     seen_set: bool,
+    /// Un statement MERGE a déjà été rencontré (M3). Un second SET/MERGE
+    /// dans la même étape → erreur "... is not allowed after ...".
+    seen_merge: bool,
+    /// Variables IN= des datasets d'un MERGE : `(nom UPPERCASE, index
+    /// dataset)`. Jamais de slot PDV (servies par EvalCtx, comme FIRST.).
+    in_flags: Vec<(String, usize)>,
     /// Items du statement BY `(nom, descending)` ; résolus en `ByVar` en
     /// fin de compilation (un second BY écrase le premier).
     by: Option<Vec<(String, bool)>>,
@@ -296,8 +311,41 @@ impl Compiler<'_> {
                         "Multiple SET statements are not yet implemented.",
                     ));
                 }
+                if self.seen_merge {
+                    return Err(SasError::runtime(
+                        "A SET statement is not allowed after a MERGE statement.",
+                    ));
+                }
                 self.seen_set = true;
                 for spec in specs {
+                    // `in=` n'est pas valide sur un SET (MERGE seulement).
+                    if spec.options.in_.is_some() {
+                        return Err(SasError::runtime(
+                            "The IN= data set option is only valid on a MERGE statement.",
+                        ));
+                    }
+                    self.compile_set(spec)?;
+                }
+                Ok(())
+            }
+            // MERGE (M3) : comme SET multi-datasets mais en match-merge par
+            // BY. Chaque dataset peut porter une option `in=`. Un SET/MERGE
+            // a déjà été vu → erreur.
+            DsStmt::Merge(specs) => {
+                if self.seen_set || self.seen_merge {
+                    return Err(SasError::runtime(
+                        "A MERGE statement is not allowed after a SET or MERGE statement.",
+                    ));
+                }
+                self.seen_merge = true;
+                for spec in specs {
+                    // L'index du dataset dans `input_datasets` AVANT le push.
+                    let ds_index = self.input_datasets.len();
+                    if let Some(nm) = &spec.options.in_ {
+                        // Le nom IN= ne doit PAS entrer en collision avec une
+                        // variable du PDV (c'est une automatique temporaire).
+                        self.in_flags.push((nm.to_uppercase(), ds_index));
+                    }
                     self.compile_set(spec)?;
                 }
                 Ok(())
@@ -522,6 +570,12 @@ impl Compiler<'_> {
                 // fin de compilation.
                 if upper.starts_with("FIRST.") || upper.starts_with("LAST.") {
                     self.first_last_refs.push(upper);
+                    return Ok(());
+                }
+                // Variable IN= d'un MERGE : automatique temporaire 0/1,
+                // servie par EvalCtx — jamais de slot PDV (donc jamais
+                // écrite en sortie).
+                if self.in_flags.iter().any(|(n, _)| *n == upper) {
                     return Ok(());
                 }
                 if self.arrays.contains_key(&upper) {
@@ -834,7 +888,20 @@ impl Compiler<'_> {
                 )));
             }
         }
-        Ok(Some(InputData { datasets, by }))
+        // MERGE exige un BY (sinon match-merge non défini : SAS le tolère en
+        // « one-to-one merge » positionnel, hors périmètre M3 → erreur).
+        if self.seen_merge && by.is_empty() {
+            return Err(SasError::runtime(
+                "A MERGE statement requires a BY statement.",
+            ));
+        }
+        let in_flags = std::mem::take(&mut self.in_flags);
+        Ok(Some(InputData {
+            datasets,
+            by,
+            merge: self.seen_merge,
+            in_flags,
+        }))
     }
 
     /// Toute variable d'un WHERE= de SET doit déjà être au PDV (= une
@@ -965,6 +1032,12 @@ impl Compiler<'_> {
             if opts.where_.is_some() {
                 return Err(SasError::runtime(
                     "WHERE= is not a valid data set option for output data sets.",
+                ));
+            }
+            // IN= n'est valide qu'en INPUT de MERGE (règle SAS).
+            if opts.in_.is_some() {
+                return Err(SasError::runtime(
+                    "IN= is not a valid data set option for output data sets.",
                 ));
             }
             // Les variables des options KEEP=/DROP=/RENAME= doivent exister

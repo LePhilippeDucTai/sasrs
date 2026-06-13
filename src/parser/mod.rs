@@ -253,50 +253,67 @@ impl<'a> StatementStream<'a> {
         self.next(); // `(`
         loop {
             let tok = self.peek().clone();
-            match &tok.kind {
+            // Le nom d'option : un Ident, ou le mot-clé `in` (lexé en
+            // `TokenKind::In`, l'opérateur — réutilisé ici comme option IN=).
+            let opt_name: Option<String> = match &tok.kind {
                 TokenKind::RParen => {
                     self.next();
                     break;
                 }
-                TokenKind::Ident(name) => {
-                    let lower = name.to_ascii_lowercase();
-                    if !matches!(lower.as_str(), "keep" | "drop" | "rename" | "where") {
-                        return Err(SasError::parse(
-                            format!("Dataset option {} is not supported.", name.to_uppercase()),
-                            tok.span,
-                        ));
-                    }
-                    self.next(); // le nom d'option
-                    if self.peek().kind != TokenKind::Eq {
-                        return Err(SasError::parse(
-                            format!(
-                                "expected '=' after the dataset option {}",
-                                name.to_uppercase()
-                            ),
-                            self.peek().span,
-                        ));
-                    }
-                    self.next(); // `=`
-                    match lower.as_str() {
-                        "keep" => {
-                            let list = self.parse_option_name_list("KEEP")?;
-                            options.keep.get_or_insert_with(Vec::new).extend(list);
-                        }
-                        "drop" => {
-                            let list = self.parse_option_name_list("DROP")?;
-                            options.drop.get_or_insert_with(Vec::new).extend(list);
-                        }
-                        "rename" => options.rename.extend(self.parse_rename_pairs()?),
-                        "where" => options.where_ = Some(self.parse_where_option()?),
-                        _ => unreachable!("filtered above"),
-                    }
+                TokenKind::Ident(name) => Some(name.to_ascii_lowercase()),
+                TokenKind::In => Some("in".to_string()),
+                _ => None,
+            };
+            let Some(lower) = opt_name else {
+                return Err(SasError::parse(
+                    "expected a dataset option or ')'",
+                    tok.span,
+                ));
+            };
+            if !matches!(lower.as_str(), "keep" | "drop" | "rename" | "where" | "in") {
+                return Err(SasError::parse(
+                    format!("Dataset option {} is not supported.", lower.to_uppercase()),
+                    tok.span,
+                ));
+            }
+            self.next(); // le nom d'option
+            if self.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    format!(
+                        "expected '=' after the dataset option {}",
+                        lower.to_uppercase()
+                    ),
+                    self.peek().span,
+                ));
+            }
+            self.next(); // `=`
+            match lower.as_str() {
+                "keep" => {
+                    let list = self.parse_option_name_list("KEEP")?;
+                    options.keep.get_or_insert_with(Vec::new).extend(list);
                 }
-                _ => {
-                    return Err(SasError::parse(
-                        "expected a dataset option or ')'",
-                        tok.span,
-                    ));
+                "drop" => {
+                    let list = self.parse_option_name_list("DROP")?;
+                    options.drop.get_or_insert_with(Vec::new).extend(list);
                 }
+                "rename" => options.rename.extend(self.parse_rename_pairs()?),
+                "where" => options.where_ = Some(self.parse_where_option()?),
+                // `in=nom` (M3) : nom de variable automatique 0/1. Sa
+                // validité (MERGE input seulement) est tranchée à la
+                // compilation.
+                "in" => {
+                    let nm_tok = self.peek().clone();
+                    let Some(nm) = nm_tok.ident().map(str::to_string) else {
+                        return Err(SasError::parse(
+                            "expected a variable name after the IN= dataset option",
+                            nm_tok.span,
+                        ));
+                    };
+                    validate_sas_name(&nm, nm_tok.span)?;
+                    self.next();
+                    options.in_ = Some(nm);
+                }
+                _ => unreachable!("filtered above"),
             }
         }
         Ok(DatasetSpec { dref, options })

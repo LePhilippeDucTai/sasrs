@@ -196,6 +196,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
 
     match head.as_str() {
         "set" => parse_set(ts),
+        "merge" => parse_merge(ts),
         "by" => parse_by(ts),
         "if" => parse_if(ts),
         "do" => parse_do(ts),
@@ -330,6 +331,27 @@ fn parse_set(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::Set(specs))
+}
+
+/// `merge spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
+/// options de dataset (dont `in=`). Match-merge SAS par BY. La validité (un
+/// seul SET/MERGE par étape, présence d'un BY, tri) est tranchée à la
+/// compilation/exécution.
+fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
+    let merge_tok = ts.peek().clone();
+    ts.next(); // `merge`
+    if ts.peek().kind == TokenKind::Semi {
+        return Err(SasError::parse(
+            "Statement MERGE without a dataset is not yet implemented.",
+            merge_tok.span,
+        ));
+    }
+    let mut specs = Vec::new();
+    while ts.peek().ident().is_some() {
+        specs.push(ts.parse_dataset_spec()?);
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::Merge(specs))
 }
 
 /// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le
@@ -1293,19 +1315,48 @@ mod tests {
 
     #[test]
     fn unimplemented_statement_errors_but_resyncs() {
-        // `merge` n'est pas implémenté en M2. L'étape doit échouer MAIS le
-        // stream doit être positionné après le `run;` pour le bloc suivant.
-        let file = SourceFile::new("data o; merge x y; set i; run; data b; run;");
+        // `update` n'est pas implémenté (M3 ajoute MERGE, pas UPDATE).
+        // L'étape doit échouer MAIS le stream doit être positionné après le
+        // `run;` pour le bloc suivant.
+        let file = SourceFile::new("data o; update x y; set i; run; data b; run;");
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         let err = parse_data_step(&mut ts).unwrap_err();
-        assert!(err.to_string().to_uppercase().contains("MERGE"));
+        assert!(err.to_string().to_uppercase().contains("UPDATE"));
         assert!(err.to_string().contains("not yet implemented"));
         // Resynchronisation : on est sur le `data` de la deuxième étape.
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast2.outputs, vec![dspec("b")]);
+    }
+
+    // ── MERGE (M3) ───────────────────────────────────────────────────────
+
+    #[test]
+    fn merge_two_datasets_parses() {
+        let ast = parse("data o; merge a b; by id; run;").unwrap();
+        assert_eq!(
+            ast.stmts[0],
+            DsStmt::Merge(vec![dspec("a"), dspec("b")])
+        );
+        assert_eq!(ast.stmts[1], DsStmt::By(vec![("id".to_string(), false)]));
+    }
+
+    #[test]
+    fn merge_with_in_option_parses() {
+        let ast = parse("data o; merge a(in=ina) b(in=inb); by id; run;").unwrap();
+        let DsStmt::Merge(specs) = &ast.stmts[0] else {
+            panic!("expected a MERGE statement");
+        };
+        assert_eq!(specs[0].options.in_.as_deref(), Some("ina"));
+        assert_eq!(specs[1].options.in_.as_deref(), Some("inb"));
+    }
+
+    #[test]
+    fn merge_without_dataset_errors() {
+        let err = parse("data o; merge; by id; run;").unwrap_err();
+        assert!(err.to_string().to_uppercase().contains("MERGE"));
     }
 
     // ── RETAIN (M2) ──────────────────────────────────────────────────────

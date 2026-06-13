@@ -55,6 +55,11 @@ pub struct EvalCtx {
     /// l'interclassement. Servent les variables automatiques FIRST.x /
     /// LAST.x (jamais de slot PDV, donc jamais écrites en sortie).
     pub by_flags: Vec<(String, bool, bool)>,
+    /// Flags IN= du MERGE `(nom UPPERCASE, valeur 0/1)` : 1 si le dataset
+    /// associé a participé au groupe de clé BY de l'observation courante.
+    /// Mis à jour par le Runner à chaque obs de sortie du MERGE. Servent
+    /// les variables automatiques IN= (jamais de slot PDV).
+    pub in_flags: Vec<(String, bool)>,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,
@@ -194,6 +199,10 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
                 Value::missing()
             }
         };
+    }
+    // Variable IN= d'un MERGE : automatique 0/1 servie depuis le contexte.
+    if let Some((_, flag)) = ctx.in_flags.iter().find(|(n, _)| *n == upper) {
+        return Value::Num(if *flag { 1.0 } else { 0.0 });
     }
     match pdv.slot(name) {
         Some(slot) => pdv.get(slot).clone(),

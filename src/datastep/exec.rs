@@ -154,6 +154,29 @@ struct Runner {
     /// Observations poussées PAR sortie (l'OUTPUT ciblé rend les comptes
     /// indépendants).
     out_rows: Vec<usize>,
+    /// MERGE (M3) : séquence pré-calculée des observations de sortie
+    /// (groupe par groupe). Vide hors MERGE.
+    merge_plan: Vec<MergeObs>,
+    /// Curseur dans `merge_plan` (prochaine obs à servir).
+    merge_cursor: usize,
+}
+
+/// Une observation de sortie d'un MERGE, pré-calculée par `build_merge_plan`.
+struct MergeObs {
+    /// Slots à remettre à MISSING AVANT les chargements (variables PROPRES
+    /// des datasets absents du groupe) — non vide seulement à la 1re obs du
+    /// groupe.
+    blank_slots: Vec<usize>,
+    /// Chargements à appliquer dans l'ORDRE (gauche→droite du MERGE) : le
+    /// dernier dataset qui contribue écrase les variables partagées.
+    /// `(index dataset, ligne)`.
+    loads: Vec<(usize, usize)>,
+    /// État IN= par dataset pour ce groupe (`true` = a participé).
+    in_active: Vec<bool>,
+    /// FIRST./LAST. par variable BY (préfixe de clés), parallèle à
+    /// `input.by`.
+    first: Vec<bool>,
+    last: Vec<bool>,
 }
 
 pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
@@ -196,6 +219,13 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         .map_or(Vec::new(), |i| {
             i.by.iter().map(|b| (b.name.clone(), true, true)).collect()
         });
+    // IN= : initialisées à 0 (aucun groupe encore servi).
+    let in_flags = input.as_ref().map_or(Vec::new(), |i| {
+        i.in_flags
+            .iter()
+            .map(|(name, _)| (name.clone(), false))
+            .collect()
+    });
     let n_outputs = outputs.len();
     let mut r = Runner {
         pdv,
@@ -208,19 +238,29 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         ctx: EvalCtx {
             arrays,
             by_flags,
+            in_flags,
             ..EvalCtx::default()
         },
         outputs,
         builders,
         out_rows: vec![0; n_outputs],
+        merge_plan: Vec::new(),
+        merge_cursor: 0,
     };
 
-    // Interclassement : pré-application des WHERE= par dataset (les
-    // lignes rejetées ne comptent pas comme lues), AVANT la boucle. Les
+    // Interclassement / match-merge : pré-application des WHERE= par dataset
+    // (les lignes rejetées ne comptent pas comme lues), AVANT la boucle. Les
     // NOTEs de conversion d'un WHERE= peuvent donc être émises pour des
     // lignes jamais atteintes (STOP précoce) — divergence mineure assumée.
     if r.input.as_ref().is_some_and(|i| !i.by.is_empty()) {
         r.prefilter()?;
+    }
+    // MERGE : pré-calcul de la séquence des obs de sortie (groupe par
+    // groupe), à partir des lignes retenues par le pré-filtrage. La
+    // détection de désordre y est faite (clé de groupe qui régresse →
+    // ERROR).
+    if r.input.as_ref().is_some_and(|i| i.merge) {
+        r.merge_plan = r.build_merge_plan()?;
     }
 
     // Valeurs initiales (RETAIN avec init, sum statements) : posées AVANT
@@ -355,6 +395,7 @@ impl Runner {
                     self.exec_set_interleave()
                 }
             }
+            DsStmt::Merge(_) => self.exec_merge(),
             DsStmt::Assign { var, expr } => {
                 let value = self.eval_checked(expr)?;
                 let Some(slot) = self.pdv.slot(var) else {
@@ -580,6 +621,226 @@ impl Runner {
         }
         self.prev_keys = Some(cur_keys);
         Ok(Flow::Normal)
+    }
+
+    /// MERGE (M3) : sert la prochaine observation pré-calculée du plan. À
+    /// l'épuisement du plan → EndStep (fin d'étape immédiate, comme SET).
+    /// Applique les MISSING des datasets absents (1re obs du groupe), les
+    /// chargements (gauche→droite, le dernier contributeur écrase les
+    /// variables partagées), puis met à jour les flags FIRST./LAST. et IN=.
+    fn exec_merge(&mut self) -> Result<Flow> {
+        let Some(input) = &self.input else {
+            return Err(SasError::runtime("MERGE statement without input data."));
+        };
+        let Some(obs) = self.merge_plan.get(self.merge_cursor) else {
+            return Ok(Flow::EndStep);
+        };
+        // Emprunts disjoints : on copie les petites données nécessaires.
+        let blank_slots = obs.blank_slots.clone();
+        let loads = obs.loads.clone();
+        let in_active = obs.in_active.clone();
+        let first = obs.first.clone();
+        let last = obs.last.clone();
+
+        // (1) Variables PROPRES des datasets absents → MISSING (persistées
+        // ensuite tout le groupe, car from_input).
+        for &slot in &blank_slots {
+            let init = match self.pdv.vars()[slot].ty {
+                VarType::Num => Value::missing(),
+                VarType::Char => Value::Char(String::new()),
+            };
+            self.pdv.set(slot, init);
+        }
+        // (2) Chargements gauche→droite (les datasets non chargés PERSISTENT
+        // leurs valeurs — c'est la « persistance du côté court »).
+        for &(d, row) in &loads {
+            let ds = &input.datasets[d];
+            for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+                self.pdv.set(*slot, col[row].clone());
+            }
+        }
+        // (3) Flags FIRST./LAST. (sur la clé de groupe).
+        for (i, flags) in self.ctx.by_flags.iter_mut().enumerate() {
+            flags.1 = first[i];
+            flags.2 = last[i];
+        }
+        // (4) Flags IN= : 1 pour les datasets ayant participé au groupe.
+        let input = self.input.as_ref().unwrap();
+        for (name, ds_idx) in &input.in_flags {
+            if let Some((_, flag)) = self.ctx.in_flags.iter_mut().find(|(n, _)| n == name) {
+                *flag = in_active[*ds_idx];
+            }
+        }
+        self.merge_cursor += 1;
+        Ok(Flow::Normal)
+    }
+
+    /// Pré-calcule la séquence des observations de sortie d'un MERGE, groupe
+    /// par groupe (cf. en-tête de fichier). Pour chaque clé de l'UNION triée
+    /// des clés présentes dans au moins un dataset, le groupe produit
+    /// `max_i(n_i)` observations. Détecte le désordre (clés non triées dans
+    /// un dataset) → ERROR.
+    fn build_merge_plan(&mut self) -> Result<Vec<MergeObs>> {
+        let input = self.input.as_ref().unwrap();
+        let n_ds = input.datasets.len();
+        let n_by = input.by.len();
+
+        // Groupes consécutifs par dataset : Vec<(clé, début, longueur)> sur
+        // les lignes RETENUES (`filtered`). Détection de désordre intra-ds.
+        let mut ds_groups: Vec<Vec<(Vec<Value>, usize, usize)>> = Vec::with_capacity(n_ds);
+        for (d, ds) in input.datasets.iter().enumerate() {
+            let rows = &self.filtered[d];
+            let mut groups: Vec<(Vec<Value>, usize, usize)> = Vec::new();
+            let mut prev_key: Option<Vec<Value>> = None;
+            for (pos, &row) in rows.iter().enumerate() {
+                let key = keys_at(ds, row);
+                match groups.last_mut() {
+                    Some((k, _, len)) if compare_keys(&key, k, &input.by) == Ordering::Equal => {
+                        *len += 1;
+                    }
+                    _ => {
+                        // Nouvelle clé : doit être STRICTEMENT supérieure à la
+                        // précédente (sinon dataset non trié).
+                        if let Some(prev) = &prev_key {
+                            if compare_keys(&key, prev, &input.by) == Ordering::Less {
+                                return Err(SasError::runtime(format!(
+                                    "BY variables are not properly sorted on data set {}.",
+                                    ds.display
+                                )));
+                            }
+                        }
+                        prev_key = Some(key.clone());
+                        groups.push((key, pos, 1));
+                    }
+                }
+            }
+            ds_groups.push(groups);
+        }
+
+        // Curseurs de groupe par dataset.
+        let mut g_cursors = vec![0usize; n_ds];
+        let mut plan: Vec<MergeObs> = Vec::new();
+        let mut prev_group_key: Option<Vec<Value>> = None;
+
+        loop {
+            // Plus petite clé de groupe parmi les datasets non épuisés.
+            let mut best: Option<Vec<Value>> = None;
+            for d in 0..n_ds {
+                if let Some((key, _, _)) = ds_groups[d].get(g_cursors[d]) {
+                    let better = match &best {
+                        None => true,
+                        Some(b) => compare_keys(key, b, &input.by) == Ordering::Less,
+                    };
+                    if better {
+                        best = Some(key.clone());
+                    }
+                }
+            }
+            let Some(group_key) = best else { break };
+
+            // Par dataset : participe-t-il à ce groupe ? Si oui, (début,
+            // longueur) de ses lignes dans `filtered`.
+            let mut participate: Vec<Option<(usize, usize)>> = vec![None; n_ds];
+            let mut n = vec![0usize; n_ds];
+            for d in 0..n_ds {
+                if let Some((key, start, len)) = ds_groups[d].get(g_cursors[d]) {
+                    if compare_keys(key, &group_key, &input.by) == Ordering::Equal {
+                        participate[d] = Some((*start, *len));
+                        n[d] = *len;
+                        g_cursors[d] += 1;
+                    }
+                }
+            }
+            let in_active: Vec<bool> = n.iter().map(|&c| c > 0).collect();
+            let max = n.iter().copied().max().unwrap_or(0);
+
+            // Slots PROPRES des datasets absents (n_i == 0) à blanchir au
+            // début du groupe : un slot d'un dataset absent n'est blanchi que
+            // s'il n'appartient à AUCUN dataset participant (sinon le
+            // participant l'écrit).
+            let mut blank_slots: Vec<usize> = Vec::new();
+            for d in 0..n_ds {
+                if n[d] > 0 {
+                    continue;
+                }
+                for &slot in &input.datasets[d].var_slots {
+                    let owned_by_participant = (0..n_ds).any(|p| {
+                        n[p] > 0 && input.datasets[p].var_slots.contains(&slot)
+                    });
+                    if !owned_by_participant && !blank_slots.contains(&slot) {
+                        blank_slots.push(slot);
+                    }
+                }
+            }
+
+            // FIRST./LAST. du groupe vs groupes voisins (préfixe de clés).
+            let first_flags: Vec<bool> = (0..n_by)
+                .map(|i| match &prev_group_key {
+                    None => true,
+                    Some(prev) => prefix_changed(&group_key, prev, i),
+                })
+                .collect();
+
+            // La clé du groupe SUIVANT (pour LAST.) : plus petite clé restante
+            // après consommation de ce groupe.
+            let mut next_group_key: Option<Vec<Value>> = None;
+            for d in 0..n_ds {
+                if let Some((key, _, _)) = ds_groups[d].get(g_cursors[d]) {
+                    let better = match &next_group_key {
+                        None => true,
+                        Some(b) => compare_keys(key, b, &input.by) == Ordering::Less,
+                    };
+                    if better {
+                        next_group_key = Some(key.clone());
+                    }
+                }
+            }
+            let last_flags: Vec<bool> = (0..n_by)
+                .map(|i| match &next_group_key {
+                    None => true,
+                    Some(next) => prefix_changed(&group_key, next, i),
+                })
+                .collect();
+
+            // `max` observations de sortie pour ce groupe. FIRST.x n'est vrai
+            // qu'à la PREMIÈRE obs du groupe (j==0), LAST.x qu'à la DERNIÈRE
+            // (j==max-1) — combiné au changement de préfixe vs groupe voisin.
+            for j in 0..max {
+                let mut loads: Vec<(usize, usize)> = Vec::new();
+                for d in 0..n_ds {
+                    if let Some((start, len)) = participate[d] {
+                        if j < len {
+                            // j-ème ligne du groupe dans `filtered`.
+                            let row = self.filtered[d][start + j];
+                            loads.push((d, row));
+                        }
+                        // j >= len : PERSISTANCE (pas de chargement).
+                    }
+                }
+                let first: Vec<bool> = first_flags
+                    .iter()
+                    .map(|&f| f && j == 0)
+                    .collect();
+                let last: Vec<bool> = last_flags
+                    .iter()
+                    .map(|&l| l && j + 1 == max)
+                    .collect();
+                plan.push(MergeObs {
+                    // Blanchiment seulement à la 1re obs du groupe.
+                    blank_slots: if j == 0 { blank_slots.clone() } else { Vec::new() },
+                    loads,
+                    in_active: in_active.clone(),
+                    first,
+                    last,
+                });
+            }
+            // Compte des lignes lues (toutes les obs participantes du groupe).
+            for d in 0..n_ds {
+                self.rows_read[d] += n[d];
+            }
+            prev_group_key = Some(group_key);
+        }
+        Ok(plan)
     }
 
     /// Pré-applique les WHERE= des datasets d'un SET avec BY : remplit
@@ -2029,6 +2290,191 @@ mod tests {
         let stats = run("data out; set inp; run;", &mut s).unwrap();
         assert_eq!(stats.read, vec![("WORK.INP".to_string(), 3)]);
         assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 3, 2)]);
+    }
+
+    // ── MERGE avec BY : match-merge SAS (M3-3) ───────────────────────────
+    //
+    // Plusieurs sorties sont COMPARÉES À UNE SORTIE SAS CALCULÉE À LA MAIN
+    // (indiqué dans le commentaire de chaque test).
+
+    /// Colonne char complète de WORK.`table`.
+    fn col_str(session: &Session, table: &str, col: &str) -> Vec<Option<String>> {
+        read_work(session, table)
+            .df
+            .column(col)
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .map(|o| o.map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn merge_one_to_one() {
+        // Sortie SAS calculée à la main : a={(1,x=10),(2,x=20)},
+        // b={(1,y=100),(2,y=200)} ; merge a b; by id; → (1,10,100),(2,20,200).
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))]);
+        let stats = run("data out; merge a b; by id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0]));
+        assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
+        assert_eq!(col(&s, "out", "y"), some(&[100.0, 200.0]));
+        assert_eq!(
+            stats.read,
+            vec![("WORK.A".to_string(), 2), ("WORK.B".to_string(), 2)]
+        );
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 2, 3)]);
+    }
+
+    #[test]
+    fn merge_one_to_many_short_side_persists() {
+        // Sortie SAS calculée à la main : a={(1,x=10),(1,x=20)}, b={(1,y=100)}
+        // ; merge a b; by id; → (1,10,100),(1,20,100). y PERSISTE à 100 sur
+        // la 2e obs (persistance du côté court).
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0, 1.0])), ("x", some(&[10.0, 20.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0])), ("y", some(&[100.0]))]);
+        run("data out; merge a b; by id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[1.0, 1.0]));
+        assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
+        // VÉRIFICATION EXPLICITE : y == 100 sur la 2e obs (persistance).
+        assert_eq!(col(&s, "out", "y"), some(&[100.0, 100.0]));
+    }
+
+    #[test]
+    fn merge_unmatched_keys_with_in_and_missing() {
+        // Sortie SAS calculée à la main : a={(1,x=10),(3,x=30)},
+        // b={(2,y=20),(3,y=33)} ; merge a(in=ina) b(in=inb); by id; →
+        //   id=1 : x=10, y=. , ina=1, inb=0
+        //   id=2 : x=. , y=20, ina=0, inb=1
+        //   id=3 : x=30, y=33, ina=1, inb=1
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))]);
+        run(
+            "data out; merge a(in=ina) b(in=inb); by id; a_in = ina; b_in = inb; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0, 3.0]));
+        assert_eq!(col(&s, "out", "x"), vec![Some(10.0), None, Some(30.0)]);
+        assert_eq!(col(&s, "out", "y"), vec![None, Some(20.0), Some(33.0)]);
+        assert_eq!(col(&s, "out", "a_in"), some(&[1.0, 0.0, 1.0]));
+        assert_eq!(col(&s, "out", "b_in"), some(&[0.0, 1.0, 1.0]));
+        // ina/inb sont des automatiques : jamais écrites en sortie.
+        let out_ds = read_work(&s, "out");
+        let cols: Vec<&str> = out_ds.df.get_column_names_str();
+        assert!(!cols.contains(&"ina"), "cols: {cols:?}");
+        assert!(!cols.contains(&"inb"), "cols: {cols:?}");
+    }
+
+    #[test]
+    fn merge_inner_join_via_in() {
+        // Idiome SAS : `if ina and inb;` = inner join. Mêmes données que le
+        // test précédent → 1 obs (id=3). Sortie calculée à la main.
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))]);
+        run(
+            "data out; merge a(in=ina) b(in=inb); by id; if ina and inb; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[3.0]));
+        assert_eq!(col(&s, "out", "x"), some(&[30.0]));
+        assert_eq!(col(&s, "out", "y"), some(&[33.0]));
+    }
+
+    #[test]
+    fn merge_variable_overlap_rightmost_wins() {
+        // a={(1,v='A')}, b={(1,v='B')} ; merge a b; by id; → v='B' (le dernier
+        // dataset du MERGE écrase). Sortie calculée à la main.
+        let mut s = session();
+        let id_a = Series::new("id".into(), &[Some(1.0)]);
+        let v_a = Series::new("v".into(), &["A"]);
+        let df_a = DataFrame::new(vec![id_a.into(), v_a.into()]).unwrap();
+        let vars = vec![
+            VarMeta { name: "id".into(), ty: VarType::Num, length: 8, format: None, label: None },
+            VarMeta { name: "v".into(), ty: VarType::Char, length: 8, format: None, label: None },
+        ];
+        s.libs.get("WORK").unwrap().write("a", &SasDataset { df: df_a, vars: vars.clone() }).unwrap();
+        let id_b = Series::new("id".into(), &[Some(1.0)]);
+        let v_b = Series::new("v".into(), &["B"]);
+        let df_b = DataFrame::new(vec![id_b.into(), v_b.into()]).unwrap();
+        s.libs.get("WORK").unwrap().write("b", &SasDataset { df: df_b, vars }).unwrap();
+        run("data out; merge a b; by id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[1.0]));
+        assert_eq!(col_str(&s, "out", "v"), vec![Some("B".to_string())]);
+    }
+
+    #[test]
+    fn merge_first_last_on_one_to_many_group() {
+        // FIRST./LAST. avec MERGE sur un groupe one-to-many. a a deux obs
+        // id=1 et une id=2 ; b une obs id=1 et une id=2. Groupe id=1 → 2
+        // obs : first=1/0, last=0/1 ; groupe id=2 → 1 obs : first=1, last=1.
+        // Sortie calculée à la main.
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0, 1.0, 2.0])), ("x", some(&[10.0, 11.0, 20.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))]);
+        run(
+            "data out; merge a b; by id; f = first.id; l = last.id; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "id"), some(&[1.0, 1.0, 2.0]));
+        assert_eq!(col(&s, "out", "f"), some(&[1.0, 0.0, 1.0]));
+        assert_eq!(col(&s, "out", "l"), some(&[0.0, 1.0, 1.0]));
+        // y persiste sur la 2e obs du groupe id=1.
+        assert_eq!(col(&s, "out", "y"), some(&[100.0, 100.0, 200.0]));
+    }
+
+    #[test]
+    fn merge_unsorted_data_stops_with_error() {
+        // Un dataset non trié selon le BY → ERROR de désordre.
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[2.0, 1.0])), ("x", some(&[1.0, 2.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[1.0, 2.0]))]);
+        let err = run("data out; merge a b; by id; run;", &mut s).err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "BY variables are not properly sorted on data set WORK.A."
+        );
+    }
+
+    #[test]
+    fn merge_without_by_is_compile_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
+        let err = run("data out; merge a b; run;", &mut s).err().unwrap();
+        assert!(err.to_string().contains("BY"), "got: {err}");
+    }
+
+    #[test]
+    fn merge_after_set_is_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
+        let err = run("data out; set a; merge a b; by id; run;", &mut s).err().unwrap();
+        assert!(err.to_string().contains("not allowed"), "got: {err}");
+    }
+
+    #[test]
+    fn set_in_option_is_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+        let err = run("data out; set a(in=ina); run;", &mut s).err().unwrap();
+        assert!(err.to_string().contains("IN="), "got: {err}");
+    }
+
+    #[test]
+    fn output_in_option_is_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+        let err = run("data out(in=foo); set a; run;", &mut s).err().unwrap();
+        assert!(err.to_string().to_uppercase().contains("IN"), "got: {err}");
     }
 
     // ── Missings spéciaux bout en bout + _ERROR_ + NOTEs (M2, lot 5) ─────

@@ -356,7 +356,7 @@ mod tests {
     use crate::session::Session;
     use crate::source::SourceFile;
     use crate::value::{MissingKind, VarType};
-    use polars::prelude::*;
+    use polars::df;
     use std::path::PathBuf;
 
     fn make_session() -> Session {
