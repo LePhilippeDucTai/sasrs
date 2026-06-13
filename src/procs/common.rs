@@ -6,9 +6,9 @@
 //! premier site d'apparition ; aucune logique n'est modifiée.
 
 use crate::dataset::SasDataset;
-use crate::error::Result;
+use crate::error::{Result, SasError};
 use crate::missing::{num_to_value, value_to_num};
-use crate::value::{Value, VarType};
+use crate::value::{format_best, Value, VarType};
 use std::cmp::Ordering;
 
 /// Decode one column of a SasDataset into a `Vec<Value>` (downcast once;
@@ -50,6 +50,122 @@ pub fn partition_numeric(col: &[Value], rows: &[usize]) -> (Vec<f64>, usize) {
         }
     }
     (xs, nmiss)
+}
+
+/// A resolved BY variable: dataset column index, declared DESCENDING flag,
+/// and the variable name (display, original case).
+pub struct ByCol {
+    pub col_idx: usize,
+    pub descending: bool,
+    pub name: String,
+}
+
+/// Resolve a BY var list against a dataset, validating each name exists.
+/// `by` is the parsed (name, descending) list.
+pub fn resolve_by_cols(ds: &SasDataset, by: &[(String, bool)]) -> Result<Vec<ByCol>> {
+    let mut cols = Vec::with_capacity(by.len());
+    for (vname, descending) in by {
+        match ds
+            .vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(vname))
+        {
+            Some(i) => cols.push(ByCol {
+                col_idx: i,
+                descending: *descending,
+                name: ds.vars[i].name.clone(),
+            }),
+            None => {
+                return Err(SasError::runtime(format!(
+                    "Variable {} not found.",
+                    vname.to_uppercase()
+                )));
+            }
+        }
+    }
+    Ok(cols)
+}
+
+/// Render a BY-key cell value (for the heading line / error message).
+fn by_cell(v: &Value) -> String {
+    match v {
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(k) => k.display(),
+        Value::Char(s) => s.trim_end().to_string(),
+    }
+}
+
+/// Verify the rows are sorted by the BY key (per each var's direction) using
+/// `sas_cmp`, then partition the rows (in their existing order) into
+/// contiguous BY groups. Returns one (key values, row indices) pair per group
+/// in input order.
+///
+/// On the first out-of-order adjacent pair, returns the SAS error
+/// `Data set <display> is not sorted in ascending sequence. ...`.
+pub fn by_groups(
+    by_values: &[Vec<Value>],
+    descending: &[bool],
+    n_obs: usize,
+    by_names: &[String],
+    display: &str,
+) -> Result<Vec<(Vec<Value>, Vec<usize>)>> {
+    // Compare the BY key of two rows honoring per-key direction.
+    let cmp = |a: usize, b: usize| -> Ordering {
+        for (k, col) in by_values.iter().enumerate() {
+            let mut c = col[a].sas_cmp(&col[b]);
+            if descending[k] {
+                c = c.reverse();
+            }
+            if c != Ordering::Equal {
+                return c;
+            }
+        }
+        Ordering::Equal
+    };
+
+    let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+    for row in 0..n_obs {
+        if row > 0 {
+            match cmp(row - 1, row) {
+                Ordering::Greater => {
+                    // Find the first key var that differs to name it in the error.
+                    let prev = row - 1;
+                    let (vname, v1, v2) = by_values
+                        .iter()
+                        .enumerate()
+                        .find_map(|(k, col)| {
+                            if col[prev].sas_cmp(&col[row]) != Ordering::Equal {
+                                Some((
+                                    by_names[k].clone(),
+                                    by_cell(&col[prev]),
+                                    by_cell(&col[row]),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            (by_names[0].clone(), by_cell(&by_values[0][prev]), by_cell(&by_values[0][row]))
+                        });
+                    return Err(SasError::runtime(format!(
+                        "Data set {display} is not sorted in ascending sequence. \
+                         The current BY group has {vname}={v1} and the next BY group has {vname}={v2}."
+                    )));
+                }
+                Ordering::Equal => {
+                    // Same group as the previous row.
+                    let key: Vec<Value> = by_values.iter().map(|c| c[row].clone()).collect();
+                    let _ = key; // group key already recorded; just append.
+                    groups.last_mut().unwrap().1.push(row);
+                    continue;
+                }
+                Ordering::Less => {}
+            }
+        }
+        let key: Vec<Value> = by_values.iter().map(|c| c[row].clone()).collect();
+        groups.push((key, vec![row]));
+    }
+    Ok(groups)
 }
 
 /// Group all rows by the tuple of the given class columns' values, in

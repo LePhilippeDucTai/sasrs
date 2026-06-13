@@ -21,19 +21,33 @@
 #![allow(unused_variables, dead_code)]
 
 use crate::ast::DatasetRef;
+use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, sample_std};
+use crate::procs::common::{by_groups, decode_column, resolve_by_cols, sample_std};
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, VarType};
+use crate::value::{format_best, Value, VarType};
+use polars::prelude::*;
 use std::cmp::Ordering;
 
 pub struct UnivariateAst {
     pub data: Option<DatasetRef>,
     pub var: Vec<String>,
+    /// BY variables (var, descending). Input must be sorted by the BY key.
+    pub by: Vec<(String, bool)>,
+    pub output: Option<UnivariateOutput>,
+}
+
+/// OUTPUT OUT= specification: target dataset + (statistic keyword, output
+/// variable names) pairs. Output names are paired positionally with the VAR
+/// list.
+pub struct UnivariateOutput {
+    pub out: DatasetRef,
+    /// (stat keyword lowercased, output var names in VAR-list order)
+    pub specs: Vec<(String, Vec<String>)>,
 }
 
 /// Parse `proc univariate [data=a] [noprint] ; [var v...;] [by ...;] ... run;`.
@@ -58,8 +72,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
-            // Accepted and ignored: UNIVARIATE always has a report to show;
-            // NOPRINT is meaningful only with OUTPUT (out of M5 scope).
+            // Accepted and ignored for rendering: UNIVARIATE always shows its
+            // report here. (NOPRINT only matters paired with OUTPUT in SAS.)
             ts.next();
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             // Unknown header option: skip its token (and a possible `=value`)
@@ -81,6 +95,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     }
 
     // --- sub-statements until run;/quit; ---
+    let mut by: Vec<(String, bool)> = Vec::new();
+    let mut output: Option<UnivariateOutput> = None;
+
     loop {
         while ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -100,13 +117,118 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             ts.next();
             var = ts.parse_name_list()?;
             ts.expect_semi()?;
+        } else if ts.peek().is_kw("by") {
+            ts.next();
+            by = crate::procs::means::parse_by_list(ts)?;
+        } else if ts.peek().is_kw("output") {
+            ts.next();
+            output = Some(parse_output(ts)?);
         } else {
-            // Unknown sub-statement (by, histogram, ...): skip leniently.
+            // Unknown sub-statement (histogram, ...): skip leniently.
             ts.skip_to_semi();
         }
     }
 
-    Ok(UnivariateAst { data, var })
+    Ok(UnivariateAst {
+        data,
+        var,
+        by,
+        output,
+    })
+}
+
+/// Recognized OUTPUT statistic keywords (paired positionally with VAR list).
+fn is_output_stat(s: &str) -> bool {
+    matches!(
+        s,
+        "mean"
+            | "std"
+            | "stddev"
+            | "min"
+            | "max"
+            | "median"
+            | "n"
+            | "nmiss"
+            | "sum"
+            | "q1"
+            | "q3"
+            | "p25"
+            | "p75"
+            | "p50"
+            | "p1"
+            | "p5"
+            | "p10"
+            | "p90"
+            | "p95"
+            | "p99"
+            | "range"
+            | "qrange"
+            | "var"
+    )
+}
+
+/// Parse the OUTPUT statement body (after "output" consumed), through `;`.
+/// `output out=lib.t [stat=name [name...]] ... ;` — each statistic keyword is
+/// followed by one or more output variable names, paired positionally with the
+/// VAR list. `var=` is accepted as the VARIANCE keyword.
+fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
+    let mut out: Option<DatasetRef> = None;
+    let mut specs: Vec<(String, Vec<String>)> = Vec::new();
+
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().is_kw("out") {
+            ts.next();
+            expect_eq(ts, "OUT")?;
+            out = Some(ts.parse_dataset_ref()?);
+        } else if let Some(kw) = ts.peek().ident().map(str::to_string) {
+            let stat = kw.to_ascii_lowercase();
+            if !is_output_stat(&stat) {
+                return Err(SasError::parse(
+                    format!("Unsupported statistic '{}' in OUTPUT statement.", kw.to_uppercase()),
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // stat keyword
+            expect_eq(ts, "OUTPUT statistic")?;
+            // Collect one or more output names until the next stat keyword,
+            // `out`, or `;`.
+            let mut names: Vec<String> = Vec::new();
+            while let Some(n) = ts.peek().ident().map(str::to_string) {
+                let nl = n.to_ascii_lowercase();
+                // Stop if this ident is actually the next keyword followed
+                // by '=' (e.g. `mean=mx n=nx`).
+                if (is_output_stat(&nl) || nl == "out") && ts.peek2().kind == TokenKind::Eq {
+                    break;
+                }
+                ts.next();
+                names.push(n);
+            }
+            if names.is_empty() {
+                return Err(SasError::parse(
+                    format!("expected an output variable name after {}=", stat),
+                    ts.peek().span,
+                ));
+            }
+            specs.push((stat, names));
+        } else {
+            return Err(SasError::parse(
+                "unexpected token in OUTPUT statement",
+                ts.peek().span,
+            ));
+        }
+    }
+
+    let out = out.ok_or_else(|| {
+        SasError::runtime("The OUTPUT statement requires the OUT= option in PROC UNIVARIATE.")
+    })?;
+    Ok(UnivariateOutput { out, specs })
 }
 
 fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
@@ -319,22 +441,47 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             .collect()
     };
 
+    // Decode each analysis variable's column once.
+    let var_values: Vec<Vec<Value>> = var_cols
+        .iter()
+        .map(|&ci| decode_column(&ds, ci))
+        .collect::<Result<_>>()?;
+
+    // --- BY processing: resolve, verify sortedness, partition into groups. ---
+    let by_cols = resolve_by_cols(&ds, &ast.by)?;
+    let by_values: Vec<Vec<Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
+    } else {
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+        by_groups(&by_values, &descending, n_obs, &by_names, &display_name)?
+    };
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+
     session.listing.page_header();
     centered(session, "The UNIVARIATE Procedure");
 
-    for &ci in &var_cols {
-        let col = decode_column(&ds, ci)?;
-        // Drop missings into a Vec<f64>, tracking original 1-based obs numbers.
-        let mut data: Vec<(f64, usize)> = Vec::with_capacity(col.len());
-        let mut n_missing = 0usize;
-        for (row, val) in col.iter().enumerate() {
-            match value_to_num(val) {
-                Some(f) if !f.is_nan() => data.push((f, row + 1)),
-                _ => n_missing += 1,
-            }
+    for (by_key, grp_rows) in &by_groups_list {
+        if !by_names.is_empty() {
+            emit_by_heading(session, &by_names, by_key);
         }
-
-        emit_variable(session, &ds.vars[ci].name, &data, n_missing, n_obs);
+        for (vi, &ci) in var_cols.iter().enumerate() {
+            // Drop missings into (value, 1-based obs number) pairs, in the
+            // group's row order.
+            let mut data: Vec<(f64, usize)> = Vec::with_capacity(grp_rows.len());
+            let mut n_missing = 0usize;
+            for &row in grp_rows {
+                match value_to_num(&var_values[vi][row]) {
+                    Some(f) if !f.is_nan() => data.push((f, row + 1)),
+                    _ => n_missing += 1,
+                }
+            }
+            emit_variable(session, &ds.vars[ci].name, &data, n_missing, grp_rows.len());
+        }
     }
 
     session.log.note(&format!(
@@ -342,7 +489,214 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         n_obs, display_name
     ));
 
+    // --- OUTPUT OUT= ---
+    if let Some(out) = &ast.output {
+        write_output(
+            session,
+            &ds,
+            &var_cols,
+            &var_values,
+            out,
+            &by_cols,
+            &by_groups_list,
+        )?;
+    }
+
     Ok(())
+}
+
+/// Emit the SAS BY heading line into the listing: `var1=val1 var2=val2`.
+fn emit_by_heading(session: &mut Session, by_names: &[String], by_key: &[Value]) {
+    let parts: Vec<String> = by_names
+        .iter()
+        .zip(by_key)
+        .map(|(name, v)| {
+            let cell = match v {
+                Value::Num(f) => format_best(*f, 12),
+                Value::Missing(k) => k.display(),
+                Value::Char(s) => s.trim_end().to_string(),
+            };
+            format!("{}={}", name, cell)
+        })
+        .collect();
+    session.listing.write_line(&parts.join(" "));
+    session.listing.blank();
+}
+
+/// Compute one OUTPUT statistic for a single variable over the group's
+/// non-missing values `xs` (sorted in `sorted`), the missing count, and the
+/// total row count. Returns `None` (→ SAS missing) when undefined.
+fn output_stat(
+    stat: &str,
+    xs: &[f64],
+    sorted: &[f64],
+    n_missing: usize,
+) -> Option<f64> {
+    let n = xs.len();
+    let mean = if n > 0 {
+        Some(xs.iter().sum::<f64>() / n as f64)
+    } else {
+        None
+    };
+    match stat {
+        "n" => Some(n as f64),
+        "nmiss" => Some(n_missing as f64),
+        "sum" => Some(xs.iter().sum()),
+        "mean" => mean,
+        "std" | "stddev" => sample_std(xs),
+        "var" => sample_std(xs).map(|s| s * s),
+        "min" | "p0" => sorted.first().copied(),
+        "max" | "p100" => sorted.last().copied(),
+        "median" | "p50" => quantile_def5(sorted, 0.50),
+        "q1" | "p25" => quantile_def5(sorted, 0.25),
+        "q3" | "p75" => quantile_def5(sorted, 0.75),
+        "p1" => quantile_def5(sorted, 0.01),
+        "p5" => quantile_def5(sorted, 0.05),
+        "p10" => quantile_def5(sorted, 0.10),
+        "p90" => quantile_def5(sorted, 0.90),
+        "p95" => quantile_def5(sorted, 0.95),
+        "p99" => quantile_def5(sorted, 0.99),
+        "range" => {
+            if n > 0 {
+                Some(sorted[n - 1] - sorted[0])
+            } else {
+                None
+            }
+        }
+        "qrange" => match (quantile_def5(sorted, 0.75), quantile_def5(sorted, 0.25)) {
+            (Some(a), Some(b)) => Some(a - b),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Build and write the OUTPUT OUT= dataset: one row per BY group (one overall
+/// when no BY), with BY variables followed by the requested statistic columns
+/// (each statistic keyword paired positionally with the VAR list).
+#[allow(clippy::too_many_arguments)]
+fn write_output(
+    session: &mut Session,
+    ds: &SasDataset,
+    var_cols: &[usize],
+    var_values: &[Vec<Value>],
+    out: &UnivariateOutput,
+    by_cols: &[crate::procs::common::ByCol],
+    by_groups_list: &[(Vec<Value>, Vec<usize>)],
+) -> Result<()> {
+    // Validate: each spec must not request more output names than there are
+    // analysis variables (positional pairing with VAR list).
+    for (stat, names) in &out.specs {
+        if names.len() > var_cols.len() {
+            return Err(SasError::runtime(format!(
+                "The OUTPUT statement requests {} names for statistic {} but only {} \
+                 analysis variable(s) are available.",
+                names.len(),
+                stat.to_uppercase(),
+                var_cols.len()
+            )));
+        }
+    }
+
+    let n_rows = by_groups_list.len();
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+
+    // BY columns first (one value per BY group).
+    for (bi, bc) in by_cols.iter().enumerate() {
+        let meta = &ds.vars[bc.col_idx];
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> = by_groups_list
+                    .iter()
+                    .map(|(key, _)| value_to_num(&key[bi]))
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<Option<String>> = by_groups_list
+                    .iter()
+                    .map(|(key, _)| match &key[bi] {
+                        Value::Char(s) if s.is_empty() => None,
+                        Value::Char(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+        vars.push(meta.clone());
+    }
+
+    // Precompute, per BY group, the (xs, sorted, n_missing) per analysis var.
+    struct VarStats {
+        xs: Vec<f64>,
+        sorted: Vec<f64>,
+        n_missing: usize,
+    }
+    let mut per_group: Vec<Vec<VarStats>> = Vec::with_capacity(by_groups_list.len());
+    for (_key, grp_rows) in by_groups_list {
+        let mut per_var: Vec<VarStats> = Vec::with_capacity(var_cols.len());
+        for vv in var_values.iter() {
+            let mut xs: Vec<f64> = Vec::with_capacity(grp_rows.len());
+            let mut n_missing = 0usize;
+            for &row in grp_rows {
+                match value_to_num(&vv[row]) {
+                    Some(f) if !f.is_nan() => xs.push(f),
+                    _ => n_missing += 1,
+                }
+            }
+            let mut sorted = xs.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            per_var.push(VarStats { xs, sorted, n_missing });
+        }
+        per_group.push(per_var);
+    }
+
+    // One statistic column per (spec, paired analysis variable).
+    for (stat, names) in &out.specs {
+        for (vi, outname) in names.iter().enumerate() {
+            let vals: Vec<Option<f64>> = per_group
+                .iter()
+                .map(|pv| {
+                    let vs = &pv[vi];
+                    output_stat(stat, &vs.xs, &vs.sorted, vs.n_missing)
+                })
+                .collect();
+            columns.push(Series::new(outname.as_str().into(), vals).into());
+            vars.push(num_var_meta(outname));
+        }
+    }
+
+    let df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df, vars };
+
+    let out_libref = out.out.libref_or_work();
+    let out_table = out.out.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_vars = out_ds.vars.len();
+
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars
+    ));
+
+    Ok(())
+}
+
+/// VarMeta for a numeric output column.
+fn num_var_meta(name: &str) -> VarMeta {
+    VarMeta {
+        name: name.to_string(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }
 }
 
 /// Write a centered line within LINESIZE.
@@ -636,11 +990,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_by_statement_ignored() {
+    fn parse_by_statement_captured() {
         let ast =
-            parse_univ("proc univariate data=work.t; by g; var x y; run;").unwrap();
-        // BY is ignored; VAR is still captured.
+            parse_univ("proc univariate data=work.t; by g descending h; var x y; run;").unwrap();
         assert_eq!(ast.var, vec!["x", "y"]);
+        assert_eq!(
+            ast.by,
+            vec![("g".to_string(), false), ("h".to_string(), true)]
+        );
     }
 
     #[test]
@@ -758,6 +1115,8 @@ mod tests {
                 name: "T".into(),
             }),
             var: vec!["x".into()],
+            by: vec![],
+            output: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -807,6 +1166,8 @@ mod tests {
                 name: "T".into(),
             }),
             var: vec![],
+            by: vec![],
+            output: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -815,5 +1176,167 @@ mod tests {
         assert!(listing.contains("Variable: a"), "listing: {listing}");
         assert!(listing.contains("Variable: b"), "listing: {listing}");
         assert!(!listing.contains("Variable: g"), "listing: {listing}");
+    }
+
+    // ─────────────────────────── BY / OUTPUT tests ─────────────────────────
+
+    fn char_meta(name: &str) -> VarMeta {
+        VarMeta {
+            name: name.to_string(),
+            ty: VarType::Char,
+            length: 4,
+            format: None,
+            label: None,
+        }
+    }
+
+    fn read_num_col(session: &Session, table: &str, col: &str) -> Vec<Value> {
+        let (ds, _) = session.libs.get("WORK").unwrap().read(table).unwrap();
+        let idx = ds.vars.iter().position(|m| m.name == col).unwrap();
+        decode_column(&ds, idx).unwrap()
+    }
+
+    #[test]
+    fn execute_by_per_group_sections() {
+        let mut session = make_session();
+        // Sorted by g: a,a,b,b.
+        let df = df![
+            "g" => ["a", "a", "b", "b"],
+            "x" => [1.0_f64, 3.0, 10.0, 20.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![("g".into(), false)],
+            output: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("The UNIVARIATE Procedure"), "listing: {listing}");
+        assert!(listing.contains("g=a"), "listing: {listing}");
+        assert!(listing.contains("g=b"), "listing: {listing}");
+        // One Variable: x section per group (2 total).
+        assert_eq!(listing.matches("Variable: x").count(), 2, "listing: {listing}");
+    }
+
+    #[test]
+    fn execute_by_unsorted_errors() {
+        let mut session = make_session();
+        // NOT sorted by g: a,b,a.
+        let df = df![
+            "g" => ["a", "b", "a"],
+            "x" => [1.0_f64, 2.0, 3.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![("g".into(), false)],
+            output: None,
+        };
+        let r = execute(&ast, &mut session);
+        assert!(r.is_err());
+        let msg = r.err().unwrap().to_string();
+        assert!(
+            msg.contains("not sorted in ascending sequence"),
+            "msg: {msg}"
+        );
+    }
+
+    #[test]
+    fn execute_output_no_by() {
+        let mut session = make_session();
+        // [1,2,3,4,5] -> mean 3, n 5, min 1, max 5, median 3.
+        let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            output: Some(UnivariateOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![
+                    ("mean".into(), vec!["m".into()]),
+                    ("n".into(), vec!["cnt".into()]),
+                    ("min".into(), vec!["lo".into()]),
+                    ("max".into(), vec!["hi".into()]),
+                    ("median".into(), vec!["med".into()]),
+                ],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 1);
+        assert_eq!(read_num_col(&session, "O", "m"), vec![Value::Num(3.0)]);
+        assert_eq!(read_num_col(&session, "O", "cnt"), vec![Value::Num(5.0)]);
+        assert_eq!(read_num_col(&session, "O", "lo"), vec![Value::Num(1.0)]);
+        assert_eq!(read_num_col(&session, "O", "hi"), vec![Value::Num(5.0)]);
+        assert_eq!(read_num_col(&session, "O", "med"), vec![Value::Num(3.0)]);
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.O"));
+    }
+
+    #[test]
+    fn execute_output_with_by() {
+        let mut session = make_session();
+        // Sorted by g: a(1,3) b(10,20).
+        let df = df![
+            "g" => ["a", "a", "b", "b"],
+            "x" => [1.0_f64, 3.0, 10.0, 20.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![("g".into(), false)],
+            output: Some(UnivariateOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![("mean".into(), vec!["mx".into()])],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 2);
+        let g = read_num_col(&session, "O", "g"); // char decoded
+        let mx = read_num_col(&session, "O", "mx");
+        assert_eq!(g[0], Value::Char("a".into()));
+        assert_eq!(g[1], Value::Char("b".into()));
+        assert_eq!(mx[0], Value::Num(2.0));
+        assert_eq!(mx[1], Value::Num(15.0));
+        // BY column precedes the statistic column.
+        let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["g", "mx"]);
+    }
+
+    #[test]
+    fn parse_output_statement() {
+        let ast = parse_univ(
+            "proc univariate data=a noprint; var x; output out=o mean=mx n=nx q1=q1x; run;",
+        )
+        .unwrap();
+        let out = ast.output.as_ref().unwrap();
+        assert_eq!(out.out.name, "o");
+        assert_eq!(
+            out.specs,
+            vec![
+                ("mean".to_string(), vec!["mx".to_string()]),
+                ("n".to_string(), vec!["nx".to_string()]),
+                ("q1".to_string(), vec!["q1x".to_string()]),
+            ]
+        );
     }
 }

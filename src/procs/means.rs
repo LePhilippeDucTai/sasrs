@@ -40,7 +40,9 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, group_by_keys, partition_numeric, sample_std};
+use crate::procs::common::{
+    by_groups, decode_column, partition_numeric, resolve_by_cols, sample_std,
+};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -54,6 +56,8 @@ pub struct MeansAst {
     pub stats: Vec<String>,
     pub class: Vec<String>,
     pub var: Vec<String>,
+    /// BY variables (var, descending). Outer grouping; input must be sorted.
+    pub by: Vec<(String, bool)>,
     pub output: Option<MeansOutput>,
 }
 
@@ -127,6 +131,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     // --- sub-statements until run;/quit; ---
     let mut class: Vec<String> = Vec::new();
     let mut var: Vec<String> = Vec::new();
+    let mut by: Vec<(String, bool)> = Vec::new();
     let mut output: Option<MeansOutput> = None;
 
     loop {
@@ -152,6 +157,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             ts.next();
             var = ts.parse_name_list()?;
             ts.expect_semi()?;
+        } else if ts.peek().is_kw("by") {
+            ts.next();
+            by = parse_by_list(ts)?;
         } else if ts.peek().is_kw("output") {
             ts.next();
             output = Some(parse_output(ts)?);
@@ -168,8 +176,44 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
         stats,
         class,
         var,
+        by,
         output,
     })
+}
+
+/// Parse a BY statement body (after "by" consumed), through its `;`.
+/// `by [descending] v1 [descending] v2 ... ;` — mirrors PROC SORT.
+pub(crate) fn parse_by_list(ts: &mut StatementStream) -> Result<Vec<(String, bool)>> {
+    let mut by: Vec<(String, bool)> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        let descending = if ts.peek().is_kw("descending") {
+            ts.next();
+            true
+        } else {
+            false
+        };
+        let tok = ts.peek().clone();
+        match tok.ident() {
+            Some(name) => {
+                ts.next();
+                by.push((name.to_string(), descending));
+            }
+            None => {
+                return Err(SasError::parse(
+                    "expected a variable name in the BY statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+    Ok(by)
 }
 
 /// Parse the OUTPUT statement body (after "output" was consumed), through
@@ -478,18 +522,50 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
         ast.stats.clone()
     };
 
+    // --- BY processing: resolve, verify sortedness, partition into groups. ---
+    // No BY → a single group spanning all rows (output byte-identical).
+    let by_cols = resolve_by_cols(&ds, &ast.by)?;
+    let by_values: Vec<Vec<Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
+    } else {
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
+    };
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+
     // --- Report ---
     if !ast.noprint {
-        emit_report(
-            session,
-            &ds,
-            &class_cols,
-            &class_values,
-            &var_cols,
-            &var_values,
-            &report_stats,
-            n_obs,
-        );
+        // Title printed once per proc invocation.
+        session.listing.page_header();
+        let title = "The MEANS Procedure";
+        let ls = session.listing.ls;
+        let pad = ls.saturating_sub(title.len()) / 2;
+        session
+            .listing
+            .write_line(&format!("{}{}", " ".repeat(pad), title));
+        session.listing.blank();
+
+        for (by_key, grp_rows) in &by_groups_list {
+            if !by_names.is_empty() {
+                emit_by_heading(session, &by_names, by_key);
+            }
+            emit_report_group(
+                session,
+                &ds,
+                &class_cols,
+                &class_values,
+                &var_cols,
+                &var_values,
+                &report_stats,
+                grp_rows,
+            );
+        }
     }
 
     // --- OUTPUT OUT= ---
@@ -502,15 +578,30 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             &var_values,
             &var_cols,
             out,
-            n_obs,
+            &by_cols,
+            &by_groups_list,
         )?;
     }
 
     Ok(())
 }
 
+/// Emit the SAS BY heading line into the listing: `var1=val1 var2=val2`.
+fn emit_by_heading(session: &mut Session, by_names: &[String], by_key: &[Value]) {
+    let parts: Vec<String> = by_names
+        .iter()
+        .zip(by_key)
+        .map(|(name, v)| format!("{}={}", name, class_cell(v)))
+        .collect();
+    session.listing.write_line(&parts.join(" "));
+    session.listing.blank();
+}
+
+/// Emit one MEANS report table for the rows in `group_rows` (the full row set
+/// when no BY is active). Does NOT emit the procedure title (caller does that
+/// once). CLASS grouping is applied within `group_rows` only.
 #[allow(clippy::too_many_arguments)]
-fn emit_report(
+fn emit_report_group(
     session: &mut Session,
     ds: &SasDataset,
     class_cols: &[usize],
@@ -518,18 +609,8 @@ fn emit_report(
     var_cols: &[usize],
     var_values: &[Vec<Value>],
     report_stats: &[String],
-    n_obs: usize,
+    group_rows: &[usize],
 ) {
-    session.listing.page_header();
-    // Centered procedure title line.
-    let title = "The MEANS Procedure";
-    let ls = session.listing.ls;
-    let pad = ls.saturating_sub(title.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), title));
-    session.listing.blank();
-
     let mut headers: Vec<String> = Vec::new();
     let mut aligns: Vec<Align> = Vec::new();
 
@@ -551,10 +632,9 @@ fn emit_report(
     let mut rows: Vec<Vec<String>> = Vec::new();
 
     if class_cols.is_empty() {
-        // One section over all rows: one row per analysis variable.
-        let all_rows: Vec<usize> = (0..n_obs).collect();
+        // One section over the group's rows: one row per analysis variable.
         for (vi, vname_idx) in var_cols.iter().enumerate() {
-            let (xs, nmiss) = partition_numeric(&var_values[vi], &all_rows);
+            let (xs, nmiss) = partition_numeric(&var_values[vi], group_rows);
             let mut row = vec![ds.vars[*vname_idx].name.clone()];
             for s in report_stats {
                 let v = compute(s, &xs, nmiss);
@@ -563,8 +643,9 @@ fn emit_report(
             rows.push(row);
         }
     } else {
+        // CLASS grouping restricted to this BY group's rows.
         let cv_refs: Vec<&Vec<Value>> = class_values.iter().collect();
-        let groups = group_by_keys(&cv_refs, n_obs);
+        let groups = group_by_keys_subset(&cv_refs, group_rows);
         for (key, grp_rows) in &groups {
             for (vi, vname_idx) in var_cols.iter().enumerate() {
                 let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
@@ -585,6 +666,39 @@ fn emit_report(
     session.listing.write_table(&headers, &aligns, &rows);
 }
 
+/// Like `group_by_keys`, but only considers `rows` (a subset of all rows),
+/// grouping by the class-value tuple in `sas_cmp` order. Used so CLASS
+/// grouping happens *within* a BY group.
+fn group_by_keys_subset(
+    class_values: &[&Vec<Value>],
+    rows: &[usize],
+) -> Vec<(Vec<Value>, Vec<usize>)> {
+    let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+    for &row in rows {
+        let key: Vec<Value> = class_values.iter().map(|c| c[row].clone()).collect();
+        let pos = groups.iter().position(|(k, _)| {
+            k.len() == key.len()
+                && k.iter()
+                    .zip(&key)
+                    .all(|(a, b)| a.sas_cmp(b) == Ordering::Equal)
+        });
+        match pos {
+            Some(p) => groups[p].1.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    groups.sort_by(|(a, _), (b, _)| {
+        for (x, y) in a.iter().zip(b) {
+            let c = x.sas_cmp(y);
+            if c != Ordering::Equal {
+                return c;
+            }
+        }
+        Ordering::Equal
+    });
+    groups
+}
+
 /// Render a class-value cell in the listing.
 fn class_cell(v: &Value) -> String {
     match v {
@@ -603,7 +717,8 @@ fn write_output(
     var_values: &[Vec<Value>],
     var_cols: &[usize],
     out: &MeansOutput,
-    n_obs: usize,
+    by_cols: &[crate::procs::common::ByCol],
+    by_groups_list: &[(Vec<Value>, Vec<usize>)],
 ) -> Result<()> {
     let k = class_cols.len();
 
@@ -638,9 +753,10 @@ fn write_output(
         });
     }
 
-    // Output rows accumulate as: (type, key_tuple_for_active_classes,
-    // per-class-cell-values, freq, stat-values).
+    // Output rows accumulate as: (BY-group index, type,
+    // per-class-cell-values, sort key, freq, stat-values).
     struct OutRow {
+        by_idx: usize,
         ty: f64,
         // class cell value per class var (active = group key value;
         // inactive = missing of right type).
@@ -654,60 +770,65 @@ fn write_output(
 
     let class_refs: Vec<&Vec<Value>> = class_values.iter().collect();
 
-    // Enumerate all 2^k subsets.
-    for mask in 0u32..(1u32 << k) {
-        // Active class indices for this subset.
-        let active: Vec<usize> = (0..k).filter(|&i| (mask >> i) & 1 == 1).collect();
+    // One block of CLASS-subset rows per BY group (one group overall if no BY),
+    // restricting the analysis to that BY group's rows.
+    for (by_idx, (_by_key, by_rows)) in by_groups_list.iter().enumerate() {
+        // Enumerate all 2^k CLASS subsets within this BY group.
+        for mask in 0u32..(1u32 << k) {
+            let active: Vec<usize> = (0..k).filter(|&i| (mask >> i) & 1 == 1).collect();
 
-        // _TYPE_ : LSB corresponds to the LAST class variable. For class var
-        // i (0-based), bit position (k-1 - i) represents it.
-        let mut ty: u64 = 0;
-        for &i in &active {
-            ty |= 1u64 << (k - 1 - i);
-        }
+            // _TYPE_ : LSB corresponds to the LAST class variable.
+            let mut ty: u64 = 0;
+            for &i in &active {
+                ty |= 1u64 << (k - 1 - i);
+            }
 
-        // Group rows by the active class variables.
-        let active_refs: Vec<&Vec<Value>> = active.iter().map(|&i| class_refs[i]).collect();
-        let groups = group_by_keys(&active_refs, n_obs);
+            // Group this BY group's rows by the active class variables.
+            let active_refs: Vec<&Vec<Value>> = active.iter().map(|&i| class_refs[i]).collect();
+            let groups = group_by_keys_subset(&active_refs, by_rows);
 
-        for (active_key, grp_rows) in &groups {
-            // Build the per-class-var cell values: active vars use the group
-            // key value; inactive vars store a missing of the right type.
-            let mut class_cells: Vec<Value> = Vec::with_capacity(k);
-            let mut ai = 0usize;
-            for (i, &col_idx) in class_cols.iter().enumerate() {
-                if active.contains(&i) {
-                    class_cells.push(active_key[ai].clone());
-                    ai += 1;
-                } else {
-                    // Missing of the right type.
-                    match ds.vars[col_idx].ty {
-                        VarType::Num => class_cells.push(Value::missing()),
-                        VarType::Char => class_cells.push(Value::Char(String::new())),
+            for (active_key, grp_rows) in &groups {
+                let mut class_cells: Vec<Value> = Vec::with_capacity(k);
+                let mut ai = 0usize;
+                for (i, &col_idx) in class_cols.iter().enumerate() {
+                    if active.contains(&i) {
+                        class_cells.push(active_key[ai].clone());
+                        ai += 1;
+                    } else {
+                        match ds.vars[col_idx].ty {
+                            VarType::Num => class_cells.push(Value::missing()),
+                            VarType::Char => class_cells.push(Value::Char(String::new())),
+                        }
                     }
                 }
+
+                let freq = grp_rows.len() as f64;
+
+                let mut stat_vals: Vec<Value> = Vec::with_capacity(specs.len());
+                for sp in &specs {
+                    let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);
+                    stat_vals.push(compute(&sp.stat, &xs, nmiss));
+                }
+
+                out_rows.push(OutRow {
+                    by_idx,
+                    ty: ty as f64,
+                    class_cells,
+                    sort_key: active_key.clone(),
+                    freq,
+                    stats: stat_vals,
+                });
             }
-
-            let freq = grp_rows.len() as f64;
-
-            let mut stat_vals: Vec<Value> = Vec::with_capacity(specs.len());
-            for sp in &specs {
-                let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);
-                stat_vals.push(compute(&sp.stat, &xs, nmiss));
-            }
-
-            out_rows.push(OutRow {
-                ty: ty as f64,
-                class_cells,
-                sort_key: active_key.clone(),
-                freq,
-                stats: stat_vals,
-            });
         }
     }
 
-    // Order rows: _TYPE_ ascending, then active class-value tuple sas_cmp.
+    // Order rows: BY group order (outer, preserved), then _TYPE_ ascending,
+    // then active class-value tuple via sas_cmp.
     out_rows.sort_by(|a, b| {
+        match a.by_idx.cmp(&b.by_idx) {
+            Ordering::Equal => {}
+            other => return other,
+        }
         match a.ty.partial_cmp(&b.ty).unwrap_or(Ordering::Equal) {
             Ordering::Equal => {}
             other => return other,
@@ -725,6 +846,33 @@ fn write_output(
     let n_rows = out_rows.len();
     let mut columns: Vec<Column> = Vec::new();
     let mut vars: Vec<VarMeta> = Vec::new();
+
+    // BY columns first (copy input VarMeta; values from the BY-group key).
+    for (bi, bc) in by_cols.iter().enumerate() {
+        let meta = &ds.vars[bc.col_idx];
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> = out_rows
+                    .iter()
+                    .map(|r| value_to_num(&by_groups_list[r.by_idx].0[bi]))
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<Option<String>> = out_rows
+                    .iter()
+                    .map(|r| match &by_groups_list[r.by_idx].0[bi] {
+                        Value::Char(s) if s.is_empty() => None,
+                        Value::Char(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+        vars.push(meta.clone());
+    }
 
     // CLASS columns (copy input VarMeta; encode per-row values).
     for (ci, &col_idx) in class_cols.iter().enumerate() {
@@ -976,6 +1124,7 @@ mod tests {
             stats: vec![],
             class: vec![],
             var: vec!["x".into()],
+            by: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1020,6 +1169,7 @@ mod tests {
             stats: vec![],
             class: vec!["g".into()],
             var: vec!["x".into()],
+            by: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1080,6 +1230,7 @@ mod tests {
             stats: vec![],
             class: vec!["g".into(), "h".into()],
             var: vec!["x".into()],
+            by: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("sum".into(), "x".into(), "sx".into())],
@@ -1137,6 +1288,7 @@ mod tests {
             stats: vec![],
             class: vec![],
             var: vec![],
+            by: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1163,6 +1315,7 @@ mod tests {
             stats: vec![],
             class: vec![],
             var: vec![],
+            by: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1172,5 +1325,115 @@ mod tests {
             !listing.contains("The MEANS Procedure"),
             "noprint should not emit a report: {listing}"
         );
+    }
+
+    // ───────────────────────────── BY tests ────────────────────────────────
+
+    #[test]
+    fn execute_by_per_group_report_and_headings() {
+        let mut session = make_session();
+        // Sorted by sex: F,F,M,M.
+        let df = df![
+            "sex" => ["F", "F", "M", "M"],
+            "x" => [2.0_f64, 4.0, 10.0, 20.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: false,
+            stats: vec!["mean".into()],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![("sex".into(), false)],
+            output: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        // Title once, BY headings for each group.
+        assert!(listing.contains("The MEANS Procedure"), "listing: {listing}");
+        assert!(listing.contains("sex=F"), "listing: {listing}");
+        assert!(listing.contains("sex=M"), "listing: {listing}");
+        // The F group mean is 3, the M group mean is 15.
+        assert!(listing.contains("15"), "listing: {listing}");
+    }
+
+    #[test]
+    fn execute_by_unsorted_errors() {
+        let mut session = make_session();
+        // NOT sorted by sex: F,M,F.
+        let df = df![
+            "sex" => ["F", "M", "F"],
+            "x" => [1.0_f64, 2.0, 3.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: false,
+            stats: vec![],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![("sex".into(), false)],
+            output: None,
+        };
+        let r = execute(&ast, &mut session);
+        assert!(r.is_err());
+        let msg = r.err().unwrap().to_string();
+        assert!(
+            msg.contains("not sorted in ascending sequence")
+                && msg.contains("sex=M")
+                && msg.contains("sex=F"),
+            "msg: {msg}"
+        );
+    }
+
+    #[test]
+    fn execute_by_output_dataset_rows() {
+        let mut session = make_session();
+        // Sorted by sex: F,F,M.
+        let df = df![
+            "sex" => ["F", "F", "M"],
+            "x" => [2.0_f64, 4.0, 10.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec![],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![("sex".into(), false)],
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![("mean".into(), "x".into(), "mx".into())],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        // No CLASS → one row per BY group (k=0, _TYPE_=0).
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 2);
+        let sex = read_num_col(&session, "O", "sex"); // char decoded
+        let mx = read_num_col(&session, "O", "mx");
+        assert_eq!(sex[0], Value::Char("F".into()));
+        assert_eq!(sex[1], Value::Char("M".into()));
+        assert_eq!(mx[0], Value::Num(3.0));
+        assert_eq!(mx[1], Value::Num(10.0));
+        // BY column comes before _TYPE_.
+        let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names[0], "sex");
+        assert!(names.contains(&"_TYPE_"));
     }
 }
