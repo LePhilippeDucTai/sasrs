@@ -101,7 +101,7 @@ impl FormatSpec {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct FormatCatalog {
     user: HashMap<String, userdef::UserFormat>,
 }

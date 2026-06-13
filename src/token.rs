@@ -63,6 +63,15 @@ pub enum TokenKind {
     Ge,
     /// `$` (char marker in LENGTH/INPUT/FORMAT statements)
     Dollar,
+    /// `@` (column pointer / line hold in INPUT/PUT — M14).
+    At,
+    /// `:` (format modifier in INPUT/PUT, label separator — M14).
+    Colon,
+    /// Données verbatim capturées après `datalines;`/`cards;` (M14). Le
+    /// lexer bascule en mode verbatim après le `;` qui termine un statement
+    /// `datalines`/`cards`/`datalines4`/`cards4` et émet ce token portant les
+    /// lignes brutes (terminateur exclu).
+    DataLines(Vec<String>),
     /// `=` (assignment or comparison depending on context)
     Eq,
     /// `^=`, `~=`, `ne`

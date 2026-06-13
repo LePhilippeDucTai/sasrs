@@ -73,7 +73,9 @@
 #![allow(unused_variables, dead_code)]
 
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
-use crate::ast::{AttribItem, DataStepAst, DsStmt, Expr, LengthSpec};
+use crate::ast::{
+    AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
+};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
 use crate::value::MissingKind;
@@ -100,6 +102,11 @@ pub fn parse_data_step(ts: &mut StatementStream) -> Result<DataStepAst> {
             TokenKind::Star => {
                 // Commentaire-statement `* texte ;` : sauter silencieusement.
                 ts.skip_to_semi();
+            }
+            TokenKind::DataLines(_) => {
+                // Bloc verbatim orphelin (déjà consommé par `parse_datalines`
+                // dans le cas normal) : ignoré par robustesse.
+                ts.next();
             }
             TokenKind::Ident(s) => {
                 let lower = s.to_ascii_lowercase();
@@ -242,6 +249,9 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "attrib" => parse_attrib(ts),
         "array" => parse_array(ts),
         "call" => parse_call_routine(ts),
+        "infile" => parse_infile(ts),
+        "input" => parse_input(ts),
+        "datalines" | "cards" | "datalines4" | "cards4" => parse_datalines(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
             "no matching DO for END.",
@@ -404,6 +414,370 @@ fn parse_call_routine(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::CallRoutine { name, args })
+}
+
+/// `infile <source> [options] ;` (M14). La source est un littéral chemin
+/// (`'fichier.txt'`) OU le mot-clé `datalines`/`cards` (source inline).
+/// Options reconnues : `DELIMITER=`/`DLM=`, `DSD`, `FIRSTOBS=`, `OBS=`,
+/// `MISSOVER`, `TRUNCOVER`, `STOPOVER`, `LRECL=`. Une option inconnue →
+/// erreur claire.
+fn parse_infile(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `infile`
+    let src_tok = ts.peek().clone();
+    let source = match &src_tok.kind {
+        TokenKind::Str {
+            value,
+            suffix: StrSuffix::None | StrSuffix::Name,
+        } => {
+            let s = value.clone();
+            ts.next();
+            InfileSource::Path(s)
+        }
+        TokenKind::Ident(name)
+            if name.eq_ignore_ascii_case("datalines") || name.eq_ignore_ascii_case("cards") =>
+        {
+            ts.next();
+            InfileSource::Datalines
+        }
+        _ => {
+            return Err(SasError::parse(
+                "expected a quoted file path or DATALINES/CARDS after INFILE",
+                src_tok.span,
+            ));
+        }
+    };
+    let mut options = InfileOptions::default();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                ts.next();
+                return Ok(DsStmt::Infile { source, options });
+            }
+            TokenKind::Ident(name) => {
+                let lower = name.to_ascii_lowercase();
+                match lower.as_str() {
+                    "dsd" => {
+                        ts.next();
+                        options.dsd = true;
+                    }
+                    "missover" => {
+                        ts.next();
+                        options.missover = true;
+                    }
+                    "truncover" => {
+                        ts.next();
+                        options.truncover = true;
+                    }
+                    "stopover" => {
+                        ts.next();
+                        options.stopover = true;
+                    }
+                    "delimiter" | "dlm" => {
+                        ts.next();
+                        expect_eq(ts, &lower)?;
+                        options.delimiter = Some(parse_infile_delimiter(ts)?);
+                    }
+                    "firstobs" => {
+                        ts.next();
+                        expect_eq(ts, &lower)?;
+                        options.firstobs = Some(parse_infile_count(ts, "FIRSTOBS")?);
+                    }
+                    "obs" => {
+                        ts.next();
+                        expect_eq(ts, &lower)?;
+                        options.obs = Some(parse_infile_count(ts, "OBS")?);
+                    }
+                    "lrecl" => {
+                        ts.next();
+                        expect_eq(ts, &lower)?;
+                        // LRECL est conservé mais reste un no-op fonctionnel.
+                        options.lrecl = Some(parse_infile_count(ts, "LRECL")?);
+                    }
+                    _ => {
+                        return Err(SasError::parse(
+                            format!("INFILE option {} is not supported.", lower.to_uppercase()),
+                            tok.span,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected an INFILE option or ';'",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Consomme le `=` d'une option `nom=valeur`.
+fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!("expected '=' after the INFILE option {}", opt.to_uppercase()),
+            ts.peek().span,
+        ));
+    }
+    ts.next();
+    Ok(())
+}
+
+/// Valeur d'un `DELIMITER=`/`DLM=` : une chaîne littérale (`','`, `'09'x`
+/// non géré) ou un identifiant/caractère isolé. On accepte une chaîne ou un
+/// token simple ; on en garde la valeur textuelle.
+fn parse_infile_delimiter(ts: &mut StatementStream) -> Result<String> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Str {
+            value,
+            suffix: StrSuffix::None | StrSuffix::Name,
+        } => {
+            let s = value.clone();
+            ts.next();
+            Ok(s)
+        }
+        // Un identifiant nu (`dlm=x`) ou un caractère seul.
+        TokenKind::Ident(s) => {
+            let s = s.clone();
+            ts.next();
+            Ok(s)
+        }
+        _ => Err(SasError::parse(
+            "expected a delimiter (quoted string or character) after DELIMITER=/DLM=",
+            tok.span,
+        )),
+    }
+}
+
+/// Entier positif d'une option INFILE (`FIRSTOBS=`, `OBS=`, `LRECL=`).
+fn parse_infile_count(ts: &mut StatementStream, opt: &str) -> Result<usize> {
+    let tok = ts.peek().clone();
+    let TokenKind::Num(n) = tok.kind else {
+        return Err(SasError::parse(
+            format!("expected a positive integer after {opt}="),
+            tok.span,
+        ));
+    };
+    if n.fract() != 0.0 || n < 1.0 {
+        return Err(SasError::parse(
+            format!("the value of {opt}= must be a positive integer"),
+            tok.span,
+        ));
+    }
+    ts.next();
+    Ok(n as usize)
+}
+
+/// `input <items> ;` (M14). Modes pris en charge :
+/// - liste : `name $ age` ;
+/// - colonne : `name $ 1-10 age 11-13` ;
+/// - formaté : `name $char10. d date9.` ;
+/// - pointeurs `@n`, `+n`, `/`, hold `@`/`@@`, modificateur `:`.
+///
+/// On lit les tokens jusqu'au `;` final (consommé). Le `$` se rapporte à la
+/// variable qui PRÉCÈDE (forme `name $`).
+fn parse_input(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `input`
+    let mut items: Vec<InputItem> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                ts.next();
+                return Ok(DsStmt::Input(items));
+            }
+            // `@@` (double hold) ou `@n` (pointeur de colonne) ou `@` (hold).
+            TokenKind::At => {
+                let at_end = tok.span.end;
+                ts.next(); // `@`
+                if ts.peek().kind == TokenKind::At {
+                    ts.next(); // second `@`
+                    items.push(InputItem::HoldLineDouble);
+                } else if let TokenKind::Num(n) = ts.peek().kind {
+                    // `@n` : pointeur ADJACENT (`@5`) ou espacé (`@ 5`) —
+                    // SAS tolère les deux.
+                    if n.fract() != 0.0 || n < 1.0 {
+                        return Err(SasError::parse(
+                            "the column pointer @n must be a positive integer",
+                            ts.peek().span,
+                        ));
+                    }
+                    ts.next();
+                    items.push(InputItem::ColumnPointer(n as usize));
+                } else {
+                    // `@` final (hold simple) — doit être suivi du `;`.
+                    let _ = at_end;
+                    items.push(InputItem::HoldLine);
+                }
+            }
+            // `+n` : avance relative du curseur.
+            TokenKind::Plus => {
+                ts.next(); // `+`
+                let n_tok = ts.peek().clone();
+                let TokenKind::Num(n) = n_tok.kind else {
+                    return Err(SasError::parse(
+                        "expected a positive integer after '+' in the INPUT statement",
+                        n_tok.span,
+                    ));
+                };
+                if n.fract() != 0.0 || n < 0.0 {
+                    return Err(SasError::parse(
+                        "the column skip +n must be a non-negative integer",
+                        n_tok.span,
+                    ));
+                }
+                ts.next();
+                items.push(InputItem::SkipColumns(n as usize));
+            }
+            // `/` : passage à la ligne d'entrée suivante.
+            TokenKind::Slash => {
+                ts.next();
+                items.push(InputItem::NextLine);
+            }
+            // Un nom de variable, éventuellement suivi de `$`, de colonnes
+            // `a-b`, d'un `:`-modificateur et/ou d'un informat.
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                validate_sas_name(&name, tok.span)?;
+                ts.next();
+                let item = parse_input_var(ts, name)?;
+                items.push(item);
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name, column pointer or ';' in the INPUT statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Suffixe d'une variable INPUT : `[$] [a-b | [:] informat]`.
+fn parse_input_var(ts: &mut StatementStream, name: String) -> Result<InputItem> {
+    let mut is_char = false;
+    // `$` : variable caractère. Deux cas :
+    // - `$char10.` / `$10.` : le `$` ouvre un INFORMAT caractère (adjacent à
+    //   un Ident/Num) — on NE le consomme PAS ici, `read_format_token` le
+    //   lira en entier.
+    // - `$` isolé (suivi d'un espace, de colonnes, ou de la variable
+    //   suivante) : simple marqueur caractère du mode liste/colonne.
+    if ts.peek().kind == TokenKind::Dollar && !dollar_begins_informat(ts) {
+        ts.next();
+        is_char = true;
+    }
+    // `:` modificateur d'informat en mode liste.
+    let mut list_modifier = false;
+    if ts.peek().kind == TokenKind::Colon {
+        ts.next();
+        list_modifier = true;
+    }
+    // Mode colonne : `a-b` (a et b entiers, a-b adjacents au `-`).
+    if let TokenKind::Num(a) = ts.peek().kind {
+        // Distinguer `a-b` (colonnes) d'un informat `8.` : un informat a un
+        // `.` ; les colonnes ont un `-`. On regarde le token suivant.
+        if a.fract() == 0.0 && a >= 1.0 && ts.peek2().kind == TokenKind::Minus {
+            ts.next(); // a
+            ts.next(); // `-`
+            let b_tok = ts.peek().clone();
+            let TokenKind::Num(b) = b_tok.kind else {
+                return Err(SasError::parse(
+                    "expected the end column after '-' in the INPUT statement",
+                    b_tok.span,
+                ));
+            };
+            if b.fract() != 0.0 || b < a {
+                return Err(SasError::parse(
+                    "invalid column range in the INPUT statement",
+                    b_tok.span,
+                ));
+            }
+            ts.next();
+            return Ok(InputItem::Var {
+                name,
+                is_char,
+                cols: Some((a as usize, b as usize)),
+                informat: None,
+                list_modifier,
+            });
+        }
+    }
+    // Mode formaté : un informat suit (token de format `date9.`, `8.2`,
+    // `$char10.`, etc.). On le détecte par adjacence (comme FORMAT).
+    if input_informat_follows(ts) {
+        let token = super::expr::read_format_token(ts)?;
+        return Ok(InputItem::Var {
+            name,
+            is_char,
+            cols: None,
+            informat: Some(token),
+            list_modifier,
+        });
+    }
+    // Mode liste pur.
+    Ok(InputItem::Var {
+        name,
+        is_char,
+        cols: None,
+        informat: None,
+        list_modifier,
+    })
+}
+
+/// Vrai si le `$` courant ouvre un informat caractère (`$char10.`, `$10.`,
+/// `$.`) : le token ADJACENT est un Ident ou un Num (qui formera le reste de
+/// l'informat). Un `$` isolé (suivi d'espace ou d'un nombre non adjacent =
+/// colonnes) reste un simple marqueur caractère.
+fn dollar_begins_informat(ts: &StatementStream) -> bool {
+    let cur = ts.peek();
+    let next = ts.peek2();
+    next.span.start == cur.span.end
+        && matches!(next.kind, TokenKind::Ident(_) | TokenKind::Num(_))
+}
+
+/// Vrai si un informat suit (mode formaté) : un `$`, un nombre porteur d'un
+/// point décimal (`5.2`, lexé en `Num(5.2)`) ou suivi d'un `.` adjacent
+/// (`8.`), ou un Ident adjacent à un morceau de format (`date9.`). Le cas du
+/// nombre suivi d'un `-` (plage de colonnes) est déjà traité plus haut.
+fn input_informat_follows(ts: &StatementStream) -> bool {
+    let cur = ts.peek();
+    match &cur.kind {
+        // `$char10.` : le `$` ouvre un informat caractère.
+        TokenKind::Dollar => true,
+        TokenKind::Num(n) => {
+            // `5.2` : le point décimal est DANS le token (partie fractionnaire).
+            if n.fract() != 0.0 {
+                return true;
+            }
+            // `8.` : un `.` adjacent suit le nombre entier.
+            let next = ts.peek2();
+            next.span.start == cur.span.end && next.kind == TokenKind::Dot
+        }
+        // `date9.` : un Ident dont le morceau suivant adjacent est un format.
+        TokenKind::Ident(_) => ident_begins_format(ts),
+        _ => false,
+    }
+}
+
+/// `datalines;` / `cards;` (M14). Le mot-clé a été lu par `parse_statement` ;
+/// ici on consomme le `;` puis le token `DataLines` (émis par le lexer juste
+/// après ce `;`). Les variantes `4` (`datalines4`/`cards4`) sont équivalentes
+/// au parsing près (le terminateur a déjà été géré par le lexer).
+fn parse_datalines(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `datalines` / `cards` / `datalines4` / `cards4`
+    ts.expect_semi()?;
+    // Le token suivant DOIT être le bloc verbatim capturé par le lexer.
+    let tok = ts.peek().clone();
+    if let TokenKind::DataLines(lines) = &tok.kind {
+        let lines = lines.clone();
+        ts.next();
+        Ok(DsStmt::Datalines(lines))
+    } else {
+        // Aucun bloc (cas dégénéré) : datalines vide.
+        Ok(DsStmt::Datalines(Vec::new()))
+    }
 }
 
 /// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le
@@ -2411,6 +2785,211 @@ mod tests {
                 label: Some("Body Weight".to_string()),
                 length: None,
             }])]
+        );
+    }
+
+    // ── INFILE / INPUT / DATALINES (M14) ─────────────────────────────────
+
+    fn var_item(name: &str, is_char: bool) -> InputItem {
+        InputItem::Var {
+            name: name.to_string(),
+            is_char,
+            cols: None,
+            informat: None,
+            list_modifier: false,
+        }
+    }
+
+    #[test]
+    fn input_list_mode_dollar() {
+        let ast = parse("data o; input name $ age height; datalines;\nx 1 2\n;\nrun;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement, got {:?}", ast.stmts[0]);
+        };
+        assert_eq!(
+            items,
+            &vec![
+                var_item("name", true),
+                var_item("age", false),
+                var_item("height", false),
+            ]
+        );
+        // Le bloc datalines est capturé.
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::Datalines(vec!["x 1 2".to_string()])
+        );
+    }
+
+    #[test]
+    fn input_column_mode() {
+        let ast = parse("data o; input name $ 1-10 age 11-13; datalines;\n;\nrun;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement");
+        };
+        assert_eq!(
+            items,
+            &vec![
+                InputItem::Var {
+                    name: "name".to_string(),
+                    is_char: true,
+                    cols: Some((1, 10)),
+                    informat: None,
+                    list_modifier: false,
+                },
+                InputItem::Var {
+                    name: "age".to_string(),
+                    is_char: false,
+                    cols: Some((11, 13)),
+                    informat: None,
+                    list_modifier: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn input_formatted_mode() {
+        let ast =
+            parse("data o; input name $char10. d date9. x 8.2; datalines;\n;\nrun;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement");
+        };
+        assert_eq!(
+            items,
+            &vec![
+                InputItem::Var {
+                    name: "name".to_string(),
+                    is_char: false,
+                    cols: None,
+                    informat: Some("$char10.".to_string()),
+                    list_modifier: false,
+                },
+                InputItem::Var {
+                    name: "d".to_string(),
+                    is_char: false,
+                    cols: None,
+                    informat: Some("date9.".to_string()),
+                    list_modifier: false,
+                },
+                InputItem::Var {
+                    name: "x".to_string(),
+                    is_char: false,
+                    cols: None,
+                    informat: Some("8.2".to_string()),
+                    list_modifier: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn input_list_modifier_colon() {
+        let ast = parse("data o; input x :date9.; datalines;\n;\nrun;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement");
+        };
+        assert_eq!(
+            items,
+            &vec![InputItem::Var {
+                name: "x".to_string(),
+                is_char: false,
+                cols: None,
+                informat: Some("date9.".to_string()),
+                list_modifier: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn input_pointers_and_holds() {
+        let ast = parse("data o; input @5 x 8. +2 y / z @@; datalines;\n;\nrun;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement");
+        };
+        assert_eq!(items[0], InputItem::ColumnPointer(5));
+        assert_eq!(
+            items[1],
+            InputItem::Var {
+                name: "x".to_string(),
+                is_char: false,
+                cols: None,
+                informat: Some("8.".to_string()),
+                list_modifier: false,
+            }
+        );
+        assert_eq!(items[2], InputItem::SkipColumns(2));
+        assert_eq!(items[3], var_item("y", false));
+        assert_eq!(items[4], InputItem::NextLine);
+        assert_eq!(items[5], var_item("z", false));
+        assert_eq!(items[6], InputItem::HoldLineDouble);
+    }
+
+    #[test]
+    fn input_trailing_hold_single() {
+        let ast = parse("data o; input x @; run;").unwrap();
+        let DsStmt::Input(items) = &ast.stmts[0] else {
+            panic!("expected an INPUT statement");
+        };
+        assert_eq!(items[0], var_item("x", false));
+        assert_eq!(items[1], InputItem::HoldLine);
+    }
+
+    #[test]
+    fn infile_datalines_with_options() {
+        let ast =
+            parse("data o; infile datalines dlm=',' dsd missover; input a b; datalines;\n;\nrun;")
+                .unwrap();
+        let DsStmt::Infile { source, options } = &ast.stmts[0] else {
+            panic!("expected an INFILE statement, got {:?}", ast.stmts[0]);
+        };
+        assert_eq!(*source, InfileSource::Datalines);
+        assert_eq!(options.delimiter.as_deref(), Some(","));
+        assert!(options.dsd);
+        assert!(options.missover);
+    }
+
+    #[test]
+    fn infile_path_with_numeric_options() {
+        let ast =
+            parse("data o; infile 'data.txt' firstobs=2 obs=10 lrecl=256 truncover; input x; run;")
+                .unwrap();
+        let DsStmt::Infile { source, options } = &ast.stmts[0] else {
+            panic!("expected an INFILE statement");
+        };
+        assert_eq!(*source, InfileSource::Path("data.txt".to_string()));
+        assert_eq!(options.firstobs, Some(2));
+        assert_eq!(options.obs, Some(10));
+        assert_eq!(options.lrecl, Some(256));
+        assert!(options.truncover);
+    }
+
+    #[test]
+    fn infile_unknown_option_errors() {
+        let err = parse("data o; infile datalines frobnicate; input x; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("INFILE option FROBNICATE is not supported."),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn datalines_without_infile_parses() {
+        // `datalines;` peut alimenter `input` sans `infile datalines;`.
+        let ast = parse("data o; input x y; datalines;\n1 2\n3 4\n;\nrun;").unwrap();
+        assert!(matches!(ast.stmts[0], DsStmt::Input(_)));
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::Datalines(vec!["1 2".to_string(), "3 4".to_string()])
+        );
+    }
+
+    #[test]
+    fn cards4_terminator_variant() {
+        let ast = parse("data o; input x; cards4;\n1;2\n;;;;\nrun;").unwrap();
+        assert_eq!(
+            ast.stmts[1],
+            DsStmt::Datalines(vec!["1;2".to_string()])
         );
     }
 

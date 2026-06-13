@@ -132,6 +132,63 @@ pub struct InputData {
     pub in_flags: Vec<(String, usize)>,
 }
 
+/// Item INPUT compilé (M14) : un item AST dont les noms de variable sont
+/// résolus en slots PDV et les informats en `FormatSpec`.
+#[derive(Clone)]
+pub enum InputAction {
+    /// Lire une variable. `slot` = slot PDV ; `is_char` = type cible ;
+    /// `cols` = colonnes 1-based inclusives (mode colonne) ; `informat` =
+    /// `FormatSpec` (mode formaté) ; `list_modifier` = informat appliqué en
+    /// mode liste.
+    Var {
+        slot: usize,
+        is_char: bool,
+        cols: Option<(usize, usize)>,
+        informat: Option<crate::formats::FormatSpec>,
+        list_modifier: bool,
+    },
+    /// `@n` : pointeur de colonne absolu (1-based).
+    ColumnPointer(usize),
+    /// `+n` : avance relative du curseur.
+    SkipColumns(usize),
+    /// `/` : ligne d'entrée suivante.
+    NextLine,
+    /// `@` final : maintien de l'enregistrement pour le prochain INPUT.
+    HoldLine,
+    /// `@@` final : maintien à travers les itérations.
+    HoldLineDouble,
+}
+
+/// Options d'exécution d'une lecture texte (M14), reprises de l'INFILE.
+pub struct TextOptions {
+    pub delimiter: Option<String>,
+    pub dsd: bool,
+    pub firstobs: usize,
+    pub obs: Option<usize>,
+    /// Comportement en cas de ligne trop courte : 0 = défaut (passe à la
+    /// ligne suivante en mode liste), 1 = MISSOVER, 2 = TRUNCOVER, 3 =
+    /// STOPOVER.
+    pub short: ShortMode,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ShortMode {
+    Default,
+    Missover,
+    Truncover,
+    Stopover,
+}
+
+/// Source d'entrée texte compilée (M14) : lignes brutes + spécification
+/// INPUT résolue. Parallèle à `InputData` (le chemin SET).
+pub struct TextInput {
+    /// "the infile DATALINES" / "the infile <path>" pour les NOTEs du log.
+    pub display: String,
+    /// Lignes brutes (DATALINES inline ou contenu du fichier).
+    pub lines: Vec<String>,
+    pub options: TextOptions,
+}
+
 /// Une sortie : où écrire et quels slots du PDV.
 pub struct OutputSpec {
     pub libref: String,
@@ -151,6 +208,9 @@ pub struct StepProgram {
     pub pdv: Pdv,
     pub stmts: Vec<crate::ast::DsStmt>,
     pub input: Option<InputData>,
+    /// Source d'entrée TEXTE (M14 : INFILE/INPUT/DATALINES), parallèle à
+    /// `input` (SET). Une étape ne peut avoir QUE l'un des deux.
+    pub text_input: Option<TextInput>,
     pub outputs: Vec<OutputSpec>,
     pub has_explicit_output: bool,
     /// Noms (casse de première référence, ordre PDV) des variables jamais
@@ -193,6 +253,9 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         arrays: HashMap::new(),
         labels: HashMap::new(),
         formats: HashMap::new(),
+        infile: None,
+        datalines: None,
+        seen_input: false,
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -238,6 +301,14 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     }
 
     let input = c.build_input()?;
+    let text_input = c.build_text_input()?;
+    // Une étape ne peut pas mélanger SET et INFILE/INPUT (sources d'entrée
+    // concurrentes — règle de cohérence, non supporté).
+    if input.is_some() && text_input.is_some() {
+        return Err(SasError::runtime(
+            "Mixing SET with INFILE/INPUT in the same step is not yet implemented.",
+        ));
+    }
     let outputs = c.resolve_outputs(&ast.outputs)?;
     let uninitialized = c
         .pdv
@@ -250,6 +321,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         pdv: c.pdv,
         stmts: ast.stmts.clone(),
         input,
+        text_input,
         outputs,
         has_explicit_output: c.has_explicit_output,
         uninitialized,
@@ -323,6 +395,13 @@ struct Compiler<'a> {
     /// Appliqués au PDV en fin de compilation (indépendamment de l'ordre des
     /// statements) ; l'emportent sur le format hérité de l'input.
     formats: HashMap<String, String>,
+    /// INFILE rencontré (M14) : source + options. `None` = pas d'INFILE
+    /// explicite (DATALINES inline implicite si présent).
+    infile: Option<(crate::ast::InfileSource, crate::ast::InfileOptions)>,
+    /// Lignes du bloc DATALINES inline (M14).
+    datalines: Option<Vec<String>>,
+    /// Un statement INPUT a déjà été vu (un second → erreur).
+    seen_input: bool,
 }
 
 impl Compiler<'_> {
@@ -622,6 +701,39 @@ impl Compiler<'_> {
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                Ok(())
+            }
+            // INFILE (M14) : déclaratif. Un second INFILE écrase le premier
+            // (SAS le permet — le dernier gagne). On mémorise source+options.
+            DsStmt::Infile { source, options } => {
+                self.infile = Some((source.clone(), options.clone()));
+                Ok(())
+            }
+            // INPUT (M14) : les variables nommées entrent au PDV en ordre de
+            // première référence (char → longueur du `$ w`/informat, défaut
+            // 8 ; num → 8). Plusieurs INPUT par étape sont autorisés.
+            DsStmt::Input(items) => {
+                self.seen_input = true;
+                for item in items {
+                    if let crate::ast::InputItem::Var {
+                        name,
+                        is_char,
+                        informat,
+                        ..
+                    } = item
+                    {
+                        let (ty, length) = input_var_type(*is_char, informat.as_deref())?;
+                        self.add_var(name, ty, length);
+                        // Une variable d'INPUT est « assignée » (pas de NOTE
+                        // uninitialized).
+                        self.assigned.insert(name.to_uppercase());
+                    }
+                }
+                Ok(())
+            }
+            // DATALINES (M14) : le bloc verbatim, source inline de l'étape.
+            DsStmt::Datalines(lines) => {
+                self.datalines = Some(lines.clone());
                 Ok(())
             }
         }
@@ -997,6 +1109,69 @@ impl Compiler<'_> {
         }))
     }
 
+    /// Assemble la source d'entrée TEXTE (M14) à partir de l'INFILE, de
+    /// l'INPUT et du bloc DATALINES rencontrés. Renvoie `None` si l'étape
+    /// n'a ni INFILE ni INPUT ni DATALINES (= pas de lecture texte).
+    fn build_text_input(&mut self) -> Result<Option<TextInput>> {
+        let infile = self.infile.take();
+        let datalines = self.datalines.take();
+
+        // Pas de lecture texte du tout.
+        if infile.is_none() && !self.seen_input && datalines.is_none() {
+            return Ok(None);
+        }
+
+        // Source : INFILE explicite, sinon DATALINES inline implicite.
+        let (lines, display) = match &infile {
+            Some((crate::ast::InfileSource::Path(path), _)) => {
+                let content = std::fs::read_to_string(path).map_err(|e| {
+                    SasError::runtime(format!("Unable to read INFILE '{path}': {e}"))
+                })?;
+                // Lignes sans le `\n` ; un `\r` final est retiré.
+                let lines: Vec<String> = content
+                    .lines()
+                    .map(|l| l.to_string())
+                    .collect();
+                (lines, format!("the infile {path}"))
+            }
+            Some((crate::ast::InfileSource::Datalines, _)) | None => {
+                let lines = datalines.clone().ok_or_else(|| {
+                    SasError::runtime(
+                        "INPUT/INFILE DATALINES used but no DATALINES block is present.",
+                    )
+                })?;
+                (lines, "the infile DATALINES".to_string())
+            }
+        };
+
+        // Options d'exécution.
+        let opts = infile.as_ref().map(|(_, o)| o);
+        let dsd = opts.is_some_and(|o| o.dsd);
+        let delimiter = opts.and_then(|o| o.delimiter.clone());
+        let short = match opts {
+            Some(o) if o.stopover => ShortMode::Stopover,
+            Some(o) if o.truncover => ShortMode::Truncover,
+            Some(o) if o.missover => ShortMode::Missover,
+            _ => ShortMode::Default,
+        };
+        let firstobs = opts.and_then(|o| o.firstobs).unwrap_or(1).max(1);
+        let obs = opts.and_then(|o| o.obs);
+
+        let options = TextOptions {
+            delimiter,
+            dsd,
+            firstobs,
+            obs,
+            short,
+        };
+
+        Ok(Some(TextInput {
+            display,
+            lines,
+            options,
+        }))
+    }
+
     /// Toute variable d'un WHERE= de SET doit déjà être au PDV (= une
     /// variable de l'input, après keep/drop/rename) — message proche du
     /// SAS "Variable x is not on file WORK.A.". On ne walke PAS via
@@ -1210,6 +1385,27 @@ fn retain_literal(expr: &Expr) -> Result<(VarType, usize, Value)> {
         _ => Err(SasError::runtime(
             "RETAIN initial values must be literals.",
         )),
+    }
+}
+
+/// Type et longueur d'une variable d'INPUT (M14). Caractère si `$` OU si
+/// l'informat porte un `$` (ex. `$char10.`) ; longueur = largeur de
+/// l'informat, sinon 8 par défaut. Numérique : longueur 8 (métadonnée).
+fn input_var_type(is_char: bool, informat: Option<&str>) -> Result<(VarType, usize)> {
+    let spec = informat
+        .map(|tok| {
+            crate::formats::FormatSpec::parse(tok)
+                .ok_or_else(|| SasError::runtime(format!("The informat {tok} is not valid.")))
+        })
+        .transpose()?;
+    let char_informat = spec.as_ref().is_some_and(|s| s.name.starts_with('$'));
+    let char = is_char || char_informat;
+    if char {
+        // Longueur = largeur de l'informat caractère, défaut 8.
+        let len = spec.as_ref().and_then(|s| s.w).map(|w| w as usize).unwrap_or(8);
+        Ok((VarType::Char, len.max(1)))
+    } else {
+        Ok((VarType::Num, 8))
     }
 }
 
