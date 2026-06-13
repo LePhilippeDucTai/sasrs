@@ -24,7 +24,11 @@ pub mod sql;
 pub mod token;
 pub mod value;
 
-use preprocess::{IdentityMacroStage, TextStage};
+use preprocess::TextStage;
+#[cfg(not(feature = "macros"))]
+use preprocess::IdentityMacroStage;
+#[cfg(feature = "macros")]
+use preprocess::MacroStage;
 use session::Session;
 use source::SourceFile;
 use std::path::PathBuf;
@@ -75,9 +79,12 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
         }
     };
 
-    // Emplacement réservé du processeur macro : identité tant que la
-    // phase macro n'est pas implémentée.
+    // Couture du processeur macro : identité par défaut, spike %let/&var
+    // sous la feature `macros`.
+    #[cfg(not(feature = "macros"))]
     let preprocessed = IdentityMacroStage.process(source_text);
+    #[cfg(feature = "macros")]
+    let preprocessed = MacroStage::default().process(source_text);
     let src = SourceFile::new(preprocessed);
 
     if let Err(e) = executor::run_program(&src, &mut session) {

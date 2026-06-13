@@ -7,6 +7,11 @@ edition = "2024"
 name = "sasrs"
 path = "src/main.rs"
 
+[features]
+# Spike M8 : processeur macro %let/&var derrière la couture preprocess::TextStage.
+# OFF par défaut ; activer avec --features macros.
+macros = []
+
 [dependencies]
 polars = { version = "0.46", features = [
     "lazy",

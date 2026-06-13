@@ -67,7 +67,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m7/ + snapshots
 
 ## M8 — durcissement
-- [ ] Spike macro `%let` derrière feature flag (valider la couture TextStage)
+- [x] Spike macro `%let` derrière feature flag (valider la couture TextStage)
 - [ ] Stub `S3Library` derrière feature `s3` (compile, non branché)
 - [ ] Fast-path vectorisé optionnel des steps simples
 - [ ] Revue checklist pièges (PLAN.md §Checklist) sur tout le code
