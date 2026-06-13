@@ -98,7 +98,7 @@ interfoliée** pilotée par l'exécuteur, état (`MacroEngine`) dans `Session` ;
 `src/macros/` (promu depuis `preprocess.rs`). Un segment brut est expansé PUIS lexé/parsé/exécuté ;
 `CALL SYMPUT` écrit la table après l'étape, vu par le segment suivant.
 
-- [ ] M11.1 — déplacer l'expansion dans la boucle exécuteur ; `Session.macro_engine` ; segmenteur brut + expand→lex par segment. `%let`/`&var` IDENTIQUE (réutilise `read_name`/`resolve_value`/`resolve_refs_once`). **Invariant pass-through octet-identique** (source sans macro → inchangé) + écho des n° de ligne ORIGINAUX. Flag conservé ; tests de non-régression
+- [x] M11.1 — `MacroEngine` dans `Session` (cfg-split : identité pure sous build défaut ; `%let`/`&var` sous `--features macros`, logique du spike déplacée verbatim). Expansion pilotée par `executor::run_program` (plus par `lib.rs`) ; pour cette unité, source ENTIER expansé une fois (identité → `src` inchangé → lexing/écho byte-identiques). `RawSegmenter`/interfoliage par bloc DÉFÉRÉ à M11.5. Gates : défaut 895 + snapshot (0 `.snap.new`), `--features macros` 903, 0 warning sur les deux. Flag conservé
 - [ ] M11.2 — `%macro name(params)/%mend` + invocation `%name(args)` : table de définitions, paramètres positionnels + mots-clés (défauts), expanseur récursif (garde de profondeur), `%local`/`%global`
 - [ ] M11.3 — `%if/%then/%else/%do/%end` + `%do i=a %to b [%by k]` itératif (génération de texte ; garde d'itérations)
 - [ ] M11.4 — `%eval` : arithmétique entière (`/` tronque), comparaisons, logique ; câblé dans %if/%to/%by

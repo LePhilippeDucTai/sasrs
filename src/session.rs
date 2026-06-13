@@ -40,6 +40,9 @@ pub struct Session {
     pub deterministic: bool,
     /// User-defined format catalog (populated by PROC FORMAT).
     pub format_catalog: crate::formats::FormatCatalog,
+    /// Processeur macro de la session (M11) : table des symboles `%let`/`&var`.
+    /// Sous le build par défaut c'est une identité pure (cf. `MacroEngine`).
+    pub macro_engine: crate::preprocess::MacroEngine,
     /// Opt-in : autorise le fast-path vectorisé des étapes DATA simples
     /// (`datastep::fastpath`). OFF par défaut — le chemin ligne-à-ligne reste
     /// la référence ; le fast-path ne s'active que pour les étapes que
@@ -63,6 +66,7 @@ impl Session {
             last_dataset: None,
             deterministic,
             format_catalog: crate::formats::FormatCatalog::default(),
+            macro_engine: crate::preprocess::MacroEngine::new(deterministic),
             vectorize: false,
         })
     }

@@ -21,6 +21,70 @@ impl TextStage for IdentityMacroStage {
     }
 }
 
+/// Processeur macro de la session (M11).
+///
+/// `MacroEngine` porte la table des symboles macro (`%let`/`&var`) et est
+/// stocké dans `Session` (cf. `Session::macro_engine`). C'est la couture
+/// d'état du futur processeur macro : la table vit pour toute la session et
+/// l'expansion est désormais pilotée depuis l'`executor`, plus depuis `lib.rs`.
+///
+/// # Invariant de bascule (byte-identical)
+/// `expand_open_code` DOIT être l'identité stricte pour tout segment sans
+/// déclencheur macro résolu. Sous le build PAR DÉFAUT (sans `--features
+/// macros`), l'engine n'a aucune table et `expand_open_code` renvoie l'entrée
+/// inchangée — comportement identique à l'ancien `IdentityMacroStage`.
+///
+/// # M11.1 — périmètre
+/// Cette unité établit seulement la couture : l'état macro vit dans `Session`
+/// et l'expansion est appelée depuis l'`executor` (sur le source ENTIER, une
+/// fois, en tête de `run_program`). Le découpage en segments bruts
+/// (`RawSegmenter`) et l'expansion interfoliée bloc-par-bloc — nécessaires à
+/// `CALL SYMPUT` (M11.5) — sont DÉFÉRÉS pour préserver la garantie
+/// byte-identical (la segmentation per-bloc risquerait de changer le lexing et
+/// l'écho de numéros de ligne).
+#[cfg(feature = "macros")]
+#[derive(Default)]
+pub struct MacroEngine {
+    table: std::collections::HashMap<String, String>,
+}
+
+/// Variante PAR DÉFAUT (sans feature `macros`) : engine vide, identité pure.
+/// Aucune table, aucune logique — garantit l'octet-identité du build par
+/// défaut (équivalent strict de l'ancien `IdentityMacroStage`).
+#[cfg(not(feature = "macros"))]
+#[derive(Default)]
+pub struct MacroEngine;
+
+impl MacroEngine {
+    /// Construit l'engine de session. (Le paramètre `deterministic` est réservé
+    /// pour les variables automatiques figées des unités M11 ultérieures —
+    /// `&SYSDATE9`/`&SYSTIME`/`&SYSVER` ; inutilisé pour `%let`/`&var`.)
+    pub fn new(_deterministic: bool) -> Self {
+        Self::default()
+    }
+
+    /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).
+    ///
+    /// Sous `--features macros` : applique le `%let`/`&var` du spike. Pour un
+    /// segment SANS déclencheur (`%`/`&`) le résultat est l'entrée inchangée.
+    /// Sous le build par défaut : identité stricte.
+    #[cfg(feature = "macros")]
+    pub fn expand_open_code(&mut self, raw: &str) -> String {
+        // Fast-path identité : sans déclencheur macro, rien à expanser. Garantit
+        // l'invariant byte-identical pour le source sans tokens macro.
+        if !raw.contains('%') && !raw.contains('&') {
+            return raw.to_string();
+        }
+        self.process(raw)
+    }
+
+    /// Build par défaut : identité stricte (équivalent `IdentityMacroStage`).
+    #[cfg(not(feature = "macros"))]
+    pub fn expand_open_code(&mut self, raw: &str) -> String {
+        raw.to_string()
+    }
+}
+
 /// SPIKE M8 (feature `macros`) : processeur macro minimal `%let` / `&var`.
 ///
 /// But : valider que la couture `TextStage` peut héberger le futur processeur
@@ -46,14 +110,23 @@ impl TextStage for IdentityMacroStage {
 /// - Chaînes : ce spike résout `&x` PARTOUT (y compris dans les littéraux
 ///   simple/double quote). SAS ne résout pas dans `'...'`, mais on documente
 ///   ici qu'on simplifie — la résolution s'applique partout.
+///
+/// NB (M11.1) : la logique `%let`/`&var` du spike vit désormais sur
+/// `MacroEngine` (cf. ci-dessus). `MacroStage` est conservé comme alias mince
+/// implémentant `TextStage` afin que les tests de spike existants restent
+/// inchangés ; il n'est plus utilisé par `lib.rs` / l'`executor`.
 #[cfg(feature = "macros")]
-#[derive(Default)]
-pub struct MacroStage {
-    table: std::collections::HashMap<String, String>,
+pub type MacroStage = MacroEngine;
+
+#[cfg(feature = "macros")]
+impl TextStage for MacroEngine {
+    fn process(&mut self, source: &str) -> String {
+        self.process_impl(source)
+    }
 }
 
 #[cfg(feature = "macros")]
-impl MacroStage {
+impl MacroEngine {
     /// Nombre maximal d'itérations de résolution d'une valeur contenant
     /// elle-même des `&refs` (garde contre les cycles).
     const MAX_RESOLVE_ITERS: usize = 10;
@@ -134,8 +207,10 @@ impl MacroStage {
 }
 
 #[cfg(feature = "macros")]
-impl TextStage for MacroStage {
-    fn process(&mut self, source: &str) -> String {
+impl MacroEngine {
+    /// Coeur de l'expansion `%let`/`&var` (une passe gauche→droite). Met à jour
+    /// la table de l'engine (état conservé entre appels — donc entre segments).
+    fn process_impl(&mut self, source: &str) -> String {
         let chars: Vec<char> = source.chars().collect();
         let mut out = String::with_capacity(source.len());
         let mut i = 0;
@@ -182,7 +257,7 @@ impl TextStage for MacroStage {
 }
 
 #[cfg(feature = "macros")]
-impl MacroStage {
+impl MacroEngine {
     /// Vrai si `chars[i..]` commence par `%let` (insensible casse) suivi d'un
     /// blanc (pour ne pas matcher `%letx`).
     fn matches_let(chars: &[char], i: usize) -> bool {

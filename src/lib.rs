@@ -24,11 +24,6 @@ pub mod sql;
 pub mod token;
 pub mod value;
 
-use preprocess::TextStage;
-#[cfg(not(feature = "macros"))]
-use preprocess::IdentityMacroStage;
-#[cfg(feature = "macros")]
-use preprocess::MacroStage;
 use session::Session;
 use source::SourceFile;
 use std::path::PathBuf;
@@ -84,13 +79,10 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
     };
     session.vectorize = opts.vectorize;
 
-    // Couture du processeur macro : identité par défaut, spike %let/&var
-    // sous la feature `macros`.
-    #[cfg(not(feature = "macros"))]
-    let preprocessed = IdentityMacroStage.process(source_text);
-    #[cfg(feature = "macros")]
-    let preprocessed = MacroStage::default().process(source_text);
-    let src = SourceFile::new(preprocessed);
+    // M11.1 : l'expansion macro n'est plus pilotée ici. L'état macro vit dans
+    // `Session::macro_engine` et l'expansion est désormais conduite par
+    // l'`executor` (cf. `run_program`). Le source brut est passé tel quel.
+    let src = SourceFile::new(source_text.to_string());
 
     if let Err(e) = executor::run_program(&src, &mut session) {
         session.log.error(&e.to_string());

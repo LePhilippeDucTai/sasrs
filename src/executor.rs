@@ -41,6 +41,24 @@ use crate::source::SourceFile;
 use std::path::PathBuf;
 
 pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
+    // M11.1 : l'expansion macro est désormais pilotée par l'executor (et non
+    // plus par `lib.rs`), avec l'état dans `Session::macro_engine`. Pour CETTE
+    // unité, on expanse le source ENTIER une seule fois, en tête de boucle.
+    // C'est la couture : la table macro vit dans la `Session` et l'expansion
+    // est conduite ici. Le découpage en segments bruts (`RawSegmenter`) et
+    // l'expansion interfoliée bloc-par-bloc — requis par `CALL SYMPUT` (M11.5)
+    // — sont DÉFÉRÉS afin de préserver la garantie byte-identical : sous le
+    // build par défaut `expand_open_code` est l'identité stricte, donc `src`
+    // est inchangé et le lexing / l'écho de n° de ligne restent identiques.
+    let expanded = session.macro_engine.expand_open_code(&src.text);
+    let owned_src;
+    let src: &SourceFile = if expanded == src.text {
+        src
+    } else {
+        owned_src = SourceFile::new(expanded);
+        &owned_src
+    };
+
     let mut stream = StatementStream::new(src)?;
     while let Some((block, span)) = stream.next_block() {
         let lines = src.lines_of_span(span);
@@ -315,6 +333,33 @@ mod tests {
         assert_eq!(out.exit_code, 0);
         assert!(!out.log.contains("has 1 observations"));
         assert!(out.listing.is_empty());
+    }
+
+    /// M11.1 : l'expansion macro est conduite par l'executor (état dans
+    /// `Session::macro_engine`). Un programme avec `%let`/`&var` doit produire
+    /// EXACTEMENT le même résultat que son équivalent sans macro.
+    #[cfg(feature = "macros")]
+    #[test]
+    fn macro_let_ref_runs_through_executor() {
+        let with_macro = run_det(
+            "%let lib=work; data &lib..a; x=1; run; proc print data=&lib..a; run;",
+        );
+        let without_macro = run_det(
+            "data work.a; x=1; run; proc print data=work.a; run;",
+        );
+        assert_eq!(with_macro.exit_code, 0, "log was:\n{}", with_macro.log);
+        assert_eq!(
+            with_macro.listing, without_macro.listing,
+            "macro listing differs:\nMACRO:\n{}\nPLAIN:\n{}",
+            with_macro.listing, without_macro.listing
+        );
+        // Les NOTEs de l'étape DATA / PROC doivent correspondre.
+        assert!(with_macro
+            .log
+            .contains("The data set WORK.A has 1 observations and 1 variables."));
+        assert!(with_macro
+            .log
+            .contains("There were 1 observations read from the data set WORK.A."));
     }
 
     #[test]
