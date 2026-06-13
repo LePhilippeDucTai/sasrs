@@ -33,6 +33,11 @@ struct Cli {
     /// Sortie déterministe (temps figés) — utilisé par les tests snapshot
     #[arg(long)]
     deterministic: bool,
+
+    /// Active le fast-path vectorisé OPTIONNEL des étapes DATA simples
+    /// (SET + assignations numériques) ; sinon repli sur la boucle.
+    #[arg(long)]
+    vectorize: bool,
 }
 
 fn main() -> ExitCode {
@@ -58,6 +63,7 @@ fn main() -> ExitCode {
             work_dir: cli.work,
             base_dir,
             deterministic: cli.deterministic,
+            vectorize: cli.vectorize,
         },
     );
 

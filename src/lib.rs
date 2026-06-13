@@ -42,6 +42,9 @@ pub struct RunOptions {
     /// Fige les temps (et toute sortie non reproductible) pour les
     /// snapshots de test.
     pub deterministic: bool,
+    /// Active le fast-path vectorisé OPTIONNEL des étapes DATA simples
+    /// (cf. `datastep::fastpath`). OFF par défaut.
+    pub vectorize: bool,
 }
 
 impl Default for RunOptions {
@@ -50,6 +53,7 @@ impl Default for RunOptions {
             work_dir: None,
             base_dir: None,
             deterministic: false,
+            vectorize: false,
         }
     }
 }
@@ -78,6 +82,7 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
             };
         }
     };
+    session.vectorize = opts.vectorize;
 
     // Couture du processeur macro : identité par défaut, spike %let/&var
     // sous la feature `macros`.

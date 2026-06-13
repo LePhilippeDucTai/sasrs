@@ -180,6 +180,17 @@ struct MergeObs {
 }
 
 pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
+    // Fast-path vectorisé OPTIONNEL (OFF par défaut). Ne s'active que pour les
+    // étapes prouvées équivalentes ET une fenêtre d'entrée pleine
+    // (FIRSTOBS=1 / OBS=MAX) ; sinon on garde la boucle ligne-à-ligne.
+    if session.vectorize
+        && session.options.firstobs == 1
+        && session.options.obs.is_none()
+        && super::fastpath::eligible(&prog)
+    {
+        return super::fastpath::run(prog, session);
+    }
+
     let StepProgram {
         pdv,
         stmts,
@@ -1803,6 +1814,7 @@ mod tests {
                 work_dir: None,
                 base_dir: None,
                 deterministic: true,
+                vectorize: false,
             },
         );
         assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
@@ -1822,6 +1834,7 @@ mod tests {
                 work_dir: None,
                 base_dir: None,
                 deterministic: true,
+                vectorize: false,
             },
         );
         assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
@@ -1840,6 +1853,7 @@ mod tests {
                 work_dir: None,
                 base_dir: None,
                 deterministic: true,
+                vectorize: false,
             },
         );
         assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);

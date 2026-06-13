@@ -190,6 +190,7 @@ mod tests {
                 work_dir: None,
                 base_dir: None,
                 deterministic: true,
+                vectorize: false,
             },
         )
     }
@@ -297,6 +298,7 @@ mod tests {
                 work_dir: None,
                 base_dir: Some(dir.path().to_path_buf()),
                 deterministic: true,
+                vectorize: false,
             },
         );
         assert_eq!(out.exit_code, 0, "{}", out.log);

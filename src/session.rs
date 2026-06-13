@@ -40,6 +40,11 @@ pub struct Session {
     pub deterministic: bool,
     /// User-defined format catalog (populated by PROC FORMAT).
     pub format_catalog: crate::formats::FormatCatalog,
+    /// Opt-in : autorise le fast-path vectorisé des étapes DATA simples
+    /// (`datastep::fastpath`). OFF par défaut — le chemin ligne-à-ligne reste
+    /// la référence ; le fast-path ne s'active que pour les étapes que
+    /// `fastpath::eligible` prouve équivalentes.
+    pub vectorize: bool,
 }
 
 impl Session {
@@ -58,6 +63,7 @@ impl Session {
             last_dataset: None,
             deterministic,
             format_catalog: crate::formats::FormatCatalog::default(),
+            vectorize: false,
         })
     }
 }

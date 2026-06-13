@@ -65,6 +65,7 @@
 
 pub mod eval;
 pub mod exec;
+pub mod fastpath;
 pub mod functions;
 pub mod pdv;
 

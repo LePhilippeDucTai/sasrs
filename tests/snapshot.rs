@@ -22,6 +22,7 @@ fn fixtures() {
                 work_dir: None,
                 base_dir: Some(tmp.path().to_path_buf()),
                 deterministic: true,
+                vectorize: false,
             },
         );
         insta::assert_snapshot!(format!(
