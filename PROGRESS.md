@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M13** (branchement S3 réel). M1–M12 terminés.
+Jalon courant : **— M1–M13 terminés** (+ extensions macro M12 et branchement S3 réel M13).
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -119,5 +119,5 @@ m1–m11 octet-identiques (le nouveau comportement ne s'active que sur les nouve
 Le stub `S3Library` (feature `s3`, M8) compile mais n'est pas branché. Objectif : LIBNAME
 sur URI `s3://` lit/scanne réellement des parquet via Polars object-store.
 
-- [ ] M13.1 — activer les features Polars `cloud`/`aws` derrière `s3` ; implémenter `S3Library` (scan/read parquet `s3://bucket/key` via `LazyFrame::scan_parquet` object-store ; `ScanArgsParquet`/`CloudOptions`), brancher dans `LibraryManager`/parsing LIBNAME (`libname x 's3://...';` → provider S3). Credentials via env AWS standard. Mutations (write/rename/delete) : best-effort ou erreur claire documentée.
-- [ ] M13.2 — tests : parsing d'URI `s3://`, sélection du provider, chemins clé→table ; I/O réelle gardée (skip si pas de credentials / pas de réseau) ou contre un mock. Fixtures non applicables (réseau) — tests unitaires + doc. DoD : `cargo build --features s3` + `cargo test` verts.
+- [x] M13.1 — feature `s3 = ["polars/cloud","polars/aws"]` ; `S3Library::from_uri` (parse `s3://bucket/prefix`), `read()` = scan parquet cloud via `ScanArgsParquet`+`CloudOptions` (credentials env AWS) ; LIBNAME `s3://...` routé vers `S3Library` (cfg-gated : sous build défaut, `s3://` reste un chemin local — inchangé) ; trait `LibraryProvider::is_cloud()` ; mutations → erreur claire. Crates cloud/aws récupérées et compilées dans cet env.
+- [x] M13.2 — tests (`cfg(feature=s3)`) : parsing URI `s3://`, sélection du provider (cloud vs DirLibrary), chemins clé→table. I/O réelle non testée (besoin creds+réseau, documenté). DoD : défaut 989 (0 warning, octet-identique) ; `--features s3` build + 999 tests (+10) verts, 0 warning. (NB disque : impossible de garder simultanément les artefacts des 2 variantes — validées séparément après `cargo clean`.) **M13 TERMINÉ.**

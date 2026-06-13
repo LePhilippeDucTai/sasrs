@@ -122,6 +122,26 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
 fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     match stmt {
         GlobalStmt::Libname { libref, path } => {
+            // M13 : routage cloud. Quand la feature `s3` est active et que le
+            // chemin commence par `s3://`, on enregistre une `S3Library`
+            // (bucket/prefix) au lieu d'une `DirLibrary`. Le chemin affiché
+            // reste l'URI tel quel (pas de résolution relative, pas d'absolu de
+            // tempdir → snapshots stables). Sous le build par défaut ce bloc
+            // n'est pas compilé : un chemin `s3://...` est traité comme
+            // aujourd'hui (résolu comme un répertoire local, qui n'existe pas →
+            // erreur runtime habituelle).
+            #[cfg(feature = "s3")]
+            if path.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("s3://")) {
+                match session.libs.assign_uri(libref, path) {
+                    Ok(()) => session.log.note(&format!(
+                        "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {path}",
+                        libref.to_uppercase()
+                    )),
+                    Err(e) => session.log.error(&e.to_string()),
+                }
+                return;
+            }
+
             let p = PathBuf::from(path);
             let abs = if p.is_absolute() {
                 p

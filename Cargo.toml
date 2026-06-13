@@ -12,11 +12,14 @@ path = "src/main.rs"
 # %sysfunc, %str/%nrstr, CALL SYMPUT/SYMGET) est désormais TOUJOURS ACTIF —
 # il n'y a plus de feature `macros`. L'invariant byte-identical est porté par
 # le fast-path identité de `MacroEngine::expand_open_code` (cf. src/preprocess.rs).
-# Stub M8 : backend de stockage S3 (trait LibraryProvider sur scan parquet cloud).
-# OFF par défaut, NON branché dans LibraryManager/LIBNAME ; activer avec
-# --features s3. L'I/O cloud réelle demandera d'activer plus tard les features
-# Polars `cloud`/`aws` (suite). Voir src/library.rs (module s3).
-s3 = []
+# M13 : backend de stockage S3 (trait LibraryProvider sur scan parquet cloud),
+# désormais RÉELLEMENT branché dans LibraryManager/LIBNAME (`libname x
+# 's3://bucket/prefix';`). OFF par défaut — activer avec --features s3, ce qui
+# tire les features Polars `cloud` + `aws` (object_store + aws-*). Ces features
+# sont ADDITIVES : le build par défaut (sans `s3`) reste byte-identique car rien
+# de tout cela n'est compilé. Voir src/library.rs (S3Library) et src/executor.rs
+# (routage LIBNAME `s3://`).
+s3 = ["polars/cloud", "polars/aws"]
 
 [dependencies]
 polars = { version = "0.46", features = [
