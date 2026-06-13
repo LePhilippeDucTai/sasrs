@@ -100,7 +100,8 @@
 use super::eval::{coerce_num, eval, EvalCtx};
 use super::pdv::Pdv;
 use super::{
-    ByVar, InputAction, InputData, InputDataset, OutputSpec, StepProgram, TextInput,
+    ByVar, InputAction, InputData, InputDataset, OutputSpec, PutDestResolved, StepProgram,
+    TextInput,
 };
 use crate::ast::DsStmt;
 use crate::dataset::{SasDataset, VarMeta};
@@ -175,6 +176,75 @@ struct Runner {
     text_col: usize,
     /// Lignes lues au sens SAS (records read), pour la NOTE de fin d'étape.
     records_read: usize,
+    /// Sortie texte (FILE/PUT, M14.2). `None` si l'étape n'a aucun PUT.
+    put: Option<PutState>,
+}
+
+/// État de sortie texte d'une étape DATA (FILE/PUT, M14.2).
+struct PutState {
+    /// Répertoire de base de la session (pour résoudre les chemins FILE
+    /// relatifs).
+    base_dir: std::path::PathBuf,
+    /// Destination courante (par défaut LOG).
+    cur_dest: PutDestResolved,
+    /// Délimiteur courant du list output (issu du dernier FILE).
+    delimiter: Option<String>,
+    dsd: bool,
+    /// Tampon de la ligne de sortie en cours (line-hold).
+    buf: String,
+    /// Pointeur de colonne de sortie courant (1-based) dans `buf`.
+    col: usize,
+    /// La ligne courante est-elle retenue (`@`) à l'intérieur de l'itération ?
+    held: bool,
+    /// ... ou retenue à travers les itérations (`@@`) ?
+    held_across: bool,
+    /// La ligne en cours a-t-elle reçu au moins un PUT (pour décider du flush
+    /// d'une ligne vide en fin de hold) ?
+    line_started: bool,
+    /// Destination à laquelle appartient la ligne retenue en cours.
+    held_dest: PutDestResolved,
+    /// Tampons de sortie par destination, vidés vers la session après la
+    /// boucle (ordre des lignes = ordre des PUT exécutés).
+    log_lines: Vec<String>,
+    print_lines: Vec<String>,
+    /// Fichiers physiques : chemin → lignes, dans l'ordre de première
+    /// écriture.
+    files: Vec<(std::path::PathBuf, Vec<String>)>,
+}
+
+impl PutState {
+    fn new(base_dir: std::path::PathBuf) -> Self {
+        PutState {
+            base_dir,
+            cur_dest: PutDestResolved::Log,
+            delimiter: None,
+            dsd: false,
+            buf: String::new(),
+            col: 1,
+            held: false,
+            held_across: false,
+            line_started: false,
+            held_dest: PutDestResolved::Log,
+            log_lines: Vec::new(),
+            print_lines: Vec::new(),
+            files: Vec::new(),
+        }
+    }
+
+    /// Pousse une ligne complète vers le tampon de sa destination.
+    fn emit(&mut self, dest: &PutDestResolved, line: String) {
+        match dest {
+            PutDestResolved::Log => self.log_lines.push(line),
+            PutDestResolved::Print => self.print_lines.push(line),
+            PutDestResolved::Path(p) => {
+                if let Some((_, lines)) = self.files.iter_mut().find(|(fp, _)| fp == p) {
+                    lines.push(line);
+                } else {
+                    self.files.push((p.clone(), vec![line]));
+                }
+            }
+        }
+    }
 }
 
 /// Une observation de sortie d'un MERGE, pré-calculée par `build_merge_plan`.
@@ -213,6 +283,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         input,
         text_input,
         input_actions,
+        has_put,
         outputs,
         has_explicit_output,
         uninitialized,
@@ -220,6 +291,13 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         arrays,
         labels,
     } = prog;
+
+    // Sortie texte (FILE/PUT, M14.2) : état seulement si l'étape a un PUT.
+    let put = if has_put {
+        Some(PutState::new(session.base_dir.clone()))
+    } else {
+        None
+    };
 
     for name in &uninitialized {
         session.log.note(&format!("Variable {name} is uninitialized."));
@@ -289,6 +367,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         text_line: 0,
         text_col: 1,
         records_read: 0,
+        put,
     };
 
     // Interclassement / match-merge : pré-application des WHERE= par dataset
@@ -329,6 +408,9 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
                 break;
             }
         }
+        // Fin d'itération (FILE/PUT, M14.2) : une ligne retenue par `@`
+        // (mais pas `@@`) est émise automatiquement à la fin de l'itération.
+        r.flush_put_iteration_end();
         if flow == Flow::EndStep {
             break;
         }
@@ -343,6 +425,33 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             return Err(SasError::runtime(
                 "DATA step appears to loop infinitely (no input rows consumed); stopping.",
             ));
+        }
+    }
+
+    // Sortie texte (FILE/PUT, M14.2) : une ligne encore retenue (`@@` ou un
+    // `@` non libéré sur une étape sans itération) est émise à la fin de
+    // l'étape, puis on écrit les tampons vers la session (LOG/listing) et les
+    // fichiers physiques. Les lignes PUT-vers-LOG s'intercalent APRÈS l'écho
+    // du source et AVANT les NOTEs de fin d'étape (fidèle à SAS).
+    r.flush_put_final();
+    if let Some(put) = r.put.take() {
+        for line in put.log_lines {
+            session.log.put_line(&line);
+        }
+        for line in put.print_lines {
+            session.listing.write_line(&line);
+        }
+        for (path, lines) in put.files {
+            let mut content = lines.join("\n");
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            if let Err(e) = std::fs::write(&path, content) {
+                session.log.error(&format!(
+                    "Unable to write the FILE physical file {}: {e}",
+                    path.display()
+                ));
+            }
         }
     }
 
@@ -581,6 +690,20 @@ impl Runner {
             // INFILE/DATALINES : déclaratifs (source résolue à la
             // compilation) ; rien à exécuter.
             DsStmt::Infile { .. } | DsStmt::Datalines { .. } => Ok(Flow::Normal),
+            // FILE (M14.2) : change la destination courante des PUT suivants.
+            DsStmt::File {
+                dest,
+                delimiter,
+                dsd,
+            } => {
+                self.exec_file(dest, delimiter, *dsd);
+                Ok(Flow::Normal)
+            }
+            // PUT (M14.2) : écrit dans la destination courante.
+            DsStmt::Put { items } => {
+                self.exec_put(items)?;
+                Ok(Flow::Normal)
+            }
             // Directives de compilation : rien à exécuter.
             DsStmt::Keep(_)
             | DsStmt::Drop(_)
@@ -795,6 +918,294 @@ impl Runner {
                 self.pdv.error_ = true;
                 self.pdv.set(slot, Value::missing());
             }
+        }
+    }
+
+    /// Exécute un statement FILE (M14.2) : fixe la destination courante des
+    /// PUT suivants + ses options de délimiteur. Résout depuis l'AST (le
+    /// chemin relatif vs `base_dir`).
+    fn exec_file(&mut self, dest: &crate::ast::PutDest, delimiter: &Option<String>, dsd: bool) {
+        let Some(put) = &mut self.put else { return };
+        let resolved = match dest {
+            crate::ast::PutDest::Log => PutDestResolved::Log,
+            crate::ast::PutDest::Print => PutDestResolved::Print,
+            crate::ast::PutDest::Path(path) => {
+                let p = std::path::PathBuf::from(path);
+                let abs = if p.is_absolute() {
+                    p
+                } else {
+                    put.base_dir.join(&p)
+                };
+                PutDestResolved::Path(abs)
+            }
+        };
+        put.cur_dest = resolved;
+        put.delimiter = delimiter.clone();
+        put.dsd = dsd;
+    }
+
+    /// Exécute un statement PUT (M14.2) : formate les items dans le tampon de
+    /// ligne, gère les pointeurs `@n`/`+n`, le saut `/`, le maintien `@`/`@@`
+    /// et `_all_`/named output. La ligne n'est émise qu'au flush (fin de PUT
+    /// sans hold, `/`, ou fin d'itération). Exécuté depuis l'AST (robuste aux
+    /// boucles DO).
+    fn exec_put(&mut self, items: &[crate::ast::PutItem]) -> Result<()> {
+        use crate::ast::PutItem;
+        if self.put.is_none() {
+            return Ok(());
+        }
+
+        let mut hold = false;
+        let mut hold_across = false;
+
+        for item in items {
+            match item {
+                PutItem::Literal(s) => {
+                    self.put_write_literal(s);
+                }
+                PutItem::Var { name, format } => {
+                    let (slot, is_char, spec) = self.resolve_put_runtime(name, format)?;
+                    let text = self.format_put_value(slot, is_char, spec.as_ref());
+                    self.put_write_value(&text, spec.is_some());
+                }
+                PutItem::NamedVar(name) => {
+                    let (slot, is_char, _spec) = self.resolve_put_runtime(name, &None)?;
+                    let display = self.pdv.vars()[slot].name.clone();
+                    let text = self.format_put_value(slot, is_char, None);
+                    self.put_write_named(&display, &text);
+                }
+                PutItem::PointerCol(n) => {
+                    if let Some(p) = &mut self.put {
+                        p.col = (*n).max(1);
+                    }
+                }
+                PutItem::PointerSkip(n) => {
+                    if let Some(p) = &mut self.put {
+                        p.col += *n;
+                    }
+                }
+                PutItem::NextLine => {
+                    self.put_flush_line();
+                }
+                PutItem::All => {
+                    self.put_write_all();
+                }
+                PutItem::HoldLine => {
+                    hold = true;
+                }
+                PutItem::HoldLineAcross => {
+                    hold_across = true;
+                }
+            }
+        }
+
+        // Fin du PUT : si aucune rétention, on émet la ligne. Sinon on la
+        // retient (mémorise la destination courante pour le flush ultérieur).
+        if let Some(p) = &mut self.put {
+            if hold || hold_across {
+                p.held = hold;
+                p.held_across = hold_across;
+                p.held_dest = p.cur_dest.clone();
+            } else {
+                p.held = false;
+                p.held_across = false;
+            }
+        }
+        if !hold && !hold_across {
+            self.put_flush_line();
+        }
+        Ok(())
+    }
+
+    /// Résout une variable de PUT à l'exécution : slot PDV (déjà créé à la
+    /// compilation), type effectif, et FormatSpec éventuel. Un format absent
+    /// pour une variable absente du PDV ne devrait pas arriver (compile_put
+    /// l'a créée), mais on dégrade en missing numérique par robustesse.
+    fn resolve_put_runtime(
+        &self,
+        name: &str,
+        format: &Option<String>,
+    ) -> Result<(usize, bool, Option<crate::formats::FormatSpec>)> {
+        let spec = match format {
+            Some(tok) => crate::formats::FormatSpec::parse(tok),
+            None => None,
+        };
+        let slot = self
+            .pdv
+            .slot(name)
+            .ok_or_else(|| SasError::runtime(format!("PUT references unknown variable {name}.")))?;
+        let is_char = self.pdv.vars()[slot].ty == VarType::Char;
+        Ok((slot, is_char, spec))
+    }
+
+    /// `_all_` : écrit `NOM=valeur` pour toutes les variables vivantes du PDV
+    /// (forme named output), séparées comme du list output.
+    fn put_write_all(&mut self) {
+        let n = self.pdv.vars().len();
+        for slot in 0..n {
+            let var = &self.pdv.vars()[slot];
+            let is_char = var.ty == VarType::Char;
+            let display = var.name.clone();
+            let text = self.format_put_value(slot, is_char, None);
+            self.put_write_named(&display, &text);
+        }
+    }
+
+    /// Valeur d'une variable formatée pour PUT. Avec format → FormatCatalog ;
+    /// sinon list output : char tel quel (trim des blancs finaux), num en
+    /// BESTw. (12) trimé. `. = .` géré par `Value` (jamais de `==`).
+    fn format_put_value(
+        &self,
+        slot: usize,
+        is_char: bool,
+        format: Option<&crate::formats::FormatSpec>,
+    ) -> String {
+        let v = self.pdv.get(slot);
+        if let Some(spec) = format {
+            let catalog = crate::formats::FormatCatalog::default();
+            return catalog.format(v, spec);
+        }
+        // List output (pas de format).
+        match v {
+            Value::Char(s) => s.trim_end().to_string(),
+            Value::Num(n) => format_best(*n, 12).trim().to_string(),
+            Value::Missing(k) => {
+                let _ = is_char;
+                // Char missing = blanc ; num missing = caractère de missing.
+                if is_char {
+                    String::new()
+                } else {
+                    k.display()
+                }
+            }
+        }
+    }
+
+    /// Écrit une valeur de list/formatted output dans le tampon courant.
+    /// `formatted` = true (format explicite) → écrit à la colonne courante
+    /// sans séparateur. Sinon (list output) → un séparateur (délimiteur FILE
+    /// ou blanc) précède la valeur si la ligne n'est pas vide.
+    fn put_write_value(&mut self, text: &str, formatted: bool) {
+        if formatted {
+            self.put_write_literal(text);
+            return;
+        }
+        self.put_write_list_item(text);
+    }
+
+    /// Named output `NOM=valeur` (séparé comme du list output).
+    fn put_write_named(&mut self, name: &str, value: &str) {
+        let item = format!("{name}={value}");
+        self.put_write_list_item(&item);
+    }
+
+    /// Écrit un item de list output : insère le séparateur courant si la
+    /// ligne contient déjà quelque chose, puis le texte (avec quoting DSD si
+    /// le texte contient le délimiteur).
+    fn put_write_list_item(&mut self, text: &str) {
+        let (sep, dsd) = match &self.put {
+            Some(p) => {
+                // Séparateur effectif : DLM= explicite ; sinon `,` sous DSD ;
+                // sinon un blanc (list output standard).
+                let sep = match &p.delimiter {
+                    Some(d) => d.clone(),
+                    None if p.dsd => ",".to_string(),
+                    None => " ".to_string(),
+                };
+                (sep, p.dsd)
+            }
+            None => return,
+        };
+        // Séparateur entre items si la ligne a déjà du contenu à gauche.
+        let need_sep = self
+            .put
+            .as_ref()
+            .map(|p| p.line_started && p.col > 1)
+            .unwrap_or(false);
+        if need_sep {
+            self.put_append(&sep);
+        }
+        let delim_char = sep.chars().next();
+        if dsd && delim_char.is_some_and(|d| text.contains(d)) {
+            self.put_append(&format!("\"{text}\""));
+        } else {
+            self.put_append(text);
+        }
+    }
+
+    /// Écrit un littéral / valeur formatée à la colonne courante (pas de
+    /// séparateur automatique). Pad de la ligne jusqu'à la colonne courante.
+    fn put_write_literal(&mut self, text: &str) {
+        self.put_append(text);
+    }
+
+    /// Ajoute `text` au tampon de ligne à la colonne courante : pad par des
+    /// blancs jusqu'à `col`, puis insère `text` et avance `col`. Compté en
+    /// caractères.
+    fn put_append(&mut self, text: &str) {
+        let Some(p) = &mut self.put else { return };
+        let target = p.col.saturating_sub(1);
+        let cur_len = p.buf.chars().count();
+        if target > cur_len {
+            for _ in 0..(target - cur_len) {
+                p.buf.push(' ');
+            }
+        } else if target < cur_len {
+            // Réécriture en arrière (`@n` plus petit) : tronque puis écrit.
+            let kept: String = p.buf.chars().take(target).collect();
+            p.buf = kept;
+        }
+        p.buf.push_str(text);
+        p.col = p.buf.chars().count() + 1;
+        p.line_started = true;
+    }
+
+    /// Émet la ligne courante vers sa destination puis repart à zéro (utilisé
+    /// par `/` et la fin d'un PUT non retenu).
+    fn put_flush_line(&mut self) {
+        let Some(p) = &mut self.put else { return };
+        let line = std::mem::take(&mut p.buf);
+        let dest = p.cur_dest.clone();
+        p.col = 1;
+        p.line_started = false;
+        p.held = false;
+        p.held_across = false;
+        p.emit(&dest, line);
+    }
+
+    /// Fin d'itération (M14.2) : une ligne retenue par `@` (pas `@@`) est
+    /// émise. Une ligne `@@` est conservée pour l'itération suivante.
+    fn flush_put_iteration_end(&mut self) {
+        let Some(p) = &mut self.put else { return };
+        if p.held_across {
+            return;
+        }
+        if p.held || p.line_started {
+            let line = std::mem::take(&mut p.buf);
+            let dest = p.held_dest.clone();
+            p.col = 1;
+            p.line_started = false;
+            p.held = false;
+            p.emit(&dest, line);
+        }
+    }
+
+    /// Fin d'étape (M14.2) : émet une éventuelle ligne encore retenue (`@@`
+    /// non libéré, ou hold sur une étape sans itération).
+    fn flush_put_final(&mut self) {
+        let Some(p) = &mut self.put else { return };
+        if p.held || p.held_across || p.line_started || !p.buf.is_empty() {
+            let line = std::mem::take(&mut p.buf);
+            let dest = if p.held_across || p.held {
+                p.held_dest.clone()
+            } else {
+                p.cur_dest.clone()
+            };
+            p.col = 1;
+            p.line_started = false;
+            p.held = false;
+            p.held_across = false;
+            p.emit(&dest, line);
         }
     }
 
@@ -3301,5 +3712,203 @@ mod tests {
         .unwrap();
         let ds = read_work(&s, "out");
         assert_eq!(ds.n_obs(), 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // M14.2 — FILE / PUT
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn put_default_destination_is_log_list_output() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run("data _null_; set inp; put name age; run;", &mut s).unwrap();
+        let log = s.log.into_string();
+        // List output: char as-is, num via BEST, separated by one blank.
+        // Age missing for Alice → '.'.
+        assert!(log.contains("Alfred 14"), "log:\n{log}");
+        assert!(log.contains("Alice ."), "log:\n{log}");
+        assert!(log.contains("Barbara 13"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_literal_then_value() {
+        let mut s = session();
+        run(
+            "data _null_;\n  x = 42;\n  put 'Total:' x;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        assert!(log.contains("Total: 42"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_formatted_column_output() {
+        let mut s = session();
+        run(
+            "data _null_;\n  length name $ 8;\n  name = 'Al';\n  age = 7;\n  put name $10. age 5.2;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // $10. left-justified width 10, then 5.2 right-justified width 5.
+        assert!(log.contains("Al         7.00"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_named_output() {
+        let mut s = session();
+        run(
+            "data _null_;\n  length nm $ 4;\n  nm = 'abcd';\n  x = 3;\n  put nm= x=;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        assert!(log.contains("nm=abcd x=3"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_all_writes_every_pdv_var() {
+        let mut s = session();
+        run(
+            "data _null_;\n  a = 1;\n  b = 2;\n  put _all_;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // _ALL_ also emits the automatic _N_ and _ERROR_? We only emit PDV
+        // user vars here. Check a= and b= present.
+        assert!(log.contains("a=1 b=2"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_slash_starts_new_line() {
+        let mut s = session();
+        run(
+            "data _null_;\n  a = 1; b = 2;\n  put a / b;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // Two separate lines.
+        let lines: Vec<&str> = log.lines().collect();
+        assert!(
+            lines.iter().any(|l| l.trim() == "1") && lines.iter().any(|l| l.trim() == "2"),
+            "log:\n{log}"
+        );
+    }
+
+    #[test]
+    fn put_at_hold_within_iteration() {
+        let mut s = session();
+        // First PUT holds the line with @, second PUT appends and releases.
+        run(
+            "data _null_;\n  put 'A' @;\n  put 'B';\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        assert!(log.contains("AB"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_double_at_holds_across_iterations() {
+        let mut s = session();
+        // Each iteration appends its value to the SAME held line via @@.
+        run(
+            "data _null_;\n  do i = 1 to 3;\n    put i @@;\n  end;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // All three on one line: "1 2 3" (list output separators).
+        assert!(log.contains("1 2 3"), "log:\n{log}");
+    }
+
+    #[test]
+    fn file_print_routes_to_listing() {
+        let mut s = session();
+        run(
+            "data _null_;\n  x = 99;\n  file print;\n  put 'val=' x;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let listing = s.listing.into_string();
+        assert!(listing.contains("val= 99"), "listing:\n{listing}");
+        // Nothing written to the log body for this PUT.
+        let log = s.log.into_string();
+        assert!(!log.contains("val="), "log:\n{log}");
+    }
+
+    #[test]
+    fn file_log_explicit() {
+        let mut s = session();
+        run(
+            "data _null_;\n  x = 5;\n  file log;\n  put 'x is ' x;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        assert!(log.contains("x is  5") || log.contains("x is 5"), "log:\n{log}");
+    }
+
+    #[test]
+    fn file_physical_path_written() {
+        let mut s = session();
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("sasrs_put_test_{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let src = format!(
+            "data _null_;\n  do i = 1 to 2;\n    file '{}';\n    put 'line' i;\n  end;\nrun;",
+            path.display()
+        );
+        run(&src, &mut s).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "line 1\nline 2\n", "file content: {content:?}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn put_pointer_col_and_skip() {
+        let mut s = session();
+        run(
+            "data _null_;\n  put 'X' @5 'Y' +2 'Z';\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // 'X' at col1, 'Y' at col5, then +2 → col after Y is 6, +2 = col8, 'Z'.
+        // "X   Y Z" : X(1) pad to 5 -> "X   Y", col now 6, +2 -> col 8, "Y" was
+        // 1 char so col6; +2 => col8; pad cols 6,7 -> two spaces then Z at 8.
+        assert!(log.contains("X   Y  Z"), "log:\n{log}");
+    }
+
+    #[test]
+    fn put_dsd_quotes_value_with_delimiter() {
+        let mut s = session();
+        run(
+            "data _null_;\n  length a $ 20;\n  a = 'Smith, John';\n  b = 1;\n  file print dsd;\n  put a b;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let listing = s.listing.into_string();
+        // DSD: comma delimiter, value with comma quoted.
+        assert!(listing.contains("\"Smith, John\",1"), "listing:\n{listing}");
+    }
+
+    #[test]
+    fn put_char_missing_is_blank_num_missing_is_dot() {
+        let mut s = session();
+        run(
+            "data _null_;\n  length c $ 3;\n  put 'n=' n 'c=[' c ']';\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let log = s.log.into_string();
+        // List output: a single blank precedes each VARIABLE value, not
+        // literals. n uninitialized numeric → '.', c blank (length 3 but
+        // stored trimmed → empty). So: "n=" + " ." + "c=[" + " " + "]".
+        assert!(log.contains("n= .c=[ ]"), "log:\n{log}");
     }
 }

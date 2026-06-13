@@ -57,6 +57,13 @@ impl LogWriter {
         self.message("NOTE", msg);
     }
 
+    /// Écrit une ligne de PUT verbatim dans le journal (M14.2 : `FILE LOG` ou
+    /// `PUT` sans destination). Pas de préfixe NOTE/WARNING : la ligne est le
+    /// texte produit par le DATA step tel quel.
+    pub fn put_line(&mut self, line: &str) {
+        self.raw(line);
+    }
+
     pub fn warning(&mut self, msg: &str) {
         self.warnings += 1;
         self.message("WARNING", msg);

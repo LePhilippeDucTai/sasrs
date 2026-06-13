@@ -75,6 +75,7 @@
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
 use crate::ast::{
     AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
+    PutDest, PutItem,
 };
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
@@ -246,6 +247,8 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "call" => parse_call_routine(ts),
         "infile" => parse_infile(ts),
         "input" => parse_input(ts),
+        "file" => parse_file(ts),
+        "put" => parse_put(ts),
         "datalines" | "cards" | "lines" | "datalines4" | "cards4" | "lines4" => {
             parse_datalines(ts)
         }
@@ -890,6 +893,212 @@ fn format_informat_num(n: f64) -> String {
     // On formate avec suffisamment de précision puis on retire les zéros.
     let s = format!("{n}");
     s
+}
+
+/// `file <dest> <options>;` (M14.2). Destination : `'chemin'` (fichier),
+/// `LOG`, ou `PRINT`. Options reconnues : `DLM=`/`DELIMITER=`, `DSD`,
+/// `LRECL=` (acceptée puis ignorée). Un fileref nu (ex. `file myfile;`) ou
+/// une option inconnue → erreur "not yet implemented." propre.
+fn parse_file(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `file`
+    let dest_tok = ts.peek().clone();
+    let dest = match &dest_tok.kind {
+        TokenKind::Str { value, .. } => {
+            ts.next();
+            PutDest::Path(value.clone())
+        }
+        TokenKind::Ident(s) if s.eq_ignore_ascii_case("log") => {
+            ts.next();
+            PutDest::Log
+        }
+        TokenKind::Ident(s) if s.eq_ignore_ascii_case("print") => {
+            ts.next();
+            PutDest::Print
+        }
+        // Un fileref nu (ex. `file out;`) n'est pas couvert : seuls les
+        // chemins littéraux et LOG/PRINT le sont.
+        TokenKind::Ident(_) => {
+            return Err(SasError::parse(
+                "FILE with a fileref is not yet implemented; use a quoted physical path, LOG, or PRINT.",
+                dest_tok.span,
+            ));
+        }
+        _ => {
+            return Err(SasError::parse(
+                "expected a quoted file path, LOG, or PRINT after FILE",
+                dest_tok.span,
+            ));
+        }
+    };
+
+    let mut delimiter: Option<String> = None;
+    let mut dsd = false;
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => break,
+            TokenKind::Ident(name) => {
+                let lower = name.to_ascii_lowercase();
+                match lower.as_str() {
+                    "dlm" | "delimiter" => {
+                        ts.next();
+                        if ts.peek().kind != TokenKind::Eq {
+                            return Err(SasError::parse(
+                                "expected '=' after the DLM=/DELIMITER= FILE option",
+                                ts.peek().span,
+                            ));
+                        }
+                        ts.next(); // `=`
+                        delimiter = Some(parse_delimiter_value(ts)?);
+                    }
+                    "dsd" => {
+                        ts.next();
+                        dsd = true;
+                    }
+                    "lrecl" => {
+                        ts.next();
+                        // Acceptée puis ignorée.
+                        let _ = parse_infile_uint(ts, "LRECL=")?;
+                    }
+                    other => {
+                        return Err(SasError::parse(
+                            format!(
+                                "The FILE option {} is not yet implemented.",
+                                other.to_uppercase()
+                            ),
+                            tok.span,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(SasError::parse("expected a FILE option or ';'", tok.span));
+            }
+        }
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::File {
+        dest,
+        delimiter,
+        dsd,
+    })
+}
+
+/// `put <items>;` (M14.2). Items : variables (list `name`, formatted
+/// `name 5.2`/`name $10.`, named `name=`), littéraux quotés, pointeurs
+/// `@n`/`+n`, `/`, `_all_`, et maintien de ligne `@`/`@@` EN FIN de PUT.
+fn parse_put(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `put`
+    let mut items: Vec<PutItem> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => break,
+            // Littéral quoté : écrit verbatim.
+            TokenKind::Str { value, .. } => {
+                ts.next();
+                items.push(PutItem::Literal(value.clone()));
+            }
+            // `@` : pointeur `@n` OU maintien de ligne `@`/`@@` en fin.
+            TokenKind::At => {
+                ts.next(); // `@`
+                if ts.peek().kind == TokenKind::At {
+                    // `@@` : maintien à travers les itérations. Doit terminer
+                    // le PUT.
+                    ts.next();
+                    items.push(PutItem::HoldLineAcross);
+                    break;
+                }
+                // `@n` : pointeur de colonne ; `@` seul suivi de `;` = hold.
+                match ts.peek().kind {
+                    TokenKind::Num(n) if n.fract() == 0.0 && n >= 1.0 => {
+                        ts.next();
+                        items.push(PutItem::PointerCol(n as usize));
+                    }
+                    TokenKind::Semi => {
+                        items.push(PutItem::HoldLine);
+                        break;
+                    }
+                    _ => {
+                        return Err(SasError::parse(
+                            "expected a column number after '@' (or ';' for line-hold) in the PUT statement",
+                            ts.peek().span,
+                        ));
+                    }
+                }
+            }
+            // `+n` : saut relatif.
+            TokenKind::Plus => {
+                ts.next(); // `+`
+                let n = parse_input_uint(ts, "the + column-pointer")?;
+                items.push(PutItem::PointerSkip(n));
+            }
+            // `/` : ligne suivante.
+            TokenKind::Slash => {
+                ts.next();
+                items.push(PutItem::NextLine);
+            }
+            TokenKind::Ident(_) => {
+                items.push(parse_put_var(ts)?);
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable, literal, or pointer in the PUT statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::Put { items })
+}
+
+/// Une variable de PUT : `name`, `name=` (named output), `name format.`,
+/// `name $10.`, `_all_`.
+fn parse_put_var(ts: &mut StatementStream) -> Result<PutItem> {
+    let name_tok = ts.peek().clone();
+    let name = name_tok
+        .ident()
+        .expect("caller matched an Ident")
+        .to_string();
+
+    // `_all_` : named output de toutes les variables du PDV.
+    if name.eq_ignore_ascii_case("_all_") {
+        ts.next();
+        return Ok(PutItem::All);
+    }
+
+    super::validate_sas_name(&name, name_tok.span)?;
+    ts.next(); // nom
+
+    // Named output `name=`.
+    if ts.peek().kind == TokenKind::Eq {
+        ts.next();
+        return Ok(PutItem::NamedVar(name));
+    }
+
+    // `$` (caractère) éventuel avant un format `$w.`.
+    let mut is_char = false;
+    if ts.peek().kind == TokenKind::Dollar {
+        ts.next();
+        is_char = true;
+    }
+
+    // Format d'écriture éventuel (`name 5.2`, `name $10.`, `name DATE9.`).
+    let mut format = try_parse_informat_token(ts)?;
+    if let Some(token) = &mut format {
+        if token.starts_with('$') {
+            // déjà un format caractère.
+        } else if is_char {
+            // `$` consommé AVANT le format (`name $10.`) : le préfixer.
+            token.insert(0, '$');
+        }
+    } else if is_char {
+        // `name $` sans largeur : format caractère par défaut.
+        format = Some("$".to_string());
+    }
+
+    Ok(PutItem::Var { name, format })
 }
 
 /// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le
@@ -3097,5 +3306,144 @@ mod tests {
     fn empty_input_statement_errors() {
         let err = parse("data a; input ; datalines;\n;\nrun;").unwrap_err();
         assert!(err.to_string().contains("at least one variable"), "got: {err}");
+    }
+
+    // ---------------------------------------------------------------------
+    // M14.2 — FILE / PUT
+    // ---------------------------------------------------------------------
+
+    fn put_items(src: &str) -> Vec<PutItem> {
+        let ast = parse(src).unwrap();
+        ast.stmts
+            .iter()
+            .find_map(|s| match s {
+                DsStmt::Put { items } => Some(items.clone()),
+                _ => None,
+            })
+            .expect("expected a PUT statement")
+    }
+
+    fn file_stmt(src: &str) -> (PutDest, Option<String>, bool) {
+        let ast = parse(src).unwrap();
+        ast.stmts
+            .iter()
+            .find_map(|s| match s {
+                DsStmt::File {
+                    dest,
+                    delimiter,
+                    dsd,
+                } => Some((dest.clone(), delimiter.clone(), *dsd)),
+                _ => None,
+            })
+            .expect("expected a FILE statement")
+    }
+
+    #[test]
+    fn file_log_print_path_destinations() {
+        let (d, _, _) = file_stmt("data _null_; file log; put x; run;");
+        assert_eq!(d, PutDest::Log);
+        let (d, _, _) = file_stmt("data _null_; file print; put x; run;");
+        assert_eq!(d, PutDest::Print);
+        let (d, _, _) =
+            file_stmt("data _null_; file '/tmp/o.txt'; put x; run;");
+        assert_eq!(d, PutDest::Path("/tmp/o.txt".into()));
+    }
+
+    #[test]
+    fn file_options_dlm_dsd_lrecl() {
+        let (dest, dlm, dsd) = file_stmt("data _null_; file print dlm='|' dsd lrecl=200; put x; run;");
+        assert_eq!(dest, PutDest::Print);
+        assert_eq!(dlm.as_deref(), Some("|"));
+        assert!(dsd);
+    }
+
+    #[test]
+    fn file_bare_fileref_not_implemented() {
+        let err = parse("data _null_; file myref; put x; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn file_unknown_option_not_implemented() {
+        let err = parse("data _null_; file print frobnicate; put x; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn put_list_output_items() {
+        let items = put_items("data _null_; put name age; run;");
+        assert_eq!(
+            items.as_slice(),
+            &[
+                PutItem::Var {
+                    name: "name".into(),
+                    format: None
+                },
+                PutItem::Var {
+                    name: "age".into(),
+                    format: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn put_formatted_items() {
+        let items = put_items("data _null_; put name $10. age 5.2; run;");
+        assert_eq!(
+            items.as_slice(),
+            &[
+                PutItem::Var {
+                    name: "name".into(),
+                    format: Some("$10.".into())
+                },
+                PutItem::Var {
+                    name: "age".into(),
+                    format: Some("5.2".into())
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn put_literal_and_named() {
+        let items = put_items("data _null_; put 'Total:' x name=; run;");
+        assert_eq!(
+            items.as_slice(),
+            &[
+                PutItem::Literal("Total:".into()),
+                PutItem::Var {
+                    name: "x".into(),
+                    format: None
+                },
+                PutItem::NamedVar("name".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn put_all_and_slash() {
+        let items = put_items("data _null_; put _all_ / x; run;");
+        assert_eq!(items[0], PutItem::All);
+        assert_eq!(items[1], PutItem::NextLine);
+    }
+
+    #[test]
+    fn put_pointers() {
+        let items = put_items("data _null_; put @5 x +3 y; run;");
+        assert_eq!(items[0], PutItem::PointerCol(5));
+        assert_eq!(items[2], PutItem::PointerSkip(3));
+    }
+
+    #[test]
+    fn put_at_line_hold() {
+        let items = put_items("data _null_; put x @; run;");
+        assert_eq!(items.last(), Some(&PutItem::HoldLine));
+    }
+
+    #[test]
+    fn put_double_at_line_hold() {
+        let items = put_items("data _null_; put x @@; run;");
+        assert_eq!(items.last(), Some(&PutItem::HoldLineAcross));
     }
 }

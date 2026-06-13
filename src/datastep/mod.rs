@@ -160,6 +160,25 @@ pub enum TextSource {
     Lines(Vec<String>),
 }
 
+/// Destination résolue d'un statement FILE (M14.2).
+#[derive(Clone)]
+pub enum PutDestResolved {
+    /// Fichier physique (chemin absolu déjà résolu vs base_dir).
+    Path(std::path::PathBuf),
+    /// Le journal (LOG) — destination par défaut.
+    Log,
+    /// Le listing (PRINT).
+    Print,
+}
+
+// Note (M14.2) : les statements FILE/PUT sont exécutés directement depuis
+// l'AST (`ast::PutItem`/`ast::PutDest`) — pas de pré-compilation en
+// « actions » à slots, car un PUT dans une boucle DO s'exécute plusieurs
+// fois par itération (un compteur positionnel serait faux). La compilation se
+// contente de créer les variables référencées au PDV (`compile_put`) ; la
+// résolution slot/format se fait à l'exécution. La résolution du chemin
+// physique d'un FILE relatif utilise `Session.base_dir`, transmis au Runner.
+
 /// Entrée texte d'une étape DATA (M14.1) — parallèle à `InputData` (SET).
 /// Construite à la compilation depuis INFILE + DATALINES ; consommée
 /// ligne-à-ligne par l'exécuteur à chaque exécution d'un INPUT.
@@ -202,6 +221,11 @@ pub struct StepProgram {
     /// Actions d'INPUT compilées, une liste par statement INPUT, dans
     /// l'ordre d'apparition. L'exécuteur les consomme via un compteur.
     pub input_actions: Vec<Vec<InputAction>>,
+    /// Vrai si l'étape contient au moins un FILE/PUT (M14.2) — active l'état
+    /// de sortie texte dans le Runner. Les variables référencées par PUT ont
+    /// été créées au PDV à la compilation ; l'exécution lit l'AST directement
+    /// (robuste aux boucles DO, où un même PUT s'exécute plusieurs fois).
+    pub has_put: bool,
     pub outputs: Vec<OutputSpec>,
     pub has_explicit_output: bool,
     /// Noms (casse de première référence, ordre PDV) des variables jamais
@@ -248,6 +272,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         datalines: None,
         seen_text_input: false,
         input_actions: Vec::new(),
+        has_put: false,
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -309,12 +334,14 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         .map(|v| v.name.clone())
         .collect();
     let input_actions = std::mem::take(&mut c.input_actions);
+    let has_put = c.has_put;
     Ok(StepProgram {
         pdv: c.pdv,
         stmts: ast.stmts.clone(),
         input,
         text_input,
         input_actions,
+        has_put,
         outputs,
         has_explicit_output: c.has_explicit_output,
         uninitialized,
@@ -396,6 +423,8 @@ struct Compiler<'a> {
     seen_text_input: bool,
     /// Actions INPUT compilées, une liste par statement INPUT.
     input_actions: Vec<Vec<InputAction>>,
+    /// Un statement FILE/PUT a été vu (M14.2) — active la sortie texte.
+    has_put: bool,
 }
 
 impl Compiler<'_> {
@@ -733,7 +762,67 @@ impl Compiler<'_> {
                 self.input_actions.push(actions);
                 Ok(())
             }
+            // FILE (M14.2) : déclaratif ; active la sortie texte. La
+            // résolution destination/chemin se fait à l'exécution.
+            DsStmt::File { .. } => {
+                self.has_put = true;
+                Ok(())
+            }
+            // PUT (M14.2) : active la sortie texte et crée au PDV les
+            // variables référencées (l'exécution résout slot/format depuis
+            // l'AST).
+            DsStmt::Put { items } => {
+                self.has_put = true;
+                self.compile_put(items)?;
+                Ok(())
+            }
         }
+    }
+
+    /// Crée au PDV les variables référencées par un statement PUT (M14.2) et
+    /// valide leurs formats. NE marque PAS les variables comme assignées : une
+    /// variable seulement référencée par PUT reste « uninitialized » (NOTE
+    /// SAS). Le format `$...` impose le type caractère.
+    fn compile_put(&mut self, items: &[crate::ast::PutItem]) -> Result<()> {
+        use crate::ast::PutItem;
+        for item in items {
+            let (name, format) = match item {
+                PutItem::Var { name, format } => (name, format.clone()),
+                PutItem::NamedVar(name) => (name, None),
+                // Littéraux / pointeurs / _all_ / hold : aucune variable à
+                // créer (_all_ porte sur les variables déjà au PDV).
+                _ => continue,
+            };
+            let spec = match &format {
+                Some(tok) => match crate::formats::FormatSpec::parse(tok) {
+                    Some(spec) => Some(spec),
+                    None => {
+                        return Err(SasError::runtime(format!(
+                            "The format {tok} is not valid."
+                        )));
+                    }
+                },
+                None => None,
+            };
+            let format_is_char = spec
+                .as_ref()
+                .map(|s| s.name.starts_with('$'))
+                .unwrap_or(false);
+            if self.pdv.slot(name).is_none() {
+                let ty = if format_is_char {
+                    VarType::Char
+                } else {
+                    VarType::Num
+                };
+                let len = if format_is_char {
+                    spec.as_ref().and_then(|s| s.w).map(|w| w as usize).unwrap_or(8)
+                } else {
+                    8
+                };
+                self.add_var(name, ty, len);
+            }
+        }
+        Ok(())
     }
 
     /// Compile les items d'un statement INPUT : crée les variables au PDV

@@ -207,8 +207,48 @@ pub enum InputItem {
     NextLine,
 }
 
+/// Destination d'un statement FILE / PUT (M14.2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PutDest {
+    /// `file 'chemin';` — fichier physique (chemin littéral).
+    Path(String),
+    /// `file log;` / `put` par défaut — le journal SAS.
+    Log,
+    /// `file print;` — le listing (sortie « print »).
+    Print,
+}
+
+/// Style d'un item de PUT (M14.2). Miroir de `InputItem`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PutItem {
+    /// Une variable à écrire. Le style d'écriture dépend des champs :
+    /// list (rien), column (`@col` posé en amont via `PointerCol`),
+    /// formatted (`format`).
+    Var {
+        name: String,
+        /// Format d'écriture éventuel (token, ex. "5.2", "$10.", "DATE9.").
+        format: Option<String>,
+    },
+    /// Named output `var=` : écrit `NOM=valeur` (forme `put name=;`).
+    NamedVar(String),
+    /// Littéral entre quotes : écrit verbatim.
+    Literal(String),
+    /// `@n` : positionne le pointeur de colonne de sortie (1-based).
+    PointerCol(usize),
+    /// `+n` : avance le pointeur de colonne de sortie de n.
+    PointerSkip(usize),
+    /// `/` : passe à la ligne de sortie suivante (dans le même PUT).
+    NextLine,
+    /// `_all_` : écrit `var=valeur` pour toutes les variables du PDV.
+    All,
+    /// `@` en fin de PUT : maintien de ligne dans la MÊME itération.
+    HoldLine,
+    /// `@@` en fin de PUT : maintien de ligne à travers les itérations.
+    HoldLineAcross,
+}
+
 /// DATA step statements (M1 subset + M2 : RETAIN, sum statement, LENGTH ;
-/// M14 : INFILE/INPUT/DATALINES).
+/// M14 : INFILE/INPUT/DATALINES, FILE/PUT).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsStmt {
     /// `set lib.a [lib.b ...];` — un ou plusieurs datasets, chacun avec
@@ -327,6 +367,21 @@ pub enum DsStmt {
     /// `datalines;`/`cards;` (M14.1) — lignes de données en ligne dans le
     /// source. Capturées brutes par le lexer ; le INPUT les consomme.
     Datalines { lines: Vec<String> },
+    /// `file <dest> <options>;` (M14.2) — choisit la destination des PUT
+    /// suivants (fichier physique / LOG / PRINT). Options DLM=/DSD/LRECL=
+    /// acceptées (LRECL ignorée). Le dernier FILE gagne.
+    File {
+        dest: PutDest,
+        /// DLM=/DELIMITER= : séparateur inséré entre les items de list output.
+        delimiter: Option<String>,
+        /// DSD : sépare par `,` et entoure de quotes les valeurs char
+        /// contenant le délimiteur.
+        dsd: bool,
+    },
+    /// `put <items>;` (M14.2) — écrit dans la destination courante (LOG par
+    /// défaut) selon les items (list / formatted / named / littéraux),
+    /// pointeurs `@n`/`+n`, `/`, maintien de ligne `@`/`@@`, `_all_`.
+    Put { items: Vec<PutItem> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
