@@ -155,11 +155,36 @@ impl std::fmt::Display for MacroError {
 pub struct MacroEngine;
 
 impl MacroEngine {
-    /// Construit l'engine de session. (Le paramètre `deterministic` est réservé
-    /// pour les variables automatiques figées des unités M11 ultérieures —
-    /// `&SYSDATE9`/`&SYSTIME`/`&SYSVER` ; inutilisé pour `%let`/`&var`.)
-    pub fn new(_deterministic: bool) -> Self {
-        Self::default()
+    /// Construit l'engine de session.
+    ///
+    /// # M11.6 — variables automatiques (feature `macros`)
+    /// Sous la feature `macros`, on amorce la table globale avec un sous-ensemble
+    /// des variables automatiques SAS, résolues ensuite par un `&SYSDATE9` normal.
+    /// Le flag `deterministic` choisit entre valeurs FIGÉES (pour des snapshots
+    /// stables) et valeurs dérivées de l'horloge réelle.
+    ///
+    /// Valeurs FIGÉES (`deterministic == true`) :
+    /// - `SYSDATE9` = `01JAN1960`
+    /// - `SYSDATE`  = `01JAN60`
+    /// - `SYSTIME`  = `00:00`
+    /// - `SYSDAY`   = `Friday`
+    /// - `SYSVER`   = `9.4`
+    /// - `SYSSCP`   = `LIN X64`
+    ///
+    /// Sous le build PAR DÉFAUT (sans `macros`), l'engine reste vide (identité) —
+    /// le paramètre est ignoré.
+    pub fn new(deterministic: bool) -> Self {
+        #[cfg(feature = "macros")]
+        {
+            let mut engine = Self::default();
+            engine.seed_automatic_vars(deterministic);
+            engine
+        }
+        #[cfg(not(feature = "macros"))]
+        {
+            let _ = deterministic;
+            Self::default()
+        }
     }
 
     /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).
@@ -174,7 +199,10 @@ impl MacroEngine {
         if !raw.contains('%') && !raw.contains('&') {
             return raw.to_string();
         }
-        self.process(raw)
+        let expanded = self.process(raw);
+        // Passe finale d'« unmask » : les sentinelles posées par `%str`/`%nrstr`
+        // sont retransformées en leurs caractères littéraux d'origine.
+        Self::unmask(&expanded)
     }
 
     /// Build par défaut : identité stricte (équivalent `IdentityMacroStage`).
@@ -438,6 +466,35 @@ impl MacroEngine {
                 }
             }
 
+            // `%sysfunc(func(args))` / `%qsysfunc(...)` — appelle la fonction
+            // DATA-step et splice le résultat formaté en texte.
+            if c == '%' && Self::matches_kw_paren(&chars, i, "sysfunc") {
+                if let Some(next) = self.consume_sysfunc(&chars, "sysfunc", i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "qsysfunc") {
+                if let Some(next) = self.consume_sysfunc(&chars, "qsysfunc", i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%str(...)` / `%nrstr(...)` — masquage des caractères spéciaux.
+            if c == '%' && Self::matches_kw_paren(&chars, i, "str") {
+                if let Some(next) = self.consume_quote(&chars, i, "str", false, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "nrstr") {
+                if let Some(next) = self.consume_quote(&chars, i, "nrstr", true, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
             // `%if <cond> %then <action>; [%else <action>;]`
             if c == '%' && Self::matches_kw(&chars, i, "if") {
                 if let Some(next) = self.consume_if(&chars, i, &mut out) {
@@ -466,25 +523,49 @@ impl MacroEngine {
             }
 
             if c == '&' {
-                // `&&` -> un seul `&`.
-                if chars.get(i + 1) == Some(&'&') {
-                    out.push('&');
-                    i += 2;
-                    continue;
+                // Indirection imbriquée `&&&x` / `&&var&i` (M11.6).
+                //
+                // On capture le run complet de `&` en tête, puis le nom et un
+                // unique point terminateur, et on confie la résolution à
+                // `resolve_value` (multi-passes vers point fixe : chaque passe
+                // transforme `&&`→`&` et résout `&name`, jusqu'à `MAX_RESOLVE_ITERS`).
+                let amp_start = i;
+                let mut k = i;
+                while chars.get(k) == Some(&'&') {
+                    k += 1;
                 }
-                if let Some((name, after)) = Self::read_name(&chars, i + 1) {
+                if let Some((_name, after)) = Self::read_name(&chars, k) {
+                    // Étendre le token tant qu'on enchaîne `&`/nom sans rupture
+                    // (`&&v&i` est UN seul token d'indirection). On consomme
+                    // aussi un unique point terminateur à la toute fin.
                     let mut next = after;
+                    loop {
+                        if chars.get(next) == Some(&'&') {
+                            let mut m = next;
+                            while chars.get(m) == Some(&'&') {
+                                m += 1;
+                            }
+                            if let Some((_, a2)) = Self::read_name(&chars, m) {
+                                next = a2;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
                     if chars.get(next) == Some(&'.') {
                         next += 1;
                     }
-                    match self.lookup(&name) {
-                        Some(v) => out.push_str(&self.resolve_value(&v)),
-                        None => {
-                            out.push('&');
-                            out.push_str(&name);
-                        }
-                    }
+                    let run: String = chars[amp_start..next].iter().collect();
+                    let resolved = self.resolve_value(&run);
+                    out.push_str(&resolved);
                     i = next;
+                    continue;
+                }
+                // `&` non suivi (in fine) d'un nom : `&&` seul -> un `&` ; sinon
+                // `&` brut (opérateur booléen) laissé tel quel.
+                if chars.get(i + 1) == Some(&'&') {
+                    out.push('&');
+                    i += 2;
                     continue;
                 }
             }
@@ -528,16 +609,39 @@ impl MacroEngine {
             return None;
         }
         j += 1;
-        // Valeur = tout jusqu'au prochain `;`.
+        // Valeur = tout jusqu'au prochain `;`, mais un `%str(...)`/`%nrstr(...)`
+        // masque son `;` interne (M11.6) : on saute ces régions à parenthèses
+        // équilibrées pour ne pas terminer le `%let` prématurément.
         let val_start = j;
         while j < chars.len() && chars[j] != ';' {
+            if chars[j] == '%'
+                && (Self::matches_kw_paren(chars, j, "str")
+                    || Self::matches_kw_paren(chars, j, "nrstr"))
+            {
+                // Avancer jusqu'à la `(` puis sauter la région équilibrée.
+                let mut p = j + 1;
+                while matches!(chars.get(p), Some(ch) if *ch != '(') {
+                    p += 1;
+                }
+                if let Some((_, after)) = Self::read_balanced_parens(chars, p) {
+                    j = after;
+                    continue;
+                }
+            }
             j += 1;
         }
         if chars.get(j) != Some(&';') {
             return None; // pas de `;` terminal : abandon, on n'avale rien.
         }
         let raw_value: String = chars[val_start..j].iter().collect();
-        let resolved = self.resolve_value(&raw_value);
+        // Si la valeur contient un déclencheur de fonction macro (`%`), la
+        // ré-expanser entièrement (gère `%str`/`%nrstr`/`%sysfunc`/`%eval`) ;
+        // sinon, simple résolution des `&refs` (comportement historique).
+        let resolved = if raw_value.contains('%') {
+            self.process_impl(&raw_value)
+        } else {
+            self.resolve_value(&raw_value)
+        };
         self.assign(&name, resolved.trim().to_string());
         j += 1; // après le `;`
         // Le `%let ...;` est consommé entièrement, y compris les blancs
@@ -1061,6 +1165,282 @@ impl MacroEngine {
             j += 1;
         }
         None
+    }
+
+    // ── M11.6 : variables automatiques ──────────────────────────────────────
+
+    /// Amorce un sous-ensemble des variables automatiques SAS dans `table`.
+    /// Sous `deterministic`, valeurs FIGÉES (snapshots stables) ; sinon dérivées
+    /// de l'horloge réelle. Cf. la doc de [`MacroEngine::new`].
+    fn seed_automatic_vars(&mut self, deterministic: bool) {
+        let vars: [(&str, String); 6] = if deterministic {
+            [
+                ("SYSDATE9", "01JAN1960".to_string()),
+                ("SYSDATE", "01JAN60".to_string()),
+                ("SYSTIME", "00:00".to_string()),
+                ("SYSDAY", "Friday".to_string()),
+                ("SYSVER", "9.4".to_string()),
+                ("SYSSCP", "LIN X64".to_string()),
+            ]
+        } else {
+            use chrono::{Datelike, Local, Timelike};
+            let now = Local::now();
+            const MONTHS: [&str; 12] = [
+                "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+            ];
+            const DAYS: [&str; 7] = [
+                "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+            ];
+            let mon = MONTHS[(now.month0()) as usize];
+            let day = now.day();
+            let year4 = now.year();
+            let year2 = (year4 % 100).abs();
+            let sysdate9 = format!("{day:02}{mon}{year4:04}");
+            let sysdate = format!("{day:02}{mon}{year2:02}");
+            let systime = format!("{:02}:{:02}", now.hour(), now.minute());
+            let sysday = DAYS[now.weekday().num_days_from_monday() as usize].to_string();
+            [
+                ("SYSDATE9", sysdate9),
+                ("SYSDATE", sysdate),
+                ("SYSTIME", systime),
+                ("SYSDAY", sysday),
+                ("SYSVER", "9.4".to_string()),
+                ("SYSSCP", "LIN X64".to_string()),
+            ]
+        };
+        for (k, v) in vars {
+            self.table.insert(k.to_string(), v);
+        }
+    }
+
+    // ── M11.6 : %sysfunc ─────────────────────────────────────────────────────
+
+    /// Consomme `%sysfunc ( func(args) )` (ou `%qsysfunc`). Résout les `&refs`,
+    /// parse `func(arg1, arg2, ...)`, appelle `functions::call` avec les args
+    /// typés (numérique si l'argument parse en nombre, sinon `Char`), puis
+    /// splice le résultat formaté en texte. Fonction inconnue / non whitelistée
+    /// → note d'erreur propre (pas de panic). Rend l'index après la `)`, ou
+    /// `None` si la parenthèse externe n'est pas trouvée.
+    fn consume_sysfunc(
+        &mut self,
+        chars: &[char],
+        kw: &str,
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // Résoudre les &refs (et les sentinelles déjà posées restent inertes).
+        let resolved = self.resolve_value(&inner);
+        match self.eval_sysfunc(&resolved) {
+            Ok(text) => out.push_str(&text),
+            Err(e) => Self::emit_error(out, &e),
+        }
+        Some(after)
+    }
+
+    /// Liste blanche des fonctions DATA-step appelables via `%sysfunc`. On
+    /// délègue à `functions::call`, mais on filtre explicitement pour éviter
+    /// d'exposer des fonctions sans signification en contexte macro (texte).
+    const SYSFUNC_WHITELIST: &'static [&'static str] = &[
+        "UPCASE", "LOWCASE", "SUBSTR", "TRIM", "STRIP", "LEFT", "COMPRESS", "INDEX", "SCAN",
+        "LENGTH", "CAT", "CATS", "CATX", "TRANWRD", "SUM", "MAX", "MIN", "ABS", "INT", "MDY",
+        "YEAR", "MONTH", "DAY", "TODAY", "DATE", "WEEKDAY",
+    ];
+
+    /// Parse `func(a, b, ...)` et évalue la fonction. Le contenu a déjà ses
+    /// `&refs` résolus. Rend le texte du résultat ou une `MacroError`.
+    fn eval_sysfunc(&self, content: &str) -> Result<String, MacroError> {
+        let content = content.trim();
+        let chars: Vec<char> = content.chars().collect();
+        // Nom de fonction.
+        let (name, after) = Self::read_name(&chars, 0)
+            .ok_or_else(|| MacroError::new("ERROR: %SYSFUNC requires a function call"))?;
+        let mut j = after;
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        // Arguments : `(...)` optionnel (fonctions sans argument : TODAY()).
+        let arg_strings: Vec<String> = if chars.get(j) == Some(&'(') {
+            let (args_inner, _) = Self::read_balanced_parens(&chars, j)
+                .ok_or_else(|| MacroError::new("ERROR: unbalanced parentheses in %SYSFUNC"))?;
+            Self::split_top_level_commas(&args_inner)
+        } else {
+            Vec::new()
+        };
+        let upper = name.to_uppercase();
+        if !Self::SYSFUNC_WHITELIST.contains(&upper.as_str()) {
+            return Err(MacroError::new(format!(
+                "ERROR: Function {} not supported by %SYSFUNC in this interpreter",
+                name
+            )));
+        }
+        // Typage des arguments : un argument qui parse en nombre devient
+        // `Value::Num`, sinon `Value::Char` (le trim de bord est appliqué, comme
+        // SAS pour les arguments macro).
+        let args: Vec<crate::value::Value> = arg_strings
+            .iter()
+            .map(|a| {
+                let t = a.trim();
+                match t.parse::<f64>() {
+                    Ok(n) => crate::value::Value::Num(n),
+                    Err(_) => crate::value::Value::Char(t.to_string()),
+                }
+            })
+            .collect();
+        // EvalCtx minimal jetable : `Default` suffit (aucune dépendance PDV pour
+        // les fonctions whitelistées).
+        let mut ctx = crate::datastep::eval::EvalCtx::default();
+        match crate::datastep::functions::call(&upper, &args, &mut ctx) {
+            Some(v) => Ok(Self::value_to_text(&v)),
+            None => Err(MacroError::new(format!(
+                "ERROR: Function {} is unknown to %SYSFUNC",
+                name
+            ))),
+        }
+    }
+
+    /// Formate une `Value` en texte pour l'insertion macro : `Char` tel quel
+    /// (trim de droite), `Num` via le format BEST (entier sans décimales),
+    /// missing → chaîne vide.
+    fn value_to_text(v: &crate::value::Value) -> String {
+        match v {
+            crate::value::Value::Char(s) => s.trim_end().to_string(),
+            crate::value::Value::Num(n) => crate::value::format_best(*n, 12),
+            crate::value::Value::Missing(_) => String::new(),
+        }
+    }
+
+    /// Découpe une chaîne d'arguments sur les `,` de niveau supérieur (les
+    /// parenthèses imbriquées sont équilibrées). Chaîne vide → aucun argument.
+    fn split_top_level_commas(s: &str) -> Vec<String> {
+        let chars: Vec<char> = s.chars().collect();
+        let mut parts = Vec::new();
+        let mut depth = 0i32;
+        let mut start = 0usize;
+        let mut any = false;
+        for (k, &c) in chars.iter().enumerate() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(chars[start..k].iter().collect());
+                    start = k + 1;
+                    any = true;
+                }
+                _ => {}
+            }
+        }
+        let last: String = chars[start..].iter().collect();
+        if any || !last.trim().is_empty() {
+            parts.push(last);
+        }
+        parts
+    }
+
+    // ── M11.6 : %str / %nrstr (quoting par sentinelles) ─────────────────────
+
+    /// Sentinelle de base (zone privée Unicode). Chaque caractère spécial masqué
+    /// est remplacé par `MASK_BASE + offset`, où `offset` est un petit index
+    /// stable. La passe `unmask` finale rétablit les littéraux. Ces points de
+    /// code n'apparaissent jamais dans un source SAS normal.
+    const MASK_BASE: u32 = 0xE000;
+
+    /// Caractères masqués par `%str` (et `%nrstr`), dans l'ordre des offsets.
+    /// `%str` masque la ponctuation/opérateurs pour qu'un `;` ou `,` interne
+    /// soit littéral ; `&` et `%` ne sont masqués QUE par `%nrstr`.
+    const STR_MASKED: &'static [char] = &[
+        ';', '+', '-', '*', '/', '<', '>', '=', '|', '~', ',', '(', ')', '\'', '"',
+    ];
+    /// Caractères additionnels masqués UNIQUEMENT par `%nrstr` (déclencheurs).
+    const NRSTR_EXTRA: &'static [char] = &['&', '%'];
+
+    /// Masque un caractère vers sa sentinelle si présent dans la table donnée.
+    /// Rend `Some(sentinelle)` ou `None` si le caractère n'est pas masqué.
+    fn mask_char(c: char) -> Option<char> {
+        // Index global stable sur la concaténation STR_MASKED ++ NRSTR_EXTRA.
+        if let Some(idx) = Self::STR_MASKED.iter().position(|&m| m == c) {
+            return char::from_u32(Self::MASK_BASE + idx as u32);
+        }
+        if let Some(idx) = Self::NRSTR_EXTRA.iter().position(|&m| m == c) {
+            return char::from_u32(Self::MASK_BASE + Self::STR_MASKED.len() as u32 + idx as u32);
+        }
+        None
+    }
+
+    /// Passe finale d'« unmask » : rétablit chaque sentinelle en son littéral.
+    fn unmask(s: &str) -> String {
+        if !s.chars().any(|c| {
+            let v = c as u32;
+            (Self::MASK_BASE..Self::MASK_BASE + 0x100).contains(&v)
+        }) {
+            return s.to_string();
+        }
+        let total = Self::STR_MASKED.len() + Self::NRSTR_EXTRA.len();
+        s.chars()
+            .map(|c| {
+                let v = c as u32;
+                if v >= Self::MASK_BASE && v < Self::MASK_BASE + total as u32 {
+                    let idx = (v - Self::MASK_BASE) as usize;
+                    if idx < Self::STR_MASKED.len() {
+                        Self::STR_MASKED[idx]
+                    } else {
+                        Self::NRSTR_EXTRA[idx - Self::STR_MASKED.len()]
+                    }
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// Consomme `%str ( ... )` (si `!nrstr`) ou `%nrstr ( ... )`. Masque les
+    /// caractères spéciaux du contenu (pour `%str`, `&`/`%` restent ACTIFS et
+    /// sont donc résolus ; pour `%nrstr` ils sont AUSSI masqués → inertes). Pour
+    /// `%str`, on ré-expanse le contenu masqué afin de résoudre les `&x`/`%m`
+    /// éventuels ; pour `%nrstr`, on émet le contenu masqué tel quel. Rend
+    /// l'index après la `)`, ou `None` si la parenthèse n'est pas trouvée.
+    fn consume_quote(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        kw: &str,
+        nrstr: bool,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        let masked: String = inner
+            .chars()
+            .map(|c| {
+                // `&` et `%` ne sont masqués que par `%nrstr`.
+                if (c == '&' || c == '%') && !nrstr {
+                    return c;
+                }
+                Self::mask_char(c).unwrap_or(c)
+            })
+            .collect();
+        if nrstr {
+            // Contenu inerte : émis tel quel (déclencheurs masqués).
+            out.push_str(&masked);
+        } else {
+            // `%str` : `&`/`%` restent actifs → ré-expansion.
+            let expanded = self.process_impl(&masked);
+            out.push_str(&expanded);
+        }
+        Some(after)
     }
 
     /// Évalue une condition `%if` : résout d'abord les `&refs` et tout
@@ -2046,6 +2426,13 @@ mod macro_tests {
         MacroStage::default().process(input)
     }
 
+    /// Comme `run` mais passe par `expand_open_code` (applique la passe finale
+    /// d'unmask des sentinelles `%str`/`%nrstr`). Engine déterministe pour les
+    /// variables automatiques figées.
+    fn expand(input: &str) -> String {
+        MacroEngine::new(true).expand_open_code(input)
+    }
+
     fn segments(src: &str) -> Vec<String> {
         let mut seg = RawSegmenter::new(src);
         let mut out = Vec::new();
@@ -2402,5 +2789,90 @@ mod macro_tests {
     fn do_while_until_deferred() {
         let out = run("%do %while(1); x %end;");
         assert!(out.contains("not supported"), "got: {out}");
+    }
+
+    // --- M11.6 : &&& / &&var&i nested indirection ---
+
+    #[test]
+    fn triple_ampersand_indirection() {
+        // &&&y : y -> x, &x -> ab.
+        assert_eq!(run("%let x=ab; %let y=x; &&&y"), "ab");
+    }
+
+    #[test]
+    fn double_ampersand_with_index() {
+        // &&v&i : i -> 2, v2 -> hit.
+        assert_eq!(run("%let i=2; %let v2=hit; &&v&i"), "hit");
+    }
+
+    // --- M11.6 : %sysfunc ---
+
+    #[test]
+    fn sysfunc_upcase() {
+        assert_eq!(run("%sysfunc(upcase(abc))"), "ABC");
+    }
+
+    #[test]
+    fn sysfunc_substr() {
+        assert_eq!(run("%sysfunc(substr(abcdef,2,3))"), "bcd");
+    }
+
+    #[test]
+    fn sysfunc_with_macro_var_arg() {
+        assert_eq!(run("%let w=hello; %sysfunc(upcase(&w))"), "HELLO");
+    }
+
+    #[test]
+    fn sysfunc_numeric_function() {
+        assert_eq!(run("%sysfunc(length(abcd))"), "4");
+    }
+
+    #[test]
+    fn sysfunc_unknown_function_errors_no_panic() {
+        let out = run("%sysfunc(nosuchfn(1))");
+        assert!(out.contains("not supported") || out.contains("unknown"), "got: {out}");
+    }
+
+    // --- M11.6 : automatic macro variables (deterministic frozen) ---
+
+    #[test]
+    fn auto_var_sysdate9() {
+        assert_eq!(expand("&sysdate9"), "01JAN1960");
+    }
+
+    #[test]
+    fn auto_var_sysver() {
+        assert_eq!(expand("&sysver"), "9.4");
+    }
+
+    #[test]
+    fn auto_var_systime_and_sysday() {
+        assert_eq!(expand("&systime &sysday"), "00:00 Friday");
+    }
+
+    // --- M11.6 : %str / %nrstr quoting ---
+
+    #[test]
+    fn str_masks_semicolon_and_comma() {
+        // Le `;` et le `,` internes sont littéraux (non terminateurs).
+        assert_eq!(expand("%str(a;b,c)"), "a;b,c");
+    }
+
+    #[test]
+    fn str_semicolon_does_not_terminate() {
+        // Sans %str, `;` terminerait ; avec %str il reste dans la valeur.
+        assert_eq!(expand("%let v=%str(a;b); &v"), "a;b");
+    }
+
+    #[test]
+    fn str_resolves_ampersand() {
+        // %str masque la ponctuation mais &x reste résolu.
+        assert_eq!(expand("%let x=Z; %str(&x;y)"), "Z;y");
+    }
+
+    #[test]
+    fn nrstr_leaves_triggers_unresolved() {
+        // %nrstr masque & et % : %macro et &x ne sont pas résolus.
+        assert_eq!(expand("%nrstr(%macro &x)"), "%macro &x");
     }
 }
