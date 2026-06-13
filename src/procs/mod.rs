@@ -107,12 +107,8 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             Ok(ProcAst::Append(ast))
         }
         "datasets" => {
-            ts.skip_to_semi();
-            ts.skip_to_step_boundary();
-            Err(SasError::runtime(format!(
-                "Procedure {} is not yet implemented.",
-                name.to_uppercase()
-            )))
+            let ast = datasets::parse(ts)?;
+            Ok(ProcAst::Datasets(ast))
         }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
@@ -214,7 +210,11 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["datasets"] {
+        // All procs that were once "known but unimplemented" are now implemented.
+        // This slice is intentionally empty; the loop is kept as a scaffold for
+        // future unimplemented procs.
+        let unimplemented: &[&str] = &[];
+        for proc_name in unimplemented {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
             let mut ts = crate::parser::StatementStream::new(&source).unwrap();

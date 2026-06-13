@@ -18,6 +18,10 @@ pub trait LibraryProvider: Send + Sync {
     fn scan(&self, table: &str) -> Result<LazyFrame>;
     fn write(&self, table: &str, ds: &SasDataset) -> Result<()>;
     fn delete(&self, table: &str) -> Result<()>;
+    /// Rename `old` → `new` (PROC DATASETS CHANGE statement).
+    /// Also moves the sidecar `<old>.parquet.sasmeta.json` if it exists.
+    /// Returns an error if `old` does not exist.
+    fn rename(&self, old: &str, new: &str) -> Result<()>;
 }
 
 /// A libref bound to a local directory: each table is `<dir>/<table>.parquet`.
@@ -69,6 +73,35 @@ impl LibraryProvider for DirLibrary {
 
     fn delete(&self, table: &str) -> Result<()> {
         std::fs::remove_file(self.table_path(table))?;
+        Ok(())
+    }
+
+    fn rename(&self, old: &str, new: &str) -> Result<()> {
+        let old_path = self.table_path(old);
+        if !old_path.is_file() {
+            return Err(SasError::runtime(format!(
+                "Table {} does not exist in this library.",
+                old.to_uppercase()
+            )));
+        }
+        let new_path = self.table_path(new);
+        std::fs::rename(&old_path, &new_path)?;
+
+        // Move the sidecar metadata file if it exists.
+        // Sidecar convention (from dataset.rs): `<table>.parquet.sasmeta.json`
+        let old_sidecar = {
+            let mut s = old_path.as_os_str().to_os_string();
+            s.push(".sasmeta.json");
+            std::path::PathBuf::from(s)
+        };
+        if old_sidecar.is_file() {
+            let new_sidecar = {
+                let mut s = new_path.as_os_str().to_os_string();
+                s.push(".sasmeta.json");
+                std::path::PathBuf::from(s)
+            };
+            std::fs::rename(&old_sidecar, &new_sidecar)?;
+        }
         Ok(())
     }
 }
