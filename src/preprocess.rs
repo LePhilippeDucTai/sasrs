@@ -412,6 +412,60 @@ impl MacroEngine {
                 }
             }
 
+            // `%superq(name)` — valeur d'une variable SANS résolution, masquée.
+            if c == '%' && Self::matches_kw_paren(&chars, i, "superq") {
+                if let Some(next) = self.consume_superq(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%bquote(text)` / `%nrbquote(text)` — résout puis masque.
+            if c == '%' && Self::matches_kw_paren(&chars, i, "nrbquote") {
+                if let Some(next) = self.consume_bquote(&chars, i, "nrbquote", true, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "bquote") {
+                if let Some(next) = self.consume_bquote(&chars, i, "bquote", false, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // Fonctions chaîne macro simples et leurs variantes `%q*` (résultat
+            // masqué). On teste les `%q*` AVANT leurs versions nues : grâce à la
+            // frontière de mot de `matches_kw_paren` il n'y a pas de collision,
+            // mais l'ordre garde l'intention explicite. `consumed_macro_fn`
+            // permet de relancer la boucle `while` externe via `continue`.
+            if c == '%' {
+                let mut handled = false;
+                for (kw, masked) in [
+                    ("qupcase", true),
+                    ("upcase", false),
+                    ("qlowcase", true),
+                    ("lowcase", false),
+                    ("qsubstr", true),
+                    ("substr", false),
+                    ("qscan", true),
+                    ("scan", false),
+                    ("index", false),
+                    ("length", false),
+                ] {
+                    if Self::matches_kw_paren(&chars, i, kw) {
+                        if let Some(next) = self.consume_macro_fn(&chars, i, kw, masked, &mut out) {
+                            i = next;
+                            handled = true;
+                            break;
+                        }
+                    }
+                }
+                if handled {
+                    continue;
+                }
+            }
+
             // `%str(...)` / `%nrstr(...)` — masquage des caractères spéciaux.
             if c == '%' && Self::matches_kw_paren(&chars, i, "str") {
                 if let Some(next) = self.consume_quote(&chars, i, "str", false, &mut out) {
@@ -546,7 +600,10 @@ impl MacroEngine {
         while j < chars.len() && chars[j] != ';' {
             if chars[j] == '%'
                 && (Self::matches_kw_paren(chars, j, "str")
-                    || Self::matches_kw_paren(chars, j, "nrstr"))
+                    || Self::matches_kw_paren(chars, j, "nrstr")
+                    || Self::matches_kw_paren(chars, j, "bquote")
+                    || Self::matches_kw_paren(chars, j, "nrbquote")
+                    || Self::matches_kw_paren(chars, j, "superq"))
             {
                 // Avancer jusqu'à la `(` puis sauter la région équilibrée.
                 let mut p = j + 1;
@@ -1166,8 +1223,17 @@ impl MacroEngine {
         let (inner, after) = Self::read_balanced_parens(chars, j)?;
         // Résoudre les &refs (et les sentinelles déjà posées restent inertes).
         let resolved = self.resolve_value(&inner);
+        // `%qsysfunc` masque son résultat (ponctuation + déclencheurs), comme
+        // les autres variantes `%q*` ; `%sysfunc` l'émet en clair.
+        let q = kw == "qsysfunc";
         match self.eval_sysfunc(&resolved) {
-            Ok(text) => out.push_str(&text),
+            Ok(text) => {
+                if q {
+                    out.push_str(&Self::mask_special(&text, true));
+                } else {
+                    out.push_str(&text);
+                }
+            }
             Err(e) => Self::emit_error(out, &e),
         }
         Some(after)
@@ -1369,6 +1435,229 @@ impl MacroEngine {
             out.push_str(&expanded);
         }
         Some(after)
+    }
+
+    // ── M12.2 : quoting étendu (%superq, %bquote, %nrbquote) ─────────────────
+
+    /// Masque TOUS les caractères « spéciaux » d'une chaîne via le schéma de
+    /// sentinelles partagé avec `%str`/`%nrstr`. Si `triggers` est vrai, masque
+    /// aussi `&` et `%` (déclencheurs) — sinon ils restent actifs en aval. Les
+    /// caractères non listés (lettres, chiffres, blancs, `.`) passent inchangés.
+    fn mask_special(s: &str, triggers: bool) -> String {
+        s.chars()
+            .map(|c| {
+                if (c == '&' || c == '%') && !triggers {
+                    return c;
+                }
+                Self::mask_char(c).unwrap_or(c)
+            })
+            .collect()
+    }
+
+    /// Consomme `%superq ( name )`. Prend un NOM de variable (pas `&name`),
+    /// lit sa valeur SANS résoudre aucun `&`/`%` qu'elle contient, et masque
+    /// TOUT (y compris `&`/`%`) afin que le résultat soit littéral et inerte en
+    /// aval — l'outil idéal pour des valeurs contenant des `&`/`%` parasites.
+    /// L'argument peut lui-même être un `&ref` désignant le nom (SAS résout
+    /// l'argument en un nom). Variable indéfinie → chaîne vide (SAS émet un
+    /// WARNING ; on se contente d'émettre vide). Rend l'index après la `)`.
+    fn consume_superq(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + 1 + "superq".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // L'argument désigne un nom : on résout d'éventuels `&ref` puis on rogne
+        // les blancs et un éventuel `&` de tête (SAS accepte `%superq(&x)` =
+        // nom dans x, comme `%superq(x)`). On ne touche PAS à la valeur lue.
+        let name_arg = self.resolve_value(&inner);
+        let name = name_arg.trim().trim_start_matches('&').trim();
+        match self.lookup(name) {
+            Some(v) => out.push_str(&Self::mask_special(&v, true)),
+            None => { /* indéfini → vide (SAS warne) */ }
+        }
+        Some(after)
+    }
+
+    /// Consomme `%bquote ( text )` (si `!nr`) ou `%nrbquote ( text )`. Résout
+    /// d'abord les `&`/`%` du texte (expansion normale), PUIS masque le
+    /// résultat pour le rendre littéral en aval :
+    /// - `%bquote` masque la ponctuation/opérateurs (`; , ( ) ' " + - * / < >
+    ///   = | ~`) mais laisse `&`/`%` ACTIFS (ils ont déjà été résolus ; un `&`
+    ///   résiduel non défini reste tel quel) ;
+    /// - `%nrbquote` masque EN PLUS `&`/`%` du résultat (empêche toute
+    ///   résolution ultérieure).
+    /// Les quotes/parenthèses NON APPARIÉES de l'entrée ne posent pas de
+    /// problème : on ne fait pas d'analyse appariée du contenu — `read_balanced_parens`
+    /// borne sur la `)` de `%bquote(...)` et tout `'`/`(` interne est traité
+    /// comme un caractère ordinaire (puis masqué). Rend l'index après la `)`.
+    fn consume_bquote(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        kw: &str,
+        nr: bool,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // Expansion normale du texte (résout `&x`/`%m`), puis masquage du
+        // résultat. `%nrbquote` masque aussi `&`/`%`.
+        let expanded = self.process_impl(&inner);
+        out.push_str(&Self::mask_special(&expanded, nr));
+        Some(after)
+    }
+
+    // ── M12.2 : fonctions chaîne macro (%upcase/%substr/... et %q*) ──────────
+
+    /// Consomme une fonction chaîne macro `%kw ( args )` parmi
+    /// `upcase`/`lowcase`/`substr`/`scan`/`index`/`length` et leurs variantes
+    /// `q*` (`masked == true` → résultat masqué par sentinelles, comme
+    /// `%bquote`). Les arguments sont d'abord résolus (`&refs`) puis découpés
+    /// sur les `,` de niveau supérieur. Positions 1-basées (convention SAS).
+    /// Le résultat texte n'est PAS masqué pour les variantes nues. Rend l'index
+    /// après la `)`, ou `None` si la parenthèse manque / arité invalide.
+    fn consume_macro_fn(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        kw: &str,
+        masked: bool,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // Résoudre les `&refs` des arguments avant découpe (les sentinelles
+        // déjà posées restent inertes et seront ré-émises telles quelles).
+        let resolved = self.resolve_value(&inner);
+        let args = Self::split_top_level_commas(&resolved);
+        // Le nom de fonction « logique » est `kw` sans le préfixe `q` éventuel.
+        let logical = kw.strip_prefix('q').unwrap_or(kw);
+        let result = Self::eval_macro_fn(logical, &args)?;
+        if masked {
+            // Variantes `%q*` : masque la ponctuation ET les déclencheurs
+            // résiduels (`&`/`%`) du résultat, afin qu'il soit totalement inerte
+            // en aval (cf. `%qupcase(a&x)` qui masque le `&`).
+            out.push_str(&Self::mask_special(&result, true));
+        } else {
+            out.push_str(&result);
+        }
+        Some(after)
+    }
+
+    /// Calcule le résultat d'une fonction chaîne macro à partir d'arguments
+    /// (texte déjà résolu, non rognés sauf indication). Conventions SAS :
+    /// - `upcase(t)` / `lowcase(t)` : casse (sur tout l'argument, blancs inclus) ;
+    /// - `substr(t, pos[, len])` : sous-chaîne 1-basée ; `pos`/`len` rognés et
+    ///   parsés en entier ; `pos` borné à `[1, len(t)+1]` ; `len` par défaut
+    ///   jusqu'à la fin ; bornes clampées (pas de panic hors limites) ;
+    /// - `scan(t, n[, delims])` : n-ième mot (1-basé), délimiteurs par défaut
+    ///   = blanc et quelques ponctuations SAS ; `n` négatif compte depuis la
+    ///   fin ; hors borne → chaîne vide ;
+    /// - `index(t, sub)` : position 1-basée de `sub` dans `t` (0 si absent) ;
+    /// - `length(t)` : longueur (au moins 1 pour une chaîne vide, comme SAS qui
+    ///   rend 1 pour une chaîne vide ; ici on rend 0 pour vide et documente
+    ///   l'écart — voir NB). Rend `None` si l'arité est invalide.
+    fn eval_macro_fn(name: &str, args: &[String]) -> Option<String> {
+        match name {
+            "upcase" => {
+                let t = args.first().map(String::as_str).unwrap_or("");
+                Some(t.to_uppercase())
+            }
+            "lowcase" => {
+                let t = args.first().map(String::as_str).unwrap_or("");
+                Some(t.to_lowercase())
+            }
+            "substr" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return None;
+                }
+                let t: Vec<char> = args[0].chars().collect();
+                let pos = args[1].trim().parse::<i64>().ok()?;
+                // SAS : pos 1-basé. On clamp dans [1, len+1].
+                let start = pos.clamp(1, t.len() as i64 + 1) as usize - 1;
+                let remaining = t.len() - start;
+                let take = if args.len() == 3 {
+                    let l = args[2].trim().parse::<i64>().ok()?;
+                    (l.max(0) as usize).min(remaining)
+                } else {
+                    remaining
+                };
+                Some(t[start..start + take].iter().collect())
+            }
+            "scan" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return None;
+                }
+                let t = &args[0];
+                let n = args[1].trim().parse::<i64>().ok()?;
+                // Délimiteurs par défaut SAS (sous-ensemble usuel) ; sinon ceux
+                // fournis tels quels (sans rogner, un blanc compte).
+                let delims: Vec<char> = if args.len() == 3 {
+                    args[2].chars().collect()
+                } else {
+                    " \t\n.<(+|&!$*);^-/,%>".chars().collect()
+                };
+                let mut words: Vec<String> = Vec::new();
+                let mut cur = String::new();
+                for c in t.chars() {
+                    if delims.contains(&c) {
+                        if !cur.is_empty() {
+                            words.push(std::mem::take(&mut cur));
+                        }
+                    } else {
+                        cur.push(c);
+                    }
+                }
+                if !cur.is_empty() {
+                    words.push(cur);
+                }
+                let idx = if n >= 0 {
+                    (n as usize).checked_sub(1)
+                } else {
+                    let from_end = (-n) as usize;
+                    words.len().checked_sub(from_end)
+                };
+                Some(idx.and_then(|k| words.get(k)).cloned().unwrap_or_default())
+            }
+            "index" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let t = &args[0];
+                let sub = &args[1];
+                // Position 1-basée en CARACTÈRES (pas octets) ; 0 si absent.
+                let pos = if sub.is_empty() {
+                    0
+                } else {
+                    match t.find(sub.as_str()) {
+                        Some(byte_off) => t[..byte_off].chars().count() + 1,
+                        None => 0,
+                    }
+                };
+                Some(pos.to_string())
+            }
+            "length" => {
+                let t = args.first().map(String::as_str).unwrap_or("");
+                Some(t.chars().count().to_string())
+            }
+            _ => None,
+        }
     }
 
     /// Évalue une condition `%if` : résout d'abord les `&refs` et tout
@@ -2911,5 +3200,124 @@ mod macro_tests {
     fn nrstr_leaves_triggers_unresolved() {
         // %nrstr masque & et % : %macro et &x ne sont pas résolus.
         assert_eq!(expand("%nrstr(%macro &x)"), "%macro &x");
+    }
+
+    // --- M12.2 : fonctions chaîne macro simples ---
+
+    #[test]
+    fn macro_fn_upcase_lowcase() {
+        assert_eq!(expand("%upcase(abc)"), "ABC");
+        assert_eq!(expand("%lowcase(ABC)"), "abc");
+    }
+
+    #[test]
+    fn macro_fn_substr() {
+        assert_eq!(expand("%substr(abcdef,2,3)"), "bcd");
+        // Sans longueur : jusqu'à la fin.
+        assert_eq!(expand("%substr(abcdef,4)"), "def");
+    }
+
+    #[test]
+    fn macro_fn_scan() {
+        assert_eq!(expand("%scan(a.b.c,2,.)"), "b");
+        // Délimiteurs par défaut (blanc).
+        assert_eq!(expand("%scan(one two three,3)"), "three");
+        // Index depuis la fin.
+        assert_eq!(expand("%scan(a.b.c,-1,.)"), "c");
+    }
+
+    #[test]
+    fn macro_fn_index_length() {
+        assert_eq!(expand("%index(abcdef,cd)"), "3");
+        assert_eq!(expand("%index(abcdef,zz)"), "0");
+        assert_eq!(expand("%length(abcd)"), "4");
+    }
+
+    #[test]
+    fn macro_fn_resolves_refs_in_args() {
+        // Les `&refs` des arguments sont résolus avant calcul.
+        assert_eq!(expand("%let w=hello; %upcase(&w)"), "HELLO");
+    }
+
+    // --- M12.2 : %superq ---
+
+    #[test]
+    fn superq_returns_value_without_resolving() {
+        // v = "a&b" avec b indéfini ; %superq(v) rend "a&b" littéral, sans
+        // tenter de résoudre &b (donc pas d'expansion). On utilise %nrstr pour
+        // stocker la valeur sans déclencher la résolution au moment du %let.
+        assert_eq!(expand("%let v=%nrstr(a&b); %superq(v)"), "a&b");
+    }
+
+    #[test]
+    fn superq_undefined_is_empty() {
+        assert_eq!(expand("[%superq(nope)]"), "[]");
+    }
+
+    // --- M12.2 : %bquote / %nrbquote ---
+
+    #[test]
+    fn bquote_masks_comma_and_semicolon() {
+        // `,` et `;` restent littéraux dans la sortie finale.
+        assert_eq!(expand("%bquote(a,b;c)"), "a,b;c");
+    }
+
+    #[test]
+    fn bquote_semicolon_does_not_terminate_let() {
+        assert_eq!(expand("%let v=%bquote(a;b); &v"), "a;b");
+    }
+
+    #[test]
+    fn bquote_unmatched_quote_ok() {
+        // Une quote non appariée dans l'argument ne fait pas planter : elle est
+        // traitée comme un caractère ordinaire puis masquée (littérale en sortie).
+        assert_eq!(expand("%bquote(it's a test)"), "it's a test");
+    }
+
+    #[test]
+    fn bquote_unmatched_paren_stays_verbatim() {
+        // Parenthèse non appariée → l'appel `%bquote` n'est pas reconnu comme
+        // équilibré ; on ne plante pas, le texte reste verbatim (pas d'erreur).
+        let s = expand("%bquote(a (b)");
+        assert!(s.contains("%bquote"));
+    }
+
+    #[test]
+    fn bquote_resolves_then_masks() {
+        // &x est résolu, puis le `;` reste littéral.
+        assert_eq!(expand("%let x=Z; %bquote(&x;y)"), "Z;y");
+    }
+
+    #[test]
+    fn nrbquote_masks_triggers_in_result() {
+        // nrbquote masque les `&`/`%` résiduels : &z (indéfini) reste littéral
+        // et inerte. (Après résolution &z est inchangé, puis masqué.)
+        assert_eq!(expand("%nrbquote(a&z b)"), "a&z b");
+    }
+
+    // --- M12.2 : variantes %q* (résultat masqué) ---
+
+    #[test]
+    fn qsysfunc_upcase_masked() {
+        assert_eq!(expand("%qsysfunc(upcase(abc))"), "ABC");
+    }
+
+    #[test]
+    fn qupcase_qlowcase() {
+        assert_eq!(expand("%qupcase(abc)"), "ABC");
+        assert_eq!(expand("%qlowcase(ABC)"), "abc");
+    }
+
+    #[test]
+    fn qsubstr_qscan() {
+        assert_eq!(expand("%qsubstr(abcdef,2,3)"), "bcd");
+        assert_eq!(expand("%qscan(a.b.c,2,.)"), "b");
+    }
+
+    #[test]
+    fn qupcase_masks_residual_ampersand() {
+        // x indéfini : &x reste, est mis en MAJ (inchangé), puis masqué donc
+        // inerte ; la sortie finale (unmask) montre `&X` littéral.
+        assert_eq!(expand("%qupcase(a&x)"), "A&X");
     }
 }
