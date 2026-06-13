@@ -79,7 +79,7 @@ Pattern d'ajout : nouveau `src/procs/<nom>.rs` (`<Nom>Ast` + `parse(ts)` + `exec
 `provider.read()`+`forward`, rendu via `listing.page_header()`+`write_table`, `last_dataset` si OUT=.
 
 - [x] `src/procs/common.rs` — helpers partagés extraits (verbatim) : `decode_column` (6 copies identiques fusionnées), `sample_std`, `partition_numeric`, `group_by_keys` (= ex-`means::group_by_class`). means/freq/univariate/sort/transpose/append rebranchés, imports morts nettoyés. Refactor pur : **789 tests + snapshot inchangés, zéro warning**. (`resolve_input` laissé par-proc : implémentations non identiques — hors périmètre de cet incrément)
-- [ ] `src/procs/corr.rs` — PROC CORR : Pearson (VAR / WITH), N, NOSIMPLE/NOPROB ; sortie matricielle ; OUT= optionnel (réutilise `decode_column`/`sample_std`/`mean`)
+- [x] `src/procs/corr.rs` — PROC CORR Pearson : VAR/WITH (défaut VAR = numériques), NOSIMPLE/NOPROB/NOCORR ; Simple Statistics + matrice de coefficients (r 5 décimales, `Prob > |r|` via t-CDF = beta incomplète régularisée, N par cellule si N appariés varient), observations appariées-complètes, variable constante → `.`. OUT= → erreur "not yet implemented" (suite). 18 tests. (corrigé : valeur attendue d'un test de r erronée côté agent)
 - [ ] `src/procs/rank.rs` — PROC RANK : VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= (collation `sas_cmp` de SORT) ; écrit une table
 - [ ] `src/procs/tabulate.rs` — PROC TABULATE : CLASS/VAR + expression de table (page/row/col, `*` et `,`), stats par cellule. Effort élevé (sous-parser dédié de l'expression de table)
 - [ ] `src/procs/report.rs` — PROC REPORT : COLUMN + DEFINE (display/group/analysis/order), stats de groupe, BREAK/RBREAK (sous-ensemble documenté). Effort élevé (grande grammaire)
