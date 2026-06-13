@@ -79,6 +79,12 @@ pub struct EvalCtx {
     /// la feature `macros` il reflète l'état des `%let`/symput antérieurs ;
     /// sous le build par défaut il est vide (aucune résolution macro).
     pub macro_symbols: HashMap<String, String>,
+    /// Mode `--deterministic` : sous ce drapeau, les fonctions dépendantes de
+    /// l'horloge (`TODAY`/`DATE`/`DATETIME`) renvoient une valeur FIGÉE
+    /// (le 01JAN1960, soit la date 0 / le datetime 0) afin que les snapshots
+    /// restent stables. Câblé depuis `Session::deterministic` par l'exécuteur ;
+    /// `false` par défaut (chemin horloge réelle).
+    pub deterministic: bool,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,

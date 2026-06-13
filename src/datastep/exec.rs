@@ -354,6 +354,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             by_flags,
             in_flags,
             macro_symbols,
+            deterministic: session.deterministic,
             ..EvalCtx::default()
         },
         outputs,
