@@ -768,6 +768,227 @@ fn fn_weekday(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Interval date functions : INTCK / INTNX
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Parsed interval keyword (premier argument caractère de INTCK/INTNX).
+enum Interval {
+    Day,
+    Week,
+    Month,
+    Qtr,
+    Year,
+}
+
+/// Parse l'intervalle (insensible à la casse, blancs de bord supprimés).
+/// Renvoie None pour un intervalle inconnu.
+fn parse_interval(v: &Value) -> Option<Interval> {
+    let s = match v {
+        Value::Char(s) => s.trim().to_uppercase(),
+        _ => return None,
+    };
+    match s.as_str() {
+        "DAY" => Some(Interval::Day),
+        "WEEK" => Some(Interval::Week),
+        "MONTH" => Some(Interval::Month),
+        "QTR" | "QUARTER" => Some(Interval::Qtr),
+        "YEAR" => Some(Interval::Year),
+        _ => None,
+    }
+}
+
+/// Index de semaine SAS (les semaines commencent le DIMANCHE). Le jour SAS 0
+/// (1960-01-01) est un VENDREDI ; le dimanche le plus récent à cette date est
+/// le jour -5 (1959-12-27), et le dimanche suivant est le jour 2 (1960-01-03).
+/// `floor((d - 2) / 7)` place donc chaque dimanche (… -5, 2, 9 …) sur une
+/// frontière. On utilise une division euclidienne pour gérer correctement les
+/// jours négatifs.
+fn week_index(sas_day: i64) -> i64 {
+    (sas_day - 2).div_euclid(7)
+}
+
+/// INTCK('interval', from, to) → nombre discret de frontières d'intervalle
+/// franchies (méthode "DISCRETE" par défaut de SAS). Intervalle inconnu ou
+/// date manquante → missing.
+fn fn_intck(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 3 {
+        ctx.invalid_data += 1;
+        return Value::missing();
+    }
+    let Some(interval) = parse_interval(&args[0]) else {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    };
+    let from = match coerce_num(&args[1], ctx) {
+        None => return Value::missing(),
+        Some(f) => f.floor() as i64,
+    };
+    let to = match coerce_num(&args[2], ctx) {
+        None => return Value::missing(),
+        Some(f) => f.floor() as i64,
+    };
+    let (y1, m1, _d1) = sas_date_to_ymd(from);
+    let (y2, m2, _d2) = sas_date_to_ymd(to);
+    let count = match interval {
+        Interval::Day => (to - from) as f64,
+        Interval::Week => (week_index(to) - week_index(from)) as f64,
+        Interval::Month => ((y2 * 12 + m2) - (y1 * 12 + m1)) as f64,
+        Interval::Qtr => {
+            let q1 = (m1 - 1) / 3; // 0-based quarter index
+            let q2 = (m2 - 1) / 3;
+            ((y2 * 4 + q2) - (y1 * 4 + q1)) as f64
+        }
+        Interval::Year => (y2 - y1) as f64,
+    };
+    Value::Num(count)
+}
+
+/// Alignement de INTNX (4e argument optionnel, défaut BEGINNING).
+enum Align {
+    Beginning,
+    End,
+    Same,
+    Middle,
+}
+
+fn parse_align(v: Option<&Value>) -> Align {
+    let s = match v {
+        Some(Value::Char(s)) => s.trim().to_uppercase(),
+        _ => return Align::Beginning,
+    };
+    // On matche sur le premier caractère significatif (B/E/S/M).
+    match s.chars().next() {
+        Some('E') => Align::End,
+        Some('S') => Align::Same,
+        Some('M') => Align::Middle,
+        _ => Align::Beginning, // 'B'/BEG/BEGINNING et tout le reste
+    }
+}
+
+/// Dernier jour du mois (gère les années bissextiles).
+fn last_day_of_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Normalise (year, month) après avoir ajouté des mois (month 1-based).
+fn normalize_ym(year: i64, month0: i64) -> (i64, i64) {
+    // month0 est 0-based ici pour faciliter l'arithmétique modulaire.
+    let y = year + month0.div_euclid(12);
+    let m = month0.rem_euclid(12) + 1;
+    (y, m)
+}
+
+/// INTNX('interval', start, increment [, 'alignment']) → date SAS.
+/// Date manquante / intervalle inconnu → missing.
+fn fn_intnx(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 3 {
+        ctx.invalid_data += 1;
+        return Value::missing();
+    }
+    let Some(interval) = parse_interval(&args[0]) else {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    };
+    let start = match coerce_num(&args[1], ctx) {
+        None => return Value::missing(),
+        Some(f) => f.floor() as i64,
+    };
+    let inc = match coerce_num(&args[2], ctx) {
+        None => return Value::missing(),
+        Some(f) => f.trunc() as i64,
+    };
+    let align = parse_align(args.get(3));
+    let (sy, sm, sd) = sas_date_to_ymd(start);
+
+    let (y, m, d) = match interval {
+        Interval::Day => {
+            // Période = 1 jour ; alignement sans objet (B=E=S=start+inc).
+            return Value::Num((start + inc) as f64);
+        }
+        Interval::Week => {
+            // Période = 7 jours débutant un dimanche.
+            // Le dimanche d'index k est le jour 7*k + 2 (cf. week_index :
+            // … -5, 2, 9 …). Dimanche de la semaine de `start` :
+            let start_sunday = week_index(start) * 7 + 2;
+            let target_sunday = start_sunday + inc * 7;
+            let day = match align {
+                Align::Beginning => target_sunday,
+                Align::End => target_sunday + 6,         // samedi
+                Align::Same => target_sunday + (start - start_sunday), // même jour de semaine
+                Align::Middle => target_sunday + 3,      // milieu : mercredi
+            };
+            return Value::Num(day as f64);
+        }
+        Interval::Month => {
+            // Période = mois civil. Début de période = (sy, sm, 1).
+            let (ny, nm) = normalize_ym(sy, (sm - 1) + inc);
+            let last = last_day_of_month(ny, nm);
+            let d = match align {
+                Align::Beginning => 1,
+                Align::End => last,
+                Align::Same => sd.min(last),
+                Align::Middle => 15,
+            };
+            (ny, nm, d)
+        }
+        Interval::Qtr => {
+            // Période = trimestre (mois de début 1, 4, 7, 10).
+            let q0 = (sm - 1) / 3; // 0-based quarter of start
+            let total_q = sy * 4 + q0 + inc;
+            let ny = total_q.div_euclid(4);
+            let nq = total_q.rem_euclid(4); // 0..3
+            let first_month = nq * 3 + 1;
+            let d = match align {
+                Align::Beginning => (ny, first_month, 1),
+                Align::End => {
+                    let last_month = first_month + 2;
+                    (ny, last_month, last_day_of_month(ny, last_month))
+                }
+                Align::Same => {
+                    // Même offset (mois dans le trimestre + jour) que start.
+                    let month_in_q = (sm - 1) % 3; // 0..2
+                    let tm = first_month + month_in_q;
+                    let last = last_day_of_month(ny, tm);
+                    (ny, tm, sd.min(last))
+                }
+                Align::Middle => {
+                    // Milieu du trimestre ≈ 15 du mois central.
+                    (ny, first_month + 1, 15)
+                }
+            };
+            d
+        }
+        Interval::Year => {
+            let ny = sy + inc;
+            match align {
+                Align::Beginning => (ny, 1, 1),
+                Align::End => (ny, 12, 31),
+                Align::Same => {
+                    let last = last_day_of_month(ny, sm);
+                    (ny, sm, sd.min(last))
+                }
+                Align::Middle => (ny, 7, 1),
+            }
+        }
+    };
+
+    Value::Num(days_since_1960(y, m, d) as f64)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Conversion functions (PUT / INPUT) — délèguent au moteur formats/ (M4)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -859,6 +1080,8 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("MONTH", fn_month),
     ("DAY", fn_day),
     ("WEEKDAY", fn_weekday),
+    ("INTCK", fn_intck),
+    ("INTNX", fn_intnx),
     // Conversion (PUT/INPUT) — délèguent au moteur de formats (M4).
     ("PUT", fn_put),
     ("INPUT", fn_input),
@@ -1463,5 +1686,196 @@ mod tests {
     #[test]
     fn input_wrong_arity_returns_missing() {
         assert_eq!(invoke("INPUT", &[chr("123")]), miss());
+    }
+
+    // ── INTCK ─────────────────────────────────────────────────────────────────
+
+    fn sas_day(y: i64, m: i64, d: i64) -> f64 {
+        days_since_1960(y, m, d) as f64
+    }
+
+    #[test]
+    fn intck_day_diff() {
+        let d1 = sas_day(2020, 1, 1);
+        let d2 = sas_day(2020, 1, 11);
+        assert_eq!(invoke("INTCK", &[chr("day"), num(d1), num(d2)]), num(10.0));
+    }
+
+    #[test]
+    fn intck_month() {
+        // 15jan2020 → 01mar2020 = 2 month boundaries.
+        let d1 = sas_day(2020, 1, 15);
+        let d2 = sas_day(2020, 3, 1);
+        assert_eq!(invoke("INTCK", &[chr("month"), num(d1), num(d2)]), num(2.0));
+    }
+
+    #[test]
+    fn intck_qtr() {
+        // jan2020 (Q1) → jul2020 (Q3) = 2 quarter boundaries.
+        let d1 = sas_day(2020, 1, 15);
+        let d2 = sas_day(2020, 7, 1);
+        assert_eq!(invoke("INTCK", &[chr("qtr"), num(d1), num(d2)]), num(2.0));
+    }
+
+    #[test]
+    fn intck_year() {
+        let d1 = sas_day(2018, 6, 1);
+        let d2 = sas_day(2021, 3, 1);
+        assert_eq!(invoke("INTCK", &[chr("year"), num(d1), num(d2)]), num(3.0));
+    }
+
+    #[test]
+    fn intck_week_boundary() {
+        // SAS day 0 = Friday; day 2 (1960-01-03) = Sunday → new SAS week.
+        assert_eq!(invoke("INTCK", &[chr("week"), num(0.0), num(2.0)]), num(1.0));
+        // days 0..6 within the SAS week of day 0: day 0 (Fri) → day 1 (Sat)
+        // are in the same week (Sunday boundary not crossed).
+        assert_eq!(invoke("INTCK", &[chr("week"), num(0.0), num(1.0)]), num(0.0));
+    }
+
+    #[test]
+    fn intck_week_negative() {
+        // Going backward across a Sunday boundary.
+        assert_eq!(invoke("INTCK", &[chr("week"), num(2.0), num(0.0)]), num(-1.0));
+    }
+
+    #[test]
+    fn intck_unknown_interval_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("INTCK", &[chr("fortnight"), num(0.0), num(14.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    #[test]
+    fn intck_missing_date_is_missing() {
+        assert_eq!(invoke("INTCK", &[chr("day"), miss(), num(5.0)]), miss());
+    }
+
+    // ── INTNX ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn intnx_month_beginning_default() {
+        // INTNX('month', 15jan2020, 1) → 01feb2020.
+        let start = sas_day(2020, 1, 15);
+        assert_eq!(
+            invoke("INTNX", &[chr("month"), num(start), num(1.0)]),
+            num(sas_day(2020, 2, 1))
+        );
+    }
+
+    #[test]
+    fn intnx_month_same() {
+        // INTNX('month', 15jan2020, 1, 'same') → 15feb2020.
+        let start = sas_day(2020, 1, 15);
+        assert_eq!(
+            invoke("INTNX", &[chr("month"), num(start), num(1.0), chr("same")]),
+            num(sas_day(2020, 2, 15))
+        );
+    }
+
+    #[test]
+    fn intnx_month_end() {
+        // INTNX('month', 15jan2020, 1, 'e') → 29feb2020 (leap year).
+        let start = sas_day(2020, 1, 15);
+        assert_eq!(
+            invoke("INTNX", &[chr("month"), num(start), num(1.0), chr("e")]),
+            num(sas_day(2020, 2, 29))
+        );
+    }
+
+    #[test]
+    fn intnx_month_same_clamps_to_last_day() {
+        // 31jan2020 + 1 month, 'same' → clamp to 29feb2020.
+        let start = sas_day(2020, 1, 31);
+        assert_eq!(
+            invoke("INTNX", &[chr("month"), num(start), num(1.0), chr("same")]),
+            num(sas_day(2020, 2, 29))
+        );
+    }
+
+    #[test]
+    fn intnx_year_end() {
+        // INTNX('year', d, 0, 'e') → 31dec of that year.
+        let start = sas_day(2020, 5, 17);
+        assert_eq!(
+            invoke("INTNX", &[chr("year"), num(start), num(0.0), chr("e")]),
+            num(sas_day(2020, 12, 31))
+        );
+    }
+
+    #[test]
+    fn intnx_year_beginning() {
+        let start = sas_day(2020, 5, 17);
+        assert_eq!(
+            invoke("INTNX", &[chr("year"), num(start), num(0.0)]),
+            num(sas_day(2020, 1, 1))
+        );
+    }
+
+    #[test]
+    fn intnx_qtr_beginning() {
+        // 17may2020 is in Q2 (apr-jun); +1 qtr → Q3 → 01jul2020.
+        let start = sas_day(2020, 5, 17);
+        assert_eq!(
+            invoke("INTNX", &[chr("qtr"), num(start), num(1.0)]),
+            num(sas_day(2020, 7, 1))
+        );
+    }
+
+    #[test]
+    fn intnx_qtr_end() {
+        // Q2 of 2020, 0 increment, end → 30jun2020.
+        let start = sas_day(2020, 5, 17);
+        assert_eq!(
+            invoke("INTNX", &[chr("qtr"), num(start), num(0.0), chr("e")]),
+            num(sas_day(2020, 6, 30))
+        );
+    }
+
+    #[test]
+    fn intnx_day() {
+        let start = sas_day(2020, 1, 1);
+        assert_eq!(
+            invoke("INTNX", &[chr("day"), num(start), num(10.0)]),
+            num(sas_day(2020, 1, 11))
+        );
+    }
+
+    #[test]
+    fn intnx_week_beginning() {
+        // SAS day 0 = Friday; its week begins Sunday day -5 (1959-12-27).
+        // +0 weeks, B → day -5.
+        assert_eq!(
+            invoke("INTNX", &[chr("week"), num(0.0), num(0.0)]),
+            num(-5.0)
+        );
+        // +1 week beginning → next Sunday = day 2 (1960-01-03).
+        assert_eq!(
+            invoke("INTNX", &[chr("week"), num(0.0), num(1.0)]),
+            num(2.0)
+        );
+    }
+
+    #[test]
+    fn intnx_week_same_weekday() {
+        // day 0 = Friday; +1 week 'same' → next Friday = day 7.
+        assert_eq!(
+            invoke("INTNX", &[chr("week"), num(0.0), num(1.0), chr("s")]),
+            num(7.0)
+        );
+    }
+
+    #[test]
+    fn intnx_unknown_interval_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("INTNX", &[chr("decade"), num(0.0), num(1.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    #[test]
+    fn intnx_missing_date_is_missing() {
+        assert_eq!(invoke("INTNX", &[chr("month"), miss(), num(1.0)]), miss());
     }
 }

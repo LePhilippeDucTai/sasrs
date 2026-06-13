@@ -60,6 +60,12 @@ pub struct EvalCtx {
     /// Mis à jour par le Runner à chaque obs de sortie du MERGE. Servent
     /// les variables automatiques IN= (jamais de slot PDV).
     pub in_flags: Vec<(String, bool)>,
+    /// Files FIFO de LAG/DIF, une PAR SITE D'APPEL lexical (clé = pointeur
+    /// du slice d'arguments de l'AST, stable d'une itération de la boucle
+    /// implicite à l'autre). Voir PLAN.md §Checklist pitfall #8 : LAGn /
+    /// DIFn renvoient la valeur d'il y a `n` exécutions du MÊME site, pas la
+    /// valeur d'il y a `n` lignes de la variable.
+    pub lag_queues: HashMap<usize, std::collections::VecDeque<Value>>,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,
@@ -407,6 +413,15 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     if args.len() == 1 && ctx.arrays.contains_key(&name.to_uppercase()) {
         return eval_array_ref(name, &args[0], pdv, ctx);
     }
+    // LAGn / DIFn : NE PEUVENT PAS être de simples fonctions car elles ont
+    // besoin de l'identité du SITE D'APPEL (chaque LAG/DIF lexical possède sa
+    // propre file FIFO — PLAN.md §Checklist pitfall #8). On intercepte ici,
+    // avant la délégation générique.
+    if args.len() == 1
+        && let Some((n, is_dif)) = parse_lag_dif(name)
+    {
+        return eval_lag_dif(n, is_dif, args, pdv, ctx);
+    }
     let mut arg_vals = Vec::with_capacity(args.len());
     for a in args {
         let v = eval(a, pdv, ctx);
@@ -424,6 +439,70 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
             ));
             Value::missing()
         }
+    }
+}
+
+/// Reconnaît `LAG`, `LAG1`, `LAG2`, … et `DIF`, `DIF1`, … (insensible à la
+/// casse). Renvoie `(n, is_dif)` où `n` est le décalage (1 par défaut quand
+/// aucun chiffre ne suit). Un suffixe non entièrement numérique → None.
+fn parse_lag_dif(name: &str) -> Option<(usize, bool)> {
+    let upper = name.to_uppercase();
+    let (prefix_len, is_dif) = if upper.starts_with("LAG") {
+        (3, false)
+    } else if upper.starts_with("DIF") {
+        (3, true)
+    } else {
+        return None;
+    };
+    let suffix = &upper[prefix_len..];
+    let n = if suffix.is_empty() {
+        1
+    } else if suffix.chars().all(|c| c.is_ascii_digit()) {
+        suffix.parse::<usize>().ok()?
+    } else {
+        return None;
+    };
+    Some((n, is_dif))
+}
+
+/// Implémente LAGn / DIFn avec une file FIFO PAR SITE D'APPEL.
+///
+/// La clé de site est `args.as_ptr() as usize` : l'AST persiste pendant toute
+/// l'étape (et `Runner.ctx` aussi), donc ce pointeur est STABLE pour un même
+/// site lexical d'une itération de la boucle implicite à l'autre, et DISTINCT
+/// entre deux sites différents. C'est le cœur de la sémantique (pitfall #8).
+///
+/// L'argument est évalué EXACTEMENT UNE FOIS. La file renvoie missing tant que
+/// `n` exécutions n'ont pas eu lieu, puis la valeur d'il y a `n` exécutions.
+fn eval_lag_dif(n: usize, is_dif: bool, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+    // Clé de site AVANT d'emprunter ctx de façon mutable pour l'évaluation.
+    let key = args.as_ptr() as usize;
+    // Évaluer l'argument UNE seule fois (emprunt mutable de ctx).
+    let cur = eval(&args[0], pdv, ctx);
+    if ctx.fatal.is_some() {
+        return Value::missing();
+    }
+    // L'emprunt mutable ci-dessus est terminé : on peut emprunter la file.
+    let q = ctx.lag_queues.entry(key).or_default();
+    let lagged = if q.len() == n {
+        q.pop_front().unwrap()
+    } else {
+        Value::missing()
+    };
+    q.push_back(cur.clone());
+
+    if is_dif {
+        // DIFn(x) = x - LAGn(x).
+        if cur.is_missing() || lagged.is_missing() {
+            Value::missing()
+        } else {
+            match (coerce_num(&cur, ctx), coerce_num(&lagged, ctx)) {
+                (Some(a), Some(b)) => Value::Num(a - b),
+                _ => Value::missing(),
+            }
+        }
+    } else {
+        lagged
     }
 }
 
@@ -947,5 +1026,154 @@ mod tests {
         assert_eq!(v, Value::Num(0.0));
         assert!(ctx.invalid_data > 0);
         assert!(ctx.error_flag);
+    }
+
+    // ── LAG / DIF : files FIFO PAR SITE D'APPEL ──────────────────────────
+    //
+    // On réutilise le MÊME `Expr::Call` (donc le même `args.as_ptr()`) et le
+    // MÊME `EvalCtx` à travers les appels successifs, en mutant la valeur de
+    // `x` dans le PDV entre chaque exécution — c'est exactement ce que fait la
+    // boucle implicite du DATA step sur un site lexical donné.
+
+    /// Reconnaissance du suffixe numérique.
+    #[test]
+    fn parse_lag_dif_recognises_suffix() {
+        assert_eq!(parse_lag_dif("LAG"), Some((1, false)));
+        assert_eq!(parse_lag_dif("lag"), Some((1, false)));
+        assert_eq!(parse_lag_dif("LAG2"), Some((2, false)));
+        assert_eq!(parse_lag_dif("DIF"), Some((1, true)));
+        assert_eq!(parse_lag_dif("Dif3"), Some((3, true)));
+        // Pas un LAG/DIF.
+        assert_eq!(parse_lag_dif("LOG"), None);
+        // Suffixe non numérique → pas reconnu (laisse passer LAGUERRE & co).
+        assert_eq!(parse_lag_dif("LAGX"), None);
+    }
+
+    #[test]
+    fn lag1_returns_value_from_previous_call() {
+        let mut pdv = pdv_with(vec![(num_var("x"), Value::Num(10.0))]);
+        let slot = pdv.slot("x").unwrap();
+        let e = Expr::Call {
+            name: "LAG".to_string(),
+            args: vec![var("x")],
+        };
+        let mut ctx = EvalCtx::default();
+
+        // Appel 1 : x = 10 → LAG renvoie missing (rien encore en file).
+        pdv.set(slot, Value::Num(10.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::missing());
+        // Appel 2 : x = 20 → LAG renvoie la valeur de l'appel 1 (10).
+        pdv.set(slot, Value::Num(20.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::Num(10.0));
+        // Appel 3 : x = 30 → LAG renvoie la valeur de l'appel 2 (20).
+        pdv.set(slot, Value::Num(30.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::Num(20.0));
+    }
+
+    #[test]
+    fn lag2_returns_value_from_two_calls_ago() {
+        let mut pdv = pdv_with(vec![(num_var("x"), Value::Num(0.0))]);
+        let slot = pdv.slot("x").unwrap();
+        let e = Expr::Call {
+            name: "LAG2".to_string(),
+            args: vec![var("x")],
+        };
+        let mut ctx = EvalCtx::default();
+
+        let seq = [1.0, 2.0, 3.0, 4.0];
+        // n=2 : missing, missing, puis valeur d'il y a 2 exécutions.
+        let expected = [
+            Value::missing(),
+            Value::missing(),
+            Value::Num(1.0),
+            Value::Num(2.0),
+        ];
+        for (v, exp) in seq.iter().zip(expected.iter()) {
+            pdv.set(slot, Value::Num(*v));
+            assert_eq!(&eval(&e, &pdv, &mut ctx), exp);
+        }
+    }
+
+    #[test]
+    fn dif1_computes_difference_with_missing_first() {
+        let mut pdv = pdv_with(vec![(num_var("x"), Value::Num(0.0))]);
+        let slot = pdv.slot("x").unwrap();
+        let e = Expr::Call {
+            name: "DIF".to_string(),
+            args: vec![var("x")],
+        };
+        let mut ctx = EvalCtx::default();
+
+        // x : 10, 25, 5 → DIF : ., 15, -20.
+        let seq = [10.0, 25.0, 5.0];
+        let expected = [Value::missing(), Value::Num(15.0), Value::Num(-20.0)];
+        for (v, exp) in seq.iter().zip(expected.iter()) {
+            pdv.set(slot, Value::Num(*v));
+            assert_eq!(&eval(&e, &pdv, &mut ctx), exp);
+        }
+    }
+
+    #[test]
+    fn dif1_missing_current_yields_missing() {
+        let mut pdv = pdv_with(vec![(num_var("x"), Value::Num(0.0))]);
+        let slot = pdv.slot("x").unwrap();
+        let e = Expr::Call {
+            name: "DIF".to_string(),
+            args: vec![var("x")],
+        };
+        let mut ctx = EvalCtx::default();
+
+        pdv.set(slot, Value::Num(10.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::missing()); // 1er : pas de lag
+        // x manquant → DIF missing même si un lag existe.
+        pdv.set(slot, Value::missing());
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::missing());
+        // x de nouveau présent, mais le lag (.) est manquant → missing.
+        pdv.set(slot, Value::Num(7.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::missing());
+        // x = 8, lag = 7 → 1.
+        pdv.set(slot, Value::Num(8.0));
+        assert_eq!(eval(&e, &pdv, &mut ctx), Value::Num(1.0));
+    }
+
+    #[test]
+    fn two_lag_sites_have_independent_queues() {
+        // CRUX (pitfall #8) : deux sites LAG lexicaux DISTINCTS sur la MÊME
+        // variable ont des files INDÉPENDANTES, indexées par args.as_ptr().
+        let mut pdv = pdv_with(vec![(num_var("x"), Value::Num(0.0))]);
+        let slot = pdv.slot("x").unwrap();
+        let site_a = Expr::Call {
+            name: "LAG".to_string(),
+            args: vec![var("x")],
+        };
+        let site_b = Expr::Call {
+            name: "LAG".to_string(),
+            args: vec![var("x")],
+        };
+        // Les deux sites doivent avoir des pointeurs d'args distincts.
+        if let (Expr::Call { args: a, .. }, Expr::Call { args: b, .. }) = (&site_a, &site_b) {
+            assert_ne!(a.as_ptr() as usize, b.as_ptr() as usize);
+        }
+        let mut ctx = EvalCtx::default();
+
+        // Appel 1 du site A avec x = 100.
+        pdv.set(slot, Value::Num(100.0));
+        assert_eq!(eval(&site_a, &pdv, &mut ctx), Value::missing());
+
+        // Premier appel du site B avec x = 200 : DOIT renvoyer missing
+        // (file propre au site B vide), PAS 100 (qui appartient au site A).
+        pdv.set(slot, Value::Num(200.0));
+        assert_eq!(eval(&site_b, &pdv, &mut ctx), Value::missing());
+
+        // Deuxième appel du site A avec x = 300 → renvoie 100 (sa file à lui).
+        pdv.set(slot, Value::Num(300.0));
+        assert_eq!(eval(&site_a, &pdv, &mut ctx), Value::Num(100.0));
+
+        // Deuxième appel du site B avec x = 400 → renvoie 200 (sa file à lui).
+        pdv.set(slot, Value::Num(400.0));
+        assert_eq!(eval(&site_b, &pdv, &mut ctx), Value::Num(200.0));
+
+        // Deux files distinctes ont bien été créées.
+        assert_eq!(ctx.lag_queues.len(), 2);
     }
 }
