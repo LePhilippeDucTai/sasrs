@@ -90,7 +90,11 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = freq::parse(ts)?;
             Ok(ProcAst::Freq(ast))
         }
-        "transpose" | "univariate"
+        "univariate" => {
+            let ast = univariate::parse(ts)?;
+            Ok(ProcAst::Univariate(ast))
+        }
+        "transpose"
         | "datasets" | "append" | "sql" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
@@ -199,7 +203,7 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["transpose", "univariate",
+        for proc_name in &["transpose",
                            "datasets", "append", "sql"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
