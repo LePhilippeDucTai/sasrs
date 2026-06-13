@@ -121,7 +121,43 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
 
 fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     match stmt {
-        GlobalStmt::Libname { libref, path } => {
+        GlobalStmt::Libname { libref, engine, path } => {
+            // M14.4 : engine CSV → CsvLibrary; engine XLSX → not-implemented error.
+            // engine None (default) or unknown → existing DirLibrary (Parquet) behaviour.
+            let engine_upper = engine.as_deref().unwrap_or("").to_ascii_uppercase();
+
+            // XLSX engine: deferred with a clear error message.
+            if engine_upper == "XLSX" {
+                session.log.error(
+                    "LIBNAME engine XLSX is not yet implemented in this build.",
+                );
+                return;
+            }
+
+            // CSV engine: register a CsvLibrary backed by the directory.
+            if engine_upper == "CSV" {
+                let p = PathBuf::from(path);
+                let abs = if p.is_absolute() {
+                    p
+                } else {
+                    session.base_dir.join(p)
+                };
+                let shown = if session.deterministic {
+                    path.clone()
+                } else {
+                    abs.display().to_string()
+                };
+                match session.libs.assign_csv(libref, abs) {
+                    Ok(()) => session.log.note(&format!(
+                        "Libref {} was successfully assigned as follows:\n      Engine:        CSV\n      Physical Name: {shown}",
+                        libref.to_uppercase()
+                    )),
+                    Err(e) => session.log.error(&e.to_string()),
+                }
+                return;
+            }
+
+            // Default / no engine: existing DirLibrary (Parquet) behaviour — UNCHANGED.
             // M13 : routage cloud. Quand la feature `s3` est active et que le
             // chemin commence par `s3://`, on enregistre une `S3Library`
             // (bucket/prefix) au lieu d'une `DirLibrary`. Le chemin affiché

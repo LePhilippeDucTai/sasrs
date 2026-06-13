@@ -395,6 +395,9 @@ pub struct DataStepAst {
 pub enum GlobalStmt {
     Libname {
         libref: String,
+        /// Optional engine keyword (e.g. `"CSV"`, `"XLSX"`). `None` = default
+        /// Parquet/DirLibrary behaviour (backward-compatible).
+        engine: Option<String>,
         path: String,
     },
     LibnameClear {
