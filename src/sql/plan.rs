@@ -194,24 +194,11 @@ pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFra
 
 fn scan_normalized(session: &Session, lib: &str, table: &str) -> Result<LazyFrame> {
     let provider = session.libs.get(lib)?;
-    let mut lf = provider.scan(table)?;
+    let lf = provider.scan(table)?;
     // Normalisation des missings spéciaux (NaN-payload → null) sur chaque
-    // colonne Float64. Cf. note d'en-tête.
-    let schema = lf.collect_schema()?;
-    let float_cols: Vec<String> = schema
-        .iter()
-        .filter(|(_, dt)| matches!(dt, DataType::Float64))
-        .map(|(name, _)| name.to_string())
-        .collect();
-    for name in float_cols {
-        lf = lf.with_column(
-            when(col(name.clone()).is_nan())
-                .then(lit(NULL))
-                .otherwise(col(name.clone()))
-                .alias(name.clone()),
-        );
-    }
-    Ok(lf)
+    // colonne Float64 — passe par l'unique implémentation `normalize_specials`
+    // (cf. note d'en-tête : ne jamais réimplémenter ad hoc).
+    normalize_specials(lf)
 }
 
 fn build_from(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
