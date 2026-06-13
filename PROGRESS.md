@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M8 — TERMINÉ** (tous les jalons M1–M8 sont complets)
+Jalon courant : **M9** (M1–M8 complets ; extension validée — voir M9/M10/M11)
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -71,3 +71,38 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Stub `S3Library` derrière feature `s3` (compile, non branché) — trait `LibraryProvider` sur scan parquet via URI `s3://`, mutations renvoient une erreur ; I/O cloud réelle = suite (features Polars `cloud`/`aws`)
 - [x] Fast-path vectorisé optionnel des steps simples — `src/datastep/fastpath.rs` (opt-in `Session.vectorize` / CLI `--vectorize`, OFF par défaut). Périmètre v1 prouvé équivalent : SET d'un seul dataset (sans BY/MERGE/WHERE), assignations numériques (littéraux, copies préservant le NaN-payload, +/-/*), une sortie, output implicite ; tout le reste retombe sur la boucle ligne-à-ligne via `eligible()`. NOTE "missing generated" répliquée. 10 tests (équivalence bit-à-bit output + log, préservation `.A`, rejets du garde-fou, repli)
 - [x] Revue checklist pièges (PLAN.md §Checklist) sur tout le code — 8/8 conformes : nullify_specials (eager + réplique lazy sql), sas_cmp partout (sort/means/freq/transpose/univariate via décodage Value, jamais d'agrégation native sur les spéciaux), aucun get_row, WARNING i64>2^53, collation tri par sas_cmp, troncature char + comparaison sans blancs finaux, NOTEs "variables." invariable, LAG/DIF FIFO par site d'appel (clé = ptr args). Seul correctif : dé-duplication de la normalisation des missings dans sql/plan.rs (scan_normalized délègue à normalize_specials)
+
+## M9 — nouveaux PROCs
+Ordre (effort/dépendances croissants), un incrément (= une case) par invocation.
+Pattern d'ajout : nouveau `src/procs/<nom>.rs` (`<Nom>Ast` + `parse(ts)` + `execute(ast, session)`),
+`pub mod` + variante `ProcAst`, bras dans `parse_proc`/`execute_proc` (mod.rs), lecture via
+`provider.read()`+`forward`, rendu via `listing.page_header()`+`write_table`, `last_dataset` si OUT=.
+
+- [ ] `src/procs/common.rs` — extraire les helpers dupliqués (D1) : `decode_column` (6 copies), `resolve_input` (4×), `sample_std`/`mean`/`partition_numeric`, `group_by_keys` (généralise `means::group_by_class`). Rebrancher print/sort/means/freq/univariate/transpose/append/contents dessus. **Refactor pur : snapshots et 789 tests inchangés**
+- [ ] `src/procs/corr.rs` — PROC CORR : Pearson (VAR / WITH), N, NOSIMPLE/NOPROB ; sortie matricielle ; OUT= optionnel (réutilise `decode_column`/`sample_std`/`mean`)
+- [ ] `src/procs/rank.rs` — PROC RANK : VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= (collation `sas_cmp` de SORT) ; écrit une table
+- [ ] `src/procs/tabulate.rs` — PROC TABULATE : CLASS/VAR + expression de table (page/row/col, `*` et `,`), stats par cellule. Effort élevé (sous-parser dédié de l'expression de table)
+- [ ] `src/procs/report.rs` — PROC REPORT : COLUMN + DEFINE (display/group/analysis/order), stats de groupe, BREAK/RBREAK (sous-ensemble documenté). Effort élevé (grande grammaire)
+- [ ] Fixtures `tests/fixtures/m9/` + snapshots (vérifiés à la main vs SAS 9.4) ; DoD : `cargo test -p sas_interpreter` vert ; passer M9 à TERMINÉ, jalon courant → M10
+
+## M10 — stats avancées (procs existants)
+- [ ] BY-group dans MEANS & UNIVARIATE (aujourd'hui parsé puis ignoré : `means.rs:60-62`, `univariate.rs:104-105`) : exige tri par BY (NOTE/erreur sinon), une section par groupe (réutilise `group_by_keys`) ; + `OUTPUT OUT=` pour UNIVARIATE
+- [ ] WEIGHT dans MEANS & UNIVARIATE (et CORR si livré) : stats pondérées via `partition_weighted` (D2 ; poids ≤0/missing exclus)
+- [ ] Intervalles de confiance MEANS : `ALPHA=`, `CLM`/`LCLM`/`UCLM` ; helper quantile t de Student (`common.rs`)
+- [ ] FREQ : test CHISQ (Pearson χ², ddl, p-value, 2 voies) ET application réelle de NOROW/NOCOL/NOPERCENT/NOFREQ/NOCUM (parsés puis ignorés : `freq.rs:192-199`)
+- [ ] Fixtures `tests/fixtures/m10/` + snapshots ; DoD : cargo test vert ; jalon courant → M11
+
+## M11 — macro complet (promu ON par défaut)
+Architecture (D3 + design détaillé, voir PLAN.md §Macro M11) : expansion **texte→texte
+interfoliée** pilotée par l'exécuteur, état (`MacroEngine`) dans `Session` ; nouveau module
+`src/macros/` (promu depuis `preprocess.rs`). Un segment brut est expansé PUIS lexé/parsé/exécuté ;
+`CALL SYMPUT` écrit la table après l'étape, vu par le segment suivant.
+
+- [ ] M11.1 — déplacer l'expansion dans la boucle exécuteur ; `Session.macro_engine` ; segmenteur brut + expand→lex par segment. `%let`/`&var` IDENTIQUE (réutilise `read_name`/`resolve_value`/`resolve_refs_once`). **Invariant pass-through octet-identique** (source sans macro → inchangé) + écho des n° de ligne ORIGINAUX. Flag conservé ; tests de non-régression
+- [ ] M11.2 — `%macro name(params)/%mend` + invocation `%name(args)` : table de définitions, paramètres positionnels + mots-clés (défauts), expanseur récursif (garde de profondeur), `%local`/`%global`
+- [ ] M11.3 — `%if/%then/%else/%do/%end` + `%do i=a %to b [%by k]` itératif (génération de texte ; garde d'itérations)
+- [ ] M11.4 — `%eval` : arithmétique entière (`/` tronque), comparaisons, logique ; câblé dans %if/%to/%by
+- [ ] M11.5 — `CALL SYMPUT`/`SYMGET` : `DsStmt::CallRoutine`, `EvalCtx.symput_writes` (drainé APRÈS l'étape → écrit `session.macro_engine` global) + `EvalCtx.macro_symbols_snapshot` (SYMGET lit l'instantané début d'étape). Parser `call symput(...)` dans `parser/datastep.rs`
+- [ ] M11.6 — `%sysfunc(fn(args))` (liste blanche `functions::call`) ; vars auto `&SYSDATE9`/`&SYSTIME`/`&SYSVER` (FIGÉES sous `--deterministic`) ; quoting `%str`/`%nrstr` (sentinelles ; `%bquote`/`%superq` en suite) ; indirection `&&&`
+- [ ] M11.7 — retrait du feature flag `macros` (ON par défaut ; supprimer les `#[cfg(feature="macros")]`). **Gate : toute la suite (789 tests + snapshots) verte SANS `--features`, snapshots octet-identiques**
+- [ ] Fixtures `tests/fixtures/m11/` + snapshots ; DoD : cargo test vert, flag retiré

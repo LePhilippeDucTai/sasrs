@@ -112,6 +112,44 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `S3Library` derrière feature `s3` | M8 | ✅ | moyen | même trait `LibraryProvider`, scan parquet via URI `s3://` ; non branché ; cloud réel = features Polars `cloud`/`aws` (suite) |
 | `src/datastep/fastpath.rs` — fast-path vectorisé des steps simples (SET+assign → LazyFrame) | M8 | ✅ | élevé | opt-in (`Session.vectorize`/`--vectorize`), OFF par défaut ; v1 = SET simple + assignations numériques (littéraux/copies/+−*), prouvé équivalent au chemin ligne-à-ligne (tests bit-à-bit + log) ; subsetting IF / `/` / `**` / char repliés sur la boucle |
 
+### Jalons M9–M11 (extension — roadmap dans PROGRESS.md)
+
+| Fichier / tâche | Jalon | Modèle | Effort | Notes |
+|---|---|---|---|---|
+| `src/procs/common.rs` | M9 | **Sonnet** | moyen | extraire `decode_column`/`resolve_input`/`sample_std`/`mean`/`partition_numeric`/`group_by_keys` (dédup 6×/4×/2×) ; rebrancher les procs ; refactor pur, sorties inchangées |
+| `src/procs/corr.rs` | M9 | **Opus** | moyen | Pearson (VAR/WITH), N, NOSIMPLE/NOPROB, OUT= ; réutilise common |
+| `src/procs/rank.rs` | M9 | **Opus** | moyen | VAR/RANKS, GROUPS=, TIES=, DESCENDING, OUT= ; collation `sas_cmp` |
+| `src/procs/tabulate.rs` | M9 | **Opus** | élevé | sous-parser de l'expression de table (page/row/col, `*`/`,`) |
+| `src/procs/report.rs` | M9 | **Opus** | élevé | COLUMN + DEFINE, groupes, BREAK/RBREAK (sous-ensemble) |
+| BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | **Opus** | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
+| `src/macros/` (depuis `preprocess.rs`) — processeur macro complet | M11 | **Fable** | élevé | voir §Macro M11 ci-dessous ; 7 unités incrémentales |
+
+### Macro M11 — architecture (décision actée)
+
+Modèle choisi : **expansion texte→texte PRE-lexer, interfoliée** avec la boucle de
+`executor::run_program`, état dans `Session` (pas de transformeur de tokens : les corps
+de `%macro` contiennent du texte SAS arbitraire, et `%str`/`%nrstr` masquent des caractères
+au scanner — naturellement un travail au niveau texte ; c'est aussi le modèle réel de SAS).
+
+- **État** : nouveau `pub macro_engine: MacroEngine` sur `Session` (construit dans `Session::new`
+  depuis `deterministic`). `MacroEngine { symbols: SymbolTable{global, scopes}, macros: HashMap<String,MacroDef>, deterministic, guard }`.
+- **Seam** : `executor::run_program` ne reçoit plus un source pré-expansé ; il itère sur des
+  **segments bruts** (`RawSegmenter`, découpe aux frontières top-level en respectant
+  `%macro…%mend` et le masquage `%str/%nrstr`), appelle `macro_engine.expand_open_code(raw)`,
+  puis lexe/parse/exécute le texte expansé via un `StatementStream` transitoire (les bras du
+  match `Block` sont réutilisés tels quels). `lib.rs` cesse de pré-expanser.
+- **CALL SYMPUT** : `EvalCtx` (construit par étape, sans `&mut Session`) gagne
+  `symput_writes: Vec<(String,String)>` ; `DsStmt::CallRoutine` y pousse ; APRÈS l'exécution de
+  l'étape, `exec::execute` draine vers `macro_engine.set_symbol_global` (visible au segment
+  suivant — fidèle à SAS : invisible dans la même étape). `SYMGET` lit un instantané
+  `EvalCtx.macro_symbols_snapshot` pris en début d'étape.
+- **Écho log** : afficher les n° de ligne ORIGINAUX (pas le texte généré ; MPRINT hors périmètre).
+- **Vars auto / déterminisme** : `&SYSDATE9`/`&SYSTIME`/`&SYSVER` figées sous `--deterministic`
+  (sinon snapshots instables). `today_sas()` doit devenir deterministic-aware si SYSDATE9 en dérive.
+- **Invariant de bascule (M11.7)** : `expand_open_code` est l'IDENTITÉ pour tout segment sans
+  déclencheur macro résolu → les 789 tests + snapshots restent octet-identiques sans `--features`.
+- Découpage en 7 unités commit+push : voir PROGRESS.md (M11.1 … M11.7).
+
 ### Conseils d'orchestration
 
 - **Ordre M1 strict** : `parser/mod.rs` → `parser/expr.rs` → `parser/{datastep,global}.rs`
