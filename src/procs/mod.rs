@@ -86,7 +86,11 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
         // statement courant (on est au MILIEU du statement PROC : un ident
         // comme `data` dans `proc sort data=x;` serait sinon pris pour une
         // frontière par skip_to_step_boundary).
-        "freq" | "transpose" | "univariate"
+        "freq" => {
+            let ast = freq::parse(ts)?;
+            Ok(ProcAst::Freq(ast))
+        }
+        "transpose" | "univariate"
         | "datasets" | "append" | "sql" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
@@ -195,7 +199,7 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["freq", "transpose", "univariate",
+        for proc_name in &["transpose", "univariate",
                            "datasets", "append", "sql"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);

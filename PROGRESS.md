@@ -49,7 +49,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 
 ## M5 — procs statistiques
 - [x] `src/procs/means.rs` (CLASS, _TYPE_/_FREQ_, OUTPUT OUT=)
-- [ ] `src/procs/freq.rs` (1 voie, 2 voies, MISSING)
+- [x] `src/procs/freq.rs` (1 voie, 2 voies, MISSING)
 - [ ] `src/procs/univariate.rs` (quantiles définition 5)
 - [ ] Fixtures m5/ + snapshots
 
