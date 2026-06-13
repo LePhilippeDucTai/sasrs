@@ -60,7 +60,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m6/ + snapshots
 
 ## M7 — gestion de données
-- [ ] `src/procs/transpose.rs` (BY/ID/VAR, _NAME_/COLn)
+- [x] `src/procs/transpose.rs` (BY/ID/VAR, _NAME_/COLn)
 - [ ] `src/procs/append.rs` (FORCE)
 - [ ] `src/procs/datasets.rs` (+ `rename` dans LibraryProvider)
 - [ ] OPTIONS OBS=/FIRSTOBS= ; fonctions lot 2 (INTNX/INTCK, LAG/DIF par site d'appel)

@@ -98,8 +98,11 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let prog = crate::sql::parser::parse_sql_program(ts)?;
             Ok(ProcAst::Sql(prog))
         }
-        "transpose"
-        | "datasets" | "append" => {
+        "transpose" => {
+            let ast = transpose::parse(ts)?;
+            Ok(ProcAst::Transpose(ast))
+        }
+        "datasets" | "append" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
             Err(SasError::runtime(format!(
@@ -207,8 +210,7 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["transpose",
-                           "datasets", "append"] {
+        for proc_name in &["datasets", "append"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
             let mut ts = crate::parser::StatementStream::new(&source).unwrap();
