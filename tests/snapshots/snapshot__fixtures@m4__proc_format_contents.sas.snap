@@ -1,0 +1,87 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m4/proc_format_contents.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc format;
+3       value $sexf 'M'='Male' 'F'='Female';
+4       value agegrp low-12='Child' 13-15='Teen' 16-high='Adult';
+5     run;
+NOTE: Format $SEXF has been output.
+NOTE: Format AGEGRP has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     data work.people;
+7       set d.class(keep=name sex age);
+8       format sex $sexf. age agegrp.;
+9     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.PEOPLE has 19 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title 'User formats applied';
+
+11    proc print data=work.people;
+12    run;
+NOTE: There were 19 observations read from the data set WORK.PEOPLE.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    title 'Metadata';
+
+14    proc contents data=work.people;
+15    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                      User formats applied
+
+                               Obs    name       sex         age
+
+                                 1    Alfred     Male       Teen
+                                 2    Alice      Female     Teen
+                                 3    Barbara    Female     Teen
+                                 4    Carol      Female     Teen
+                                 5    Henry      Male       Teen
+                                 6    James      Male      Child
+                                 7    Jane       Female    Child
+                                 8    Janet      Female     Teen
+                                 9    Jeffrey    Male       Teen
+                                10    John       Male      Child
+                                11    Joyce      Female    Child
+                                12    Judy       Female     Teen
+                                13    Louise     Female    Child
+                                14    Mary       Female     Teen
+                                15    Philip     Male      Adult
+                                16    Robert     Male      Child
+                                17    Ronald     Male       Teen
+                                18    Thomas     Male      Child
+                                19    William    Male       Teen
+
+                                            Metadata
+
+Data Set Name:  WORK.PEOPLE           Observations:   19
+Member Type:    DATA                  Variables:      3
+Engine:         PARQUET
+
+                        #    Variable    Type    Len    Format     Label
+
+                        3    age         Num       8    agegrp.
+                        1    name        Char      7
+                        2    sex         Char      1    $sexf.
+
+==== EXIT 0 ====

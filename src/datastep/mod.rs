@@ -1199,16 +1199,13 @@ fn put_width(args: &[Expr]) -> usize {
         Expr::Str(s) => s.as_str(),
         _ => return 200,
     };
-    let trimmed = name.trim_end_matches('.');
-    let digits: String = trimmed
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    digits.parse().unwrap_or(200)
+    // La largeur du résultat de PUT est la largeur `w` du format, PAS les
+    // chiffres finaux du token : pour `dollar10.2` c'est 10 (pas 2, le nombre
+    // de décimales). On s'appuie donc sur le parseur de FormatSpec.
+    crate::formats::FormatSpec::parse(name)
+        .and_then(|spec| spec.w)
+        .map(|w| w as usize)
+        .unwrap_or(200)
 }
 
 #[cfg(test)]
@@ -1787,6 +1784,10 @@ mod tests {
         assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("date9.".into())]), 9);
         assert_eq!(put_width(&[Expr::Num(1.0), Expr::Var("words".into())]), 200);
         assert_eq!(put_width(&[Expr::Num(1.0)]), 200);
+        // Forme w.d : la largeur est `w`, pas le nombre de décimales.
+        assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("dollar10.2".into())]), 10);
+        assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("percent8.1".into())]), 8);
+        assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("comma12.".into())]), 12);
     }
 
     // ── Options de dataset + OUTPUT ciblé (M2, lot 4) ────────────────────

@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M4**
+Jalon courant : **M5**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -45,7 +45,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] INPUT()/PUT() branchés dans functions.rs ; FORMAT/LABEL/ATTRIB statements
 - [x] `src/formats/userdef.rs` + `src/procs/format.rs`
 - [x] Persistance VarMeta + `src/procs/contents.rs` (persistance format/label via sidecar JSON `<table>.parquet.sasmeta.json` faite en box 2 — Polars 0.46 ParquetWriter n'expose pas d'API KV parquet ; `src/procs/contents.rs` fait)
-- [ ] Fixtures m4/ + snapshots
+- [x] Fixtures m4/ + snapshots
 
 ## M5 — procs statistiques
 - [ ] `src/procs/means.rs` (CLASS, _TYPE_/_FREQ_, OUTPUT OUT=)
