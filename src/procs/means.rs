@@ -286,7 +286,7 @@ fn resolve_input(ast: &MeansAst, session: &Session) -> Result<DatasetRef> {
 /// group. `n`/`nmiss` are passed the group's non-missing/missing counts
 /// separately because they depend on the missing tally, not on `xs`.
 /// Returns a `Value` (`Value::missing()` when undefined for the group).
-fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
+pub fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
     let n = xs.len();
     match stat {
         "n" => Value::Num(n as f64),
@@ -365,7 +365,7 @@ fn median(xs: &[f64]) -> Option<f64> {
 }
 
 /// Header text used both as report header and a stat label in the listing.
-fn stat_header(stat: &str) -> &'static str {
+pub fn stat_header(stat: &str) -> &'static str {
     match stat {
         "n" => "N",
         "nmiss" => "NMiss",

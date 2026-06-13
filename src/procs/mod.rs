@@ -25,6 +25,7 @@ pub mod means;
 pub mod print;
 pub mod rank;
 pub mod sort;
+pub mod tabulate;
 pub mod transpose;
 pub mod univariate;
 
@@ -46,6 +47,7 @@ pub enum ProcAst {
     Datasets(datasets::DatasetsAst),
     Append(append::AppendAst),
     Format(format::FormatAst),
+    Tabulate(tabulate::TabulateAst),
     Sql(crate::sql::ast::SqlProgram),
 }
 
@@ -115,6 +117,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = transpose::parse(ts)?;
             Ok(ProcAst::Transpose(ast))
         }
+        "tabulate" => {
+            let ast = tabulate::parse(ts)?;
+            Ok(ProcAst::Tabulate(ast))
+        }
         "append" => {
             let ast = append::parse(ts)?;
             Ok(ProcAst::Append(ast))
@@ -153,6 +159,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Datasets(a) => datasets::execute(a, session),
         ProcAst::Append(a) => append::execute(a, session),
         ProcAst::Format(a) => format::execute(a, session),
+        ProcAst::Tabulate(a) => tabulate::execute(a, session),
         ProcAst::Sql(a) => crate::sql::execute(a, session),
     };
 
