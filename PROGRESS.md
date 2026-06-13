@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M14** (I/O fichiers plats). M1–M13 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M15** (bibliothèque de fonctions). M1–M14 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -143,7 +143,7 @@ Le plus gros déblocage : aujourd'hui tout entre/sort en parquet, impossible de 
 - [x] M14.2 — `FILE` + `PUT` (sortie texte) : `DsStmt::{File,Put}`, `PutDest{Path,Log,Print}`, `PutItem` (miroir de `InputItem`). Destinations `FILE 'chemin'`/`LOG`/`PRINT` (défaut LOG), options DLM=/DSD/LRECL= ; PUT list (char trimé / num BESTw., blanc avant chaque variable), formatted (`$10.`/`5.2`/`DATE9.` via `FormatCatalog::format`), named `var=`, `_all_`, littéraux, pointeurs `@n`/`+n`, `/`, hold `@` (même itération) / `@@` (entre itérations). Exécution pilotée par l'AST (PUT dans `DO` réexécuté). `LogWriter::put_line` (verbatim). Différés : fileref nu, option FILE inconnue. +25 tests (1043 lib + snapshot, 0 `.snap.new`, 0 warning)
 - [x] M14.3 — `PROC IMPORT`/`PROC EXPORT` : `src/procs/{import,export}.rs`, 3 points dans `mod.rs`. **CSV/TAB/DLM complets** (Polars feature `csv` : `CsvReadOptions`/`CsvWriter`, coercition via `SasDataset::from_dataframe`) ; options `DATAFILE=`/`OUT=`/`OUTFILE=`/`DATA=`/`DBMS=`/`REPLACE`/`GETNAMES=YES|NO`/`DELIMITER=`/`DLM=`/`DATAROW=`/`SHEET=` (parsé). **Excel (XLSX) différé proprement** : `calamine`/`rust_xlsxwriter` absents du registry local (pas de réseau) → erreur "PROC IMPORT/EXPORT with DBMS=XLSX is not yet implemented in this build." Export num : colonnes date exportées en valeur SAS brute (reconversion différée). +28 tests (1071 lib + snapshot, 0 `.snap.new`, 0 warning)
 - [x] M14.4 — `LIBNAME libref CSV 'dir'` bibliothèque virtuelle : `CsvLibrary` (impl `LibraryProvider` : read/scan via `CsvReadOptions`+`from_dataframe`, write via `CsvWriter`, list/exists/delete/rename sur `<table>.csv`), `LibraryManager::assign_csv`. `parse_libname` accepte un engine optionnel (`GlobalStmt::Libname{engine}`), routage dans `executor` : CSV→`CsvLibrary`, XLSX→erreur "LIBNAME engine XLSX is not yet implemented in this build.", défaut→`DirLibrary` (inchangé). +14 tests (1088 lib + snapshot, 0 `.snap.new`, 0 warning)
-- [ ] Fixtures `m14/` (read_csv, datalines, put_report, import_export) + snapshots vérifiés. DoD : m1–m13 inchangés
+- [x] Fixtures `m14/` (datalines, put_report, read_csv, libname_csv) + 4 snapshots **vérifiés à la main** : DATALINES "3 records were read from the infile DATALINES." + PROC PRINT ; PUT formaté @20/@32 dans le listing ; PROC IMPORT CSV "data set WORK.PETS has 3 obs 4 vars" ; LIBNAME CSV "Engine: CSV, Physical Name: data". Harnais : `common::write_pets_csv` (input CSV relatif → déterministe). **EXPORT non snapshoté** (NOTE chemin absolu non déterministe → couvert par le round-trip unitaire). `cargo test` vert (1088 lib + snapshot, m1–m13 octet-identiques). Réserve documentée : espacement littéral+variable du PUT à confronter à un oracle SAS réel. **M14 TERMINÉ.**
 
 ## M15 — bibliothèque de fonctions (~44 → ~150)
 Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par famille.
