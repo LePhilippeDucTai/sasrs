@@ -204,6 +204,10 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
         });
     }
 
+    // Take a shared reference to the session's format catalog for formatting.
+    // All cell formatting is done here, before any &mut session use below.
+    let cat = &session.format_catalog;
+
     // Décode chaque colonne UNE seule fois (downcast par colonne, jamais
     // par cellule — checklist PLAN.md point 3).
     let mut col_cells: Vec<Vec<String>> = Vec::with_capacity(col_indices.len());
@@ -223,9 +227,7 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
                 .map(|o| {
                     let v = num_to_value(o);
                     match &spec {
-                        Some(spec) => {
-                            crate::formats::FormatCatalog::default().format(&v, spec)
-                        }
+                        Some(spec) => cat.format(&v, spec),
                         None => match v {
                             Value::Missing(kind) => kind.display(),
                             Value::Num(f) => format_best(f, 12),
@@ -240,8 +242,7 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
                 .map(|o| {
                     let raw = o.unwrap_or("");
                     match &spec {
-                        Some(spec) => crate::formats::FormatCatalog::default()
-                            .format(&Value::Char(raw.to_string()), spec),
+                        Some(spec) => cat.format(&Value::Char(raw.to_string()), spec),
                         None => raw.to_string(),
                     }
                 })
@@ -664,5 +665,83 @@ mod tests {
         let listing = session.listing.into_string();
         assert!(listing.contains("Body Weight"), "listing: {listing}");
         assert!(listing.contains("Pupil Name"), "listing: {listing}");
+    }
+
+    // ── End-to-end: PROC FORMAT → FORMAT statement → PROC PRINT ──────────────
+
+    /// Prove that a user-defined format registered via PROC FORMAT is resolved
+    /// by PROC PRINT through the session catalog.
+    ///
+    /// Setup:
+    ///   1. Define `SEXFMT` (1→Male, 2→Female, other→Unknown) in the session
+    ///      format catalog (simulating `proc format; value sexfmt 1='Male' ...`).
+    ///   2. Write a dataset with a `sex` column (format="SEXFMT.") holding
+    ///      values 1, 2, and 3.
+    ///   3. Execute PROC PRINT and check the listing shows "Male", "Female",
+    ///      and "Unknown" (the `other` label).
+    #[test]
+    fn user_format_end_to_end_via_session_catalog() {
+        use crate::formats::userdef::{Bound, Range, UserFormat};
+
+        let mut session = make_session();
+
+        // 1. Register a user-defined numeric format in the session catalog.
+        let uf = UserFormat {
+            is_char: false,
+            ranges: vec![
+                Range {
+                    from: Bound::Num(1.0),
+                    to: Bound::Num(1.0),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    label: "Male".to_string(),
+                },
+                Range {
+                    from: Bound::Num(2.0),
+                    to: Bound::Num(2.0),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    label: "Female".to_string(),
+                },
+            ],
+            other: Some("Unknown".to_string()),
+        };
+        session.format_catalog.define("SEXFMT", uf);
+
+        // 2. Write a dataset whose `sex` column has format="SEXFMT."
+        let df = df!["sex" => [1.0_f64, 2.0, 3.0]].unwrap();
+        let vars = vec![VarMeta {
+            name: "sex".to_string(),
+            ty: VarType::Num,
+            length: 8,
+            format: Some("SEXFMT.".to_string()),
+            label: None,
+        }];
+        let ds = SasDataset { df, vars };
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write("GENDER", &ds)
+            .unwrap();
+
+        // 3. PROC PRINT.
+        let ast = PrintAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "GENDER".into(),
+            }),
+            vars: None,
+            noobs: false,
+            label: false,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        // The user-defined format labels must appear in the listing.
+        // This proves the session catalog was used, not FormatCatalog::default().
+        assert!(listing.contains("Male"), "listing: {listing}");
+        assert!(listing.contains("Female"), "listing: {listing}");
+        assert!(listing.contains("Unknown"), "listing: {listing}");
     }
 }

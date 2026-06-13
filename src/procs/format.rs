@@ -12,22 +12,593 @@
 //!   output." — en session seulement, pas de catalogue persistant
 //!   (limitation documentée dans README).
 //! - INVALUE (informats utilisateur) : M4+, ERROR propre d'ici là.
+//!
+//! ## Naming convention
+//! Format names are registered WITHOUT a leading `$` transformation beyond
+//! what the user writes. The `$` prefix is kept as part of the name, e.g.
+//! `$CITYFMT`. `FormatCatalog::define` upcases the whole string, so the
+//! stored key is `$CITYFMT`. When `FormatSpec::parse` sees `$CITYFMT.` it
+//! produces `name="$CITYFMT"`, which matches the catalog key exactly.
 
-#![allow(unused_variables, dead_code)]
-
-use crate::error::Result;
+use crate::error::{Result, SasError};
+use crate::formats::userdef::{Bound, Range, UserFormat};
 use crate::parser::StatementStream;
 use crate::session::Session;
+use crate::token::TokenKind;
 
 pub struct FormatAst {
     /// (nom, définition brute à parser en UserFormat)
-    pub values: Vec<(String, crate::formats::userdef::UserFormat)>,
+    pub values: Vec<(String, UserFormat)>,
 }
 
+/// Parse `proc format; value ... ; [value ... ;] run;`
+/// Called AFTER "proc format" has been consumed. Consumes through `run;`/`quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
-    todo!()
+    // Consume the trailing `;` of the `proc format` statement header.
+    // There may be options between `proc format` and `;` (none supported yet).
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        // Skip any unrecognised proc-header options (none for FORMAT).
+        ts.next();
+    }
+
+    let mut values: Vec<(String, UserFormat)> = Vec::new();
+
+    loop {
+        // Skip stray semicolons.
+        while ts.peek().kind == TokenKind::Semi {
+            ts.next();
+        }
+
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            ts.next();
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
+            break;
+        }
+
+        if ts.peek().is_kw("value") {
+            ts.next(); // consume "value"
+            let (name, uf) = parse_value_stmt(ts)?;
+            values.push((name, uf));
+        } else if ts.peek().is_kw("invalue") {
+            let span = ts.peek().span;
+            return Err(SasError::parse(
+                "INVALUE in PROC FORMAT is not yet implemented.",
+                span,
+            ));
+        } else {
+            // Unknown sub-statement: skip it.
+            ts.skip_to_semi();
+        }
+    }
+
+    Ok(FormatAst { values })
+}
+
+/// Parse one VALUE statement (after the "value" keyword has been consumed):
+///   [$]<fmtname>  <range>='label'  [<range>='label' ...] [other='label'] ;
+fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, UserFormat)> {
+    // --- format name: optional `$` then identifier ---
+    let is_char = ts.peek().kind == TokenKind::Dollar;
+    let dollar_span = ts.peek().span;
+    if is_char {
+        ts.next(); // consume `$`
+    }
+
+    let name_tok = ts.peek().clone();
+    let base_name = match name_tok.ident() {
+        Some(n) => n.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a format name after VALUE",
+                name_tok.span,
+            ));
+        }
+    };
+    ts.next();
+
+    // Build the stored name: include the `$` prefix for char formats.
+    let name = if is_char {
+        let _ = dollar_span; // used above for is_char detection
+        format!("${}", base_name)
+    } else {
+        base_name
+    };
+
+    // --- parse range='label' pairs until `;` ---
+    let mut ranges: Vec<Range> = Vec::new();
+    let mut other: Option<String> = None;
+
+    loop {
+        // Skip stray semicolons within the statement (there should not be any,
+        // but be defensive). A real `;` ends the statement.
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        // `run` / `quit` as step terminator (in case `;` was already consumed).
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            break;
+        }
+
+        // OTHER keyword.
+        if ts.peek().is_kw("other") {
+            ts.next(); // consume "other"
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after OTHER",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // consume `=`
+            let lbl = parse_string_literal(ts)?;
+            other = Some(lbl);
+            continue;
+        }
+
+        // Parse one or more bounds that share a label (comma list or range).
+        // Collect all ranges for this label-group.
+        let group_ranges = parse_range_group(ts, is_char)?;
+
+        // Now expect `=` then label.
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "expected '=' after range specification",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // consume `=`
+
+        let label = parse_string_literal(ts)?;
+
+        // Assign label to every range in the group.
+        for mut r in group_ranges {
+            r.label = label.clone();
+            ranges.push(r);
+        }
+    }
+
+    let uf = UserFormat { is_char, ranges, other };
+    Ok((name, uf))
+}
+
+/// Parse a comma-separated list of range specs that share a single label.
+/// Each element is a bound or a bound-range (`a-b`, `low-<b`, etc.).
+/// Returns a Vec of Range with empty labels (caller fills them in).
+fn parse_range_group(ts: &mut StatementStream, is_char: bool) -> Result<Vec<Range>> {
+    let mut out: Vec<Range> = Vec::new();
+
+    loop {
+        let r = parse_single_range(ts, is_char)?;
+        out.push(r);
+
+        // If next token is a comma, consume it and continue with another range.
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+            // After comma there must be another range before `=`.
+        } else {
+            break;
+        }
+    }
+
+    Ok(out)
+}
+
+/// Parse a single bound or range:
+///   single:  `1`  or  `'PAR'`
+///   range:   `1-3`  |  `low-<5`  |  `5<-high`  |  `1<-<100`
+///            `low-5`  |  `1-high`  etc.
+///
+/// Exclusivity encoding (`<` next to `-`):
+///   `a-<b`  → from_exclusive=false, to_exclusive=true
+///   `a<-b`  → from_exclusive=true,  to_exclusive=false
+///   `a<-<b` → from_exclusive=true,  to_exclusive=true
+fn parse_single_range(ts: &mut StatementStream, is_char: bool) -> Result<Range> {
+    // Parse the "from" bound.
+    let (from_bound, from_lt_before_minus) = parse_bound_with_lt(ts, is_char)?;
+
+    // Check if there is a `-` or `<-` token sequence starting a range.
+    // After the from bound:
+    //   Case A: Next is `-`       → simple `-`, to_exclusive stays false by default.
+    //   Case B: Next is `<` then `-` (already consumed `<` as from_lt_before_minus)
+    //      → from_exclusive=true, to_exclusive depends on `<` after `-`.
+    //
+    // from_lt_before_minus == true means we already consumed a `<` between the
+    // from value and the `-` (i.e. `5 < - high`).
+
+    // Now decide if there's a range at all.
+    // If the next token is `=` or `,` or `;` or EOF or step-boundary → single value.
+    let has_range = match ts.peek().kind {
+        TokenKind::Minus => true,
+        _ => false,
+    };
+
+    if !has_range {
+        // Single value: from == to, no exclusivity.
+        // from_lt_before_minus being true here would be a parse error, but
+        // we'll just ignore it and treat as single value.
+        let to = from_bound.clone();
+        return Ok(Range {
+            from: from_bound,
+            to,
+            from_exclusive: false,
+            to_exclusive: false,
+            label: String::new(),
+        });
+    }
+
+    // Consume the `-`.
+    ts.next(); // `-`
+
+    // Check for `<` immediately after `-` → to_exclusive = true.
+    let to_exclusive = if ts.peek().kind == TokenKind::Lt {
+        ts.next(); // consume `<`
+        true
+    } else {
+        false
+    };
+
+    // Parse the "to" bound.
+    let (to_bound, _) = parse_bound_with_lt(ts, is_char)?;
+
+    Ok(Range {
+        from: from_bound,
+        to: to_bound,
+        from_exclusive: from_lt_before_minus,
+        to_exclusive,
+        label: String::new(),
+    })
+}
+
+
+/// Parse a bound token, also detecting a leading `<` before the `-` dash
+/// (which would indicate from_exclusive=true for a range like `5<-high`).
+///
+/// Returns `(Bound, had_lt_before_dash)`.
+/// The `had_lt_before_dash` is true when we see `<` and the *next* token is
+/// `-` (so `5<-high`). We consume the `<` in that case.
+fn parse_bound_with_lt(
+    ts: &mut StatementStream,
+    is_char: bool,
+) -> Result<(Bound, bool)> {
+    // Check for a leading `<` that precedes `-` (from_exclusive pattern).
+    // We need lookahead: peek is `<` and peek2 is `-`.
+    // Actually the `<` comes AFTER the bound value in `5<-high`:
+    //   tokens: Num(5), Lt, Minus, Ident("high")
+    // So we parse the bound normally, then check for `<` before `-`.
+
+    let bound = parse_bound(ts, is_char)?;
+
+    // After the bound, check for `<` immediately followed by `-` → from_exclusive.
+    let had_lt = if ts.peek().kind == TokenKind::Lt && ts.peek2().kind == TokenKind::Minus {
+        ts.next(); // consume `<`
+        true
+    } else {
+        false
+    };
+
+    Ok((bound, had_lt))
+}
+
+/// Parse a single bound value (LOW, HIGH, a number, or a quoted string).
+fn parse_bound(ts: &mut StatementStream, is_char: bool) -> Result<Bound> {
+    if ts.peek().is_kw("low") {
+        ts.next();
+        return Ok(Bound::Low);
+    }
+    if ts.peek().is_kw("high") {
+        ts.next();
+        return Ok(Bound::High);
+    }
+
+    if is_char {
+        // Character bound: must be a string literal.
+        let s = parse_string_literal(ts)?;
+        return Ok(Bound::Char(s));
+    }
+
+    // Numeric bound: a number literal.
+    // Handle optional leading minus sign (negative numbers).
+    let negative = if ts.peek().kind == TokenKind::Minus {
+        // But only if the next-next is a number (not another operator).
+        // Peek2 check: is the token after `-` a Num?
+        if matches!(ts.peek2().kind, TokenKind::Num(_)) {
+            ts.next(); // consume `-`
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    match ts.peek().kind.clone() {
+        TokenKind::Num(n) => {
+            ts.next();
+            let v = if negative { -n } else { n };
+            Ok(Bound::Num(v))
+        }
+        _ => Err(SasError::parse(
+            "expected a numeric bound (number, LOW, or HIGH)",
+            ts.peek().span,
+        )),
+    }
+}
+
+/// Parse a quoted string literal and return its content.
+fn parse_string_literal(ts: &mut StatementStream) -> Result<String> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Str { value, .. } => {
+            let s = value.clone();
+            ts.next();
+            Ok(s)
+        }
+        _ => Err(SasError::parse(
+            "expected a quoted string literal",
+            tok.span,
+        )),
+    }
 }
 
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
-    todo!()
+    for (name, uf) in &ast.values {
+        let uname = name.to_uppercase();
+        session.log.note(&format!("Format {} has been output.", uname));
+        session.format_catalog.define(&uname, uf.clone());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+    use crate::source::SourceFile;
+    use std::path::PathBuf;
+
+    fn make_session() -> Session {
+        Session::new(None, PathBuf::from("."), true).unwrap()
+    }
+
+    fn parse_format_src(src: &str) -> Result<FormatAst> {
+        let source = SourceFile::new(src);
+        let mut ts = StatementStream::new(&source).unwrap();
+        ts.next(); // "proc"
+        ts.next(); // "format"
+        parse(&mut ts)
+    }
+
+    // ── parse tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_minimal_empty() {
+        let ast = parse_format_src("proc format; run;").unwrap();
+        assert!(ast.values.is_empty());
+    }
+
+    #[test]
+    fn parse_single_value_numeric() {
+        let ast = parse_format_src(
+            "proc format; value sexfmt 1='Male' 2='Female'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.values.len(), 1);
+        let (name, uf) = &ast.values[0];
+        assert_eq!(name, "sexfmt");
+        assert!(!uf.is_char);
+        assert_eq!(uf.ranges.len(), 2);
+        assert_eq!(uf.ranges[0].label, "Male");
+        assert_eq!(uf.ranges[1].label, "Female");
+    }
+
+    #[test]
+    fn parse_char_format_with_dollar() {
+        let ast = parse_format_src(
+            "proc format; value $cityfmt 'PAR'='Paris' 'NYC'='New York'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.values.len(), 1);
+        let (name, uf) = &ast.values[0];
+        assert_eq!(name, "$cityfmt");
+        assert!(uf.is_char);
+        assert_eq!(uf.ranges.len(), 2);
+        assert_eq!(uf.ranges[0].label, "Paris");
+        assert_eq!(uf.ranges[1].label, "New York");
+    }
+
+    #[test]
+    fn parse_inclusive_range() {
+        let ast = parse_format_src(
+            "proc format; value agefmt 0-17='Child' 18-64='Adult' 65-high='Senior'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        assert_eq!(uf.ranges.len(), 3);
+        // 0-17: from=Num(0), to=Num(17), both inclusive
+        assert!(matches!(uf.ranges[0].from, Bound::Num(n) if n == 0.0));
+        assert!(matches!(uf.ranges[0].to, Bound::Num(n) if n == 17.0));
+        assert!(!uf.ranges[0].from_exclusive);
+        assert!(!uf.ranges[0].to_exclusive);
+        // 65-high
+        assert!(matches!(uf.ranges[2].from, Bound::Num(n) if n == 65.0));
+        assert!(matches!(uf.ranges[2].to, Bound::High));
+    }
+
+    #[test]
+    fn parse_low_exclusive_upper() {
+        // low-<5='Below5'
+        let ast = parse_format_src(
+            "proc format; value f low-<5='Below5' 5-high='AtLeast5'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        assert!(matches!(uf.ranges[0].from, Bound::Low));
+        assert!(matches!(uf.ranges[0].to, Bound::Num(n) if n == 5.0));
+        assert!(!uf.ranges[0].from_exclusive);
+        assert!(uf.ranges[0].to_exclusive);
+    }
+
+    #[test]
+    fn parse_exclusive_lower_to_high() {
+        // 5<-high='Above5'
+        let ast = parse_format_src(
+            "proc format; value f low-5='AtMost5' 5<-high='Above5'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        // Second range: 5<-high
+        assert!(matches!(uf.ranges[1].from, Bound::Num(n) if n == 5.0));
+        assert!(uf.ranges[1].from_exclusive);
+        assert!(!uf.ranges[1].to_exclusive);
+        assert!(matches!(uf.ranges[1].to, Bound::High));
+    }
+
+    #[test]
+    fn parse_both_exclusive() {
+        // 1<-<10='Middle'
+        let ast = parse_format_src(
+            "proc format; value f 1<-<10='Middle'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        assert!(uf.ranges[0].from_exclusive);
+        assert!(uf.ranges[0].to_exclusive);
+    }
+
+    #[test]
+    fn parse_comma_list() {
+        // 1,2,3='Group'  → 3 ranges with same label
+        let ast = parse_format_src(
+            "proc format; value f 1,2,3='Group'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        assert_eq!(uf.ranges.len(), 3);
+        for r in &uf.ranges {
+            assert_eq!(r.label, "Group");
+        }
+    }
+
+    #[test]
+    fn parse_other() {
+        let ast = parse_format_src(
+            "proc format; value f 1='One' other='Unknown'; run;",
+        )
+        .unwrap();
+        let (_, uf) = &ast.values[0];
+        assert_eq!(uf.other, Some("Unknown".to_string()));
+        assert_eq!(uf.ranges.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_value_stmts() {
+        let ast = parse_format_src(
+            "proc format; value a 1='x'; value b 2='y'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.values.len(), 2);
+        assert_eq!(ast.values[0].0, "a");
+        assert_eq!(ast.values[1].0, "b");
+    }
+
+    #[test]
+    fn parse_invalue_errors() {
+        let result = parse_format_src("proc format; invalue f '1'=1; run;");
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("INVALUE"), "msg: {msg}");
+    }
+
+    // ── execute tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn execute_registers_format_in_catalog() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let mut session = make_session();
+        let ast = FormatAst {
+            values: vec![(
+                "SEXFMT".to_string(),
+                UserFormat {
+                    is_char: false,
+                    ranges: vec![
+                        crate::formats::userdef::Range {
+                            from: Bound::Num(1.0),
+                            to: Bound::Num(1.0),
+                            from_exclusive: false,
+                            to_exclusive: false,
+                            label: "Male".to_string(),
+                        },
+                        crate::formats::userdef::Range {
+                            from: Bound::Num(2.0),
+                            to: Bound::Num(2.0),
+                            from_exclusive: false,
+                            to_exclusive: false,
+                            label: "Female".to_string(),
+                        },
+                    ],
+                    other: Some("Unknown".to_string()),
+                },
+            )],
+        };
+
+        execute(&ast, &mut session).unwrap();
+
+        // Verify it's in the catalog.
+        let spec = FormatSpec::parse("SEXFMT.").unwrap();
+        let result = session.format_catalog.format(&Value::Num(1.0), &spec);
+        // Right-justified to w=0 (no width in spec) → label as-is.
+        assert!(result.contains("Male"), "result: {result}");
+
+        // NOTE logged.
+        let log = session.log.into_string();
+        assert!(log.contains("Format SEXFMT has been output."), "log: {log}");
+    }
+
+    #[test]
+    fn execute_round_trip_parse_and_execute() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let mut session = make_session();
+        let source = SourceFile::new(
+            "proc format; value sexfmt 1='Male' 2='Female' other='?'; run;",
+        );
+        let mut ts = StatementStream::new(&source).unwrap();
+        ts.next(); // proc
+        ts.next(); // format
+        let ast = parse(&mut ts).unwrap();
+        execute(&ast, &mut session).unwrap();
+
+        let spec = FormatSpec::parse("SEXFMT.").unwrap();
+        assert_eq!(
+            session.format_catalog.format(&Value::Num(1.0), &spec),
+            "Male"
+        );
+        assert_eq!(
+            session.format_catalog.format(&Value::Num(2.0), &spec),
+            "Female"
+        );
+        assert_eq!(
+            session.format_catalog.format(&Value::Num(99.0), &spec),
+            "?"
+        );
+    }
 }

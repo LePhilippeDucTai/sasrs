@@ -28,6 +28,8 @@ pub struct Session {
     /// input of procs without DATA=.
     pub last_dataset: Option<String>,
     pub deterministic: bool,
+    /// User-defined format catalog (populated by PROC FORMAT).
+    pub format_catalog: crate::formats::FormatCatalog,
 }
 
 impl Session {
@@ -45,6 +47,7 @@ impl Session {
             base_dir,
             last_dataset: None,
             deterministic,
+            format_catalog: crate::formats::FormatCatalog::default(),
         })
     }
 }

@@ -60,13 +60,17 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = sort::parse(ts)?;
             Ok(ProcAst::Sort(ast))
         }
+        "format" => {
+            let ast = format::parse(ts)?;
+            Ok(ProcAst::Format(ast))
+        }
         // Procs connues du périmètre, pas encore implémentées : consommer
         // le bloc pour rester synchronisé, puis ERROR. Finir d'abord le
         // statement courant (on est au MILIEU du statement PROC : un ident
         // comme `data` dans `proc sort data=x;` serait sinon pris pour une
         // frontière par skip_to_step_boundary).
         "means" | "summary" | "freq" | "transpose" | "univariate" | "contents"
-        | "datasets" | "append" | "format" | "sql" => {
+        | "datasets" | "append" | "sql" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
             Err(SasError::runtime(format!(
@@ -175,7 +179,7 @@ mod tests {
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
         for proc_name in &["means", "freq", "transpose", "univariate",
-                           "contents", "datasets", "append", "format", "sql"] {
+                           "contents", "datasets", "append", "sql"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
             let mut ts = crate::parser::StatementStream::new(&source).unwrap();
@@ -229,6 +233,31 @@ mod tests {
             !msg.contains("not yet implemented"),
             "unknown proc should say 'not found', not 'not yet implemented': {msg}"
         );
+    }
+
+    #[test]
+    fn parse_proc_format_succeeds() {
+        let (name, ast) = parse_proc_src("proc format; value f 1='x'; run;").unwrap();
+        assert_eq!(name.to_ascii_lowercase(), "format");
+        assert!(matches!(ast, ProcAst::Format(_)));
+    }
+
+    #[test]
+    fn execute_proc_format_registers_and_notes() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let mut session = make_session();
+        let (_, ast) = parse_proc_src("proc format; value sexfmt 1='Male' 2='Female'; run;").unwrap();
+        execute_proc("format", &ast, &mut session).unwrap();
+
+        let spec = FormatSpec::parse("SEXFMT.").unwrap();
+        let result = session.format_catalog.format(&Value::Num(1.0), &spec);
+        assert!(result.contains("Male"), "result: {result}");
+
+        let log = session.log.into_string();
+        assert!(log.contains("Format SEXFMT has been output."), "log: {log}");
+        assert!(log.contains("PROCEDURE FORMAT used"), "log: {log}");
     }
 
     // --- execute_proc tests ---
