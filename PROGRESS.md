@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M11** (M1–M10 complets ; reste le processeur macro complet)
+Jalon courant : **— tous les jalons M1–M11 terminés** (étape DATA, 15 PROCs, SQL, stats avancées, processeur macro complet ON par défaut)
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -105,4 +105,4 @@ interfoliée** pilotée par l'exécuteur, état (`MacroEngine`) dans `Session` ;
 - [x] M11.5 — `CALL SYMPUT`/`SYMGET` + interfoliage par segment (`RawSegmenter` feature-gated : découpe aux frontières `run;`/`quit;`, ignore `;` en chaîne/`%macro`). `DsStmt::CallRoutine` (parsé 2 builds) ; `EvalCtx.symput_writes` drainé APRÈS l'étape → `macro_engine.set_symbol_global` (invisible dans la même étape = SAS) ; `SYMGET` lit `EvalCtx.macro_symbols` (instantané début d'étape) ; format numérique BEST12. **Build défaut cfg-split = identité M11.1 → byte-identique** ; per-segment + drain compilés sous `macros` seulement. Gates : défaut 896 (0 `.snap.new`), feature 953 (+8), 0 warning
 - [x] M11.6 — `%sysfunc(fn(args))` (liste blanche → `functions::call`) ; vars auto `&SYSDATE9`/`&SYSTIME`/`&SYSDAY`/`&SYSVER` (FIGÉES sous `--deterministic` : 01JAN1960/00:00/Friday/9.4) ; quoting `%str`/`%nrstr` (sentinelles) ; indirection `&&&`/`&&var&i`. Tout sous feature `macros`. Gates : défaut 896 (0 `.snap.new`), feature 967 (+14), 0 warning. (l'agent a fini le code mais n'a pu lancer son gate — disque plein ; validé par l'orchestrateur après `cargo clean`)
 - [x] M11.7 — feature `macros` RETIRÉE : processeur macro TOUJOURS actif. `IdentityMacroStage` + le `MacroEngine` identité (zero-sized) + la branche `run_program` source-entier supprimés ; seul le chemin per-segment subsiste. **Gate critique vert : `cargo test -p sas_interpreter` (sans `--features`) = 967 tests + snapshot, ZÉRO `.snap.new` (octet-identique), 0 warning.** Aucun fixture macro-free n'a divergé (fast-path identité : segment sans `%`/`&` → tranche inchangée ; n° de ligne via `LogWriter.src_line` partagé)
-- [ ] Fixtures `tests/fixtures/m11/` + snapshots ; DoD : cargo test vert, flag retiré
+- [x] Fixtures `tests/fixtures/m11/` (macro_loop, eval_if, symput, sysfunc_autovars) + 4 snapshots **vérifiés à la main** : `%macro`+`%do` génère x=1,2,3 ; `%eval(7/2)`=3 + `%if` → big=7 ; `CALL SYMPUT`→étape suivante v=42 ; `%sysfunc(upcase)`=SAS + `&sysver`=9.4 + `&sysdate9`=01JAN1960. (NB : commentaires sans `%`/`&` — le processeur les scanne, simplification documentée.) `cargo test` vert (967 + snapshots), flag retiré. **M11 TERMINÉ.**

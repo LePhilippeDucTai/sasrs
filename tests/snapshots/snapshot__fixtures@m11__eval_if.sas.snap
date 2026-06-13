@@ -1,0 +1,35 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m11/eval_if.sas
+---
+==== LOG ====
+
+1     data calc;
+2       q = 3;
+3       big = 7;
+4     run;
+NOTE: The data set WORK.CALC has 1 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'Macro %eval and %if inside a DATA step';
+
+6     proc print data=calc;
+7       var q big;
+8     run;
+NOTE: There were 1 observations read from the data set WORK.CALC.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                             Macro %eval and %if inside a DATA step
+
+                                        Obs    q    big
+
+                                          1    3      7
+
+==== EXIT 0 ====
