@@ -62,6 +62,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{
     by_groups, decode_column, partition_numeric, partition_weighted, resolve_by_cols, sample_std,
+    t_quantile,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -81,6 +82,9 @@ pub struct MeansAst {
     /// WEIGHT variable (single numeric var). When `Some`, all statistics are
     /// computed through the weighted code path (see `compute_weighted`).
     pub weight: Option<String>,
+    /// Confidence level alpha for CLM/LCLM/UCLM (SAS default 0.05). Only the
+    /// CI statistics consult it; it never affects the default output.
+    pub alpha: f64,
     pub output: Option<MeansOutput>,
 }
 
@@ -93,6 +97,7 @@ pub struct MeansOutput {
 /// Recognized statistic keywords accepted on the PROC MEANS statement.
 const STAT_KEYWORDS: &[&str] = &[
     "n", "nmiss", "mean", "std", "stddev", "min", "max", "sum", "range", "stderr", "cv", "median",
+    "clm", "lclm", "uclm",
 ];
 
 fn is_stat_keyword(s: &str) -> bool {
@@ -107,6 +112,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut data: Option<DatasetRef> = None;
     let mut noprint = false;
     let mut stats: Vec<String> = Vec::new();
+    // SAS default confidence level. Stays 0.05 unless ALPHA= is given; only
+    // the CI statistics read it, so the default path is unaffected.
+    let mut alpha: f64 = 0.05;
 
     // --- PROC MEANS statement options, until `;` ---
     loop {
@@ -128,6 +136,26 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             // explicit PRINT — undo a noprint default (e.g. PROC SUMMARY).
             ts.next();
             noprint = false;
+        } else if ts.peek().is_kw("alpha") {
+            ts.next();
+            expect_eq(ts, "ALPHA")?;
+            let tok = ts.peek().clone();
+            let val = match tok.kind {
+                TokenKind::Num(f) => f,
+                _ => {
+                    return Err(SasError::parse(
+                        "expected a number after ALPHA=",
+                        tok.span,
+                    ));
+                }
+            };
+            ts.next();
+            if !(val > 0.0 && val < 1.0) {
+                return Err(SasError::runtime(format!(
+                    "The ALPHA= value {val} must be between 0 and 1."
+                )));
+            }
+            alpha = val;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             if is_stat_keyword(&name) {
                 ts.next();
@@ -205,6 +233,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
         var,
         by,
         weight,
+        alpha,
         output,
     })
 }
@@ -383,8 +412,22 @@ fn resolve_input(ast: &MeansAst, session: &Session) -> Result<DatasetRef> {
 /// group. `n`/`nmiss` are passed the group's non-missing/missing counts
 /// separately because they depend on the missing tally, not on `xs`.
 /// Returns a `Value` (`Value::missing()` when undefined for the group).
-pub fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
+pub fn compute(stat: &str, xs: &[f64], n_missing: usize, alpha: f64) -> Value {
     let n = xs.len();
+    // Confidence limits for the mean (CLM/LCLM/UCLM). Require n>=2 (need a
+    // valid std error). half-width h = t_{1-alpha/2, n-1} * stderr.
+    if matches!(stat, "lclm" | "uclm" | "clm") {
+        let mean = if n == 0 {
+            return Value::missing();
+        } else {
+            xs.iter().sum::<f64>() / n as f64
+        };
+        let stderr = match sample_std(xs) {
+            Some(s) if n >= 2 => s / (n as f64).sqrt(),
+            _ => return Value::missing(),
+        };
+        return clm_value(stat, mean, stderr, n, alpha);
+    }
     match stat {
         "n" => Value::Num(n as f64),
         "nmiss" => Value::Num(n_missing as f64),
@@ -452,7 +495,7 @@ pub fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
 ///
 /// See the file header for the formulas. MEDIAN is computed UNWEIGHTED here
 /// (weighted median deferred — documented divergence).
-pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize) -> Value {
+pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alpha: f64) -> Value {
     let n = pairs.len();
     let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
     let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
@@ -473,6 +516,19 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize) -> 
         None
     };
     let std = variance.map(|v| v.sqrt());
+
+    // Weighted confidence limits for the mean. Reuse the SAME weighted std
+    // error MEANS displays (Std/sqrt(Σw)) so the CI is consistent with the
+    // reported StdErr; df = n-1 over the usable-obs COUNT. Documented choice.
+    if matches!(stat, "lclm" | "uclm" | "clm") {
+        match (mean_w, std) {
+            (Some(m), Some(s)) if n >= 2 && sum_w > 0.0 => {
+                let stderr = s / sum_w.sqrt();
+                return clm_value(stat, m, stderr, n, alpha);
+            }
+            _ => return Value::missing(),
+        }
+    }
 
     match stat {
         "n" => Value::Num(n as f64),
@@ -539,6 +595,26 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize) -> 
     }
 }
 
+/// Confidence-limit half-width h = t_{1-alpha/2, n-1} * stderr, and the
+/// requested single bound. `clm` has no single-value meaning (it is a pair of
+/// columns in the listing) → missing here; only `lclm`/`uclm` resolve.
+fn clm_value(stat: &str, mean: f64, stderr: f64, n: usize, alpha: f64) -> Value {
+    let h = clm_halfwidth(stderr, n, alpha);
+    match stat {
+        "lclm" => Value::Num(mean - h),
+        "uclm" => Value::Num(mean + h),
+        _ => Value::missing(),
+    }
+}
+
+/// Half-width of the confidence interval for the mean: t_{1-alpha/2, n-1} *
+/// stderr. Requires n>=2 (caller guarantees a finite stderr).
+fn clm_halfwidth(stderr: f64, n: usize, alpha: f64) -> f64 {
+    let df = (n - 1) as f64;
+    let t = t_quantile(1.0 - alpha / 2.0, df);
+    t * stderr
+}
+
 /// Median of the non-missing values (None when empty).
 fn median(xs: &[f64]) -> Option<f64> {
     if xs.is_empty() {
@@ -568,6 +644,11 @@ pub fn stat_header(stat: &str) -> &'static str {
         "stderr" => "Std Error",
         "cv" => "CV",
         "median" => "Median",
+        // CI stats: alpha-dependent labels are produced by
+        // `stat_report_headers`; these are generic fallbacks.
+        "lclm" => "Lower CL for Mean",
+        "uclm" => "Upper CL for Mean",
+        "clm" => "CL for Mean",
         _ => "Stat",
     }
 }
@@ -726,6 +807,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
                 &var_values,
                 weight_values.as_deref(),
                 &report_stats,
+                ast.alpha,
                 grp_rows,
             );
         }
@@ -744,6 +826,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             out,
             &by_cols,
             &by_groups_list,
+            ast.alpha,
         )?;
     }
 
@@ -774,6 +857,7 @@ fn emit_report_group(
     var_values: &[Vec<Value>],
     weight_values: Option<&[Value]>,
     report_stats: &[String],
+    alpha: f64,
     group_rows: &[usize],
 ) {
     let mut headers: Vec<String> = Vec::new();
@@ -789,10 +873,35 @@ fn emit_report_group(
     }
     headers.push("Variable".to_string());
     aligns.push(Align::Left);
+    // CLM expands to two columns; LCLM/UCLM to one CL column each; all others
+    // to a single column. Header text reflects the confidence level.
     for s in report_stats {
-        headers.push(stat_header(s).to_string());
-        aligns.push(Align::Right);
+        for h in stat_report_headers(s, alpha) {
+            headers.push(h);
+            aligns.push(Align::Right);
+        }
     }
+
+    // Append the per-stat cells for one analysis variable to `row`, choosing
+    // the weighted or unweighted path. CLM yields two cells (lower, upper).
+    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
+        Some(wv) => {
+            let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
+            for s in report_stats {
+                for cell in stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, alpha)) {
+                    row.push(cell);
+                }
+            }
+        }
+        None => {
+            let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
+            for s in report_stats {
+                for cell in stat_report_cells(s, &|st| compute(st, &xs, nmiss, alpha)) {
+                    row.push(cell);
+                }
+            }
+        }
+    };
 
     let mut rows: Vec<Vec<String>> = Vec::new();
 
@@ -800,22 +909,7 @@ fn emit_report_group(
         // One section over the group's rows: one row per analysis variable.
         for (vi, vname_idx) in var_cols.iter().enumerate() {
             let mut row = vec![ds.vars[*vname_idx].name.clone()];
-            match weight_values {
-                Some(wv) => {
-                    let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, group_rows);
-                    for s in report_stats {
-                        let v = compute_weighted(s, &pairs, nmiss);
-                        row.push(fmt_stat_cell(s, &v));
-                    }
-                }
-                None => {
-                    let (xs, nmiss) = partition_numeric(&var_values[vi], group_rows);
-                    for s in report_stats {
-                        let v = compute(s, &xs, nmiss);
-                        row.push(fmt_stat_cell(s, &v));
-                    }
-                }
-            }
+            push_cells(&mut row, vi, group_rows);
             rows.push(row);
         }
     } else {
@@ -829,28 +923,54 @@ fn emit_report_group(
                     row.push(class_cell(kv));
                 }
                 row.push(ds.vars[*vname_idx].name.clone());
-                match weight_values {
-                    Some(wv) => {
-                        let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
-                        for s in report_stats {
-                            let v = compute_weighted(s, &pairs, nmiss);
-                            row.push(fmt_stat_cell(s, &v));
-                        }
-                    }
-                    None => {
-                        let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
-                        for s in report_stats {
-                            let v = compute(s, &xs, nmiss);
-                            row.push(fmt_stat_cell(s, &v));
-                        }
-                    }
-                }
+                push_cells(&mut row, vi, grp_rows);
                 rows.push(row);
             }
         }
     }
 
     session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// Report column header(s) for a stat. Most stats map to one header; the
+/// confidence-limit stats produce alpha-dependent labels and CLM produces two.
+fn stat_report_headers(stat: &str, alpha: f64) -> Vec<String> {
+    let pct = cl_percent_label(alpha);
+    match stat {
+        "lclm" => vec![format!("Lower {pct}% CL for Mean")],
+        "uclm" => vec![format!("Upper {pct}% CL for Mean")],
+        "clm" => vec![
+            format!("Lower {pct}% CL for Mean"),
+            format!("Upper {pct}% CL for Mean"),
+        ],
+        _ => vec![stat_header(stat).to_string()],
+    }
+}
+
+/// Report cell(s) for a stat, computing values via `f` (the unweighted or
+/// weighted `compute*` closure). CLM emits two cells (LCLM then UCLM).
+fn stat_report_cells(stat: &str, f: &dyn Fn(&str) -> Value) -> Vec<String> {
+    match stat {
+        "clm" => vec![
+            fmt_stat_cell("lclm", &f("lclm")),
+            fmt_stat_cell("uclm", &f("uclm")),
+        ],
+        _ => vec![fmt_stat_cell(stat, &f(stat))],
+    }
+}
+
+/// Format the confidence percentage for a CL header from alpha, e.g.
+/// 0.05 → "95", 0.10 → "90", 0.01 → "99". Whole percents print without a
+/// decimal; otherwise the trailing zeros are trimmed (matches SAS labels).
+fn cl_percent_label(alpha: f64) -> String {
+    let pct = 100.0 * (1.0 - alpha);
+    // Round to a sensible precision to avoid FP noise like 94.99999999.
+    let rounded = (pct * 1e6).round() / 1e6;
+    if (rounded - rounded.round()).abs() < 1e-9 {
+        format!("{}", rounded.round() as i64)
+    } else {
+        format!("{rounded}")
+    }
 }
 
 /// Like `group_by_keys`, but only considers `rows` (a subset of all rows),
@@ -907,6 +1027,7 @@ fn write_output(
     out: &MeansOutput,
     by_cols: &[crate::procs::common::ByCol],
     by_groups_list: &[(Vec<Value>, Vec<usize>)],
+    alpha: f64,
 ) -> Result<()> {
     let k = class_cols.len();
 
@@ -997,11 +1118,11 @@ fn write_output(
                     match weight_values {
                         Some(wv) => {
                             let (pairs, nmiss) = partition_weighted(&sp.col, wv, grp_rows);
-                            stat_vals.push(compute_weighted(&sp.stat, &pairs, nmiss));
+                            stat_vals.push(compute_weighted(&sp.stat, &pairs, nmiss, alpha));
                         }
                         None => {
                             let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);
-                            stat_vals.push(compute(&sp.stat, &xs, nmiss));
+                            stat_vals.push(compute(&sp.stat, &xs, nmiss, alpha));
                         }
                     }
                 }
@@ -1224,53 +1345,146 @@ mod tests {
     fn compute_basic_stats_with_a_missing() {
         // values: 2, 4, 6, missing -> non-missing [2,4,6], nmiss=1
         let xs = vec![2.0, 4.0, 6.0];
-        assert_eq!(compute("n", &xs, 1), Value::Num(3.0));
-        assert_eq!(compute("nmiss", &xs, 1), Value::Num(1.0));
-        assert_eq!(compute("mean", &xs, 1), Value::Num(4.0));
-        assert_eq!(compute("min", &xs, 1), Value::Num(2.0));
-        assert_eq!(compute("max", &xs, 1), Value::Num(6.0));
-        assert_eq!(compute("sum", &xs, 1), Value::Num(12.0));
-        assert_eq!(compute("range", &xs, 1), Value::Num(4.0));
-        assert_eq!(compute("median", &xs, 1), Value::Num(4.0));
+        assert_eq!(compute("n", &xs, 1, 0.05), Value::Num(3.0));
+        assert_eq!(compute("nmiss", &xs, 1, 0.05), Value::Num(1.0));
+        assert_eq!(compute("mean", &xs, 1, 0.05), Value::Num(4.0));
+        assert_eq!(compute("min", &xs, 1, 0.05), Value::Num(2.0));
+        assert_eq!(compute("max", &xs, 1, 0.05), Value::Num(6.0));
+        assert_eq!(compute("sum", &xs, 1, 0.05), Value::Num(12.0));
+        assert_eq!(compute("range", &xs, 1, 0.05), Value::Num(4.0));
+        assert_eq!(compute("median", &xs, 1, 0.05), Value::Num(4.0));
         // std of [2,4,6]: variance = ((2-4)^2+(4-4)^2+(6-4)^2)/2 = 8/2 = 4 -> std 2
-        assert_eq!(compute("std", &xs, 1), Value::Num(2.0));
+        assert_eq!(compute("std", &xs, 1, 0.05), Value::Num(2.0));
     }
 
     #[test]
     fn compute_median_even() {
         let xs = vec![1.0, 2.0, 3.0, 4.0];
-        assert_eq!(compute("median", &xs, 0), Value::Num(2.5));
+        assert_eq!(compute("median", &xs, 0, 0.05), Value::Num(2.5));
     }
 
     #[test]
     fn compute_edge_n0_and_n1() {
         let empty: Vec<f64> = vec![];
-        assert_eq!(compute("n", &empty, 0), Value::Num(0.0));
-        assert!(compute("mean", &empty, 0).is_missing());
-        assert!(compute("std", &empty, 0).is_missing());
-        assert!(compute("min", &empty, 0).is_missing());
-        assert!(compute("range", &empty, 0).is_missing());
-        assert_eq!(compute("sum", &empty, 0), Value::Num(0.0));
+        assert_eq!(compute("n", &empty, 0, 0.05), Value::Num(0.0));
+        assert!(compute("mean", &empty, 0, 0.05).is_missing());
+        assert!(compute("std", &empty, 0, 0.05).is_missing());
+        assert!(compute("min", &empty, 0, 0.05).is_missing());
+        assert!(compute("range", &empty, 0, 0.05).is_missing());
+        assert_eq!(compute("sum", &empty, 0, 0.05), Value::Num(0.0));
 
         let one = vec![5.0];
-        assert_eq!(compute("n", &one, 0), Value::Num(1.0));
-        assert_eq!(compute("mean", &one, 0), Value::Num(5.0));
+        assert_eq!(compute("n", &one, 0, 0.05), Value::Num(1.0));
+        assert_eq!(compute("mean", &one, 0, 0.05), Value::Num(5.0));
         // std needs n>=2.
-        assert!(compute("std", &one, 0).is_missing());
-        assert!(compute("stderr", &one, 0).is_missing());
-        assert_eq!(compute("min", &one, 0), Value::Num(5.0));
+        assert!(compute("std", &one, 0, 0.05).is_missing());
+        assert!(compute("stderr", &one, 0, 0.05).is_missing());
+        assert_eq!(compute("min", &one, 0, 0.05), Value::Num(5.0));
     }
 
     #[test]
     fn compute_cv_and_stderr() {
         // [2,4,6]: mean 4, std 2 -> cv = 100*2/4 = 50; stderr = 2/sqrt(3)
         let xs = vec![2.0, 4.0, 6.0];
-        assert_eq!(compute("cv", &xs, 0), Value::Num(50.0));
-        if let Value::Num(se) = compute("stderr", &xs, 0) {
+        assert_eq!(compute("cv", &xs, 0, 0.05), Value::Num(50.0));
+        if let Value::Num(se) = compute("stderr", &xs, 0, 0.05) {
             assert!((se - 2.0 / 3.0_f64.sqrt()).abs() < 1e-12);
         } else {
             panic!("stderr should be numeric");
         }
+    }
+
+    // ──────────────────────── confidence-interval tests ────────────────────
+
+    #[test]
+    fn t_quantile_known_values() {
+        // t_{0.975, 1} ≈ 12.7062
+        assert!((t_quantile(0.975, 1.0) - 12.7062).abs() < 1e-3);
+        // t_{0.975, 10} ≈ 2.2281
+        assert!((t_quantile(0.975, 10.0) - 2.2281).abs() < 1e-3);
+        // t_{0.975, large} → z_{0.975} ≈ 1.95996
+        assert!((t_quantile(0.975, 100000.0) - 1.95996).abs() < 1e-3);
+        // Symmetry and median.
+        assert_eq!(t_quantile(0.5, 7.0), 0.0);
+        assert!((t_quantile(0.025, 10.0) + t_quantile(0.975, 10.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_clm_hand_computed() {
+        // values [2,4,4,4,5,5,7,9]: mean 5, n=8. SAS uses the SAMPLE std
+        // (VARDEF=DF): var = 32/7 → std = 2.13809, stderr = std/sqrt(8) =
+        // 0.75593, t_{0.975,7} = 2.36462 → h = 1.78749. (The task brief's
+        // 3.3278/6.6722 assumed std=2, which is not the sample std of this
+        // data; SAS reports the values below.)
+        let xs = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let lo = match compute("lclm", &xs, 0, 0.05) {
+            Value::Num(f) => f,
+            _ => panic!("lclm numeric"),
+        };
+        let hi = match compute("uclm", &xs, 0, 0.05) {
+            Value::Num(f) => f,
+            _ => panic!("uclm numeric"),
+        };
+        assert!((lo - 3.21251).abs() < 1e-3, "lclm={lo}");
+        assert!((hi - 6.78749).abs() < 1e-3, "uclm={hi}");
+    }
+
+    #[test]
+    fn compute_clm_alpha_widens_interval() {
+        let xs = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let lo05 = match compute("lclm", &xs, 0, 0.05) {
+            Value::Num(f) => f,
+            _ => unreachable!(),
+        };
+        let lo01 = match compute("lclm", &xs, 0, 0.01) {
+            Value::Num(f) => f,
+            _ => unreachable!(),
+        };
+        // Smaller alpha → wider interval → lower lower-limit.
+        assert!(lo01 < lo05, "lo01={lo01} lo05={lo05}");
+    }
+
+    #[test]
+    fn compute_clm_requires_n2() {
+        let one = vec![5.0];
+        assert!(compute("lclm", &one, 0, 0.05).is_missing());
+        assert!(compute("uclm", &one, 0, 0.05).is_missing());
+        let empty: Vec<f64> = vec![];
+        assert!(compute("lclm", &empty, 0, 0.05).is_missing());
+        // "clm" has no single-value meaning.
+        assert!(compute("clm", &one, 0, 0.05).is_missing());
+    }
+
+    #[test]
+    fn parse_alpha_option() {
+        let ast = parse_means("proc means data=a alpha=0.1 clm; var x; run;").unwrap();
+        assert!((ast.alpha - 0.1).abs() < 1e-12);
+        assert!(ast.stats.contains(&"clm".to_string()));
+    }
+
+    #[test]
+    fn parse_alpha_default() {
+        let ast = parse_means("proc means data=a; var x; run;").unwrap();
+        assert!((ast.alpha - 0.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parse_alpha_invalid_errors() {
+        for bad in ["alpha=0", "alpha=1", "alpha=1.5"] {
+            let r = parse_means(&format!("proc means data=a {bad}; run;"));
+            assert!(r.is_err(), "{bad} should error");
+            assert!(
+                r.err().unwrap().to_string().contains("between 0 and 1"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn cl_percent_label_values() {
+        assert_eq!(cl_percent_label(0.05), "95");
+        assert_eq!(cl_percent_label(0.10), "90");
+        assert_eq!(cl_percent_label(0.01), "99");
     }
 
     // ───────────────────────────── execute tests ───────────────────────────
@@ -1322,6 +1536,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![],
             weight: None,
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1368,6 +1583,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![],
             weight: None,
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1430,6 +1646,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![],
             weight: None,
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("sum".into(), "x".into(), "sx".into())],
@@ -1489,6 +1706,7 @@ mod tests {
             var: vec![],
             by: vec![],
             weight: None,
+            alpha: 0.05,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1517,6 +1735,7 @@ mod tests {
             var: vec![],
             by: vec![],
             weight: None,
+            alpha: 0.05,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1525,6 +1744,77 @@ mod tests {
         assert!(
             !listing.contains("The MEANS Procedure"),
             "noprint should not emit a report: {listing}"
+        );
+    }
+
+    #[test]
+    fn execute_clm_output_readback() {
+        let mut session = make_session();
+        // [2,4,4,4,5,5,7,9]: mean 5, lclm≈3.21251, uclm≈6.78749 (alpha 0.05,
+        // SAS sample-std CI).
+        let df = df!["x" => [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec![],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            alpha: 0.05,
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![
+                    ("lclm".into(), "x".into(), "lo".into()),
+                    ("uclm".into(), "x".into(), "hi".into()),
+                ],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let lo = read_num_col(&session, "O", "lo");
+        let hi = read_num_col(&session, "O", "hi");
+        if let (Value::Num(l), Value::Num(h)) = (&lo[0], &hi[0]) {
+            assert!((l - 3.21251).abs() < 1e-3, "lo={l}");
+            assert!((h - 6.78749).abs() < 1e-3, "hi={h}");
+        } else {
+            panic!("lclm/uclm numeric");
+        }
+    }
+
+    #[test]
+    fn execute_clm_report_headers() {
+        let mut session = make_session();
+        let df = df!["x" => [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: false,
+            stats: vec!["mean".into(), "clm".into()],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            alpha: 0.05,
+            output: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(
+            listing.contains("Lower 95% CL for Mean"),
+            "listing: {listing}"
+        );
+        assert!(
+            listing.contains("Upper 95% CL for Mean"),
+            "listing: {listing}"
         );
     }
 
@@ -1551,6 +1841,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
             weight: None,
+            alpha: 0.05,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1585,6 +1876,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
             weight: None,
+            alpha: 0.05,
             output: None,
         };
         let r = execute(&ast, &mut session);
@@ -1619,6 +1911,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
             weight: None,
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -1654,25 +1947,25 @@ mod tests {
         //   CV = 100*Std/mean = 55.3283
         //   USS_w = 1*1 + 2*4 + 3*9 = 36
         let pairs = vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
-        assert_eq!(compute_weighted("n", &pairs, 0), Value::Num(3.0));
-        assert_eq!(compute_weighted("nmiss", &pairs, 0), Value::Num(0.0));
-        assert_eq!(compute_weighted("sum", &pairs, 0), Value::Num(14.0));
-        assert_eq!(compute_weighted("min", &pairs, 0), Value::Num(1.0));
-        assert_eq!(compute_weighted("max", &pairs, 0), Value::Num(3.0));
+        assert_eq!(compute_weighted("n", &pairs, 0, 0.05), Value::Num(3.0));
+        assert_eq!(compute_weighted("nmiss", &pairs, 0, 0.05), Value::Num(0.0));
+        assert_eq!(compute_weighted("sum", &pairs, 0, 0.05), Value::Num(14.0));
+        assert_eq!(compute_weighted("min", &pairs, 0, 0.05), Value::Num(1.0));
+        assert_eq!(compute_weighted("max", &pairs, 0, 0.05), Value::Num(3.0));
 
-        let m = match compute_weighted("mean", &pairs, 0) {
+        let m = match compute_weighted("mean", &pairs, 0, 0.05) {
             Value::Num(f) => f,
             _ => panic!("mean numeric"),
         };
         assert!((m - 14.0 / 6.0).abs() < 1e-12, "mean = {m}");
 
-        let std = match compute_weighted("std", &pairs, 0) {
+        let std = match compute_weighted("std", &pairs, 0, 0.05) {
             Value::Num(f) => f,
             _ => panic!("std numeric"),
         };
         assert!((std - (5.0_f64 / 3.0).sqrt()).abs() < 1e-12, "std = {std}");
 
-        let se = match compute_weighted("stderr", &pairs, 0) {
+        let se = match compute_weighted("stderr", &pairs, 0, 0.05) {
             Value::Num(f) => f,
             _ => panic!("stderr numeric"),
         };
@@ -1681,7 +1974,7 @@ mod tests {
             "stderr = {se}"
         );
 
-        let cv = match compute_weighted("cv", &pairs, 0) {
+        let cv = match compute_weighted("cv", &pairs, 0, 0.05) {
             Value::Num(f) => f,
             _ => panic!("cv numeric"),
         };
@@ -1692,10 +1985,10 @@ mod tests {
     #[test]
     fn compute_weighted_n1_std_missing() {
         let pairs = vec![(5.0, 2.0)];
-        assert_eq!(compute_weighted("n", &pairs, 0), Value::Num(1.0));
-        assert_eq!(compute_weighted("mean", &pairs, 0), Value::Num(5.0));
-        assert!(compute_weighted("std", &pairs, 0).is_missing());
-        assert!(compute_weighted("stderr", &pairs, 0).is_missing());
+        assert_eq!(compute_weighted("n", &pairs, 0, 0.05), Value::Num(1.0));
+        assert_eq!(compute_weighted("mean", &pairs, 0, 0.05), Value::Num(5.0));
+        assert!(compute_weighted("std", &pairs, 0, 0.05).is_missing());
+        assert!(compute_weighted("stderr", &pairs, 0, 0.05).is_missing());
     }
 
     #[test]
@@ -1720,6 +2013,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![],
             weight: Some("w".into()),
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1768,6 +2062,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![("g".into(), false)],
             weight: Some("w".into()),
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -1809,6 +2104,7 @@ mod tests {
             var: vec!["x".into()],
             by: vec![],
             weight: Some("w".into()),
+            alpha: 0.05,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],

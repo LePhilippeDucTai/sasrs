@@ -533,7 +533,10 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
                     }
                     Usage::Analysis(stat) => {
                         let (xs, nmiss) = partition_numeric(&decoded[ci], grp_rows);
-                        let v = means::compute(stat, &xs, nmiss);
+                        // PROC REPORT has no CI statistics; pass the default
+                        // alpha (0.05) — unused unless a CLM/LCLM/UCLM stat is
+                        // requested, which REPORT does not support.
+                        let v = means::compute(stat, &xs, nmiss, 0.05);
                         fmt_cell(&v)
                     }
                     Usage::Display => {

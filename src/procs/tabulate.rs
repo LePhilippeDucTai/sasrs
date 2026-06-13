@@ -702,7 +702,8 @@ fn compute_cell(
                 .expect("var col decoded")
                 .1;
             let (xs, nmiss) = partition_numeric(col, &rows);
-            compute(&stat, &xs, nmiss)
+            // TABULATE has no CI statistics; default alpha is unused here.
+            compute(&stat, &xs, nmiss, 0.05)
         }
         None => {
             // No analysis variable: only frequency-style stats are defined.

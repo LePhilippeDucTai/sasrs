@@ -81,6 +81,163 @@ pub fn partition_weighted(
     (pairs, excluded)
 }
 
+// ───────────────────────── Student-t quantile ─────────────────────────
+//
+// Self-contained Student-t inverse CDF (quantile), added for confidence-
+// interval statistics in PROC MEANS (CLM/LCLM/UCLM). This intentionally
+// duplicates the betai / ln_gamma machinery already present privately in
+// `corr.rs` rather than refactoring corr's copies: keeping corr untouched
+// guarantees its listing output stays byte-identical. The duplication is
+// small and documented here. If a future increment wants a single source of
+// truth, fold corr's private copies into these `pub(crate)` versions and run
+// the corr snapshot/tests to confirm no drift.
+
+/// Lanczos approximation of ln Γ(x) for x > 0. Accuracy ~1e-13.
+fn ln_gamma(x: f64) -> f64 {
+    const COF: [f64; 6] = [
+        76.18009172947146,
+        -86.50532032941677,
+        24.01409824083091,
+        -1.231739572450155,
+        0.1208650973866179e-2,
+        -0.5395239384953e-5,
+    ];
+    let mut y = x;
+    let tmp = x + 5.5 - (x + 0.5) * (x + 5.5).ln();
+    let mut ser = 1.000000000190015;
+    for c in COF.iter() {
+        y += 1.0;
+        ser += c / y;
+    }
+    -tmp + (2.5066282746310005 * ser / x).ln()
+}
+
+/// Continued fraction for the incomplete beta function (Lentz's algorithm).
+fn betacf(a: f64, b: f64, x: f64) -> f64 {
+    const MAXIT: usize = 300;
+    const EPS: f64 = 3.0e-15;
+    const FPMIN: f64 = 1.0e-300;
+
+    let qab = a + b;
+    let qap = a + 1.0;
+    let qam = a - 1.0;
+    let mut c = 1.0;
+    let mut d = 1.0 - qab * x / qap;
+    if d.abs() < FPMIN {
+        d = FPMIN;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=MAXIT {
+        let m = m as f64;
+        let m2 = 2.0 * m;
+        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < FPMIN {
+            d = FPMIN;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < FPMIN {
+            c = FPMIN;
+        }
+        d = 1.0 / d;
+        h *= d * c;
+        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < FPMIN {
+            d = FPMIN;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < FPMIN {
+            c = FPMIN;
+        }
+        d = 1.0 / d;
+        let del = d * c;
+        h *= del;
+        if (del - 1.0).abs() < EPS {
+            break;
+        }
+    }
+    h
+}
+
+/// Regularized incomplete beta function I_x(a, b), x in [0,1].
+fn betai(a: f64, b: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let ln_beta = ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b);
+    let front = (a * x.ln() + b * (1.0 - x).ln() + ln_beta).exp();
+    if x < (a + 1.0) / (a + b + 2.0) {
+        front * betacf(a, b, x) / a
+    } else {
+        1.0 - front * betacf(b, a, 1.0 - x) / b
+    }
+}
+
+/// Cumulative distribution function of Student's t with `df` degrees of
+/// freedom evaluated at `t`: P(T_df <= t). Uses the regularized incomplete
+/// beta identity. Symmetric around 0.
+fn student_t_cdf(t: f64, df: f64) -> f64 {
+    // P(T <= t) = 1 - 0.5 * I_{df/(df+t^2)}(df/2, 1/2) for t >= 0, mirrored.
+    let x = df / (df + t * t);
+    let ib = betai(df / 2.0, 0.5, x);
+    if t >= 0.0 {
+        1.0 - 0.5 * ib
+    } else {
+        0.5 * ib
+    }
+}
+
+/// Student-t quantile (inverse CDF): the value `q` such that
+/// `P(T_df <= q) = p`, for `0 < p < 1` and `df >= 1`. Symmetric around 0.
+///
+/// Solved by bisection on the monotone t-CDF (robust; no derivative needed).
+/// Accuracy ~1e-8 on the target probability. Used by PROC MEANS for the
+/// half-width of confidence limits for the mean: t_{1-alpha/2, n-1}.
+pub fn t_quantile(p: f64, df: f64) -> f64 {
+    if !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if p == 0.5 {
+        return 0.0;
+    }
+    // Exploit symmetry: solve for the upper tail then mirror.
+    let upper = p > 0.5;
+    let target = if upper { p } else { 1.0 - p };
+
+    // Bracket the root. The t distribution has heavier tails than normal, so
+    // start wide and expand until the CDF brackets `target`.
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    while student_t_cdf(hi, df) < target && hi < 1e12 {
+        hi *= 2.0;
+    }
+
+    // Bisection on [lo, hi] (CDF is strictly increasing here).
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        let c = student_t_cdf(mid, df);
+        if c < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo) <= 1e-12 * (1.0 + hi.abs()) {
+            break;
+        }
+    }
+    let q = 0.5 * (lo + hi);
+    if upper {
+        q
+    } else {
+        -q
+    }
+}
+
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
 /// and the variable name (display, original case).
 pub struct ByCol {
