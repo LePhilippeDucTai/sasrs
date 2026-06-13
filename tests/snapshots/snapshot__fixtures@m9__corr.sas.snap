@@ -1,0 +1,75 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m9/corr.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'Pearson correlations among height, weight, age';
+
+3     proc corr data=d.class;
+4       var height weight age;
+5     run;
+NOTE: PROCEDURE CORR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title 'CORR with WITH, no simple statistics, no probabilities';
+
+7     proc corr data=d.class nosimple noprob;
+8       var height weight;
+9       with age;
+10    run;
+NOTE: PROCEDURE CORR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                         Pearson correlations among height, weight, age
+
+                                       The CORR Procedure
+
+3 Variables:  height weight age
+
+                                       Simple Statistics
+
+         Variable     N            Mean         Std Dev       Sum    Minimum    Maximum
+
+         height      19    62.336842105    5.1270752466    1184.4       51.3         72
+         weight      19    100.02631579    22.773933494    1900.5       50.5        150
+         age         19    13.315789474    1.4926721594       253         11         16
+
+                                Pearson Correlation Coefficients
+                                   Prob > |r| under H0: Rho=0
+
+                                       height     weight        age
+
+                            height    1.00000    0.87779    0.81143
+                                                  <.0001     <.0001
+                            weight    0.87779    1.00000    0.74089
+                                       <.0001                0.0003
+                            age       0.81143    0.74089    1.00000
+                                       <.0001     0.0003
+
+
+                     CORR with WITH, no simple statistics, no probabilities
+
+                                       The CORR Procedure
+
+1 With Variables:  age
+2 Variables:  height weight
+
+                                Pearson Correlation Coefficients
+
+                                           height     weight
+
+                                   age    0.81143    0.74089
+
+
+==== EXIT 0 ====

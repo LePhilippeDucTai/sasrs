@@ -1,0 +1,53 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m9/tabulate.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'Frequency of sex';
+
+3     proc tabulate data=d.class;
+4       class sex;
+5       table sex;
+6     run;
+NOTE: PROCEDURE TABULATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Mean height and weight by sex';
+
+8     proc tabulate data=d.class;
+9       class sex;
+10      var height weight;
+11      table sex, height*mean weight*mean;
+12    run;
+NOTE: PROCEDURE TABULATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                        Frequency of sex
+
+                                     The TABULATE Procedure
+
+                                        Table    F     M
+
+                                                 9    10
+
+                                 Mean height and weight by sex
+
+                                     The TABULATE Procedure
+
+                                     height*Mean     weight*Mean
+
+                               F    60.588888889    90.111111111
+                               M           63.91          108.95
+
+==== EXIT 0 ====
