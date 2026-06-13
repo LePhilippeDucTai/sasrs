@@ -44,7 +44,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/formats/mod.rs` + `builtin.rs` (formats puis informats) + tests table-driven
 - [x] INPUT()/PUT() branchés dans functions.rs ; FORMAT/LABEL/ATTRIB statements
 - [x] `src/formats/userdef.rs` + `src/procs/format.rs`
-- [ ] Persistance VarMeta + `src/procs/contents.rs` (persistance format/label FAITE en box 2 via sidecar JSON `<table>.parquet.sasmeta.json` — Polars 0.46 ParquetWriter n'expose pas d'API KV parquet ; reste : `src/procs/contents.rs`)
+- [x] Persistance VarMeta + `src/procs/contents.rs` (persistance format/label via sidecar JSON `<table>.parquet.sasmeta.json` faite en box 2 — Polars 0.46 ParquetWriter n'expose pas d'API KV parquet ; `src/procs/contents.rs` fait)
 - [ ] Fixtures m4/ + snapshots
 
 ## M5 — procs statistiques

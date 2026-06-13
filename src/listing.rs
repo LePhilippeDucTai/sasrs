@@ -45,6 +45,16 @@ impl ListingWriter {
         self.raw(&format!("{}{}", " ".repeat(pad), text));
     }
 
+    /// Left-justified raw line: output `text` as-is at column 0.
+    pub fn write_line(&mut self, text: &str) {
+        self.raw(text);
+    }
+
+    /// Emit a blank line.
+    pub fn blank(&mut self) {
+        self.raw("");
+    }
+
     /// Page header at the start of each proc's output.
     pub fn page_header(&mut self) {
         if self.wrote_anything {

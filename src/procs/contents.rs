@@ -10,13 +10,26 @@
 //! prévoir plus tard un `LibraryProvider::read_meta` si les fichiers
 //! deviennent gros.
 //! `data=lib._all_` : liste les tables de la librairie (via `list()`).
-
-#![allow(unused_variables, dead_code)]
+//!
+//! ## Header block layout
+//!
+//! Two-column layout: left column (~25 chars) holds the label, right column
+//! holds the value.  Three lines:
+//!
+//!   Data Set Name: WORK.CLASS       Observations:  10
+//!   Member Type:   DATA             Variables:      3
+//!   Engine:        PARQUET
+//!
+//! Variable table columns (in order): #, Variable, Type, Len, Format, Label.
+//! `#` and `Len` are right-aligned; all others left-aligned.
 
 use crate::ast::DatasetRef;
-use crate::error::Result;
+use crate::error::{Result, SasError};
+use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::session::Session;
+use crate::token::TokenKind;
+use crate::value::VarType;
 
 pub struct ContentsAst {
     pub data: Option<DatasetRef>,
@@ -25,10 +38,544 @@ pub struct ContentsAst {
     pub all: bool,
 }
 
+/// Parse `proc contents [data=lib.x] [varnum] ; run ;`
+/// Called AFTER "proc contents" has been consumed. Consumes through `run;`.
 pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
-    todo!()
+    let mut data: Option<DatasetRef> = None;
+    let mut varnum = false;
+    let mut all = false;
+
+    // Parse PROC CONTENTS header options until `;`
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next(); // consume `;`
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().is_kw("data") {
+            ts.next(); // consume "data"
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after DATA",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // consume `=`
+            let ds_ref = ts.parse_dataset_ref()?;
+            // Detect data=lib._all_ or data=_all_
+            if ds_ref.name.to_uppercase() == "_ALL_" {
+                all = true;
+            }
+            data = Some(ds_ref);
+        } else if ts.peek().is_kw("varnum") {
+            ts.next();
+            varnum = true;
+        } else {
+            // Unknown option on PROC CONTENTS statement
+            let span = ts.peek().span;
+            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(SasError::parse(
+                format!("Unexpected option '{bad}' on PROC CONTENTS statement."),
+                span,
+            ));
+        }
+    }
+
+    // Parse sub-statements until `run;` or `quit;` or step boundary
+    loop {
+        // Skip stray semicolons
+        while ts.peek().kind == TokenKind::Semi {
+            ts.next();
+        }
+
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            ts.next(); // consume run/quit
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
+            break;
+        }
+
+        // Unknown sub-statement: skip it
+        ts.skip_to_semi();
+    }
+
+    Ok(ContentsAst { data, varnum, all })
 }
 
+/// Execute PROC CONTENTS. Called by `procs::execute_proc`.
 pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
-    todo!()
+    session.listing.page_header();
+
+    if ast.all {
+        // data=lib._all_  — list all tables in the library
+        let libref = match &ast.data {
+            Some(r) => r.libref_or_work(),
+            None => "WORK".to_string(),
+        };
+        let provider = session.libs.get(&libref)?;
+        let mut tables = provider.list()?;
+        tables.sort();
+
+        let headers = vec!["Member Name".to_string()];
+        let aligns = vec![Align::Left];
+        let rows: Vec<Vec<String>> = tables
+            .into_iter()
+            .map(|t| vec![t.to_uppercase()])
+            .collect();
+        session.listing.write_table(&headers, &aligns, &rows);
+        return Ok(());
+    }
+
+    // Resolve the dataset reference (data= or _LAST_)
+    let ds_ref: DatasetRef = match &ast.data {
+        Some(r) => r.clone(),
+        None => {
+            let last = session.last_dataset.clone().ok_or_else(|| {
+                SasError::runtime(
+                    "There is no default input data set (_LAST_ is undefined).",
+                )
+            })?;
+            let parts: Vec<&str> = last.splitn(2, '.').collect();
+            if parts.len() == 2 {
+                DatasetRef {
+                    libref: Some(parts[0].to_string()),
+                    name: parts[1].to_string(),
+                }
+            } else {
+                DatasetRef {
+                    libref: None,
+                    name: last,
+                }
+            }
+        }
+    };
+
+    let libref = ds_ref.libref_or_work();
+    let table_name = ds_ref.name.to_uppercase();
+    let display_name = ds_ref.display(); // e.g. "WORK.CLASS"
+
+    // Read the dataset (metadata only — we only look at VarMeta + n_obs)
+    let provider = session.libs.get(&libref)?;
+    let (ds, notes) = provider.read(&table_name)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+
+    let n_obs = ds.n_obs();
+    let n_vars = ds.vars.len();
+
+    // ── Header block ─────────────────────────────────────────────────────────
+    //
+    // Two-column layout.  Each line: left label (fixed 25 chars wide),
+    // left value.  Two items per line where a right-hand item exists.
+    //
+    //   Data Set Name: WORK.CLASS       Observations:  10
+    //   Member Type:   DATA             Variables:       3
+    //   Engine:        PARQUET
+    //
+    // Label column width = 16 chars (enough for "Data Set Name: ").
+    // We use simple string formatting; no table renderer needed.
+
+    let left_label_width = 16usize;
+    let left_value_width = 20usize; // pad left value to this width for alignment
+
+    // Line 1: Data Set Name / Observations
+    session.listing.write_line(&format!(
+        "{:<lw$}{:<vw$}  {:<lw$}{}",
+        "Data Set Name:",
+        display_name,
+        "Observations:",
+        n_obs,
+        lw = left_label_width,
+        vw = left_value_width,
+    ));
+    // Line 2: Member Type / Variables
+    session.listing.write_line(&format!(
+        "{:<lw$}{:<vw$}  {:<lw$}{}",
+        "Member Type:",
+        "DATA",
+        "Variables:",
+        n_vars,
+        lw = left_label_width,
+        vw = left_value_width,
+    ));
+    // Line 3: Engine (no right-hand item)
+    session.listing.write_line(&format!(
+        "{:<lw$}{}",
+        "Engine:",
+        "PARQUET",
+        lw = left_label_width,
+    ));
+    session.listing.blank();
+
+    // ── Variable table ────────────────────────────────────────────────────────
+    //
+    // Columns: #, Variable, Type, Len, Format, Label
+    // `#` and `Len` are right-aligned; others left-aligned.
+    //
+    // Sort order:
+    //   - default: alphabetical by variable name (case-insensitive)
+    //   - varnum:  creation order (original position in ds.vars)
+    //
+    // In all cases `#` shows the CREATION-ORDER position (1-based).
+
+    let headers: Vec<String> = vec![
+        "#".to_string(),
+        "Variable".to_string(),
+        "Type".to_string(),
+        "Len".to_string(),
+        "Format".to_string(),
+        "Label".to_string(),
+    ];
+    let aligns: Vec<Align> = vec![
+        Align::Right, // #
+        Align::Left,  // Variable
+        Align::Left,  // Type
+        Align::Right, // Len
+        Align::Left,  // Format
+        Align::Left,  // Label
+    ];
+
+    // Build index array, then sort it
+    let mut indices: Vec<usize> = (0..n_vars).collect();
+    if !ast.varnum {
+        // Sort alphabetically by name, case-insensitive
+        indices.sort_by(|&a, &b| {
+            ds.vars[a]
+                .name
+                .to_ascii_lowercase()
+                .cmp(&ds.vars[b].name.to_ascii_lowercase())
+        });
+    }
+    // If varnum=true, leave in creation order (already 0..n_vars)
+
+    let rows: Vec<Vec<String>> = indices
+        .into_iter()
+        .map(|i| {
+            let v = &ds.vars[i];
+            let type_str = match v.ty {
+                VarType::Num => "Num",
+                VarType::Char => "Char",
+            };
+            vec![
+                (i + 1).to_string(),                              // creation-order #
+                v.name.clone(),
+                type_str.to_string(),
+                v.length.to_string(),
+                v.format.as_deref().unwrap_or("").to_string(),
+                v.label.as_deref().unwrap_or("").to_string(),
+            ]
+        })
+        .collect();
+
+    session.listing.write_table(&headers, &aligns, &rows);
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataset::{SasDataset, VarMeta};
+    use crate::session::Session;
+    use crate::source::SourceFile;
+    use polars::prelude::*;
+    use std::path::PathBuf;
+
+    fn make_session() -> Session {
+        Session::new(None, PathBuf::from("."), true).unwrap()
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn parse_contents_src(src: &str) -> Result<ContentsAst> {
+        let full = format!("proc contents {}; run;", src);
+        let source = SourceFile::new(&full);
+        let mut ts = crate::parser::StatementStream::new(&source).unwrap();
+        ts.next(); // "proc"
+        ts.next(); // "contents"
+        parse(&mut ts)
+    }
+
+    fn parse_contents_full(src: &str) -> Result<ContentsAst> {
+        let source = SourceFile::new(src);
+        let mut ts = crate::parser::StatementStream::new(&source).unwrap();
+        ts.next(); // "proc"
+        ts.next(); // "contents"
+        parse(&mut ts)
+    }
+
+    /// Write a small dataset with one Num and one Char variable.
+    /// `age` has a format and label; `name` has neither.
+    fn write_test_dataset(session: &mut Session) {
+        let df = df![
+            "name" => ["Alice", "Bob"],
+            "age"  => [30.0_f64, 25.0]
+        ]
+        .unwrap();
+        let vars = vec![
+            VarMeta {
+                name: "name".to_string(),
+                ty: VarType::Char,
+                length: 5,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "age".to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: Some("best12.".to_string()),
+                label: Some("Age of subject".to_string()),
+            },
+        ];
+        let ds = SasDataset { df, vars };
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write("CLASS", &ds)
+            .unwrap();
+        session.last_dataset = Some("WORK.CLASS".to_string());
+    }
+
+    // ── Parse tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_minimal() {
+        let ast = parse_contents_src("").unwrap();
+        assert!(ast.data.is_none());
+        assert!(!ast.varnum);
+        assert!(!ast.all);
+    }
+
+    #[test]
+    fn parse_data_option() {
+        let ast = parse_contents_src("data=work.x").unwrap();
+        assert_eq!(
+            ast.data,
+            Some(DatasetRef {
+                libref: Some("work".into()),
+                name: "x".into()
+            })
+        );
+        assert!(!ast.varnum);
+        assert!(!ast.all);
+    }
+
+    #[test]
+    fn parse_varnum_option() {
+        let ast = parse_contents_src("data=work.x varnum").unwrap();
+        assert!(ast.varnum);
+        assert!(!ast.all);
+    }
+
+    #[test]
+    fn parse_all_option() {
+        let ast = parse_contents_full("proc contents data=work._all_; run;").unwrap();
+        assert!(ast.all);
+        assert_eq!(ast.data.as_ref().unwrap().libref, Some("work".into()));
+    }
+
+    #[test]
+    fn parse_all_uppercase() {
+        let ast = parse_contents_full("proc contents data=MYLIB._ALL_; run;").unwrap();
+        assert!(ast.all);
+    }
+
+    #[test]
+    fn parse_unknown_option_errors() {
+        let result = parse_contents_src("bogus");
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("BOGUS") || msg.contains("bogus"), "msg: {msg}");
+    }
+
+    // ── Execute tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn execute_basic_contents() {
+        let mut session = make_session();
+        write_test_dataset(&mut session);
+
+        let ast = ContentsAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "CLASS".into(),
+            }),
+            varnum: false,
+            all: false,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+
+        // Header block should contain dataset name and observation count
+        assert!(listing.contains("WORK.CLASS"), "listing: {listing}");
+        assert!(listing.contains('2'), "obs count: {listing}");
+
+        // Variable names must appear
+        assert!(listing.contains("name") || listing.contains("NAME"), "listing: {listing}");
+        assert!(listing.contains("age") || listing.contains("AGE"), "listing: {listing}");
+
+        // Type column
+        assert!(listing.contains("Num"), "Num type: {listing}");
+        assert!(listing.contains("Char"), "Char type: {listing}");
+    }
+
+    #[test]
+    fn execute_shows_format_and_label() {
+        let mut session = make_session();
+        write_test_dataset(&mut session);
+
+        let ast = ContentsAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "CLASS".into(),
+            }),
+            varnum: false,
+            all: false,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+
+        // Format should appear in the variable table
+        assert!(listing.contains("best12.") || listing.contains("BEST12."), "format: {listing}");
+
+        // Label should appear in the variable table
+        assert!(listing.contains("Age of subject"), "label: {listing}");
+    }
+
+    #[test]
+    fn execute_varnum_ordering() {
+        // With varnum, variables should appear in creation order (name then age).
+        // Without varnum (default), they appear alphabetically (age then name).
+        let mut session = make_session();
+        write_test_dataset(&mut session);
+
+        // Default: alphabetical → age before name
+        let ast_alpha = ContentsAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "CLASS".into(),
+            }),
+            varnum: false,
+            all: false,
+        };
+        execute(&ast_alpha, &mut session).unwrap();
+        let listing = session.listing.into_string();
+
+        // Find positions of "age" and "name" in the variable table section.
+        // Use rfind so the header "Data Set Name:" (which also contains "name")
+        // does not confuse the position check — the last occurrence of each
+        // token is in the variable table, where alphabetical order must hold.
+        let lower = listing.to_lowercase();
+        let pos_age = lower.rfind("age");
+        let pos_name = lower.rfind("name");
+        assert!(pos_age.is_some() && pos_name.is_some(), "listing: {listing}");
+        assert!(
+            pos_age.unwrap() < pos_name.unwrap(),
+            "alphabetical: age before name; listing:\n{listing}"
+        );
+
+        // With varnum: creation order → name (index 0) before age (index 1)
+        let mut session2 = make_session();
+        write_test_dataset(&mut session2);
+        let ast_varnum = ContentsAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "CLASS".into(),
+            }),
+            varnum: true,
+            all: false,
+        };
+        execute(&ast_varnum, &mut session2).unwrap();
+        let listing2 = session2.listing.into_string();
+        let lower2 = listing2.to_lowercase();
+        // Skip the header "Variables: 2" which also contains text before variable table
+        // Find the variable table section after the blank line following the header
+        let pos_age2 = lower2.rfind("age");
+        let pos_name2 = lower2.rfind("name");
+        assert!(pos_age2.is_some() && pos_name2.is_some(), "listing2: {listing2}");
+        assert!(
+            pos_name2.unwrap() < pos_age2.unwrap(),
+            "varnum: name (index 0) before age (index 1); listing:\n{listing2}"
+        );
+    }
+
+    #[test]
+    fn execute_all_lists_tables() {
+        let mut session = make_session();
+        write_test_dataset(&mut session);
+
+        // Write a second dataset so there are 2 tables
+        let df2 = df!["x" => [1.0_f64]].unwrap();
+        let vars2 = vec![VarMeta {
+            name: "x".to_string(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        }];
+        let ds2 = SasDataset { df: df2, vars: vars2 };
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write("SCORES", &ds2)
+            .unwrap();
+
+        let ast = ContentsAst {
+            data: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "_ALL_".into(),
+            }),
+            varnum: false,
+            all: true,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("CLASS"), "listing: {listing}");
+        assert!(listing.contains("SCORES"), "listing: {listing}");
+        assert!(listing.contains("Member Name"), "listing: {listing}");
+    }
+
+    #[test]
+    fn execute_uses_last_dataset_when_no_data() {
+        let mut session = make_session();
+        write_test_dataset(&mut session);
+
+        let ast = ContentsAst {
+            data: None,
+            varnum: false,
+            all: false,
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("WORK.CLASS"), "listing: {listing}");
+    }
+
+    #[test]
+    fn execute_no_last_dataset_errors() {
+        let mut session = make_session();
+
+        let ast = ContentsAst {
+            data: None,
+            varnum: false,
+            all: false,
+        };
+        let result = execute(&ast, &mut session);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("_LAST_") || msg.contains("undefined"), "msg: {msg}");
+    }
 }

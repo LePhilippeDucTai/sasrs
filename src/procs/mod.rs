@@ -64,12 +64,16 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = format::parse(ts)?;
             Ok(ProcAst::Format(ast))
         }
+        "contents" => {
+            let ast = contents::parse(ts)?;
+            Ok(ProcAst::Contents(ast))
+        }
         // Procs connues du périmètre, pas encore implémentées : consommer
         // le bloc pour rester synchronisé, puis ERROR. Finir d'abord le
         // statement courant (on est au MILIEU du statement PROC : un ident
         // comme `data` dans `proc sort data=x;` serait sinon pris pour une
         // frontière par skip_to_step_boundary).
-        "means" | "summary" | "freq" | "transpose" | "univariate" | "contents"
+        "means" | "summary" | "freq" | "transpose" | "univariate"
         | "datasets" | "append" | "sql" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
@@ -179,7 +183,7 @@ mod tests {
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
         for proc_name in &["means", "freq", "transpose", "univariate",
-                           "contents", "datasets", "append", "sql"] {
+                           "datasets", "append", "sql"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
             let mut ts = crate::parser::StatementStream::new(&source).unwrap();
