@@ -132,6 +132,51 @@ pub struct InputData {
     pub in_flags: Vec<(String, usize)>,
 }
 
+/// Comment lire UNE variable lors d'un INPUT (résolu à la compilation :
+/// slot PDV + style de lecture). Parallèle à `ast::InputItem` mais avec les
+/// slots déjà localisés.
+#[derive(Clone)]
+pub enum InputAction {
+    /// Lit une variable dans son slot PDV.
+    ReadVar {
+        slot: usize,
+        is_char: bool,
+        /// Column input : (début, fin) 1-based inclusif.
+        col_range: Option<(usize, usize)>,
+        /// Informat (FormatSpec) éventuel (formatted / list-with-informat).
+        informat: Option<crate::formats::FormatSpec>,
+    },
+    /// `@n` : pointeur absolu (1-based).
+    PointerCol(usize),
+    /// `+n` : saut relatif.
+    PointerSkip(usize),
+    /// `/` : ligne suivante.
+    NextLine,
+}
+
+/// Source matérialisée d'un INFILE (M14.1).
+pub enum TextSource {
+    /// Lignes en mémoire (DATALINES ou fichier déjà lu).
+    Lines(Vec<String>),
+}
+
+/// Entrée texte d'une étape DATA (M14.1) — parallèle à `InputData` (SET).
+/// Construite à la compilation depuis INFILE + DATALINES ; consommée
+/// ligne-à-ligne par l'exécuteur à chaque exécution d'un INPUT.
+pub struct TextInput {
+    /// Lignes de données (fenêtre FIRSTOBS=/OBS= déjà appliquée).
+    pub lines: Vec<String>,
+    /// Délimiteur(s) effectif(s) du list input (chars). Vide = blancs.
+    pub delimiters: Vec<char>,
+    /// DSD : quotes gérées, délimiteurs consécutifs = missing.
+    pub dsd: bool,
+    pub missover: bool,
+    pub truncover: bool,
+    pub stopover: bool,
+    /// "DATALINES" ou le chemin du fichier — pour d'éventuelles NOTEs.
+    pub display: String,
+}
+
 /// Une sortie : où écrire et quels slots du PDV.
 pub struct OutputSpec {
     pub libref: String,
@@ -151,6 +196,12 @@ pub struct StepProgram {
     pub pdv: Pdv,
     pub stmts: Vec<crate::ast::DsStmt>,
     pub input: Option<InputData>,
+    /// Entrée texte (INFILE/INPUT/DATALINES, M14.1). Exclusive avec un SET
+    /// (combiner les deux n'est pas couvert — erreur de compilation).
+    pub text_input: Option<TextInput>,
+    /// Actions d'INPUT compilées, une liste par statement INPUT, dans
+    /// l'ordre d'apparition. L'exécuteur les consomme via un compteur.
+    pub input_actions: Vec<Vec<InputAction>>,
     pub outputs: Vec<OutputSpec>,
     pub has_explicit_output: bool,
     /// Noms (casse de première référence, ordre PDV) des variables jamais
@@ -193,6 +244,10 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         arrays: HashMap::new(),
         labels: HashMap::new(),
         formats: HashMap::new(),
+        infile: None,
+        datalines: None,
+        seen_text_input: false,
+        input_actions: Vec::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -238,6 +293,13 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     }
 
     let input = c.build_input()?;
+    let text_input = c.build_text_input()?;
+    // Un SET et un INFILE/INPUT simultanés ne sont pas couverts.
+    if input.is_some() && text_input.is_some() {
+        return Err(SasError::runtime(
+            "Combining INFILE/INPUT with SET/MERGE is not yet implemented.",
+        ));
+    }
     let outputs = c.resolve_outputs(&ast.outputs)?;
     let uninitialized = c
         .pdv
@@ -246,10 +308,13 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         .filter(|v| !v.from_input && !c.assigned.contains(&v.name.to_uppercase()))
         .map(|v| v.name.clone())
         .collect();
+    let input_actions = std::mem::take(&mut c.input_actions);
     Ok(StepProgram {
         pdv: c.pdv,
         stmts: ast.stmts.clone(),
         input,
+        text_input,
+        input_actions,
         outputs,
         has_explicit_output: c.has_explicit_output,
         uninitialized,
@@ -323,6 +388,14 @@ struct Compiler<'a> {
     /// Appliqués au PDV en fin de compilation (indépendamment de l'ordre des
     /// statements) ; l'emportent sur le format hérité de l'input.
     formats: HashMap<String, String>,
+    /// INFILE courant (M14.1) : source + options. Le dernier INFILE gagne.
+    infile: Option<(crate::ast::InfileSource, crate::ast::InfileOptions)>,
+    /// Lignes DATALINES de l'étape (au plus un bloc).
+    datalines: Option<Vec<String>>,
+    /// Un statement DATALINES/INFILE/INPUT a été vu (active le mode texte).
+    seen_text_input: bool,
+    /// Actions INPUT compilées, une liste par statement INPUT.
+    input_actions: Vec<Vec<InputAction>>,
 }
 
 impl Compiler<'_> {
@@ -624,7 +697,113 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
+            // INFILE (M14.1) : déclaratif ; mémorise source + options (le
+            // dernier gagne). Mêle SET et INFILE → erreur de compilation.
+            DsStmt::Infile { source, options } => {
+                if self.seen_set || self.seen_merge {
+                    return Err(SasError::runtime(
+                        "Combining INFILE/INPUT with SET/MERGE is not yet implemented.",
+                    ));
+                }
+                self.seen_text_input = true;
+                self.infile = Some((source.clone(), options.clone()));
+                Ok(())
+            }
+            // DATALINES (M14.1) : mémorise les lignes brutes du bloc.
+            DsStmt::Datalines { lines } => {
+                if self.seen_set || self.seen_merge {
+                    return Err(SasError::runtime(
+                        "Combining INFILE/INPUT with SET/MERGE is not yet implemented.",
+                    ));
+                }
+                self.seen_text_input = true;
+                self.datalines = Some(lines.clone());
+                Ok(())
+            }
+            // INPUT (M14.1) : crée/typifie les variables lues et compile les
+            // actions de lecture.
+            DsStmt::Input { items } => {
+                if self.seen_set || self.seen_merge {
+                    return Err(SasError::runtime(
+                        "Combining INFILE/INPUT with SET/MERGE is not yet implemented.",
+                    ));
+                }
+                self.seen_text_input = true;
+                let actions = self.compile_input(items)?;
+                self.input_actions.push(actions);
+                Ok(())
+            }
         }
+    }
+
+    /// Compile les items d'un statement INPUT : crée les variables au PDV
+    /// (type char/num, longueur), résout les informats, et produit la liste
+    /// d'actions exécutables.
+    fn compile_input(&mut self, items: &[crate::ast::InputItem]) -> Result<Vec<InputAction>> {
+        use crate::ast::InputItem;
+        let mut actions = Vec::with_capacity(items.len());
+        for item in items {
+            match item {
+                InputItem::Var {
+                    name,
+                    is_char,
+                    col_range,
+                    informat,
+                } => {
+                    // Longueur : column input → largeur de colonnes ; sinon
+                    // informat $w. → w ; défaut 8 (char comme num). Une
+                    // variable déjà au PDV (LENGTH antérieur) garde la sienne.
+                    let informat_spec = match informat {
+                        Some(tok) => {
+                            let Some(spec) = crate::formats::FormatSpec::parse(tok) else {
+                                return Err(SasError::runtime(format!(
+                                    "The informat {tok} is not valid."
+                                )));
+                            };
+                            Some(spec)
+                        }
+                        None => None,
+                    };
+                    let char_len = if *is_char {
+                        if let Some((a, b)) = col_range {
+                            b.saturating_sub(*a) + 1
+                        } else if let Some(spec) = &informat_spec {
+                            spec.w.map(|w| w as usize).unwrap_or(8)
+                        } else {
+                            8
+                        }
+                    } else {
+                        8
+                    };
+                    let ty = if *is_char { VarType::Char } else { VarType::Num };
+                    // Si la variable existe déjà avec un type incompatible →
+                    // erreur (comme SAS).
+                    if let Some(slot) = self.pdv.slot(name)
+                        && self.pdv.vars()[slot].ty != ty
+                    {
+                        return Err(SasError::runtime(format!(
+                            "Variable {name} has been defined as both character and numeric."
+                        )));
+                    }
+                    let slot = self.add_var(name, ty, char_len);
+                    // Une variable lue par INPUT est "assignée" (pas de NOTE
+                    // uninitialized) ; mais elle N'EST PAS from_input — elle
+                    // est remise à missing/blanc à chaque itération comme SAS
+                    // (sauf RETAIN).
+                    self.assigned.insert(name.to_uppercase());
+                    actions.push(InputAction::ReadVar {
+                        slot,
+                        is_char: *is_char,
+                        col_range: *col_range,
+                        informat: informat_spec,
+                    });
+                }
+                InputItem::PointerCol(n) => actions.push(InputAction::PointerCol(*n)),
+                InputItem::PointerSkip(n) => actions.push(InputAction::PointerSkip(*n)),
+                InputItem::NextLine => actions.push(InputAction::NextLine),
+            }
+        }
+        Ok(actions)
     }
 
     /// Crée les variables simplement référencées (Num par défaut), en ordre
@@ -994,6 +1173,70 @@ impl Compiler<'_> {
             by,
             merge: self.seen_merge,
             in_flags,
+        }))
+    }
+
+    /// Assemble le `TextInput` (M14.1) depuis INFILE + DATALINES. Sans
+    /// INFILE/INPUT/DATALINES → None. Résout la source (lignes datalines ou
+    /// fichier externe lu), les options (délimiteurs, DSD, fenêtre
+    /// FIRSTOBS=/OBS=), et matérialise les lignes.
+    fn build_text_input(&mut self) -> Result<Option<TextInput>> {
+        if !self.seen_text_input {
+            return Ok(None);
+        }
+        use crate::ast::InfileSource;
+        // Source effective : un INFILE l'emporte ; sinon DATALINES direct.
+        let (lines, options, display) = match self.infile.take() {
+            Some((InfileSource::Path(path), opts)) => {
+                let p = std::path::PathBuf::from(&path);
+                let abs = if p.is_absolute() {
+                    p
+                } else {
+                    self.session.base_dir.join(&p)
+                };
+                let content = std::fs::read_to_string(&abs).map_err(|e| {
+                    SasError::runtime(format!(
+                        "Unable to read the INFILE physical file {path}: {e}"
+                    ))
+                })?;
+                let lines: Vec<String> =
+                    content.lines().map(|l| l.to_string()).collect();
+                (lines, opts, path)
+            }
+            Some((InfileSource::Datalines, opts)) => {
+                let lines = self.datalines.take().unwrap_or_default();
+                (lines, opts, "DATALINES".to_string())
+            }
+            None => {
+                // INPUT + DATALINES sans INFILE explicite.
+                let lines = self.datalines.take().unwrap_or_default();
+                (lines, crate::ast::InfileOptions::default(), "DATALINES".to_string())
+            }
+        };
+
+        // Fenêtre FIRSTOBS=/OBS= (options INFILE, 1-based). FIRSTOBS=k saute
+        // les k-1 premières lignes ; OBS=n borne la dernière.
+        let n = lines.len();
+        let start = options.firstobs.unwrap_or(1).saturating_sub(1).min(n);
+        let end = options.obs.map_or(n, |o| o.min(n)).max(start);
+        let lines: Vec<String> = lines[start..end].to_vec();
+
+        // Délimiteurs effectifs : DLM=/DELIMITER= s'il est posé ; sinon `,`
+        // sous DSD ; sinon blancs (liste vide = découpage par blancs).
+        let delimiters: Vec<char> = match &options.delimiter {
+            Some(s) => s.chars().collect(),
+            None if options.dsd => vec![','],
+            None => Vec::new(),
+        };
+
+        Ok(Some(TextInput {
+            lines,
+            delimiters,
+            dsd: options.dsd,
+            missover: options.missover,
+            truncover: options.truncover,
+            stopover: options.stopover,
+            display,
         }))
     }
 

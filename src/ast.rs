@@ -147,8 +147,68 @@ pub struct AttribItem {
     pub length: Option<LengthSpec>,
 }
 
+/// Source d'un statement INFILE (M14.1).
+#[derive(Debug, Clone, PartialEq)]
+pub enum InfileSource {
+    /// `infile 'chemin' ...;` — fichier texte externe (chemin littéral).
+    Path(String),
+    /// `infile datalines ...;` — relit les lignes du bloc DATALINES de
+    /// l'étape (équivalent au INPUT direct depuis DATALINES, mais permet de
+    /// poser des options DSD/DLM=).
+    Datalines,
+}
+
+/// Options du statement INFILE (M14.1). Toutes optionnelles.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct InfileOptions {
+    /// `DLM=`/`DELIMITER=` : caractère(s) délimiteur(s). `None` = défaut
+    /// (blanc en list input, ou `,` sous DSD).
+    pub delimiter: Option<String>,
+    /// `DSD` : champs façon CSV (délimiteur défaut `,`, quotes gérées,
+    /// délimiteurs consécutifs = valeur manquante).
+    pub dsd: bool,
+    /// `FIRSTOBS=` : 1re ligne (1-based) à lire ; défaut 1.
+    pub firstobs: Option<usize>,
+    /// `OBS=` : numéro de la dernière ligne à lire (1-based).
+    pub obs: Option<usize>,
+    /// `MISSOVER` : fin de ligne prématurée → variables restantes missing,
+    /// sans passer à la ligne suivante.
+    pub missover: bool,
+    /// `TRUNCOVER` : comme MISSOVER mais la dernière variable reçoit ce qui
+    /// reste (même partiel) avant la fin de ligne.
+    pub truncover: bool,
+    /// `STOPOVER` : fin de ligne prématurée → erreur, l'étape s'arrête.
+    pub stopover: bool,
+    /// `LRECL=` : accepté puis ignoré (longueur d'enregistrement).
+    pub lrecl: Option<usize>,
+}
+
+/// Style d'un item d'INPUT (M14.1).
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputItem {
+    /// Une variable à lire. Le style de lecture dépend des champs présents :
+    /// list (rien), column (`col_range`), ou formatted (`informat`,
+    /// éventuellement précédé d'un pointeur `@col`).
+    Var {
+        name: String,
+        /// Variable caractère (`$`).
+        is_char: bool,
+        /// Column input : plage de colonnes 1-based inclusive `(début, fin)`.
+        col_range: Option<(usize, usize)>,
+        /// Formatted/list-with-informat : informat (token, ex. "5.2",
+        /// "$10.", "COMMA8.").
+        informat: Option<String>,
+    },
+    /// `@n` : positionne le pointeur de colonne à la colonne n (1-based).
+    PointerCol(usize),
+    /// `+n` : avance le pointeur de colonne de n.
+    PointerSkip(usize),
+    /// `/` : passe à la ligne d'entrée suivante.
+    NextLine,
+}
+
 /// DATA step statements (M1 subset + M2 : RETAIN, sum statement, LENGTH ;
-/// M2+ ajoutera DO iterative, ARRAY, MERGE, BY...).
+/// M14 : INFILE/INPUT/DATALINES).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsStmt {
     /// `set lib.a [lib.b ...];` — un ou plusieurs datasets, chacun avec
@@ -253,6 +313,20 @@ pub enum DsStmt {
     /// MAJUSCULES à l'exécution). Ce statement est parsé dans les DEUX
     /// builds (aucun test/fixture existant n'emploie `call`).
     CallRoutine { name: String, args: Vec<Expr> },
+    /// `infile <source> <options>;` (M14.1) — déclare la source de lecture
+    /// texte de l'étape. Une seule source active à la fois (un second INFILE
+    /// remplace le premier, comme SAS).
+    Infile {
+        source: InfileSource,
+        options: InfileOptions,
+    },
+    /// `input <items>;` (M14.1) — lit la ligne d'entrée courante dans le PDV
+    /// selon les items (list / column / formatted). Le `@@` (hold) n'est pas
+    /// couvert ; voir parser.
+    Input { items: Vec<InputItem> },
+    /// `datalines;`/`cards;` (M14.1) — lignes de données en ligne dans le
+    /// source. Capturées brutes par le lexer ; le INPUT les consomme.
+    Datalines { lines: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -99,7 +99,9 @@
 
 use super::eval::{coerce_num, eval, EvalCtx};
 use super::pdv::Pdv;
-use super::{ByVar, InputData, InputDataset, OutputSpec, StepProgram};
+use super::{
+    ByVar, InputAction, InputData, InputDataset, OutputSpec, StepProgram, TextInput,
+};
 use crate::ast::DsStmt;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
@@ -159,6 +161,20 @@ struct Runner {
     merge_plan: Vec<MergeObs>,
     /// Curseur dans `merge_plan` (prochaine obs à servir).
     merge_cursor: usize,
+    /// Entrée texte (INFILE/INPUT/DATALINES, M14.1). `None` hors mode texte.
+    text: Option<TextInput>,
+    /// Actions INPUT compilées, une liste par statement INPUT (ordre
+    /// d'apparition). Consommées via `input_action_cursor`.
+    input_actions: Vec<Vec<InputAction>>,
+    /// Index du PROCHAIN statement INPUT à exécuter (un par exécution
+    /// d'INPUT dans une itération ; remis à 0 en début d'itération).
+    input_action_cursor: usize,
+    /// Ligne d'entrée courante (index dans `text.lines`).
+    text_line: usize,
+    /// Pointeur de colonne courant (1-based) dans la ligne d'entrée.
+    text_col: usize,
+    /// Lignes lues au sens SAS (records read), pour la NOTE de fin d'étape.
+    records_read: usize,
 }
 
 /// Une observation de sortie d'un MERGE, pré-calculée par `build_merge_plan`.
@@ -195,6 +211,8 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         pdv,
         stmts,
         input,
+        text_input,
+        input_actions,
         outputs,
         has_explicit_output,
         uninitialized,
@@ -220,10 +238,11 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         })
         .collect();
 
-    let single_iteration = input.is_none();
+    let single_iteration = input.is_none() && text_input.is_none();
     let n_rows: usize = input
         .as_ref()
-        .map_or(0, |i| i.datasets.iter().map(|d| d.n_rows).sum());
+        .map_or(0, |i| i.datasets.iter().map(|d| d.n_rows).sum())
+        + text_input.as_ref().map_or(0, |t| t.lines.len());
     let n_datasets = input.as_ref().map_or(0, |i| i.datasets.len());
     // FIRST./LAST. valent 1 tant qu'aucune observation n'a été servie.
     let by_flags = input
@@ -264,6 +283,12 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         out_rows: vec![0; n_outputs],
         merge_plan: Vec::new(),
         merge_cursor: 0,
+        text: text_input,
+        input_actions,
+        input_action_cursor: 0,
+        text_line: 0,
+        text_col: 1,
+        records_read: 0,
     };
 
     // Interclassement / match-merge : pré-application des WHERE= par dataset
@@ -295,6 +320,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         r.pdv.n_ += 1;
         r.pdv.error_ = false;
         r.pdv.reset_non_retained();
+        r.input_action_cursor = 0;
 
         let mut flow = Flow::Normal;
         for stmt in &stmts {
@@ -367,6 +393,14 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             ));
             stats.read.push((ds.display.clone(), *n));
         }
+    }
+    // Mode texte (INFILE/INPUT/DATALINES) : NOTE des records lus (M14.1).
+    if let Some(text) = &r.text {
+        session.log.note(&format!(
+            "{} records were read from the infile {}.",
+            r.records_read, text.display
+        ));
+        stats.read.push((text.display.clone(), r.records_read));
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).
@@ -541,6 +575,12 @@ impl Runner {
                 Ok(Flow::Normal)
             }
             DsStmt::CallRoutine { name, args } => self.exec_call_routine(name, args),
+            // INPUT (M14.1) : lit la ligne d'entrée courante. EOF → EndStep
+            // immédiat (comme SET, fin au milieu de l'itération).
+            DsStmt::Input { .. } => self.exec_input(),
+            // INFILE/DATALINES : déclaratifs (source résolue à la
+            // compilation) ; rien à exécuter.
+            DsStmt::Infile { .. } | DsStmt::Datalines { .. } => Ok(Flow::Normal),
             // Directives de compilation : rien à exécuter.
             DsStmt::Keep(_)
             | DsStmt::Drop(_)
@@ -551,6 +591,210 @@ impl Runner {
             | DsStmt::Label(_)
             | DsStmt::Attrib(_)
             | DsStmt::Array { .. } => Ok(Flow::Normal),
+        }
+    }
+
+    /// Exécute le prochain statement INPUT de l'itération (M14.1) : charge la
+    /// ligne d'entrée suivante, applique les actions de lecture, peuple le
+    /// PDV. EOF → `Flow::EndStep` (fin immédiate, comme SET). Respecte le
+    /// pointeur de colonne (`@n`, `+n`, `/`) et les options
+    /// MISSOVER/TRUNCOVER/STOPOVER.
+    fn exec_input(&mut self) -> Result<Flow> {
+        // Récupère le bloc d'actions de CE statement INPUT.
+        let cursor = self.input_action_cursor;
+        self.input_action_cursor += 1;
+        let Some(actions) = self.input_actions.get(cursor).cloned() else {
+            // Plus d'actions compilées : INPUT vide (garde-fou).
+            return Ok(Flow::Normal);
+        };
+        let Some(text) = &self.text else {
+            return Err(SasError::runtime("INPUT statement without an input source."));
+        };
+        // Fin de données : EndStep immédiat.
+        if self.text_line >= text.lines.len() {
+            return Ok(Flow::EndStep);
+        }
+        // Nouvelle ligne logique : repart en colonne 1.
+        self.text_col = 1;
+        self.records_read += 1;
+
+        // Découpe en champs (list/DSD) une seule fois si nécessaire — mais
+        // comme column/formatted input lisent par position, on travaille sur
+        // la ligne brute et un itérateur de champs pour le list input.
+        let line = text.lines[self.text_line].clone();
+        let dsd = text.dsd;
+        let delimiters = text.delimiters.clone();
+        let missover = text.missover;
+        let truncover = text.truncover;
+        let stopover = text.stopover;
+        let display = text.display.clone();
+
+        // Champs pour le list input (séparés à la demande, en suivant le
+        // pointeur de colonne). On maintient un curseur de champ pour le list
+        // input et un pointeur de colonne pour column/formatted.
+        let mut field_iter = FieldReader::new(&line, &delimiters, dsd);
+        // Synchronise le curseur du FieldReader avec un éventuel pointeur de
+        // colonne déjà avancé : pour le list input pur, text_col reste 1.
+
+        let mut premature_eol = false;
+        for action in &actions {
+            match action {
+                InputAction::PointerCol(n) => {
+                    self.text_col = *n;
+                    field_iter.seek_col(*n);
+                }
+                InputAction::PointerSkip(n) => {
+                    self.text_col += *n;
+                    field_iter.seek_col(self.text_col);
+                }
+                InputAction::NextLine => {
+                    // `/` : passe à la ligne suivante.
+                    self.text_line += 1;
+                    self.text_col = 1;
+                    if self.text_line >= self.text.as_ref().unwrap().lines.len() {
+                        // Plus de ligne : fin d'étape.
+                        return Ok(Flow::EndStep);
+                    }
+                    self.records_read += 1;
+                    // Rebâtit le lecteur sur la nouvelle ligne.
+                    let new_line = self.text.as_ref().unwrap().lines[self.text_line].clone();
+                    field_iter = FieldReader::new_owned(new_line, &delimiters, dsd);
+                }
+                InputAction::ReadVar {
+                    slot,
+                    is_char,
+                    col_range,
+                    informat,
+                } => {
+                    // Récupère le texte brut du champ selon le style.
+                    let raw: Option<String> = if let Some((a, b)) = col_range {
+                        // Column input : sous-chaîne par position (1-based).
+                        Some(substr_cols(&field_iter.line(), *a, *b))
+                    } else if informat.is_some() {
+                        // Formatted input : largeur de l'informat depuis la
+                        // position courante du pointeur de colonne.
+                        let w = informat
+                            .as_ref()
+                            .and_then(|s| s.w)
+                            .map(|w| w as usize);
+                        match w {
+                            Some(w) => {
+                                let s = substr_from(&field_iter.line(), self.text_col, w);
+                                self.text_col += w;
+                                field_iter.seek_col(self.text_col);
+                                Some(s)
+                            }
+                            // Informat sans largeur : se comporte en list
+                            // input (champ délimité).
+                            None => field_iter.next_field(),
+                        }
+                    } else {
+                        // List input : champ délimité suivant.
+                        field_iter.next_field()
+                    };
+
+                    let raw = match raw {
+                        Some(s) => s,
+                        None => {
+                            // Fin de ligne prématurée.
+                            premature_eol = true;
+                            if stopover {
+                                self.pdv.error_ = true;
+                                return Err(SasError::runtime(format!(
+                                    "INPUT statement exceeded record length on the file {display} (STOPOVER)."
+                                )));
+                            }
+                            // MISSOVER / TRUNCOVER / défaut : variable
+                            // manquante. (Le défaut SAS « flow to next line »
+                            // n'est pas couvert pour le list input : on
+                            // assigne missing — divergence documentée.)
+                            self.assign_input_missing(*slot, *is_char);
+                            continue;
+                        }
+                    };
+
+                    self.assign_input_value(*slot, *is_char, &raw, informat.as_ref());
+                }
+            }
+        }
+        let _ = (truncover, missover, premature_eol);
+        // Avance à la ligne suivante pour le prochain INPUT/itération.
+        self.text_line += 1;
+        Ok(Flow::Normal)
+    }
+
+    /// Assigne une valeur missing à une variable lue par INPUT.
+    fn assign_input_missing(&mut self, slot: usize, is_char: bool) {
+        let v = if is_char {
+            Value::Char(String::new())
+        } else {
+            Value::missing()
+        };
+        self.pdv.set(slot, v);
+    }
+
+    /// Convertit le texte d'un champ en `Value` puis l'assigne au PDV.
+    /// Char : la chaîne trimée (la troncature à la longueur est faite par
+    /// `Pdv::set`). Num : via l'informat si présent, sinon parse standard ;
+    /// donnée numérique illisible → `.` + NOTE "Invalid data" + `_ERROR_`.
+    fn assign_input_value(
+        &mut self,
+        slot: usize,
+        is_char: bool,
+        raw: &str,
+        informat: Option<&crate::formats::FormatSpec>,
+    ) {
+        if is_char {
+            // Caractère : si un informat $ est posé, il peut transformer
+            // (ex. $UPCASE) ; sinon on prend la chaîne brute (trim des blancs
+            // de bord façon list input — la troncature PDV gère la longueur).
+            let s = match informat {
+                Some(spec) => match apply_informat(raw, spec) {
+                    Value::Char(s) => s,
+                    Value::Num(n) => crate::value::format_best(n, 12).trim().to_string(),
+                    Value::Missing(_) => String::new(),
+                },
+                None => raw.trim().to_string(),
+            };
+            self.pdv.set(slot, Value::Char(s));
+            return;
+        }
+        // Numérique.
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            self.pdv.set(slot, Value::missing());
+            return;
+        }
+        let value = match informat {
+            Some(spec) => apply_informat(trimmed, spec),
+            None => {
+                // Standard numeric informat (w. implicite) : parse direct.
+                // Accepte le `.` SAS comme missing.
+                if trimmed == "." {
+                    Value::missing()
+                } else {
+                    match trimmed.parse::<f64>() {
+                        Ok(f) => Value::Num(f),
+                        Err(_) => Value::Missing(crate::value::MissingKind::Dot),
+                    }
+                }
+            }
+        };
+        match value {
+            Value::Num(f) => self.pdv.set(slot, Value::Num(f)),
+            Value::Missing(_) => {
+                // Une donnée non vide qui ne se lit pas en numérique est une
+                // « invalid data » : missing + NOTE + _ERROR_.
+                self.ctx.invalid_data += 1;
+                self.pdv.error_ = true;
+                self.pdv.set(slot, Value::missing());
+            }
+            // Un informat caractère sur une variable numérique : missing.
+            Value::Char(_) => {
+                self.ctx.invalid_data += 1;
+                self.pdv.error_ = true;
+                self.pdv.set(slot, Value::missing());
+            }
         }
     }
 
@@ -1272,6 +1516,169 @@ fn choose_next(
         }
     }
     best
+}
+
+/// Applique un informat à un texte brut (M14.1) via un catalogue builtin
+/// par défaut (les informats utilisateur de PROC FORMAT ne sont pas couverts
+/// dans l'INPUT — divergence documentée). Réutilise
+/// `FormatCatalog::informat` : le piège des décimales implicites (`w.d`
+/// applique `d` décimales SI la donnée n'a pas de point décimal) y est déjà
+/// géré (cf. `formats::builtin::informat_builtin`).
+fn apply_informat(s: &str, spec: &crate::formats::FormatSpec) -> Value {
+    let catalog = crate::formats::FormatCatalog::default();
+    catalog.informat(s, spec)
+}
+
+/// Sous-chaîne par colonnes 1-based inclusives `[a, b]` (column input).
+/// Comptée en CARACTÈRES (pas octets). Au-delà de la fin → ce qui reste.
+fn substr_cols(line: &str, a: usize, b: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let start = a.saturating_sub(1);
+    let end = b.min(chars.len());
+    if start >= chars.len() || start >= end {
+        return String::new();
+    }
+    chars[start..end].iter().collect()
+}
+
+/// Sous-chaîne de largeur `w` à partir de la colonne 1-based `col`
+/// (formatted input). Comptée en caractères.
+fn substr_from(line: &str, col: usize, w: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let start = col.saturating_sub(1);
+    if start >= chars.len() {
+        return String::new();
+    }
+    let end = (start + w).min(chars.len());
+    chars[start..end].iter().collect()
+}
+
+/// Lecteur de champs pour le list input (M14.1). Découpe une ligne en
+/// champs selon les délimiteurs (blancs par défaut, ou DLM=/DSD). Gère :
+/// - délimiteurs multiples consécutifs : en mode blanc, plusieurs blancs =
+///   UN séparateur ; en DSD, deux délimiteurs consécutifs = valeur manquante ;
+/// - DSD : valeurs entre guillemets (`"..."`), guillemets retirés, délimiteur
+///   dans les quotes ignoré.
+struct FieldReader {
+    chars: Vec<char>,
+    pos: usize,
+    /// Délimiteurs effectifs. Vide = découpage par blancs.
+    delims: Vec<char>,
+    dsd: bool,
+}
+
+impl FieldReader {
+    fn new(line: &str, delims: &[char], dsd: bool) -> Self {
+        FieldReader {
+            chars: line.chars().collect(),
+            pos: 0,
+            delims: delims.to_vec(),
+            dsd,
+        }
+    }
+
+    fn new_owned(line: String, delims: &[char], dsd: bool) -> Self {
+        FieldReader {
+            chars: line.chars().collect(),
+            pos: 0,
+            delims: delims.to_vec(),
+            dsd,
+        }
+    }
+
+    /// Ligne brute (pour column/formatted input).
+    fn line(&self) -> String {
+        self.chars.iter().collect()
+    }
+
+    /// Repositionne le curseur de champ sur la colonne 1-based `col`.
+    fn seek_col(&mut self, col: usize) {
+        self.pos = col.saturating_sub(1).min(self.chars.len());
+    }
+
+    fn is_delim(&self, c: char) -> bool {
+        if self.delims.is_empty() {
+            c == ' ' || c == '\t'
+        } else {
+            self.delims.contains(&c)
+        }
+    }
+
+    /// Prochain champ. `None` = fin de ligne atteinte sans champ à lire
+    /// (fin prématurée). Sémantique :
+    /// - mode blanc : saute les blancs de tête, lit jusqu'au prochain blanc ;
+    /// - mode DSD : un champ peut être vide (deux délimiteurs consécutifs =
+    ///   missing) ; les quotes encadrent une valeur littérale.
+    fn next_field(&mut self) -> Option<String> {
+        if self.dsd {
+            self.next_field_dsd()
+        } else {
+            self.next_field_plain()
+        }
+    }
+
+    fn next_field_plain(&mut self) -> Option<String> {
+        // Saute les délimiteurs de tête (blancs consécutifs = un séparateur).
+        while self.pos < self.chars.len() && self.is_delim(self.chars[self.pos]) {
+            self.pos += 1;
+        }
+        if self.pos >= self.chars.len() {
+            return None;
+        }
+        let start = self.pos;
+        while self.pos < self.chars.len() && !self.is_delim(self.chars[self.pos]) {
+            self.pos += 1;
+        }
+        Some(self.chars[start..self.pos].iter().collect())
+    }
+
+    fn next_field_dsd(&mut self) -> Option<String> {
+        if self.pos > self.chars.len() {
+            return None;
+        }
+        // En DSD, après la fin de la ligne, plus aucun champ.
+        if self.pos == self.chars.len() {
+            // Position pile en fin : il n'y a plus de champ à servir.
+            return None;
+        }
+        // Valeur entre guillemets.
+        if self.chars[self.pos] == '"' {
+            self.pos += 1;
+            let mut out = String::new();
+            while self.pos < self.chars.len() {
+                let c = self.chars[self.pos];
+                if c == '"' {
+                    // Guillemet doublé = guillemet littéral.
+                    if self.pos + 1 < self.chars.len() && self.chars[self.pos + 1] == '"' {
+                        out.push('"');
+                        self.pos += 2;
+                        continue;
+                    }
+                    self.pos += 1; // guillemet fermant
+                    break;
+                }
+                out.push(c);
+                self.pos += 1;
+            }
+            // Consomme le délimiteur suivant éventuel.
+            if self.pos < self.chars.len() && self.is_delim(self.chars[self.pos]) {
+                self.pos += 1;
+            }
+            return Some(out);
+        }
+        // Champ non quoté : lit jusqu'au prochain délimiteur.
+        let start = self.pos;
+        while self.pos < self.chars.len() && !self.is_delim(self.chars[self.pos]) {
+            self.pos += 1;
+        }
+        let field: String = self.chars[start..self.pos].iter().collect();
+        // Consomme le délimiteur (un seul ; deux consécutifs = champ vide
+        // suivant).
+        if self.pos < self.chars.len() && self.is_delim(self.chars[self.pos]) {
+            self.pos += 1;
+        }
+        Some(field)
+    }
 }
 
 #[cfg(test)]
@@ -2698,5 +3105,201 @@ mod tests {
             1,
             "log was: {log}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // M14.1 — INFILE / INPUT / DATALINES
+    // ---------------------------------------------------------------------
+
+    fn dfnum(ds: &SasDataset, name: &str) -> Vec<Option<f64>> {
+        ds.df.column(name).unwrap().f64().unwrap().iter().collect()
+    }
+    fn dfstr(ds: &SasDataset, name: &str) -> Vec<Option<String>> {
+        ds.df
+            .column(name)
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .map(|o| o.map(|s| s.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn datalines_list_input_basic() {
+        let mut s = session();
+        let stats = run(
+            "data out;\n  input name $ age height;\ndatalines;\nAlfred 14 69\nAlice 13 56.5\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 2, 3)]);
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.n_obs(), 2);
+        assert_eq!(
+            dfstr(&ds, "name"),
+            vec![Some("Alfred".into()), Some("Alice".into())]
+        );
+        assert_eq!(dfnum(&ds, "age"), vec![Some(14.0), Some(13.0)]);
+        assert_eq!(dfnum(&ds, "height"), vec![Some(69.0), Some(56.5)]);
+        let log = s.log.into_string();
+        assert!(log.contains("2 records were read from the infile DATALINES."));
+        assert!(log.contains("The data set WORK.OUT has 2 observations and 3 variables."));
+    }
+
+    #[test]
+    fn datalines_char_truncated_to_default_length_8() {
+        let mut s = session();
+        run(
+            "data out;\n  input name $;\ndatalines;\nVeryLongName\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // Default char length 8 → truncated.
+        assert_eq!(dfstr(&ds, "name"), vec![Some("VeryLong".into())]);
+    }
+
+    #[test]
+    fn column_input_fixed_positions() {
+        let mut s = session();
+        // Columns: name 1-10, age 11-13.
+        run(
+            "data out;\n  input name $ 1-10 age 11-13;\ndatalines;\nAlfred     14\nBarbara    99\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(
+            dfstr(&ds, "name"),
+            vec![Some("Alfred".into()), Some("Barbara".into())]
+        );
+        assert_eq!(dfnum(&ds, "age"), vec![Some(14.0), Some(99.0)]);
+    }
+
+    #[test]
+    fn formatted_input_pointer_and_informat() {
+        let mut s = session();
+        // @1 name $10. then age 5.2 (implicit decimal pitfall: "12345" → 123.45).
+        run(
+            "data out;\n  input @1 name $10. age 5.2;\ndatalines;\nAlfred    12345\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfstr(&ds, "name"), vec![Some("Alfred".into())]);
+        // 5.2 informat, no decimal point in data → divide by 100.
+        assert_eq!(dfnum(&ds, "age"), vec![Some(123.45)]);
+    }
+
+    #[test]
+    fn formatted_input_explicit_decimal_ignores_d() {
+        let mut s = session();
+        // Data has an explicit decimal point → d ignored.
+        run(
+            "data out;\n  input x 6.2;\ndatalines;\n123.45\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfnum(&ds, "x"), vec![Some(123.45)]);
+    }
+
+    #[test]
+    fn dsd_csv_with_quotes_and_missing() {
+        let mut s = session();
+        // DSD: comma-delimited, quoted field containing a comma, empty field
+        // = missing.
+        run(
+            "data out;\n  length a $ 20;\n  infile datalines dsd;\n  input a $ b c $;\ndatalines;\n\"Smith, John\",,hi\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfstr(&ds, "a"), vec![Some("Smith, John".into())]);
+        assert_eq!(dfnum(&ds, "b"), vec![None]); // consecutive delimiters
+        assert_eq!(dfstr(&ds, "c"), vec![Some("hi".into())]);
+    }
+
+    #[test]
+    fn dlm_custom_delimiter() {
+        let mut s = session();
+        run(
+            "data out;\n  infile datalines dlm='|';\n  input a $ b;\ndatalines;\nfoo|42\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfstr(&ds, "a"), vec![Some("foo".into())]);
+        assert_eq!(dfnum(&ds, "b"), vec![Some(42.0)]);
+    }
+
+    #[test]
+    fn invalid_numeric_data_sets_error_and_missing() {
+        let mut s = session();
+        run(
+            "data out;\n  input x;\n  e = _error_;\ndatalines;\nabc\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfnum(&ds, "x"), vec![None]);
+        assert_eq!(dfnum(&ds, "e"), vec![Some(1.0)]);
+        let log = s.log.into_string();
+        assert!(log.contains("NOTE: Invalid numeric data."), "log: {log}");
+    }
+
+    #[test]
+    fn missover_short_line_gives_missing() {
+        let mut s = session();
+        // Second line is short; MISSOVER → missing for the absent var.
+        run(
+            "data out;\n  infile datalines missover;\n  input a b c;\ndatalines;\n1 2 3\n4 5\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfnum(&ds, "a"), vec![Some(1.0), Some(4.0)]);
+        assert_eq!(dfnum(&ds, "b"), vec![Some(2.0), Some(5.0)]);
+        assert_eq!(dfnum(&ds, "c"), vec![Some(3.0), None]);
+    }
+
+    #[test]
+    fn firstobs_obs_window() {
+        let mut s = session();
+        run(
+            "data out;\n  infile datalines firstobs=2 obs=3;\n  input x;\ndatalines;\n10\n20\n30\n40\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // Lines 2..=3 → 20, 30.
+        assert_eq!(dfnum(&ds, "x"), vec![Some(20.0), Some(30.0)]);
+    }
+
+    #[test]
+    fn slash_advances_to_next_line() {
+        let mut s = session();
+        // Each observation spans two input lines.
+        run(
+            "data out;\n  input a / b;\ndatalines;\n1\n2\n3\n4\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(dfnum(&ds, "a"), vec![Some(1.0), Some(3.0)]);
+        assert_eq!(dfnum(&ds, "b"), vec![Some(2.0), Some(4.0)]);
+    }
+
+    #[test]
+    fn empty_datalines_block_no_observations() {
+        let mut s = session();
+        run(
+            "data out;\n  input x;\ndatalines;\n;\nrun;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.n_obs(), 0);
     }
 }

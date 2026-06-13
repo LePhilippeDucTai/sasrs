@@ -13,6 +13,27 @@ pub struct Lexer<'a> {
     /// (son contenu peut contenir n'importe quoi sauf `;`, y compris des
     /// caractères qui ne se lexent pas — fidèle à SAS).
     at_stmt_start: bool,
+    /// `DATALINES`/`CARDS` (M14.1) : armé après l'émission du `;` qui ferme
+    /// le statement `datalines;`/`cards;`. `Some(is4)` = la prochaine demande
+    /// de token doit CAPTURER les lignes de données brutes jusqu'au
+    /// terminateur (`;` seul, ou `;;;;` si `is4`). Le contenu n'est JAMAIS
+    /// lexé comme du SAS — c'est ce qui permet d'y trouver `@`, des quotes
+    /// déséquilibrées, etc. sans erreur de lexing.
+    capture_datalines: Option<bool>,
+    /// Mémorise le mot-clé de tête du statement courant QUAND il est en
+    /// début de statement : sert à détecter `datalines;`/`cards;` (et les
+    /// variantes `datalines4`/`cards4`) lorsqu'on émet leur `;`.
+    pending_datalines_kw: Option<bool>,
+}
+
+/// Si `name` (insensible à la casse) est le mot-clé d'un statement
+/// `DATALINES`/`CARDS`/`LINES` (ou leur variante `4`), renvoie `Some(is4)`.
+fn datalines_keyword(name: &str) -> Option<bool> {
+    match name.to_ascii_lowercase().as_str() {
+        "datalines" | "cards" | "lines" => Some(false),
+        "datalines4" | "cards4" | "lines4" => Some(true),
+        _ => None,
+    }
 }
 
 impl<'a> Lexer<'a> {
@@ -22,6 +43,8 @@ impl<'a> Lexer<'a> {
             bytes: src.as_bytes(),
             pos: 0,
             at_stmt_start: true,
+            capture_datalines: None,
+            pending_datalines_kw: None,
         }
     }
 
@@ -82,10 +105,86 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Token> {
+        // DATALINES/CARDS : si la capture est armée (le `;` du statement
+        // `datalines;` vient d'être émis), lire les lignes brutes AVANT toute
+        // tentative de lexing SAS.
+        if let Some(is4) = self.capture_datalines.take() {
+            return Ok(self.capture_data_lines(is4));
+        }
+
+        let at_start = self.at_stmt_start;
         let tok = self.next_token_inner()?;
+        match &tok.kind {
+            TokenKind::Ident(name) if at_start => {
+                // Tête de statement : mémorise si c'est datalines/cards.
+                self.pending_datalines_kw = datalines_keyword(name);
+            }
+            TokenKind::Semi => {
+                // Fin de statement : si la tête était datalines/cards, armer
+                // la capture pour le prochain appel.
+                if let Some(is4) = self.pending_datalines_kw.take() {
+                    self.capture_datalines = Some(is4);
+                }
+            }
+            // Tout autre token entre la tête et le `;` invalide la détection
+            // (ex. `datalines foo;` n'est pas un statement datalines pur — le
+            // parser en fera une erreur de toute façon).
+            _ => {
+                self.pending_datalines_kw = None;
+            }
+        }
         // Un `*` en tête du PROCHAIN statement ouvrira un commentaire.
         self.at_stmt_start = tok.kind == TokenKind::Semi;
         Ok(tok)
+    }
+
+    /// Capture les lignes de données brutes après `datalines;`/`cards;`.
+    /// Les données commencent à la LIGNE SUIVANT le `;` (on saute le reste de
+    /// la ligne du `;`). On lit ligne par ligne jusqu'à une ligne dont le
+    /// contenu trimé est exactement le terminateur : `;` (normal) ou `;;;;`
+    /// (variante `4`). Le terminateur N'EST PAS inclus mais EST consommé (la
+    /// position se place après lui), de sorte que le lexing reprend ensuite
+    /// normalement. EOF avant terminateur : on capture ce qu'on a (best
+    /// effort, comme SAS qui clôt l'étape).
+    fn capture_data_lines(&mut self, is4: bool) -> Token {
+        let start = self.pos;
+        // Sauter jusqu'à la fin de la ligne courante (celle du `;`).
+        while self.peek().is_some_and(|c| c != b'\n') {
+            self.pos += 1;
+        }
+        if self.peek() == Some(b'\n') {
+            self.pos += 1;
+        }
+        let terminator = if is4 { ";;;;" } else { ";" };
+        let mut lines: Vec<String> = Vec::new();
+        loop {
+            if self.peek().is_none() {
+                break;
+            }
+            // Lire une ligne (jusqu'au `\n` exclu).
+            let line_start = self.pos;
+            while self.peek().is_some_and(|c| c != b'\n') {
+                self.pos += 1;
+            }
+            let raw = &self.src[line_start..self.pos];
+            // Consommer le `\n` (s'il existe).
+            if self.peek() == Some(b'\n') {
+                self.pos += 1;
+            }
+            // Ligne sans CR final.
+            let line = raw.strip_suffix('\r').unwrap_or(raw);
+            if line.trim() == terminator {
+                // Terminateur : consommé, non inclus.
+                break;
+            }
+            lines.push(line.to_string());
+        }
+        // Le lexing reprend en début de statement.
+        self.at_stmt_start = true;
+        Token {
+            kind: TokenKind::DataLines(lines),
+            span: Span::new(start, self.pos),
+        }
     }
 
     fn next_token_inner(&mut self) -> Result<Token> {
@@ -245,6 +344,14 @@ impl<'a> Lexer<'a> {
             b'$' => {
                 self.pos += 1;
                 TokenKind::Dollar
+            }
+            b'@' => {
+                self.pos += 1;
+                TokenKind::At
+            }
+            b':' => {
+                self.pos += 1;
+                TokenKind::Colon
             }
             other => {
                 self.pos += 1;
@@ -528,5 +635,57 @@ mod tests {
         let k = kinds("x = .; y = .5;");
         assert!(k.contains(&TokenKind::Dot));
         assert!(k.contains(&TokenKind::Num(0.5)));
+    }
+
+    // ---- M14.1 : DATALINES / CARDS capture, `@`, `:` ----
+
+    #[test]
+    fn datalines_captures_raw_lines() {
+        let k = kinds("data a;\ninput x;\ndatalines;\n10\n20\n;\nrun;");
+        // The DataLines token holds the two raw data lines.
+        assert!(k.contains(&TokenKind::DataLines(vec!["10".into(), "20".into()])));
+        // The terminator `;` line is consumed, not emitted as a Semi after it.
+        // Lexing resumes with `run;`.
+        let tail: Vec<&TokenKind> = k.iter().rev().take(3).collect();
+        assert_eq!(tail[0], &TokenKind::Eof);
+        assert_eq!(tail[1], &TokenKind::Semi);
+        assert_eq!(tail[2], &TokenKind::Ident("run".into()));
+    }
+
+    #[test]
+    fn datalines_content_never_lexed_as_sas() {
+        // Content with `@`, unbalanced quote, `%` — would all fail normal
+        // lexing, but inside datalines it is captured verbatim.
+        let k = kinds("data a;\ninput x $;\ndatalines;\n@weird \"unbalanced %macro\n;\nrun;");
+        assert!(k.contains(&TokenKind::DataLines(vec![
+            "@weird \"unbalanced %macro".into()
+        ])));
+    }
+
+    #[test]
+    fn cards_is_an_alias() {
+        let k = kinds("data a;\ninput x;\ncards;\n1\n;\nrun;");
+        assert!(k.contains(&TokenKind::DataLines(vec!["1".into()])));
+    }
+
+    #[test]
+    fn datalines4_terminator_is_four_semicolons() {
+        let k = kinds("data a;\ninput x $;\ndatalines4;\nline;with;semis\n;;;;\nrun;");
+        assert!(k.contains(&TokenKind::DataLines(vec!["line;with;semis".into()])));
+    }
+
+    #[test]
+    fn at_and_colon_tokens() {
+        let k = kinds("input @1 x :8.;");
+        assert!(k.contains(&TokenKind::At));
+        assert!(k.contains(&TokenKind::Colon));
+    }
+
+    #[test]
+    fn datalines_not_armed_when_not_statement_head() {
+        // `x = datalines;` — `datalines` is not at statement start, so no
+        // capture is armed (it is just an identifier).
+        let k = kinds("x = datalines; y = 1;");
+        assert!(!k.iter().any(|t| matches!(t, TokenKind::DataLines(_))));
     }
 }

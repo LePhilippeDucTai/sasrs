@@ -139,7 +139,7 @@ M16 → M17 → M19 → M20 → M21 → M22 → M24 → M25 → M26 → M23 → 
 
 ## M14 — I/O fichiers plats
 Le plus gros déblocage : aujourd'hui tout entre/sort en parquet, impossible de lire un CSV/texte.
-- [ ] M14.1 — `INFILE` + `INPUT` (list/column/formatted) + `DATALINES`/`CARDS` (Fable, élevé) : `DsStmt::{Infile,Input,Datalines}`, mode `InputMode::TextFile` parallèle à SET dans `exec.rs`, informats réutilisés (`FormatCatalog::informat`), piège décimale implicite documenté
+- [x] M14.1 — `INFILE` + `INPUT` (list/column/formatted) + `DATALINES`/`CARDS` : `DsStmt::{Infile,Input,Datalines}`, mode d'entrée texte parallèle à SET dans `exec.rs`, informats réutilisés (`FormatCatalog::informat`). Lexer capture les lignes DATALINES brutes (token `DataLines`), tokens `@`/`:`. Couvre list (`name $ age`, `:informat.`), column (`name $ 1-10`), formatted (`@1 name $10. age 5.2`), pointeurs `@n`/`+n`/`/` ; INFILE DLM=/DELIMITER=/DSD/FIRSTOBS=/OBS=/MISSOVER/TRUNCOVER/STOPOVER/LRECL=. Différés (erreurs propres) : `@@` line-hold, fileref nu, SET+INFILE simultanés, option INFILE inconnue. Donnée num illisible → `.` + NOTE + `_ERROR_`. +29 tests (1018 lib + snapshot, 0 `.snap.new`, 0 warning)
 - [ ] M14.2 — `FILE` + `PUT` (sortie texte ; `@`/`@@` hold, `/`) (Opus, moyen) : builders texte dans le Runner, destination fichier/`_WEBOUT`
 - [ ] ⫽ M14.3 — `PROC IMPORT`/`PROC EXPORT` : CSV (Polars `CsvReader/CsvWriter`), Excel (`calamine` lecture / `rust_xlsxwriter` écriture) ; `DBMS=`/`GETNAMES`/`SHEET=`/`OUT=`/`OUTFILE=` (Sonnet, moyen)
 - [ ] M14.4 — `LIBNAME ... CSV`/`XLSX` bibliothèque virtuelle (optionnel) : impl `LibraryProvider` fichier-table (Sonnet, faible)

@@ -73,7 +73,9 @@
 #![allow(unused_variables, dead_code)]
 
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
-use crate::ast::{AttribItem, DataStepAst, DsStmt, Expr, LengthSpec};
+use crate::ast::{
+    AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
+};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
 use crate::value::MissingKind;
@@ -242,6 +244,11 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "attrib" => parse_attrib(ts),
         "array" => parse_array(ts),
         "call" => parse_call_routine(ts),
+        "infile" => parse_infile(ts),
+        "input" => parse_input(ts),
+        "datalines" | "cards" | "lines" | "datalines4" | "cards4" | "lines4" => {
+            parse_datalines(ts)
+        }
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
             "no matching DO for END.",
@@ -404,6 +411,485 @@ fn parse_call_routine(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::CallRoutine { name, args })
+}
+
+/// `datalines;`/`cards;`/`lines;` (+ variantes `4`) → `DsStmt::Datalines`.
+/// Le lexer a déjà capturé les lignes brutes dans un `TokenKind::DataLines`
+/// qui SUIT le `;` du statement : on consomme le mot-clé, le `;`, puis le
+/// token `DataLines`. Un `datalines;` sans bloc de données (EOF immédiat)
+/// donne une liste vide.
+fn parse_datalines(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // datalines / cards / lines (+ variante 4)
+    ts.expect_semi()?;
+    let lines = match &ts.peek().kind {
+        TokenKind::DataLines(lines) => {
+            let lines = lines.clone();
+            ts.next();
+            lines
+        }
+        // Pas de token DataLines (cas dégénéré : datalines en fin de source) :
+        // bloc vide.
+        _ => Vec::new(),
+    };
+    Ok(DsStmt::Datalines { lines })
+}
+
+/// `infile <source> <options>;` (M14.1). Source : un littéral chaîne
+/// (chemin) ou le mot-clé `datalines`/`cards`. Options reconnues :
+/// `DLM=`/`DELIMITER=`, `DSD`, `FIRSTOBS=`, `OBS=`, `MISSOVER`,
+/// `TRUNCOVER`, `STOPOVER`, `LRECL=`. Option inconnue → erreur "not yet
+/// implemented." propre.
+fn parse_infile(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `infile`
+    let src_tok = ts.peek().clone();
+    let source = match &src_tok.kind {
+        TokenKind::Str { value, .. } => {
+            ts.next();
+            InfileSource::Path(value.clone())
+        }
+        TokenKind::Ident(s)
+            if matches!(
+                s.to_ascii_lowercase().as_str(),
+                "datalines" | "cards" | "lines"
+            ) =>
+        {
+            ts.next();
+            InfileSource::Datalines
+        }
+        // Un fileref nu (ex. `infile myfile;`) n'est pas couvert : seuls les
+        // chemins littéraux et DATALINES le sont.
+        TokenKind::Ident(_) => {
+            return Err(SasError::parse(
+                "INFILE with a fileref is not yet implemented; use a quoted physical path or DATALINES.",
+                src_tok.span,
+            ));
+        }
+        _ => {
+            return Err(SasError::parse(
+                "expected a quoted file path or DATALINES after INFILE",
+                src_tok.span,
+            ));
+        }
+    };
+
+    let mut options = InfileOptions::default();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => break,
+            TokenKind::Ident(name) => {
+                let lower = name.to_ascii_lowercase();
+                match lower.as_str() {
+                    "dlm" | "delimiter" => {
+                        ts.next();
+                        if ts.peek().kind != TokenKind::Eq {
+                            return Err(SasError::parse(
+                                "expected '=' after the DLM=/DELIMITER= INFILE option",
+                                ts.peek().span,
+                            ));
+                        }
+                        ts.next(); // `=`
+                        options.delimiter = Some(parse_delimiter_value(ts)?);
+                    }
+                    "dsd" => {
+                        ts.next();
+                        options.dsd = true;
+                    }
+                    "missover" => {
+                        ts.next();
+                        options.missover = true;
+                    }
+                    "truncover" => {
+                        ts.next();
+                        options.truncover = true;
+                    }
+                    "stopover" => {
+                        ts.next();
+                        options.stopover = true;
+                    }
+                    "firstobs" => {
+                        ts.next();
+                        options.firstobs = Some(parse_infile_uint(ts, "FIRSTOBS=")?);
+                    }
+                    "obs" => {
+                        ts.next();
+                        options.obs = Some(parse_infile_uint(ts, "OBS=")?);
+                    }
+                    "lrecl" => {
+                        ts.next();
+                        options.lrecl = Some(parse_infile_uint(ts, "LRECL=")?);
+                    }
+                    other => {
+                        return Err(SasError::parse(
+                            format!(
+                                "The INFILE option {} is not yet implemented.",
+                                other.to_uppercase()
+                            ),
+                            tok.span,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected an INFILE option or ';'",
+                    tok.span,
+                ));
+            }
+        }
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::Infile { source, options })
+}
+
+/// Valeur d'un `DLM=`/`DELIMITER=` : un littéral chaîne (ex. `dlm=','`) ou
+/// un seul caractère non quoté lexable (ex. `dlm=,` n'est pas lexable comme
+/// chaîne — on accepte donc la forme quotée et, par robustesse, un Ident
+/// d'un caractère). On exige au moins un caractère.
+fn parse_delimiter_value(ts: &mut StatementStream) -> Result<String> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Str { value, .. } => {
+            ts.next();
+            Ok(value.clone())
+        }
+        // Forme non quotée d'un caractère lexé comme identifiant (rare).
+        TokenKind::Ident(s) if s.chars().count() == 1 => {
+            let s = s.clone();
+            ts.next();
+            Ok(s)
+        }
+        _ => Err(SasError::parse(
+            "expected a quoted delimiter after DLM=/DELIMITER=",
+            tok.span,
+        )),
+    }
+}
+
+/// Valeur entière positive d'une option INFILE (FIRSTOBS=/OBS=/LRECL=).
+fn parse_infile_uint(ts: &mut StatementStream, opt: &str) -> Result<usize> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!("expected '=' after the {opt} INFILE option"),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `=`
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Num(n) if *n >= 1.0 && n.fract() == 0.0 => {
+            ts.next();
+            Ok(*n as usize)
+        }
+        _ => Err(SasError::parse(
+            format!("expected a positive integer for the {opt} INFILE option"),
+            tok.span,
+        )),
+    }
+}
+
+/// `input <items>;` (M14.1). Trois styles mêlés : list (`name`, `name $`,
+/// `name :informat.`), column (`name 1-10`, `name $ 1-10`), formatted
+/// (`@col name informat.`, `name informat.`). Pointeurs `@n`, `+n`, `/`.
+/// `@@` (hold) non couvert → erreur "not yet implemented.".
+fn parse_input(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `input`
+    let mut items: Vec<InputItem> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => break,
+            // Pointeur `@col` (`@1`, `@12`). `@@` (hold) non couvert → erreur.
+            TokenKind::At => {
+                items.push(parse_at_pointer(ts)?);
+            }
+            // `+n` : saut relatif du pointeur.
+            TokenKind::Plus => {
+                ts.next(); // `+`
+                let n = parse_input_uint(ts, "the + column-pointer")?;
+                items.push(InputItem::PointerSkip(n));
+            }
+            // `/` : ligne suivante.
+            TokenKind::Slash => {
+                ts.next();
+                items.push(InputItem::NextLine);
+            }
+            TokenKind::Ident(_) => {
+                items.push(parse_input_var(ts)?);
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name or column pointer in the INPUT statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+    ts.expect_semi()?;
+    if items.is_empty() {
+        return Err(SasError::parse(
+            "The INPUT statement must list at least one variable.",
+            ts.peek().span,
+        ));
+    }
+    Ok(DsStmt::Input { items })
+}
+
+/// `@col` : positionne le pointeur de colonne (1-based). `@@` (hold du
+/// pointeur entre itérations) n'est pas couvert → erreur "not yet
+/// implemented.". `@expr` (colonne dynamique) non couvert non plus.
+fn parse_at_pointer(ts: &mut StatementStream) -> Result<InputItem> {
+    let at_tok = ts.peek().clone();
+    ts.next(); // `@`
+    if ts.peek().kind == TokenKind::At {
+        return Err(SasError::parse(
+            "The line-hold specifier @@ is not yet implemented.",
+            at_tok.span,
+        ));
+    }
+    let tok = ts.peek().clone();
+    match tok.kind {
+        TokenKind::Num(n) if n.fract() == 0.0 && n >= 1.0 => {
+            ts.next();
+            Ok(InputItem::PointerCol(n as usize))
+        }
+        _ => Err(SasError::parse(
+            "expected a column number after '@' in the INPUT statement",
+            tok.span,
+        )),
+    }
+}
+
+/// Une variable d'INPUT : `name`, `name $`, `name :informat.`,
+/// `name informat.`, `name col1-col2`, `name $ col1-col2`.
+fn parse_input_var(ts: &mut StatementStream) -> Result<InputItem> {
+    let name_tok = ts.peek().clone();
+    let name = name_tok
+        .ident()
+        .expect("caller matched an Ident")
+        .to_string();
+    super::validate_sas_name(&name, name_tok.span)?;
+    ts.next(); // nom
+
+    let mut is_char = false;
+    let mut informat: Option<String> = None;
+    let mut col_range: Option<(usize, usize)> = None;
+
+    // `$` (caractère).
+    if ts.peek().kind == TokenKind::Dollar {
+        ts.next();
+        is_char = true;
+    }
+
+    // Modificateur `:` du list input : `name :informat.` (lecture séparée
+    // par délimiteurs mais en appliquant l'informat). Sémantiquement, pour
+    // nous, c'est un informat de list input (largeur non contraignante).
+    if ts.peek().kind == TokenKind::Colon {
+        ts.next();
+        // Un informat caractère peut suivre sous la forme `$w.`.
+        if let Some(token) = try_parse_informat_token(ts)? {
+            if token.starts_with('$') {
+                is_char = true;
+            }
+            return Ok(InputItem::Var {
+                name,
+                is_char,
+                col_range: None,
+                informat: Some(token),
+            });
+        }
+        // `:` sans informat : list input ordinaire.
+        return Ok(InputItem::Var {
+            name,
+            is_char,
+            col_range: None,
+            informat: None,
+        });
+    }
+
+    // Column input : `col1 - col2` ou `col1` (une seule colonne). On NE
+    // traite un `Num` en column input QUE s'il est entier et n'est PAS la
+    // largeur d'un informat. Discriminant : un `Num` entier suivi d'un `.`
+    // (ex. `10.`) ou un `Num` fractionnaire (ex. `5.2`) est un informat ;
+    // un `Num` suivi d'un `-` (plage) ou d'un séparateur d'item est une
+    // colonne.
+    if let TokenKind::Num(n) = ts.peek().kind {
+        let is_informat_width =
+            n.fract() != 0.0 || matches!(ts.peek2().kind, TokenKind::Dot);
+        if n.fract() == 0.0 && n >= 1.0 && !is_informat_width {
+            let start = n as usize;
+            ts.next(); // col de début
+            let end = if ts.peek().kind == TokenKind::Minus {
+                ts.next(); // `-`
+                let end_tok = ts.peek().clone();
+                match end_tok.kind {
+                    TokenKind::Num(e) if e.fract() == 0.0 && e >= 1.0 => {
+                        ts.next();
+                        e as usize
+                    }
+                    _ => {
+                        return Err(SasError::parse(
+                            "expected an ending column number after '-' in the INPUT statement",
+                            end_tok.span,
+                        ));
+                    }
+                }
+            } else {
+                start
+            };
+            if end < start {
+                return Err(SasError::parse(
+                    "INPUT column range end is before its start.",
+                    name_tok.span,
+                ));
+            }
+            col_range = Some((start, end));
+            // Forme `name 1-10 .d` (décimales sur column input) : non couverte.
+            return Ok(InputItem::Var {
+                name,
+                is_char,
+                col_range,
+                informat: None,
+            });
+        }
+    }
+
+    // Formatted input : un informat suit (`name 5.2`, `name $10.`,
+    // `name COMMA8.`, `name date9.`). Reconnu via un token de format,
+    // assemblé par `try_parse_informat_token`.
+    if let Some(mut token) = try_parse_informat_token(ts)? {
+        // Un informat commençant par `$` implique le caractère.
+        if token.starts_with('$') {
+            is_char = true;
+        } else if is_char {
+            // Un `$` a été consommé AVANT l'informat (`name $10.`) : le
+            // préfixer pour que FormatSpec reconnaisse un informat caractère.
+            token.insert(0, '$');
+        }
+        informat = Some(token);
+    }
+
+    Ok(InputItem::Var {
+        name,
+        is_char,
+        col_range,
+        informat,
+    })
+}
+
+/// Entier positif (saut de pointeur `+n`).
+fn parse_input_uint(ts: &mut StatementStream, what: &str) -> Result<usize> {
+    let tok = ts.peek().clone();
+    match tok.kind {
+        TokenKind::Num(n) if n.fract() == 0.0 && n >= 0.0 => {
+            ts.next();
+            Ok(n as usize)
+        }
+        _ => Err(SasError::parse(
+            format!("expected a non-negative integer for {what}"),
+            tok.span,
+        )),
+    }
+}
+
+/// Tente de lire un token d'informat à la position courante. Un informat
+/// SAS s'écrit `name w. d` / `w. d` / `$ w.` etc. Le lexer découpe par ex.
+/// `5.2` en `Num(5.2)` et `$10.` en `Dollar Num(10) Dot`. On reconstruit
+/// donc le token textuel attendu par `FormatSpec::parse`. Renvoie `None` si
+/// aucun informat n'est présent (la variable était en list input simple).
+fn try_parse_informat_token(ts: &mut StatementStream) -> Result<Option<String>> {
+    // Cas `$w.` ou `$name w.` : un `$` déjà consommé par l'appelant signale
+    // le caractère, mais un `$` peut aussi introduire un informat ($CHAR.,
+    // $w.). Ici on traite les formes APRÈS le nom (et après un éventuel `$`).
+    let mut token = String::new();
+
+    // Informat caractère explicite `$CHARw.` / `$w.` introduit par un `$`.
+    if ts.peek().kind == TokenKind::Dollar {
+        ts.next();
+        token.push('$');
+    }
+
+    // Nom d'informat alphabétique optionnel (DATE, COMMA, CHAR, BEST...).
+    if let TokenKind::Ident(s) = &ts.peek().kind {
+        // Un identifiant n'est un nom d'informat QUE s'il est immédiatement
+        // suivi de chiffres et/ou d'un `.` (sinon c'est la variable
+        // suivante du list input). On le détecte en regardant le token
+        // suivant : Num ou Dot.
+        let next = &ts.peek2().kind;
+        let looks_like_informat = matches!(next, TokenKind::Num(_) | TokenKind::Dot);
+        if looks_like_informat {
+            token.push_str(s);
+            ts.next();
+        } else if !token.is_empty() {
+            // On a déjà consommé `$` : `$name` sans largeur = informat
+            // caractère nommé (rare) — on prend le nom.
+            token.push_str(s);
+            ts.next();
+        } else {
+            // Pas d'informat : rien à faire.
+            return Ok(None);
+        }
+    }
+
+    // Largeur `w` puis `. d` éventuels. Le lexer a pu produire :
+    //   `5.2`  → Num(5.2)
+    //   `5.`   → Num(5) Dot      (ou Num(5.0)? non : `5.` suivi d'un non-digit
+    //                              reste Num(5) puis Dot)
+    //   `10.`  → Num(10) Dot
+    //   `.`    → Dot
+    match ts.peek().kind {
+        TokenKind::Num(n) => {
+            ts.next();
+            // `Num(5.2)` : le lexer a fusionné largeur.décimales.
+            if n.fract() != 0.0 {
+                // Reconstituer "w.d" depuis la valeur flottante via sa
+                // représentation textuelle d'origine est ambigu ; on utilise
+                // la forme décimale brute.
+                token.push_str(&format_informat_num(n));
+            } else {
+                token.push_str(&format!("{}", n as i64));
+                // `.` éventuel (largeur entière suivie d'un point).
+                if ts.peek().kind == TokenKind::Dot {
+                    ts.next();
+                    token.push('.');
+                    // décimales éventuelles `d`.
+                    if let TokenKind::Num(d) = ts.peek().kind
+                        && d.fract() == 0.0
+                    {
+                        ts.next();
+                        token.push_str(&format!("{}", d as i64));
+                    }
+                }
+            }
+        }
+        TokenKind::Dot => {
+            // `name .` : informat dégénéré ; on prend juste le `.`.
+            ts.next();
+            token.push('.');
+        }
+        _ => {
+            if token.is_empty() {
+                return Ok(None);
+            }
+            // `$` seul (ex. `name $`) a déjà été géré par l'appelant ; ici
+            // un `$` sans suite est un informat caractère par défaut.
+        }
+    }
+
+    if token.is_empty() || token == "$" {
+        return Ok(None);
+    }
+    Ok(Some(token))
+}
+
+/// Représente un `Num(5.2)` (largeur.décimales) en token d'informat "5.2".
+fn format_informat_num(n: f64) -> String {
+    // n vaut par ex. 5.2 → "5.2". On reconstruit via une représentation
+    // décimale courte. Les informats w.d ont w et d entiers ; ici n encode
+    // w.d dans un f64, ce qui est intrinsèquement ambigu pour d≥2 chiffres.
+    // On formate avec suffisamment de précision puis on retire les zéros.
+    let s = format!("{n}");
+    s
 }
 
 /// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le
@@ -2437,5 +2923,179 @@ mod tests {
                 },
             ])]
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // M14.1 — INFILE / INPUT / DATALINES
+    // ---------------------------------------------------------------------
+
+    fn input_items(ast: &DataStepAst) -> &[InputItem] {
+        ast.stmts
+            .iter()
+            .find_map(|s| match s {
+                DsStmt::Input { items } => Some(items.as_slice()),
+                _ => None,
+            })
+            .expect("expected an INPUT statement")
+    }
+
+    #[test]
+    fn datalines_statement_captures_lines() {
+        let ast = parse("data a; input x; datalines;\n10\n20\n;\nrun;").unwrap();
+        let dl = ast.stmts.iter().find_map(|s| match s {
+            DsStmt::Datalines { lines } => Some(lines.clone()),
+            _ => None,
+        });
+        assert_eq!(dl, Some(vec!["10".to_string(), "20".to_string()]));
+    }
+
+    #[test]
+    fn list_input_with_char_and_modifier() {
+        let ast = parse("data a; input name $ age height; datalines;\nx 1 2\n;\nrun;").unwrap();
+        let items = input_items(&ast);
+        assert_eq!(
+            items,
+            &[
+                InputItem::Var {
+                    name: "name".into(),
+                    is_char: true,
+                    col_range: None,
+                    informat: None
+                },
+                InputItem::Var {
+                    name: "age".into(),
+                    is_char: false,
+                    col_range: None,
+                    informat: None
+                },
+                InputItem::Var {
+                    name: "height".into(),
+                    is_char: false,
+                    col_range: None,
+                    informat: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn list_input_colon_informat() {
+        let ast = parse("data a; input x :comma8.; datalines;\n1\n;\nrun;").unwrap();
+        let items = input_items(&ast);
+        assert_eq!(
+            items,
+            &[InputItem::Var {
+                name: "x".into(),
+                is_char: false,
+                col_range: None,
+                informat: Some("comma8.".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn column_input_ranges() {
+        let ast = parse("data a; input name $ 1-10 age 11-13; datalines;\nx\n;\nrun;").unwrap();
+        let items = input_items(&ast);
+        assert_eq!(
+            items,
+            &[
+                InputItem::Var {
+                    name: "name".into(),
+                    is_char: true,
+                    col_range: Some((1, 10)),
+                    informat: None,
+                },
+                InputItem::Var {
+                    name: "age".into(),
+                    is_char: false,
+                    col_range: Some((11, 13)),
+                    informat: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn formatted_input_pointer_and_informats() {
+        let ast = parse("data a; input @1 name $10. age 5.2; datalines;\nx\n;\nrun;").unwrap();
+        let items = input_items(&ast);
+        assert_eq!(
+            items,
+            &[
+                InputItem::PointerCol(1),
+                InputItem::Var {
+                    name: "name".into(),
+                    is_char: true,
+                    col_range: None,
+                    informat: Some("$10.".into()),
+                },
+                InputItem::Var {
+                    name: "age".into(),
+                    is_char: false,
+                    col_range: None,
+                    informat: Some("5.2".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn input_pointer_skip_and_next_line() {
+        let ast = parse("data a; input a +3 b / c; datalines;\nx\n;\nrun;").unwrap();
+        let items = input_items(&ast);
+        assert_eq!(items[1], InputItem::PointerSkip(3));
+        assert_eq!(items[3], InputItem::NextLine);
+    }
+
+    #[test]
+    fn infile_datalines_with_options() {
+        let ast = parse(
+            "data a; infile datalines dsd dlm=',' firstobs=2 obs=10 missover; input x; datalines;\n1\n;\nrun;",
+        )
+        .unwrap();
+        let opts = ast.stmts.iter().find_map(|s| match s {
+            DsStmt::Infile { source, options } => Some((source.clone(), options.clone())),
+            _ => None,
+        });
+        let (source, options) = opts.expect("expected an INFILE statement");
+        assert_eq!(source, InfileSource::Datalines);
+        assert!(options.dsd);
+        assert_eq!(options.delimiter.as_deref(), Some(","));
+        assert_eq!(options.firstobs, Some(2));
+        assert_eq!(options.obs, Some(10));
+        assert!(options.missover);
+    }
+
+    #[test]
+    fn infile_path_and_lrecl_truncover() {
+        let ast =
+            parse("data a; infile '/tmp/data.txt' lrecl=200 truncover; input x; run;").unwrap();
+        let opts = ast.stmts.iter().find_map(|s| match s {
+            DsStmt::Infile { source, options } => Some((source.clone(), options.clone())),
+            _ => None,
+        });
+        let (source, options) = opts.unwrap();
+        assert_eq!(source, InfileSource::Path("/tmp/data.txt".into()));
+        assert_eq!(options.lrecl, Some(200));
+        assert!(options.truncover);
+    }
+
+    #[test]
+    fn unknown_infile_option_errors() {
+        let err = parse("data a; infile datalines frobnicate; input x; run;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn double_at_hold_is_not_implemented() {
+        let err = parse("data a; input x @@; datalines;\n1\n;\nrun;").unwrap_err();
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    #[test]
+    fn empty_input_statement_errors() {
+        let err = parse("data a; input ; datalines;\n;\nrun;").unwrap_err();
+        assert!(err.to_string().contains("at least one variable"), "got: {err}");
     }
 }
