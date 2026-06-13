@@ -24,6 +24,7 @@ pub mod freq;
 pub mod means;
 pub mod print;
 pub mod rank;
+pub mod report;
 pub mod sort;
 pub mod tabulate;
 pub mod transpose;
@@ -48,6 +49,7 @@ pub enum ProcAst {
     Append(append::AppendAst),
     Format(format::FormatAst),
     Tabulate(tabulate::TabulateAst),
+    Report(report::ReportAst),
     Sql(crate::sql::ast::SqlProgram),
 }
 
@@ -121,6 +123,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = tabulate::parse(ts)?;
             Ok(ProcAst::Tabulate(ast))
         }
+        "report" => {
+            let ast = report::parse(ts)?;
+            Ok(ProcAst::Report(ast))
+        }
         "append" => {
             let ast = append::parse(ts)?;
             Ok(ProcAst::Append(ast))
@@ -160,6 +166,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Append(a) => append::execute(a, session),
         ProcAst::Format(a) => format::execute(a, session),
         ProcAst::Tabulate(a) => tabulate::execute(a, session),
+        ProcAst::Report(a) => report::execute(a, session),
         ProcAst::Sql(a) => crate::sql::execute(a, session),
     };
 

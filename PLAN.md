@@ -120,7 +120,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/procs/corr.rs` | M9 | ✅ | moyen | Pearson (VAR/WITH), Simple Statistics, matrice r + `Prob>|r|` (t-CDF via betai), N appariés ; NOSIMPLE/NOPROB/NOCORR ; OUT= = erreur (suite) ; réutilise common |
 | `src/procs/rank.rs` | M9 | ✅ | moyen | VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= ; collation `sas_cmp`, missing→missing ; BY + méthodes alt. = erreur (suite) |
 | `src/procs/tabulate.rs` | M9 | ✅ | élevé | v1 listing : CLASS/VAR, `table` 1–2 dims (empilement/croisement/parenthèses), stats N/NMISS/SUM/MEAN/MIN/MAX/STD ; en-têtes plats, 3ᵉ dim + croisements 2 VAR/stats + PCTN/formats différés (erreurs) |
-| `src/procs/report.rs` | M9 | **Opus** | élevé | COLUMN + DEFINE, groupes, BREAK/RBREAK (sous-ensemble) |
+| `src/procs/report.rs` | M9 | ✅ | élevé | v1 listing : COLUMN + DEFINE (DISPLAY/ORDER/GROUP/ANALYSIS+stat) ; détail ou sommaire groupé ; ACROSS/COMPUTE/BREAK/RBREAK/LINE/WHERE/OUT= différés (erreurs) |
 | BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | **Opus** | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
 | `src/macros/` (depuis `preprocess.rs`) — processeur macro complet | M11 | **Fable** | élevé | voir §Macro M11 ci-dessous ; 7 unités incrémentales |
 
