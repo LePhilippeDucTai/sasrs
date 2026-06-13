@@ -1,0 +1,49 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m10/by_group.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sort data=d.class out=class;
+3       by sex;
+4     run;
+NOTE: PROCEDURE SORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'Mean height and weight by sex';
+
+6     proc means data=class;
+7       by sex;
+8       var height weight;
+9     run;
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                 Mean height and weight by sex
+
+                                      The MEANS Procedure
+
+sex=F
+
+              Variable    N            Mean         Std Dev    Minimum    Maximum
+
+              height      9    60.588888889    5.0183275213       51.3       66.5
+              weight      9    90.111111111     19.38391372       50.5      112.5
+sex=M
+
+                 Variable     N      Mean         Std Dev    Minimum    Maximum
+
+                 height      10     63.91    4.9379370411       57.3         72
+                 weight      10    108.95    22.727186363         83        150
+
+==== EXIT 0 ====

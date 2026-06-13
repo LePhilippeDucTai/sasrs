@@ -1,0 +1,59 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m10/freq_chisq.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data class2;
+3       set d.class;
+4       if age >= 14 then agegrp = 'Old';
+5       else agegrp = 'Yng';
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.CLASS2 has 19 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Sex by age-group with chi-square (no row/col pct)';
+
+8     proc freq data=class2;
+9       tables sex*agegrp / chisq norow nocol;
+10    run;
+NOTE: PROCEDURE FREQ used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                       Sex by age-group with chi-square (no row/col pct)
+
+                                       The FREQ Procedure
+
+Table of sex by agegrp
+
+Cell contents: Frequency / Percent
+
+                               sex        Old      Yng     Total
+
+                               F            4        5         9
+                                        21.05    26.32     47.37
+                               M            5        5        10
+                                        26.32    26.32     52.63
+                               Total        9       10        19
+                                        47.37    52.63    100.00
+
+Statistics for Table of sex by agegrp
+
+                     Statistic                      DF     Value      Prob
+
+                     Chi-Square                      1    0.0586    0.8087
+                     Likelihood Ratio Chi-Square     1    0.0587    0.8086
+
+==== EXIT 0 ====

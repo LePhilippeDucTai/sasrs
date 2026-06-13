@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M10** (M1–M9 complets ; extension — voir M10/M11)
+Jalon courant : **M11** (M1–M10 complets ; reste le processeur macro complet)
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -90,7 +90,7 @@ Pattern d'ajout : nouveau `src/procs/<nom>.rs` (`<Nom>Ast` + `parse(ts)` + `exec
 - [x] WEIGHT dans MEANS & UNIVARIATE : statement `weight var;` ; `common::partition_weighted` (exclut value missing / weight missing / weight≤0) ; stats pondérées VARDEF=DF (SumWgt, Sum=Σwx, Mean=Σwx/Σw, Var=CSS_w/(n−1), Std, StdErr=Std/√ΣW, CV, USS) ; Min/Max non pondérés ; chemin sans-WEIGHT byte-identique. Différés documentés : skew/kurt non pondérés, médiane MEANS non pondérée, quantiles UNIVARIATE omis (note). CORR WEIGHT non livré (suite). +9 tests (877 total, 0 warning)
 - [x] Intervalles de confiance MEANS : option `ALPHA=` (défaut 0.05, validée) + stats `CLM`/`LCLM`/`UCLM` ; `common::t_quantile` (inverse CDF t par bissection sur betai, validé t₀.₉₇₅,₁₀≈2.2281) ; demi-largeur = t·stderr (réutilise le StdErr affiché, pondéré si WEIGHT), n≥2 ; en-têtes "Lower/Upper NN% CL for Mean" ; OUTPUT OUT= câblé. Chemin par défaut byte-identique. +10 tests (887 total, 0 warning)
 - [x] FREQ : CHISQ deux voies (Pearson + Likelihood Ratio : valeur, ddl=(r−1)(c−1), Prob via `common::chisq_sf` = Q(df/2, x/2) incomplète gamma ; table dégénérée gérée) ET NOFREQ/NOPERCENT/NOROW/NOCOL/NOCUM appliqués réellement (suppression des lignes/colonnes, 1 et 2 voies). CHISQ 1 voie différé. Sortie par défaut byte-identique (m5/freq inchangé). +8 tests (895 total, 0 warning)
-- [ ] Fixtures `tests/fixtures/m10/` + snapshots ; DoD : cargo test vert ; jalon courant → M11
+- [x] Fixtures `tests/fixtures/m10/` (by_group, weight, confint, freq_chisq) + 4 snapshots **vérifiés à la main** : moyennes par groupe + min/max exacts, pondéré 14/6 & √(5/3) & Σwx=14, IC height [59.866, 64.808] (t₀.₉₇₅,₁₈), χ² 2×2 = 0.0586/ddl1/p0.8087 + NOROW/NOCOL appliqués. `cargo test` vert. **M10 TERMINÉ.**
 
 ## M11 — macro complet (promu ON par défaut)
 Architecture (D3 + design détaillé, voir PLAN.md §Macro M11) : expansion **texte→texte

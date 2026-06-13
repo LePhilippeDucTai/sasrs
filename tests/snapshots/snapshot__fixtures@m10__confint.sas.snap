@@ -1,0 +1,32 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m10/confint.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title '95% confidence limits for mean height';
+
+3     proc means data=d.class n mean std stderr lclm uclm;
+4       var height;
+5     run;
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                             95% confidence limits for mean height
+
+                                      The MEANS Procedure
+
+Variable     N            Mean         Std Dev       Std Error    Lower 95% CL for Mean    Upper 95% CL for Mean
+
+height      19    62.336842105    5.1270752466    1.1762317303             59.865670939             64.808013272
+
+==== EXIT 0 ====
