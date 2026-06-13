@@ -272,6 +272,7 @@ mod tests {
             }),
             vars: None,
             noobs: false,
+            label: false,
         });
 
         execute_proc("print", &ast, &mut session).unwrap();
@@ -297,6 +298,7 @@ mod tests {
             }),
             vars: None,
             noobs: false,
+            label: false,
         });
 
         execute_proc("print", &ast, &mut session).unwrap();

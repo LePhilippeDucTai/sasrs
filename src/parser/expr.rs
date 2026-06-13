@@ -384,9 +384,73 @@ fn parse_dot(ts: &mut StatementStream) -> Result<Expr> {
     Ok(Expr::Missing(MissingKind::Dot))
 }
 
+/// Lit un token de format/informat (ex. `dollar8.2`, `date9.`, `8.2`,
+/// `$char10.`) en consommant le RUN contigu de tokens et en tranchant la
+/// source brute — robuste quelle que soit la façon dont le lexer découpe
+/// lettres/chiffres/points. Algorithme : on consomme les tokens
+/// `Dollar | Ident | Num | Dot` tant qu'ils sont ADJACENTS (le `span.start`
+/// de chacun touche le `span.end` du précédent), puis on rend la tranche
+/// `src.text[start..end]`.
+pub(crate) fn read_format_token(ts: &mut StatementStream) -> Result<String> {
+    let start = ts.peek().span.start;
+    let mut end = start;
+    let mut consumed = false;
+    loop {
+        let tok = ts.peek();
+        let is_fmt_piece = matches!(
+            tok.kind,
+            TokenKind::Dollar | TokenKind::Ident(_) | TokenKind::Num(_) | TokenKind::Dot
+        );
+        if !is_fmt_piece {
+            break;
+        }
+        // Le premier morceau est accepté tel quel ; les suivants doivent être
+        // adjacents (aucun espace dans la source).
+        if consumed && tok.span.start != end {
+            break;
+        }
+        end = tok.span.end;
+        consumed = true;
+        ts.next();
+    }
+    if !consumed {
+        return Err(SasError::parse("expected a format", ts.peek().span));
+    }
+    Ok(ts.src.text[start..end].to_string())
+}
+
 /// Appel de fonction : `(` déjà en tête de stream, `name` déjà consommé.
 fn parse_call(ts: &mut StatementStream, name: String) -> Result<Expr> {
     ts.next(); // (
+
+    // PUT(value, format) / INPUT(source, informat) : le second argument est
+    // un TOKEN de format (ex. `dollar8.2`, `date9.`) — pas une expression. On
+    // parse le premier argument normalement, puis on lit le token de format
+    // brut via `read_format_token` et on le pousse comme `Expr::Str`.
+    let upper = name.to_uppercase();
+    if upper == "PUT" || upper == "INPUT" {
+        let value = parse_expr(ts)?;
+        if ts.peek().kind != TokenKind::Comma {
+            return Err(SasError::parse(
+                format!("expected ',' then a format in the call to {upper}"),
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `,`
+        let token = read_format_token(ts)?;
+        if ts.peek().kind != TokenKind::RParen {
+            return Err(SasError::parse(
+                format!("expected ')' after the format in the call to {upper}"),
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `)`
+        return Ok(Expr::Call {
+            name,
+            args: vec![value, Expr::Str(token)],
+        });
+    }
+
     let mut args = Vec::new();
     if ts.peek().kind != TokenKind::RParen {
         loop {
@@ -1022,5 +1086,40 @@ mod tests {
     #[test]
     fn empty_input_errors() {
         assert!(parse("").is_err());
+    }
+
+    // ── PUT / INPUT : le 2e argument est un token de format (M4) ──────────
+
+    #[test]
+    fn put_parses_format_token_as_string_arg() {
+        assert_eq!(
+            ok("put(x, dollar8.2)"),
+            Expr::Call {
+                name: "put".to_string(),
+                args: vec![var("x"), Expr::Str("dollar8.2".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn input_parses_format_token_with_trailing_dot() {
+        assert_eq!(
+            ok("input(s, date9.)"),
+            Expr::Call {
+                name: "input".to_string(),
+                args: vec![var("s"), Expr::Str("date9.".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn put_with_bare_wd_format() {
+        assert_eq!(
+            ok("put(y, 8.2)"),
+            Expr::Call {
+                name: "put".to_string(),
+                args: vec![var("y"), Expr::Str("8.2".to_string())],
+            }
+        );
     }
 }

@@ -189,6 +189,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         uninitialized,
         initial_values,
         arrays,
+        labels,
     } = prog;
 
     for name in &uninitialized {
@@ -355,12 +356,15 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
                 ColBuilder::Char(vals) => Series::new(out_name.as_str().into(), vals),
             };
             columns.push(series.into());
+            // Le libellé suit la variable (par son nom de PDV, pas le
+            // nom renommé en sortie).
+            let label = labels.get(&v.name.to_uppercase()).cloned();
             vars.push(VarMeta {
                 name: out_name.clone(),
                 ty: v.ty,
                 length: v.length,
                 format: v.format.clone(),
-                label: None,
+                label,
             });
         }
         let df = DataFrame::new(columns)?;
@@ -516,6 +520,9 @@ impl Runner {
             | DsStmt::Retain(_)
             | DsStmt::Length(_)
             | DsStmt::By(_)
+            | DsStmt::Format(_)
+            | DsStmt::Label(_)
+            | DsStmt::Attrib(_)
             | DsStmt::Array { .. } => Ok(Flow::Normal),
         }
     }

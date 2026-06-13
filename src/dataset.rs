@@ -57,6 +57,26 @@ impl SasDataset {
             vars.push(meta);
         }
 
+        // Métadonnées SAS (format/label) persistées dans un sidecar JSON :
+        // le Parquet ne porte que types et données ; format et libellé (qui,
+        // en SAS, ne sont QUE de l'affichage) survivent au round-trip via ce
+        // fichier annexe. Absent → on garde les VarMeta dérivés du Parquet
+        // (rétro-compatible : datasets écrits sans format/label).
+        if let Some(meta_map) = read_sidecar(path) {
+            for v in &mut vars {
+                if let Some(saved) = meta_map.get(&v.name.to_uppercase()) {
+                    // Le format/libellé sauvegardé l'emporte (y compris pour
+                    // remplacer le DATE9. inféré d'une colonne Date physique).
+                    if saved.format.is_some() {
+                        v.format = saved.format.clone();
+                    }
+                    if saved.label.is_some() {
+                        v.label = saved.label.clone();
+                    }
+                }
+            }
+        }
+
         let df = DataFrame::new(columns)?;
         Ok((SasDataset { df, vars }, notes))
     }
@@ -65,8 +85,64 @@ impl SasDataset {
         let mut file = File::create(path)?;
         let mut df = self.df.clone();
         ParquetWriter::new(&mut file).finish(&mut df)?;
+        write_sidecar(path, &self.vars)?;
         Ok(())
     }
+}
+
+/// Métadonnée SAS persistée par variable (format/libellé). Le type et la
+/// longueur se redéduisent du Parquet ; seuls format et libellé doivent être
+/// conservés à part.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedMeta {
+    format: Option<String>,
+    label: Option<String>,
+}
+
+/// Chemin du sidecar JSON associé à un fichier parquet (`t.parquet` →
+/// `t.parquet.sasmeta.json`).
+fn sidecar_path(path: &Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".sasmeta.json");
+    std::path::PathBuf::from(s)
+}
+
+/// Écrit le sidecar de métadonnées si AU MOINS une variable porte un format
+/// ou un libellé ; sinon, supprime un sidecar éventuellement obsolète (et
+/// n'en crée aucun — round-trip identique pour les datasets sans
+/// format/label, stabilité des snapshots existants).
+fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
+    let has_meta = vars.iter().any(|v| v.format.is_some() || v.label.is_some());
+    let sc = sidecar_path(path);
+    if !has_meta {
+        let _ = std::fs::remove_file(&sc);
+        return Ok(());
+    }
+    let map: std::collections::HashMap<String, SavedMeta> = vars
+        .iter()
+        .map(|v| {
+            (
+                v.name.to_uppercase(),
+                SavedMeta {
+                    format: v.format.clone(),
+                    label: v.label.clone(),
+                },
+            )
+        })
+        .collect();
+    let json = serde_json::to_string(&map)
+        .map_err(|e| SasError::runtime(format!("failed to serialize SAS metadata: {e}")))?;
+    std::fs::write(&sc, json)?;
+    Ok(())
+}
+
+/// Lit le sidecar de métadonnées s'il existe (nom UPPERCASE → métadonnée).
+/// Toute erreur de lecture/parsing est silencieusement ignorée (on retombe
+/// sur les VarMeta dérivés du Parquet).
+fn read_sidecar(path: &Path) -> Option<std::collections::HashMap<String, SavedMeta>> {
+    let sc = sidecar_path(path);
+    let data = std::fs::read_to_string(&sc).ok()?;
+    serde_json::from_str(&data).ok()
 }
 
 fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Series, VarMeta)> {

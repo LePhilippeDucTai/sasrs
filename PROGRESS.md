@@ -42,9 +42,9 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 
 ## M4 — formats
 - [x] `src/formats/mod.rs` + `builtin.rs` (formats puis informats) + tests table-driven
-- [ ] INPUT()/PUT() branchés dans functions.rs ; FORMAT/LABEL/ATTRIB statements
+- [x] INPUT()/PUT() branchés dans functions.rs ; FORMAT/LABEL/ATTRIB statements
 - [ ] `src/formats/userdef.rs` + `src/procs/format.rs`
-- [ ] Persistance VarMeta en métadonnées KV parquet (`sas_meta`) + `src/procs/contents.rs`
+- [ ] Persistance VarMeta + `src/procs/contents.rs` (persistance format/label FAITE en box 2 via sidecar JSON `<table>.parquet.sasmeta.json` — Polars 0.46 ParquetWriter n'expose pas d'API KV parquet ; reste : `src/procs/contents.rs`)
 - [ ] Fixtures m4/ + snapshots
 
 ## M5 — procs statistiques

@@ -131,6 +131,13 @@ impl Pdv {
         self.vars[slot].from_input = true;
     }
 
+    /// Associe (ou remplace) le format d'affichage d'une variable. Utilisé
+    /// par les statements FORMAT/ATTRIB (M4) à la compilation : le format
+    /// déclaré l'emporte sur celui hérité de l'input.
+    pub fn set_format(&mut self, slot: usize, format: String) {
+        self.vars[slot].format = Some(format);
+    }
+
     /// Réinitialise à missing les variables NON retenues ET NON issues
     /// d'un input (`from_input`). Appelé au début de chaque itération.
     ///

@@ -136,6 +136,17 @@ pub struct LengthSpec {
     pub len: usize,
 }
 
+/// Un item du statement ATTRIB : un groupe de variables et les attributs
+/// déclarés. `format`/`label` sont optionnels ; `length` est conservé pour
+/// compatibilité mais non appliqué en M4 (voir parser).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttribItem {
+    pub vars: Vec<String>,
+    pub format: Option<String>,
+    pub label: Option<String>,
+    pub length: Option<LengthSpec>,
+}
+
 /// DATA step statements (M1 subset + M2 : RETAIN, sum statement, LENGTH ;
 /// M2+ ajoutera DO iterative, ARRAY, MERGE, BY...).
 #[derive(Debug, Clone, PartialEq)]
@@ -204,6 +215,18 @@ pub enum DsStmt {
     Sum { var: String, expr: Expr },
     /// `length v1 v2 $ 20 v3 5;`
     Length(Vec<(String, LengthSpec)>),
+    /// `format weight height 8.2 name $char10.;` (M4) — chaque groupe est
+    /// une liste de variables suivie d'un token de format. Déclaratif :
+    /// associe un format aux variables (appliqué à la finalisation du PDV /
+    /// par PROC PRINT) ; aucun effet à l'exécution.
+    Format(Vec<(Vec<String>, String)>),
+    /// `label weight='Body Weight' name='Pupil';` (M4) — paires
+    /// (variable, libellé). Déclaratif.
+    Label(Vec<(String, String)>),
+    /// `attrib weight format=8.2 label='Body Weight';` (M4) — un item par
+    /// groupe de variables, portant format=/label=/length= (length=
+    /// optionnel). Déclaratif.
+    Attrib(Vec<AttribItem>),
     /// `array arr{3} x y z;` (M2, 1-D). `size: None` = `{*}` (taille
     /// déduite de la liste) ; `char_len: Some(n)` = array caractère
     /// (`$ n`, défaut 8) ; `vars` vide = éléments auto-nommés arr1..arrN

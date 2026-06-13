@@ -32,6 +32,9 @@ pub struct PrintAst {
     pub data: Option<DatasetRef>,
     pub vars: Option<Vec<String>>,
     pub noobs: bool,
+    /// Option LABEL : utilise le libellé de chaque variable (s'il existe)
+    /// comme en-tête de colonne au lieu du nom. Défaut = noms (comme SAS).
+    pub label: bool,
 }
 
 /// Parse `proc print [data=lib.t] [noobs] [label] ; [var v1 v2... ;] ... run ;`
@@ -39,6 +42,7 @@ pub struct PrintAst {
 pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
     let mut data: Option<DatasetRef> = None;
     let mut noobs = false;
+    let mut label = false;
     let mut vars: Option<Vec<String>> = None;
 
     // Parse PROC PRINT header options until `;`
@@ -64,8 +68,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
             ts.next();
             noobs = true;
         } else if ts.peek().is_kw("label") {
-            // LABEL option: accepted, silently ignored in M1
+            // LABEL option: utilise les libellés comme en-têtes (M4).
             ts.next();
+            label = true;
         } else {
             // Unknown option on PROC PRINT statement — skip to end of statement
             let span = ts.peek().span;
@@ -107,7 +112,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
         }
     }
 
-    Ok(PrintAst { data, vars, noobs })
+    Ok(PrintAst { data, vars, noobs, label })
 }
 
 /// Execute PROC PRINT. Called by `procs::execute_proc` which wraps with timing.
@@ -185,8 +190,14 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
     }
 
     for &idx in &col_indices {
-        // Casse d'origine de la variable (SAS affiche le nom tel que déclaré).
-        headers.push(ds.vars[idx].name.clone());
+        // Option LABEL : libellé en en-tête s'il existe, sinon le nom.
+        // Sans l'option, toujours le nom (casse d'origine — SAS affiche le
+        // nom tel que déclaré).
+        let header = match (ast.label, &ds.vars[idx].label) {
+            (true, Some(lbl)) if !lbl.is_empty() => lbl.clone(),
+            _ => ds.vars[idx].name.clone(),
+        };
+        headers.push(header);
         aligns.push(match ds.vars[idx].ty {
             crate::value::VarType::Num => Align::Right,
             crate::value::VarType::Char => Align::Left,
@@ -198,20 +209,42 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
     let mut col_cells: Vec<Vec<String>> = Vec::with_capacity(col_indices.len());
     for &col_i in &col_indices {
         let series = ds.df.get_columns()[col_i].as_materialized_series();
+        // M4 : si la variable porte un format VALIDE, on rend chaque valeur
+        // via le moteur de formats. SANS format (ou format invalide), on
+        // garde EXACTEMENT le chemin historique (stabilité des snapshots).
+        let spec = ds.vars[col_i]
+            .format
+            .as_deref()
+            .and_then(crate::formats::FormatSpec::parse);
         let cells: Vec<String> = match ds.vars[col_i].ty {
             crate::value::VarType::Num => series
                 .f64()?
                 .iter()
-                .map(|o| match num_to_value(o) {
-                    Value::Missing(kind) => kind.display(),
-                    Value::Num(f) => format_best(f, 12),
-                    Value::Char(_) => unreachable!("num column decoded to char"),
+                .map(|o| {
+                    let v = num_to_value(o);
+                    match &spec {
+                        Some(spec) => {
+                            crate::formats::FormatCatalog::default().format(&v, spec)
+                        }
+                        None => match v {
+                            Value::Missing(kind) => kind.display(),
+                            Value::Num(f) => format_best(f, 12),
+                            Value::Char(_) => unreachable!("num column decoded to char"),
+                        },
+                    }
                 })
                 .collect(),
             crate::value::VarType::Char => series
                 .str()?
                 .iter()
-                .map(|o| o.unwrap_or("").to_string())
+                .map(|o| {
+                    let raw = o.unwrap_or("");
+                    match &spec {
+                        Some(spec) => crate::formats::FormatCatalog::default()
+                            .format(&Value::Char(raw.to_string()), spec),
+                        None => raw.to_string(),
+                    }
+                })
                 .collect(),
         };
         col_cells.push(cells);
@@ -387,6 +420,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "MYDATA".into() }),
             vars: None,
             noobs: false,
+            label: false,
         };
 
         execute(&ast, &mut session).unwrap();
@@ -418,6 +452,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "MYDATA".into() }),
             vars: None,
             noobs: true,
+            label: false,
         };
 
         execute(&ast, &mut session).unwrap();
@@ -437,6 +472,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "MYDATA".into() }),
             vars: Some(vec!["age".to_string()]),
             noobs: false,
+            label: false,
         };
 
         execute(&ast, &mut session).unwrap();
@@ -457,6 +493,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "MYDATA".into() }),
             vars: Some(vec!["nonexistent".to_string()]),
             noobs: false,
+            label: false,
         };
 
         let result = execute(&ast, &mut session);
@@ -475,6 +512,7 @@ mod tests {
             data: None, // use _LAST_
             vars: None,
             noobs: false,
+            label: false,
         };
 
         execute(&ast, &mut session).unwrap();
@@ -491,6 +529,7 @@ mod tests {
             data: None,
             vars: None,
             noobs: false,
+            label: false,
         };
 
         let result = execute(&ast, &mut session);
@@ -519,6 +558,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "ONE".into() }),
             vars: None,
             noobs: false,
+            label: false,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -541,6 +581,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "MYDATA".into() }),
             vars: None,
             noobs: false,
+            label: false,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -549,5 +590,79 @@ mod tests {
         assert!(listing.contains("1"), "listing: {listing}");
         assert!(listing.contains("2"), "listing: {listing}");
         assert!(listing.contains("3"), "listing: {listing}");
+    }
+
+    // ── M4 : formats appliqués + option LABEL ─────────────────────────────
+
+    fn write_formatted_dataset(session: &mut Session) {
+        let df = df![
+            "name"   => ["Alice", "Bob"],
+            "weight" => [112.0_f64, 98.0]
+        ]
+        .unwrap();
+        let vars = vec![
+            VarMeta {
+                name: "name".to_string(),
+                ty: VarType::Char,
+                length: 5,
+                format: None,
+                label: Some("Pupil Name".to_string()),
+            },
+            VarMeta {
+                name: "weight".to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: Some("dollar8.".to_string()),
+                label: Some("Body Weight".to_string()),
+            },
+        ];
+        let ds = SasDataset { df, vars };
+        session.libs.get("WORK").unwrap().write("FMT", &ds).unwrap();
+    }
+
+    #[test]
+    fn execute_applies_numeric_format() {
+        let mut session = make_session();
+        write_formatted_dataset(&mut session);
+
+        let ast = PrintAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "FMT".into() }),
+            vars: None,
+            noobs: false,
+            label: false,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        // dollar8. renders 112 as "$112" (and 98 as "$98").
+        assert!(listing.contains("$112"), "listing: {listing}");
+        assert!(listing.contains("$98"), "listing: {listing}");
+        // Without LABEL, headers are variable names (uppercased by SAS).
+        assert!(
+            listing.contains("weight") || listing.contains("WEIGHT"),
+            "listing: {listing}"
+        );
+        assert!(
+            !listing.contains("Body Weight"),
+            "label must not appear without LABEL option: {listing}"
+        );
+    }
+
+    #[test]
+    fn execute_label_option_uses_labels_as_headers() {
+        let mut session = make_session();
+        write_formatted_dataset(&mut session);
+
+        let ast = PrintAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "FMT".into() }),
+            vars: None,
+            noobs: false,
+            label: true,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Body Weight"), "listing: {listing}");
+        assert!(listing.contains("Pupil Name"), "listing: {listing}");
     }
 }

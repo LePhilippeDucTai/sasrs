@@ -768,6 +768,48 @@ fn fn_weekday(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Conversion functions (PUT / INPUT) — délèguent au moteur formats/ (M4)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// `PUT(value, format)` : applique un format à une valeur, renvoie TOUJOURS
+/// du caractère. Le second argument est le token de format (poussé en
+/// `Value::Char` par le parser). Format invalide ou args manquants → chaîne
+/// vide.
+fn fn_put(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() != 2 {
+        return Value::Char(String::new());
+    }
+    let token = match &args[1] {
+        Value::Char(s) => s.clone(),
+        _ => return Value::Char(String::new()),
+    };
+    let Some(spec) = crate::formats::FormatSpec::parse(&token) else {
+        return Value::Char(String::new());
+    };
+    let result = crate::formats::FormatCatalog::default().format(&args[0], &spec);
+    Value::Char(result)
+}
+
+/// `INPUT(source, informat)` : lit une chaîne selon un informat, renvoie un
+/// numérique ou un caractère selon l'informat. Le second argument est le
+/// token d'informat (poussé en `Value::Char` par le parser). Informat
+/// invalide ou args manquants → missing.
+fn fn_input(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() != 2 {
+        return Value::missing();
+    }
+    let source = coerce_char(&args[0]);
+    let token = match &args[1] {
+        Value::Char(s) => s.clone(),
+        _ => return Value::missing(),
+    };
+    let Some(spec) = crate::formats::FormatSpec::parse(&token) else {
+        return Value::missing();
+    };
+    crate::formats::FormatCatalog::default().informat(&source, &spec)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -817,6 +859,9 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("MONTH", fn_month),
     ("DAY", fn_day),
     ("WEEKDAY", fn_weekday),
+    // Conversion (PUT/INPUT) — délèguent au moteur de formats (M4).
+    ("PUT", fn_put),
+    ("INPUT", fn_input),
 ];
 
 /// Renvoie None si la fonction est inconnue.
@@ -1359,5 +1404,64 @@ mod tests {
     fn function_names_case_insensitive() {
         assert_eq!(invoke("sum", &[num(1.0), num(2.0)]), num(3.0));
         assert_eq!(invoke("Abs", &[num(-3.0)]), num(3.0));
+    }
+
+    // ── PUT / INPUT : délégation au moteur de formats (M4) ────────────────
+    // Le 2e argument est le TOKEN de format poussé en Value::Char par le
+    // parser (cf. parse_call dans expr.rs).
+
+    #[test]
+    fn put_dollar_format_returns_char() {
+        // PUT(1234.5, dollar10.2) → "$1,234.50".
+        let r = invoke("PUT", &[num(1234.5), chr("dollar10.2")]);
+        match r {
+            Value::Char(s) => assert!(
+                s.contains("$1,234.50"),
+                "expected '$1,234.50' inside {s:?}"
+            ),
+            _ => panic!("PUT must return character, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn put_date_format_returns_char() {
+        // 2020-01-01 = 21915 jours après 1960-01-01 (croise avec MDY).
+        assert_eq!(invoke("MDY", &[num(1.0), num(1.0), num(2020.0)]), num(21915.0));
+        let r = invoke("PUT", &[num(21915.0), chr("date9.")]);
+        match r {
+            Value::Char(s) => assert!(
+                s.contains("01JAN2020"),
+                "expected '01JAN2020' inside {s:?}"
+            ),
+            _ => panic!("PUT must return character, got {r:?}"),
+        }
+    }
+
+    #[test]
+    fn put_invalid_format_returns_empty() {
+        // Token non parsable → chaîne vide (pas de panique).
+        assert_eq!(invoke("PUT", &[num(1.0), chr("")]), chr(""));
+    }
+
+    #[test]
+    fn put_wrong_arity_returns_empty() {
+        assert_eq!(invoke("PUT", &[num(1.0)]), chr(""));
+    }
+
+    #[test]
+    fn input_implicit_decimal() {
+        // INPUT("123", 5.2) → 1.23 (le `.2` impose 2 décimales implicites).
+        assert_eq!(invoke("INPUT", &[chr("123"), chr("5.2")]), num(1.23));
+    }
+
+    #[test]
+    fn input_date_informat() {
+        // INPUT("01JAN2020", date9.) → 21915.
+        assert_eq!(invoke("INPUT", &[chr("01JAN2020"), chr("date9.")]), num(21915.0));
+    }
+
+    #[test]
+    fn input_wrong_arity_returns_missing() {
+        assert_eq!(invoke("INPUT", &[chr("123")]), miss());
     }
 }

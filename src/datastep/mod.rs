@@ -165,6 +165,9 @@ pub struct StepProgram {
     /// Arrays 1-D : nom UPPERCASE → slots PDV des éléments, dans l'ordre de
     /// déclaration. Passé tel quel à l'EvalCtx par l'exécuteur.
     pub arrays: HashMap<String, Vec<usize>>,
+    /// Libellés déclarés (LABEL/ATTRIB) : nom UPPERCASE → libellé.
+    /// Appliqués aux `VarMeta` de sortie par l'exécuteur.
+    pub labels: HashMap<String, String>,
 }
 
 pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> {
@@ -187,9 +190,20 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         retained_slots: HashSet::new(),
         initial_values: Vec::new(),
         arrays: HashMap::new(),
+        labels: HashMap::new(),
+        formats: HashMap::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
+    }
+    // FORMAT/ATTRIB format= : appliqués au PDV maintenant que TOUTES les
+    // variables y sont entrées (l'ordre déclaration/référence n'importe
+    // plus). Variable inconnue → ignorée (SIMPLIFICATION M4 documentée).
+    let formats = std::mem::take(&mut c.formats);
+    for (name, token) in &formats {
+        if let Some(slot) = c.pdv.slot(name) {
+            c.pdv.set_format(slot, token.clone());
+        }
     }
 
     // RETAIN sans valeur initiale — SIMPLIFICATION M2 ASSUMÉE : en vrai
@@ -240,6 +254,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         uninitialized,
         initial_values: c.initial_values,
         arrays: c.arrays,
+        labels: c.labels,
     })
 }
 
@@ -300,6 +315,13 @@ struct Compiler<'a> {
     initial_values: Vec<(usize, Value)>,
     /// Arrays déclarés : nom UPPERCASE → slots PDV des éléments.
     arrays: HashMap<String, Vec<usize>>,
+    /// Libellés déclarés (LABEL/ATTRIB) : nom UPPERCASE → libellé. Une
+    /// déclaration ultérieure pour la même variable écrase la précédente.
+    labels: HashMap<String, String>,
+    /// Formats déclarés (FORMAT/ATTRIB) : nom UPPERCASE → token de format.
+    /// Appliqués au PDV en fin de compilation (indépendamment de l'ordre des
+    /// statements) ; l'emportent sur le format hérité de l'input.
+    formats: HashMap<String, String>,
 }
 
 impl Compiler<'_> {
@@ -539,6 +561,53 @@ impl Compiler<'_> {
                                 ));
                             }
                         }
+                    }
+                }
+                Ok(())
+            }
+            // FORMAT/LABEL/ATTRIB : déclarations de compilation. Le format
+            // (validé via FormatSpec::parse) et le libellé sont mémorisés
+            // dans des maps appliquées en fin de compilation (l'ordre
+            // déclaration/référence n'importe donc pas). Une variable
+            // inconnue est ignorée (SIMPLIFICATION M4 documentée : en vrai
+            // SAS la variable serait créée sur le PDV).
+            DsStmt::Format(groups) => {
+                for (names, token) in groups {
+                    if crate::formats::FormatSpec::parse(token).is_none() {
+                        return Err(SasError::runtime(format!(
+                            "The format {token} is not valid."
+                        )));
+                    }
+                    for name in names {
+                        self.formats.insert(name.to_uppercase(), token.clone());
+                    }
+                }
+                Ok(())
+            }
+            DsStmt::Label(pairs) => {
+                for (name, label) in pairs {
+                    self.labels.insert(name.to_uppercase(), label.clone());
+                }
+                Ok(())
+            }
+            DsStmt::Attrib(items) => {
+                for item in items {
+                    if let Some(token) = &item.format
+                        && crate::formats::FormatSpec::parse(token).is_none()
+                    {
+                        return Err(SasError::runtime(format!(
+                            "The format {token} is not valid."
+                        )));
+                    }
+                    for name in &item.vars {
+                        let upper = name.to_uppercase();
+                        if let Some(token) = &item.format {
+                            self.formats.insert(upper.clone(), token.clone());
+                        }
+                        if let Some(label) = &item.label {
+                            self.labels.insert(upper.clone(), label.clone());
+                        }
+                        // length= : parsé mais non appliqué en M4.
                     }
                 }
                 Ok(())

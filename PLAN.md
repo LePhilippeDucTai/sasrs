@@ -97,7 +97,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/formats/mod.rs` | M4 | **Sonnet** | moyen | FormatSpec, catalogue, résolution user→builtin→fallback |
 | `src/formats/builtin.rs` | M4 | **Sonnet** | moyen-élevé | table-driven, beaucoup de cas ; informat `5.2` piège des décimales implicites |
 | `src/formats/userdef.rs` + `src/procs/format.rs` | M4 | **Sonnet** | moyen | plages low-<high, OTHER |
-| Persistance VarMeta dans les métadonnées KV parquet (`dataset.rs`) | M4 | **Opus** | moyen | clé `"sas_meta"` JSON ; API KV isolée dans dataset.rs |
+| Persistance VarMeta (`dataset.rs`) | M4 | **Opus** | moyen | ✅ FAIT (box 2). Polars 0.46 `ParquetWriter` n'expose **aucune** API KV parquet → format/label persistés dans un sidecar JSON `<table>.parquet.sasmeta.json` (écrit seulement si une var porte un format/label → round-trip identique sinon, snapshots stables). API isolée dans `dataset.rs`. |
 | `src/procs/contents.rs` | M4 | **Sonnet** | faible | métadonnées seulement |
 | `src/procs/means.rs` | M5 | **Opus** | élevé | combinatoire `_TYPE_`/`_FREQ_` de CLASS |
 | `src/procs/freq.rs` | M5 | **Opus** | moyen | 1 et 2 voies, option MISSING |
