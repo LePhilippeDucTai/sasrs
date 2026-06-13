@@ -8,9 +8,10 @@ name = "sasrs"
 path = "src/main.rs"
 
 [features]
-# Spike M8 : processeur macro %let/&var derrière la couture preprocess::TextStage.
-# OFF par défaut ; activer avec --features macros.
-macros = []
+# M11.7 : le processeur macro (%let/&var, %macro/%mend, %if/%do, %eval,
+# %sysfunc, %str/%nrstr, CALL SYMPUT/SYMGET) est désormais TOUJOURS ACTIF —
+# il n'y a plus de feature `macros`. L'invariant byte-identical est porté par
+# le fast-path identité de `MacroEngine::expand_open_code` (cf. src/preprocess.rs).
 # Stub M8 : backend de stockage S3 (trait LibraryProvider sur scan parquet cloud).
 # OFF par défaut, NON branché dans LibraryManager/LIBNAME ; activer avec
 # --features s3. L'I/O cloud réelle demandera d'activer plus tard les features

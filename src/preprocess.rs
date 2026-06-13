@@ -12,15 +12,6 @@ pub trait TextStage {
     fn process(&mut self, source: &str) -> String;
 }
 
-/// No-op stage used until the macro facility is implemented.
-pub struct IdentityMacroStage;
-
-impl TextStage for IdentityMacroStage {
-    fn process(&mut self, source: &str) -> String {
-        source.to_string()
-    }
-}
-
 /// Processeur macro de la session (M11).
 ///
 /// `MacroEngine` porte la table des symboles macro (`%let`/`&var`) et est
@@ -30,9 +21,9 @@ impl TextStage for IdentityMacroStage {
 ///
 /// # Invariant de bascule (byte-identical)
 /// `expand_open_code` DOIT être l'identité stricte pour tout segment sans
-/// déclencheur macro résolu. Sous le build PAR DÉFAUT (sans `--features
-/// macros`), l'engine n'a aucune table et `expand_open_code` renvoie l'entrée
-/// inchangée — comportement identique à l'ancien `IdentityMacroStage`.
+/// déclencheur macro résolu (ni `%` ni `&name`) : son fast-path renvoie alors
+/// l'entrée inchangée. C'est ce qui garantit l'octet-identité de tout source
+/// macro-free (M1..M10), désormais que le processeur macro est TOUJOURS actif.
 ///
 /// # M11.1 — périmètre
 /// Cette unité établit seulement la couture : l'état macro vit dans `Session`
@@ -79,7 +70,6 @@ impl TextStage for IdentityMacroStage {
 /// `%if/%do` (M11.3), `%eval` (M11.4), `%sysfunc`/vars auto (M11.6), fonctions
 /// de quoting (`%str`/`%nrstr`). Un corps contenant `%if`/`%do` est stocké tel
 /// quel et ré-émis verbatim à l'invocation (non interprété).
-#[cfg(feature = "macros")]
 #[derive(Default)]
 pub struct MacroEngine {
     /// Table globale des symboles macro (`%let`/`&var` en open code, `%global`).
@@ -100,7 +90,6 @@ pub struct MacroEngine {
 /// `body` est le texte VERBATIM entre le `;` qui clôt la liste de paramètres et
 /// le `%mend` correspondant. Il n'est PAS expansé à la définition ; il l'est à
 /// chaque invocation, dans la portée locale créée pour cet appel.
-#[cfg(feature = "macros")]
 #[derive(Clone, Debug)]
 pub struct MacroDef {
     /// Nom de la macro, stocké tel quel (la recherche se fait en MAJUSCULES).
@@ -113,7 +102,6 @@ pub struct MacroDef {
 }
 
 /// Un paramètre formel de macro.
-#[cfg(feature = "macros")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacroParam {
     /// Paramètre positionnel `p` (sans valeur par défaut ; défaut = chaîne vide).
@@ -126,42 +114,32 @@ pub enum MacroParam {
 /// bornes `%to`/`%by`). Portée par la feature `macros`. On ne `panic` jamais
 /// sur une entrée macro invalide : l'expanseur transforme cette erreur en une
 /// note SAS-like émise dans le flux de sortie et poursuit le scan.
-#[cfg(feature = "macros")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MacroError {
     /// Message lisible (proche du libellé SAS quand pertinent).
     pub message: String,
 }
 
-#[cfg(feature = "macros")]
 impl MacroError {
     fn new(msg: impl Into<String>) -> Self {
         MacroError { message: msg.into() }
     }
 }
 
-#[cfg(feature = "macros")]
 impl std::fmt::Display for MacroError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
     }
 }
 
-/// Variante PAR DÉFAUT (sans feature `macros`) : engine vide, identité pure.
-/// Aucune table, aucune logique — garantit l'octet-identité du build par
-/// défaut (équivalent strict de l'ancien `IdentityMacroStage`).
-#[cfg(not(feature = "macros"))]
-#[derive(Default)]
-pub struct MacroEngine;
-
 impl MacroEngine {
     /// Construit l'engine de session.
     ///
-    /// # M11.6 — variables automatiques (feature `macros`)
-    /// Sous la feature `macros`, on amorce la table globale avec un sous-ensemble
-    /// des variables automatiques SAS, résolues ensuite par un `&SYSDATE9` normal.
-    /// Le flag `deterministic` choisit entre valeurs FIGÉES (pour des snapshots
-    /// stables) et valeurs dérivées de l'horloge réelle.
+    /// # M11.6 — variables automatiques
+    /// On amorce la table globale avec un sous-ensemble des variables
+    /// automatiques SAS, résolues ensuite par un `&SYSDATE9` normal. Le flag
+    /// `deterministic` choisit entre valeurs FIGÉES (pour des snapshots stables)
+    /// et valeurs dérivées de l'horloge réelle.
     ///
     /// Valeurs FIGÉES (`deterministic == true`) :
     /// - `SYSDATE9` = `01JAN1960`
@@ -170,29 +148,17 @@ impl MacroEngine {
     /// - `SYSDAY`   = `Friday`
     /// - `SYSVER`   = `9.4`
     /// - `SYSSCP`   = `LIN X64`
-    ///
-    /// Sous le build PAR DÉFAUT (sans `macros`), l'engine reste vide (identité) —
-    /// le paramètre est ignoré.
     pub fn new(deterministic: bool) -> Self {
-        #[cfg(feature = "macros")]
-        {
-            let mut engine = Self::default();
-            engine.seed_automatic_vars(deterministic);
-            engine
-        }
-        #[cfg(not(feature = "macros"))]
-        {
-            let _ = deterministic;
-            Self::default()
-        }
+        let mut engine = Self::default();
+        engine.seed_automatic_vars(deterministic);
+        engine
     }
 
     /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).
     ///
-    /// Sous `--features macros` : applique le `%let`/`&var` du spike. Pour un
-    /// segment SANS déclencheur (`%`/`&`) le résultat est l'entrée inchangée.
-    /// Sous le build par défaut : identité stricte.
-    #[cfg(feature = "macros")]
+    /// Applique le `%let`/`&var`/`%macro`/… Pour un segment SANS déclencheur
+    /// macro (`%`/`&`) le fast-path renvoie l'entrée inchangée — c'est
+    /// l'invariant byte-identical pour le source macro-free.
     pub fn expand_open_code(&mut self, raw: &str) -> String {
         // Fast-path identité : sans déclencheur macro, rien à expanser. Garantit
         // l'invariant byte-identical pour le source sans tokens macro.
@@ -205,47 +171,22 @@ impl MacroEngine {
         Self::unmask(&expanded)
     }
 
-    /// Build par défaut : identité stricte (équivalent `IdentityMacroStage`).
-    #[cfg(not(feature = "macros"))]
-    pub fn expand_open_code(&mut self, raw: &str) -> String {
-        raw.to_string()
-    }
-
     /// Pose un symbole macro GLOBAL (sémantique `CALL SYMPUT` — M11.5) : le
     /// symbole est créé/écrasé dans la table globale, insensible casse.
-    ///
-    /// Sous la feature `macros` : insère dans `table`. Sous le build par
-    /// défaut : NO-OP (l'engine identité n'a pas de table) — `call symput`
-    /// s'exécute donc sans effet macro, ce qui préserve l'octet-identité.
-    #[cfg(feature = "macros")]
     pub fn set_symbol_global(&mut self, name: &str, value: String) {
         self.table.insert(name.to_uppercase(), value);
     }
 
-    /// Build par défaut : NO-OP.
-    #[cfg(not(feature = "macros"))]
-    pub fn set_symbol_global(&mut self, _name: &str, _value: String) {}
-
     /// Lit la valeur d'un symbole macro (pile de portées puis table globale,
-    /// comme `&var`). `None` si indéfini. Sous le build par défaut : toujours
-    /// `None`.
-    #[cfg(feature = "macros")]
+    /// comme `&var`). `None` si indéfini.
     pub fn get_symbol(&self, name: &str) -> Option<String> {
         self.lookup(name)
-    }
-
-    /// Build par défaut : toujours `None`.
-    #[cfg(not(feature = "macros"))]
-    pub fn get_symbol(&self, _name: &str) -> Option<String> {
-        None
     }
 
     /// Instantané (clés MAJUSCULES → valeur) de la table macro VISIBLE en
     /// open code, pour alimenter `SYMGET` (M11.5). On aplatit la pile de
     /// portées (plus interne d'abord) puis la table globale ; en open code la
-    /// pile est vide, donc seule `table` contribue. Sous le build par défaut :
-    /// map VIDE.
-    #[cfg(feature = "macros")]
+    /// pile est vide, donc seule `table` contribue.
     pub fn symbols_snapshot(&self) -> std::collections::HashMap<String, String> {
         let mut snap = self.table.clone();
         // La table globale est la base ; les portées locales (s'il y en a)
@@ -256,12 +197,6 @@ impl MacroEngine {
             }
         }
         snap
-    }
-
-    /// Build par défaut : instantané VIDE.
-    #[cfg(not(feature = "macros"))]
-    pub fn symbols_snapshot(&self) -> std::collections::HashMap<String, String> {
-        std::collections::HashMap::new()
     }
 }
 
@@ -295,17 +230,14 @@ impl MacroEngine {
 /// `MacroEngine` (cf. ci-dessus). `MacroStage` est conservé comme alias mince
 /// implémentant `TextStage` afin que les tests de spike existants restent
 /// inchangés ; il n'est plus utilisé par `lib.rs` / l'`executor`.
-#[cfg(feature = "macros")]
 pub type MacroStage = MacroEngine;
 
-#[cfg(feature = "macros")]
 impl TextStage for MacroEngine {
     fn process(&mut self, source: &str) -> String {
         self.process_impl(source)
     }
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Nombre maximal d'itérations de résolution d'une valeur contenant
     /// elle-même des `&refs` (garde contre les cycles).
@@ -417,7 +349,6 @@ impl MacroEngine {
     }
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Coeur de l'expansion `%let`/`&var` (une passe gauche→droite). Met à jour
     /// la table de l'engine (état conservé entre appels — donc entre segments).
@@ -577,7 +508,6 @@ impl MacroEngine {
     }
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Vrai si `chars[i..]` commence par `%let` (insensible casse) suivi d'un
     /// blanc (pour ne pas matcher `%letx`).
@@ -659,7 +589,6 @@ impl MacroEngine {
     }
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Vrai si `chars[i..]` commence par `%<kw>` (insensible casse) suivi d'un
     /// non-identifiant (blanc, `(`, `;` ...). Évite de matcher `%macrox`.
@@ -1085,7 +1014,6 @@ impl MacroEngine {
     }
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Garde anti-boucle-folle pour les `%do` itératifs.
     const MAX_LOOP_ITERS: i64 = 1_000_000;
@@ -1852,7 +1780,6 @@ impl MacroEngine {
 }
 
 /// Jeton de l'expression macro pour `%eval`.
-#[cfg(feature = "macros")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum EvalTok {
     Int(i64),
@@ -1878,7 +1805,6 @@ enum EvalTok {
     RParen,
 }
 
-#[cfg(feature = "macros")]
 impl MacroEngine {
     /// Évalue une expression macro `%eval` selon la sémantique ENTIÈRE de SAS.
     /// Le texte fourni doit déjà avoir ses `&vars` résolus (l'appelant le fait).
@@ -2063,13 +1989,11 @@ impl MacroEngine {
 }
 
 /// Analyseur récursif-descendant pour l'expression `%eval`.
-#[cfg(feature = "macros")]
 struct EvalParser<'a> {
     toks: &'a [EvalTok],
     pos: usize,
 }
 
-#[cfg(feature = "macros")]
 impl<'a> EvalParser<'a> {
     fn peek(&self) -> Option<&EvalTok> {
         self.toks.get(self.pos)
@@ -2301,7 +2225,6 @@ impl<'a> EvalParser<'a> {
 /// que l'executor puisse à la fois (a) ré-expanser le texte brut du segment
 /// et (b) écho­ter les lignes ORIGINALES correspondantes (numérotation
 /// préservée).
-#[cfg(feature = "macros")]
 pub struct RawSegmenter<'a> {
     chars: Vec<char>,
     /// Décalages OCTETS cumulés, `byte_offset[i]` = offset du i-ème char.
@@ -2311,7 +2234,6 @@ pub struct RawSegmenter<'a> {
     _src: std::marker::PhantomData<&'a str>,
 }
 
-#[cfg(feature = "macros")]
 impl<'a> RawSegmenter<'a> {
     pub fn new(src: &'a str) -> Self {
         let chars: Vec<char> = src.chars().collect();
@@ -2418,7 +2340,7 @@ impl<'a> RawSegmenter<'a> {
     }
 }
 
-#[cfg(all(test, feature = "macros"))]
+#[cfg(test)]
 mod macro_tests {
     use super::*;
 

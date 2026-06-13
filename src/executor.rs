@@ -40,34 +40,8 @@ use crate::session::Session;
 use crate::source::SourceFile;
 use std::path::PathBuf;
 
-/// Build PAR DÉFAUT (sans `macros`) : chemin M11.1 verbatim. `expand_open_code`
-/// est l'identité stricte → `src` inchangé → lexing et écho de n° de ligne
-/// IDENTIQUES à l'historique. C'est ce qui garantit STRUCTURELLEMENT
-/// l'octet-identité de la suite par défaut (rien de la machinerie per-segment
-/// de M11.5 n'est compilé ici).
-#[cfg(not(feature = "macros"))]
-pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
-    let expanded = session.macro_engine.expand_open_code(&src.text);
-    let owned_src;
-    let src: &SourceFile = if expanded == src.text {
-        src
-    } else {
-        owned_src = SourceFile::new(expanded);
-        &owned_src
-    };
-
-    let mut stream = StatementStream::new(src)?;
-    while let Some((block, span)) = stream.next_block() {
-        let lines = src.lines_of_span(span);
-        let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
-        session.log.echo_source(&line_texts);
-
-        run_one_block(block, session);
-    }
-    Ok(())
-}
-
-/// Build `macros` (M11.5) : expansion macro INTERFOLIÉE segment par segment.
+/// M11.5/M11.7 : expansion macro INTERFOLIÉE segment par segment (toujours
+/// active désormais — il n'y a plus de feature `macros`).
 ///
 /// On découpe le source ORIGINAL en segments bruts (`RawSegmenter`, coupe sur
 /// `run;`/`quit;` de niveau supérieur). Pour CHAQUE segment, dans l'ordre :
@@ -96,7 +70,6 @@ pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
 /// EXPANSÉ de ce segment (pas l'original). C'est sans incidence sur les
 /// fixtures de snapshot (aucune n'emploie de macro), et sans fixture dédiée
 /// pour ce cas.
-#[cfg(feature = "macros")]
 pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
     use crate::preprocess::RawSegmenter;
 
@@ -398,7 +371,6 @@ mod tests {
     /// M11.1 : l'expansion macro est conduite par l'executor (état dans
     /// `Session::macro_engine`). Un programme avec `%let`/`&var` doit produire
     /// EXACTEMENT le même résultat que son équivalent sans macro.
-    #[cfg(feature = "macros")]
     #[test]
     fn macro_let_ref_runs_through_executor() {
         let with_macro = run_det(
@@ -425,7 +397,6 @@ mod tests {
     /// M11.5 : `CALL SYMPUT` dans une étape pose un symbole macro visible
     /// dans le SEGMENT SUIVANT (le drain a lieu au `run;`). Ici on s'en sert
     /// pour nommer un dataset de l'étape d'après.
-    #[cfg(feature = "macros")]
     #[test]
     fn symput_visible_in_next_segment_as_dataset_name() {
         let out = run_det(
@@ -447,7 +418,6 @@ mod tests {
     }
 
     /// M11.5 : formatage NUMÉRIQUE d'un symput — `42` (et non `          42`).
-    #[cfg(feature = "macros")]
     #[test]
     fn symput_numeric_value_left_aligned_best12() {
         let out = run_det(
@@ -464,7 +434,6 @@ mod tests {
     }
 
     /// M11.5 : SYMGET lit un `%let` antérieur (table macro → DATA step).
-    #[cfg(feature = "macros")]
     #[test]
     fn symget_reads_prior_let() {
         let out = run_det(
@@ -485,7 +454,6 @@ mod tests {
     /// MÊME étape ne s'y reflète pas (le drain n'a lieu qu'au `run;`). Ici
     /// `w` n'existe pas au début de l'étape → symget rend une valeur vide,
     /// alors que l'étape SUIVANTE la verrait.
-    #[cfg(feature = "macros")]
     #[test]
     fn symput_not_visible_in_same_step() {
         let out = run_det(
@@ -500,28 +468,6 @@ mod tests {
             out.listing.contains("99"),
             "step B should see w=99 via symget; listing was:\n{}",
             out.listing
-        );
-    }
-
-    /// Build PAR DÉFAUT : `call symput` / `symget` PARSENT et s'exécutent
-    /// sans erreur, sans résolution macro (pas de feature). Le dataset garde
-    /// son nom littéral, `symget` rend une valeur manquante (vide).
-    #[cfg(not(feature = "macros"))]
-    #[test]
-    fn call_symput_and_symget_parse_and_run_without_macro_effect() {
-        let out = run_det(
-            "data a; call symput('x','42'); v = symget('x'); run;\n\
-             proc print data=a; run;\n",
-        );
-        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
-        // L'étape s'exécute ; `call symput` ne crée pas de variable,
-        // `v = symget(...)` crée la seule variable. v est vide (table macro
-        // vide sous le build par défaut → aucun effet macro).
-        assert!(
-            out.log
-                .contains("The data set WORK.A has 1 observations and 1 variables."),
-            "log was:\n{}",
-            out.log
         );
     }
 
