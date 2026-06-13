@@ -54,7 +54,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m5/ + snapshots
 
 ## M6 — PROC SQL
-- [ ] `src/sql/parser.rs` + compléments `ast.rs` (tests d'AST)
+- [x] `src/sql/parser.rs` + compléments `ast.rs` (tests d'AST)
 - [ ] `src/sql/plan.rs` (joins, group/having/order, CALCULATED, remerge + NOTE, missing semantics)
 - [ ] CREATE TABLE/DROP/INSERT/DELETE/DESCRIBE ; SELECT nu vers listing
 - [ ] Fixtures m6/ + snapshots

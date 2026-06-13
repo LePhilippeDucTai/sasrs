@@ -13,10 +13,12 @@
 
 use crate::ast::{DatasetRef, Expr};
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SqlProgram {
     pub stmts: Vec<SqlStmt>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum SqlStmt {
     Select(SelectStmt),
     CreateTableAs { table: DatasetRef, query: SelectStmt },
@@ -27,6 +29,7 @@ pub enum SqlStmt {
     Describe(DatasetRef),
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectStmt {
     pub distinct: bool,
     pub items: Vec<SelectItem>,
@@ -40,28 +43,33 @@ pub struct SelectStmt {
     pub set_op: Option<(SetOp, bool /* all */, Box<SelectStmt>)>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum SetOp {
     Union,
     Except,
     Intersect,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectItem {
     pub expr: SqlExpr,
     pub alias: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct FromItem {
     pub table: DatasetRef,
     pub alias: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     pub kind: JoinKind,
     pub table: FromItem,
     pub on: Option<SqlExpr>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum JoinKind {
     Inner,
     Left,
@@ -72,8 +80,13 @@ pub enum JoinKind {
 
 /// Expression SQL : réutilise Expr (mêmes littéraux/opérateurs/fonctions)
 /// plus les nœuds spécifiques SQL.
+#[derive(Debug, Clone, PartialEq)]
 pub enum SqlExpr {
     Base(Expr),
+    /// `*` — toutes les colonnes (uniquement valide en tête de select-list).
+    Star,
+    /// `alias.*` — toutes les colonnes d'une table qualifiée.
+    QualifiedStar(String),
     /// `alias.colonne`
     Qualified { table: String, column: String },
     /// `CALCULATED alias` — référence à un alias du select-list.
