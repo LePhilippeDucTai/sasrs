@@ -38,8 +38,9 @@ use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::listing::Align;
-use crate::missing::{num_to_value, value_to_num};
+use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -260,20 +261,6 @@ fn resolve_input(ast: &FreqAst, session: &Session) -> Result<DatasetRef> {
             }
         }
     }
-}
-
-/// Decode one column of a SasDataset into a `Vec<Value>` (downcast once).
-fn decode_column(ds: &SasDataset, col_idx: usize) -> Result<Vec<Value>> {
-    let series = ds.df.get_columns()[col_idx].as_materialized_series();
-    let values = match ds.vars[col_idx].ty {
-        VarType::Num => series.f64()?.iter().map(num_to_value).collect(),
-        VarType::Char => series
-            .str()?
-            .iter()
-            .map(|o| Value::Char(o.unwrap_or("").to_string()))
-            .collect(),
-    };
-    Ok(values)
 }
 
 /// Find a variable column index by name (case-insensitive), or error.

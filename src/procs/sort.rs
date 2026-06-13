@@ -34,11 +34,11 @@
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
-use crate::missing::num_to_value;
 use crate::parser::StatementStream;
+use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{Value, VarType};
+use crate::value::Value;
 use polars::prelude::*;
 use std::cmp::Ordering;
 
@@ -201,20 +201,6 @@ fn resolve_input(ast: &SortAst, session: &Session) -> Result<DatasetRef> {
             }
         }
     }
-}
-
-/// Decode one column of a SasDataset into a `Vec<Value>` (downcast once).
-fn decode_column(ds: &SasDataset, col_idx: usize) -> Result<Vec<Value>> {
-    let series = ds.df.get_columns()[col_idx].as_materialized_series();
-    let values = match ds.vars[col_idx].ty {
-        VarType::Num => series.f64()?.iter().map(num_to_value).collect(),
-        VarType::Char => series
-            .str()?
-            .iter()
-            .map(|o| Value::Char(o.unwrap_or("").to_string()))
-            .collect(),
-    };
-    Ok(values)
 }
 
 /// Execute PROC SORT. Called by `procs::execute_proc` which wraps with timing.

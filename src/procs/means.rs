@@ -38,8 +38,9 @@ use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::listing::Align;
-use crate::missing::{num_to_value, value_to_num};
+use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::{decode_column, group_by_keys, partition_numeric, sample_std};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -281,21 +282,6 @@ fn resolve_input(ast: &MeansAst, session: &Session) -> Result<DatasetRef> {
     }
 }
 
-/// Decode one column of a SasDataset into a `Vec<Value>` (downcast once;
-/// local equivalent of sort.rs::decode_column — never decode per cell).
-fn decode_column(ds: &SasDataset, col_idx: usize) -> Result<Vec<Value>> {
-    let series = ds.df.get_columns()[col_idx].as_materialized_series();
-    let values = match ds.vars[col_idx].ty {
-        VarType::Num => series.f64()?.iter().map(num_to_value).collect(),
-        VarType::Char => series
-            .str()?
-            .iter()
-            .map(|o| Value::Char(o.unwrap_or("").to_string()))
-            .collect(),
-    };
-    Ok(values)
-}
-
 /// Compute one statistic over the NON-MISSING numeric values `xs` of a
 /// group. `n`/`nmiss` are passed the group's non-missing/missing counts
 /// separately because they depend on the missing tally, not on `xs`.
@@ -363,17 +349,6 @@ fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
     }
 }
 
-/// Sample standard deviation (divisor n-1). Needs n>=2, else None.
-fn sample_std(xs: &[f64]) -> Option<f64> {
-    let n = xs.len();
-    if n < 2 {
-        return None;
-    }
-    let mean = xs.iter().sum::<f64>() / n as f64;
-    let ss: f64 = xs.iter().map(|v| (v - mean) * (v - mean)).sum();
-    Some((ss / (n as f64 - 1.0)).sqrt())
-}
-
 /// Median of the non-missing values (None when empty).
 fn median(xs: &[f64]) -> Option<f64> {
     if xs.is_empty() {
@@ -420,21 +395,6 @@ fn fmt_stat_cell(stat: &str, v: &Value) -> String {
         Value::Missing(k) => k.display(),
         Value::Char(s) => s.clone(),
     }
-}
-
-/// Split a column's values for one set of row indices into (non-missing
-/// numbers, missing count). Char values are treated as missing for numeric
-/// statistics.
-fn partition_numeric(col: &[Value], rows: &[usize]) -> (Vec<f64>, usize) {
-    let mut xs = Vec::with_capacity(rows.len());
-    let mut nmiss = 0usize;
-    for &r in rows {
-        match value_to_num(&col[r]) {
-            Some(f) if !f.is_nan() => xs.push(f),
-            _ => nmiss += 1,
-        }
-    }
-    (xs, nmiss)
 }
 
 /// Execute PROC MEANS / SUMMARY. Called by `procs::execute_proc`.
@@ -549,40 +509,6 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
-/// Group all rows by the tuple of the given class columns' values, in
-/// `sas_cmp` order. Returns (key tuple, row indices) pairs.
-fn group_by_class(
-    class_values: &[&Vec<Value>],
-    n_obs: usize,
-) -> Vec<(Vec<Value>, Vec<usize>)> {
-    let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
-    for row in 0..n_obs {
-        let key: Vec<Value> = class_values.iter().map(|c| c[row].clone()).collect();
-        // Find an existing group with an equal key (sas_cmp equality).
-        let pos = groups.iter().position(|(k, _)| {
-            k.len() == key.len()
-                && k.iter()
-                    .zip(&key)
-                    .all(|(a, b)| a.sas_cmp(b) == Ordering::Equal)
-        });
-        match pos {
-            Some(p) => groups[p].1.push(row),
-            None => groups.push((key, vec![row])),
-        }
-    }
-    // Order groups by the key tuple via sas_cmp.
-    groups.sort_by(|(a, _), (b, _)| {
-        for (x, y) in a.iter().zip(b) {
-            let c = x.sas_cmp(y);
-            if c != Ordering::Equal {
-                return c;
-            }
-        }
-        Ordering::Equal
-    });
-    groups
-}
-
 #[allow(clippy::too_many_arguments)]
 fn emit_report(
     session: &mut Session,
@@ -638,7 +564,7 @@ fn emit_report(
         }
     } else {
         let cv_refs: Vec<&Vec<Value>> = class_values.iter().collect();
-        let groups = group_by_class(&cv_refs, n_obs);
+        let groups = group_by_keys(&cv_refs, n_obs);
         for (key, grp_rows) in &groups {
             for (vi, vname_idx) in var_cols.iter().enumerate() {
                 let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
@@ -742,7 +668,7 @@ fn write_output(
 
         // Group rows by the active class variables.
         let active_refs: Vec<&Vec<Value>> = active.iter().map(|&i| class_refs[i]).collect();
-        let groups = group_by_class(&active_refs, n_obs);
+        let groups = group_by_keys(&active_refs, n_obs);
 
         for (active_key, grp_rows) in &groups {
             // Build the per-class-var cell values: active vars use the group

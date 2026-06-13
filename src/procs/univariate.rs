@@ -21,14 +21,14 @@
 #![allow(unused_variables, dead_code)]
 
 use crate::ast::DatasetRef;
-use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
-use crate::missing::{num_to_value, value_to_num};
+use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::{decode_column, sample_std};
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{format_best, VarType};
 use std::cmp::Ordering;
 
 pub struct UnivariateAst {
@@ -144,33 +144,7 @@ fn resolve_input(ast: &UnivariateAst, session: &Session) -> Result<DatasetRef> {
     }
 }
 
-/// Decode one column of a SasDataset into a `Vec<Value>` (downcast once;
-/// local equivalent of means.rs::decode_column — never decode per cell).
-fn decode_column(ds: &SasDataset, col_idx: usize) -> Result<Vec<Value>> {
-    let series = ds.df.get_columns()[col_idx].as_materialized_series();
-    let values = match ds.vars[col_idx].ty {
-        VarType::Num => series.f64()?.iter().map(num_to_value).collect(),
-        VarType::Char => series
-            .str()?
-            .iter()
-            .map(|o| Value::Char(o.unwrap_or("").to_string()))
-            .collect(),
-    };
-    Ok(values)
-}
-
 // ─────────────────────────── statistics helpers ───────────────────────────
-
-/// Sample standard deviation (divisor n-1). Needs n>=2, else None.
-fn sample_std(xs: &[f64]) -> Option<f64> {
-    let n = xs.len();
-    if n < 2 {
-        return None;
-    }
-    let mean = xs.iter().sum::<f64>() / n as f64;
-    let ss: f64 = xs.iter().map(|v| (v - mean) * (v - mean)).sum();
-    Some((ss / (n as f64 - 1.0)).sqrt())
-}
 
 /// SAS skewness g1 (needs n>=3 and s>0, else None):
 /// `g1 = n/((n-1)(n-2)) * Σ((x_i-mean)/s)^3`.

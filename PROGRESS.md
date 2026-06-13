@@ -78,7 +78,7 @@ Pattern d'ajout : nouveau `src/procs/<nom>.rs` (`<Nom>Ast` + `parse(ts)` + `exec
 `pub mod` + variante `ProcAst`, bras dans `parse_proc`/`execute_proc` (mod.rs), lecture via
 `provider.read()`+`forward`, rendu via `listing.page_header()`+`write_table`, `last_dataset` si OUT=.
 
-- [ ] `src/procs/common.rs` — extraire les helpers dupliqués (D1) : `decode_column` (6 copies), `resolve_input` (4×), `sample_std`/`mean`/`partition_numeric`, `group_by_keys` (généralise `means::group_by_class`). Rebrancher print/sort/means/freq/univariate/transpose/append/contents dessus. **Refactor pur : snapshots et 789 tests inchangés**
+- [x] `src/procs/common.rs` — helpers partagés extraits (verbatim) : `decode_column` (6 copies identiques fusionnées), `sample_std`, `partition_numeric`, `group_by_keys` (= ex-`means::group_by_class`). means/freq/univariate/sort/transpose/append rebranchés, imports morts nettoyés. Refactor pur : **789 tests + snapshot inchangés, zéro warning**. (`resolve_input` laissé par-proc : implémentations non identiques — hors périmètre de cet incrément)
 - [ ] `src/procs/corr.rs` — PROC CORR : Pearson (VAR / WITH), N, NOSIMPLE/NOPROB ; sortie matricielle ; OUT= optionnel (réutilise `decode_column`/`sample_std`/`mean`)
 - [ ] `src/procs/rank.rs` — PROC RANK : VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= (collation `sas_cmp` de SORT) ; écrit une table
 - [ ] `src/procs/tabulate.rs` — PROC TABULATE : CLASS/VAR + expression de table (page/row/col, `*` et `,`), stats par cellule. Effort élevé (sous-parser dédié de l'expression de table)

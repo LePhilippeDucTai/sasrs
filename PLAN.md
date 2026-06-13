@@ -116,7 +116,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 
 | Fichier / tâche | Jalon | Modèle | Effort | Notes |
 |---|---|---|---|---|
-| `src/procs/common.rs` | M9 | **Sonnet** | moyen | extraire `decode_column`/`resolve_input`/`sample_std`/`mean`/`partition_numeric`/`group_by_keys` (dédup 6×/4×/2×) ; rebrancher les procs ; refactor pur, sorties inchangées |
+| `src/procs/common.rs` | M9 | ✅ | moyen | `decode_column`/`sample_std`/`partition_numeric`/`group_by_keys` extraits (verbatim) ; means/freq/univariate/sort/transpose/append rebranchés ; refactor pur, sorties inchangées (`resolve_input` laissé par-proc) |
 | `src/procs/corr.rs` | M9 | **Opus** | moyen | Pearson (VAR/WITH), N, NOSIMPLE/NOPROB, OUT= ; réutilise common |
 | `src/procs/rank.rs` | M9 | **Opus** | moyen | VAR/RANKS, GROUPS=, TIES=, DESCENDING, OUT= ; collation `sas_cmp` |
 | `src/procs/tabulate.rs` | M9 | **Opus** | élevé | sous-parser de l'expression de table (page/row/col, `*`/`,`) |

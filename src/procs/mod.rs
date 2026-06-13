@@ -15,6 +15,7 @@
 //! aucun dataset créé dans la session → ERROR (comme SAS _LAST_ vide).
 
 pub mod append;
+pub mod common;
 pub mod contents;
 pub mod datasets;
 pub mod format;
