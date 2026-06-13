@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M6**
+Jalon courant : **M7**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -57,7 +57,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/sql/parser.rs` + compléments `ast.rs` (tests d'AST)
 - [x] `src/sql/plan.rs` (joins, group/having/order, CALCULATED, remerge + NOTE, missing semantics) — LIKE limité à préfixe/suffixe/exact (feature regex Polars non activée) ; EXCEPT/INTERSECT ALL approximés
 - [x] CREATE TABLE/DROP/INSERT/DELETE/DESCRIBE ; SELECT nu vers listing
-- [ ] Fixtures m6/ + snapshots
+- [x] Fixtures m6/ + snapshots
 
 ## M7 — gestion de données
 - [ ] `src/procs/transpose.rs` (BY/ID/VAR, _NAME_/COLn)

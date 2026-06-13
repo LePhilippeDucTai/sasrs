@@ -1,0 +1,37 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m6/select_group.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'Average height/weight by sex (age 13+)';
+
+3     proc sql;
+4       select sex,
+5              count(*) as n,
+6              avg(height) as avg_h,
+7              avg(weight) as avg_w
+8       from d.class
+9       where age >= 13
+10      group by sex
+11      order by sex;
+12    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                             Average height/weight by sex (age 13+)
+
+                            sex    n           avg_h           avg_w
+
+                            F      6    62.983333333    99.833333333
+                            M      6           66.75    115.66666667
+
+==== EXIT 0 ====

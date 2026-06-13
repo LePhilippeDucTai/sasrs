@@ -1,0 +1,39 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m6/join.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sql;
+3       create table work.tall  as select name, height from d.class where height > 65;
+4       create table work.heavy as select name, weight from d.class where weight > 100;
+5       select a.name, a.height, b.weight
+6       from work.tall as a
+7       inner join work.heavy as b
+8       on a.name = b.name
+9       order by a.name;
+10    quit;
+NOTE: Table WORK.TALL created, with 6 rows and 2 columns.
+NOTE: Table WORK.HEAVY created, with 9 rows and 2 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                         The SAS System
+
+                                  name       height    weight
+
+                                  Alfred         69     112.5
+                                  Mary         66.5       112
+                                  Philip         72       150
+                                  Ronald         67       133
+                                  William      66.5       112
+
+==== EXIT 0 ====
