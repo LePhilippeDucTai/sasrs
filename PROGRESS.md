@@ -55,7 +55,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 
 ## M6 — PROC SQL
 - [x] `src/sql/parser.rs` + compléments `ast.rs` (tests d'AST)
-- [ ] `src/sql/plan.rs` (joins, group/having/order, CALCULATED, remerge + NOTE, missing semantics)
+- [x] `src/sql/plan.rs` (joins, group/having/order, CALCULATED, remerge + NOTE, missing semantics) — LIKE limité à préfixe/suffixe/exact (feature regex Polars non activée) ; EXCEPT/INTERSECT ALL approximés
 - [ ] CREATE TABLE/DROP/INSERT/DELETE/DESCRIBE ; SELECT nu vers listing
 - [ ] Fixtures m6/ + snapshots
 
