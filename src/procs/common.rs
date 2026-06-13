@@ -52,6 +52,35 @@ pub fn partition_numeric(col: &[Value], rows: &[usize]) -> (Vec<f64>, usize) {
     (xs, nmiss)
 }
 
+/// Split a value column paired with a weight column, for one set of row
+/// indices, into the usable (value, weight) pairs and an excluded count.
+///
+/// SAS WEIGHT exclusion rules: an observation is excluded from the weighted
+/// analysis when the analysis value is missing, OR the weight is missing, OR
+/// the weight is <= 0 (SAS treats a non-positive weight as 0, dropping the
+/// observation). Special missing values decode to NaN via `value_to_num` and
+/// are therefore excluded, as are char cells. The excluded count is returned
+/// as the weighted "NMiss" analogue.
+pub fn partition_weighted(
+    value_col: &[Value],
+    weight_col: &[Value],
+    rows: &[usize],
+) -> (Vec<(f64, f64)>, usize) {
+    let mut pairs = Vec::with_capacity(rows.len());
+    let mut excluded = 0usize;
+    for &r in rows {
+        let v = value_to_num(&value_col[r]);
+        let w = value_to_num(&weight_col[r]);
+        match (v, w) {
+            (Some(vf), Some(wf)) if !vf.is_nan() && !wf.is_nan() && wf > 0.0 => {
+                pairs.push((vf, wf));
+            }
+            _ => excluded += 1,
+        }
+    }
+    (pairs, excluded)
+}
+
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
 /// and the variable name (display, original case).
 pub struct ByCol {

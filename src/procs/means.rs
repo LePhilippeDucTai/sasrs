@@ -31,6 +31,26 @@
 //!   CLASS, puis colonne `Variable`, puis une colonne par stat. Une ligne
 //!   par (combinaison de classes × variable). Les combinaisons de classes
 //!   sont ordonnées par `sas_cmp`.
+//!
+//! ## WEIGHT statement (jalon WEIGHT)
+//! `weight <var>;` — une seule variable numérique. Quand elle est présente,
+//! toutes les stats passent par `compute_weighted` (analogue pondéré de
+//! `compute`). Le chemin non-pondéré reste BYTE-IDENTIQUE : `compute_weighted`
+//! n'est appelé que si `ast.weight.is_some()`. Fonctionne avec CLASS et BY
+//! (poids partitionnés par groupe), et OUTPUT OUT= utilise les stats pondérées.
+//!
+//! Formules pondérées (VARDEF=DF) — n = nb d'obs utilisables, w_i poids, x_i :
+//!   SumWgt = Σw_i ; Sum = Σw_i x_i ; Mean = Σw_i x_i / Σw_i ;
+//!   CSS_w = Σw_i(x_i−x̄_w)² ; Variance = CSS_w/(n−1) ; Std = √Variance ;
+//!   StdErr = Std/√(Σw_i) (SAS pondère l'erreur-type par √ΣW) ;
+//!   CV = 100·Std/x̄_w ; Min/Max = min/max NON pondérés de x_i ; N = n ;
+//!   NMiss = nb d'obs exclues (valeur missing, poids missing, ou poids ≤ 0).
+//! Exclusions : voir `common::partition_weighted`.
+//!
+//! ## Simplifications SAS documentées (WEIGHT)
+//! - MEDIAN avec WEIGHT : la vraie médiane pondérée de SAS est complexe ;
+//!   DIFFÉRÉ. Ici MEDIAN est calculée NON pondérée (médiane simple des x_i
+//!   utilisables) — divergence assumée et documentée.
 
 #![allow(unused_variables, dead_code)]
 
@@ -41,7 +61,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{
-    by_groups, decode_column, partition_numeric, resolve_by_cols, sample_std,
+    by_groups, decode_column, partition_numeric, partition_weighted, resolve_by_cols, sample_std,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -58,6 +78,9 @@ pub struct MeansAst {
     pub var: Vec<String>,
     /// BY variables (var, descending). Outer grouping; input must be sorted.
     pub by: Vec<(String, bool)>,
+    /// WEIGHT variable (single numeric var). When `Some`, all statistics are
+    /// computed through the weighted code path (see `compute_weighted`).
+    pub weight: Option<String>,
     pub output: Option<MeansOutput>,
 }
 
@@ -132,6 +155,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut class: Vec<String> = Vec::new();
     let mut var: Vec<String> = Vec::new();
     let mut by: Vec<(String, bool)> = Vec::new();
+    let mut weight: Option<String> = None;
     let mut output: Option<MeansOutput> = None;
 
     loop {
@@ -160,6 +184,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
         } else if ts.peek().is_kw("by") {
             ts.next();
             by = parse_by_list(ts)?;
+        } else if ts.peek().is_kw("weight") {
+            ts.next();
+            weight = Some(parse_single_var(ts, "WEIGHT")?);
         } else if ts.peek().is_kw("output") {
             ts.next();
             output = Some(parse_output(ts)?);
@@ -177,8 +204,34 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
         class,
         var,
         by,
+        weight,
         output,
     })
+}
+
+/// Parse a single-variable statement body (after the keyword was consumed),
+/// e.g. `weight <var> ;`. Errors if no variable or extra tokens before `;`.
+pub(crate) fn parse_single_var(ts: &mut StatementStream, kw: &str) -> Result<String> {
+    let tok = ts.peek().clone();
+    let name = match tok.ident() {
+        Some(n) => {
+            ts.next();
+            n.to_string()
+        }
+        None => {
+            return Err(SasError::parse(
+                format!("expected a variable name in the {kw} statement"),
+                tok.span,
+            ));
+        }
+    };
+    // Consume the terminating `;` (tolerate trailing tokens by skipping).
+    if ts.peek().kind == TokenKind::Semi {
+        ts.next();
+    } else {
+        ts.skip_to_semi();
+    }
+    Ok(name)
 }
 
 /// Parse a BY statement body (after "by" consumed), through its `;`.
@@ -393,6 +446,99 @@ pub fn compute(stat: &str, xs: &[f64], n_missing: usize) -> Value {
     }
 }
 
+/// Weighted analogue of `compute`. `pairs` holds the usable (value, weight)
+/// pairs of a group (from `common::partition_weighted`); `n_excluded` is the
+/// count of observations dropped by the WEIGHT exclusion rules. VARDEF=DF.
+///
+/// See the file header for the formulas. MEDIAN is computed UNWEIGHTED here
+/// (weighted median deferred — documented divergence).
+pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize) -> Value {
+    let n = pairs.len();
+    let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
+    let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
+    let mean_w = if sum_w != 0.0 {
+        Some(sum_wx / sum_w)
+    } else {
+        None
+    };
+    // Weighted corrected sum of squares: Σ w_i (x_i − x̄_w)^2.
+    let css_w = match mean_w {
+        Some(m) => pairs.iter().map(|(x, w)| w * (x - m) * (x - m)).sum::<f64>(),
+        None => 0.0,
+    };
+    // Variance = CSS_w / (n − 1) using the COUNT of usable obs.
+    let variance = if n >= 2 {
+        Some(css_w / (n as f64 - 1.0))
+    } else {
+        None
+    };
+    let std = variance.map(|v| v.sqrt());
+
+    match stat {
+        "n" => Value::Num(n as f64),
+        "nmiss" => Value::Num(n_excluded as f64),
+        "min" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                Value::Num(pairs.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min))
+            }
+        }
+        "max" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                Value::Num(
+                    pairs
+                        .iter()
+                        .map(|(x, _)| *x)
+                        .fold(f64::NEG_INFINITY, f64::max),
+                )
+            }
+        }
+        "range" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                let mn = pairs.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+                let mx = pairs
+                    .iter()
+                    .map(|(x, _)| *x)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                Value::Num(mx - mn)
+            }
+        }
+        // Weighted SUM = Σ w_i x_i (matches SAS PROC MEANS with WEIGHT).
+        "sum" => Value::Num(sum_wx),
+        "mean" => match mean_w {
+            Some(m) => Value::Num(m),
+            None => Value::missing(),
+        },
+        "std" | "stddev" => match std {
+            Some(s) => Value::Num(s),
+            None => Value::missing(),
+        },
+        // SAS weighted std error divides Std by sqrt(Σ w_i).
+        "stderr" => match std {
+            Some(s) if sum_w > 0.0 => Value::Num(s / sum_w.sqrt()),
+            _ => Value::missing(),
+        },
+        "cv" => match (mean_w, std) {
+            (Some(m), Some(s)) if m != 0.0 => Value::Num(100.0 * s / m),
+            _ => Value::missing(),
+        },
+        // Weighted median deferred → unweighted median of the usable values.
+        "median" => {
+            let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
+            match median(&xs) {
+                Some(m) => Value::Num(m),
+                None => Value::missing(),
+            }
+        }
+        _ => Value::missing(),
+    }
+}
+
 /// Median of the non-missing values (None when empty).
 fn median(xs: &[f64]) -> Option<f64> {
     if xs.is_empty() {
@@ -509,6 +655,22 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
         .map(|&ci| decode_column(&ds, ci))
         .collect::<Result<_>>()?;
 
+    // Resolve & decode the WEIGHT column once (None → unweighted path,
+    // byte-identical to before).
+    let weight_values: Option<Vec<Value>> = match &ast.weight {
+        Some(wname) => {
+            let wi = ds
+                .vars
+                .iter()
+                .position(|m| m.name.eq_ignore_ascii_case(wname))
+                .ok_or_else(|| {
+                    SasError::runtime(format!("Variable {} not found.", wname.to_uppercase()))
+                })?;
+            Some(decode_column(&ds, wi)?)
+        }
+        None => None,
+    };
+
     // Default report stats when none requested.
     let report_stats: Vec<String> = if ast.stats.is_empty() {
         vec![
@@ -562,6 +724,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
                 &class_values,
                 &var_cols,
                 &var_values,
+                weight_values.as_deref(),
                 &report_stats,
                 grp_rows,
             );
@@ -577,6 +740,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             &class_values,
             &var_values,
             &var_cols,
+            weight_values.as_deref(),
             out,
             &by_cols,
             &by_groups_list,
@@ -608,6 +772,7 @@ fn emit_report_group(
     class_values: &[Vec<Value>],
     var_cols: &[usize],
     var_values: &[Vec<Value>],
+    weight_values: Option<&[Value]>,
     report_stats: &[String],
     group_rows: &[usize],
 ) {
@@ -634,11 +799,22 @@ fn emit_report_group(
     if class_cols.is_empty() {
         // One section over the group's rows: one row per analysis variable.
         for (vi, vname_idx) in var_cols.iter().enumerate() {
-            let (xs, nmiss) = partition_numeric(&var_values[vi], group_rows);
             let mut row = vec![ds.vars[*vname_idx].name.clone()];
-            for s in report_stats {
-                let v = compute(s, &xs, nmiss);
-                row.push(fmt_stat_cell(s, &v));
+            match weight_values {
+                Some(wv) => {
+                    let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, group_rows);
+                    for s in report_stats {
+                        let v = compute_weighted(s, &pairs, nmiss);
+                        row.push(fmt_stat_cell(s, &v));
+                    }
+                }
+                None => {
+                    let (xs, nmiss) = partition_numeric(&var_values[vi], group_rows);
+                    for s in report_stats {
+                        let v = compute(s, &xs, nmiss);
+                        row.push(fmt_stat_cell(s, &v));
+                    }
+                }
             }
             rows.push(row);
         }
@@ -648,15 +824,26 @@ fn emit_report_group(
         let groups = group_by_keys_subset(&cv_refs, group_rows);
         for (key, grp_rows) in &groups {
             for (vi, vname_idx) in var_cols.iter().enumerate() {
-                let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
                 let mut row: Vec<String> = Vec::new();
                 for kv in key {
                     row.push(class_cell(kv));
                 }
                 row.push(ds.vars[*vname_idx].name.clone());
-                for s in report_stats {
-                    let v = compute(s, &xs, nmiss);
-                    row.push(fmt_stat_cell(s, &v));
+                match weight_values {
+                    Some(wv) => {
+                        let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
+                        for s in report_stats {
+                            let v = compute_weighted(s, &pairs, nmiss);
+                            row.push(fmt_stat_cell(s, &v));
+                        }
+                    }
+                    None => {
+                        let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
+                        for s in report_stats {
+                            let v = compute(s, &xs, nmiss);
+                            row.push(fmt_stat_cell(s, &v));
+                        }
+                    }
                 }
                 rows.push(row);
             }
@@ -716,6 +903,7 @@ fn write_output(
     class_values: &[Vec<Value>],
     var_values: &[Vec<Value>],
     var_cols: &[usize],
+    weight_values: Option<&[Value]>,
     out: &MeansOutput,
     by_cols: &[crate::procs::common::ByCol],
     by_groups_list: &[(Vec<Value>, Vec<usize>)],
@@ -806,8 +994,16 @@ fn write_output(
 
                 let mut stat_vals: Vec<Value> = Vec::with_capacity(specs.len());
                 for sp in &specs {
-                    let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);
-                    stat_vals.push(compute(&sp.stat, &xs, nmiss));
+                    match weight_values {
+                        Some(wv) => {
+                            let (pairs, nmiss) = partition_weighted(&sp.col, wv, grp_rows);
+                            stat_vals.push(compute_weighted(&sp.stat, &pairs, nmiss));
+                        }
+                        None => {
+                            let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);
+                            stat_vals.push(compute(&sp.stat, &xs, nmiss));
+                        }
+                    }
                 }
 
                 out_rows.push(OutRow {
@@ -1125,6 +1321,7 @@ mod tests {
             class: vec![],
             var: vec!["x".into()],
             by: vec![],
+            weight: None,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1170,6 +1367,7 @@ mod tests {
             class: vec!["g".into()],
             var: vec!["x".into()],
             by: vec![],
+            weight: None,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1231,6 +1429,7 @@ mod tests {
             class: vec!["g".into(), "h".into()],
             var: vec!["x".into()],
             by: vec![],
+            weight: None,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("sum".into(), "x".into(), "sx".into())],
@@ -1289,6 +1488,7 @@ mod tests {
             class: vec![],
             var: vec![],
             by: vec![],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1316,6 +1516,7 @@ mod tests {
             class: vec![],
             var: vec![],
             by: vec![],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1349,6 +1550,7 @@ mod tests {
             class: vec![],
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1382,6 +1584,7 @@ mod tests {
             class: vec![],
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
+            weight: None,
             output: None,
         };
         let r = execute(&ast, &mut session);
@@ -1415,6 +1618,7 @@ mod tests {
             class: vec![],
             var: vec!["x".into()],
             by: vec![("sex".into(), false)],
+            weight: None,
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -1435,5 +1639,208 @@ mod tests {
         let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names[0], "sex");
         assert!(names.contains(&"_TYPE_"));
+    }
+
+    // ───────────────────────────── WEIGHT tests ────────────────────────────
+
+    #[test]
+    fn compute_weighted_hand_values() {
+        // values [1,2,3] weights [1,2,3]:
+        //   SumWgt=6, Sum=14, mean=14/6=2.33333...
+        //   CSS_w = 1*(1-m)^2 + 2*(2-m)^2 + 3*(3-m)^2 = 3.33333...
+        //   Variance = CSS_w/(n-1) = 3.33333/2 = 1.66667
+        //   Std = sqrt(1.66667) = 1.2909944
+        //   StdErr = Std/sqrt(6) = 0.5270463
+        //   CV = 100*Std/mean = 55.3283
+        //   USS_w = 1*1 + 2*4 + 3*9 = 36
+        let pairs = vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
+        assert_eq!(compute_weighted("n", &pairs, 0), Value::Num(3.0));
+        assert_eq!(compute_weighted("nmiss", &pairs, 0), Value::Num(0.0));
+        assert_eq!(compute_weighted("sum", &pairs, 0), Value::Num(14.0));
+        assert_eq!(compute_weighted("min", &pairs, 0), Value::Num(1.0));
+        assert_eq!(compute_weighted("max", &pairs, 0), Value::Num(3.0));
+
+        let m = match compute_weighted("mean", &pairs, 0) {
+            Value::Num(f) => f,
+            _ => panic!("mean numeric"),
+        };
+        assert!((m - 14.0 / 6.0).abs() < 1e-12, "mean = {m}");
+
+        let std = match compute_weighted("std", &pairs, 0) {
+            Value::Num(f) => f,
+            _ => panic!("std numeric"),
+        };
+        assert!((std - (5.0_f64 / 3.0).sqrt()).abs() < 1e-12, "std = {std}");
+
+        let se = match compute_weighted("stderr", &pairs, 0) {
+            Value::Num(f) => f,
+            _ => panic!("stderr numeric"),
+        };
+        assert!(
+            (se - (5.0_f64 / 3.0).sqrt() / 6.0_f64.sqrt()).abs() < 1e-12,
+            "stderr = {se}"
+        );
+
+        let cv = match compute_weighted("cv", &pairs, 0) {
+            Value::Num(f) => f,
+            _ => panic!("cv numeric"),
+        };
+        let expected_cv = 100.0 * (5.0_f64 / 3.0).sqrt() / (14.0 / 6.0);
+        assert!((cv - expected_cv).abs() < 1e-9, "cv = {cv}");
+    }
+
+    #[test]
+    fn compute_weighted_n1_std_missing() {
+        let pairs = vec![(5.0, 2.0)];
+        assert_eq!(compute_weighted("n", &pairs, 0), Value::Num(1.0));
+        assert_eq!(compute_weighted("mean", &pairs, 0), Value::Num(5.0));
+        assert!(compute_weighted("std", &pairs, 0).is_missing());
+        assert!(compute_weighted("stderr", &pairs, 0).is_missing());
+    }
+
+    #[test]
+    fn execute_weight_report_and_exclusions() {
+        let mut session = make_session();
+        // x: 1,2,3, bad(w<=0), bad(missing w), bad(missing x)
+        // weights: 1,2,3, 5, ., 4  -> only first three usable.
+        let df = df![
+            "x" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(9.0), Some(7.0), None],
+            "w" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(0.0), None, Some(4.0)]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec!["n".into(), "nmiss".into(), "mean".into(), "sum".into()],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: Some("w".into()),
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![
+                    ("n".into(), "x".into(), "nx".into()),
+                    ("nmiss".into(), "x".into(), "nmx".into()),
+                    ("mean".into(), "x".into(), "mx".into()),
+                    ("sum".into(), "x".into(), "sx".into()),
+                ],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let nx = read_num_col(&session, "O", "nx");
+        let nmx = read_num_col(&session, "O", "nmx");
+        let mx = read_num_col(&session, "O", "mx");
+        let sx = read_num_col(&session, "O", "sx");
+        assert_eq!(nx, vec![Value::Num(3.0)]);
+        assert_eq!(nmx, vec![Value::Num(3.0)]); // w<=0, missing w, missing x
+        assert_eq!(sx, vec![Value::Num(14.0)]); // weighted sum Σw_i x_i
+        if let Value::Num(m) = mx[0] {
+            assert!((m - 14.0 / 6.0).abs() < 1e-12, "mean = {m}");
+        } else {
+            panic!("mean numeric");
+        }
+    }
+
+    #[test]
+    fn execute_weight_with_by() {
+        let mut session = make_session();
+        // Sorted by g: a(values 1,2,3 weights 1,2,3) b(values 10,20 weights 1,1)
+        let df = df![
+            "g" => ["a", "a", "a", "b", "b"],
+            "x" => [1.0_f64, 2.0, 3.0, 10.0, 20.0],
+            "w" => [1.0_f64, 2.0, 3.0, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec![],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![("g".into(), false)],
+            weight: Some("w".into()),
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![("mean".into(), "x".into(), "mx".into())],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 2);
+        let mx = read_num_col(&session, "O", "mx");
+        // a: 14/6 = 2.33333 ; b: (10+20)/2 = 15.
+        if let Value::Num(m) = mx[0] {
+            assert!((m - 14.0 / 6.0).abs() < 1e-12, "a mean = {m}");
+        } else {
+            panic!("numeric");
+        }
+        assert_eq!(mx[1], Value::Num(15.0));
+    }
+
+    #[test]
+    fn execute_weight_with_class() {
+        let mut session = make_session();
+        // class g: a(1,2,3 w 1,2,3) b(10 w 5)
+        let df = df![
+            "g" => ["a", "a", "a", "b"],
+            "x" => [1.0_f64, 2.0, 3.0, 10.0],
+            "w" => [1.0_f64, 2.0, 3.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec![],
+            class: vec!["g".into()],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: Some("w".into()),
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![("mean".into(), "x".into(), "mx".into())],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        // _TYPE_ 0 (overall) + 2 levels = 3 rows.
+        assert_eq!(out.n_obs(), 3);
+        let ty = read_num_col(&session, "O", "_TYPE_");
+        let mx = read_num_col(&session, "O", "mx");
+        // overall: Σwx/Σw = (1+4+9+50)/(1+2+3+5) = 64/11 = 5.81818...
+        assert_eq!(ty[0], Value::Num(0.0));
+        if let Value::Num(m) = mx[0] {
+            assert!((m - 64.0 / 11.0).abs() < 1e-12, "overall mean = {m}");
+        } else {
+            panic!("numeric");
+        }
+        // level a (_TYPE_=1): 14/6 ; level b: 10.
+        if let Value::Num(m) = mx[1] {
+            assert!((m - 14.0 / 6.0).abs() < 1e-12, "a mean = {m}");
+        } else {
+            panic!("numeric");
+        }
+        assert_eq!(mx[2], Value::Num(10.0));
+    }
+
+    #[test]
+    fn parse_weight_statement() {
+        let ast = parse_means("proc means data=a; var x; weight w; run;").unwrap();
+        assert_eq!(ast.weight.as_deref(), Some("w"));
+        assert_eq!(ast.var, vec!["x"]);
     }
 }

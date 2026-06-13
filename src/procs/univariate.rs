@@ -17,6 +17,28 @@
 //! - Extreme Observations : 5 plus basses / 5 plus hautes avec n° d'obs.
 //! Les missings sont exclus (compter et afficher la section Missing
 //! Values si présents).
+//!
+//! ## WEIGHT statement (jalon WEIGHT)
+//! `weight <var>;` — une seule variable numérique. Quand elle est présente,
+//! les **Moments** et les mesures **Basic** mean/std/variance sont calculés
+//! avec les formules pondérées (VARDEF=DF) :
+//!   N = n (nb d'obs utilisables) ; Sum Weights = Σw_i ;
+//!   Sum Observations = Σw_i x_i ; Mean = Σw_i x_i / Σw_i ;
+//!   Variance = Σw_i(x_i−x̄_w)² / (n−1) ; Std = √Variance ;
+//!   Corrected SS = Σw_i(x_i−x̄_w)² ; Uncorrected SS = Σw_i x_i² ;
+//!   Coeff Variation = 100·Std/x̄_w ; Std Error Mean = Std/√(Σw_i).
+//! Exclusions : valeur missing, poids missing, ou poids ≤ 0
+//! (voir `common::partition_weighted`). Le chemin non-pondéré reste
+//! BYTE-IDENTIQUE (la pondération ne s'active que si `ast.weight.is_some()`).
+//!
+//! ## Simplifications SAS documentées (WEIGHT)
+//! - Skewness / Kurtosis pondérés : DIFFÉRÉ. Affichés à partir des valeurs
+//!   NON pondérées (formules g1/g2 existantes) — divergence documentée.
+//! - Quantiles / Extreme Observations pondérés : DIFFÉRÉ — choix (a) : ces
+//!   sections sont OMISES lorsque WEIGHT est présent (une note centrée
+//!   "Quantiles and Extreme Observations are not computed with a WEIGHT
+//!   variable." est affichée à la place). On ne présente JAMAIS des
+//!   quantiles non pondérés comme s'ils étaient pondérés.
 
 #![allow(unused_variables, dead_code)]
 
@@ -26,7 +48,9 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{by_groups, decode_column, resolve_by_cols, sample_std};
+use crate::procs::common::{
+    by_groups, decode_column, partition_weighted, resolve_by_cols, sample_std,
+};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -38,6 +62,10 @@ pub struct UnivariateAst {
     pub var: Vec<String>,
     /// BY variables (var, descending). Input must be sorted by the BY key.
     pub by: Vec<(String, bool)>,
+    /// WEIGHT variable (single numeric var). When `Some`, the Moments and
+    /// Basic Measures mean/std/variance use the weighted formulas; Quantiles
+    /// and Extreme Observations are omitted (see file header).
+    pub weight: Option<String>,
     pub output: Option<UnivariateOutput>,
 }
 
@@ -96,6 +124,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
 
     // --- sub-statements until run;/quit; ---
     let mut by: Vec<(String, bool)> = Vec::new();
+    let mut weight: Option<String> = None;
     let mut output: Option<UnivariateOutput> = None;
 
     loop {
@@ -120,6 +149,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         } else if ts.peek().is_kw("by") {
             ts.next();
             by = crate::procs::means::parse_by_list(ts)?;
+        } else if ts.peek().is_kw("weight") {
+            ts.next();
+            weight = Some(crate::procs::means::parse_single_var(ts, "WEIGHT")?);
         } else if ts.peek().is_kw("output") {
             ts.next();
             output = Some(parse_output(ts)?);
@@ -133,6 +165,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         data,
         var,
         by,
+        weight,
         output,
     })
 }
@@ -447,6 +480,22 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         .map(|&ci| decode_column(&ds, ci))
         .collect::<Result<_>>()?;
 
+    // Resolve & decode the WEIGHT column once (None → unweighted path,
+    // byte-identical to before).
+    let weight_values: Option<Vec<Value>> = match &ast.weight {
+        Some(wname) => {
+            let wi = ds
+                .vars
+                .iter()
+                .position(|m| m.name.eq_ignore_ascii_case(wname))
+                .ok_or_else(|| {
+                    SasError::runtime(format!("Variable {} not found.", wname.to_uppercase()))
+                })?;
+            Some(decode_column(&ds, wi)?)
+        }
+        None => None,
+    };
+
     // --- BY processing: resolve, verify sortedness, partition into groups. ---
     let by_cols = resolve_by_cols(&ds, &ast.by)?;
     let by_values: Vec<Vec<Value>> = by_cols
@@ -470,17 +519,32 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             emit_by_heading(session, &by_names, by_key);
         }
         for (vi, &ci) in var_cols.iter().enumerate() {
-            // Drop missings into (value, 1-based obs number) pairs, in the
-            // group's row order.
-            let mut data: Vec<(f64, usize)> = Vec::with_capacity(grp_rows.len());
-            let mut n_missing = 0usize;
-            for &row in grp_rows {
-                match value_to_num(&var_values[vi][row]) {
-                    Some(f) if !f.is_nan() => data.push((f, row + 1)),
-                    _ => n_missing += 1,
+            match &weight_values {
+                Some(wv) => {
+                    // Weighted path: usable (value, weight) pairs + excluded count.
+                    let (pairs, n_missing) = partition_weighted(&var_values[vi], wv, grp_rows);
+                    emit_variable_weighted(
+                        session,
+                        &ds.vars[ci].name,
+                        &pairs,
+                        n_missing,
+                        grp_rows.len(),
+                    );
+                }
+                None => {
+                    // Drop missings into (value, 1-based obs number) pairs, in the
+                    // group's row order.
+                    let mut data: Vec<(f64, usize)> = Vec::with_capacity(grp_rows.len());
+                    let mut n_missing = 0usize;
+                    for &row in grp_rows {
+                        match value_to_num(&var_values[vi][row]) {
+                            Some(f) if !f.is_nan() => data.push((f, row + 1)),
+                            _ => n_missing += 1,
+                        }
+                    }
+                    emit_variable(session, &ds.vars[ci].name, &data, n_missing, grp_rows.len());
                 }
             }
-            emit_variable(session, &ds.vars[ci].name, &data, n_missing, grp_rows.len());
         }
     }
 
@@ -948,6 +1012,153 @@ fn emit_variable(
     }
 }
 
+/// Emit the report for a single analysis variable with a WEIGHT variable in
+/// effect. `pairs` are the usable (value, weight) pairs (excluding missing
+/// values, missing weights, and weights ≤ 0); `n_missing` is the excluded
+/// count, `n_total` the group's total row count.
+///
+/// Moments and Basic Measures mean/std/variance use the weighted formulas
+/// (see file header). Skewness/Kurtosis are computed on the UNWEIGHTED values
+/// (documented divergence). Quantiles and Extreme Observations are OMITTED.
+fn emit_variable_weighted(
+    session: &mut Session,
+    name: &str,
+    pairs: &[(f64, f64)],
+    n_missing: usize,
+    n_total: usize,
+) {
+    session.listing.blank();
+    centered(session, &format!("Variable: {name}"));
+    session.listing.blank();
+
+    let n = pairs.len();
+    let nf = n as f64;
+    let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
+
+    let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
+    let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
+    let mean_w = if sum_w != 0.0 {
+        Some(sum_wx / sum_w)
+    } else {
+        None
+    };
+    // Weighted corrected / uncorrected sums of squares.
+    let css_w: f64 = match mean_w {
+        Some(m) => pairs.iter().map(|(x, w)| w * (x - m) * (x - m)).sum(),
+        None => 0.0,
+    };
+    let uss_w: f64 = pairs.iter().map(|(x, w)| w * x * x).sum();
+    let variance = if n >= 2 {
+        Some(css_w / (nf - 1.0))
+    } else {
+        None
+    };
+    let std = variance.map(|v| v.sqrt());
+    let cv = match (mean_w, std) {
+        (Some(m), Some(sd)) if m != 0.0 => Some(100.0 * sd / m),
+        _ => None,
+    };
+    // SAS weighted std error of the mean: Std / sqrt(Σ w_i).
+    let std_err = match std {
+        Some(sd) if sum_w > 0.0 => Some(sd / sum_w.sqrt()),
+        _ => None,
+    };
+    // Skewness / kurtosis deferred → computed on UNWEIGHTED values.
+    let skew = skewness(&xs);
+    let kurt = kurtosis(&xs);
+
+    // ── Moments ──
+    centered(session, "Moments");
+    session.listing.blank();
+    let moments: Vec<(&str, String, &str, String)> = vec![
+        ("N", format!("{n}"), "Sum Weights", fmt_num(sum_w)),
+        ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
+        ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
+        ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
+        ("Uncorrected SS", fmt_num(uss_w), "Corrected SS", fmt_num(css_w)),
+        ("Coeff Variation", fmt_opt(cv), "Std Error Mean", fmt_opt(std_err)),
+    ];
+    let m_rows: Vec<Vec<String>> = moments
+        .into_iter()
+        .map(|(la, va, lb, vb)| vec![la.to_string(), va, lb.to_string(), vb])
+        .collect();
+    session.listing.write_table(
+        &[
+            "Label1".into(),
+            "Value1".into(),
+            "Label2".into(),
+            "Value2".into(),
+        ],
+        &[Align::Left, Align::Right, Align::Left, Align::Right],
+        &m_rows,
+    );
+
+    // ── Basic Statistical Measures ── (weighted mean/std/variance; mode,
+    // median, range, IQR depend on quantiles → deferred, shown as missing).
+    session.listing.blank();
+    centered(session, "Basic Statistical Measures");
+    session.listing.blank();
+    let basic_rows: Vec<Vec<String>> = vec![
+        vec![
+            "Mean".into(),
+            fmt_opt(mean_w),
+            "Std Deviation".into(),
+            fmt_opt(std),
+        ],
+        vec![
+            "Median".into(),
+            ".".into(),
+            "Variance".into(),
+            fmt_opt(variance),
+        ],
+        vec!["Mode".into(), ".".into(), "Range".into(), ".".into()],
+        vec![
+            "".into(),
+            "".into(),
+            "Interquartile Range".into(),
+            ".".into(),
+        ],
+    ];
+    session.listing.write_table(
+        &[
+            "LocLabel".into(),
+            "LocValue".into(),
+            "VarLabel".into(),
+            "VarValue".into(),
+        ],
+        &[Align::Left, Align::Right, Align::Left, Align::Right],
+        &basic_rows,
+    );
+
+    // ── Quantiles / Extreme Observations: deferred with WEIGHT (choice (a)). ──
+    session.listing.blank();
+    centered(
+        session,
+        "Quantiles and Extreme Observations are not computed with a WEIGHT variable.",
+    );
+
+    // ── Missing Values ──
+    if n_missing > 0 {
+        session.listing.blank();
+        centered(session, "Missing Values");
+        session.listing.blank();
+        let pct = if n_total > 0 {
+            100.0 * n_missing as f64 / n_total as f64
+        } else {
+            0.0
+        };
+        session.listing.write_table(
+            &[
+                "Missing Value".into(),
+                "Count".into(),
+                "Percent Of All Obs".into(),
+            ],
+            &[Align::Left, Align::Right, Align::Right],
+            &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,6 +1327,7 @@ mod tests {
             }),
             var: vec!["x".into()],
             by: vec![],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1167,6 +1379,7 @@ mod tests {
             }),
             var: vec![],
             by: vec![],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1212,6 +1425,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             var: vec!["x".into()],
             by: vec![("g".into(), false)],
+            weight: None,
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1240,6 +1454,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             var: vec!["x".into()],
             by: vec![("g".into(), false)],
+            weight: None,
             output: None,
         };
         let r = execute(&ast, &mut session);
@@ -1263,6 +1478,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             var: vec!["x".into()],
             by: vec![],
+            weight: None,
             output: Some(UnivariateOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1302,6 +1518,7 @@ mod tests {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             var: vec!["x".into()],
             by: vec![("g".into(), false)],
+            weight: None,
             output: Some(UnivariateOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), vec!["mx".into()])],
@@ -1338,5 +1555,80 @@ mod tests {
                 ("q1".to_string(), vec!["q1x".to_string()]),
             ]
         );
+    }
+
+    // ───────────────────────────── WEIGHT tests ────────────────────────────
+
+    #[test]
+    fn parse_weight_statement() {
+        let ast = parse_univ("proc univariate data=a; var x; weight w; run;").unwrap();
+        assert_eq!(ast.weight.as_deref(), Some("w"));
+        assert_eq!(ast.var, vec!["x"]);
+    }
+
+    #[test]
+    fn execute_weighted_moments() {
+        let mut session = make_session();
+        // values [1,2,3] weights [1,2,3] + an excluded row (w<=0).
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 99.0],
+            "w" => [1.0_f64, 2.0, 3.0, 0.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: Some("w".into()),
+            output: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("The UNIVARIATE Procedure"), "listing: {listing}");
+        assert!(listing.contains("Variable: x"), "listing: {listing}");
+        assert!(listing.contains("Moments"), "listing: {listing}");
+        // Weighted: Sum Weights = 6, Sum Observations = 14.
+        assert!(listing.contains("Sum Weights"), "listing: {listing}");
+        // Quantiles section omitted; replacement note shown instead.
+        assert!(
+            listing.contains("not computed with a WEIGHT variable"),
+            "listing: {listing}"
+        );
+        assert!(!listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
+        // The excluded (w<=0) row counts as a missing value.
+        assert!(listing.contains("Missing Values"), "listing: {listing}");
+    }
+
+    #[test]
+    fn execute_weighted_no_quantiles_section() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [10.0_f64, 20.0, 30.0],
+            "w" => [1.0_f64, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: Some("w".into()),
+            output: None,
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // With equal weights the weighted mean equals the plain mean (20).
+        assert!(listing.contains("Mean"), "listing: {listing}");
+        // The Quantiles (Definition 5) table is not emitted.
+        assert!(!listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
+        // The Extreme Observations table header is not emitted (only the
+        // replacement note mentions the phrase).
+        assert!(!listing.contains("Lowest Value"), "listing: {listing}");
     }
 }

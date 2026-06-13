@@ -87,7 +87,7 @@ Pattern d'ajout : nouveau `src/procs/<nom>.rs` (`<Nom>Ast` + `parse(ts)` + `exec
 
 ## M10 — stats avancées (procs existants)
 - [x] BY-group dans MEANS & UNIVARIATE : statement BY honoré (helper `common::by_groups` — vérifie le tri par clé BY via `sas_cmp`, groupes contigus en ordre d'entrée, erreur "not sorted in ascending sequence" sinon → arrêt). Une section par groupe avec en-tête `var=val` ; MEANS combine BY (externe) × CLASS (interne, _TYPE_/_FREQ_) ; chemin sans-BY byte-identique (m5 inchangés). + UNIVARIATE `OUTPUT OUT=` (mean/std/min/max/median/q1/q3/pNN/n/nmiss/sum/range/qrange, 1 ligne/groupe BY). +8 tests (868 total, 0 warning)
-- [ ] WEIGHT dans MEANS & UNIVARIATE (et CORR si livré) : stats pondérées via `partition_weighted` (D2 ; poids ≤0/missing exclus)
+- [x] WEIGHT dans MEANS & UNIVARIATE : statement `weight var;` ; `common::partition_weighted` (exclut value missing / weight missing / weight≤0) ; stats pondérées VARDEF=DF (SumWgt, Sum=Σwx, Mean=Σwx/Σw, Var=CSS_w/(n−1), Std, StdErr=Std/√ΣW, CV, USS) ; Min/Max non pondérés ; chemin sans-WEIGHT byte-identique. Différés documentés : skew/kurt non pondérés, médiane MEANS non pondérée, quantiles UNIVARIATE omis (note). CORR WEIGHT non livré (suite). +9 tests (877 total, 0 warning)
 - [ ] Intervalles de confiance MEANS : `ALPHA=`, `CLM`/`LCLM`/`UCLM` ; helper quantile t de Student (`common.rs`)
 - [ ] FREQ : test CHISQ (Pearson χ², ddl, p-value, 2 voies) ET application réelle de NOROW/NOCOL/NOPERCENT/NOFREQ/NOCUM (parsés puis ignorés : `freq.rs:192-199`)
 - [ ] Fixtures `tests/fixtures/m10/` + snapshots ; DoD : cargo test vert ; jalon courant → M11
