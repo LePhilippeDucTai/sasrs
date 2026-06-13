@@ -81,6 +81,28 @@ impl SasDataset {
         Ok((SasDataset { df, vars }, notes))
     }
 
+    /// Coerce an arbitrary DataFrame (e.g. a PROC SQL result, which may carry
+    /// u32/i64/bool/Float64/String columns from aggregates and joins) into the
+    /// strict SAS type model: numeric → f64, character → string. Reuses the
+    /// same per-column coercion as `read_parquet` so VarMeta inference is
+    /// identical. Returns the dataset plus any NOTE/WARNING lines.
+    pub fn from_dataframe(df: DataFrame) -> Result<(SasDataset, Vec<String>)> {
+        let mut notes = Vec::new();
+        let mut columns: Vec<Column> = Vec::with_capacity(df.width());
+        let mut vars = Vec::with_capacity(df.width());
+
+        for col in df.get_columns() {
+            let name = col.name().to_string();
+            let s = col.as_materialized_series();
+            let (series, meta) = coerce_series(&name, s, &mut notes)?;
+            columns.push(series.into());
+            vars.push(meta);
+        }
+
+        let df = DataFrame::new(columns)?;
+        Ok((SasDataset { df, vars }, notes))
+    }
+
     pub fn write_parquet(&self, path: &Path) -> Result<()> {
         let mut file = File::create(path)?;
         let mut df = self.df.clone();

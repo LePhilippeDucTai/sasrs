@@ -82,6 +82,35 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// Traduit un prédicat SQL nu (sans CALCULATED ni agrégats) en expression
+/// Polars. Utilisé par `DELETE FROM ... WHERE` (cf. sql/mod.rs), qui filtre
+/// une frame déjà scannée et normalisée. Réutilise exactement la sémantique
+/// des missings (`x = .` → is_null, etc.) du traducteur interne.
+pub(crate) fn translate_predicate(pred: &SqlExpr) -> Result<Expr> {
+    sql_expr_to_polars(pred, &Ctx::empty())
+}
+
+/// Réplique l'effet eager de `missing::nullify_specials` sur une LazyFrame :
+/// pour chaque colonne Float64, NaN-payload (missings spéciaux) → null, afin
+/// que les comparaisons Polars d'un `WHERE` voient bien les missings.
+pub(crate) fn normalize_specials(mut lf: LazyFrame) -> Result<LazyFrame> {
+    let schema = lf.collect_schema()?;
+    let float_cols: Vec<String> = schema
+        .iter()
+        .filter(|(_, dt)| matches!(dt, DataType::Float64))
+        .map(|(name, _)| name.to_string())
+        .collect();
+    for name in float_cols {
+        lf = lf.with_column(
+            when(col(name.clone()).is_nan())
+                .then(lit(NULL))
+                .otherwise(col(name.clone()))
+                .alias(name.clone()),
+        );
+    }
+    Ok(lf)
+}
+
 pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
     // 1. FROM + joins.
     let mut lf = build_from(query, session)?;
