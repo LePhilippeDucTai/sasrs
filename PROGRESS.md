@@ -147,8 +147,8 @@ Le plus gros déblocage : aujourd'hui tout entre/sort en parquet, impossible de 
 
 ## M15 — bibliothèque de fonctions (~44 → ~150)
 Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par famille.
-- [ ] ⫽ M15.1 — caractère : FIND, FINDC, COUNT, COUNTC, VERIFY, TRANSLATE, REVERSE, REPEAT, PROPCASE, COMPBL, SUBSTRN, CHAR, RANK, BYTE, WHICHC, CATQ (Sonnet, moyen)
-- [ ] ⫽ M15.2 — mathématiques : CEIL, FLOOR, SIGN, SIN/COS/TAN/ARSIN/ARCOS/ATAN/ATAN2, SINH/COSH/TANH, FACT, COMB, PERM, GAMMA, LGAMMA, DIGAMMA, BETA, ROUNDZ, RANGE, LARGEST/SMALLEST, ORDINAL (Sonnet, moyen)
+- [x] M15.1 — caractère : FIND, FINDC, COUNT, COUNTC, VERIFY, TRANSLATE, REVERSE, REPEAT (n+1 copies), PROPCASE, COMPBL, SUBSTRN (pos/len négatifs sans `_ERROR_`), CHAR, RANK (ASCII), BYTE, WHICHC, CATQ ; modificateurs `i`/`t`/`v` pour FIND/FINDC/COUNT/COUNTC. (livré avec M15.2)
+- [x] M15.2 — mathématiques : CEIL, FLOOR, SIGN, SIN/COS/TAN/ARSIN/ARCOS/ATAN/ATAN2, SINH/COSH/TANH, FACT, COMB, PERM, GAMMA/LGAMMA/DIGAMMA/BETA (Lanczos maison, pas de crate), ROUNDZ (half-even), RANGE/LARGEST/SMALLEST/ORDINAL (ignorent les manquants). Domaines invalides → missing + `invalid_data` + `_ERROR_`. GAMMA(0.5)=√π, FACT(10)=3628800, COMB(52,5)=2598960, DIGAMMA(1)=−γ vérifiés. +54 tests (1142 lib + snapshot, 0 `.snap.new`, 0 warning)
 - [ ] ⫽ M15.3 — date/heure : DATEPART, TIMEPART, DATETIME, HMS, DHMS, YRDIF, DATDIF, JULDATE, DATEJUL, HOUR/MINUTE/SECOND, NLDATE, INTFMT, INTSHIFT (Opus, moyen)
 - [ ] M15.4 — probabilités : PROBNORM, PROBT, PROBF, PROBCHI, PROBBETA, PROBGAM, CDF, PDF, QUANTILE, SDF, LOGCDF, PROBBNML, POISSON (Fable, élevé — numérique maison, anticipe `src/stat/`)
 - [ ] M15.5 — aléatoire : RAND, RANUNI, RANNOR, RANEXP, RANBIN, CALL STREAMINIT/RANUNI ; PRNG MT19937 maison, graine figée sous `--deterministic`, fidélité flux SAS documentée comme approximation (Fable, élevé)

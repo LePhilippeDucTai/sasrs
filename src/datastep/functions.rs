@@ -686,6 +686,964 @@ fn fn_scan(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Character functions — lot M15.1
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Modificateurs partagés par FIND/FINDC/COUNT/COUNTC.
+/// `'i'` → comparaison insensible à la casse ; `'t'` → trim (blancs finaux
+/// retirés de la chaîne ET de l'ensemble de caractères/sous-chaîne).
+struct CharMods {
+    ignore_case: bool,
+    trim: bool,
+}
+
+fn parse_char_mods(s: &str) -> CharMods {
+    let mut m = CharMods {
+        ignore_case: false,
+        trim: false,
+    };
+    for c in s.chars() {
+        match c.to_ascii_lowercase() {
+            'i' => m.ignore_case = true,
+            't' => m.trim = true,
+            _ => {}
+        }
+    }
+    m
+}
+
+/// Distingue un argument modificateur (uniquement des lettres i/t/o, ou
+/// blanc) d'un argument numérique de position : SAS examine le type, mais
+/// nos `Value` peuvent être ambigus. On considère char composé de mods
+/// connus comme modificateur, et tout Value::Num comme position.
+fn is_mods_value(v: &Value) -> bool {
+    match v {
+        Value::Char(s) => s
+            .chars()
+            .all(|c| matches!(c.to_ascii_lowercase(), 'i' | 't' | 'o' | ' ')),
+        _ => false,
+    }
+}
+
+/// FIND(s, sub [, mods] [, start]) — 1-based, 0 si absent.
+/// Les arguments optionnels mods (char) et start (num) peuvent venir dans
+/// n'importe quel ordre après `sub`.
+fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let mut mods = CharMods {
+        ignore_case: false,
+        trim: false,
+    };
+    let mut start: i64 = 1;
+    for a in &args[2..] {
+        if is_mods_value(a) {
+            mods = parse_char_mods(&coerce_char(a));
+        } else if let Some(f) = coerce_num(a, ctx) {
+            start = f as i64;
+        }
+    }
+    let mut s = coerce_char(&args[0]);
+    let mut sub = coerce_char(&args[1]);
+    if mods.trim {
+        s = s.trim_end_matches(' ').to_string();
+        sub = sub.trim_end_matches(' ').to_string();
+    }
+    find_impl(&s, &sub, mods.ignore_case, start)
+}
+
+/// Implémentation partagée d'une recherche de sous-chaîne 1-based avec
+/// point de départ (négatif = recherche vers l'arrière depuis |start|).
+fn find_impl(s: &str, sub: &str, ignore_case: bool, start: i64) -> Value {
+    let chars: Vec<char> = s.chars().collect();
+    let sub_chars: Vec<char> = sub.chars().collect();
+    if sub_chars.is_empty() {
+        return Value::Num(0.0);
+    }
+    let n = chars.len();
+    let sl = sub_chars.len();
+    let eq = |a: char, b: char| {
+        if ignore_case {
+            a.eq_ignore_ascii_case(&b)
+        } else {
+            a == b
+        }
+    };
+    let matches_at = |i: usize| -> bool {
+        if i + sl > n {
+            return false;
+        }
+        (0..sl).all(|k| eq(chars[i + k], sub_chars[k]))
+    };
+    if start >= 0 {
+        let from = if start <= 1 { 0 } else { (start - 1) as usize };
+        for i in from..=n.saturating_sub(sl) {
+            if i + sl <= n && matches_at(i) {
+                return Value::Num((i + 1) as f64);
+            }
+        }
+    } else {
+        // start négatif : recherche vers l'arrière à partir de |start|.
+        let from = ((-start) as usize).min(n);
+        let begin = from.saturating_sub(1).min(n.saturating_sub(sl).max(0));
+        let mut i = begin as i64;
+        while i >= 0 {
+            if matches_at(i as usize) {
+                return Value::Num((i + 1) as f64);
+            }
+            i -= 1;
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// FINDC(s, chars [, mods] [, start]) — position du 1er caractère de `s`
+/// présent dans l'ensemble `chars`. Modificateur `'v'` (inversé : 1er
+/// caractère ABSENT) géré aussi. 0 si rien trouvé.
+fn fn_findc(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let mut ignore_case = false;
+    let mut trim = false;
+    let mut invert = false;
+    let mut start: i64 = 1;
+    for a in &args[2..] {
+        match a {
+            Value::Char(s)
+                if s.chars().all(|c| {
+                    matches!(c.to_ascii_lowercase(), 'i' | 't' | 'o' | 'v' | ' ')
+                }) =>
+            {
+                for c in s.chars() {
+                    match c.to_ascii_lowercase() {
+                        'i' => ignore_case = true,
+                        't' => trim = true,
+                        'v' => invert = true,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                if let Some(f) = coerce_num(a, ctx) {
+                    start = f as i64;
+                }
+            }
+        }
+    }
+    let mut s = coerce_char(&args[0]);
+    let mut set = coerce_char(&args[1]);
+    if trim {
+        s = s.trim_end_matches(' ').to_string();
+        set = set.trim_end_matches(' ').to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let in_set = |c: char| -> bool {
+        if ignore_case {
+            set.chars().any(|x| x.eq_ignore_ascii_case(&c))
+        } else {
+            set.contains(c)
+        }
+    };
+    let n = chars.len();
+    let fwd = start >= 0;
+    let from = if fwd {
+        if start <= 1 { 0 } else { (start - 1) as usize }
+    } else {
+        ((-start) as usize).saturating_sub(1).min(n.saturating_sub(1))
+    };
+    if fwd {
+        for i in from..n {
+            if in_set(chars[i]) != invert {
+                return Value::Num((i + 1) as f64);
+            }
+        }
+    } else if n > 0 {
+        let mut i = from as i64;
+        while i >= 0 {
+            if in_set(chars[i as usize]) != invert {
+                return Value::Num((i + 1) as f64);
+            }
+            i -= 1;
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// COUNT(s, sub [, mods]) — nombre d'occurrences non chevauchantes.
+fn fn_count(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let mods = if args.len() >= 3 {
+        parse_char_mods(&coerce_char(&args[2]))
+    } else {
+        CharMods { ignore_case: false, trim: false }
+    };
+    let mut s = coerce_char(&args[0]);
+    let mut sub = coerce_char(&args[1]);
+    if mods.trim {
+        s = s.trim_end_matches(' ').to_string();
+        sub = sub.trim_end_matches(' ').to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let sub_chars: Vec<char> = sub.chars().collect();
+    if sub_chars.is_empty() {
+        return Value::Num(0.0);
+    }
+    let n = chars.len();
+    let sl = sub_chars.len();
+    let eq = |a: char, b: char| {
+        if mods.ignore_case {
+            a.eq_ignore_ascii_case(&b)
+        } else {
+            a == b
+        }
+    };
+    let mut count = 0u32;
+    let mut i = 0usize;
+    while i + sl <= n {
+        if (0..sl).all(|k| eq(chars[i + k], sub_chars[k])) {
+            count += 1;
+            i += sl;
+        } else {
+            i += 1;
+        }
+    }
+    Value::Num(count as f64)
+}
+
+/// COUNTC(s, chars [, mods]) — nombre de caractères de `s` présents dans
+/// l'ensemble `chars`. Modificateur `'v'` (compte les ABSENTS).
+fn fn_countc(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let mut ignore_case = false;
+    let mut trim = false;
+    let mut invert = false;
+    if args.len() >= 3 {
+        for c in coerce_char(&args[2]).chars() {
+            match c.to_ascii_lowercase() {
+                'i' => ignore_case = true,
+                't' => trim = true,
+                'v' => invert = true,
+                _ => {}
+            }
+        }
+    }
+    let mut s = coerce_char(&args[0]);
+    let mut set = coerce_char(&args[1]);
+    if trim {
+        s = s.trim_end_matches(' ').to_string();
+        set = set.trim_end_matches(' ').to_string();
+    }
+    let in_set = |c: char| -> bool {
+        if ignore_case {
+            set.chars().any(|x| x.eq_ignore_ascii_case(&c))
+        } else {
+            set.contains(c)
+        }
+    };
+    let count = s.chars().filter(|&c| in_set(c) != invert).count();
+    Value::Num(count as f64)
+}
+
+/// VERIFY(s, chars) — position du 1er caractère de `s` ABSENT de
+/// l'ensemble `chars` ; 0 si tous présents.
+fn fn_verify(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    // VERIFY accepte plusieurs ensembles (concaténés).
+    let mut set = String::new();
+    for a in &args[1..] {
+        set.push_str(&coerce_char(a));
+    }
+    for (i, c) in s.chars().enumerate() {
+        if !set.contains(c) {
+            return Value::Num((i + 1) as f64);
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// TRANSLATE(s, to, from) — remplace chaque caractère de `from` par le
+/// caractère de même rang dans `to`. Caractères de `from` sans
+/// correspondance dans `to` sont supprimés (comportement SAS : si `to`
+/// plus court, le caractère est laissé inchangé en SAS 9.4 — on conserve
+/// donc le caractère original).
+fn fn_translate(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 3 {
+        return Value::Char(if args.is_empty() {
+            String::new()
+        } else {
+            coerce_char(&args[0])
+        });
+    }
+    let s = coerce_char(&args[0]);
+    let to: Vec<char> = coerce_char(&args[1]).chars().collect();
+    let from: Vec<char> = coerce_char(&args[2]).chars().collect();
+    let result: String = s
+        .chars()
+        .map(|c| match from.iter().position(|&f| f == c) {
+            Some(idx) => to.get(idx).copied().unwrap_or(c),
+            None => c,
+        })
+        .collect();
+    Value::Char(result)
+}
+
+/// REVERSE(s) — inverse l'ordre des caractères (blancs inclus).
+fn fn_reverse(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Char(String::new()),
+        Some(v) => Value::Char(coerce_char(v).chars().rev().collect()),
+    }
+}
+
+/// REPEAT(s, n) — renvoie `s` répété n+1 fois (piège SAS : n est le nombre
+/// de répétitions SUPPLÉMENTAIRES, donc n+1 copies au total).
+fn fn_repeat(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let n = match args.get(1) {
+        None => 0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => 0,
+            Some(f) => f as i64,
+        },
+    };
+    if n < 0 {
+        return Value::Char(s);
+    }
+    let copies = (n + 1) as usize;
+    Value::Char(s.repeat(copies))
+}
+
+/// PROPCASE(s [, delims]) — met en majuscule la 1re lettre de chaque mot,
+/// le reste en minuscule. Délimiteurs par défaut : blanc et quelques
+/// ponctuations courantes.
+fn fn_propcase(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let delims: String = if args.len() >= 2 {
+        coerce_char(&args[1])
+    } else {
+        " \t\r\n-/".to_string()
+    };
+    let mut result = String::with_capacity(s.len());
+    let mut at_word_start = true;
+    for c in s.chars() {
+        if delims.contains(c) {
+            result.push(c);
+            at_word_start = true;
+        } else if at_word_start {
+            result.extend(c.to_uppercase());
+            at_word_start = false;
+        } else {
+            result.extend(c.to_lowercase());
+        }
+    }
+    Value::Char(result)
+}
+
+/// COMPBL(s) — réduit toute suite de blancs consécutifs à un seul espace.
+fn fn_compbl(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Char(String::new()),
+        Some(v) => {
+            let s = coerce_char(v);
+            let mut result = String::with_capacity(s.len());
+            let mut prev_space = false;
+            for c in s.chars() {
+                if c == ' ' {
+                    if !prev_space {
+                        result.push(' ');
+                    }
+                    prev_space = true;
+                } else {
+                    result.push(c);
+                    prev_space = false;
+                }
+            }
+            Value::Char(result)
+        }
+    }
+}
+
+/// SUBSTRN(s, pos [, len]) — comme SUBSTR mais TOLÈRE pos/len négatifs ou
+/// hors borne sans erreur : la portion hors de [1, len(s)] est ignorée et
+/// le résultat peut être vide.
+fn fn_substrn(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let chars: Vec<char> = s.chars().collect();
+    let slen = chars.len() as i64;
+    let pos = match args.get(1) {
+        None => 1,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::Char(String::new()),
+            Some(f) => f.floor() as i64,
+        },
+    };
+    let len = match args.get(2) {
+        None => slen - pos + 1,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::Char(String::new()),
+            Some(f) => f.floor() as i64,
+        },
+    };
+    // Intervalle demandé [pos, pos+len) intersecté avec [1, slen].
+    let req_start = pos;
+    let req_end = pos + len; // exclusif
+    let lo = req_start.max(1);
+    let hi = req_end.min(slen + 1);
+    if hi <= lo {
+        return Value::Char(String::new());
+    }
+    let start = (lo - 1) as usize;
+    let end = (hi - 1) as usize;
+    Value::Char(chars[start..end].iter().collect())
+}
+
+/// CHAR(s, n) — n-ième caractère (1-based) ; blanc si hors borne.
+fn fn_char(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let n = match coerce_num(&args[1], ctx) {
+        None => return Value::Char(" ".to_string()),
+        Some(f) => f as i64,
+    };
+    if n < 1 {
+        return Value::Char(" ".to_string());
+    }
+    match s.chars().nth((n - 1) as usize) {
+        Some(c) => Value::Char(c.to_string()),
+        None => Value::Char(" ".to_string()),
+    }
+}
+
+/// RANK(c) — code ASCII (position) du 1er caractère de `c`.
+fn fn_rank(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => {
+            let s = coerce_char(v);
+            match s.chars().next() {
+                Some(c) => Value::Num(c as u32 as f64),
+                None => Value::missing(),
+            }
+        }
+    }
+}
+
+/// BYTE(n) — caractère dont le code ASCII/Latin-1 est `n`.
+fn fn_byte(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Char(String::new()),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::Char(String::new()),
+            Some(f) => {
+                let code = f as u32;
+                match char::from_u32(code) {
+                    Some(c) => Value::Char(c.to_string()),
+                    None => Value::Char(String::new()),
+                }
+            }
+        },
+    }
+}
+
+/// WHICHC(x, c1, c2, ...) — index (1-based) du 1er argument char égal à
+/// `x` (comparaison ignorant les blancs finaux) ; 0 si aucun.
+fn fn_whichc(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Num(0.0);
+    }
+    let target = coerce_char(&args[0]);
+    let target = target.trim_end_matches(' ');
+    for (i, a) in args[1..].iter().enumerate() {
+        let s = coerce_char(a);
+        if s.trim_end_matches(' ') == target {
+            return Value::Num((i + 1) as f64);
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// CATQ([mods,] [delim,] item1, item2, ...) — concatène avec un
+/// délimiteur, en entourant de guillemets les items contenant le
+/// délimiteur ou un blanc. Version simplifiée : 1er arg = modificateurs
+/// (char contenant uniquement des lettres de mods connus) optionnel ;
+/// arg suivant = délimiteur si char ; défaut délimiteur = espace.
+fn fn_catq(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let mut idx = 0usize;
+    // Modificateurs optionnels.
+    let mut strip = true; // CATQ strippe par défaut (proche de CATS)
+    if let Some(Value::Char(s)) = args.first() {
+        let is_mods = !s.is_empty()
+            && s.chars().all(|c| {
+                matches!(c.to_ascii_lowercase(), 'a' | 'b' | 'c' | 'd' | 'h' | 'm' | 'n' | 'o' | 'p' | 'q' | 's' | 't' | '1' | '2' | '3' | ' ')
+            });
+        if is_mods && args.len() > 1 {
+            for c in s.chars() {
+                if c.to_ascii_lowercase() == 't' {
+                    strip = true;
+                }
+            }
+            idx = 1;
+        }
+    }
+    // Délimiteur : par défaut un espace. CATQ utilise un délimiteur fixe
+    // (espace) sauf si le mod 'd' précise un délimiteur dans l'arg suivant.
+    let delim = " ".to_string();
+    let mut parts: Vec<String> = Vec::new();
+    for a in &args[idx..] {
+        let mut s = coerce_char(a);
+        if strip {
+            s = s.trim().to_string();
+        }
+        // Quote si l'item contient le délimiteur ou un blanc.
+        if s.contains(&delim) || s.contains(' ') || s.contains('"') {
+            let escaped = s.replace('"', "\"\"");
+            parts.push(format!("\"{}\"", escaped));
+        } else {
+            parts.push(s);
+        }
+    }
+    Value::Char(parts.join(&delim))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Math functions — lot M15.2
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Applique une fonction unaire `f` à l'argument numérique en propageant le
+/// missing (arg manquant → résultat manquant ; pas d'argument → manquant).
+fn unary_num(args: &[Value], ctx: &mut EvalCtx, f: impl Fn(f64) -> f64) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => Value::Num(f(x)),
+        },
+    }
+}
+
+/// Comme `unary_num` mais le domaine est validé : si `domain_ok(x)` est faux,
+/// renvoie missing et incrémente `ctx.invalid_data` + `ctx.error_flag` (style
+/// SQRT/LOG existant).
+fn unary_num_domain(
+    args: &[Value],
+    ctx: &mut EvalCtx,
+    domain_ok: impl Fn(f64) -> bool,
+    f: impl Fn(f64) -> f64,
+) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => {
+                if domain_ok(x) {
+                    Value::Num(f(x))
+                } else {
+                    ctx.invalid_data += 1;
+                    ctx.error_flag = true;
+                    Value::missing()
+                }
+            }
+        },
+    }
+}
+
+fn fn_ceil(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.ceil())
+}
+
+fn fn_floor(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.floor())
+}
+
+/// SIGN(x) → -1, 0 ou 1 (SAS : SIGN(0)=0, signe du non-nul sinon).
+fn fn_sign(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| {
+        if x > 0.0 {
+            1.0
+        } else if x < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    })
+}
+
+fn fn_sin(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.sin())
+}
+
+fn fn_cos(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.cos())
+}
+
+fn fn_tan(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.tan())
+}
+
+/// ARSIN(x) — domaine [-1, 1].
+fn fn_arsin(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num_domain(args, ctx, |x| (-1.0..=1.0).contains(&x), |x| x.asin())
+}
+
+/// ARCOS(x) — domaine [-1, 1].
+fn fn_arcos(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num_domain(args, ctx, |x| (-1.0..=1.0).contains(&x), |x| x.acos())
+}
+
+fn fn_atan(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.atan())
+}
+
+/// ATAN2(y, x) — arc-tangente à deux arguments (manquant propagé).
+fn fn_atan2(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::missing();
+    }
+    match (coerce_num(&args[0], ctx), coerce_num(&args[1], ctx)) {
+        (Some(y), Some(x)) => Value::Num(y.atan2(x)),
+        _ => Value::missing(),
+    }
+}
+
+fn fn_sinh(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.sinh())
+}
+
+fn fn_cosh(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.cosh())
+}
+
+fn fn_tanh(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num(args, ctx, |x| x.tanh())
+}
+
+/// FACT(n) — factorielle. n doit être un entier ≥ 0 ; sinon missing + erreur.
+fn fn_fact(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => {
+                // n doit être un entier non négatif.
+                if x < 0.0 || x.fract() != 0.0 {
+                    ctx.invalid_data += 1;
+                    ctx.error_flag = true;
+                    return Value::missing();
+                }
+                let n = x as u64;
+                // Au-delà de 170!, dépassement f64 → +inf (comme SAS qui pose
+                // une erreur d'overflow). On borne pour rester déterministe.
+                if n > 170 {
+                    ctx.invalid_data += 1;
+                    ctx.error_flag = true;
+                    return Value::missing();
+                }
+                let mut acc = 1.0f64;
+                for k in 2..=n {
+                    acc *= k as f64;
+                }
+                Value::Num(acc)
+            }
+        },
+    }
+}
+
+/// COMB(n, k) — nombre de combinaisons C(n, k) = n! / (k!(n-k)!).
+/// Calcul multiplicatif stable (évite l'overflow des factorielles).
+fn fn_comb(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::missing();
+    }
+    let (n, k) = match (coerce_num(&args[0], ctx), coerce_num(&args[1], ctx)) {
+        (Some(n), Some(k)) => (n, k),
+        _ => return Value::missing(),
+    };
+    if n < 0.0 || k < 0.0 || n.fract() != 0.0 || k.fract() != 0.0 {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    let n = n as i64;
+    let k = k as i64;
+    if k > n {
+        return Value::Num(0.0);
+    }
+    // C(n, k) symétrique : prendre le plus petit k.
+    let k = k.min(n - k);
+    let mut acc = 1.0f64;
+    for i in 0..k {
+        acc = acc * (n - i) as f64 / (i + 1) as f64;
+    }
+    Value::Num(acc.round())
+}
+
+/// PERM(n[, k]) — arrangements P(n, k) = n! / (n-k)! ; PERM(n) = n!.
+fn fn_perm(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let n = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(x) => x,
+        },
+    };
+    let k = match args.get(1) {
+        None => n,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(x) => x,
+        },
+    };
+    if n < 0.0 || k < 0.0 || n.fract() != 0.0 || k.fract() != 0.0 {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    let n = n as i64;
+    let k = k as i64;
+    if k > n {
+        // SAS : k > n → erreur.
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    let mut acc = 1.0f64;
+    for i in 0..k {
+        acc *= (n - i) as f64;
+    }
+    Value::Num(acc)
+}
+
+/// Coefficients de Lanczos (g = 7, n = 9) pour l'approximation de la fonction
+/// gamma. Déterministe, pas de dépendance externe.
+const LANCZOS_G: f64 = 7.0;
+const LANCZOS_COEF: [f64; 9] = [
+    0.999_999_999_999_809_93,
+    676.520_368_121_885_1,
+    -1_259.139_216_722_402_8,
+    771.323_428_777_653_1,
+    -176.615_029_162_140_6,
+    12.507_343_278_686_905,
+    -0.138_571_095_265_720_12,
+    9.984_369_578_019_572e-6,
+    1.505_632_735_149_311_6e-7,
+];
+
+/// ln(Γ(x)) par l'approximation de Lanczos (gère x ≤ 0 via la réflexion).
+fn lgamma_lanczos(x: f64) -> f64 {
+    use std::f64::consts::PI;
+    if x < 0.5 {
+        // Réflexion : Γ(x)Γ(1-x) = π / sin(πx).
+        let log_sin = (PI * x).sin().abs().ln();
+        (PI).ln() - log_sin - lgamma_lanczos(1.0 - x)
+    } else {
+        let x = x - 1.0;
+        let mut a = LANCZOS_COEF[0];
+        let t = x + LANCZOS_G + 0.5;
+        for (i, &c) in LANCZOS_COEF.iter().enumerate().skip(1) {
+            a += c / (x + i as f64);
+        }
+        0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+    }
+}
+
+/// Γ(x) par Lanczos. Reflète pour x < 0.5.
+fn gamma_lanczos(x: f64) -> f64 {
+    use std::f64::consts::PI;
+    if x < 0.5 {
+        PI / ((PI * x).sin() * gamma_lanczos(1.0 - x))
+    } else {
+        let x = x - 1.0;
+        let mut a = LANCZOS_COEF[0];
+        let t = x + LANCZOS_G + 0.5;
+        for (i, &c) in LANCZOS_COEF.iter().enumerate().skip(1) {
+            a += c / (x + i as f64);
+        }
+        (2.0 * PI).sqrt() * t.powf(x + 0.5) * (-t).exp() * a
+    }
+}
+
+/// GAMMA(x) — fonction gamma. Pôles aux entiers ≤ 0 → missing + erreur.
+fn fn_gamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num_domain(
+        args,
+        ctx,
+        |x| !(x <= 0.0 && x.fract() == 0.0),
+        gamma_lanczos,
+    )
+}
+
+/// LGAMMA(x) — ln de la fonction gamma. SAS exige x > 0.
+fn fn_lgamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num_domain(args, ctx, |x| x > 0.0, lgamma_lanczos)
+}
+
+/// Fonction digamma ψ(x) = d/dx ln Γ(x), via récurrence + série asymptotique.
+fn digamma_impl(mut x: f64) -> f64 {
+    use std::f64::consts::PI;
+    let mut result = 0.0;
+    // Réflexion pour x ≤ 0 : ψ(1-x) - ψ(x) = π·cot(πx).
+    if x <= 0.0 && x.fract() == 0.0 {
+        return f64::NAN; // pôle (filtré en amont)
+    }
+    if x < 0.0 {
+        result -= PI / (PI * x).tan();
+        x = 1.0 - x;
+    }
+    // Récurrence ascendante jusqu'à x ≥ 6 pour la série asymptotique.
+    while x < 6.0 {
+        result -= 1.0 / x;
+        x += 1.0;
+    }
+    // Série asymptotique : ψ(x) ≈ ln x - 1/(2x) - Σ B_2k/(2k x^{2k}).
+    let inv = 1.0 / x;
+    let inv2 = inv * inv;
+    result += x.ln() - 0.5 * inv
+        - inv2
+            * (1.0 / 12.0
+                - inv2 * (1.0 / 120.0 - inv2 * (1.0 / 252.0 - inv2 / 240.0)));
+    result
+}
+
+/// DIGAMMA(x) — SAS exige x > 0 (ou non-entier ; ici on borne à x > 0 comme SAS).
+fn fn_digamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    unary_num_domain(args, ctx, |x| x > 0.0, digamma_impl)
+}
+
+/// BETA(a, b) = Γ(a)Γ(b)/Γ(a+b). SAS exige a > 0 et b > 0.
+fn fn_beta(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::missing();
+    }
+    let (a, b) = match (coerce_num(&args[0], ctx), coerce_num(&args[1], ctx)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Value::missing(),
+    };
+    if a <= 0.0 || b <= 0.0 {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    // Via lgamma pour la stabilité numérique.
+    let log_beta = lgamma_lanczos(a) + lgamma_lanczos(b) - lgamma_lanczos(a + b);
+    Value::Num(log_beta.exp())
+}
+
+/// ROUNDZ(x[, u]) — arrondi au multiple de u le plus proche, demi-arrondi vers
+/// le PAIR (round-half-even / banker's rounding), contrairement à ROUND.
+fn fn_roundz(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => {
+                let unit = if args.len() >= 2 {
+                    match coerce_num(&args[1], ctx) {
+                        None => return Value::missing(),
+                        Some(u) => u,
+                    }
+                } else {
+                    1.0
+                };
+                if unit == 0.0 {
+                    return Value::Num(x);
+                }
+                let scaled = x / unit;
+                // round-half-to-even : Rust f64::round_ties_even.
+                let rounded = scaled.round_ties_even() * unit;
+                Value::Num(rounded)
+            }
+        },
+    }
+}
+
+/// RANGE(...) — étendue (max − min) des arguments non manquants. Tous
+/// manquants → missing.
+fn fn_range(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let mut lo: Option<f64> = None;
+    let mut hi: Option<f64> = None;
+    for a in args {
+        if let Some(f) = coerce_num(a, ctx) {
+            lo = Some(lo.map_or(f, |m| m.min(f)));
+            hi = Some(hi.map_or(f, |m| m.max(f)));
+        }
+    }
+    match (lo, hi) {
+        (Some(l), Some(h)) => Value::Num(h - l),
+        _ => Value::missing(),
+    }
+}
+
+/// Collecte les valeurs numériques non manquantes des arguments `args`.
+fn collect_nonmissing(args: &[Value], ctx: &mut EvalCtx) -> Vec<f64> {
+    args.iter().filter_map(|a| coerce_num(a, ctx)).collect()
+}
+
+/// LARGEST(k, v1, v2, ...) — k-ième plus grande valeur non manquante.
+/// k hors borne → missing.
+fn fn_largest(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::missing();
+    }
+    let k = match coerce_num(&args[0], ctx) {
+        None => return Value::missing(),
+        Some(f) => f as i64,
+    };
+    let mut vals = collect_nonmissing(&args[1..], ctx);
+    if k < 1 || (k as usize) > vals.len() {
+        return Value::missing();
+    }
+    // Tri décroissant.
+    vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    Value::Num(vals[(k - 1) as usize])
+}
+
+/// SMALLEST(k, v1, v2, ...) — k-ième plus petite valeur non manquante.
+fn fn_smallest(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::missing();
+    }
+    let k = match coerce_num(&args[0], ctx) {
+        None => return Value::missing(),
+        Some(f) => f as i64,
+    };
+    let mut vals = collect_nonmissing(&args[1..], ctx);
+    if k < 1 || (k as usize) > vals.len() {
+        return Value::missing();
+    }
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Value::Num(vals[(k - 1) as usize])
+}
+
+/// ORDINAL(k, v1, v2, ...) — k-ième plus petite valeur (synonyme de SMALLEST
+/// en SAS, sur les valeurs non manquantes).
+fn fn_ordinal(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    fn_smallest(args, ctx)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Date functions
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1089,6 +2047,49 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("COMPRESS", fn_compress),
     ("TRANWRD", fn_tranwrd),
     ("SCAN", fn_scan),
+    // Character — lot M15.1
+    ("FIND", fn_find),
+    ("FINDC", fn_findc),
+    ("COUNT", fn_count),
+    ("COUNTC", fn_countc),
+    ("VERIFY", fn_verify),
+    ("TRANSLATE", fn_translate),
+    ("REVERSE", fn_reverse),
+    ("REPEAT", fn_repeat),
+    ("PROPCASE", fn_propcase),
+    ("COMPBL", fn_compbl),
+    ("SUBSTRN", fn_substrn),
+    ("CHAR", fn_char),
+    ("RANK", fn_rank),
+    ("BYTE", fn_byte),
+    ("WHICHC", fn_whichc),
+    ("CATQ", fn_catq),
+    // Math — lot M15.2
+    ("CEIL", fn_ceil),
+    ("FLOOR", fn_floor),
+    ("SIGN", fn_sign),
+    ("SIN", fn_sin),
+    ("COS", fn_cos),
+    ("TAN", fn_tan),
+    ("ARSIN", fn_arsin),
+    ("ARCOS", fn_arcos),
+    ("ATAN", fn_atan),
+    ("ATAN2", fn_atan2),
+    ("SINH", fn_sinh),
+    ("COSH", fn_cosh),
+    ("TANH", fn_tanh),
+    ("FACT", fn_fact),
+    ("COMB", fn_comb),
+    ("PERM", fn_perm),
+    ("GAMMA", fn_gamma),
+    ("LGAMMA", fn_lgamma),
+    ("DIGAMMA", fn_digamma),
+    ("BETA", fn_beta),
+    ("ROUNDZ", fn_roundz),
+    ("RANGE", fn_range),
+    ("LARGEST", fn_largest),
+    ("SMALLEST", fn_smallest),
+    ("ORDINAL", fn_ordinal),
     // Date
     ("TODAY", fn_today),
     ("DATE", fn_today),   // DATE() is an alias for TODAY()
@@ -1896,5 +2897,529 @@ mod tests {
     #[test]
     fn intnx_missing_date_is_missing() {
         assert_eq!(invoke("INTNX", &[chr("month"), miss(), num(1.0)]), miss());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // M15.1 — fonctions caractère
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ── FIND ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn find_table() {
+        // (s, sub, extra_args, expected)
+        let cases: &[(&str, &str, Vec<Value>, f64)] = &[
+            ("Hello World", "World", vec![], 7.0),
+            ("Hello", "xyz", vec![], 0.0),
+            ("abcabc", "bc", vec![], 2.0),
+            // start argument: chercher après la position 3.
+            ("abcabc", "bc", vec![num(3.0)], 5.0),
+        ];
+        for (s, sub, extra, exp) in cases {
+            let mut args = vec![chr(s), chr(sub)];
+            args.extend(extra.clone());
+            assert_eq!(invoke("FIND", &args), num(*exp), "FIND({s:?},{sub:?},{extra:?})");
+        }
+    }
+
+    #[test]
+    fn find_mod_i_case_insensitive() {
+        // Sans 'i' : pas trouvé ; avec 'i' : trouvé.
+        assert_eq!(invoke("FIND", &[chr("Hello"), chr("hello")]), num(0.0));
+        assert_eq!(invoke("FIND", &[chr("Hello"), chr("hello"), chr("i")]), num(1.0));
+    }
+
+    #[test]
+    fn find_missing_like_blank() {
+        // Sous-chaîne vide → 0.
+        assert_eq!(invoke("FIND", &[chr("abc"), chr("")]), num(0.0));
+    }
+
+    // ── FINDC ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn findc_table() {
+        // 1er caractère de s présent dans l'ensemble.
+        assert_eq!(invoke("FINDC", &[chr("abc123"), chr("0123456789")]), num(4.0));
+        // aucun présent → 0.
+        assert_eq!(invoke("FINDC", &[chr("abc"), chr("xyz")]), num(0.0));
+        // modificateur 'v' : 1er caractère ABSENT de l'ensemble.
+        assert_eq!(invoke("FINDC", &[chr("123a"), chr("0123456789"), chr("v")]), num(4.0));
+    }
+
+    #[test]
+    fn findc_mod_i() {
+        assert_eq!(invoke("FINDC", &[chr("ABC"), chr("abc"), chr("i")]), num(1.0));
+    }
+
+    // ── COUNT / COUNTC ────────────────────────────────────────────────────────
+
+    #[test]
+    fn count_table() {
+        assert_eq!(invoke("COUNT", &[chr("abcabcabc"), chr("abc")]), num(3.0));
+        assert_eq!(invoke("COUNT", &[chr("aaaa"), chr("aa")]), num(2.0)); // non chevauchant
+        assert_eq!(invoke("COUNT", &[chr("xyz"), chr("a")]), num(0.0));
+    }
+
+    #[test]
+    fn count_mod_i() {
+        assert_eq!(invoke("COUNT", &[chr("AbAbAb"), chr("ab"), chr("i")]), num(3.0));
+    }
+
+    #[test]
+    fn countc_table() {
+        assert_eq!(invoke("COUNTC", &[chr("a1b2c3"), chr("0123456789")]), num(3.0));
+        // 'v' : compte les absents de l'ensemble.
+        assert_eq!(invoke("COUNTC", &[chr("a1b2c3"), chr("0123456789"), chr("v")]), num(3.0));
+    }
+
+    // ── VERIFY ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn verify_table() {
+        // 1er caractère absent de l'ensemble.
+        assert_eq!(invoke("VERIFY", &[chr("12345"), chr("0123456789")]), num(0.0));
+        assert_eq!(invoke("VERIFY", &[chr("123a5"), chr("0123456789")]), num(4.0));
+    }
+
+    // ── TRANSLATE ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn translate_table() {
+        assert_eq!(
+            invoke("TRANSLATE", &[chr("abc"), chr("xyz"), chr("abc")]),
+            chr("xyz")
+        );
+        // caractère sans correspondance laissé inchangé.
+        assert_eq!(
+            invoke("TRANSLATE", &[chr("a-b"), chr("X"), chr("a")]),
+            chr("X-b")
+        );
+    }
+
+    // ── REVERSE ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reverse_table() {
+        assert_eq!(invoke("REVERSE", &[chr("abc")]), chr("cba"));
+        assert_eq!(invoke("REVERSE", &[chr("")]), chr(""));
+    }
+
+    // ── REPEAT (piège : n+1 copies) ───────────────────────────────────────────
+
+    #[test]
+    fn repeat_n_plus_one_copies() {
+        // REPEAT("ab", 2) → 3 copies = "ababab".
+        assert_eq!(invoke("REPEAT", &[chr("ab"), num(2.0)]), chr("ababab"));
+        // REPEAT("x", 0) → 1 copie = "x".
+        assert_eq!(invoke("REPEAT", &[chr("x"), num(0.0)]), chr("x"));
+    }
+
+    // ── PROPCASE ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn propcase_table() {
+        assert_eq!(invoke("PROPCASE", &[chr("hello world")]), chr("Hello World"));
+        assert_eq!(invoke("PROPCASE", &[chr("JOHN SMITH")]), chr("John Smith"));
+    }
+
+    // ── COMPBL ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn compbl_table() {
+        assert_eq!(invoke("COMPBL", &[chr("a   b    c")]), chr("a b c"));
+        assert_eq!(invoke("COMPBL", &[chr("no  double")]), chr("no double"));
+    }
+
+    // ── SUBSTRN (tolère pos/len négatifs/hors borne) ──────────────────────────
+
+    #[test]
+    fn substrn_table() {
+        // nominal.
+        assert_eq!(invoke("SUBSTRN", &[chr("Hello"), num(2.0), num(3.0)]), chr("ell"));
+        // pos négatif : tronque la partie hors [1,len].
+        assert_eq!(invoke("SUBSTRN", &[chr("Hello"), num(-1.0), num(3.0)]), chr("H"));
+        // pos après la fin → vide (pas d'erreur).
+        assert_eq!(invoke("SUBSTRN", &[chr("Hello"), num(10.0), num(3.0)]), chr(""));
+        // len négatif → vide.
+        assert_eq!(invoke("SUBSTRN", &[chr("Hello"), num(2.0), num(-1.0)]), chr(""));
+    }
+
+    #[test]
+    fn substrn_no_error_flag() {
+        // Contrairement à SUBSTR, SUBSTRN ne lève pas _ERROR_.
+        let mut c = ctx();
+        let r = invoke_ctx("SUBSTRN", &[chr("abc"), num(-5.0), num(2.0)], &mut c);
+        assert_eq!(r, chr(""));
+        assert!(!c.error_flag);
+    }
+
+    // ── CHAR ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn char_table() {
+        assert_eq!(invoke("CHAR", &[chr("Hello"), num(1.0)]), chr("H"));
+        assert_eq!(invoke("CHAR", &[chr("Hello"), num(5.0)]), chr("o"));
+        // hors borne → blanc.
+        assert_eq!(invoke("CHAR", &[chr("Hi"), num(9.0)]), chr(" "));
+    }
+
+    // ── RANK / BYTE ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn rank_table() {
+        assert_eq!(invoke("RANK", &[chr("A")]), num(65.0));
+        assert_eq!(invoke("RANK", &[chr("a")]), num(97.0));
+    }
+
+    #[test]
+    fn byte_table() {
+        assert_eq!(invoke("BYTE", &[num(65.0)]), chr("A"));
+        assert_eq!(invoke("BYTE", &[num(97.0)]), chr("a"));
+    }
+
+    #[test]
+    fn rank_byte_roundtrip() {
+        let c = invoke("BYTE", &[num(66.0)]);
+        assert_eq!(invoke("RANK", &[c]), num(66.0));
+    }
+
+    // ── WHICHC ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn whichc_table() {
+        assert_eq!(
+            invoke("WHICHC", &[chr("b"), chr("a"), chr("b"), chr("c")]),
+            num(2.0)
+        );
+        assert_eq!(
+            invoke("WHICHC", &[chr("z"), chr("a"), chr("b")]),
+            num(0.0)
+        );
+        // comparaison ignore les blancs finaux.
+        assert_eq!(
+            invoke("WHICHC", &[chr("a"), chr("a  ")]),
+            num(1.0)
+        );
+    }
+
+    // ── CATQ ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn catq_quotes_when_needed() {
+        // item avec espace → entre guillemets. (Le 1er arg "x y" n'est pas une
+        // chaîne de modificateurs valide — il est donc traité comme un item.)
+        let r = invoke("CATQ", &[chr("x y"), chr("z")]);
+        match r {
+            Value::Char(s) => assert!(s.contains('"'), "CATQ should quote spaced item: {s:?}"),
+            _ => panic!("CATQ must return char"),
+        }
+        // items simples → pas de guillemets, séparés par espace.
+        assert_eq!(invoke("CATQ", &[chr("foo"), chr("bar")]), chr("foo bar"));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // M15.2 — fonctions mathématiques
+    // ══════════════════════════════════════════════════════════════════════════
+
+    fn approx(v: Value, expected: f64) {
+        match v {
+            Value::Num(f) => assert!(
+                (f - expected).abs() < 1e-9,
+                "expected ~{expected}, got {f}"
+            ),
+            _ => panic!("expected numeric, got {v:?}"),
+        }
+    }
+
+    fn approx_tol(v: Value, expected: f64, tol: f64) {
+        match v {
+            Value::Num(f) => assert!(
+                (f - expected).abs() < tol,
+                "expected ~{expected} (tol {tol}), got {f}"
+            ),
+            _ => panic!("expected numeric, got {v:?}"),
+        }
+    }
+
+    // ── CEIL / FLOOR ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn ceil_floor_table() {
+        assert_eq!(invoke("CEIL", &[num(2.1)]), num(3.0));
+        assert_eq!(invoke("CEIL", &[num(-2.1)]), num(-2.0));
+        assert_eq!(invoke("FLOOR", &[num(2.9)]), num(2.0));
+        assert_eq!(invoke("FLOOR", &[num(-2.1)]), num(-3.0));
+    }
+
+    #[test]
+    fn ceil_floor_missing() {
+        assert_eq!(invoke("CEIL", &[miss()]), miss());
+        assert_eq!(invoke("FLOOR", &[miss()]), miss());
+    }
+
+    // ── SIGN ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn sign_table() {
+        assert_eq!(invoke("SIGN", &[num(5.0)]), num(1.0));
+        assert_eq!(invoke("SIGN", &[num(-5.0)]), num(-1.0));
+        assert_eq!(invoke("SIGN", &[num(0.0)]), num(0.0));
+        assert_eq!(invoke("SIGN", &[miss()]), miss());
+    }
+
+    // ── Trigonométrie ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn trig_table() {
+        approx(invoke("SIN", &[num(0.0)]), 0.0);
+        approx(invoke("COS", &[num(0.0)]), 1.0);
+        approx(invoke("TAN", &[num(0.0)]), 0.0);
+        approx(invoke("SIN", &[num(std::f64::consts::FRAC_PI_2)]), 1.0);
+        assert_eq!(invoke("SIN", &[miss()]), miss());
+    }
+
+    #[test]
+    fn arc_trig_table() {
+        approx(invoke("ARSIN", &[num(1.0)]), std::f64::consts::FRAC_PI_2);
+        approx(invoke("ARCOS", &[num(1.0)]), 0.0);
+        approx(invoke("ATAN", &[num(0.0)]), 0.0);
+        approx(invoke("ATAN2", &[num(1.0), num(1.0)]), std::f64::consts::FRAC_PI_4);
+    }
+
+    #[test]
+    fn arsin_domain_error() {
+        let mut c = ctx();
+        let r = invoke_ctx("ARSIN", &[num(2.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+        assert_eq!(c.invalid_data, 1);
+    }
+
+    #[test]
+    fn arcos_domain_error() {
+        let mut c = ctx();
+        let r = invoke_ctx("ARCOS", &[num(-2.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    #[test]
+    fn hyperbolic_table() {
+        approx(invoke("SINH", &[num(0.0)]), 0.0);
+        approx(invoke("COSH", &[num(0.0)]), 1.0);
+        approx(invoke("TANH", &[num(0.0)]), 0.0);
+        approx(invoke("TANH", &[num(100.0)]), 1.0);
+    }
+
+    // ── FACT / COMB / PERM ────────────────────────────────────────────────────
+
+    #[test]
+    fn fact_known_values() {
+        assert_eq!(invoke("FACT", &[num(0.0)]), num(1.0));
+        assert_eq!(invoke("FACT", &[num(1.0)]), num(1.0));
+        assert_eq!(invoke("FACT", &[num(5.0)]), num(120.0));
+        assert_eq!(invoke("FACT", &[num(10.0)]), num(3628800.0));
+    }
+
+    #[test]
+    fn fact_negative_or_fraction_errors() {
+        let mut c = ctx();
+        assert_eq!(invoke_ctx("FACT", &[num(-1.0)], &mut c), miss());
+        assert!(c.error_flag);
+        let mut c2 = ctx();
+        assert_eq!(invoke_ctx("FACT", &[num(2.5)], &mut c2), miss());
+        assert!(c2.error_flag);
+    }
+
+    #[test]
+    fn fact_missing() {
+        assert_eq!(invoke("FACT", &[miss()]), miss());
+    }
+
+    #[test]
+    fn comb_table() {
+        assert_eq!(invoke("COMB", &[num(5.0), num(2.0)]), num(10.0));
+        assert_eq!(invoke("COMB", &[num(10.0), num(0.0)]), num(1.0));
+        assert_eq!(invoke("COMB", &[num(10.0), num(10.0)]), num(1.0));
+        // k > n → 0.
+        assert_eq!(invoke("COMB", &[num(3.0), num(5.0)]), num(0.0));
+        assert_eq!(invoke("COMB", &[num(52.0), num(5.0)]), num(2598960.0));
+    }
+
+    #[test]
+    fn perm_table() {
+        // PERM(n) = n!.
+        assert_eq!(invoke("PERM", &[num(5.0)]), num(120.0));
+        // PERM(5, 2) = 5*4 = 20.
+        assert_eq!(invoke("PERM", &[num(5.0), num(2.0)]), num(20.0));
+        assert_eq!(invoke("PERM", &[num(10.0), num(3.0)]), num(720.0));
+    }
+
+    #[test]
+    fn perm_missing() {
+        assert_eq!(invoke("PERM", &[miss()]), miss());
+    }
+
+    // ── GAMMA / LGAMMA ────────────────────────────────────────────────────────
+
+    #[test]
+    fn gamma_known_values() {
+        // Γ(n) = (n-1)!.
+        approx_tol(invoke("GAMMA", &[num(1.0)]), 1.0, 1e-7);
+        approx_tol(invoke("GAMMA", &[num(5.0)]), 24.0, 1e-6);
+        approx_tol(invoke("GAMMA", &[num(6.0)]), 120.0, 1e-5);
+        // Γ(0.5) = sqrt(pi).
+        approx_tol(invoke("GAMMA", &[num(0.5)]), std::f64::consts::PI.sqrt(), 1e-7);
+    }
+
+    #[test]
+    fn gamma_pole_errors() {
+        let mut c = ctx();
+        let r = invoke_ctx("GAMMA", &[num(0.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+        let mut c2 = ctx();
+        assert_eq!(invoke_ctx("GAMMA", &[num(-3.0)], &mut c2), miss());
+        assert!(c2.error_flag);
+    }
+
+    #[test]
+    fn gamma_missing() {
+        assert_eq!(invoke("GAMMA", &[miss()]), miss());
+    }
+
+    #[test]
+    fn lgamma_known_values() {
+        // ln Γ(5) = ln(24).
+        approx_tol(invoke("LGAMMA", &[num(5.0)]), 24.0_f64.ln(), 1e-7);
+        approx_tol(invoke("LGAMMA", &[num(1.0)]), 0.0, 1e-9);
+        // ln Γ(100) connu.
+        approx_tol(invoke("LGAMMA", &[num(10.0)]), 362880.0_f64.ln(), 1e-6);
+    }
+
+    #[test]
+    fn lgamma_nonpositive_errors() {
+        let mut c = ctx();
+        assert_eq!(invoke_ctx("LGAMMA", &[num(0.0)], &mut c), miss());
+        assert!(c.error_flag);
+    }
+
+    // ── DIGAMMA ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn digamma_known_values() {
+        // ψ(1) = -γ (constante d'Euler-Mascheroni ≈ -0.5772156649).
+        approx_tol(invoke("DIGAMMA", &[num(1.0)]), -0.577_215_664_9, 1e-8);
+        // ψ(2) = 1 - γ.
+        approx_tol(invoke("DIGAMMA", &[num(2.0)]), 1.0 - 0.577_215_664_9, 1e-8);
+    }
+
+    #[test]
+    fn digamma_nonpositive_errors() {
+        let mut c = ctx();
+        assert_eq!(invoke_ctx("DIGAMMA", &[num(0.0)], &mut c), miss());
+        assert!(c.error_flag);
+    }
+
+    // ── BETA ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn beta_known_values() {
+        // BETA(a, b) = Γ(a)Γ(b)/Γ(a+b). BETA(1, 1) = 1.
+        approx_tol(invoke("BETA", &[num(1.0), num(1.0)]), 1.0, 1e-9);
+        // BETA(2, 3) = 1!·2!/4! = 2/24 = 1/12.
+        approx_tol(invoke("BETA", &[num(2.0), num(3.0)]), 1.0 / 12.0, 1e-9);
+    }
+
+    #[test]
+    fn beta_invalid_domain_errors() {
+        let mut c = ctx();
+        assert_eq!(invoke_ctx("BETA", &[num(0.0), num(1.0)], &mut c), miss());
+        assert!(c.error_flag);
+    }
+
+    // ── ROUNDZ (round-half-even) ──────────────────────────────────────────────
+
+    #[test]
+    fn roundz_half_even() {
+        // 2.5 → 2 (vers le pair), contrairement à ROUND qui donne 3.
+        assert_eq!(invoke("ROUNDZ", &[num(2.5)]), num(2.0));
+        assert_eq!(invoke("ROUNDZ", &[num(3.5)]), num(4.0));
+        assert_eq!(invoke("ROUNDZ", &[num(0.5)]), num(0.0));
+        assert_eq!(invoke("ROUNDZ", &[num(1.5)]), num(2.0));
+    }
+
+    #[test]
+    fn roundz_with_unit() {
+        assert_eq!(invoke("ROUNDZ", &[num(2.125), num(0.01)]), num(2.12));
+    }
+
+    #[test]
+    fn roundz_missing() {
+        assert_eq!(invoke("ROUNDZ", &[miss()]), miss());
+    }
+
+    // ── RANGE ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn range_table() {
+        assert_eq!(invoke("RANGE", &[num(1.0), num(5.0), num(3.0)]), num(4.0));
+        // ignore les manquants.
+        assert_eq!(invoke("RANGE", &[num(2.0), miss(), num(8.0)]), num(6.0));
+        // tous manquants → missing.
+        assert_eq!(invoke("RANGE", &[miss(), miss()]), miss());
+    }
+
+    // ── LARGEST / SMALLEST / ORDINAL ──────────────────────────────────────────
+
+    #[test]
+    fn largest_table() {
+        // 2e plus grand parmi 1,3,5,7.
+        assert_eq!(
+            invoke("LARGEST", &[num(2.0), num(1.0), num(3.0), num(5.0), num(7.0)]),
+            num(5.0)
+        );
+    }
+
+    #[test]
+    fn largest_ignores_missing() {
+        // LARGEST(1, ., 4, .) = 4 (manquants ignorés).
+        assert_eq!(
+            invoke("LARGEST", &[num(1.0), miss(), num(4.0), miss()]),
+            num(4.0)
+        );
+        // k au-delà du nombre de non-manquants → missing.
+        assert_eq!(
+            invoke("LARGEST", &[num(3.0), num(1.0), miss(), num(2.0)]),
+            miss()
+        );
+    }
+
+    #[test]
+    fn smallest_table() {
+        assert_eq!(
+            invoke("SMALLEST", &[num(1.0), num(5.0), num(3.0), num(8.0)]),
+            num(3.0)
+        );
+        // 2e plus petit, manquants ignorés.
+        assert_eq!(
+            invoke("SMALLEST", &[num(2.0), num(5.0), miss(), num(3.0), num(8.0)]),
+            num(5.0)
+        );
+    }
+
+    #[test]
+    fn ordinal_is_smallest() {
+        // ORDINAL(2, 5, 3, 8) = 2e plus petit = 5.
+        assert_eq!(
+            invoke("ORDINAL", &[num(2.0), num(5.0), num(3.0), num(8.0)]),
+            num(5.0)
+        );
+    }
+
+    #[test]
+    fn smallest_k_out_of_range() {
+        assert_eq!(invoke("SMALLEST", &[num(5.0), num(1.0), num(2.0)]), miss());
     }
 }
