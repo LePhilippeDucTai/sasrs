@@ -1,0 +1,51 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m3/by_first_last.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sort data=d.class out=work.sorted;
+3       by sex;
+4     run;
+NOTE: PROCEDURE SORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     data work.counts;
+6       set work.sorted;
+7       by sex;
+8       if first.sex then n = 0;
+9       n + 1;
+10      if last.sex;
+11      keep sex n;
+12    run;
+NOTE: There were 19 observations read from the data set WORK.SORTED.
+NOTE: The data set WORK.COUNTS has 2 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    title 'Number of pupils by sex';
+
+14    proc print data=work.counts;
+15    run;
+NOTE: There were 2 observations read from the data set WORK.COUNTS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                    Number of pupils by sex
+
+                                        Obs    sex     n
+
+                                          1    F       9
+                                          2    M      10
+
+==== EXIT 0 ====

@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M3**
+Jalon courant : **M4**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -38,7 +38,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/procs/sort.rs` (collation missings, NODUPKEY, DESCENDING, OUT=)
 - [x] SET avec BY (interclassement), FIRST./LAST.
 - [x] MERGE avec BY (match-merge exact, IN=, détection désordre) — tests contre sorties SAS calculées à la main
-- [ ] Fixtures m3/ + snapshots
+- [x] Fixtures m3/ + snapshots
 
 ## M4 — formats
 - [ ] `src/formats/mod.rs` + `builtin.rs` (formats puis informats) + tests table-driven
