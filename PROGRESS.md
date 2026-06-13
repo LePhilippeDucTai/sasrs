@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M12** (extensions macro : `%do %while`/`%until` + quoting) puis **M13** (branchement S3 réel). M1–M11 terminés.
+Jalon courant : **M13** (branchement S3 réel). M1–M12 terminés.
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -113,7 +113,7 @@ m1–m11 octet-identiques (le nouveau comportement ne s'active que sur les nouve
 
 - [x] M12.1 — `%do %while(cond)` / `%do %until(cond)` : boucles conditionnelles, cond résolue (`&refs`) puis `macro_eval` à chaque tour. `%while` teste AVANT (0 itération possible), `%until` APRÈS (≥1). Garde `MAX_LOOP_ITERS` réutilisée (pas de hang/panic). +5 tests (972 total, 0 `.snap.new`, 0 warning).
 - [x] M12.2 — quoting : fonctions macro `%upcase`/`%lowcase`/`%substr`/`%scan`/`%index`/`%length` (ajoutées, texte brut) ; `%superq(nom)` (valeur masquée, `&`/`%` non résolus) ; `%bquote`/`%nrbquote` (résolvent puis masquent ; nrbquote masque aussi `&`/`%` ; gère quotes/parens non appariées) ; variantes masquées `%qsysfunc`/`%qupcase`/`%qlowcase`/`%qsubstr`/`%qscan`. Réutilise le schéma de sentinelles de `%str`. Différés : `%unquote`/`%cmpres`/`%sysevalf`/`%symexist`. (Note : `%length("")`→0 vs SAS 1, documenté.) +17 tests (989 total, 0 `.snap.new`, 0 warning).
-- [ ] Fixtures `tests/fixtures/m12/` + snapshots (vérifiés main) ; DoD : cargo test vert.
+- [x] Fixtures `tests/fixtures/m12/` (do_while, quoting) + snapshots **vérifiés main** : `%do %while` génère x=1..4 ; `%qupcase`=ABCDEF, `%substr`=bcd, `%scan`=b, `%length`=6. `cargo test` vert (989 + snapshots). **M12 TERMINÉ.**
 
 ## M13 — branchement S3 réel
 Le stub `S3Library` (feature `s3`, M8) compile mais n'est pas branché. Objectif : LIBNAME

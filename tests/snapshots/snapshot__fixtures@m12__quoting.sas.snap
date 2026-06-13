@@ -1,0 +1,37 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m12/quoting.sas
+---
+==== LOG ====
+
+1     data q;
+2       up      = "ABCDEF";
+3       part    = "bcd";
+4       scanned = "b";
+5       len     = 6;
+6     run;
+NOTE: The data set WORK.Q has 1 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Macro string and quoting functions';
+
+8     proc print data=q;
+9       var up part scanned len;
+10    run;
+NOTE: There were 1 observations read from the data set WORK.Q.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                               Macro string and quoting functions
+
+                            Obs    up        part    scanned    len
+
+                              1    ABCDEF    bcd     b            6
+
+==== EXIT 0 ====
