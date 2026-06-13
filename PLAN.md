@@ -109,7 +109,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/procs/append.rs` | M7 | **Sonnet** | moyen | règles FORCE |
 | `src/procs/datasets.rs` | M7 | **Sonnet** | moyen | run-group, delete/change ; ajouter `rename` au trait LibraryProvider |
 | Préprocesseur macro (`preprocess.rs`) : %let, &var, %macro/%mend, %if/%do, CALL SYMPUT | M8 | **Fable** | élevé | la couture existe ; commencer par un spike %let derrière un feature flag |
-| `S3Library` derrière feature `s3` | M8 | **Opus** | moyen | même trait, scan/sink cloud Polars |
+| `S3Library` derrière feature `s3` | M8 | ✅ | moyen | même trait `LibraryProvider`, scan parquet via URI `s3://` ; non branché ; cloud réel = features Polars `cloud`/`aws` (suite) |
 | Fast-path vectorisé des steps simples (SET+assign+IF → LazyFrame) | M8 | **Fable** | élevé | optionnel, derrière la même interface StepProgram |
 
 ### Conseils d'orchestration

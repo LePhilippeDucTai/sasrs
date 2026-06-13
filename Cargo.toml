@@ -11,6 +11,11 @@ path = "src/main.rs"
 # Spike M8 : processeur macro %let/&var derrière la couture preprocess::TextStage.
 # OFF par défaut ; activer avec --features macros.
 macros = []
+# Stub M8 : backend de stockage S3 (trait LibraryProvider sur scan parquet cloud).
+# OFF par défaut, NON branché dans LibraryManager/LIBNAME ; activer avec
+# --features s3. L'I/O cloud réelle demandera d'activer plus tard les features
+# Polars `cloud`/`aws` (suite). Voir src/library.rs (module s3).
+s3 = []
 
 [dependencies]
 polars = { version = "0.46", features = [

@@ -174,6 +174,95 @@ impl LibraryManager {
     }
 }
 
+/// Backend de stockage S3 (ou compatible S3) derrière la feature `s3`.
+///
+/// STATUT (spike M8) : ce module pose la couture `LibraryProvider` au-dessus
+/// d'un stockage objet et n'est **délibérément PAS branché** dans
+/// `LibraryManager`/`LIBNAME` — il prouve que le même trait suffit à brancher
+/// le cloud plus tard. Une table `t` d'un libref lié au bucket `b`/préfixe `p`
+/// est mappée sur l'URI `s3://b/p/t.parquet`, lue paresseusement par le scanner
+/// parquet de Polars (chemin identique à `DirLibrary`, seul l'URI change).
+///
+/// L'I/O cloud réelle exige de compiler Polars avec ses features `cloud`/`aws`
+/// (suite non incluse ici, pour ne pas alourdir les dépendances par défaut) :
+/// sans elles, `scan`/`read` résolvent l'URI comme un chemin local et échouent
+/// à l'exécution. Les opérations mutantes (write/delete/rename) ne sont pas
+/// gérées par ce stub orienté lecture et renvoient une erreur runtime claire.
+#[cfg(feature = "s3")]
+pub struct S3Library {
+    bucket: String,
+    prefix: String,
+}
+
+#[cfg(feature = "s3")]
+impl S3Library {
+    pub fn new(bucket: impl Into<String>, prefix: impl Into<String>) -> Self {
+        S3Library {
+            bucket: bucket.into(),
+            prefix: prefix.into(),
+        }
+    }
+
+    /// Construit l'URI `s3://<bucket>/<prefix>/<table>.parquet` (nom de table
+    /// en minuscules, comme `DirLibrary`). Le préfixe vide ou bordé de `/` est
+    /// normalisé pour éviter les doubles barres.
+    fn uri(&self, table: &str) -> String {
+        let prefix = self.prefix.trim_matches('/');
+        let table = table.to_lowercase();
+        if prefix.is_empty() {
+            format!("s3://{}/{table}.parquet", self.bucket)
+        } else {
+            format!("s3://{}/{prefix}/{table}.parquet", self.bucket)
+        }
+    }
+}
+
+#[cfg(feature = "s3")]
+impl LibraryProvider for S3Library {
+    fn list(&self) -> Result<Vec<String>> {
+        Err(SasError::runtime(
+            "Listing tables in an S3 library is not supported by the cloud scan stub.",
+        ))
+    }
+
+    fn exists(&self, _table: &str) -> bool {
+        // Pas de HEAD object dans le stub : on ne peut pas l'affirmer.
+        false
+    }
+
+    fn read(&self, table: &str) -> Result<(SasDataset, Vec<String>)> {
+        // Même contrat que DirLibrary::read : lecture eager puis coercition au
+        // modèle SAS (et notes de conversion) via from_dataframe.
+        let df = self.scan(table)?.collect()?;
+        SasDataset::from_dataframe(df)
+    }
+
+    fn scan(&self, table: &str) -> Result<LazyFrame> {
+        // PathBuf, exactement comme DirLibrary : Polars résout l'URI cloud quand
+        // ses features cloud sont actives, un chemin local sinon.
+        let lf = LazyFrame::scan_parquet(PathBuf::from(self.uri(table)), ScanArgsParquet::default())?;
+        Ok(lf)
+    }
+
+    fn write(&self, _table: &str, _ds: &SasDataset) -> Result<()> {
+        Err(SasError::runtime(
+            "Writing to an S3 library is not supported yet (read-only cloud scan stub).",
+        ))
+    }
+
+    fn delete(&self, _table: &str) -> Result<()> {
+        Err(SasError::runtime(
+            "Deleting from an S3 library is not supported yet (read-only cloud scan stub).",
+        ))
+    }
+
+    fn rename(&self, _old: &str, _new: &str) -> Result<()> {
+        Err(SasError::runtime(
+            "Renaming in an S3 library is not supported yet (read-only cloud scan stub).",
+        ))
+    }
+}
+
 fn validate_libref(libref: &str) -> Result<()> {
     let valid = !libref.is_empty()
         && libref.len() <= 8
@@ -189,5 +278,42 @@ fn validate_libref(libref: &str) -> Result<()> {
             "{} is not a valid SAS name for a libref.",
             libref.to_uppercase()
         )))
+    }
+}
+
+#[cfg(all(test, feature = "s3"))]
+mod s3_tests {
+    use super::*;
+
+    #[test]
+    fn builds_s3_uri_lowercasing_table() {
+        let lib = S3Library::new("my-bucket", "data/sas");
+        assert_eq!(lib.uri("Class"), "s3://my-bucket/data/sas/class.parquet");
+    }
+
+    #[test]
+    fn empty_prefix_has_no_double_slash() {
+        let lib = S3Library::new("my-bucket", "");
+        assert_eq!(lib.uri("CLASS"), "s3://my-bucket/class.parquet");
+    }
+
+    #[test]
+    fn surrounding_slashes_in_prefix_are_trimmed() {
+        let lib = S3Library::new("my-bucket", "/trimmed/");
+        assert_eq!(lib.uri("t"), "s3://my-bucket/trimmed/t.parquet");
+    }
+
+    #[test]
+    fn mutating_ops_return_runtime_errors() {
+        let lib = S3Library::new("b", "p");
+        let ds = SasDataset {
+            df: DataFrame::empty(),
+            vars: Vec::new(),
+        };
+        assert!(lib.write("t", &ds).is_err());
+        assert!(lib.delete("t").is_err());
+        assert!(lib.rename("a", "b").is_err());
+        assert!(lib.list().is_err());
+        assert!(!lib.exists("t"));
     }
 }

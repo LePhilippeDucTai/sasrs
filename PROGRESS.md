@@ -68,6 +68,6 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 
 ## M8 — durcissement
 - [x] Spike macro `%let` derrière feature flag (valider la couture TextStage)
-- [ ] Stub `S3Library` derrière feature `s3` (compile, non branché)
+- [x] Stub `S3Library` derrière feature `s3` (compile, non branché) — trait `LibraryProvider` sur scan parquet via URI `s3://`, mutations renvoient une erreur ; I/O cloud réelle = suite (features Polars `cloud`/`aws`)
 - [ ] Fast-path vectorisé optionnel des steps simples
 - [ ] Revue checklist pièges (PLAN.md §Checklist) sur tout le code
