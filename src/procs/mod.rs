@@ -68,12 +68,25 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = contents::parse(ts)?;
             Ok(ProcAst::Contents(ast))
         }
+        // PROC MEANS / PROC SUMMARY share a parser/executor. PROC SUMMARY is
+        // PROC MEANS with NOPRINT defaulted to true: it suppresses the report
+        // and is normally paired with an OUTPUT statement. (Simplification:
+        // we always force noprint=true for SUMMARY; an explicit PRINT option
+        // on SUMMARY is uncommon and not re-enabled here.)
+        "means" | "summary" => {
+            let mut ast = means::parse(ts)?;
+            if name.eq_ignore_ascii_case("summary") {
+                ast.summary = true;
+                ast.noprint = true;
+            }
+            Ok(ProcAst::Means(ast))
+        }
         // Procs connues du périmètre, pas encore implémentées : consommer
         // le bloc pour rester synchronisé, puis ERROR. Finir d'abord le
         // statement courant (on est au MILIEU du statement PROC : un ident
         // comme `data` dans `proc sort data=x;` serait sinon pris pour une
         // frontière par skip_to_step_boundary).
-        "means" | "summary" | "freq" | "transpose" | "univariate"
+        "freq" | "transpose" | "univariate"
         | "datasets" | "append" | "sql" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
@@ -182,7 +195,7 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["means", "freq", "transpose", "univariate",
+        for proc_name in &["freq", "transpose", "univariate",
                            "datasets", "append", "sql"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);

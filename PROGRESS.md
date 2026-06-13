@@ -48,7 +48,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m4/ + snapshots
 
 ## M5 — procs statistiques
-- [ ] `src/procs/means.rs` (CLASS, _TYPE_/_FREQ_, OUTPUT OUT=)
+- [x] `src/procs/means.rs` (CLASS, _TYPE_/_FREQ_, OUTPUT OUT=)
 - [ ] `src/procs/freq.rs` (1 voie, 2 voies, MISSING)
 - [ ] `src/procs/univariate.rs` (quantiles définition 5)
 - [ ] Fixtures m5/ + snapshots
