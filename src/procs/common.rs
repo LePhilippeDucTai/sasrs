@@ -238,6 +238,97 @@ pub fn t_quantile(p: f64, df: f64) -> f64 {
     }
 }
 
+// ───────────────────────── chi-square survival ─────────────────────────
+//
+// Upper-tail (survival) probability of the chi-square distribution, used by
+// PROC FREQ for the CHISQ statistics. Implemented via the regularized upper
+// incomplete gamma function Q(a, x) = gammq, following Numerical Recipes
+// (series `gser` for x < a+1, continued fraction `gcf` otherwise). Reuses the
+// `ln_gamma` already defined above. Accuracy ~1e-10 on the useful range.
+
+/// Series representation of the lower regularized incomplete gamma P(a, x),
+/// valid (convergent) for x < a + 1.
+fn gser(a: f64, x: f64) -> f64 {
+    const ITMAX: usize = 300;
+    const EPS: f64 = 3.0e-15;
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let gln = ln_gamma(a);
+    let mut ap = a;
+    let mut sum = 1.0 / a;
+    let mut del = sum;
+    for _ in 0..ITMAX {
+        ap += 1.0;
+        del *= x / ap;
+        sum += del;
+        if del.abs() < sum.abs() * EPS {
+            break;
+        }
+    }
+    sum * (-x + a * x.ln() - gln).exp()
+}
+
+/// Continued-fraction representation of the upper regularized incomplete gamma
+/// Q(a, x) (Lentz's algorithm), valid (convergent) for x >= a + 1.
+fn gcf(a: f64, x: f64) -> f64 {
+    const ITMAX: usize = 300;
+    const EPS: f64 = 3.0e-15;
+    const FPMIN: f64 = 1.0e-300;
+    let gln = ln_gamma(a);
+    let mut b = x + 1.0 - a;
+    let mut c = 1.0 / FPMIN;
+    let mut d = 1.0 / b;
+    let mut h = d;
+    for i in 1..=ITMAX {
+        let an = -(i as f64) * (i as f64 - a);
+        b += 2.0;
+        d = an * d + b;
+        if d.abs() < FPMIN {
+            d = FPMIN;
+        }
+        c = b + an / c;
+        if c.abs() < FPMIN {
+            c = FPMIN;
+        }
+        d = 1.0 / d;
+        let del = d * c;
+        h *= del;
+        if (del - 1.0).abs() < EPS {
+            break;
+        }
+    }
+    (-x + a * x.ln() - gln).exp() * h
+}
+
+/// Regularized upper incomplete gamma function Q(a, x) = 1 - P(a, x).
+fn gammq(a: f64, x: f64) -> f64 {
+    if x < 0.0 || a <= 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 1.0;
+    }
+    if x < a + 1.0 {
+        1.0 - gser(a, x)
+    } else {
+        gcf(a, x)
+    }
+}
+
+/// Upper-tail (survival) probability of the chi-square distribution with `df`
+/// degrees of freedom evaluated at `x`: P(X²_df > x) = Q(df/2, x/2). Returns
+/// 1.0 at x <= 0 and ~0 for large x. Accuracy ~1e-10.
+pub(crate) fn chisq_sf(x: f64, df: f64) -> f64 {
+    if df <= 0.0 {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 1.0;
+    }
+    gammq(df / 2.0, x / 2.0)
+}
+
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
 /// and the variable name (display, original case).
 pub struct ByCol {

@@ -40,7 +40,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{chisq_sf, decode_column};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -57,6 +57,14 @@ pub struct TableRequest {
     pub vars: Vec<String>,
     pub missing: bool,
     pub out: Option<DatasetRef>,
+    /// Display-suppression options (parsed AND honored).
+    pub nofreq: bool,
+    pub nopercent: bool,
+    pub norow: bool,
+    pub nocol: bool,
+    pub nocum: bool,
+    /// CHISQ statistics request (two-way only).
+    pub chisq: bool,
 }
 
 fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
@@ -176,6 +184,12 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
     // Options after `/`.
     let mut missing = false;
     let mut out: Option<DatasetRef> = None;
+    let mut nofreq = false;
+    let mut nopercent = false;
+    let mut norow = false;
+    let mut nocol = false;
+    let mut nocum = false;
+    let mut chisq = false;
     if ts.peek().kind == TokenKind::Slash {
         ts.next();
         loop {
@@ -190,14 +204,24 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
                 ts.next();
                 expect_eq(ts, "OUT")?;
                 out = Some(ts.parse_dataset_ref()?);
-            } else if ts.peek().is_kw("nopercent")
-                || ts.peek().is_kw("norow")
-                || ts.peek().is_kw("nocol")
-                || ts.peek().is_kw("nofreq")
-                || ts.peek().is_kw("nocum")
-            {
-                // Display options we accept and ignore.
+            } else if ts.peek().is_kw("nopercent") {
                 ts.next();
+                nopercent = true;
+            } else if ts.peek().is_kw("norow") {
+                ts.next();
+                norow = true;
+            } else if ts.peek().is_kw("nocol") {
+                ts.next();
+                nocol = true;
+            } else if ts.peek().is_kw("nofreq") {
+                ts.next();
+                nofreq = true;
+            } else if ts.peek().is_kw("nocum") {
+                ts.next();
+                nocum = true;
+            } else if ts.peek().is_kw("chisq") {
+                ts.next();
+                chisq = true;
             } else if let Some(name) = ts.peek().ident().map(str::to_string) {
                 // Unknown option: ignore leniently (skip the token, and any
                 // `=value` that follows).
@@ -235,6 +259,12 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
             missing,
             // OUT= only applies (and is only valid) for a single spec.
             out: if i == 0 && n == 1 { out.clone() } else { None },
+            nofreq,
+            nopercent,
+            norow,
+            nocol,
+            nocum,
+            chisq,
         })
         .collect())
 }
@@ -377,25 +407,38 @@ fn one_way(
     // `cats`, otherwise they are excluded (so denom = non-missing count).
     let denom: usize = cats.iter().map(|c| c.freq).sum();
 
-    // Listing table.
-    let headers = vec![
-        var_name.clone(),
-        "Frequency".to_string(),
-        "Percent".to_string(),
-        "Cumulative Frequency".to_string(),
-        "Cumulative Percent".to_string(),
-    ];
-    let aligns = vec![
-        if ds.vars[col_idx].ty == VarType::Num {
-            Align::Right
-        } else {
-            Align::Left
-        },
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
+    // Listing table. Display options suppress whole columns:
+    //   NOFREQ    -> drop Frequency
+    //   NOPERCENT -> drop Percent (and Cumulative Percent)
+    //   NOCUM     -> drop Cumulative Frequency and Cumulative Percent
+    // The default (no options) keeps all five columns exactly as before.
+    let show_freq = !req.nofreq;
+    let show_pct = !req.nopercent;
+    let show_cum_freq = !req.nocum;
+    let show_cum_pct = !req.nocum && !req.nopercent;
+
+    let mut headers = vec![var_name.clone()];
+    let mut aligns = vec![if ds.vars[col_idx].ty == VarType::Num {
+        Align::Right
+    } else {
+        Align::Left
+    }];
+    if show_freq {
+        headers.push("Frequency".to_string());
+        aligns.push(Align::Right);
+    }
+    if show_pct {
+        headers.push("Percent".to_string());
+        aligns.push(Align::Right);
+    }
+    if show_cum_freq {
+        headers.push("Cumulative Frequency".to_string());
+        aligns.push(Align::Right);
+    }
+    if show_cum_pct {
+        headers.push("Cumulative Percent".to_string());
+        aligns.push(Align::Right);
+    }
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(cats.len());
     let mut cum_freq = 0usize;
@@ -411,13 +454,20 @@ fn one_way(
         } else {
             0.0
         };
-        rows.push(vec![
-            category_label(&c.value),
-            format!("{}", c.freq),
-            fmt_pct(pct),
-            format!("{cum_freq}"),
-            fmt_pct(cum_pct),
-        ]);
+        let mut row = vec![category_label(&c.value)];
+        if show_freq {
+            row.push(format!("{}", c.freq));
+        }
+        if show_pct {
+            row.push(fmt_pct(pct));
+        }
+        if show_cum_freq {
+            row.push(format!("{cum_freq}"));
+        }
+        if show_cum_pct {
+            row.push(fmt_pct(cum_pct));
+        }
+        rows.push(row);
     }
 
     session.listing.write_table(&headers, &aligns, &rows);
@@ -571,15 +621,40 @@ fn two_way(
         .collect();
     let grand: usize = row_tot.iter().sum();
 
-    // A legend line so the four stacked numbers per cell are interpretable.
+    // Which stacked per-cell lines to show. Display options drop a line:
+    //   NOFREQ    -> Frequency, NOPERCENT -> Percent,
+    //   NOROW     -> Row Pct,   NOCOL     -> Col Pct.
+    // Default (no options) keeps all four, exactly as before.
+    let show_freq = !req.nofreq;
+    let show_pct = !req.nopercent;
+    let show_rowp = !req.norow;
+    let show_colp = !req.nocol;
+
+    // Legend reflecting the lines actually shown.
+    let mut legend_parts: Vec<&str> = Vec::new();
+    if show_freq {
+        legend_parts.push("Frequency");
+    }
+    if show_pct {
+        legend_parts.push("Percent");
+    }
+    if show_rowp {
+        legend_parts.push("Row Pct");
+    }
+    if show_colp {
+        legend_parts.push("Col Pct");
+    }
+
     session
         .listing
         .write_line(&format!("Table of {row_name} by {col_name}"));
     session.listing.blank();
-    session
-        .listing
-        .write_line("Cell contents: Frequency / Percent / Row Pct / Col Pct");
-    session.listing.blank();
+    if !legend_parts.is_empty() {
+        session
+            .listing
+            .write_line(&format!("Cell contents: {}", legend_parts.join(" / ")));
+        session.listing.blank();
+    }
 
     // Header: row-var name, one column per col value, then Total.
     let mut headers = vec![row_name.clone()];
@@ -604,11 +679,33 @@ fn two_way(
         }
     };
 
+    // The row-value label rides on the first physical line that is shown.
+    let label_on_freq = show_freq;
+    let label_on_pct = !show_freq && show_pct;
+    let label_on_rowp = !show_freq && !show_pct && show_rowp;
+    let label_on_colp = !show_freq && !show_pct && !show_rowp && show_colp;
+
     for r in 0..nr {
-        let mut line_freq = vec![category_label(&row_vals[r])];
-        let mut line_pct = vec![String::new()];
-        let mut line_rowp = vec![String::new()];
-        let mut line_colp = vec![String::new()];
+        let mut line_freq = vec![if label_on_freq {
+            category_label(&row_vals[r])
+        } else {
+            String::new()
+        }];
+        let mut line_pct = vec![if label_on_pct {
+            category_label(&row_vals[r])
+        } else {
+            String::new()
+        }];
+        let mut line_rowp = vec![if label_on_rowp {
+            category_label(&row_vals[r])
+        } else {
+            String::new()
+        }];
+        let mut line_colp = vec![if label_on_colp {
+            category_label(&row_vals[r])
+        } else {
+            String::new()
+        }];
         for c in 0..nc {
             let f = freq[r][c];
             line_freq.push(format!("{f}"));
@@ -621,10 +718,18 @@ fn two_way(
         line_pct.push(pct_of(row_tot[r], grand));
         line_rowp.push(String::new());
         line_colp.push(String::new());
-        rows.push(line_freq);
-        rows.push(line_pct);
-        rows.push(line_rowp);
-        rows.push(line_colp);
+        if show_freq {
+            rows.push(line_freq);
+        }
+        if show_pct {
+            rows.push(line_pct);
+        }
+        if show_rowp {
+            rows.push(line_rowp);
+        }
+        if show_colp {
+            rows.push(line_colp);
+        }
     }
 
     // Total row (column totals + grand total): Frequency + Percent only.
@@ -636,12 +741,116 @@ fn two_way(
     }
     tot_freq.push(format!("{grand}"));
     tot_pct.push(pct_of(grand, grand));
-    rows.push(tot_freq);
-    rows.push(tot_pct);
+    if show_freq {
+        rows.push(tot_freq);
+    }
+    if show_pct {
+        // When the Frequency line is suppressed the "Total" label needs to
+        // land on the percent line so the margin row stays identifiable.
+        if !show_freq {
+            tot_pct[0] = "Total".to_string();
+        }
+        rows.push(tot_pct);
+    }
 
     session.listing.write_table(&headers, &aligns, &rows);
 
+    // CHISQ statistics (two-way only), printed after the crosstab.
+    if req.chisq {
+        chisq_block(session, &row_name, &col_name, &freq, &row_tot, &col_tot, grand);
+    }
+
     Ok(())
+}
+
+/// Format a p-value SAS-style: `<.0001`, else 4 decimals (mirrors corr.rs).
+fn fmt_chisq_p(p: f64) -> String {
+    if p < 0.0001 {
+        "<.0001".to_string()
+    } else {
+        format!("{p:.4}")
+    }
+}
+
+/// Print the "Statistics for Table of <row> by <col>" CHISQ block for a
+/// two-way table: Pearson chi-square and the likelihood-ratio chi-square,
+/// each with DF and an upper-tail p-value. Degenerate tables (grand total 0,
+/// any zero margin, or DF <= 0) are skipped gracefully with a note.
+fn chisq_block(
+    session: &mut Session,
+    row_name: &str,
+    col_name: &str,
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) {
+    session.listing.blank();
+    session
+        .listing
+        .write_line(&format!("Statistics for Table of {row_name} by {col_name}"));
+    session.listing.blank();
+
+    let nr = row_tot.len();
+    let nc = col_tot.len();
+    let df = (nr.saturating_sub(1)) * (nc.saturating_sub(1));
+
+    // Guard against degenerate tables: no expected counts are defined.
+    if grand == 0
+        || df == 0
+        || row_tot.contains(&0)
+        || col_tot.contains(&0)
+    {
+        session
+            .listing
+            .write_line("Chi-Square statistics are not computable for this table.");
+        return;
+    }
+
+    let g = grand as f64;
+    let mut pearson = 0.0_f64;
+    let mut lratio = 0.0_f64;
+    for r in 0..nr {
+        for c in 0..nc {
+            let e = (row_tot[r] as f64) * (col_tot[c] as f64) / g;
+            let n = freq[r][c] as f64;
+            if e > 0.0 {
+                let d = n - e;
+                pearson += d * d / e;
+            }
+            if n > 0.0 && e > 0.0 {
+                lratio += n * (n / e).ln();
+            }
+        }
+    }
+    lratio *= 2.0;
+
+    let df_f = df as f64;
+    let p_pearson = chisq_sf(pearson, df_f);
+    let p_lratio = chisq_sf(lratio, df_f);
+
+    let headers = vec![
+        "Statistic".to_string(),
+        "DF".to_string(),
+        "Value".to_string(),
+        "Prob".to_string(),
+    ];
+    let aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
+    let rows = vec![
+        vec![
+            "Chi-Square".to_string(),
+            format!("{df}"),
+            format!("{pearson:.4}"),
+            fmt_chisq_p(p_pearson),
+        ],
+        vec![
+            "Likelihood Ratio Chi-Square".to_string(),
+            format!("{df}"),
+            format!("{lratio:.4}"),
+            fmt_chisq_p(p_lratio),
+        ],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
 }
 
 fn num_var_meta(name: &str) -> VarMeta {
@@ -693,6 +902,21 @@ mod tests {
             length: 4,
             format: None,
             label: None,
+        }
+    }
+
+    /// Build a TableRequest with all display/chisq options off (defaults).
+    fn tr(vars: &[&str], missing: bool, out: Option<DatasetRef>) -> TableRequest {
+        TableRequest {
+            vars: vars.iter().map(|s| s.to_string()).collect(),
+            missing,
+            out,
+            nofreq: false,
+            nopercent: false,
+            norow: false,
+            nocol: false,
+            nocum: false,
+            chisq: false,
         }
     }
 
@@ -815,7 +1039,7 @@ mod tests {
 
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
-            tables: vec![TableRequest { vars: vec!["x".into()], missing: false, out: None }],
+            tables: vec![tr(&["x"], false, None)],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -839,7 +1063,7 @@ mod tests {
 
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
-            tables: vec![TableRequest { vars: vec!["x".into()], missing: true, out: None }],
+            tables: vec![tr(&["x"], true, None)],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -861,11 +1085,11 @@ mod tests {
 
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
-            tables: vec![TableRequest {
-                vars: vec!["x".into()],
-                missing: false,
-                out: Some(DatasetRef { libref: Some("WORK".into()), name: "O".into() }),
-            }],
+            tables: vec![tr(
+                &["x"],
+                false,
+                Some(DatasetRef { libref: Some("WORK".into()), name: "O".into() }),
+            )],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -906,11 +1130,7 @@ mod tests {
 
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
-            tables: vec![TableRequest {
-                vars: vec!["r".into(), "c".into()],
-                missing: false,
-                out: None,
-            }],
+            tables: vec![tr(&["r", "c"], false, None)],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -922,5 +1142,154 @@ mod tests {
         assert!(listing.contains("Row Pct"), "{listing}");
         // Grand-total percent 100.00 must appear.
         assert!(listing.contains("100.00"), "{listing}");
+    }
+
+    // ───────────────────────── chisq_sf tests ─────────────────────────
+
+    #[test]
+    fn chisq_sf_known_values() {
+        // 95th percentile of chi-square(1) is 3.841 -> upper tail ~ 0.05.
+        assert!((chisq_sf(3.841, 1.0) - 0.05).abs() < 1e-3, "{}", chisq_sf(3.841, 1.0));
+        // At 0 the survival function is 1.
+        assert!((chisq_sf(0.0, 1.0) - 1.0).abs() < 1e-12);
+        // Far in the tail -> ~0.
+        assert!(chisq_sf(100.0, 1.0) < 1e-3);
+    }
+
+    // ───────────────────────── display-option tests ─────────────────────────
+
+    fn one_way_listing(opts: impl Fn(&mut TableRequest)) -> String {
+        let mut session = make_session();
+        let df = df!["x" => [Some(1.0_f64), Some(1.0), Some(2.0)]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let mut req = tr(&["x"], false, None);
+        opts(&mut req);
+        let ast = FreqAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            tables: vec![req],
+        };
+        execute(&ast, &mut session).unwrap();
+        session.listing.into_string()
+    }
+
+    #[test]
+    fn one_way_nofreq_drops_frequency_column() {
+        let l = one_way_listing(|r| r.nofreq = true);
+        // The standalone "Frequency" header is gone, but "Cumulative
+        // Frequency" (NOCUM not set) remains.
+        let default = one_way_listing(|_| {});
+        let default_freq = default.matches("Frequency").count();
+        assert_eq!(l.matches("Frequency").count(), default_freq - 1, "{l}");
+        assert!(l.contains("Percent"), "{l}");
+        assert!(l.contains("Cumulative Frequency"), "{l}");
+    }
+
+    #[test]
+    fn one_way_nopercent_drops_percent_columns() {
+        let l = one_way_listing(|r| r.nopercent = true);
+        assert!(!l.contains("Percent"), "{l}");
+        assert!(l.contains("Frequency"), "{l}");
+        assert!(l.contains("Cumulative Frequency"), "{l}");
+    }
+
+    #[test]
+    fn one_way_nocum_drops_cumulative_columns() {
+        let l = one_way_listing(|r| r.nocum = true);
+        assert!(!l.contains("Cumulative"), "{l}");
+        assert!(l.contains("Frequency"), "{l}");
+        assert!(l.contains("Percent"), "{l}");
+    }
+
+    fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
+        let mut session = make_session();
+        let df = df![
+            "r" => ["a", "a", "b", "b"],
+            "c" => [1.0_f64, 2.0, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+        write_dataset(&mut session, "T", ds);
+        let mut req = tr(&["r", "c"], false, None);
+        opts(&mut req);
+        let ast = FreqAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            tables: vec![req],
+        };
+        execute(&ast, &mut session).unwrap();
+        session.listing.into_string()
+    }
+
+    #[test]
+    fn crosstab_norow_drops_row_pct() {
+        let l = crosstab_listing(|r| r.norow = true);
+        assert!(!l.contains("Row Pct"), "{l}");
+        assert!(l.contains("Col Pct"), "{l}");
+    }
+
+    #[test]
+    fn crosstab_nocol_drops_col_pct() {
+        let l = crosstab_listing(|r| r.nocol = true);
+        assert!(!l.contains("Col Pct"), "{l}");
+        assert!(l.contains("Row Pct"), "{l}");
+    }
+
+    #[test]
+    fn crosstab_nofreq_keeps_others() {
+        // NOFREQ drops the per-cell Frequency line; Percent/Row/Col remain.
+        let l = crosstab_listing(|r| r.nofreq = true);
+        assert!(l.contains("Percent"), "{l}");
+        assert!(l.contains("Row Pct"), "{l}");
+        assert!(l.contains("Col Pct"), "{l}");
+        // The label row must still identify the row categories and Total.
+        assert!(l.contains("Total"), "{l}");
+    }
+
+    // ───────────────────────── chisq block test ─────────────────────────
+
+    #[test]
+    fn crosstab_chisq_2x2_hand_computed() {
+        // 2x2 table:
+        //          c=1  c=2  | tot
+        //   r=a :   10    20 |  30
+        //   r=b :   30    40 |  70
+        //   col :   40    60 | 100
+        // Expected: e_a1=30*40/100=12, e_a2=18, e_b1=28, e_b2=42.
+        // Pearson = (10-12)^2/12 + (20-18)^2/18 + (30-28)^2/28 + (40-42)^2/42
+        //         = 4/12 + 4/18 + 4/28 + 4/42
+        //         = 0.333333 + 0.222222 + 0.142857 + 0.095238 = 0.793651
+        // DF = 1; p = chisq_sf(0.793651, 1) ~ 0.3730.
+        let mut session = make_session();
+        // Build column vectors that reproduce the table counts.
+        let mut r: Vec<&str> = Vec::new();
+        let mut c: Vec<f64> = Vec::new();
+        for _ in 0..10 { r.push("a"); c.push(1.0); }
+        for _ in 0..20 { r.push("a"); c.push(2.0); }
+        for _ in 0..30 { r.push("b"); c.push(1.0); }
+        for _ in 0..40 { r.push("b"); c.push(2.0); }
+        let df = df!["r" => r, "c" => c].unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut req = tr(&["r", "c"], false, None);
+        req.chisq = true;
+        let ast = FreqAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            tables: vec![req],
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Statistics for Table of r by c"), "{listing}");
+        assert!(listing.contains("Chi-Square"), "{listing}");
+        assert!(listing.contains("Likelihood Ratio Chi-Square"), "{listing}");
+        // Pearson value formatted to 4 decimals.
+        assert!(listing.contains("0.7937"), "{listing}");
+
+        // Cross-check the numeric pieces directly.
+        let pearson: f64 = 4.0 / 12.0 + 4.0 / 18.0 + 4.0 / 28.0 + 4.0 / 42.0;
+        assert!((pearson - 0.793651).abs() < 1e-4, "{pearson}");
+        let p = chisq_sf(pearson, 1.0);
+        assert!((p - 0.3730).abs() < 1e-3, "p={p}");
     }
 }
