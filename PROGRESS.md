@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M5**
+Jalon courant : **M6**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -51,7 +51,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/procs/means.rs` (CLASS, _TYPE_/_FREQ_, OUTPUT OUT=)
 - [x] `src/procs/freq.rs` (1 voie, 2 voies, MISSING)
 - [x] `src/procs/univariate.rs` (quantiles définition 5)
-- [ ] Fixtures m5/ + snapshots
+- [x] Fixtures m5/ + snapshots
 
 ## M6 — PROC SQL
 - [ ] `src/sql/parser.rs` + compléments `ast.rs` (tests d'AST)
