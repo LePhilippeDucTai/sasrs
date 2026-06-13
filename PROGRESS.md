@@ -63,7 +63,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/procs/transpose.rs` (BY/ID/VAR, _NAME_/COLn)
 - [x] `src/procs/append.rs` (FORCE)
 - [x] `src/procs/datasets.rs` (+ `rename` dans LibraryProvider)
-- [ ] OPTIONS OBS=/FIRSTOBS= ; fonctions lot 2 (INTNX/INTCK, LAG/DIF par site d'appel)
+- [x] OPTIONS OBS=/FIRSTOBS= ; fonctions lot 2 (INTNX/INTCK, LAG/DIF par site d'appel) — OBS=/FIRSTOBS= appliqués à l'entrée SET de l'étape DATA (pas encore aux lectures des procs)
 - [ ] Fixtures m7/ + snapshots
 
 ## M8 — durcissement

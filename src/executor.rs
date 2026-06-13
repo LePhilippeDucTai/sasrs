@@ -119,6 +119,32 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                             value.as_deref().unwrap_or("")
                         )),
                     }
+                } else if name.eq_ignore_ascii_case("obs") {
+                    // OBS=MAX (or unset) → no limit; OBS=n → process up to obs n.
+                    match value.as_deref() {
+                        Some(v) if v.eq_ignore_ascii_case("max") => session.options.obs = None,
+                        Some(v) => match v.parse::<usize>() {
+                            Ok(n) => session.options.obs = Some(n),
+                            Err(_) => session.log.error(&format!(
+                                "The value {v} is not a valid OBS value."
+                            )),
+                        },
+                        None => session.options.obs = None,
+                    }
+                } else if name.eq_ignore_ascii_case("firstobs") {
+                    // FIRSTOBS=MAX is unusual; treat any non-number as an error.
+                    match value.as_deref() {
+                        Some(v) if v.eq_ignore_ascii_case("max") => {
+                            session.options.firstobs = usize::MAX
+                        }
+                        Some(v) => match v.parse::<usize>() {
+                            Ok(n) if n >= 1 => session.options.firstobs = n,
+                            _ => session.log.error(&format!(
+                                "The value {v} is not a valid FIRSTOBS value."
+                            )),
+                        },
+                        None => {}
+                    }
                 } else {
                     session.log.warning(&format!(
                         "Option {} is not yet supported.",
@@ -235,6 +261,30 @@ mod tests {
         let out = run_det("options ls=120 nocenter;");
         assert_eq!(out.exit_code, 1, "{}", out.log);
         assert!(out.log.contains("WARNING: Option NOCENTER is not yet supported."));
+    }
+
+    #[test]
+    fn options_firstobs_and_obs_window_input() {
+        // Build a 5-row data set, then read it with FIRSTOBS=2 OBS=4 → obs 2..4
+        // (3 observations). The window applies to the physical SET input.
+        let out = run_det(
+            "data a; do i = 1 to 5; output; end; run;\n\
+             options firstobs=2 obs=4;\n\
+             data b; set a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "{}", out.log);
+        assert!(
+            out.log
+                .contains("The data set WORK.A has 5 observations and 1 variables."),
+            "{}",
+            out.log
+        );
+        assert!(
+            out.log
+                .contains("The data set WORK.B has 3 observations and 1 variables."),
+            "{}",
+            out.log
+        );
     }
 
     #[test]

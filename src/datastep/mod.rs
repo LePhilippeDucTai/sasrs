@@ -890,11 +890,23 @@ impl Compiler<'_> {
             self.validate_where_vars(w, &r.display())?;
         }
 
+        // OPTIONS FIRSTOBS=/OBS= : restreindre la fenêtre des observations
+        // PHYSIQUES lues, AVANT le filtre WHERE= (ordre SAS). FIRSTOBS=k saute
+        // les k-1 premières ; OBS=n borne le numéro de la dernière obs lue.
+        let n = ds.n_obs();
+        let start = self.session.options.firstobs.saturating_sub(1).min(n);
+        let end = self.session.options.obs.map_or(n, |o| o.min(n)).max(start);
+        if start != 0 || end != n {
+            for c in &mut columns {
+                *c = c[start..end].to_vec();
+            }
+        }
+
         self.input_datasets.push(InputDataset {
             display: r.display(),
             columns,
             var_slots,
-            n_rows: ds.n_obs(),
+            n_rows: end - start,
             where_: opts.where_.clone(),
             by_cols: Vec::new(),
         });

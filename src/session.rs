@@ -7,12 +7,22 @@ use std::path::PathBuf;
 /// parsed and ignored with a WARNING.
 pub struct SasOptions {
     pub ls: usize,
+    /// FIRSTOBS= : 1-based number of the first observation to read from each
+    /// input data set. Default 1.
+    pub firstobs: usize,
+    /// OBS= : the number of the LAST observation to process (1-based, an upper
+    /// bound on the observation count read). `None` = no limit (OBS=MAX).
+    pub obs: Option<usize>,
 }
 
 impl Default for SasOptions {
     fn default() -> Self {
         // SAS 9.4 listing default linesize.
-        SasOptions { ls: 96 }
+        SasOptions {
+            ls: 96,
+            firstobs: 1,
+            obs: None,
+        }
     }
 }
 
