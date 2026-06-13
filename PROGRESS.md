@@ -6,7 +6,12 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **— M1–M13 terminés** (+ extensions macro M12 et branchement S3 réel M13).
+Jalon courant : **M14** (I/O fichiers plats). M1–M13 terminés. Roadmap M14–M30 ouverte
+(couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
+compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
+graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
+dépendances mixtes (crates pour l'I/O lourd, numérique stat **fait maison** dans `src/stat/`) ;
+ODS HTML/RTF/PDF/Excel + ODS OUTPUT→datasets.
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -121,3 +126,132 @@ sur URI `s3://` lit/scanne réellement des parquet via Polars object-store.
 
 - [x] M13.1 — feature `s3 = ["polars/cloud","polars/aws"]` ; `S3Library::from_uri` (parse `s3://bucket/prefix`), `read()` = scan parquet cloud via `ScanArgsParquet`+`CloudOptions` (credentials env AWS) ; LIBNAME `s3://...` routé vers `S3Library` (cfg-gated : sous build défaut, `s3://` reste un chemin local — inchangé) ; trait `LibraryProvider::is_cloud()` ; mutations → erreur claire. Crates cloud/aws récupérées et compilées dans cet env.
 - [x] M13.2 — tests (`cfg(feature=s3)`) : parsing URI `s3://`, sélection du provider (cloud vs DirLibrary), chemins clé→table. I/O réelle non testée (besoin creds+réseau, documenté). DoD : défaut 989 (0 warning, octet-identique) ; `--features s3` build + 999 tests (+10) verts, 0 warning. (NB disque : impossible de garder simultanément les artefacts des 2 variantes — validées séparément après `cargo clean`.) **M13 TERMINÉ.**
+
+# Roadmap M14–M30 — couverture SAS quasi-intégrale
+
+Objectif : parité fonctionnelle large avec SAS 9.4 Base + STAT + graphiques statiques.
+Invariant transverse : snapshots m1–m13 **octet-identiques** (le nouveau comportement ne
+s'active que sur les nouvelles directives), `sas_cmp`/`nullify_specials` partout, fidélité SAS
+vérifiée à la main contre un oracle réel. Ordre d'exécution recommandé : M14 → M15 → M18 →
+M16 → M17 → M19 → M20 → M21 → M22 → M24 → M25 → M26 → M23 → M27 → M29 → M28 → M30.
+
+## PHASE A — combler le périmètre existant
+
+## M14 — I/O fichiers plats
+Le plus gros déblocage : aujourd'hui tout entre/sort en parquet, impossible de lire un CSV/texte.
+- [ ] M14.1 — `INFILE` + `INPUT` (list/column/formatted) + `DATALINES`/`CARDS` (Fable, élevé) : `DsStmt::{Infile,Input,Datalines}`, mode `InputMode::TextFile` parallèle à SET dans `exec.rs`, informats réutilisés (`FormatCatalog::informat`), piège décimale implicite documenté
+- [ ] M14.2 — `FILE` + `PUT` (sortie texte ; `@`/`@@` hold, `/`) (Opus, moyen) : builders texte dans le Runner, destination fichier/`_WEBOUT`
+- [ ] ⫽ M14.3 — `PROC IMPORT`/`PROC EXPORT` : CSV (Polars `CsvReader/CsvWriter`), Excel (`calamine` lecture / `rust_xlsxwriter` écriture) ; `DBMS=`/`GETNAMES`/`SHEET=`/`OUT=`/`OUTFILE=` (Sonnet, moyen)
+- [ ] M14.4 — `LIBNAME ... CSV`/`XLSX` bibliothèque virtuelle (optionnel) : impl `LibraryProvider` fichier-table (Sonnet, faible)
+- [ ] Fixtures `m14/` (read_csv, datalines, put_report, import_export) + snapshots vérifiés. DoD : m1–m13 inchangés
+
+## M15 — bibliothèque de fonctions (~44 → ~150)
+Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par famille.
+- [ ] ⫽ M15.1 — caractère : FIND, FINDC, COUNT, COUNTC, VERIFY, TRANSLATE, REVERSE, REPEAT, PROPCASE, COMPBL, SUBSTRN, CHAR, RANK, BYTE, WHICHC, CATQ (Sonnet, moyen)
+- [ ] ⫽ M15.2 — mathématiques : CEIL, FLOOR, SIGN, SIN/COS/TAN/ARSIN/ARCOS/ATAN/ATAN2, SINH/COSH/TANH, FACT, COMB, PERM, GAMMA, LGAMMA, DIGAMMA, BETA, ROUNDZ, RANGE, LARGEST/SMALLEST, ORDINAL (Sonnet, moyen)
+- [ ] ⫽ M15.3 — date/heure : DATEPART, TIMEPART, DATETIME, HMS, DHMS, YRDIF, DATDIF, JULDATE, DATEJUL, HOUR/MINUTE/SECOND, NLDATE, INTFMT, INTSHIFT (Opus, moyen)
+- [ ] M15.4 — probabilités : PROBNORM, PROBT, PROBF, PROBCHI, PROBBETA, PROBGAM, CDF, PDF, QUANTILE, SDF, LOGCDF, PROBBNML, POISSON (Fable, élevé — numérique maison, anticipe `src/stat/`)
+- [ ] M15.5 — aléatoire : RAND, RANUNI, RANNOR, RANEXP, RANBIN, CALL STREAMINIT/RANUNI ; PRNG MT19937 maison, graine figée sous `--deterministic`, fidélité flux SAS documentée comme approximation (Fable, élevé)
+- [ ] M15.6 — CALL routines : CALL MISSING, CALL EXECUTE (file différée post-step), CALL SORTN/SORTC, CALL SYMPUTX, CALL CATS/SCAN, CALL LABEL, CALL VNAME (Opus, moyen)
+- [ ] M15.7 — LAG/LAGn/DIF/DIFn : FIFO par site d'appel (clé = identité d'expression), `EvalCtx.lag_fifos` (vérifier l'état réel d'abord) (Opus, moyen)
+- [ ] Fixtures `m15/` + snapshots. DoD
+
+## M16 — constructions étape DATA
+- [ ] M16.1 — `SELECT`/`WHEN`/`OTHERWISE` (formes sélecteur et booléen), `DsStmt::Select` (Opus, moyen)
+- [ ] M16.2 — tableaux multi-dimensionnels (gardes `parser/datastep.rs:291,786`) + valeurs initiales (`:866`) + `_TEMPORARY_`/`_NUMERIC_`/`_CHARACTER_`/`_ALL_` (`:836`) + DIM/HBOUND/LBOUND, index linéaire row-major (Fable, élevé)
+- [ ] M16.3 — `DO` sur liste de valeurs (gardes `:579,622`), `DO OVER`, littéraux date en RETAIN (`:999`) (Opus, moyen)
+- [ ] M16.4 — SET multiples (garde `datastep/mod.rs:334`), `SET ... POINT=`/`NOBS=` (accès direct), `SET ... END=` (Fable, élevé)
+- [ ] M16.5 — `UPDATE` (master/transaction), `MODIFY` (réécriture en place) (Fable, élevé)
+- [ ] M16.6 — `LINK`/`RETURN`, labels/`GOTO`, `RETAIN _ALL_` (Opus, moyen)
+- [ ] Fixtures `m16/` + snapshots. DoD
+
+## M17 — objets hash
+- [ ] M17.1 — `DECLARE HASH h(...)` + `defineKey/defineData/defineDone` ; `HashObject{keys,data_vars,rows}` dans le Runner, dispatch méthodes via `EvalCtx` (Fable, élevé)
+- [ ] M17.2 — méthodes find/check/add/replace/remove/clear/output/num_items ; `DECLARE HITER` + first/next/last/prev ; options ordered:/duplicate:/multidata: (Fable, élevé)
+- [ ] Fixtures `m17/` + snapshots. DoD
+
+## M18 — formats & informats
+- [ ] ⫽ M18.1 — étoffer `format_builtin`/`informat_builtin` : COMMAX, DOLLARX, EURO, NEGPAREN, HEX, BINARY, OCTAL, ROMAN, WORDS, FRACT, SCIENTIFIC, dates (WEEKDATE, DOWNAME, MONNAME, QTR, YYQ, JULIAN, B8601*/E8601* ISO), $QUOTE, $HEX, $UPCASE (Sonnet, moyen-élevé)
+- [ ] M18.2 — INVALUE (informats utilisateur) : lever `procs/format.rs:78`, `FormatCatalog.user_informats`, lookup avant builtin (Sonnet, moyen)
+- [ ] M18.3 — PICTURE : `enum FormatKind{Value,Picture,Invalue}` dans `userdef.rs`, templates `99/99/9999`, directives PREFIX/MULT/FILL (Opus, moyen)
+- [ ] Fixtures `m18/` + snapshots. DoD
+
+## M19 — macro : fonctions différées
+- [ ] M19.1 — `%unquote`, `%cmpres`/`%qcmpres`, `%symexist`, `%sysmexist`, `%sysget`, `%sysevalf` (éval flottante) ; triggers + `consume_*` dans `preprocess.rs` (Fable, moyen-élevé)
+- [ ] M19.2 — `%include` + bibliothèques autocall (`SASAUTOS`, recherche + compilation paresseuse) (Opus, moyen)
+- [ ] M19.3 — options de trace `MPRINT`/`MLOGIC`/`SYMBOLGEN` (écho conditionnel au log) ; `CALL EXECUTE` côté macro ; `%put` avancé (Opus, moyen)
+- [ ] Fixtures `m19/` + snapshots. DoD
+
+## M20 — PROC SQL : compléments
+- [ ] M20.1 — `LIKE` complet (regex) ; `EXCEPT/INTERSECT ALL` exacts (Opus, moyen)
+- [ ] M20.2 — sous-requêtes corrélées/non corrélées (WHERE/HAVING/SELECT), `EXISTS` (Fable, élevé)
+- [ ] M20.3 — dictionary tables (`DICTIONARY.TABLES/COLUMNS/MACROS`, vues `sashelp.v*`) alimentées par l'état de session (Opus, moyen)
+- [ ] M20.4 — vues SQL (`CREATE VIEW`), `UPDATE ... SET`, sous-requêtes dans `INSERT` (Opus, moyen)
+- [ ] Fixtures `m20/` + snapshots. DoD
+
+## M21 — complétion des procs existants + procs utilitaires
+- [ ] ⫽ M21.1 — `PROC COMPARE`, `PROC PRINTTO`, `PROC OPTIONS`, `PROC CATALOG` (Sonnet, moyen)
+- [ ] M21.2 — FREQ : Fisher exact, AGREE (kappa), MEASURES (odds ratio, RR), TREND (Cochran-Armitage), CHISQ 1 voie, `TABLES ... / OUT=` (Opus, élevé)
+- [ ] M21.3 — UNIVARIATE : tests de normalité (Shapiro-Wilk, Kolmogorov, Anderson-Darling), HISTOGRAM/QQPLOT (→ images M29), percentiles étendus (Fable, élevé)
+- [ ] M21.4 — TABULATE/REPORT avancés : 3ᵉ dim, croisements multi-VAR/stats, ALL, PCTN/PCTSUM (TABULATE) ; ACROSS, COMPUTE, BREAK/RBREAK, LINE, WHERE, OUT= (REPORT) (Opus, élevé)
+- [ ] M21.5 — RANK méthodes FRACTION/PERCENT/NORMAL/SAVAGE + BY ; CORR Spearman/Kendall + OUT=/OUTP= + WEIGHT (Opus, moyen-élevé)
+- [ ] Fixtures `m21/` + snapshots. DoD
+
+## PHASE B — ODS (prérequis capture + graphiques)
+
+## M22 — couche de routage ODS + capture
+- [ ] M22.1 — trait `OutputDestination { page_header; write_table; write_line; blank }` dans `src/output/` ; `TextListing` = comportement actuel, `Session.listing: Box<dyn OutputDestination>` + registre multi-destinations. Invariant : listing texte par défaut byte-identique (Fable, élevé)
+- [ ] M22.2 — parseur du statement `ODS` (ouvrir/fermer destinations) + options globales NOCENTER/DATE/NUMBER (Opus, moyen)
+- [ ] M22.3 — ODS OUTPUT → datasets (mapping nom-de-table ODS → `OUT=`) ; utile pour tester les procs stat à venir (Opus, moyen-élevé)
+- [ ] M22.4 — destination HTML (tables CSS, fichier `.html`) (Sonnet, moyen)
+- [ ] Fixtures `m22/` + snapshots (texte inchangé ; HTML/dataset capturés vérifiés). DoD
+
+## M23 — ODS RTF / PDF / Excel
+- [ ] ⫽ M23.1 — RTF (séquences de contrôle Word) (Opus, moyen)
+- [ ] ⫽ M23.2 — PDF via `printpdf` (pagination, tables), feature `pdf` (Opus, moyen-élevé)
+- [ ] ⫽ M23.3 — Excel via `rust_xlsxwriter` (`ODS EXCEL`, feuilles par proc, styles de base) (Sonnet, moyen)
+- [ ] Fixtures `m23/` + snapshots (assertion structure/existence des fichiers). DoD
+
+## PHASE C — modélisation statistique
+
+## M24 — fondation numérique stat + procs de base
+- [ ] M24.1 — module `src/stat/` (maison) : promotion des helpers `common.rs` (Beta/Gamma/t/χ²) + normale (CDF/quantile), F, gamma, bêta ; `linalg.rs` (Cholesky, QR/Householder, moindres carrés, inversion, valeurs/vecteurs propres symétriques par Jacobi), tout testé contre valeurs documentées (Fable, élevé)
+- [ ] M24.2 — `PROC TTEST` (1 échantillon, 2 échantillons groupés/appariés, Satterthwaite, CLASS, PAIRED) (Opus, élevé)
+- [ ] M24.3 — `PROC NPAR1WAY` (Wilcoxon, Kruskal-Wallis, scores) (Opus, moyen-élevé)
+- [ ] Fixtures `m24/` + snapshots vérifiés contre SAS. DoD
+
+## M25 — modèle linéaire
+- [ ] M25.1 — `PROC REG` (OLS via QR, MODEL, R²/F/t, OUTPUT OUT= résidus/prédits, TEST, intervalles) (Fable, élevé)
+- [ ] M25.2 — `PROC ANOVA` (plans équilibrés, CLASS, MEANS, types de SC) (Opus, élevé)
+- [ ] M25.3 — `PROC GLM` (codage CLASS, SC type I/III, LSMEANS, contrastes, ESTIMATE) (Fable, élevé)
+- [ ] Fixtures `m25/` + snapshots. DoD
+
+## M26 — modèles catégoriels
+- [ ] M26.1 — `PROC LOGISTIC` (logistique binaire, Newton-Raphson/IRLS, odds ratios, CLASS, LINK=) (Fable, élevé)
+- [ ] M26.2 — `PROC GENMOD` (GLM exponentiels : Poisson, binomial, gamma ; fonctions de lien ; DIST=) (Fable, élevé)
+- [ ] Fixtures `m26/` + snapshots. DoD
+
+## M27 — multivarié
+- [ ] M27.1 — `PROC PRINCOMP` (ACP via valeurs propres covariance/corrélation) (Opus, élevé)
+- [ ] M27.2 — `PROC FACTOR` (extraction, rotation VARIMAX) (Fable, élevé)
+- [ ] M27.3 — `PROC CLUSTER` + `PROC FASTCLUS` (k-means), `PROC DISTANCE` (Opus, élevé)
+- [ ] M27.4 — `PROC DISCRIM` (analyse discriminante linéaire) (Opus, élevé)
+- [ ] Fixtures `m27/` + snapshots. DoD
+
+## M28 — modèles mixtes (le plus difficile, en dernier)
+- [ ] M28.1 — `PROC MIXED` (effets fixes + aléatoires, REML/ML itératif, structures VC/CS/AR(1)/UN, SOLUTION, LSMEANS) (Fable, très élevé)
+- [ ] M28.2 — `PROC GLIMMIX` (modèles mixtes généralisés, pseudo-vraisemblance) (Fable, très élevé)
+- [ ] Fixtures `m28/` + snapshots. DoD
+
+## PHASE D — graphiques (images via `plotters`, dépend de M22)
+
+## M29 — ODS GRAPHICS + PROC SGPLOT
+- [ ] M29.1 — infra ODS GRAPHICS : destination image vers `plotters` (PNG + SVG), nommage/dimensions/DPI ; snapshots = log/listing + assertion existence + (format, largeur×hauteur), feature `graphics` (Fable, élevé)
+- [ ] M29.2 — `PROC SGPLOT` : SCATTER, SERIES, VBAR/HBAR, HISTOGRAM, DENSITY, VBOX, REG/LOESS, XAXIS/YAXIS, BY (Opus, élevé)
+- [ ] M29.3 — branchement des plots UNIVARIATE (HISTOGRAM/QQPLOT) et REG (diagnostics) sur l'infra image (Opus, moyen)
+- [ ] Fixtures `m29/` + snapshots. DoD
+
+## M30 — graphiques legacy
+- [ ] ⫽ M30.1 — `PROC GPLOT` (+ SYMBOL/AXIS), `PROC GCHART` (VBAR/HBAR/PIE) (Opus, moyen-élevé)
+- [ ] ⫽ M30.2 — `PROC PLOT` (rendu image cohérent avec ODS GRAPHICS) (Sonnet, moyen)
+- [ ] Fixtures `m30/` + snapshots. DoD → **couverture cible atteinte**
