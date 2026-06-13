@@ -122,6 +122,31 @@ pub enum MacroParam {
     Keyword { name: String, default: String },
 }
 
+/// Erreur d'évaluation d'une expression macro (`%eval`, conditions `%if`,
+/// bornes `%to`/`%by`). Portée par la feature `macros`. On ne `panic` jamais
+/// sur une entrée macro invalide : l'expanseur transforme cette erreur en une
+/// note SAS-like émise dans le flux de sortie et poursuit le scan.
+#[cfg(feature = "macros")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MacroError {
+    /// Message lisible (proche du libellé SAS quand pertinent).
+    pub message: String,
+}
+
+#[cfg(feature = "macros")]
+impl MacroError {
+    fn new(msg: impl Into<String>) -> Self {
+        MacroError { message: msg.into() }
+    }
+}
+
+#[cfg(feature = "macros")]
+impl std::fmt::Display for MacroError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 /// Variante PAR DÉFAUT (sans feature `macros`) : engine vide, identité pure.
 /// Aucune table, aucune logique — garantit l'octet-identité du build par
 /// défaut (équivalent strict de l'ancien `IdentityMacroStage`).
@@ -347,6 +372,30 @@ impl MacroEngine {
             }
             if c == '%' && Self::matches_kw(&chars, i, "global") {
                 if let Some(next) = self.consume_scope_decl(&chars, i, false, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%eval(expr)` — évalue et splice le résultat entier.
+            if c == '%' && Self::matches_kw_paren(&chars, i, "eval") {
+                if let Some(next) = self.consume_eval(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%if <cond> %then <action>; [%else <action>;]`
+            if c == '%' && Self::matches_kw(&chars, i, "if") {
+                if let Some(next) = self.consume_if(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%do ...` (plain group ou itératif `%do i=a %to b`).
+            if c == '%' && Self::matches_kw(&chars, i, "do") {
+                if let Some(next) = self.consume_do(&chars, i, &mut out) {
                     i = next;
                     continue;
                 }
@@ -879,6 +928,917 @@ impl MacroEngine {
     }
 }
 
+#[cfg(feature = "macros")]
+impl MacroEngine {
+    /// Garde anti-boucle-folle pour les `%do` itératifs.
+    const MAX_LOOP_ITERS: i64 = 1_000_000;
+
+    /// Vrai si `chars[i..]` commence par `%<kw>` (insensible casse) suivi
+    /// éventuellement de blancs puis d'une `(` — pour les fonctions macro comme
+    /// `%eval(...)`. Évite de matcher un identifiant plus long (`%evalx`).
+    fn matches_kw_paren(chars: &[char], i: usize, kw: &str) -> bool {
+        if chars.get(i) != Some(&'%') {
+            return false;
+        }
+        let kwc: Vec<char> = kw.chars().collect();
+        for (k, &kc) in kwc.iter().enumerate() {
+            match chars.get(i + 1 + k) {
+                Some(c) if c.to_ascii_lowercase() == kc => {}
+                _ => return false,
+            }
+        }
+        let mut j = i + 1 + kwc.len();
+        // Le caractère juste après le mot-clé ne doit pas continuer un identifiant.
+        if matches!(chars.get(j), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
+            return false;
+        }
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        chars.get(j) == Some(&'(')
+    }
+
+    /// Émet une note d'erreur macro SAS-like dans le flux et poursuit. Jamais
+    /// de `panic` sur entrée invalide.
+    fn emit_error(out: &mut String, err: &MacroError) {
+        out.push_str(&format!("/* {} */", err.message));
+    }
+
+    /// Consomme `%eval ( expr )` : résout les `&refs` de `expr`, évalue, et
+    /// splice le résultat entier. Rend l'index après la `)`, ou `None` si la
+    /// parenthèse n'est pas trouvée (laisse alors le `%` brut).
+    fn consume_eval(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + 1 + "eval".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // Résoudre d'abord les &refs, puis (récursivement) tout `%eval`/macro
+        // imbriqué dans l'argument avant d'évaluer.
+        let resolved = self.resolve_value(&inner);
+        let expanded = self.process_impl(&resolved);
+        match self.macro_eval(&expanded) {
+            Ok(v) => out.push_str(&v.to_string()),
+            Err(e) => Self::emit_error(out, &e),
+        }
+        Some(after)
+    }
+
+    /// Lit le contenu entre `(` (à l'index `lparen`) et sa `)` équilibrée.
+    /// Rend `(contenu_sans_parenthèses, index_après_la_parenthèse_fermante)`.
+    fn read_balanced_parens(chars: &[char], lparen: usize) -> Option<(String, usize)> {
+        let mut depth = 0i32;
+        let mut j = lparen;
+        let start = lparen + 1;
+        while j < chars.len() {
+            match chars[j] {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner: String = chars[start..j].iter().collect();
+                        return Some((inner, j + 1));
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// Évalue une condition `%if` : résout d'abord les `&refs` et tout
+    /// `%eval`/macro imbriqué, puis applique `macro_eval`. Truthy = non nul.
+    fn eval_condition(&mut self, cond: &str) -> Result<bool, MacroError> {
+        let resolved = self.resolve_value(cond);
+        let expanded = self.process_impl(&resolved);
+        Ok(self.macro_eval(expanded.trim())? != 0)
+    }
+
+    /// Consomme `%if <cond> %then <action> [; %else <action> ;]`.
+    ///
+    /// `<cond>` court jusqu'au `%then` (insensible casse). `<action>` est soit
+    /// un groupe `%do; ... %end;`, soit un fragment de texte jusqu'au `;` de fin
+    /// d'action (le `;` est inclus dans le texte émis, comme une instruction
+    /// SAS). On émet la branche prise EXPANSÉE et rien pour l'autre. Rend
+    /// l'index de reprise, ou `None` si la structure ne tient pas.
+    fn consume_if(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let cond_start = i + 1 + "if".len();
+        // Trouver le `%then`.
+        let then_pos = Self::find_kw(chars, cond_start, "then")?;
+        let cond: String = chars[cond_start..then_pos].iter().collect();
+        let mut j = then_pos + 1 + "then".len();
+
+        // Évaluer la condition.
+        let take_then = match self.eval_condition(&cond) {
+            Ok(b) => b,
+            Err(e) => {
+                Self::emit_error(out, &e);
+                // En cas d'erreur, on consomme tout de même la structure pour ne
+                // pas réémettre du texte macro brut. On parse les actions sans
+                // les exécuter.
+                false
+            }
+        };
+
+        // Parser l'action du THEN (group ou fragment) -> (texte, index_après).
+        let (then_text, after_then) = Self::scan_action(chars, j)?;
+        j = after_then;
+
+        // %else optionnel.
+        let mut else_text: Option<String> = None;
+        let mut after_else = j;
+        {
+            let mut k = j;
+            while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
+                k += 1;
+            }
+            if Self::matches_kw(chars, k, "else") {
+                let astart = k + 1 + "else".len();
+                let (etext, ae) = Self::scan_action(chars, astart)?;
+                else_text = Some(etext);
+                after_else = ae;
+            }
+        }
+
+        // Émettre la branche prise, expansée.
+        let chosen = if take_then {
+            Some(then_text)
+        } else {
+            else_text
+        };
+        if let Some(text) = chosen {
+            let expanded = self.process_impl(&text);
+            out.push_str(&expanded);
+        }
+        Some(after_else)
+    }
+
+    /// Scanne une "action" de `%if`/`%then`/`%else` à partir de `start` :
+    /// soit un groupe `%do; ... %end;` (le texte retourné est le corps interne
+    /// du `%do`, sans le `%do;`/`%end;`), soit un fragment de texte jusqu'au
+    /// `;` terminal inclus. Rend `(texte_action, index_après)`.
+    fn scan_action(chars: &[char], start: usize) -> Option<(String, usize)> {
+        let mut k = start;
+        while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
+            k += 1;
+        }
+        if Self::matches_kw(chars, k, "do") {
+            // Réutiliser le scan de `%do` complet : on renvoie le texte
+            // `%do ... %end;` tel quel pour le laisser ré-expanser (gère donc
+            // `%do;`, itératif, imbriqué). Le `process_impl` rappellera
+            // `consume_do` dessus.
+            let (text, after) = Self::scan_do_block(chars, k)?;
+            Some((text, after))
+        } else {
+            // Fragment jusqu'au `;` terminal (inclus). On respecte les `%do`
+            // imbriqués éventuels au cas où, mais le cas nominal est un texte
+            // simple. On s'arrête au premier `;` de niveau 0.
+            let frag_start = k;
+            while k < chars.len() && chars[k] != ';' {
+                k += 1;
+            }
+            if chars.get(k) != Some(&';') {
+                // Pas de `;` : prendre jusqu'à la fin.
+                let frag: String = chars[frag_start..k].iter().collect();
+                return Some((frag, k));
+            }
+            k += 1; // inclure le `;`
+            let frag: String = chars[frag_start..k].iter().collect();
+            Some((frag, k))
+        }
+    }
+
+    /// Scanne un bloc `%do ... %end;` complet à partir de `start` (qui pointe
+    /// sur `%do`). Rend `(texte_complet_incluant_%do_et_%end;, index_après)`.
+    /// Équilibre les `%do`/`%end` imbriqués.
+    fn scan_do_block(chars: &[char], start: usize) -> Option<(String, usize)> {
+        let mut j = start + 1 + "do".len();
+        let mut depth = 1usize;
+        while j < chars.len() && depth > 0 {
+            if chars[j] == '%' {
+                if Self::matches_kw(chars, j, "do") {
+                    depth += 1;
+                    j += 1 + "do".len();
+                    continue;
+                }
+                if Self::matches_kw(chars, j, "end") {
+                    depth -= 1;
+                    j += 1 + "end".len();
+                    if depth == 0 {
+                        // Avaler un `;` terminal optionnel après `%end`.
+                        let mut k = j;
+                        while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
+                            k += 1;
+                        }
+                        if chars.get(k) == Some(&';') {
+                            j = k + 1;
+                        }
+                        let text: String = chars[start..j].iter().collect();
+                        return Some((text, j));
+                    }
+                    continue;
+                }
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// Consomme un `%do` : soit `%do; ... %end;` (groupe), soit
+    /// `%do i=a %to b [%by c]; ... %end;` (itératif). Émet le contenu expansé.
+    fn consume_do(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + 1 + "do".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        // Forme itérative : `%do <name> = ...`.
+        if let Some((var, after_var)) = Self::read_name(chars, j) {
+            let mut k = after_var;
+            while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
+                k += 1;
+            }
+            if chars.get(k) == Some(&'=') {
+                return self.consume_iterative_do(chars, i, &var, k + 1, out);
+            }
+            // `%do %while`/`%until` : non implémenté (déféré). On émet une note
+            // et on consomme le bloc pour ne pas réémettre du texte brut.
+        }
+        // Vérifier `%do %while`/`%until` -> déféré.
+        if Self::matches_kw(chars, j, "while") || Self::matches_kw(chars, j, "until") {
+            let (_text, after) = Self::scan_do_block(chars, i)?;
+            Self::emit_error(
+                out,
+                &MacroError::new("ERROR: %DO %WHILE/%UNTIL is not supported by this interpreter"),
+            );
+            return Some(after);
+        }
+
+        // Forme groupe `%do; ... %end;` : le caractère courant doit être `;`.
+        if chars.get(j) != Some(&';') {
+            return None;
+        }
+        let body_start = j + 1;
+        // Trouver le `%end` équilibré.
+        let (body_end, after) = Self::find_matching_end(chars, body_start)?;
+        let body: String = chars[body_start..body_end].iter().collect();
+        // Voir la note de `consume_iterative_do` sur le rognage des blancs de
+        // bord (fidélité SAS simplifiée) : on rogne le bord gauche du corps puis
+        // le bord droit de la contribution du bloc.
+        let expanded = self.process_impl(body.trim_start());
+        out.push_str(expanded.trim_end());
+        Some(after)
+    }
+
+    /// Consomme la forme itérative `%do i = <start> %to <stop> [%by <step>]; body %end;`.
+    /// `expr_start` pointe juste après le `=`. Itère `&i` de start à stop.
+    ///
+    /// # Rognage des blancs (fidélité SAS simplifiée)
+    /// SAS conserve verbatim le texte entre `%do...;` et `%end`, blancs de bord
+    /// inclus. On simplifie : on rogne le bord GAUCHE du corps (avant chaque
+    /// expansion) et le bord DROIT de la contribution totale du bloc. Les blancs
+    /// internes (entre instructions/itérations) sont préservés, d'où
+    /// `%do i=1 %to 5 %by 2; [&i] %end;` -> `[1] [3] [5]` (un espace par
+    /// séparateur, sans blanc de bord parasite).
+    fn consume_iterative_do(
+        &mut self,
+        chars: &[char],
+        _do_start: usize,
+        var: &str,
+        expr_start: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        // `<start>` court jusqu'au `%to`.
+        let to_pos = Self::find_kw(chars, expr_start, "to")?;
+        let start_expr: String = chars[expr_start..to_pos].iter().collect();
+        let after_to = to_pos + 1 + "to".len();
+        // `<stop>` court jusqu'au `%by` ou au `;`.
+        let by_pos = Self::find_kw_before_semicolon(chars, after_to, "by");
+        let (stop_expr, after_stop, step_expr) = match by_pos {
+            Some(bp) => {
+                let stop: String = chars[after_to..bp].iter().collect();
+                let after_by = bp + 1 + "by".len();
+                // step jusqu'au `;`.
+                let semi = Self::find_semicolon(chars, after_by)?;
+                let step: String = chars[after_by..semi].iter().collect();
+                (stop, semi, Some(step))
+            }
+            None => {
+                let semi = Self::find_semicolon(chars, after_to)?;
+                let stop: String = chars[after_to..semi].iter().collect();
+                (stop, semi, None)
+            }
+        };
+        // `after_stop` pointe sur le `;` terminant l'en-tête du %do.
+        let body_start = after_stop + 1;
+        let (body_end, after) = Self::find_matching_end(chars, body_start)?;
+        let body: String = chars[body_start..body_end].iter().collect();
+
+        // Évaluer bornes/step.
+        let start = match self.eval_condition_int(&start_expr) {
+            Ok(v) => v,
+            Err(e) => {
+                Self::emit_error(out, &e);
+                return Some(after);
+            }
+        };
+        let stop = match self.eval_condition_int(&stop_expr) {
+            Ok(v) => v,
+            Err(e) => {
+                Self::emit_error(out, &e);
+                return Some(after);
+            }
+        };
+        let step = match &step_expr {
+            Some(s) => match self.eval_condition_int(s) {
+                Ok(v) => v,
+                Err(e) => {
+                    Self::emit_error(out, &e);
+                    return Some(after);
+                }
+            },
+            None => 1,
+        };
+        if step == 0 {
+            Self::emit_error(
+                out,
+                &MacroError::new("ERROR: %DO loop step is zero (non-terminating)"),
+            );
+            return Some(after);
+        }
+
+        // Itérer. Garde anti-boucle-folle. On accumule dans un buffer local pour
+        // pouvoir rogner le bord droit de la contribution complète (cf. note de
+        // rognage ci-dessous). Chaque itération expanse `body.trim_start()`.
+        let body_trimmed = body.trim_start();
+        let mut buf = String::new();
+        let mut value = start;
+        let mut iters: i64 = 0;
+        loop {
+            let cont = if step > 0 { value <= stop } else { value >= stop };
+            if !cont {
+                break;
+            }
+            iters += 1;
+            if iters > Self::MAX_LOOP_ITERS {
+                Self::emit_error(
+                    &mut buf,
+                    &MacroError::new(format!(
+                        "ERROR: %DO loop exceeded {} iterations (runaway guard)",
+                        Self::MAX_LOOP_ITERS
+                    )),
+                );
+                break;
+            }
+            // Affecter &i dans la portée courante (haut de pile, ou table en
+            // open code) puis expanser le corps.
+            self.set_loop_var(var, value);
+            let expanded = self.process_impl(body_trimmed);
+            buf.push_str(&expanded);
+            // Avancer en gardant contre l'overflow.
+            match value.checked_add(step) {
+                Some(v) => value = v,
+                None => break,
+            }
+        }
+        out.push_str(buf.trim_end());
+        Some(after)
+    }
+
+    /// Affecte la variable d'itération dans la portée courante (haut de la pile
+    /// de portées si on est dans une macro, sinon la table globale).
+    fn set_loop_var(&mut self, var: &str, value: i64) {
+        let key = var.to_uppercase();
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(key, value.to_string());
+        } else {
+            self.table.insert(key, value.to_string());
+        }
+    }
+
+    /// Comme `eval_condition` mais rend l'entier (pour les bornes `%to`/`%by`).
+    fn eval_condition_int(&mut self, expr: &str) -> Result<i64, MacroError> {
+        let resolved = self.resolve_value(expr);
+        let expanded = self.process_impl(&resolved);
+        self.macro_eval(expanded.trim())
+    }
+
+    /// Trouve le mot-clé `%<kw>` (insensible casse) à partir de `from`, au
+    /// niveau de `%do` 0 (ne descend pas dans un `%do ... %end` imbriqué). Rend
+    /// l'index du `%` du mot-clé. Utilisé pour `%then`.
+    fn find_kw(chars: &[char], from: usize, kw: &str) -> Option<usize> {
+        let mut j = from;
+        let mut do_depth = 0usize;
+        while j < chars.len() {
+            if chars[j] == '%' {
+                if Self::matches_kw(chars, j, "do") {
+                    do_depth += 1;
+                    j += 1 + "do".len();
+                    continue;
+                }
+                if Self::matches_kw(chars, j, "end") {
+                    do_depth = do_depth.saturating_sub(1);
+                    j += 1 + "end".len();
+                    continue;
+                }
+                if do_depth == 0 && Self::matches_kw(chars, j, kw) {
+                    return Some(j);
+                }
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// Trouve `%<kw>` à partir de `from` mais s'arrête au premier `;` de niveau
+    /// 0 (utilisé pour `%by`, qui doit précéder le `;` de l'en-tête de boucle).
+    fn find_kw_before_semicolon(chars: &[char], from: usize, kw: &str) -> Option<usize> {
+        let mut j = from;
+        while j < chars.len() {
+            if chars[j] == ';' {
+                return None;
+            }
+            if chars[j] == '%' && Self::matches_kw(chars, j, kw) {
+                return Some(j);
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// Trouve le prochain `;` de niveau 0 à partir de `from`.
+    fn find_semicolon(chars: &[char], from: usize) -> Option<usize> {
+        let mut j = from;
+        while j < chars.len() {
+            if chars[j] == ';' {
+                return Some(j);
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// À partir de `body_start` (juste après le `;` de l'en-tête du `%do`),
+    /// trouve le `%end` équilibré. Rend `(index_du_%end, index_après_%end;)`.
+    fn find_matching_end(chars: &[char], body_start: usize) -> Option<(usize, usize)> {
+        let mut j = body_start;
+        let mut depth = 1usize;
+        while j < chars.len() {
+            if chars[j] == '%' {
+                if Self::matches_kw(chars, j, "do") {
+                    depth += 1;
+                    j += 1 + "do".len();
+                    continue;
+                }
+                if Self::matches_kw(chars, j, "end") {
+                    depth -= 1;
+                    if depth == 0 {
+                        let end_at = j;
+                        let mut k = j + 1 + "end".len();
+                        // Avaler un `;` terminal optionnel après `%end`.
+                        let mut m = k;
+                        while matches!(chars.get(m), Some(c) if *c == ' ' || *c == '\t') {
+                            m += 1;
+                        }
+                        if chars.get(m) == Some(&';') {
+                            k = m + 1;
+                        }
+                        return Some((end_at, k));
+                    }
+                    j += 1 + "end".len();
+                    continue;
+                }
+            }
+            j += 1;
+        }
+        None
+    }
+}
+
+/// Jeton de l'expression macro pour `%eval`.
+#[cfg(feature = "macros")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EvalTok {
+    Int(i64),
+    /// Opérande non entier (rencontré tel quel) : déclenche l'erreur SAS
+    /// "A character operand was found..." si utilisé dans un contexte
+    /// arithmétique. Conservé pour égalité textuelle dans les comparaisons.
+    Word(String),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Pow,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Not,
+    LParen,
+    RParen,
+}
+
+#[cfg(feature = "macros")]
+impl MacroEngine {
+    /// Évalue une expression macro `%eval` selon la sémantique ENTIÈRE de SAS.
+    /// Le texte fourni doit déjà avoir ses `&vars` résolus (l'appelant le fait).
+    ///
+    /// Grammaire (par précédence croissante, récursive-descente) :
+    /// ```text
+    /// expr        := or_expr
+    /// or_expr     := and_expr ( ('|' | 'or') and_expr )*
+    /// and_expr    := not_expr ( ('&' | 'and') not_expr )*
+    /// not_expr    := ('^' | '~' | 'not')* cmp_expr
+    /// cmp_expr    := add_expr ( cmp_op add_expr )?
+    /// add_expr    := mul_expr ( ('+' | '-') mul_expr )*
+    /// mul_expr    := pow_expr ( ('*' | '/') pow_expr )*
+    /// pow_expr    := unary ( '**' pow_expr )?         // associatif à droite
+    /// unary       := ('+' | '-')* primary
+    /// primary     := INT | '(' expr ')'
+    /// ```
+    /// Sémantique : opérandes entiers ; division ENTIÈRE tronquée vers zéro ;
+    /// `**` puissance entière ; comparaisons → 1/0 ; logiques → 1/0 (vrai =
+    /// non nul). Un opérande non entier dans un contexte arithmétique est une
+    /// erreur ("A character operand was found in the %EVAL function...").
+    fn macro_eval(&self, expr: &str) -> Result<i64, MacroError> {
+        let toks = Self::tokenize_eval(expr)?;
+        let mut p = EvalParser { toks: &toks, pos: 0 };
+        let v = p.parse_expr()?;
+        if p.pos != p.toks.len() {
+            return Err(MacroError::new(format!(
+                "ERROR: A syntax error was detected in the %EVAL expression: {expr}"
+            )));
+        }
+        Ok(v)
+    }
+
+    /// Découpe l'expression en jetons. Les espaces séparent ; les mots
+    /// alphabétiques sont reconnus comme opérateurs textuels (`eq`, `and`,
+    /// `not`, ...) sinon conservés comme `Word` (opérande non entier).
+    fn tokenize_eval(expr: &str) -> Result<Vec<EvalTok>, MacroError> {
+        let chars: Vec<char> = expr.chars().collect();
+        let mut toks = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            match c {
+                '+' => {
+                    toks.push(EvalTok::Plus);
+                    i += 1;
+                }
+                '-' => {
+                    toks.push(EvalTok::Minus);
+                    i += 1;
+                }
+                '*' => {
+                    if chars.get(i + 1) == Some(&'*') {
+                        toks.push(EvalTok::Pow);
+                        i += 2;
+                    } else {
+                        toks.push(EvalTok::Star);
+                        i += 1;
+                    }
+                }
+                '/' => {
+                    toks.push(EvalTok::Slash);
+                    i += 1;
+                }
+                '(' => {
+                    toks.push(EvalTok::LParen);
+                    i += 1;
+                }
+                ')' => {
+                    toks.push(EvalTok::RParen);
+                    i += 1;
+                }
+                '=' => {
+                    toks.push(EvalTok::Eq);
+                    i += 1;
+                }
+                '&' => {
+                    // `&&` ou `&` -> AND logique.
+                    if chars.get(i + 1) == Some(&'&') {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                    toks.push(EvalTok::And);
+                }
+                '|' => {
+                    if chars.get(i + 1) == Some(&'|') {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                    toks.push(EvalTok::Or);
+                }
+                '<' => {
+                    if chars.get(i + 1) == Some(&'=') {
+                        toks.push(EvalTok::Le);
+                        i += 2;
+                    } else if chars.get(i + 1) == Some(&'>') {
+                        // `<>` = NE en contexte de comparaison macro SAS.
+                        toks.push(EvalTok::Ne);
+                        i += 2;
+                    } else {
+                        toks.push(EvalTok::Lt);
+                        i += 1;
+                    }
+                }
+                '>' => {
+                    if chars.get(i + 1) == Some(&'=') {
+                        toks.push(EvalTok::Ge);
+                        i += 2;
+                    } else {
+                        toks.push(EvalTok::Gt);
+                        i += 1;
+                    }
+                }
+                '^' | '~' => {
+                    if chars.get(i + 1) == Some(&'=') {
+                        toks.push(EvalTok::Ne);
+                        i += 2;
+                    } else {
+                        toks.push(EvalTok::Not);
+                        i += 1;
+                    }
+                }
+                _ if c.is_ascii_digit() => {
+                    let start = i;
+                    while matches!(chars.get(i), Some(d) if d.is_ascii_digit()) {
+                        i += 1;
+                    }
+                    // Un opérande alphanumérique mixte (ex. `3a`) est un mot.
+                    if matches!(chars.get(i), Some(d) if d.is_ascii_alphabetic() || *d == '_') {
+                        let wstart = start;
+                        while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_') {
+                            i += 1;
+                        }
+                        let w: String = chars[wstart..i].iter().collect();
+                        toks.push(EvalTok::Word(w));
+                    } else {
+                        let s: String = chars[start..i].iter().collect();
+                        match s.parse::<i64>() {
+                            Ok(n) => toks.push(EvalTok::Int(n)),
+                            Err(_) => {
+                                return Err(MacroError::new(format!(
+                                    "ERROR: Overflow in the %EVAL function: {s}"
+                                )))
+                            }
+                        }
+                    }
+                }
+                _ if c.is_ascii_alphabetic() || c == '_' => {
+                    let start = i;
+                    while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_') {
+                        i += 1;
+                    }
+                    let w: String = chars[start..i].iter().collect();
+                    match w.to_ascii_lowercase().as_str() {
+                        "eq" => toks.push(EvalTok::Eq),
+                        "ne" => toks.push(EvalTok::Ne),
+                        "lt" => toks.push(EvalTok::Lt),
+                        "le" => toks.push(EvalTok::Le),
+                        "gt" => toks.push(EvalTok::Gt),
+                        "ge" => toks.push(EvalTok::Ge),
+                        "and" => toks.push(EvalTok::And),
+                        "or" => toks.push(EvalTok::Or),
+                        "not" => toks.push(EvalTok::Not),
+                        _ => toks.push(EvalTok::Word(w)),
+                    }
+                }
+                other => {
+                    return Err(MacroError::new(format!(
+                        "ERROR: A syntax error was detected in the %EVAL expression near '{other}'"
+                    )))
+                }
+            }
+        }
+        Ok(toks)
+    }
+}
+
+/// Analyseur récursif-descendant pour l'expression `%eval`.
+#[cfg(feature = "macros")]
+struct EvalParser<'a> {
+    toks: &'a [EvalTok],
+    pos: usize,
+}
+
+#[cfg(feature = "macros")]
+impl<'a> EvalParser<'a> {
+    fn peek(&self) -> Option<&EvalTok> {
+        self.toks.get(self.pos)
+    }
+
+    fn bump(&mut self) -> Option<&EvalTok> {
+        let t = self.toks.get(self.pos);
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn parse_expr(&mut self) -> Result<i64, MacroError> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<i64, MacroError> {
+        let mut left = self.parse_and()?;
+        while matches!(self.peek(), Some(EvalTok::Or)) {
+            self.bump();
+            let right = self.parse_and()?;
+            left = ((left != 0) || (right != 0)) as i64;
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> Result<i64, MacroError> {
+        let mut left = self.parse_not()?;
+        while matches!(self.peek(), Some(EvalTok::And)) {
+            self.bump();
+            let right = self.parse_not()?;
+            left = ((left != 0) && (right != 0)) as i64;
+        }
+        Ok(left)
+    }
+
+    fn parse_not(&mut self) -> Result<i64, MacroError> {
+        let mut negs = 0;
+        while matches!(self.peek(), Some(EvalTok::Not)) {
+            self.bump();
+            negs += 1;
+        }
+        let v = self.parse_cmp()?;
+        if negs % 2 == 1 {
+            Ok((v == 0) as i64)
+        } else {
+            Ok(v)
+        }
+    }
+
+    fn parse_cmp(&mut self) -> Result<i64, MacroError> {
+        let left = self.parse_add()?;
+        if let Some(op) = self.peek().cloned() {
+            let is_cmp = matches!(
+                op,
+                EvalTok::Eq
+                    | EvalTok::Ne
+                    | EvalTok::Lt
+                    | EvalTok::Le
+                    | EvalTok::Gt
+                    | EvalTok::Ge
+            );
+            if is_cmp {
+                self.bump();
+                let right = self.parse_add()?;
+                let r = match op {
+                    EvalTok::Eq => left == right,
+                    EvalTok::Ne => left != right,
+                    EvalTok::Lt => left < right,
+                    EvalTok::Le => left <= right,
+                    EvalTok::Gt => left > right,
+                    EvalTok::Ge => left >= right,
+                    _ => unreachable!(),
+                };
+                return Ok(r as i64);
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_add(&mut self) -> Result<i64, MacroError> {
+        let mut left = self.parse_mul()?;
+        loop {
+            match self.peek() {
+                Some(EvalTok::Plus) => {
+                    self.bump();
+                    left = left.wrapping_add(self.parse_mul()?);
+                }
+                Some(EvalTok::Minus) => {
+                    self.bump();
+                    left = left.wrapping_sub(self.parse_mul()?);
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_mul(&mut self) -> Result<i64, MacroError> {
+        let mut left = self.parse_pow()?;
+        loop {
+            match self.peek() {
+                Some(EvalTok::Star) => {
+                    self.bump();
+                    left = left.wrapping_mul(self.parse_pow()?);
+                }
+                Some(EvalTok::Slash) => {
+                    self.bump();
+                    let right = self.parse_pow()?;
+                    if right == 0 {
+                        return Err(MacroError::new(
+                            "ERROR: Division by zero detected in the %EVAL expression",
+                        ));
+                    }
+                    // Division entière tronquée vers zéro (sémantique Rust `/`).
+                    left /= right;
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_pow(&mut self) -> Result<i64, MacroError> {
+        let base = self.parse_unary()?;
+        if matches!(self.peek(), Some(EvalTok::Pow)) {
+            self.bump();
+            // Associatif à droite.
+            let exp = self.parse_pow()?;
+            return Ok(Self::ipow(base, exp));
+        }
+        Ok(base)
+    }
+
+    /// Puissance entière ; exposant négatif -> 0 (sémantique entière, comme SAS
+    /// qui tronque le résultat fractionnaire vers 0 sauf base ±1).
+    fn ipow(base: i64, exp: i64) -> i64 {
+        if exp < 0 {
+            return match base {
+                1 => 1,
+                -1 => {
+                    if (-exp) % 2 == 0 {
+                        1
+                    } else {
+                        -1
+                    }
+                }
+                _ => 0,
+            };
+        }
+        let mut result: i64 = 1;
+        let mut b = base;
+        let mut e = exp;
+        while e > 0 {
+            if e & 1 == 1 {
+                result = result.wrapping_mul(b);
+            }
+            e >>= 1;
+            if e > 0 {
+                b = b.wrapping_mul(b);
+            }
+        }
+        result
+    }
+
+    fn parse_unary(&mut self) -> Result<i64, MacroError> {
+        match self.peek() {
+            Some(EvalTok::Plus) => {
+                self.bump();
+                self.parse_unary()
+            }
+            Some(EvalTok::Minus) => {
+                self.bump();
+                Ok(self.parse_unary()?.wrapping_neg())
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Result<i64, MacroError> {
+        match self.bump() {
+            Some(EvalTok::Int(n)) => Ok(*n),
+            Some(EvalTok::LParen) => {
+                let v = self.parse_expr()?;
+                match self.bump() {
+                    Some(EvalTok::RParen) => Ok(v),
+                    _ => Err(MacroError::new(
+                        "ERROR: A syntax error was detected in the %EVAL expression: expected ')'",
+                    )),
+                }
+            }
+            Some(EvalTok::Word(w)) => Err(MacroError::new(format!(
+                "ERROR: A character operand was found in the %EVAL function or %IF condition where a numeric operand is required. The condition was: {w}"
+            ))),
+            other => Err(MacroError::new(format!(
+                "ERROR: A syntax error was detected in the %EVAL expression near {other:?}"
+            ))),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "macros"))]
 mod macro_tests {
     use super::*;
@@ -1021,5 +1981,189 @@ mod macro_tests {
         // &x défini en open code, passé à la macro.
         let src = "%macro p(a); v=&a; %mend; %let x = 9; %p(&x)";
         assert_eq!(run(src), "v=9;");
+    }
+
+    // --- M11.4 : %eval (évaluateur d'expression entière) ---
+
+    fn eval(expr: &str) -> Result<i64, MacroError> {
+        MacroStage::default().macro_eval(expr)
+    }
+
+    #[test]
+    fn eval_precedence() {
+        assert_eq!(eval("3+4*2").unwrap(), 11);
+    }
+
+    #[test]
+    fn eval_integer_division_truncates() {
+        assert_eq!(eval("7/2").unwrap(), 3);
+        assert_eq!(eval("-7/2").unwrap(), -3); // tronqué vers zéro
+    }
+
+    #[test]
+    fn eval_power() {
+        assert_eq!(eval("2**10").unwrap(), 1024);
+        // Associatif à droite : 2**3**2 = 2**9 = 512.
+        assert_eq!(eval("2**3**2").unwrap(), 512);
+    }
+
+    #[test]
+    fn eval_logical_and() {
+        assert_eq!(eval("1 and 0").unwrap(), 0);
+        assert_eq!(eval("1 & 1").unwrap(), 1);
+    }
+
+    #[test]
+    fn eval_comparison() {
+        assert_eq!(eval("5 ge 5").unwrap(), 1);
+        assert_eq!(eval("5 > 6").unwrap(), 0);
+        assert_eq!(eval("3 = 3").unwrap(), 1);
+        assert_eq!(eval("3 ne 4").unwrap(), 1);
+        assert_eq!(eval("2 <> 2").unwrap(), 0); // <> = NE
+    }
+
+    #[test]
+    fn eval_parens() {
+        assert_eq!(eval("(1+2)*3").unwrap(), 9);
+    }
+
+    #[test]
+    fn eval_unary_minus() {
+        assert_eq!(eval("-3 + 5").unwrap(), 2);
+        assert_eq!(eval("- -4").unwrap(), 4);
+    }
+
+    #[test]
+    fn eval_not() {
+        assert_eq!(eval("not 0").unwrap(), 1);
+        assert_eq!(eval("^0").unwrap(), 1);
+        assert_eq!(eval("not 5").unwrap(), 0);
+    }
+
+    #[test]
+    fn eval_or() {
+        assert_eq!(eval("0 or 0").unwrap(), 0);
+        assert_eq!(eval("0 | 1").unwrap(), 1);
+    }
+
+    #[test]
+    fn eval_non_integer_operand_errors() {
+        let e = eval("abc + 1").unwrap_err();
+        assert!(e.message.contains("character operand"), "got: {}", e.message);
+    }
+
+    #[test]
+    fn eval_division_by_zero_errors() {
+        let e = eval("1/0").unwrap_err();
+        assert!(e.message.contains("Division by zero"), "got: {}", e.message);
+    }
+
+    #[test]
+    fn eval_function_splices_in_open_code() {
+        assert_eq!(run("x = %eval(3+4*2);"), "x = 11;");
+        assert_eq!(run("x = %eval((1+2)*3);"), "x = 9;");
+    }
+
+    #[test]
+    fn eval_function_with_macro_var() {
+        assert_eq!(run("%let n = 4; x = %eval(&n*2);"), "x = 8;");
+    }
+
+    // --- M11.3 : %if / %then / %else ---
+
+    #[test]
+    fn if_simple_then_else() {
+        assert_eq!(run("%if 1 %then a; %else b;"), "a;");
+        assert_eq!(run("%if 0 %then a; %else b;"), "b;");
+    }
+
+    #[test]
+    fn if_then_no_else_false_emits_nothing() {
+        assert_eq!(run("%if 0 %then x;"), "");
+    }
+
+    #[test]
+    fn if_with_do_groups() {
+        assert_eq!(
+            run("%if 0 %then %do; a=1; %end; %else %do; a=2; %end;"),
+            "a=2;"
+        );
+        assert_eq!(
+            run("%if 1 %then %do; a=1; %end; %else %do; a=2; %end;"),
+            "a=1;"
+        );
+    }
+
+    #[test]
+    fn if_condition_uses_macro_var() {
+        assert_eq!(run("%let n = 5; %if &n ge 5 %then big; %else small;"), "big;");
+        assert_eq!(run("%let n = 1; %if &n ge 5 %then big; %else small;"), "small;");
+    }
+
+    #[test]
+    fn if_condition_uses_eval_expression() {
+        assert_eq!(run("%if 3+4 gt 5 %then yes; %else no;"), "yes;");
+    }
+
+    // --- M11.3 : %do / %end (groupe) et itératif ---
+
+    #[test]
+    fn do_group_plain() {
+        assert_eq!(run("%do; a=1; b=2; %end;"), "a=1; b=2;");
+    }
+
+    #[test]
+    fn iterative_do_basic() {
+        let src = "%macro g(n); %do i=1 %to &n; v&i=&i; %end; %mend; %g(3)";
+        assert_eq!(run(src), "v1=1; v2=2; v3=3;");
+    }
+
+    #[test]
+    fn iterative_do_with_by() {
+        let src = "%macro g; %do i=1 %to 5 %by 2; [&i] %end; %mend; %g";
+        assert_eq!(run(src), "[1] [3] [5]");
+    }
+
+    #[test]
+    fn iterative_do_zero_iterations() {
+        // start > stop avec pas positif -> aucune itération.
+        let src = "%macro g; pre%do i=5 %to 1; x%end;post %mend; %g";
+        assert_eq!(run(src), "prepost");
+    }
+
+    #[test]
+    fn iterative_do_negative_step() {
+        let src = "%macro g; %do i=3 %to 1 %by -1; [&i] %end; %mend; %g";
+        assert_eq!(run(src), "[3] [2] [1]");
+    }
+
+    #[test]
+    fn iterative_do_in_open_code() {
+        assert_eq!(run("%do i=1 %to 3; n&i; %end;"), "n1; n2; n3;");
+    }
+
+    #[test]
+    fn if_do_nested_in_macro_body() {
+        let src = "%macro m(n); \
+                   %do i=1 %to &n; \
+                   %if &i ge 2 %then big&i; %else small&i; \
+                   %end; \
+                   %mend; %m(3)";
+        // i=1 -> small1 ; i=2 -> big2 ; i=3 -> big3.
+        assert_eq!(run(src), "small1; big2; big3;");
+    }
+
+    #[test]
+    fn runaway_loop_guard_does_not_hang() {
+        // step négatif avec start<stop et pas négatif s'arrête tout de suite ;
+        // ici on teste le pas nul -> erreur propre, pas de hang.
+        let out = run("%do i=1 %to 10 %by 0; x %end;");
+        assert!(out.contains("step is zero"), "got: {out}");
+    }
+
+    #[test]
+    fn do_while_until_deferred() {
+        let out = run("%do %while(1); x %end;");
+        assert!(out.contains("not supported"), "got: {out}");
     }
 }
