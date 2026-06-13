@@ -23,6 +23,7 @@ pub mod format;
 pub mod freq;
 pub mod means;
 pub mod print;
+pub mod rank;
 pub mod sort;
 pub mod transpose;
 pub mod univariate;
@@ -41,6 +42,7 @@ pub enum ProcAst {
     Univariate(univariate::UnivariateAst),
     Contents(contents::ContentsAst),
     Corr(corr::CorrAst),
+    Rank(rank::RankAst),
     Datasets(datasets::DatasetsAst),
     Append(append::AppendAst),
     Format(format::FormatAst),
@@ -74,6 +76,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
         "corr" => {
             let ast = corr::parse(ts)?;
             Ok(ProcAst::Corr(ast))
+        }
+        "rank" => {
+            let ast = rank::parse(ts)?;
+            Ok(ProcAst::Rank(ast))
         }
         // PROC MEANS / PROC SUMMARY share a parser/executor. PROC SUMMARY is
         // PROC MEANS with NOPRINT defaulted to true: it suppresses the report
@@ -143,6 +149,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Univariate(a) => univariate::execute(a, session),
         ProcAst::Contents(a) => contents::execute(a, session),
         ProcAst::Corr(a) => corr::execute(a, session),
+        ProcAst::Rank(a) => rank::execute(a, session),
         ProcAst::Datasets(a) => datasets::execute(a, session),
         ProcAst::Append(a) => append::execute(a, session),
         ProcAst::Format(a) => format::execute(a, session),

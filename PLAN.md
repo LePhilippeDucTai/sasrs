@@ -118,7 +118,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 |---|---|---|---|---|
 | `src/procs/common.rs` | M9 | ✅ | moyen | `decode_column`/`sample_std`/`partition_numeric`/`group_by_keys` extraits (verbatim) ; means/freq/univariate/sort/transpose/append rebranchés ; refactor pur, sorties inchangées (`resolve_input` laissé par-proc) |
 | `src/procs/corr.rs` | M9 | ✅ | moyen | Pearson (VAR/WITH), Simple Statistics, matrice r + `Prob>|r|` (t-CDF via betai), N appariés ; NOSIMPLE/NOPROB/NOCORR ; OUT= = erreur (suite) ; réutilise common |
-| `src/procs/rank.rs` | M9 | **Opus** | moyen | VAR/RANKS, GROUPS=, TIES=, DESCENDING, OUT= ; collation `sas_cmp` |
+| `src/procs/rank.rs` | M9 | ✅ | moyen | VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= ; collation `sas_cmp`, missing→missing ; BY + méthodes alt. = erreur (suite) |
 | `src/procs/tabulate.rs` | M9 | **Opus** | élevé | sous-parser de l'expression de table (page/row/col, `*`/`,`) |
 | `src/procs/report.rs` | M9 | **Opus** | élevé | COLUMN + DEFINE, groupes, BREAK/RBREAK (sous-ensemble) |
 | BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | **Opus** | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
