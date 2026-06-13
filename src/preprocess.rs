@@ -1528,14 +1528,12 @@ impl MacroEngine {
             // `%do %while`/`%until` : non implémenté (déféré). On émet une note
             // et on consomme le bloc pour ne pas réémettre du texte brut.
         }
-        // Vérifier `%do %while`/`%until` -> déféré.
-        if Self::matches_kw(chars, j, "while") || Self::matches_kw(chars, j, "until") {
-            let (_text, after) = Self::scan_do_block(chars, i)?;
-            Self::emit_error(
-                out,
-                &MacroError::new("ERROR: %DO %WHILE/%UNTIL is not supported by this interpreter"),
-            );
-            return Some(after);
+        // Formes conditionnelles `%do %while(<cond>)` / `%do %until(<cond>)`.
+        if Self::matches_kw_paren(chars, j, "while") {
+            return self.consume_conditional_do(chars, i, j, "while", true, out);
+        }
+        if Self::matches_kw_paren(chars, j, "until") {
+            return self.consume_conditional_do(chars, i, j, "until", false, out);
         }
 
         // Forme groupe `%do; ... %end;` : le caractère courant doit être `;`.
@@ -1663,6 +1661,87 @@ impl MacroEngine {
             match value.checked_add(step) {
                 Some(v) => value = v,
                 None => break,
+            }
+        }
+        out.push_str(buf.trim_end());
+        Some(after)
+    }
+
+    /// Consomme les formes conditionnelles `%do %while(<cond>); body %end;` et
+    /// `%do %until(<cond>); body %end;`.
+    ///
+    /// `kw_start` pointe sur le `%` de `%while`/`%until`. `is_while` distingue la
+    /// sémantique :
+    /// - `%while` : test AVANT chaque itération (0 itération si faux d'emblée) ;
+    /// - `%until` : test APRÈS chaque itération (≥1 itération, on s'arrête dès
+    ///   que la condition devient vraie).
+    ///
+    /// La condition est ré-évaluée fraîchement à chaque tour (résolution des
+    /// `&refs` + `macro_eval`), si bien qu'un `%let` dans le corps influe sur la
+    /// terminaison. Réutilise `MAX_LOOP_ITERS` comme garde anti-boucle-folle. Le
+    /// rognage des blancs suit la convention de `consume_iterative_do`.
+    fn consume_conditional_do(
+        &mut self,
+        chars: &[char],
+        _do_start: usize,
+        kw_start: usize,
+        kw: &str,
+        is_while: bool,
+        out: &mut String,
+    ) -> Option<usize> {
+        // La `(` suit le mot-clé (éventuellement après des blancs).
+        let mut p = kw_start + 1 + kw.len();
+        while matches!(chars.get(p), Some(c) if c.is_whitespace()) {
+            p += 1;
+        }
+        if chars.get(p) != Some(&'(') {
+            return None;
+        }
+        let (cond, after_cond) = Self::read_balanced_parens(chars, p)?;
+        // L'en-tête se termine par le `;` suivant la `)` de la condition.
+        let semi = Self::find_semicolon(chars, after_cond)?;
+        let body_start = semi + 1;
+        let (body_end, after) = Self::find_matching_end(chars, body_start)?;
+        let body: String = chars[body_start..body_end].iter().collect();
+        let body_trimmed = body.trim_start();
+
+        let mut buf = String::new();
+        let mut iters: i64 = 0;
+        loop {
+            // `%while` teste avant le corps ; `%until` après.
+            if is_while {
+                match self.eval_condition(&cond) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(e) => {
+                        Self::emit_error(&mut buf, &e);
+                        break;
+                    }
+                }
+            }
+            iters += 1;
+            if iters > Self::MAX_LOOP_ITERS {
+                Self::emit_error(
+                    &mut buf,
+                    &MacroError::new(format!(
+                        "ERROR: %DO loop exceeded {} iterations (runaway guard)",
+                        Self::MAX_LOOP_ITERS
+                    )),
+                );
+                break;
+            }
+            let expanded = self.process_impl(body_trimmed);
+            buf.push_str(&expanded);
+            if !is_while {
+                // `%until` : on s'arrête quand la condition devient vraie.
+                match self.eval_condition(&cond) {
+                    Ok(true) => break,
+                    Ok(false) => {}
+                    Err(e) => {
+                        Self::emit_error(&mut buf, &e);
+                        break;
+                    }
+                }
             }
         }
         out.push_str(buf.trim_end());
@@ -2707,10 +2786,46 @@ mod macro_tests {
         assert!(out.contains("step is zero"), "got: {out}");
     }
 
+    // --- M12.1 : %do %while / %do %until ---
+
     #[test]
-    fn do_while_until_deferred() {
+    fn do_while_counter_loop() {
+        let out = run("%let i=1; %do %while(&i <= 3); v&i=&i; %let i=%eval(&i+1); %end;");
+        assert_eq!(out, "v1=1; v2=2; v3=3;");
+    }
+
+    #[test]
+    fn do_until_counter_loop() {
+        let out = run("%let i=1; %do %until(&i > 3); v&i=&i; %let i=%eval(&i+1); %end;");
+        assert_eq!(out, "v1=1; v2=2; v3=3;");
+    }
+
+    #[test]
+    fn do_while_zero_iterations() {
+        // Condition fausse d'emblée -> aucune itération, sortie vide.
+        let out = run("%let i=5; %do %while(&i < 3); v&i=&i; %end;");
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn do_until_runs_at_least_once() {
+        // Condition déjà vraie à l'entrée : `%until` itère quand même une fois.
+        let out = run("%let i=5; %do %until(&i > 3); hit; %end;");
+        assert_eq!(out, "hit;");
+    }
+
+    #[test]
+    fn do_while_inside_macro_body() {
+        let src = "%macro m; %let i=1; %do %while(&i <= 3); v&i=&i; %let i=%eval(&i+1); %end; %mend; %m";
+        let out = run(src);
+        assert_eq!(out.trim(), "v1=1; v2=2; v3=3;");
+    }
+
+    #[test]
+    fn do_while_runaway_guard() {
+        // Condition toujours vraie, jamais mise à jour -> garde anti-runaway.
         let out = run("%do %while(1); x %end;");
-        assert!(out.contains("not supported"), "got: {out}");
+        assert!(out.contains("runaway guard"), "got: {out}");
     }
 
     // --- M11.6 : &&& / &&var&i nested indirection ---

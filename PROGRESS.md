@@ -111,7 +111,7 @@ interfoliée** pilotée par l'exécuteur, état (`MacroEngine`) dans `Session` ;
 Différés de M11, dans `src/preprocess.rs` (macros toujours actif). Invariant : snapshots
 m1–m11 octet-identiques (le nouveau comportement ne s'active que sur les nouvelles directives).
 
-- [ ] M12.1 — `%do %while(cond)` / `%do %until(cond)` : boucles conditionnelles (cond via `macro_eval`). `%while` teste AVANT chaque itération, `%until` APRÈS (≥1 itération). Réutilise la garde d'itérations (1e6) ; `&i` non requis. Tests : compteur via `%let`+`%eval` dans le corps, zéro-itération (%while faux d'emblée), %until s'arrête.
+- [x] M12.1 — `%do %while(cond)` / `%do %until(cond)` : boucles conditionnelles, cond résolue (`&refs`) puis `macro_eval` à chaque tour. `%while` teste AVANT (0 itération possible), `%until` APRÈS (≥1). Garde `MAX_LOOP_ITERS` réutilisée (pas de hang/panic). +5 tests (972 total, 0 `.snap.new`, 0 warning).
 - [ ] M12.2 — quoting : `%str`/`%nrstr` existent (M11.6) ; ajouter `%bquote`/`%nrbquote` (masquage à l'exécution, gère parenthèses/quotes non appariées), `%superq(nom)` (valeur du symbole SANS résoudre les `&`/`%` qu'elle contient), et variantes masquées `%qsysfunc`/`%qscan`/`%qsubstr`/`%qupcase`/`%qlowcase`. `%qscan`/etc. = version `%q*` des fonctions existantes. Différés documentés : `%unquote` partiel, `%qcmpres`.
 - [ ] Fixtures `tests/fixtures/m12/` + snapshots (vérifiés main) ; DoD : cargo test vert.
 
