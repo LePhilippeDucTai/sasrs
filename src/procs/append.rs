@@ -171,10 +171,8 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
         session.last_dataset = Some(format!("{base_libref}.{base_table}"));
         let n = data_ds.n_obs();
         session.log.note(&format!(
-            "The data set {base_disp} has {n} observation{} and {} variable{}.",
-            if n == 1 { "" } else { "s" },
+            "The data set {base_disp} has {n} observations and {} variables.",
             data_ds.n_vars(),
-            if data_ds.n_vars() == 1 { "" } else { "s" },
         ));
         return Ok(());
     }
@@ -346,18 +344,14 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     let n_total = result.n_obs();
     let n_vars = result.n_vars();
 
+    // NOTEs SAS au pluriel invariable (checklist #7) : toujours
+    // "observations"/"variables", même pour 1.
     session.log.note(&format!(
-        "There were {n_data} observation{} read from the data set {data_disp}.",
-        if n_data == 1 { "" } else { "s" },
+        "There were {n_data} observations read from the data set {data_disp}."
     ));
+    session.log.note(&format!("{n_data} observations added."));
     session.log.note(&format!(
-        "{n_data} observation{} added.",
-        if n_data == 1 { "" } else { "s" },
-    ));
-    session.log.note(&format!(
-        "The data set {base_disp} has {n_total} observation{} and {n_vars} variable{}.",
-        if n_total == 1 { "" } else { "s" },
-        if n_vars == 1 { "" } else { "s" },
+        "The data set {base_disp} has {n_total} observations and {n_vars} variables."
     ));
 
     Ok(())

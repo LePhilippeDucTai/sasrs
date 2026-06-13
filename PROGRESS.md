@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M7**
+Jalon courant : **M8**
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -64,7 +64,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] `src/procs/append.rs` (FORCE)
 - [x] `src/procs/datasets.rs` (+ `rename` dans LibraryProvider)
 - [x] OPTIONS OBS=/FIRSTOBS= ; fonctions lot 2 (INTNX/INTCK, LAG/DIF par site d'appel) — OBS=/FIRSTOBS= appliqués à l'entrée SET de l'étape DATA (pas encore aux lectures des procs)
-- [ ] Fixtures m7/ + snapshots
+- [x] Fixtures m7/ + snapshots
 
 ## M8 — durcissement
 - [ ] Spike macro `%let` derrière feature flag (valider la couture TextStage)

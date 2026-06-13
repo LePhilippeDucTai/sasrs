@@ -1,0 +1,72 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m7/options_funcs.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     options firstobs=2 obs=5;
+
+3     data work.win;
+4       set d.class(keep=name age);
+5       prev_age = lag(age);
+6       age_diff = dif(age);
+7     run;
+NOTE: There were 4 observations read from the data set D.CLASS.
+NOTE: The data set WORK.WIN has 4 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+8     options firstobs=1 obs=max;
+
+9     title 'FIRSTOBS=2 OBS=5 window with LAG/DIF';
+
+10    proc print data=work.win;
+11    run;
+NOTE: There were 4 observations read from the data set WORK.WIN.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    data work.dates;
+13      start = '15jan2020'd;
+14      next_month = intnx('month', start, 1);
+15      months_between = intck('month', '15jan2020'd, '10mar2020'd);
+16    run;
+NOTE: The data set WORK.DATES has 1 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+17    title 'INTNX / INTCK';
+
+18    proc print data=work.dates;
+19    run;
+NOTE: There were 1 observations read from the data set WORK.DATES.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                              FIRSTOBS=2 OBS=5 window with LAG/DIF
+
+                         Obs    name       age    prev_age    age_diff
+
+                           1    Alice       13           .           .
+                           2    Barbara     13          13           0
+                           3    Carol       14          13           1
+                           4    Henry       14          14           0
+
+                                         INTNX / INTCK
+
+                          Obs    start    next_month    months_between
+
+                            1    21929         21946                 2
+
+==== EXIT 0 ====
