@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **— tous les jalons M1–M11 terminés** (étape DATA, 15 PROCs, SQL, stats avancées, processeur macro complet ON par défaut)
+Jalon courant : **M12** (extensions macro : `%do %while`/`%until` + quoting) puis **M13** (branchement S3 réel). M1–M11 terminés.
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -106,3 +106,18 @@ interfoliée** pilotée par l'exécuteur, état (`MacroEngine`) dans `Session` ;
 - [x] M11.6 — `%sysfunc(fn(args))` (liste blanche → `functions::call`) ; vars auto `&SYSDATE9`/`&SYSTIME`/`&SYSDAY`/`&SYSVER` (FIGÉES sous `--deterministic` : 01JAN1960/00:00/Friday/9.4) ; quoting `%str`/`%nrstr` (sentinelles) ; indirection `&&&`/`&&var&i`. Tout sous feature `macros`. Gates : défaut 896 (0 `.snap.new`), feature 967 (+14), 0 warning. (l'agent a fini le code mais n'a pu lancer son gate — disque plein ; validé par l'orchestrateur après `cargo clean`)
 - [x] M11.7 — feature `macros` RETIRÉE : processeur macro TOUJOURS actif. `IdentityMacroStage` + le `MacroEngine` identité (zero-sized) + la branche `run_program` source-entier supprimés ; seul le chemin per-segment subsiste. **Gate critique vert : `cargo test -p sas_interpreter` (sans `--features`) = 967 tests + snapshot, ZÉRO `.snap.new` (octet-identique), 0 warning.** Aucun fixture macro-free n'a divergé (fast-path identité : segment sans `%`/`&` → tranche inchangée ; n° de ligne via `LogWriter.src_line` partagé)
 - [x] Fixtures `tests/fixtures/m11/` (macro_loop, eval_if, symput, sysfunc_autovars) + 4 snapshots **vérifiés à la main** : `%macro`+`%do` génère x=1,2,3 ; `%eval(7/2)`=3 + `%if` → big=7 ; `CALL SYMPUT`→étape suivante v=42 ; `%sysfunc(upcase)`=SAS + `&sysver`=9.4 + `&sysdate9`=01JAN1960. (NB : commentaires sans `%`/`&` — le processeur les scanne, simplification documentée.) `cargo test` vert (967 + snapshots), flag retiré. **M11 TERMINÉ.**
+
+## M12 — extensions macro (processeur ON par défaut)
+Différés de M11, dans `src/preprocess.rs` (macros toujours actif). Invariant : snapshots
+m1–m11 octet-identiques (le nouveau comportement ne s'active que sur les nouvelles directives).
+
+- [ ] M12.1 — `%do %while(cond)` / `%do %until(cond)` : boucles conditionnelles (cond via `macro_eval`). `%while` teste AVANT chaque itération, `%until` APRÈS (≥1 itération). Réutilise la garde d'itérations (1e6) ; `&i` non requis. Tests : compteur via `%let`+`%eval` dans le corps, zéro-itération (%while faux d'emblée), %until s'arrête.
+- [ ] M12.2 — quoting : `%str`/`%nrstr` existent (M11.6) ; ajouter `%bquote`/`%nrbquote` (masquage à l'exécution, gère parenthèses/quotes non appariées), `%superq(nom)` (valeur du symbole SANS résoudre les `&`/`%` qu'elle contient), et variantes masquées `%qsysfunc`/`%qscan`/`%qsubstr`/`%qupcase`/`%qlowcase`. `%qscan`/etc. = version `%q*` des fonctions existantes. Différés documentés : `%unquote` partiel, `%qcmpres`.
+- [ ] Fixtures `tests/fixtures/m12/` + snapshots (vérifiés main) ; DoD : cargo test vert.
+
+## M13 — branchement S3 réel
+Le stub `S3Library` (feature `s3`, M8) compile mais n'est pas branché. Objectif : LIBNAME
+sur URI `s3://` lit/scanne réellement des parquet via Polars object-store.
+
+- [ ] M13.1 — activer les features Polars `cloud`/`aws` derrière `s3` ; implémenter `S3Library` (scan/read parquet `s3://bucket/key` via `LazyFrame::scan_parquet` object-store ; `ScanArgsParquet`/`CloudOptions`), brancher dans `LibraryManager`/parsing LIBNAME (`libname x 's3://...';` → provider S3). Credentials via env AWS standard. Mutations (write/rename/delete) : best-effort ou erreur claire documentée.
+- [ ] M13.2 — tests : parsing d'URI `s3://`, sélection du provider, chemins clé→table ; I/O réelle gardée (skip si pas de credentials / pas de réseau) ou contre un mock. Fixtures non applicables (réseau) — tests unitaires + doc. DoD : `cargo build --features s3` + `cargo test` verts.
