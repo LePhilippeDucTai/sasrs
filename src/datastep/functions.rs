@@ -1030,6 +1030,23 @@ fn fn_input(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     crate::formats::FormatCatalog::default().informat(&source, &spec)
 }
 
+/// SYMGET (M11.5) : `symget('name')` lit la valeur de la variable macro
+/// `name` (insensible casse) dans l'INSTANTANÉ pris au début de l'étape
+/// (`ctx.macro_symbols`). Renvoie une valeur CARACTÈRE ; variable inconnue
+/// → missing caractère (chaîne vide). Sous le build par défaut l'instantané
+/// est vide, donc toujours missing — `symget` reste appelable sans effet.
+fn fn_symget(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() != 1 {
+        return Value::Char(String::new());
+    }
+    let name = coerce_char(&args[0]);
+    let key = name.trim().to_uppercase();
+    match ctx.macro_symbols.get(&key) {
+        Some(v) => Value::Char(v.clone()),
+        None => Value::Char(String::new()),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Dispatch table
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1085,6 +1102,8 @@ static DISPATCH: &[(&str, SasFn)] = &[
     // Conversion (PUT/INPUT) — délèguent au moteur de formats (M4).
     ("PUT", fn_put),
     ("INPUT", fn_input),
+    // Macro bridge (M11.5) — lit l'instantané de la table macro.
+    ("SYMGET", fn_symget),
 ];
 
 /// Renvoie None si la fonction est inconnue.

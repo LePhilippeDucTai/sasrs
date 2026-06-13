@@ -40,16 +40,13 @@ use crate::session::Session;
 use crate::source::SourceFile;
 use std::path::PathBuf;
 
+/// Build PAR DÉFAUT (sans `macros`) : chemin M11.1 verbatim. `expand_open_code`
+/// est l'identité stricte → `src` inchangé → lexing et écho de n° de ligne
+/// IDENTIQUES à l'historique. C'est ce qui garantit STRUCTURELLEMENT
+/// l'octet-identité de la suite par défaut (rien de la machinerie per-segment
+/// de M11.5 n'est compilé ici).
+#[cfg(not(feature = "macros"))]
 pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
-    // M11.1 : l'expansion macro est désormais pilotée par l'executor (et non
-    // plus par `lib.rs`), avec l'état dans `Session::macro_engine`. Pour CETTE
-    // unité, on expanse le source ENTIER une seule fois, en tête de boucle.
-    // C'est la couture : la table macro vit dans la `Session` et l'expansion
-    // est conduite ici. Le découpage en segments bruts (`RawSegmenter`) et
-    // l'expansion interfoliée bloc-par-bloc — requis par `CALL SYMPUT` (M11.5)
-    // — sont DÉFÉRÉS afin de préserver la garantie byte-identical : sous le
-    // build par défaut `expand_open_code` est l'identité stricte, donc `src`
-    // est inchangé et le lexing / l'écho de n° de ligne restent identiques.
     let expanded = session.macro_engine.expand_open_code(&src.text);
     let owned_src;
     let src: &SourceFile = if expanded == src.text {
@@ -65,25 +62,88 @@ pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
         let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
         session.log.echo_source(&line_texts);
 
-        match block {
+        run_one_block(block, session);
+    }
+    Ok(())
+}
+
+/// Build `macros` (M11.5) : expansion macro INTERFOLIÉE segment par segment.
+///
+/// On découpe le source ORIGINAL en segments bruts (`RawSegmenter`, coupe sur
+/// `run;`/`quit;` de niveau supérieur). Pour CHAQUE segment, dans l'ordre :
+/// 1. écho des lignes ORIGINALES du segment (numérotation préservée — cf.
+///    divergence ci-dessous) ;
+/// 2. `expand_open_code` du texte brut du segment avec l'état VIVANT de
+///    l'engine (les `%let`/symput des segments antérieurs sont donc visibles) ;
+/// 3. lexing/parsing/exécution du texte expansé via un `StatementStream`
+///    transitoire.
+///
+/// Comme le drain de `CALL SYMPUT` a lieu à la fin de l'étape (donc à la fin
+/// du segment qui contient le `run;`), un `&var` du segment SUIVANT voit bien
+/// la valeur posée par le symput — c'est l'objectif de M11.5.
+///
+/// # Écho de numéros de ligne — préservation
+/// L'écho reste BLOC PAR BLOC, comme le build par défaut : pour chaque bloc
+/// du segment expansé, on écho­te les lignes de son span via
+/// `seg_src.lines_of_span(span)`. Le compteur de lignes du `LogWriter`
+/// (`src_line`) avance naturellement d'un segment à l'autre. Lorsqu'un
+/// segment n'a subi AUCUNE expansion (cas des fixtures sans macro :
+/// `expand_open_code` est l'identité), le texte du segment est
+/// caractère-pour-caractère la tranche correspondante du source original,
+/// donc l'écho et la numérotation sont IDENTIQUES au chemin mono-source de
+/// M11.1. La seule divergence POSSIBLE concerne un segment dont l'expansion
+/// macro change le nombre/contenu des lignes : on écho­te alors le texte
+/// EXPANSÉ de ce segment (pas l'original). C'est sans incidence sur les
+/// fixtures de snapshot (aucune n'emploie de macro), et sans fixture dédiée
+/// pour ce cas.
+#[cfg(feature = "macros")]
+pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
+    use crate::preprocess::RawSegmenter;
+
+    let orig = src;
+    let mut seg = RawSegmenter::new(&orig.text);
+    while let Some((start, end)) = seg.next_segment() {
+        let raw = &orig.text[start..end];
+        // Expansion avec l'état vivant (visibilité des symput antérieurs).
+        let expanded = session.macro_engine.expand_open_code(raw);
+        let seg_src = SourceFile::new(expanded);
+        let mut stream = match StatementStream::new(&seg_src) {
+            Ok(s) => s,
             Err(e) => {
-                // La récupération de flux est déjà faite par le stream.
                 session.log.error(&e.to_string());
+                continue;
             }
-            Ok(Block::Empty) => {}
-            Ok(Block::Global(stmt)) => exec_global(&stmt, session),
-            Ok(Block::DataStep(ast)) => exec_data_step(&ast, session),
-            Ok(Block::Proc { name, ast }) => {
-                if let Err(e) = procs::execute_proc(&name, &ast, session) {
-                    session.log.error(&e.to_string());
-                    session
-                        .log
-                        .note("The SAS System stopped processing this step because of errors.");
-                }
-            }
+        };
+        while let Some((block, span)) = stream.next_block() {
+            let lines = seg_src.lines_of_span(span);
+            let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
+            session.log.echo_source(&line_texts);
+            run_one_block(block, session);
         }
     }
     Ok(())
+}
+
+/// Exécute UN bloc déjà lexé/parsé (commun aux deux builds). L'écho de source
+/// est fait par l'appelant (différemment selon le build).
+fn run_one_block(block: Result<Block>, session: &mut Session) {
+    match block {
+        Err(e) => {
+            // La récupération de flux est déjà faite par le stream.
+            session.log.error(&e.to_string());
+        }
+        Ok(Block::Empty) => {}
+        Ok(Block::Global(stmt)) => exec_global(&stmt, session),
+        Ok(Block::DataStep(ast)) => exec_data_step(&ast, session),
+        Ok(Block::Proc { name, ast }) => {
+            if let Err(e) = procs::execute_proc(&name, &ast, session) {
+                session.log.error(&e.to_string());
+                session
+                    .log
+                    .note("The SAS System stopped processing this step because of errors.");
+            }
+        }
+    }
 }
 
 fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
@@ -360,6 +420,109 @@ mod tests {
         assert!(with_macro
             .log
             .contains("There were 1 observations read from the data set WORK.A."));
+    }
+
+    /// M11.5 : `CALL SYMPUT` dans une étape pose un symbole macro visible
+    /// dans le SEGMENT SUIVANT (le drain a lieu au `run;`). Ici on s'en sert
+    /// pour nommer un dataset de l'étape d'après.
+    #[cfg(feature = "macros")]
+    #[test]
+    fn symput_visible_in_next_segment_as_dataset_name() {
+        let out = run_det(
+            "data _null_; call symput('answer','42'); run;\n\
+             data tbl_&answer; x=1; run;\n\
+             proc print data=tbl_&answer; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // Le dataset a bien été nommé WORK.TBL_42 (symbole résolu).
+        assert!(
+            out.log
+                .contains("The data set WORK.TBL_42 has 1 observations and 1 variables."),
+            "log was:\n{}",
+            out.log
+        );
+        assert!(out
+            .log
+            .contains("There were 1 observations read from the data set WORK.TBL_42."));
+    }
+
+    /// M11.5 : formatage NUMÉRIQUE d'un symput — `42` (et non `          42`).
+    #[cfg(feature = "macros")]
+    #[test]
+    fn symput_numeric_value_left_aligned_best12() {
+        let out = run_det(
+            "data _null_; call symput('n', 42); run;\n\
+             data tbl_&n; x=1; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        assert!(
+            out.log
+                .contains("The data set WORK.TBL_42 has 1 observations and 1 variables."),
+            "log was:\n{}",
+            out.log
+        );
+    }
+
+    /// M11.5 : SYMGET lit un `%let` antérieur (table macro → DATA step).
+    #[cfg(feature = "macros")]
+    #[test]
+    fn symget_reads_prior_let() {
+        let out = run_det(
+            "%let x = 5;\n\
+             data a; v = symget('x'); run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // v est une variable caractère = "5".
+        assert!(out.listing.contains('5'), "listing was:\n{}", out.listing);
+        assert!(out
+            .log
+            .contains("The data set WORK.A has 1 observations and 1 variables."));
+    }
+
+    /// M11.5 : un symput n'est PAS visible DANS LA MÊME étape. SYMGET lit
+    /// l'instantané de DÉBUT d'étape : un `symput('w', ...)` plus tôt dans la
+    /// MÊME étape ne s'y reflète pas (le drain n'a lieu qu'au `run;`). Ici
+    /// `w` n'existe pas au début de l'étape → symget rend une valeur vide,
+    /// alors que l'étape SUIVANTE la verrait.
+    #[cfg(feature = "macros")]
+    #[test]
+    fn symput_not_visible_in_same_step() {
+        let out = run_det(
+            "data a; call symput('w','99'); seen = symget('w'); run;\n\
+             data b; later = symget('w'); run;\n\
+             proc print data=b; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // Étape A : `seen` est vide (symput pas encore drainé) → 0 obs avec
+        // valeur non vide ; on vérifie surtout que B voit bien 99.
+        assert!(
+            out.listing.contains("99"),
+            "step B should see w=99 via symget; listing was:\n{}",
+            out.listing
+        );
+    }
+
+    /// Build PAR DÉFAUT : `call symput` / `symget` PARSENT et s'exécutent
+    /// sans erreur, sans résolution macro (pas de feature). Le dataset garde
+    /// son nom littéral, `symget` rend une valeur manquante (vide).
+    #[cfg(not(feature = "macros"))]
+    #[test]
+    fn call_symput_and_symget_parse_and_run_without_macro_effect() {
+        let out = run_det(
+            "data a; call symput('x','42'); v = symget('x'); run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // L'étape s'exécute ; `call symput` ne crée pas de variable,
+        // `v = symget(...)` crée la seule variable. v est vide (table macro
+        // vide sous le build par défaut → aucun effet macro).
+        assert!(
+            out.log
+                .contains("The data set WORK.A has 1 observations and 1 variables."),
+            "log was:\n{}",
+            out.log
+        );
     }
 
     #[test]

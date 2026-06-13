@@ -613,6 +613,17 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
+            // `call <name>(args);` (M11.5) : les arguments sont des
+            // expressions rvalue ordinaires (la routine ne crée pas de
+            // variable PDV — `call symput` écrit dans la table macro, pas
+            // dans le PDV). On parcourt donc simplement les arguments pour
+            // découvrir les variables référencées.
+            DsStmt::CallRoutine { name: _, args } => {
+                for a in args {
+                    self.walk_expr(a)?;
+                }
+                Ok(())
+            }
         }
     }
 

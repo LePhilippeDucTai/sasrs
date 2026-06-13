@@ -66,6 +66,19 @@ pub struct EvalCtx {
     /// DIFn renvoient la valeur d'il y a `n` exécutions du MÊME site, pas la
     /// valeur d'il y a `n` lignes de la variable.
     pub lag_queues: HashMap<usize, std::collections::VecDeque<Value>>,
+    /// CALL SYMPUT (M11.5) : écritures DIFFÉRÉES vers la table macro,
+    /// `(nom, valeur)` dans l'ordre d'exécution. La visibilité SAS impose
+    /// que le symbole ne soit posé qu'APRÈS le RUN de l'étape : on
+    /// accumule donc ici et le drain est fait par `exec::execute` une fois
+    /// la boucle implicite terminée (là où `&mut Session` est disponible).
+    /// Sous le build par défaut ce vecteur se remplit toujours mais le
+    /// drain est un no-op (l'engine identité n'a pas de table).
+    pub symput_writes: Vec<(String, String)>,
+    /// SYMGET (M11.5) : instantané de la table macro pris au DÉBUT de
+    /// l'étape (`MacroEngine::symbols_snapshot`), clés en MAJUSCULES. Sous
+    /// la feature `macros` il reflète l'état des `%let`/symput antérieurs ;
+    /// sous le build par défaut il est vide (aucune résolution macro).
+    pub macro_symbols: HashMap<String, String>,
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,

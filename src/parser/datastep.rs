@@ -241,6 +241,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "label" => parse_label(ts),
         "attrib" => parse_attrib(ts),
         "array" => parse_array(ts),
+        "call" => parse_call_routine(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
             "no matching DO for END.",
@@ -355,6 +356,54 @@ fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::Merge(specs))
+}
+
+/// `call <name>(arg [, arg]*);` (M11.5) — appel d'une CALL routine. On
+/// parse le nom de la routine, puis une liste d'arguments entre parenthèses
+/// (expressions séparées par des virgules ; liste vide autorisée), puis le
+/// `;`. La validation de la routine (seule SYMPUT est exécutée en v1) est
+/// faite à l'EXÉCUTION : une routine inconnue produit une erreur runtime
+/// « not yet implemented », pas une erreur de parsing.
+fn parse_call_routine(ts: &mut StatementStream) -> Result<DsStmt> {
+    let call_tok = ts.peek().clone();
+    ts.next(); // `call`
+    let name = match ts.peek().ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a CALL routine name",
+                ts.peek().span,
+            ));
+        }
+    };
+    ts.next(); // nom de la routine
+    let mut args = Vec::new();
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next(); // `(`
+        if ts.peek().kind != TokenKind::RParen {
+            loop {
+                args.push(super::expr::parse_expr(ts)?);
+                match ts.peek().kind {
+                    TokenKind::Comma => {
+                        ts.next();
+                    }
+                    _ => break,
+                }
+            }
+        }
+        if ts.peek().kind != TokenKind::RParen {
+            return Err(SasError::parse(
+                format!(
+                    "expected ')' to close the arguments of CALL {}",
+                    name.to_uppercase()
+                ),
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `)`
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::CallRoutine { name, args })
 }
 
 /// `by [descending] v1 [descending] v2 ... ;` → `DsStmt::By` (M3). Le

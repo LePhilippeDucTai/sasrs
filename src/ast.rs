@@ -246,6 +246,13 @@ pub enum DsStmt {
         index: Expr,
         expr: Expr,
     },
+    /// `call <name>(args);` — appel d'une CALL routine (M11.5). Pour v1,
+    /// seule `CALL SYMPUT` est exécutée (pont DATA step → table macro) ;
+    /// les autres routines parsent mais produisent une erreur runtime
+    /// « not yet implemented ». Le nom est conservé tel quel (résolu en
+    /// MAJUSCULES à l'exécution). Ce statement est parsé dans les DEUX
+    /// builds (aucun test/fixture existant n'emploie `call`).
+    CallRoutine { name: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]

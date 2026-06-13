@@ -239,6 +239,11 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             .collect()
     });
     let n_outputs = outputs.len();
+    // SYMGET (M11.5) : instantané de la table macro pris AU DÉBUT de
+    // l'étape. Sous la feature `macros` il porte les `%let`/symput
+    // antérieurs ; sous le build par défaut il est vide.
+    let macro_symbols = session.macro_engine.symbols_snapshot();
+
     let mut r = Runner {
         pdv,
         input,
@@ -251,6 +256,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             arrays,
             by_flags,
             in_flags,
+            macro_symbols,
             ..EvalCtx::default()
         },
         outputs,
@@ -312,6 +318,15 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
                 "DATA step appears to loop infinitely (no input rows consumed); stopping.",
             ));
         }
+    }
+
+    // CALL SYMPUT (M11.5) : drain des écritures différées vers la table
+    // macro APRÈS le RUN de l'étape (règle de visibilité SAS — le symbole
+    // n'est pas visible dans la même étape). Sous le build par défaut,
+    // `set_symbol_global` est un no-op (l'engine identité n'a pas de table) :
+    // `call symput` parse et s'exécute mais n'a aucun effet macro.
+    for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
+        session.macro_engine.set_symbol_global(&name, value);
     }
 
     // NOTEs d'erreurs/conversions collectées par l'évaluateur.
@@ -525,6 +540,7 @@ impl Runner {
                 self.pdv.set(slot, coerced);
                 Ok(Flow::Normal)
             }
+            DsStmt::CallRoutine { name, args } => self.exec_call_routine(name, args),
             // Directives de compilation : rien à exécuter.
             DsStmt::Keep(_)
             | DsStmt::Drop(_)
@@ -536,6 +552,38 @@ impl Runner {
             | DsStmt::Attrib(_)
             | DsStmt::Array { .. } => Ok(Flow::Normal),
         }
+    }
+
+    /// Exécute une CALL routine (M11.5). v1 : seule `SYMPUT` est supportée.
+    ///
+    /// `call symput(name, value);` évalue les deux arguments, convertit le
+    /// nom et la valeur en chaîne (un numérique est formaté en BEST12.
+    /// cadré à gauche, conformément à SAS), et POUSSE la paire dans
+    /// `ctx.symput_writes`. La table macro n'est PAS touchée pendant
+    /// l'étape : le symbole n'est visible qu'APRÈS le RUN (règle SAS) ; le
+    /// drain effectif est fait par `execute` après la boucle implicite.
+    /// Toute autre routine → erreur runtime « not yet implemented ».
+    fn exec_call_routine(&mut self, name: &str, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if !name.eq_ignore_ascii_case("symput") {
+            return Err(SasError::runtime(format!(
+                "CALL routine {} is not yet implemented.",
+                name.to_uppercase()
+            )));
+        }
+        if args.len() != 2 {
+            return Err(SasError::runtime(
+                "CALL SYMPUT requires exactly two arguments (name, value).",
+            ));
+        }
+        let name_val = self.eval_checked(&args[0])?;
+        let value_val = self.eval_checked(&args[1])?;
+        // Le nom macro est trimé (SAS rogne les blancs de bord du nom).
+        let sym_name = symput_string(name_val);
+        let sym_value = symput_string(value_val);
+        self.ctx
+            .symput_writes
+            .push((sym_name.trim().to_string(), sym_value));
+        Ok(Flow::Normal)
     }
 
     /// SET sans BY = CONCATÉNATION : le premier dataset en entier, puis le
@@ -1153,6 +1201,21 @@ impl Runner {
             }
         }
         self.out_rows[o] += 1;
+    }
+}
+
+/// Convertit une `Value` en la chaîne stockée par CALL SYMPUT (M11.5).
+///
+/// - Char : la valeur telle quelle (SAS ne rogne PAS la valeur d'un
+///   symput ; on garde la chaîne du PDV avec ses blancs internes/finaux).
+/// - Num : formaté en BEST12. puis CADRÉ À GAUCHE (les blancs de tête de
+///   BEST12. sont supprimés). `call symput('x', 42)` donne `&x` = "42".
+/// - Missing : le point/lettre du missing (cadrage à gauche d'un BEST12.).
+fn symput_string(value: Value) -> String {
+    match value {
+        Value::Char(s) => s,
+        Value::Num(f) => format_best(f, 12),
+        Value::Missing(k) => k.display(),
     }
 }
 
