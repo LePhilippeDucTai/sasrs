@@ -102,7 +102,11 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = transpose::parse(ts)?;
             Ok(ProcAst::Transpose(ast))
         }
-        "datasets" | "append" => {
+        "append" => {
+            let ast = append::parse(ts)?;
+            Ok(ProcAst::Append(ast))
+        }
+        "datasets" => {
             ts.skip_to_semi();
             ts.skip_to_step_boundary();
             Err(SasError::runtime(format!(
@@ -210,7 +214,7 @@ mod tests {
 
     #[test]
     fn parse_known_unimplemented_proc_errors_with_correct_message() {
-        for proc_name in &["datasets", "append"] {
+        for proc_name in &["datasets"] {
             let src = format!("proc {}; run;", proc_name);
             let source = SourceFile::new(&src);
             let mut ts = crate::parser::StatementStream::new(&source).unwrap();
