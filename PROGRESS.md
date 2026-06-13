@@ -41,7 +41,7 @@ Ordre strict (dépendances), sauf ⫽ parallélisables :
 - [x] Fixtures m3/ + snapshots
 
 ## M4 — formats
-- [ ] `src/formats/mod.rs` + `builtin.rs` (formats puis informats) + tests table-driven
+- [x] `src/formats/mod.rs` + `builtin.rs` (formats puis informats) + tests table-driven
 - [ ] INPUT()/PUT() branchés dans functions.rs ; FORMAT/LABEL/ATTRIB statements
 - [ ] `src/formats/userdef.rs` + `src/procs/format.rs`
 - [ ] Persistance VarMeta en métadonnées KV parquet (`sas_meta`) + `src/procs/contents.rs`
