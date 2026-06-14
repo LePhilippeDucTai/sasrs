@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M15** (bibliothèque de fonctions). M1–M14 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M16** (constructions étape DATA). M1–M15 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -154,7 +154,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] M15.5 — aléatoire : RAND, RANUNI, RANNOR, RANEXP, RANBIN, CALL STREAMINIT/RANUNI ; PRNG MT19937 maison, graine figée sous `--deterministic`, fidélité flux SAS documentée comme approximation (Fable, élevé)
 - [x] M15.6 — CALL routines : CALL MISSING, CALL EXECUTE (file différée post-step), CALL SORTN/SORTC, CALL SYMPUTX, CALL CATS/SCAN, CALL LABEL, CALL VNAME (Opus, moyen)
 - [x] M15.7 — LAG/LAGn/DIF/DIFn : FIFO par site d'appel (clé = identité d'expression), `EvalCtx.lag_fifos` (vérifier l'état réel d'abord) (Opus, moyen)
-- [ ] Fixtures `m15/` + snapshots. DoD
+- [x] Fixtures `m15/` + snapshots. DoD
 
 ## M16 — constructions étape DATA
 - [ ] M16.1 — `SELECT`/`WHEN`/`OTHERWISE` (formes sélecteur et booléen), `DsStmt::Select` (Opus, moyen)
