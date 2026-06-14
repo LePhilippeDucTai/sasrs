@@ -36,7 +36,6 @@ use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::value::Value;
 use std::collections::HashMap;
 
-#[derive(Default)]
 pub struct EvalCtx {
     pub missing_generated: u32,
     pub division_by_zero: u32,
@@ -79,6 +78,36 @@ pub struct EvalCtx {
     /// la feature `macros` il reflète l'état des `%let`/symput antérieurs ;
     /// sous le build par défaut il est vide (aucune résolution macro).
     pub macro_symbols: HashMap<String, String>,
+    /// RNG state for RAND*, RANUNI, RANNOR, RANEXP, RANBIN, CALL STREAMINIT
+    /// (M15.5). Uses a simple LCG seeded at construction time. CALL STREAMINIT
+    /// resets it. Box-Muller stores a spare normal variate in `rng_spare`.
+    pub rng_state: u64,
+    /// Cached spare normal variate from Box-Muller (set when a pair is
+    /// generated; consumed on the next RANNOR call).
+    pub rng_spare: Option<f64>,
+}
+
+impl Default for EvalCtx {
+    fn default() -> Self {
+        EvalCtx {
+            missing_generated: 0,
+            division_by_zero: 0,
+            note_num_to_char: false,
+            note_char_to_num: false,
+            invalid_data: 0,
+            error_flag: false,
+            fatal: None,
+            arrays: HashMap::new(),
+            by_flags: Vec::new(),
+            in_flags: Vec::new(),
+            lag_queues: HashMap::new(),
+            symput_writes: Vec::new(),
+            macro_symbols: HashMap::new(),
+            // Default seed: 1960 (SAS epoch year), shifted to avoid zero.
+            rng_state: 0x0000_0007_A120_1960_u64,
+            rng_spare: None,
+        }
+    }
 }
 
 /// Coerce une `Value` en f64 pour un CONTEXTE NUMÉRIQUE (arithmétique,

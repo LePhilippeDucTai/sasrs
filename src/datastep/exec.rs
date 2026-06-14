@@ -1310,6 +1310,20 @@ impl Runner {
     /// drain effectif est fait par `execute` après la boucle implicite.
     /// Toute autre routine → erreur runtime « not yet implemented ».
     fn exec_call_routine(&mut self, name: &str, args: &[crate::ast::Expr]) -> Result<Flow> {
+        // CALL STREAMINIT(seed) — initialise the RNG stream. Accepts an
+        // optional single argument (integer seed); no argument → no-op.
+        if name.eq_ignore_ascii_case("streaminit") {
+            if let Some(seed_expr) = args.first() {
+                let seed_val = self.eval_checked(seed_expr)?;
+                if let Value::Num(f) = seed_val {
+                    self.ctx.rng_state = super::functions::streaminit_seed(f as i64);
+                    self.ctx.rng_spare = None; // invalidate cached Box-Muller spare
+                }
+                // missing seed value → no-op (as per spec)
+            }
+            return Ok(Flow::Normal);
+        }
+
         if !name.eq_ignore_ascii_case("symput") {
             return Err(SasError::runtime(format!(
                 "CALL routine {} is not yet implemented.",

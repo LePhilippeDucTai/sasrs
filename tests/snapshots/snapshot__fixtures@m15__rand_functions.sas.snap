@@ -1,0 +1,56 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m15/rand_functions.sas
+---
+==== LOG ====
+
+1     data work.test;
+2       /* Initialize RNG stream */
+3       call streaminit(12345);
+4     
+5       /* RANUNI — uniform [0,1) */
+6       u1 = ranuni();
+7       u2 = ranuni();
+8     
+9       /* RANNOR — standard normal */
+10      n1 = rannor();
+11      n2 = rannor();
+12    
+13      /* RANEXP — exponential(1) */
+14      e1 = ranexp();
+15    
+16      /* RANBIN — binomial */
+17      b1 = ranbin(0.5, 10);      /* 10 trials, p=0.5 */
+18      b2 = ranbin(0.3, 20);      /* 20 trials, p=0.3 */
+19    
+20      /* RAND — generic */
+21      r_unif = rand('UNIFORM');  /* Should be ~[0,1) */
+22      r_norm = rand('NORMAL');   /* Should be ~N(0,1) */
+23      r_exp = rand('EXPONENTIAL');  /* Should be >0 */
+24    
+25      output;
+26    run;
+NOTE: The data set WORK.TEST has 1 observations and 10 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    title 'M15.5 Random Number Functions';
+
+28    proc print data=work.test;
+29    run;
+NOTE: There were 1 observations read from the data set WORK.TEST.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                 M15.5 Random Number Functions
+
+Obs             u1              u2             n1              n2             e1    b1    b2          r_unif          r_norm           r_exp
+
+  1    0.109578606    0.2653852959    0.252856623    -0.423071082    1.121990251     4     7    0.2837093841    0.2724097646    1.6908106347
+
+==== EXIT 0 ====
