@@ -145,6 +145,21 @@ pub enum ArraySpecial {
     All,
 }
 
+/// Un élément d'une liste de valeurs de DO (M16.3). Soit une valeur unique
+/// (`Value`), soit une sous-liste itérative `from to e [by k]` (`Range`),
+/// énumérée à l'exécution comme un DO classique.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DoListItem {
+    /// Valeur explicite unique : `3`, `'red'`, `x+1`.
+    Value(Expr),
+    /// Sous-liste `from to to_ [by by_]`.
+    Range {
+        from: Expr,
+        to: Expr,
+        by: Option<Expr>,
+    },
+}
+
 /// Spec d'une variable dans un statement LENGTH : `$ n` (char) ou `n` (num).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LengthSpec {
@@ -332,6 +347,26 @@ pub enum DsStmt {
         by: Option<Expr>,
         while_: Option<Expr>,
         until: Option<Expr>,
+        body: Vec<DsStmt>,
+    },
+    /// `do i = 1, 3, 5;` / `do c = 'a', 'b';` / `do i = 1 to 5, 10, 20 to 30 by 5;`
+    /// (M16.3) — DO sur une LISTE de valeurs (valeurs explicites et/ou
+    /// sous-listes `from to by`, dans n'importe quel ordre). L'index prend
+    /// successivement chaque valeur de la liste développée (les ranges sont
+    /// énumérés à l'exécution) ; le corps s'exécute une fois par valeur.
+    /// `index` est le nom de la variable de contrôle.
+    DoList {
+        index: String,
+        items: Vec<DoListItem>,
+        body: Vec<DsStmt>,
+    },
+    /// `do over arr; ... end;` (M16.3) — itère implicitement sur les éléments
+    /// d'un array dans l'ordre row-major. À chaque tour, une référence NUE au
+    /// nom de l'array (`arr`, sans indice) désigne l'élément courant (en
+    /// lecture comme en écriture) ; l'accès indexé `arr{i}` reste statique.
+    /// `array` est le nom de l'array (validé à la compilation).
+    DoOver {
+        array: String,
         body: Vec<DsStmt>,
     },
     /// `delete;` — termine l'itération courante sans output implicite

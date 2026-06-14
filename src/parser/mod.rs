@@ -125,6 +125,13 @@ impl<'a> StatementStream<'a> {
         &self.toks[i]
     }
 
+    /// Token à `n` positions du token courant (`peek_nth(0)` == `peek()` ;
+    /// borné sur l'Eof terminal au-delà de la fin).
+    pub fn peek_nth(&self, n: usize) -> &Token {
+        let i = (self.pos + n).min(self.toks.len() - 1);
+        &self.toks[i]
+    }
+
     pub fn at_eof(&self) -> bool {
         self.peek().kind == TokenKind::Eof
     }

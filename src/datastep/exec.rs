@@ -576,7 +576,13 @@ impl Runner {
             DsStmt::Merge(_) => self.exec_merge(),
             DsStmt::Assign { var, expr } => {
                 let value = self.eval_checked(expr)?;
-                let Some(slot) = self.pdv.slot(var) else {
+                // `arr = e;` sous un `DO OVER arr` : la cible est l'élément
+                // courant (slot dans `ctx.do_over`), pas une variable du PDV.
+                let slot = if let Some(s) = self.ctx.do_over.get(&var.to_uppercase()) {
+                    *s
+                } else if let Some(s) = self.pdv.slot(var) {
+                    s
+                } else {
                     return Err(SasError::runtime(format!(
                         "Variable {var} is not addressable."
                     )));
@@ -631,6 +637,8 @@ impl Runner {
                 until.as_ref(),
                 body,
             ),
+            DsStmt::DoList { index, items, body } => self.exec_do_list(index, items, body),
+            DsStmt::DoOver { array, body } => self.exec_do_over(array, body),
             DsStmt::Select {
                 selector,
                 whens,
@@ -2097,6 +2105,128 @@ impl Runner {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    /// DO sur une liste de valeurs (M16.3). L'index prend successivement
+    /// chaque valeur de la liste développée (valeurs explicites évaluées une
+    /// par une ; sous-listes `from to e [by k]` énumérées comme un DO
+    /// classique). Le corps s'exécute une fois par valeur ; un Flow non
+    /// Normal du corps sort de la boucle et remonte.
+    fn exec_do_list(
+        &mut self,
+        index: &str,
+        items: &[crate::ast::DoListItem],
+        body: &[DsStmt],
+    ) -> Result<Flow> {
+        use crate::ast::DoListItem;
+        let Some(idx_slot) = self.pdv.slot(index) else {
+            return Err(SasError::runtime(format!(
+                "Variable {index} is not addressable."
+            )));
+        };
+        let idx_ty = self.pdv.vars()[idx_slot].ty;
+        let mut iters: u64 = 0;
+        for item in items {
+            match item {
+                DoListItem::Value(e) => {
+                    let v = self.eval_checked(e)?;
+                    let coerced = self.coerce_assign(v, idx_ty);
+                    self.pdv.set(idx_slot, coerced);
+                    if let Some(f) = self.run_do_list_body(body)? {
+                        return Ok(f);
+                    }
+                    self.bump_do_list_guard(&mut iters)?;
+                }
+                DoListItem::Range { from, to, by } => {
+                    let from_v = self.loop_control(from)?;
+                    let to_v = self.loop_control(to)?;
+                    let by_v = match by {
+                        Some(b) => self.loop_control(b)?,
+                        None => 1.0,
+                    };
+                    if by_v == 0.0 {
+                        return Err(SasError::runtime(
+                            "Invalid DO loop control information.",
+                        ));
+                    }
+                    let mut cur = from_v;
+                    loop {
+                        if (by_v > 0.0 && cur > to_v) || (by_v < 0.0 && cur < to_v) {
+                            break;
+                        }
+                        self.pdv.set(idx_slot, Value::Num(cur));
+                        if let Some(f) = self.run_do_list_body(body)? {
+                            return Ok(f);
+                        }
+                        self.bump_do_list_guard(&mut iters)?;
+                        cur += by_v;
+                    }
+                }
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// Exécute le corps d'un DO (liste/over) ; renvoie `Some(flow)` si un Flow
+    /// non Normal doit remonter, `None` sinon.
+    fn run_do_list_body(&mut self, body: &[DsStmt]) -> Result<Option<Flow>> {
+        for s in body {
+            let f = self.exec_stmt(s)?;
+            if f != Flow::Normal {
+                return Ok(Some(f));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Garde-fou anti-boucle infinie partagé par DO liste / DO OVER.
+    fn bump_do_list_guard(&self, iters: &mut u64) -> Result<()> {
+        *iters += 1;
+        if *iters > 10_000_000 {
+            return Err(SasError::runtime(
+                "DO loop exceeded 10000000 iterations; stopping (possible infinite loop).",
+            ));
+        }
+        Ok(())
+    }
+
+    /// DO OVER (M16.3) : itère implicitement sur les éléments d'un array dans
+    /// l'ordre row-major (= ordre des `slots`, déjà row-major par
+    /// construction). À chaque tour, le slot de l'élément courant est exposé
+    /// via `ctx.do_over` (référence nue au nom de l'array = élément courant).
+    /// Un Flow non Normal du corps sort de la boucle, en restaurant l'état
+    /// `do_over` précédent.
+    fn exec_do_over(&mut self, array: &str, body: &[DsStmt]) -> Result<Flow> {
+        let upper = array.to_uppercase();
+        let Some(def) = self.ctx.arrays.get(&upper) else {
+            return Err(SasError::runtime(format!(
+                "Undeclared array referenced: {array}."
+            )));
+        };
+        let slots = def.slots.clone();
+        // Sauvegarde de l'entrée éventuellement masquée (DO OVER imbriqués sur
+        // le même nom — improbable, mais correct).
+        let prev = self.ctx.do_over.remove(&upper);
+        let mut iters: u64 = 0;
+        let mut out = Flow::Normal;
+        for slot in slots {
+            self.ctx.do_over.insert(upper.clone(), slot);
+            if let Some(f) = self.run_do_list_body(body)? {
+                out = f;
+                break;
+            }
+            self.bump_do_list_guard(&mut iters)?;
+        }
+        // Restaure l'état précédent.
+        match prev {
+            Some(p) => {
+                self.ctx.do_over.insert(upper, p);
+            }
+            None => {
+                self.ctx.do_over.remove(&upper);
+            }
+        }
+        Ok(out)
     }
 
     /// Valeur courante de l'index pour le test TO. Un index rendu missing
@@ -5142,5 +5272,248 @@ mod tests {
         .unwrap();
         let ds = read_work(&s, "out");
         assert_eq!(str_col(&ds, "w"), vec!["six".to_string()]);
+    }
+
+    // ── M16.3 : DO sur liste de valeurs, DO OVER, RETAIN littéraux date ───
+
+    #[test]
+    fn do_list_numeric_explicit_values() {
+        // `do i = 1, 3, 5, 7;` — somme et dernière valeur.
+        let mut s = session();
+        run(
+            "data out; s = 0; do i = 1, 3, 5, 7; s = s + i; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "s", 0), Some(16.0));
+        // À la sortie d'une liste, l'index garde la DERNIÈRE valeur (≠ TO).
+        assert_eq!(num_at(&s, "out", "i", 0), Some(7.0));
+    }
+
+    #[test]
+    fn do_list_unordered_values() {
+        // Ordre quelconque honoré tel quel : 5, 1, 9.
+        let mut s = session();
+        run(
+            "data out; n = 0; do i = 5, 1, 9; n + 1; last = i; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(3.0));
+        assert_eq!(num_at(&s, "out", "last", 0), Some(9.0));
+    }
+
+    #[test]
+    fn do_list_single_value() {
+        // `do i = 42;` — liste à un élément (boucle une fois).
+        let mut s = session();
+        run("data out; c = 0; do i = 42; c + 1; end; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "c", 0), Some(1.0));
+        assert_eq!(num_at(&s, "out", "i", 0), Some(42.0));
+    }
+
+    #[test]
+    fn do_list_character_values() {
+        // `do color = 'red', 'blue', 'green';` — char.
+        let mut s = session();
+        run(
+            "data out; length color $5; n = 0; \
+             do color = 'red', 'blue', 'green'; n + 1; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Dernière valeur conservée ; n = 3.
+        assert_eq!(num_at(&s, "out", "n", 0), Some(3.0));
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "color"), vec!["green".to_string()]);
+    }
+
+    #[test]
+    fn do_list_mixed_range_and_explicit() {
+        // `do i = 1 to 5 by 2, 10, 20 to 22;` → 1,3,5,10,20,21,22 (7 valeurs).
+        let mut s = session();
+        run(
+            "data out; n = 0; s = 0; \
+             do i = 1 to 5 by 2, 10, 20 to 22; n + 1; s = s + i; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(7.0));
+        // 1+3+5+10+20+21+22 = 82.
+        assert_eq!(num_at(&s, "out", "s", 0), Some(82.0));
+        // Dernière valeur = 22.
+        assert_eq!(num_at(&s, "out", "i", 0), Some(22.0));
+    }
+
+    #[test]
+    fn do_list_range_first_then_values() {
+        // `1 to 12 by 2, 0` : c'est une LISTE (à cause de la virgule) → le
+        // range énumère 1,3,5,7,9,11 puis la valeur 0 ; 7 tours, index final 0.
+        let mut s = session();
+        run(
+            "data out; n = 0; do month = 1 to 12 by 2, 0; n + 1; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(7.0));
+        // En LISTE, l'index garde la dernière valeur (≠ TO classique).
+        assert_eq!(num_at(&s, "out", "month", 0), Some(0.0));
+    }
+
+    #[test]
+    fn do_over_1d_iterates_all_elements() {
+        // DO OVER 1-D : `arr` nu = élément courant ; on double chaque élément.
+        let mut s = session();
+        run(
+            "data out; array a{5} v1-v5; \
+             do i = 1 to 5; a{i} = i; end; \
+             do over a; a = a * 10; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "v1", 0), Some(10.0));
+        assert_eq!(num_at(&s, "out", "v2", 0), Some(20.0));
+        assert_eq!(num_at(&s, "out", "v3", 0), Some(30.0));
+        assert_eq!(num_at(&s, "out", "v4", 0), Some(40.0));
+        assert_eq!(num_at(&s, "out", "v5", 0), Some(50.0));
+    }
+
+    #[test]
+    fn do_over_1d_reads_current_element_into_accumulator() {
+        // `arr` en lecture nue dans une accumulation.
+        let mut s = session();
+        run(
+            "data out; array a{4} v1-v4 (3 6 9 12); \
+             tot = 0; do over a; tot = tot + a; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "tot", 0), Some(30.0));
+    }
+
+    #[test]
+    fn do_over_static_indexed_access_inside_loop() {
+        // Accès indexé `a{1}` reste STATIQUE même dans DO OVER : on lit le
+        // premier élément à chaque tour.
+        let mut s = session();
+        run(
+            "data out; array a{3} v1-v3 (5 6 7); \
+             firstsum = 0; do over a; firstsum = firstsum + a{1}; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        // a{1}=5 lu 3 fois → 15.
+        assert_eq!(num_at(&s, "out", "firstsum", 0), Some(15.0));
+    }
+
+    #[test]
+    fn do_over_multidim_row_major_order() {
+        // DO OVER sur un array 2×3 : itération row-major (= ordre des slots).
+        // On affecte des valeurs croissantes par tour pour vérifier l'ordre.
+        let mut s = session();
+        run(
+            "data out; array m{2,3} v1-v6; \
+             k = 0; do over m; k + 1; m = k; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Row-major : v1=1, v2=2, ..., v6=6.
+        assert_eq!(num_at(&s, "out", "v1", 0), Some(1.0));
+        assert_eq!(num_at(&s, "out", "v2", 0), Some(2.0));
+        assert_eq!(num_at(&s, "out", "v3", 0), Some(3.0));
+        assert_eq!(num_at(&s, "out", "v4", 0), Some(4.0));
+        assert_eq!(num_at(&s, "out", "v5", 0), Some(5.0));
+        assert_eq!(num_at(&s, "out", "v6", 0), Some(6.0));
+    }
+
+    #[test]
+    fn do_over_char_array() {
+        // DO OVER sur array caractère : uppercase de chaque élément.
+        let mut s = session();
+        run(
+            "data out; array c{3} $3 a b cc; \
+             a = 'foo'; b = 'bar'; cc = 'baz'; \
+             do over c; c = upcase(c); end; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "a"), vec!["FOO".to_string()]);
+        assert_eq!(str_col(&ds, "b"), vec!["BAR".to_string()]);
+        assert_eq!(str_col(&ds, "cc"), vec!["BAZ".to_string()]);
+    }
+
+    #[test]
+    fn retain_date_literal_bare_suffix() {
+        // `retain d 21710d;` — 21710 est la valeur SAS date (2019-06-14).
+        let mut s = session();
+        run("data out; retain d 21710d; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "d", 0), Some(21710.0));
+    }
+
+    #[test]
+    fn retain_date_literal_quoted() {
+        // `retain d '01JAN1960'd;` — l'époque SAS = 0.
+        let mut s = session();
+        run("data out; retain d '01JAN1960'd; run;", &mut s).unwrap();
+        assert_eq!(num_at(&s, "out", "d", 0), Some(0.0));
+        // '02JAN1960'd = 1.
+        let mut s2 = session();
+        run("data out; retain e '02JAN1960'd; run;", &mut s2).unwrap();
+        assert_eq!(num_at(&s2, "out", "e", 0), Some(1.0));
+    }
+
+    #[test]
+    fn retain_datetime_literal() {
+        // `retain dt '01JAN1960 00:00:00'dt;` = 0 secondes depuis l'époque.
+        let mut s = session();
+        run(
+            "data out; retain dt '01JAN1960 00:00:00'dt; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "dt", 0), Some(0.0));
+        // '01JAN1960 00:01:00'dt = 60 secondes.
+        let mut s2 = session();
+        run(
+            "data out; retain dt '01JAN1960 00:01:00'dt; run;",
+            &mut s2,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s2, "out", "dt", 0), Some(60.0));
+    }
+
+    #[test]
+    fn retain_date_literal_is_retained_across_iterations() {
+        // La valeur initiale issue d'un littéral date est bien RETENUE :
+        // on l'incrémente à chaque obs lue.
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data out; set inp; retain d 100d; d = d + 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        // 100 (initial) +1 par obs : 101, 102, 103.
+        assert_eq!(num_at(&s, "out", "d", 0), Some(101.0));
+        assert_eq!(num_at(&s, "out", "d", 1), Some(102.0));
+        assert_eq!(num_at(&s, "out", "d", 2), Some(103.0));
+    }
+
+    #[test]
+    fn do_over_then_index_value_independent() {
+        // Intégration M16.2 : DO OVER puis accès indexé hors boucle.
+        let mut s = session();
+        run(
+            "data out; array a{3} x y z (1 2 3); \
+             do over a; a = a + 100; end; \
+             p = a{2}; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "x", 0), Some(101.0));
+        assert_eq!(num_at(&s, "out", "y", 0), Some(102.0));
+        assert_eq!(num_at(&s, "out", "z", 0), Some(103.0));
+        assert_eq!(num_at(&s, "out", "p", 0), Some(102.0));
     }
 }

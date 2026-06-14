@@ -69,7 +69,7 @@ pub mod fastpath;
 pub mod functions;
 pub mod pdv;
 
-use crate::ast::{BinaryOp, DataStepAst, DatasetSpec, DsStmt, Expr};
+use crate::ast::{BinaryOp, DataStepAst, DatasetSpec, DoListItem, DsStmt, Expr};
 use crate::error::{Result, SasError};
 use crate::missing::num_to_value;
 use crate::session::Session;
@@ -300,6 +300,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         infile: None,
         datalines: None,
         seen_input: false,
+        do_over_arrays: HashSet::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -481,6 +482,10 @@ struct Compiler<'a> {
     datalines: Option<Vec<String>>,
     /// Un statement INPUT a déjà été vu (un second → erreur).
     seen_input: bool,
+    /// Noms d'arrays (UPPERCASE) dont un `DO OVER` est actif au point de
+    /// compilation courant : une référence NUE à ce nom y désigne l'élément
+    /// courant (lecture/écriture), pas une variable illégale (M16.3).
+    do_over_arrays: HashSet<String>,
 }
 
 impl Compiler<'_> {
@@ -539,9 +544,16 @@ impl Compiler<'_> {
                 Ok(())
             }
             DsStmt::Assign { var, expr } => {
-                // Un nom d'array n'est pas une variable : `arr = e;` est
-                // une référence illégale, pas la création d'une variable.
-                if self.arrays.contains_key(&var.to_uppercase()) {
+                let upper = var.to_uppercase();
+                // `arr = e;` à l'intérieur d'un `DO OVER arr` : assignation à
+                // l'élément courant (résolue à l'exécution) — ne crée PAS de
+                // variable. Hors DO OVER, un nom d'array nu est illégal.
+                if self.arrays.contains_key(&upper) {
+                    if self.do_over_arrays.contains(&upper) {
+                        self.assigned.insert(upper);
+                        self.walk_expr(expr)?;
+                        return Ok(());
+                    }
                     return Err(SasError::runtime(format!(
                         "Illegal reference to the array {var}."
                     )));
@@ -598,6 +610,57 @@ impl Compiler<'_> {
                     self.walk_stmt(s)?;
                 }
                 Ok(())
+            }
+            // DO sur liste de valeurs (M16.3) : l'index entre au PDV (Num 8,
+            // assigné — pas de NOTE "uninitialized"). Le type est déduit des
+            // valeurs ? SAS : numérique sauf si TOUTES les valeurs explicites
+            // sont des chaînes → caractère. On infère le type/longueur de la
+            // 1re valeur (suffisant pour les cas usuels).
+            DsStmt::DoList { index, items, body } => {
+                let (ty, length) = do_list_index_type(items);
+                self.add_var(index, ty, length);
+                self.assigned.insert(index.to_uppercase());
+                for item in items {
+                    match item {
+                        DoListItem::Value(e) => self.walk_expr(e)?,
+                        DoListItem::Range { from, to, by } => {
+                            self.walk_expr(from)?;
+                            self.walk_expr(to)?;
+                            if let Some(b) = by {
+                                self.walk_expr(b)?;
+                            }
+                        }
+                    }
+                }
+                for s in body {
+                    self.walk_stmt(s)?;
+                }
+                Ok(())
+            }
+            // DO OVER (M16.3) : itération implicite sur un array. L'array doit
+            // être déclaré ; pendant le corps, une référence nue au nom de
+            // l'array désigne l'élément courant (autorisée en lecture comme en
+            // écriture). On installe le nom dans `do_over_arrays` le temps de
+            // walker le corps.
+            DsStmt::DoOver { array, body } => {
+                let upper = array.to_uppercase();
+                if !self.arrays.contains_key(&upper) {
+                    return Err(SasError::runtime(format!(
+                        "Undeclared array referenced: {array}."
+                    )));
+                }
+                let newly = self.do_over_arrays.insert(upper.clone());
+                let mut result = Ok(());
+                for s in body {
+                    if let Err(e) = self.walk_stmt(s) {
+                        result = Err(e);
+                        break;
+                    }
+                }
+                if newly {
+                    self.do_over_arrays.remove(&upper);
+                }
+                result
             }
             // SELECT (M16.1) : vérifie les références de variables du
             // sélecteur, de chaque valeur/condition de WHEN, et des corps
@@ -899,6 +962,12 @@ impl Compiler<'_> {
                     return Ok(());
                 }
                 if self.arrays.contains_key(&upper) {
+                    // Référence nue à un array : autorisée si un `DO OVER` est
+                    // actif (élément courant, résolu à l'exécution) ; ne crée
+                    // pas de variable. Sinon illégale.
+                    if self.do_over_arrays.contains(&upper) {
+                        return Ok(());
+                    }
                     return Err(SasError::runtime(format!(
                         "Illegal reference to the array {name}."
                     )));
@@ -1645,6 +1714,27 @@ impl Compiler<'_> {
 /// Type, longueur et valeur d'un littéral d'init RETAIN. Le parser ne
 /// produit que `Num` (le `-` unaire y est replié), `Str` ou `Missing` ;
 /// tout autre nœud est un garde-fou.
+/// Type/longueur de l'index d'un `DO sur liste de valeurs` (M16.3). SAS
+/// infère caractère ssi la liste contient au moins une valeur chaîne ; sinon
+/// numérique. La longueur caractère est la plus grande des chaînes
+/// littérales (défaut 8 si aucune n'est un littéral). Les ranges sont
+/// numériques par construction.
+fn do_list_index_type(items: &[DoListItem]) -> (VarType, usize) {
+    let mut is_char = false;
+    let mut max_len = 0usize;
+    for item in items {
+        if let DoListItem::Value(Expr::Str(s)) = item {
+            is_char = true;
+            max_len = max_len.max(s.chars().count());
+        }
+    }
+    if is_char {
+        (VarType::Char, max_len.max(1))
+    } else {
+        (VarType::Num, 8)
+    }
+}
+
 fn retain_literal(expr: &Expr) -> Result<(VarType, usize, Value)> {
     match expr {
         Expr::Num(n) => Ok((VarType::Num, 8, Value::Num(*n))),

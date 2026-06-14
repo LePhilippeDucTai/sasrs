@@ -85,6 +85,10 @@ pub struct EvalCtx {
     /// Cached spare normal variate from Box-Muller (set when a pair is
     /// generated; consumed on the next RANNOR call).
     pub rng_spare: Option<f64>,
+    /// `DO OVER` actifs (M16.3) : nom d'array UPPERCASE → slot PDV de
+    /// l'élément courant. Une référence NUE au nom de l'array (lecture ou
+    /// écriture) y est redirigée. Empilé/dépilé par le Runner à chaque tour.
+    pub do_over: HashMap<String, usize>,
 }
 
 impl Default for EvalCtx {
@@ -106,6 +110,7 @@ impl Default for EvalCtx {
             // Default seed: 1960 (SAS epoch year), shifted to avoid zero.
             rng_state: 0x0000_0007_A120_1960_u64,
             rng_spare: None,
+            do_over: HashMap::new(),
         }
     }
 }
@@ -259,6 +264,11 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     // Variable IN= d'un MERGE : automatique 0/1 servie depuis le contexte.
     if let Some((_, flag)) = ctx.in_flags.iter().find(|(n, _)| *n == upper) {
         return Value::Num(if *flag { 1.0 } else { 0.0 });
+    }
+    // `DO OVER arr` actif : une référence nue à `arr` désigne l'élément
+    // courant (M16.3).
+    if let Some(slot) = ctx.do_over.get(&upper) {
+        return pdv.get(*slot).clone();
     }
     match pdv.slot(name) {
         Some(slot) => pdv.get(slot).clone(),

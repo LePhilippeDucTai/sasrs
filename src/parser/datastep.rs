@@ -74,8 +74,8 @@
 
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
 use crate::ast::{
-    AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
-    PutDest, PutItem, WhenClause,
+    AttribItem, DataStepAst, DoListItem, DsStmt, Expr, InfileOptions, InfileSource, InputItem,
+    LengthSpec, PutDest, PutItem, WhenClause,
 };
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
@@ -1246,12 +1246,27 @@ fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
         TokenKind::Ident(name) => {
             let name = name.clone();
             let lower = name.to_ascii_lowercase();
+            // `do over arr;` : boucle implicite sur un array. `over` n'est pas
+            // un mot réservé — on ne le reconnaît que s'il est suivi d'un
+            // identifiant d'array et d'un `;` (sinon `over` serait un index).
+            if lower == "over" {
+                if let TokenKind::Ident(arr) = &ts.peek_nth(1).kind {
+                    if ts.peek_nth(2).kind == TokenKind::Semi {
+                        let arr = arr.clone();
+                        ts.next(); // `over`
+                        ts.next(); // nom d'array
+                        ts.expect_semi()?;
+                        let body = parse_do_body(ts)?;
+                        return Ok(DsStmt::DoOver { array: arr, body });
+                    }
+                }
+            }
             ts.next(); // l'ident (index potentiel, ou while/until)
             if ts.peek().kind == TokenKind::Eq {
-                // `do i = ...` : itératif.
+                // `do i = ...` : itératif ou liste de valeurs.
                 validate_sas_name(&name, head.span)?;
                 ts.next(); // `=`
-                parse_iterative_do(ts, name, head.span)
+                parse_iterative_do(ts, name)
             } else if (lower == "while" || lower == "until")
                 && ts.peek().kind == TokenKind::LParen
             {
@@ -1286,22 +1301,20 @@ fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
     }
 }
 
-/// Clauses d'un DO itératif après `do index =` : `from [to e] [by e]`
-/// (TO/BY acceptés dans les deux ordres, comme SAS) puis WHILE/UNTIL en
-/// ordre quelconque, UN seul de chaque. Termine sur le `;` puis parse le
-/// corps jusqu'à `end;`.
-fn parse_iterative_do(
-    ts: &mut StatementStream,
-    index_name: String,
-    index_span: Span,
-) -> Result<DsStmt> {
+/// Clauses d'un DO itératif après `do index =`. Deux formes possibles :
+///
+/// - Itératif classique : `from [to e] [by e] [while(c)] [until(c)]` (TO/BY
+///   dans les deux ordres, UN seul de chaque) → `DsStmt::DoLoop`.
+/// - Liste de valeurs (M16.3) : `v1, v2, v3` où chaque `vk` est une valeur
+///   explicite OU une sous-liste `from to e [by k]`, séparées par des
+///   virgules → `DsStmt::DoList`. Une valeur unique sans clause (`do i = 1;`)
+///   est aussi une liste (à un élément).
+///
+/// On parse d'abord le premier segment (`from` + clauses éventuelles). S'il
+/// n'y a NI virgule NI valeur unique nue, c'est le DO itératif classique
+/// (qui seul porte WHILE/UNTIL). Sinon c'est une liste de valeurs.
+fn parse_iterative_do(ts: &mut StatementStream, index_name: String) -> Result<DsStmt> {
     let from = super::expr::parse_expr(ts)?;
-    if ts.peek().kind == TokenKind::Comma {
-        return Err(SasError::parse(
-            "DO loops over a list of values are not yet implemented.",
-            ts.peek().span,
-        ));
-    }
     let mut to: Option<Expr> = None;
     let mut by: Option<Expr> = None;
     let mut while_: Option<Expr> = None;
@@ -1337,24 +1350,103 @@ fn parse_iterative_do(
             _ => break,
         }
     }
-    // Pas de clause du tout : `do i = 1;` est une liste de valeurs à un
-    // élément → même erreur "not yet implemented" que la forme à virgules.
-    if to.is_none() && by.is_none() && while_.is_none() && until.is_none() {
+
+    let has_comma = ts.peek().kind == TokenKind::Comma;
+
+    // Forme itérative classique : au moins UNE clause TO/BY/WHILE/UNTIL et
+    // PAS de virgule en suite. WHILE/UNTIL n'existent que dans cette forme.
+    if !has_comma && (to.is_some() || by.is_some() || while_.is_some() || until.is_some()) {
+        ts.expect_semi()?;
+        let body = parse_do_body(ts)?;
+        return Ok(DsStmt::DoLoop {
+            index: Some((index_name, from)),
+            to,
+            by,
+            while_,
+            until,
+            body,
+        });
+    }
+
+    // Forme liste de valeurs (M16.3). WHILE/UNTIL y sont illégaux.
+    if while_.is_some() || until.is_some() {
         return Err(SasError::parse(
-            "DO loops over a list of values are not yet implemented.",
-            index_span,
+            "WHILE/UNTIL are not allowed in a DO statement over a list of values.",
+            ts.peek().span,
         ));
+    }
+    let mut items: Vec<DoListItem> = Vec::new();
+    // Le premier segment est déjà parsé : valeur unique, ou sous-liste si TO
+    // (le BY ne peut apparaître que conjointement à TO).
+    items.push(make_do_list_item(from, to, by, ts.peek().span)?);
+    while ts.peek().kind == TokenKind::Comma {
+        ts.next(); // `,`
+        let v = super::expr::parse_expr(ts)?;
+        let (mut t, mut b): (Option<Expr>, Option<Expr>) = (None, None);
+        loop {
+            let tok = ts.peek().clone();
+            let Some(kw) = tok.ident().map(str::to_ascii_lowercase) else {
+                break;
+            };
+            match kw.as_str() {
+                "to" if t.is_none() => {
+                    ts.next();
+                    t = Some(super::expr::parse_expr(ts)?);
+                }
+                "by" if b.is_none() => {
+                    ts.next();
+                    b = Some(super::expr::parse_expr(ts)?);
+                }
+                "to" | "by" => {
+                    return Err(SasError::parse(
+                        format!("duplicate {} clause in the DO statement", kw.to_uppercase()),
+                        tok.span,
+                    ));
+                }
+                _ => break,
+            }
+        }
+        items.push(make_do_list_item(v, t, b, ts.peek().span)?);
+    }
+    // WHILE/UNTIL en fin de liste (`do i = 1, 3 while(x);`) sont illégaux.
+    if let Some(kw) = ts.peek().ident().map(str::to_ascii_lowercase) {
+        if kw == "while" || kw == "until" {
+            return Err(SasError::parse(
+                "WHILE/UNTIL are not allowed in a DO statement over a list of values.",
+                ts.peek().span,
+            ));
+        }
     }
     ts.expect_semi()?;
     let body = parse_do_body(ts)?;
-    Ok(DsStmt::DoLoop {
-        index: Some((index_name, from)),
-        to,
-        by,
-        while_,
-        until,
+    Ok(DsStmt::DoList {
+        index: index_name,
+        items,
         body,
     })
+}
+
+/// Construit un `DoListItem` à partir d'un segment de liste de valeurs :
+/// `from` seul → `Value` ; `from to to_ [by by_]` → `Range`. Un `BY` sans
+/// `TO` est une erreur de syntaxe.
+fn make_do_list_item(
+    from: Expr,
+    to: Option<Expr>,
+    by: Option<Expr>,
+    span: Span,
+) -> Result<DoListItem> {
+    match to {
+        Some(t) => Ok(DoListItem::Range { from, to: t, by }),
+        None => {
+            if by.is_some() {
+                return Err(SasError::parse(
+                    "BY without TO in a DO statement value list.",
+                    span,
+                ));
+            }
+            Ok(DoListItem::Value(from))
+        }
+    }
 }
 
 /// `( expr )` après WHILE/UNTIL.
@@ -1757,8 +1849,23 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
     let tok = ts.peek().clone();
     match &tok.kind {
         TokenKind::Num(n) => {
+            let n = *n;
+            let num_end = tok.span.end;
             ts.next();
-            Ok(Some(Expr::Num(*n)))
+            // Forme `21710d` / `21710dt` / `43200t` : un littéral numérique
+            // immédiatement suivi (spans jointifs) d'un suffixe d/t/dt. La
+            // VALEUR est déjà le nombre SAS (date/datetime/time) ; le suffixe
+            // est un marqueur de type sans effet sur la constante. On le
+            // consomme s'il est présent et adjacent.
+            if let TokenKind::Ident(s) = &ts.peek().kind {
+                let lower = s.to_ascii_lowercase();
+                if ts.peek().span.start == num_end
+                    && matches!(lower.as_str(), "d" | "t" | "dt")
+                {
+                    ts.next(); // suffixe
+                }
+            }
+            Ok(Some(Expr::Num(n)))
         }
         TokenKind::Minus => {
             // `-5` : moins unaire sur littéral numérique, replié.
@@ -1774,19 +1881,14 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
             Ok(Some(Expr::Num(-n)))
         }
         TokenKind::Str { value, suffix } => {
-            // M2 : seuls les littéraux simples sont acceptés comme valeur
-            // initiale (pas de '...'d/'...'t — viendront avec les formats).
-            match suffix {
-                StrSuffix::None | StrSuffix::Name => {
-                    let s = value.clone();
-                    ts.next();
-                    Ok(Some(Expr::Str(s)))
-                }
-                _ => Err(SasError::parse(
-                    "date/time literals are not yet implemented as RETAIN initial values",
-                    tok.span,
-                )),
-            }
+            // Littéral simple (chaîne) OU littéral date/heure/datetime
+            // (`'01JAN2020'd`, `'14:30:00't`, `'01JAN2020 14:30:00'dt`),
+            // converti en sa valeur SAS numérique (M16.3).
+            let value = value.clone();
+            let suffix = *suffix;
+            let span = tok.span;
+            ts.next();
+            Ok(Some(super::expr::literal_from_string(&value, suffix, span)?))
         }
         TokenKind::Dot => {
             // `.` seul, ou missing spécial `.a`.. / `._` si l'ident d'UNE
@@ -2718,12 +2820,13 @@ mod tests {
     }
 
     #[test]
-    fn do_value_list_errors() {
-        let err = parse("data o; do i = 1, 5; end; run;").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
-        // Une seule valeur sans clause = liste à un élément : même erreur.
-        let err = parse("data o; do i = 1; end; run;").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    fn do_value_list_now_parses() {
+        // M16.3 : les listes de valeurs sont désormais supportées (DoList).
+        let ast = parse("data o; do i = 1, 5; end; run;").unwrap();
+        assert!(matches!(ast.stmts[0], DsStmt::DoList { .. }));
+        // Une seule valeur sans clause = liste à un élément.
+        let ast = parse("data o; do i = 1; end; run;").unwrap();
+        assert!(matches!(ast.stmts[0], DsStmt::DoList { .. }));
     }
 
     #[test]
@@ -3660,6 +3763,131 @@ mod tests {
         assert!(
             err.to_string().contains("at least one value"),
             "got: {err}"
+        );
+    }
+
+    // ── M16.3 : DO liste de valeurs, DO OVER, RETAIN littéraux date ───────
+
+    #[test]
+    fn parse_do_list_numeric() {
+        let ast = parse("data o; do i = 1, 3, 5; end; run;").unwrap();
+        let DsStmt::DoList { index, items, body } = &ast.stmts[0] else {
+            panic!("expected DoList, got {:?}", ast.stmts[0]);
+        };
+        assert_eq!(index, "i");
+        assert_eq!(
+            *items,
+            vec![
+                DoListItem::Value(Expr::Num(1.0)),
+                DoListItem::Value(Expr::Num(3.0)),
+                DoListItem::Value(Expr::Num(5.0)),
+            ]
+        );
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn parse_do_list_single_value() {
+        // Une valeur unique sans clause TO/BY est une liste à un élément.
+        let ast = parse("data o; do i = 42; end; run;").unwrap();
+        let DsStmt::DoList { items, .. } = &ast.stmts[0] else {
+            panic!("expected DoList");
+        };
+        assert_eq!(*items, vec![DoListItem::Value(Expr::Num(42.0))]);
+    }
+
+    #[test]
+    fn parse_do_list_character() {
+        let ast = parse("data o; do c = 'red', 'blue'; end; run;").unwrap();
+        let DsStmt::DoList { items, .. } = &ast.stmts[0] else {
+            panic!("expected DoList");
+        };
+        assert_eq!(
+            *items,
+            vec![
+                DoListItem::Value(Expr::Str("red".to_string())),
+                DoListItem::Value(Expr::Str("blue".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_do_list_mixed_range_and_values() {
+        let ast = parse("data o; do i = 1 to 5 by 2, 10, 20 to 30; end; run;").unwrap();
+        let DsStmt::DoList { items, .. } = &ast.stmts[0] else {
+            panic!("expected DoList");
+        };
+        assert_eq!(
+            *items,
+            vec![
+                DoListItem::Range {
+                    from: Expr::Num(1.0),
+                    to: Expr::Num(5.0),
+                    by: Some(Expr::Num(2.0)),
+                },
+                DoListItem::Value(Expr::Num(10.0)),
+                DoListItem::Range {
+                    from: Expr::Num(20.0),
+                    to: Expr::Num(30.0),
+                    by: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_classic_do_still_doloop() {
+        // `do i = 1 to 10 by 2;` SANS virgule reste un DoLoop classique.
+        let ast = parse("data o; do i = 1 to 10 by 2; end; run;").unwrap();
+        assert!(matches!(ast.stmts[0], DsStmt::DoLoop { .. }));
+    }
+
+    #[test]
+    fn parse_do_over() {
+        let ast = parse("data o; array a{3} x y z; do over a; a = a + 1; end; run;").unwrap();
+        let DsStmt::DoOver { array, body } = &ast.stmts[1] else {
+            panic!("expected DoOver, got {:?}", ast.stmts[1]);
+        };
+        assert_eq!(array, "a");
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn parse_do_list_rejects_while() {
+        let err = parse("data o; do i = 1, 3 while(x); end; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("WHILE/UNTIL are not allowed"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_retain_date_literal_bare() {
+        // `21710d` (numérique + suffixe d) → valeur SAS date 21710.
+        let ast = parse("data o; retain d 21710d; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![("d".to_string(), Some(Expr::Num(21710.0)))])]
+        );
+    }
+
+    #[test]
+    fn parse_retain_date_literal_quoted() {
+        // `'02JAN1960'd` = 1.
+        let ast = parse("data o; retain d '02JAN1960'd; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![("d".to_string(), Some(Expr::Num(1.0)))])]
+        );
+    }
+
+    #[test]
+    fn parse_retain_datetime_literal() {
+        // `'01JAN1960 00:01:00'dt` = 60 secondes.
+        let ast = parse("data o; retain dt '01JAN1960 00:01:00'dt; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Retain(vec![("dt".to_string(), Some(Expr::Num(60.0)))])]
         );
     }
 }

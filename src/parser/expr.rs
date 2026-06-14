@@ -508,7 +508,7 @@ pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr
 }
 
 /// Convertit un littéral chaîne (avec son suffixe) en `Expr`.
-fn literal_from_string(value: &str, suffix: StrSuffix, span: Span) -> Result<Expr> {
+pub(super) fn literal_from_string(value: &str, suffix: StrSuffix, span: Span) -> Result<Expr> {
     match suffix {
         StrSuffix::None | StrSuffix::Name => Ok(Expr::Str(value.to_string())),
         StrSuffix::Date => Ok(Expr::Num(parse_date_literal(value, span)?)),
@@ -626,17 +626,24 @@ fn parse_time_literal(s: &str, span: Span) -> Result<f64> {
     Ok((hh * 3600 + mm * 60 + ss) as f64)
 }
 
-/// `'ddMONyyyy:hh:mm:ss'dt` → secondes depuis 1960-01-01T00:00:00 (f64).
+/// `'ddMONyyyy:hh:mm:ss'dt` ou `'ddMONyyyy hh:mm:ss'dt` → secondes depuis
+/// 1960-01-01T00:00:00 (f64). SAS accepte un ESPACE ou un `:` entre la date
+/// et l'heure ; on découpe au premier des deux.
 fn parse_datetime_literal(s: &str, span: Span) -> Result<f64> {
     let s = s.trim();
-    let Some((date_part, time_part)) = s.split_once(':') else {
+    // Séparateur date/heure : premier espace, sinon premier `:`.
+    let split = s
+        .find(' ')
+        .or_else(|| s.find(':'))
+        .map(|i| (&s[..i], &s[i + 1..]));
+    let Some((date_part, time_part)) = split else {
         return Err(SasError::parse(
             format!("invalid datetime literal '{s}'"),
             span,
         ));
     };
-    let date = parse_date_ddmonyyyy(date_part, span)?;
-    let secs_in_day = parse_time_literal(time_part, span)?;
+    let date = parse_date_ddmonyyyy(date_part.trim(), span)?;
+    let secs_in_day = parse_time_literal(time_part.trim(), span)?;
     let days = date.signed_duration_since(sas_epoch()).num_days();
     Ok(days as f64 * 86400.0 + secs_in_day)
 }
