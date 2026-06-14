@@ -1855,6 +1855,399 @@ fn fn_weekday(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Date/time functions (M15.3)
+//
+// Convention SAS :
+//   - valeur date     = jours depuis 1960-01-01 (0 = 1960-01-01)
+//   - valeur heure    = secondes dans la journée (0–86399)
+//   - valeur datetime = secondes depuis 1960-01-01 00:00:00
+// ──────────────────────────────────────────────────────────────────────────────
+
+const SECONDS_PER_DAY: f64 = 86400.0;
+
+/// Abréviations de mois SAS (majuscules), index 0 = janvier.
+const MONTH_ABBR: [&str; 12] = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+];
+
+/// Décompose un datetime (secondes) en (jours date SAS, secondes-dans-le-jour).
+/// `floor` garantit un reste positif même pour les datetimes négatifs.
+fn split_datetime(dt: f64) -> (f64, f64) {
+    let days = (dt / SECONDS_PER_DAY).floor();
+    let secs = dt - days * SECONDS_PER_DAY;
+    (days, secs)
+}
+
+fn fn_datepart(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(dt) => {
+                let (days, _) = split_datetime(dt);
+                Value::Num(days)
+            }
+        },
+    }
+}
+
+fn fn_timepart(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(dt) => {
+                let (_, secs) = split_datetime(dt);
+                Value::Num(secs.trunc())
+            }
+        },
+    }
+}
+
+fn fn_datetime_combine(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    // DATETIME(date, time) — combine une date SAS et une heure-du-jour.
+    let date = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let time = match args.get(1) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    Value::Num(date * SECONDS_PER_DAY + time)
+}
+
+fn fn_hms(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let h = match args.first() {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let m = match args.get(1) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let s = match args.get(2) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    // h ≥ 0 ; m,s dans 0–59.
+    if h < 0.0 || !(0.0..=59.0).contains(&m) || !(0.0..=59.0).contains(&s) {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    Value::Num(h.trunc() * 3600.0 + m.trunc() * 60.0 + s.trunc())
+}
+
+fn fn_dhms(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    // DHMS(date, hour, minute, second) → datetime.
+    let d = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let h = match args.get(1) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let m = match args.get(2) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let s = match args.get(3) {
+        None => 0.0,
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    if h < 0.0 || !(0.0..=59.0).contains(&m) || !(0.0..=59.0).contains(&s) {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    let time = h.trunc() * 3600.0 + m.trunc() * 60.0 + s.trunc();
+    Value::Num(d * SECONDS_PER_DAY + time)
+}
+
+/// Bases de calcul partagées par YRDIF/DATDIF.
+enum DayBasis {
+    Actual,
+    A360,
+    B360,
+    Thirty30U,
+    Thirty30E,
+}
+
+/// Parse la base (insensible à la casse). Renvoie None si inconnue.
+fn parse_basis(v: &Value) -> Option<DayBasis> {
+    let s = match v {
+        Value::Char(s) => s.trim().to_uppercase(),
+        _ => return None,
+    };
+    match s.as_str() {
+        "ACT" | "ACTUAL" | "ACT/ACT" => Some(DayBasis::Actual),
+        "A360" | "ACT/360" => Some(DayBasis::A360),
+        "B360" | "30/360" | "30/360 SAS" => Some(DayBasis::B360),
+        "30U" | "30/360 US" => Some(DayBasis::Thirty30U),
+        "30E" | "30/360 EUR" | "30E/360" => Some(DayBasis::Thirty30E),
+        _ => None,
+    }
+}
+
+/// Nombre de jours « 30/360 » selon la règle (us/eur/sas-business).
+fn days_30_360(d1: i64, d2: i64, basis: &DayBasis) -> i64 {
+    let (y1, m1, mut dd1) = sas_date_to_ymd(d1);
+    let (y2, m2, mut dd2) = sas_date_to_ymd(d2);
+    match basis {
+        DayBasis::B360 => {
+            // Règle SAS business 30/360 : d1=31 → 30 ; d2=31 et d1∈{30,31} → 30.
+            if dd1 == 31 {
+                dd1 = 30;
+            }
+            if dd2 == 31 && dd1 == 30 {
+                dd2 = 30;
+            }
+        }
+        DayBasis::Thirty30U => {
+            if dd1 == 31 {
+                dd1 = 30;
+            }
+            if dd2 == 31 && dd1 == 30 {
+                dd2 = 30;
+            }
+        }
+        DayBasis::Thirty30E => {
+            if dd1 == 31 {
+                dd1 = 30;
+            }
+            if dd2 == 31 {
+                dd2 = 30;
+            }
+        }
+        _ => {}
+    }
+    360 * (y2 - y1) + 30 * (m2 - m1) + (dd2 - dd1)
+}
+
+/// Coeur de DATDIF : nombre de jours selon la base.
+fn datdif_days(d1: f64, d2: f64, basis: &DayBasis) -> f64 {
+    match basis {
+        DayBasis::Actual | DayBasis::A360 => (d2 - d1).trunc(),
+        DayBasis::B360 | DayBasis::Thirty30U | DayBasis::Thirty30E => {
+            days_30_360(d1.trunc() as i64, d2.trunc() as i64, basis) as f64
+        }
+    }
+}
+
+fn fn_yrdif(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let d1 = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let d2 = match args.get(1) {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let basis = match args.get(2) {
+        None => DayBasis::Actual,
+        Some(v) => match parse_basis(v) {
+            Some(b) => b,
+            None => {
+                ctx.invalid_data += 1;
+                ctx.error_flag = true;
+                return Value::missing();
+            }
+        },
+    };
+    let years = match basis {
+        DayBasis::Actual => (d2 - d1) / 365.0,
+        DayBasis::A360 => (d2 - d1) / 360.0,
+        DayBasis::B360 | DayBasis::Thirty30U | DayBasis::Thirty30E => {
+            days_30_360(d1.trunc() as i64, d2.trunc() as i64, &basis) as f64 / 360.0
+        }
+    };
+    Value::Num(years)
+}
+
+fn fn_datdif(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let d1 = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let d2 = match args.get(1) {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f,
+        },
+    };
+    let basis = match args.get(2) {
+        None => DayBasis::Actual,
+        Some(v) => match parse_basis(v) {
+            Some(b) => b,
+            None => {
+                ctx.invalid_data += 1;
+                ctx.error_flag = true;
+                return Value::missing();
+            }
+        },
+    };
+    Value::Num(datdif_days(d1, d2, &basis))
+}
+
+fn fn_juldate(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(f) => {
+                let (year, _, _) = sas_date_to_ymd(f as i64);
+                let jan1 = ymd_to_sas_date(year, 1, 1);
+                let doy = (f.trunc() - jan1) as i64 + 1; // 1-based
+                Value::Num(doy as f64)
+            }
+        },
+    }
+}
+
+fn fn_datejul(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let jul = match args.first() {
+        None => return Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::missing(),
+            Some(f) => f.trunc() as i64,
+        },
+    };
+    if jul <= 0 {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    // Format YYDDD / YYYYDDD : les 3 derniers chiffres = jour de l'année.
+    let day_of_year = jul % 1000;
+    let year_part = jul / 1000;
+    if day_of_year < 1 {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    // Interprétation de l'année à 2 chiffres : 0–99 → 1900–1999, 100–199 → 2000–2099.
+    let year = if year_part < 100 {
+        1900 + year_part
+    } else if year_part < 200 {
+        2000 + (year_part - 100)
+    } else {
+        year_part
+    };
+    let max_day = if is_leap_year(year) { 366 } else { 365 };
+    if day_of_year > max_day {
+        ctx.invalid_data += 1;
+        ctx.error_flag = true;
+        return Value::missing();
+    }
+    let jan1 = ymd_to_sas_date(year, 1, 1);
+    Value::Num(jan1 + (day_of_year - 1) as f64)
+}
+
+fn fn_hour(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(dt) => {
+                let (_, secs) = split_datetime(dt);
+                Value::Num((secs / 3600.0).floor())
+            }
+        },
+    }
+}
+
+fn fn_minute(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(dt) => {
+                let (_, secs) = split_datetime(dt);
+                Value::Num(((secs % 3600.0) / 60.0).floor())
+            }
+        },
+    }
+}
+
+fn fn_second(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(dt) => {
+                let (_, secs) = split_datetime(dt);
+                Value::Num((secs % 60.0).trunc())
+            }
+        },
+    }
+}
+
+/// Formate une date SAS en "DDMMMYYYY" (ex. "01JAN2020").
+fn format_date9(sas_date: i64) -> String {
+    let (year, month, day) = sas_date_to_ymd(sas_date);
+    let abbr = MONTH_ABBR
+        .get((month - 1).clamp(0, 11) as usize)
+        .copied()
+        .unwrap_or("???");
+    format!("{:02}{}{:04}", day, abbr, year)
+}
+
+fn fn_nldate(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    let date = match args.first() {
+        None => return Value::Char(String::new()),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::Char(String::new()),
+            Some(f) => f.trunc() as i64,
+        },
+    };
+    // La langue (EN/FR/...) ne change rien dans cette implémentation simplifiée.
+    let _lang = match args.get(1) {
+        Some(Value::Char(s)) => s.trim().to_uppercase(),
+        _ => "EN".to_string(),
+    };
+    Value::Char(format_date9(date))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Interval date functions : INTCK / INTNX
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -2229,6 +2622,20 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("WEEKDAY", fn_weekday),
     ("INTCK", fn_intck),
     ("INTNX", fn_intnx),
+    // Date/time functions M15.3 (alphabetical)
+    ("DATDIF", fn_datdif),
+    ("DATEJUL", fn_datejul),
+    ("DATEPART", fn_datepart),
+    ("DATETIME", fn_datetime_combine),
+    ("DHMS", fn_dhms),
+    ("HMS", fn_hms),
+    ("HOUR", fn_hour),
+    ("JULDATE", fn_juldate),
+    ("MINUTE", fn_minute),
+    ("NLDATE", fn_nldate),
+    ("SECOND", fn_second),
+    ("TIMEPART", fn_timepart),
+    ("YRDIF", fn_yrdif),
     // Conversion (PUT/INPUT) — délèguent au moteur de formats (M4).
     ("PUT", fn_put),
     ("INPUT", fn_input),
@@ -3987,5 +4394,258 @@ mod tests {
             invoke("CATQ", &[chr(","), chr("a"), chr(""), chr("c")]),
             chr("a,,c")
         );
+    }
+
+    // ── DATEPART (M15.3) ─────────────────────────────────────────────────────
+
+    #[test]
+    fn datepart_nominal() {
+        // 2020-01-01 12:30:45 → date 21915.
+        let dt = 21915.0 * SECONDS_PER_DAY + 45045.0;
+        assert_eq!(invoke("DATEPART", &[num(dt)]), num(21915.0));
+    }
+
+    #[test]
+    fn datepart_midnight() {
+        assert_eq!(invoke("DATEPART", &[num(0.0)]), num(0.0));
+    }
+
+    #[test]
+    fn datepart_missing() {
+        assert_eq!(invoke("DATEPART", &[miss()]), miss());
+    }
+
+    // ── TIMEPART (M15.3) ─────────────────────────────────────────────────────
+
+    #[test]
+    fn timepart_nominal() {
+        let dt = 21915.0 * SECONDS_PER_DAY + 45045.0;
+        assert_eq!(invoke("TIMEPART", &[num(dt)]), num(45045.0));
+    }
+
+    #[test]
+    fn timepart_midnight() {
+        let dt = 21915.0 * SECONDS_PER_DAY;
+        assert_eq!(invoke("TIMEPART", &[num(dt)]), num(0.0));
+    }
+
+    // ── DATETIME (combine) (M15.3) ───────────────────────────────────────────
+
+    #[test]
+    fn datetime_combine_nominal() {
+        // date 21915 + time 45045 → datetime.
+        let expected = 21915.0 * SECONDS_PER_DAY + 45045.0;
+        assert_eq!(invoke("DATETIME", &[num(21915.0), num(45045.0)]), num(expected));
+    }
+
+    #[test]
+    fn datetime_combine_default_time() {
+        assert_eq!(
+            invoke("DATETIME", &[num(21915.0)]),
+            num(21915.0 * SECONDS_PER_DAY)
+        );
+    }
+
+    // ── HMS (M15.3) ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn hms_nominal() {
+        // 12:30:45 = 45045 seconds.
+        assert_eq!(invoke("HMS", &[num(12.0), num(30.0), num(45.0)]), num(45045.0));
+    }
+
+    #[test]
+    fn hms_large_hours_ok() {
+        // h ≥ 0 may exceed 23 (HMS allows large hour counts).
+        assert_eq!(invoke("HMS", &[num(25.0), num(0.0), num(0.0)]), num(90000.0));
+    }
+
+    #[test]
+    fn hms_invalid_minute_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("HMS", &[num(1.0), num(60.0), num(0.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── DHMS (M15.3) ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn dhms_nominal() {
+        let expected = 21915.0 * SECONDS_PER_DAY + 45045.0;
+        assert_eq!(
+            invoke("DHMS", &[num(21915.0), num(12.0), num(30.0), num(45.0)]),
+            num(expected)
+        );
+    }
+
+    #[test]
+    fn dhms_invalid_second_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("DHMS", &[num(0.0), num(0.0), num(0.0), num(60.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── YRDIF (M15.3) ────────────────────────────────────────────────────────
+
+    #[test]
+    fn yrdif_actual_one_year() {
+        // 2000-01-01 (14610) to 2001-01-01 (14976) = 366 days / 365.
+        let r = invoke("YRDIF", &[num(14610.0), num(14976.0), chr("ACTUAL")]);
+        assert_eq!(r, num(366.0 / 365.0));
+    }
+
+    #[test]
+    fn yrdif_default_basis_is_actual() {
+        // No basis → ACTUAL.
+        let r = invoke("YRDIF", &[num(14610.0), num(14975.0)]);
+        assert_eq!(r, num(365.0 / 365.0));
+    }
+
+    #[test]
+    fn yrdif_b360_one_year() {
+        // 2000-01-01 to 2001-01-01: 30/360 → 360 days / 360 = 1.0.
+        let r = invoke("YRDIF", &[num(14610.0), num(14976.0), chr("B360")]);
+        assert_eq!(r, num(1.0));
+    }
+
+    #[test]
+    fn yrdif_invalid_basis_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("YRDIF", &[num(14610.0), num(14976.0), chr("XYZ")], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── DATDIF (M15.3) ───────────────────────────────────────────────────────
+
+    #[test]
+    fn datdif_actual_days() {
+        assert_eq!(
+            invoke("DATDIF", &[num(14610.0), num(14976.0), chr("ACTUAL")]),
+            num(366.0)
+        );
+    }
+
+    #[test]
+    fn datdif_b360_days() {
+        assert_eq!(
+            invoke("DATDIF", &[num(14610.0), num(14976.0), chr("B360")]),
+            num(360.0)
+        );
+    }
+
+    #[test]
+    fn datdif_invalid_basis_is_missing() {
+        let mut c = ctx();
+        let r = invoke_ctx("DATDIF", &[num(14610.0), num(14976.0), chr("BAD")], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── JULDATE (M15.3) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn juldate_jan1() {
+        // 2000-01-01 (14610) → day 1.
+        assert_eq!(invoke("JULDATE", &[num(14610.0)]), num(1.0));
+    }
+
+    #[test]
+    fn juldate_dec31() {
+        // 2007-12-31 (17531) → day 365.
+        assert_eq!(invoke("JULDATE", &[num(17531.0)]), num(365.0));
+    }
+
+    #[test]
+    fn juldate_missing() {
+        assert_eq!(invoke("JULDATE", &[miss()]), miss());
+    }
+
+    // ── DATEJUL (M15.3) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn datejul_two_digit_year() {
+        // 07365 = day 365 of 1907 (00–99 → 1900–1999) → SAS date -18994.
+        assert_eq!(invoke("DATEJUL", &[num(7365.0)]), num(-18994.0));
+        // 107001 = day 1 of 2007 (100–199 → 2000–2099) → SAS date 17167.
+        let r = invoke("DATEJUL", &[num(107001.0)]);
+        assert_eq!(invoke("YEAR", &[r.clone()]), num(2007.0));
+        assert_eq!(invoke("JULDATE", &[r]), num(1.0));
+    }
+
+    #[test]
+    fn datejul_four_digit_year() {
+        // 2000001 = day 1 of 2000 → SAS date 14610.
+        assert_eq!(invoke("DATEJUL", &[num(2000001.0)]), num(14610.0));
+    }
+
+    #[test]
+    fn datejul_invalid_day_is_missing() {
+        // 2001366 = day 366 of 2001 (not a leap year) → missing.
+        let mut c = ctx();
+        let r = invoke_ctx("DATEJUL", &[num(2001366.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── HOUR / MINUTE / SECOND (M15.3) ───────────────────────────────────────
+
+    #[test]
+    fn hour_nominal() {
+        let dt = 21915.0 * SECONDS_PER_DAY + 45045.0; // 12:30:45
+        assert_eq!(invoke("HOUR", &[num(dt)]), num(12.0));
+    }
+
+    #[test]
+    fn hour_midnight() {
+        assert_eq!(invoke("HOUR", &[num(0.0)]), num(0.0));
+    }
+
+    #[test]
+    fn minute_nominal() {
+        let dt = 21915.0 * SECONDS_PER_DAY + 45045.0; // 12:30:45
+        assert_eq!(invoke("MINUTE", &[num(dt)]), num(30.0));
+    }
+
+    #[test]
+    fn minute_missing() {
+        assert_eq!(invoke("MINUTE", &[miss()]), miss());
+    }
+
+    #[test]
+    fn second_nominal() {
+        let dt = 21915.0 * SECONDS_PER_DAY + 45045.0; // 12:30:45
+        assert_eq!(invoke("SECOND", &[num(dt)]), num(45.0));
+    }
+
+    #[test]
+    fn second_zero() {
+        let dt = 21915.0 * SECONDS_PER_DAY; // midnight
+        assert_eq!(invoke("SECOND", &[num(dt)]), num(0.0));
+    }
+
+    // ── NLDATE (M15.3) ───────────────────────────────────────────────────────
+
+    #[test]
+    fn nldate_en_default() {
+        // 2020-01-01 = SAS date 21915 → "01JAN2020".
+        assert_eq!(invoke("NLDATE", &[num(21915.0)]), chr("01JAN2020"));
+    }
+
+    #[test]
+    fn nldate_fr_same_as_en() {
+        assert_eq!(invoke("NLDATE", &[num(21915.0), chr("FR")]), chr("01JAN2020"));
+    }
+
+    #[test]
+    fn nldate_unknown_language_defaults_en() {
+        assert_eq!(invoke("NLDATE", &[num(21915.0), chr("ZZ")]), chr("01JAN2020"));
+    }
+
+    #[test]
+    fn nldate_missing_is_empty() {
+        assert_eq!(invoke("NLDATE", &[miss()]), chr(""));
     }
 }
