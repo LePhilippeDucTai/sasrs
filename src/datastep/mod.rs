@@ -209,6 +209,45 @@ pub struct OutputSpec {
     pub out_names: Vec<String>,
 }
 
+/// Définition compilée d'un array (M16.2). `slots` = slots PDV des
+/// éléments dans l'ordre row-major ; `dims` = bornes supérieures de chaque
+/// dimension (borne inférieure = 1, comme SAS). Un array 1-D a `dims` de
+/// longueur 1 ; le produit des `dims` égale toujours `slots.len()`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayDef {
+    pub slots: Vec<usize>,
+    pub dims: Vec<usize>,
+}
+
+impl ArrayDef {
+    /// Traduit un sous-script multi-dimensionnel (1-based par dimension) en
+    /// index linéaire 0-based row-major. `None` si un indice est hors
+    /// bornes (ou si le nombre d'indices ne correspond ni à `dims.len()`
+    /// ni à 1 — accès linéaire). `indices` doit déjà être arrondi/entier.
+    pub fn linear_index(&self, indices: &[i64]) -> Option<usize> {
+        if indices.len() == 1 && self.dims.len() != 1 {
+            // Accès linéaire sur array multi-dim : `arr{n}` → 1..=total.
+            let n = indices[0];
+            if n >= 1 && (n as usize) <= self.slots.len() {
+                return Some(n as usize - 1);
+            }
+            return None;
+        }
+        if indices.len() != self.dims.len() {
+            return None;
+        }
+        let mut linear: usize = 0;
+        for (k, &idx) in indices.iter().enumerate() {
+            let bound = self.dims[k];
+            if idx < 1 || (idx as usize) > bound {
+                return None;
+            }
+            linear = linear * bound + (idx as usize - 1);
+        }
+        Some(linear)
+    }
+}
+
 pub struct StepProgram {
     pub pdv: Pdv,
     pub stmts: Vec<crate::ast::DsStmt>,
@@ -228,9 +267,9 @@ pub struct StepProgram {
     /// Appliquées dans l'ordre — une entrée ultérieure pour le même slot
     /// gagne (cas `n + 1; retain n 100;` : le RETAIN l'emporte).
     pub initial_values: Vec<(usize, Value)>,
-    /// Arrays 1-D : nom UPPERCASE → slots PDV des éléments, dans l'ordre de
-    /// déclaration. Passé tel quel à l'EvalCtx par l'exécuteur.
-    pub arrays: HashMap<String, Vec<usize>>,
+    /// Arrays : nom UPPERCASE → définition (slots + dimensions). Passé tel
+    /// quel à l'EvalCtx par l'exécuteur.
+    pub arrays: HashMap<String, ArrayDef>,
     /// Libellés déclarés (LABEL/ATTRIB) : nom UPPERCASE → libellé.
     /// Appliqués aux `VarMeta` de sortie par l'exécuteur.
     pub labels: HashMap<String, String>,
@@ -319,7 +358,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         .pdv
         .vars()
         .iter()
-        .filter(|v| !v.from_input && !c.assigned.contains(&v.name.to_uppercase()))
+        .filter(|v| !v.from_input && !v.temporary && !c.assigned.contains(&v.name.to_uppercase()))
         .map(|v| v.name.clone())
         .collect();
     Ok(StepProgram {
@@ -348,10 +387,45 @@ fn rebuild_with_retained(pdv: &Pdv, retained: &HashSet<usize>) -> Pdv {
             retained: v.retained || retained.contains(&i),
             from_input: v.from_input,
             format: v.format.clone(),
+            temporary: v.temporary,
         });
         debug_assert_eq!(slot, i, "rebuild must preserve slot indices");
     }
     rebuilt
+}
+
+/// Évalue une valeur initiale CONSTANTE d'un statement ARRAY (`(1, 2, 'x')`)
+/// à la compilation. N'accepte que des littéraux (num, chaîne, missing) et
+/// `-num`. La valeur est coercée vers le type de l'array (num→char =
+/// formaté BEST ; char→num = parse).
+fn const_eval_initial(expr: &crate::ast::Expr, ty: VarType) -> Result<Value> {
+    use crate::ast::{Expr, UnaryOp};
+    let v = match expr {
+        Expr::Num(n) => Value::Num(*n),
+        Expr::Str(s) => Value::Char(s.clone()),
+        Expr::Missing(k) => Value::Missing(*k),
+        Expr::Unary {
+            op: UnaryOp::Minus,
+            expr,
+        } => match const_eval_initial(expr, VarType::Num)? {
+            Value::Num(n) => Value::Num(-n),
+            other => other,
+        },
+        _ => {
+            return Err(SasError::runtime(
+                "Array initial values must be constants (numbers or quoted strings).",
+            ));
+        }
+    };
+    // Coercition vers le type déclaré de l'array.
+    Ok(match (ty, &v) {
+        (VarType::Char, Value::Num(n)) => Value::Char(crate::value::format_best(*n, 12)),
+        (VarType::Num, Value::Char(s)) => match s.trim().parse::<f64>() {
+            Ok(n) => Value::Num(n),
+            Err(_) => Value::missing(),
+        },
+        _ => v,
+    })
 }
 
 struct Compiler<'a> {
@@ -391,8 +465,8 @@ struct Compiler<'a> {
     retained_slots: HashSet<usize>,
     /// Valeurs initiales (slot, valeur) appliquées avant la 1re itération.
     initial_values: Vec<(usize, Value)>,
-    /// Arrays déclarés : nom UPPERCASE → slots PDV des éléments.
-    arrays: HashMap<String, Vec<usize>>,
+    /// Arrays déclarés : nom UPPERCASE → définition (slots + dimensions).
+    arrays: HashMap<String, ArrayDef>,
     /// Libellés déclarés (LABEL/ATTRIB) : nom UPPERCASE → libellé. Une
     /// déclaration ultérieure pour la même variable écrase la précédente.
     labels: HashMap<String, String>,
@@ -616,24 +690,33 @@ impl Compiler<'_> {
             }
             DsStmt::Array {
                 name,
-                size,
+                dims,
                 char_len,
                 vars,
-            } => self.compile_array(name, *size, *char_len, vars),
-            DsStmt::AssignIndexed { array, index, expr } => {
+                initial,
+                temporary,
+                special,
+            } => self.compile_array(name, dims.as_deref(), *char_len, vars, initial, *temporary, *special),
+            DsStmt::AssignIndexed {
+                array,
+                indices,
+                expr,
+            } => {
                 let upper = array.to_uppercase();
-                let Some(slots) = self.arrays.get(&upper) else {
+                let Some(def) = self.arrays.get(&upper) else {
                     return Err(SasError::runtime(format!(
                         "Undeclared array referenced: {array}."
                     )));
                 };
                 // Tous les éléments sont potentiellement assignés via
                 // l'indice : pas de NOTE "uninitialized" pour eux.
-                for slot in slots.clone() {
+                for slot in def.slots.clone() {
                     let n = self.pdv.vars()[slot].name.to_uppercase();
                     self.assigned.insert(n);
                 }
-                self.walk_expr(index)?;
+                for index in indices {
+                    self.walk_expr(index)?;
+                }
                 self.walk_expr(expr)?;
                 Ok(())
             }
@@ -835,24 +918,37 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
-            Expr::Index { name, index } => {
+            Expr::Index { name, indices } => {
                 if !self.arrays.contains_key(&name.to_uppercase()) {
                     return Err(SasError::runtime(format!(
                         "Undeclared array referenced: {name}."
                     )));
                 }
-                self.walk_expr(index)
+                for index in indices {
+                    self.walk_expr(index)?;
+                }
+                Ok(())
             }
             Expr::Call { name, args } => {
-                // `dim(arr)` : ne crée pas de variable pour le nom d'array.
-                if name.eq_ignore_ascii_case("dim")
-                    && args.len() == 1
+                // `dim(arr)`/`hbound(arr[, n])`/`lbound(arr[, n])` : le 1er
+                // argument nomme un array — il ne crée PAS de variable. Les
+                // autres arguments (dimension) sont walkés normalement.
+                let is_dim_fn = name.eq_ignore_ascii_case("dim")
+                    || name.eq_ignore_ascii_case("hbound")
+                    || name.eq_ignore_ascii_case("lbound");
+                if is_dim_fn
+                    && !args.is_empty()
                     && let Expr::Var(n) | Expr::Index { name: n, .. } = &args[0]
                     && self.arrays.contains_key(&n.to_uppercase())
                 {
-                    // `dim(a{i})` : l'indice reste walké.
-                    if let Expr::Index { index, .. } = &args[0] {
-                        self.walk_expr(index)?;
+                    // `dim(a{i})` : l'indice du 1er argument reste walké.
+                    if let Expr::Index { indices, .. } = &args[0] {
+                        for index in indices {
+                            self.walk_expr(index)?;
+                        }
+                    }
+                    for a in &args[1..] {
+                        self.walk_expr(a)?;
                     }
                     return Ok(());
                 }
@@ -874,55 +970,171 @@ impl Compiler<'_> {
             retained: false,
             from_input: false,
             format: None,
+            temporary: false,
         })
     }
 
-    /// Déclare un array 1-D : les éléments entrent au PDV ICI (ordre de
-    /// première référence) ; `vars` vide → éléments auto-nommés name1..N ;
-    /// `size` None (`{*}`) → taille déduite de la liste ; `char_len` →
-    /// éléments caractère de cette longueur. Le registre `arrays` associe
-    /// le nom UPPERCASE aux slots.
+    /// Slot d'un élément d'array `_TEMPORARY_` : hors-PDV-de-sortie, retenu
+    /// implicitement. Les noms internes (`*name[i]`) ne peuvent collisionner
+    /// avec une variable utilisateur (`*` interdit en SAS).
+    fn add_temp_var(&mut self, name: &str, ty: VarType, length: usize) -> usize {
+        self.pdv.add_var(PdvVar {
+            name: name.to_string(),
+            ty,
+            length,
+            retained: true,
+            from_input: false,
+            format: None,
+            temporary: true,
+        })
+    }
+
+    /// Déclare un array (M2/M16.2). Les éléments entrent au PDV ICI (ordre
+    /// de première référence). `dims` None (`{*}`) → 1-D, taille déduite de
+    /// la liste ; sinon bornes supérieures explicites (le produit = nombre
+    /// d'éléments). `vars` vide (et pas de liste spéciale) → éléments
+    /// auto-nommés name1..nameN. `char_len` → éléments caractère.
+    /// `initial` → valeurs initiales row-major (RETAIN implicite). `temp` →
+    /// éléments hors-sortie, retenus. `special` → `_NUMERIC_`/`_CHARACTER_`/
+    /// `_ALL_` remplacé par les variables PDV correspondantes. Le registre
+    /// `arrays` associe le nom UPPERCASE à la définition (slots + dims).
+    #[allow(clippy::too_many_arguments)]
     fn compile_array(
         &mut self,
         name: &str,
-        size: Option<usize>,
+        dims: Option<&[usize]>,
         char_len: Option<usize>,
         vars: &[String],
+        initial: &[crate::ast::Expr],
+        temp: bool,
+        special: Option<crate::ast::ArraySpecial>,
     ) -> Result<()> {
+        use crate::ast::ArraySpecial;
         let upper = name.to_uppercase();
         if self.arrays.contains_key(&upper) {
             return Err(SasError::runtime(format!(
                 "An array has already been defined with the name {name}."
             )));
         }
-        let names: Vec<String> = if vars.is_empty() {
-            // Éléments auto-nommés name1..nameN — il faut une taille.
-            let Some(n) = size else {
-                return Err(SasError::runtime(format!(
-                    "The array {name} has been defined with zero elements."
-                )));
-            };
-            (1..=n).map(|i| format!("{name}{i}")).collect()
-        } else {
-            if let Some(n) = size
-                && n != vars.len()
-            {
-                return Err(SasError::runtime(format!(
-                    "The number of variables in the list ({}) does not match \
-                     the number of elements ({}) in the array {}.",
-                    vars.len(),
-                    n,
-                    name
-                )));
-            }
-            vars.to_vec()
-        };
+
         let (ty, length) = match char_len {
             Some(l) => (VarType::Char, l),
             None => (VarType::Num, 8),
         };
-        let slots: Vec<usize> = names.iter().map(|v| self.add_var(v, ty, length)).collect();
-        self.arrays.insert(upper, slots);
+
+        // Liste effective d'éléments à entrer au PDV (ou slots existants
+        // pour les listes spéciales). On collecte directement des slots.
+        let slots: Vec<usize> = if let Some(kind) = special {
+            // `_NUMERIC_`/`_CHARACTER_`/`_ALL_` : toutes les variables
+            // (NON-temporaires) connues au point du statement, du type voulu.
+            let want_char = matches!(kind, ArraySpecial::Character)
+                || (matches!(kind, ArraySpecial::All) && char_len.is_some());
+            let want = if want_char { VarType::Char } else { VarType::Num };
+            let picked: Vec<usize> = self
+                .pdv
+                .vars()
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| {
+                    !v.temporary
+                        && match kind {
+                            ArraySpecial::Numeric => v.ty == VarType::Num,
+                            ArraySpecial::Character => v.ty == VarType::Char,
+                            ArraySpecial::All => v.ty == want,
+                        }
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if picked.is_empty() {
+                return Err(SasError::runtime(format!(
+                    "The array {name} has been defined with zero elements."
+                )));
+            }
+            // Une dimension explicite doit correspondre au compte trouvé.
+            if let Some(ds) = dims {
+                let total: usize = ds.iter().product();
+                if total != picked.len() {
+                    return Err(SasError::runtime(format!(
+                        "The number of variables in the list ({}) does not match \
+                         the number of elements ({}) in the array {}.",
+                        picked.len(),
+                        total,
+                        name
+                    )));
+                }
+            }
+            picked
+        } else {
+            // Liste nommée OU éléments auto-générés.
+            let total = dims.map(|d| d.iter().product::<usize>());
+            let names: Vec<String> = if vars.is_empty() {
+                let Some(n) = total else {
+                    return Err(SasError::runtime(format!(
+                        "The array {name} has been defined with zero elements."
+                    )));
+                };
+                if temp {
+                    // Éléments temporaires : noms internes non collisionnables.
+                    (1..=n).map(|i| format!("*{name}[{i}]")).collect()
+                } else {
+                    (1..=n).map(|i| format!("{name}{i}")).collect()
+                }
+            } else {
+                if let Some(n) = total
+                    && n != vars.len()
+                {
+                    return Err(SasError::runtime(format!(
+                        "The number of variables in the list ({}) does not match \
+                         the number of elements ({}) in the array {}.",
+                        vars.len(),
+                        n,
+                        name
+                    )));
+                }
+                vars.to_vec()
+            };
+            if temp {
+                names
+                    .iter()
+                    .map(|v| self.add_temp_var(v, ty, length))
+                    .collect()
+            } else {
+                names.iter().map(|v| self.add_var(v, ty, length)).collect()
+            }
+        };
+
+        // Dimensions résolues : explicites, ou 1-D = nombre d'éléments.
+        let dim_vec: Vec<usize> = match dims {
+            Some(d) => d.to_vec(),
+            None => vec![slots.len()],
+        };
+
+        // Valeurs initiales (row-major) : évaluées à la COMPILATION (les
+        // littéraux constants suffisent) puis appliquées via `initial_values`
+        // avant la 1re itération, comme RETAIN avec init. SAS marque les
+        // éléments initialisés comme retenus.
+        if !initial.is_empty() {
+            if initial.len() > slots.len() {
+                return Err(SasError::runtime(format!(
+                    "Too many initial values were specified for the array {name}."
+                )));
+            }
+            for (k, expr) in initial.iter().enumerate() {
+                let v = const_eval_initial(expr, ty)?;
+                self.initial_values.push((slots[k], v));
+                self.retained_slots.insert(slots[k]);
+                let nm = self.pdv.vars()[slots[k]].name.to_uppercase();
+                self.assigned.insert(nm);
+            }
+        }
+
+        self.arrays.insert(
+            upper,
+            ArrayDef {
+                slots,
+                dims: dim_vec,
+            },
+        );
         Ok(())
     }
 
@@ -933,7 +1145,7 @@ impl Compiler<'_> {
         match self
             .arrays
             .get(&name.to_uppercase())
-            .and_then(|slots| slots.first())
+            .and_then(|def| def.slots.first())
         {
             Some(&slot) => {
                 let v = &self.pdv.vars()[slot];
@@ -1030,6 +1242,7 @@ impl Compiler<'_> {
                 retained: false,
                 from_input: true,
                 format: meta.format.clone(),
+                temporary: false,
             });
             // Si la variable existait déjà (référence textuelle antérieure
             // au SET), la marquer issue de l'input malgré tout.
@@ -1250,7 +1463,12 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
-            Expr::Index { index, .. } => self.validate_where_vars(index, file),
+            Expr::Index { indices, .. } => {
+                for index in indices {
+                    self.validate_where_vars(index, file)?;
+                }
+                Ok(())
+            }
             Expr::Call { args, .. } => {
                 for a in args {
                     self.validate_where_vars(a, file)?;
@@ -1283,8 +1501,9 @@ impl Compiler<'_> {
             // `arr{i}` : type/longueur des éléments de l'array.
             Expr::Index { name, .. } => self.array_elem_type(name),
             Expr::Call { name, args } => {
-                // Forme parenthèses `arr(i)` : l'array masque la fonction.
-                if args.len() == 1 && self.arrays.contains_key(&name.to_uppercase()) {
+                // Forme parenthèses `arr(i)`/`arr(i,j)` : l'array masque la
+                // fonction.
+                if !args.is_empty() && self.arrays.contains_key(&name.to_uppercase()) {
                     return self.array_elem_type(name);
                 }
                 let lower = name.to_ascii_lowercase();
@@ -1395,6 +1614,10 @@ impl Compiler<'_> {
             let mut kept_slots = Vec::new();
             let mut out_names = Vec::new();
             for (i, v) in self.pdv.vars().iter().enumerate() {
+                // Les éléments d'array _TEMPORARY_ ne sont JAMAIS écrits.
+                if v.temporary {
+                    continue;
+                }
                 let u = v.name.to_uppercase();
                 let kept = stmt_keep.as_ref().is_none_or(|k| k.contains(&u))
                     && opt_keep.as_ref().is_none_or(|k| k.contains(&u))
@@ -1918,7 +2141,7 @@ mod tests {
         let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
         // Les éléments entrent au PDV au point de l'ARRAY, avant b.
         assert_eq!(names, vec!["x", "y", "z", "b"]);
-        assert_eq!(prog.arrays.get("A"), Some(&vec![0, 1, 2]));
+        assert_eq!(prog.arrays.get("A").map(|d| &d.slots), Some(&vec![0, 1, 2]));
         assert_eq!(prog.pdv.vars()[0].ty, VarType::Num);
         // Le nom de l'array n'est PAS une variable du PDV.
         assert!(prog.pdv.slot("a").is_none());
@@ -1928,7 +2151,7 @@ mod tests {
     fn array_star_size_deduced_and_char_length_applied() {
         let mut s = session();
         let prog = compile_src("data o; array c{*} $ 5 c1 c2; run;", &mut s).unwrap();
-        assert_eq!(prog.arrays.get("C"), Some(&vec![0, 1]));
+        assert_eq!(prog.arrays.get("C").map(|d| &d.slots), Some(&vec![0, 1]));
         for v in prog.pdv.vars() {
             assert_eq!(v.ty, VarType::Char);
             assert_eq!(v.length, 5);
@@ -1941,7 +2164,7 @@ mod tests {
         let prog = compile_src("data o; array a{3}; a{1} = 1; run;", &mut s).unwrap();
         let names: Vec<&str> = prog.pdv.vars().iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, vec!["a1", "a2", "a3"]);
-        assert_eq!(prog.arrays.get("A"), Some(&vec![0, 1, 2]));
+        assert_eq!(prog.arrays.get("A").map(|d| &d.slots), Some(&vec![0, 1, 2]));
     }
 
     #[test]

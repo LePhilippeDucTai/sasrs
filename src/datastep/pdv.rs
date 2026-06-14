@@ -25,6 +25,9 @@ pub struct PdvVar {
     pub retained: bool,
     pub from_input: bool,
     pub format: Option<String>,
+    /// Élément d'array `_TEMPORARY_` (M16.2) : n'est PAS écrit en sortie et
+    /// est implicitement retenu (jamais remis à missing entre itérations).
+    pub temporary: bool,
 }
 
 pub struct Pdv {
@@ -177,6 +180,7 @@ mod tests {
             retained: false,
             from_input: false,
             format: None,
+            temporary: false,
         }
     }
 
@@ -188,6 +192,7 @@ mod tests {
             retained: false,
             from_input: false,
             format: None,
+            temporary: false,
         }
     }
 

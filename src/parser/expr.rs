@@ -474,8 +474,9 @@ fn parse_call(ts: &mut StatementStream, name: String) -> Result<Expr> {
 }
 
 /// Référence d'array indexée : `{`/`[` en tête de stream, `name` déjà
-/// consommé. Le délimiteur fermant doit être assorti à l'ouvrant. Un seul
-/// indice en M2 : une virgule → erreur multi-dimensions propre.
+/// consommé. Le délimiteur fermant doit être assorti à l'ouvrant.
+/// Un ou plusieurs indices séparés par des virgules (M16.2,
+/// multi-dimensionnel) : `arr{i}` ou `arr{i, j, k}`.
 pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr> {
     let open = ts.next(); // `{` ou `[`
     let closer = match open.kind {
@@ -483,12 +484,14 @@ pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr
         TokenKind::LBracket => TokenKind::RBracket,
         _ => unreachable!("parse_index called without an opening brace/bracket"),
     };
-    let index = parse_expr(ts)?;
-    if ts.peek().kind == TokenKind::Comma {
-        return Err(SasError::parse(
-            "Multi-dimensional arrays are not yet implemented.",
-            ts.peek().span,
-        ));
+    let mut indices = Vec::new();
+    loop {
+        indices.push(parse_expr(ts)?);
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next(); // `,`
+            continue;
+        }
+        break;
     }
     if ts.peek().kind != closer {
         return Err(SasError::parse(
@@ -501,10 +504,7 @@ pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr
         ));
     }
     ts.next(); // fermant
-    Ok(Expr::Index {
-        name,
-        index: Box::new(index),
-    })
+    Ok(Expr::Index { name, indices })
 }
 
 /// Convertit un littéral chaîne (avec son suffixe) en `Expr`.
@@ -1033,7 +1033,7 @@ mod tests {
     fn index_with_braces_and_brackets() {
         let expected = Expr::Index {
             name: "a".to_string(),
-            index: Box::new(bin(BinaryOp::Add, var("i"), num(1.0))),
+            indices: vec![bin(BinaryOp::Add, var("i"), num(1.0))],
         };
         assert_eq!(ok("a{i + 1}"), expected);
         assert_eq!(ok("a[i + 1]"), expected);
@@ -1060,20 +1060,26 @@ mod tests {
                 BinaryOp::Add,
                 Expr::Index {
                     name: "a".to_string(),
-                    index: Box::new(num(1.0))
+                    indices: vec![num(1.0)]
                 },
                 Expr::Index {
                     name: "a".to_string(),
-                    index: Box::new(num(2.0))
+                    indices: vec![num(2.0)]
                 },
             )
         );
     }
 
     #[test]
-    fn index_multi_dim_errors() {
-        let err = parse("a{1, 2}").unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    fn index_multi_dim_parses() {
+        // M16.2 : `a{1, 2}` → deux indices.
+        assert_eq!(
+            ok("a{1, 2}"),
+            Expr::Index {
+                name: "a".to_string(),
+                indices: vec![num(1.0), num(2.0)],
+            }
+        );
     }
 
     #[test]

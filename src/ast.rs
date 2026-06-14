@@ -119,14 +119,30 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
-    /// Référence d'array indexée `arr{i}` / `arr[i]` (M2). La forme à
-    /// parenthèses `arr(i)` reste un `Call` : l'ambiguïté avec un appel de
-    /// fonction est résolue à l'ÉVALUATION (l'array masque la fonction,
-    /// comme SAS).
+    /// Référence d'array indexée `arr{i}` / `arr[i]` / `arr{i, j}` (M2/M16.2).
+    /// La forme à parenthèses `arr(i)` reste un `Call` : l'ambiguïté avec un
+    /// appel de fonction est résolue à l'ÉVALUATION (l'array masque la
+    /// fonction, comme SAS). `indices` porte un ou plusieurs indices (un par
+    /// dimension de l'array, ou un seul = interprétation linéaire row-major).
     Index {
         name: String,
-        index: Box<Expr>,
+        indices: Vec<Expr>,
     },
+}
+
+/// Liste spéciale d'éléments d'un statement ARRAY (M16.2). À la
+/// compilation, ces mots-clés sont remplacés par l'ensemble des variables
+/// correspondantes du PDV (toutes celles connues au point du statement).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArraySpecial {
+    /// `_NUMERIC_` : toutes les variables numériques.
+    Numeric,
+    /// `_CHARACTER_` : toutes les variables caractère.
+    Character,
+    /// `_ALL_` : toutes les variables (de même type — SAS exige
+    /// l'homogénéité ; on prend toutes les numériques OU toutes les char
+    /// selon `$`, à défaut toutes les numériques).
+    All,
 }
 
 /// Spec d'une variable dans un statement LENGTH : `$ n` (char) ou `n` (num).
@@ -351,23 +367,33 @@ pub enum DsStmt {
     /// groupe de variables, portant format=/label=/length= (length=
     /// optionnel). Déclaratif.
     Attrib(Vec<AttribItem>),
-    /// `array arr{3} x y z;` (M2, 1-D). `size: None` = `{*}` (taille
-    /// déduite de la liste) ; `char_len: Some(n)` = array caractère
-    /// (`$ n`, défaut 8) ; `vars` vide = éléments auto-nommés arr1..arrN
-    /// (expansés à la compilation). Les plages numérotées `x1-x3` sont
-    /// DÉJÀ expansées par le parser.
+    /// `array arr{3} x y z;` (M2) / `array arr{2,3} v1-v6;` (M16.2,
+    /// multi-dimensionnel). `dims: None` = `{*}` (taille déduite de la
+    /// liste, 1-D) ; sinon `Some(vec![3])` (1-D) ou `Some(vec![2,3])`
+    /// (2-D, etc.) — chaque borne supérieure, borne inférieure = 1.
+    /// `char_len: Some(n)` = array caractère (`$ n`, défaut 8) ; `vars`
+    /// vide = éléments auto-nommés arr1..arrN (expansés à la compilation),
+    /// SAUF si `special`/`temporary`. Les plages numérotées `x1-x3` sont
+    /// DÉJÀ expansées par le parser. `initial`: valeurs initiales
+    /// `(1, 2, 3)` en ordre row-major (vide = aucune). `temporary`:
+    /// `_TEMPORARY_` — slots hors-PDV (jamais en sortie). `special`:
+    /// `_NUMERIC_`/`_CHARACTER_`/`_ALL_` comme liste de variables.
     Array {
         name: String,
-        size: Option<usize>,
+        dims: Option<Vec<usize>>,
         char_len: Option<usize>,
         vars: Vec<String>,
+        initial: Vec<Expr>,
+        temporary: bool,
+        special: Option<ArraySpecial>,
     },
-    /// `arr{i} = expr;` / `arr[i] = expr;` / `arr(i) = expr;` —
-    /// assignation à un élément d'array. Pour la forme à parenthèses, le
-    /// nom est validé array à la COMPILATION.
+    /// `arr{i} = expr;` / `arr[i] = expr;` / `arr(i) = expr;` /
+    /// `arr{i,j} = expr;` — assignation à un élément d'array. Pour la forme
+    /// à parenthèses, le nom est validé array à la COMPILATION. `indices`
+    /// porte un ou plusieurs indices (un par dimension, ou un seul linéaire).
     AssignIndexed {
         array: String,
-        index: Expr,
+        indices: Vec<Expr>,
         expr: Expr,
     },
     /// `call <name>(args);` — appel d'une CALL routine (M11.5). Pour v1,

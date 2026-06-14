@@ -288,24 +288,28 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
                     ts.expect_semi()?;
                     Ok(DsStmt::Sum { var, expr })
                 }
-                // `arr{i} = e;` / `arr[i] = e;` : assignation indexée.
+                // `arr{i} = e;` / `arr[i] = e;` / `arr{i,j} = e;` :
+                // assignation indexée (mono- ou multi-dimensionnelle).
                 TokenKind::LBrace | TokenKind::LBracket => {
-                    let Expr::Index { name, index } = super::expr::parse_index(ts, var)?
+                    let Expr::Index { name, indices } = super::expr::parse_index(ts, var)?
                     else {
                         unreachable!("parse_index always returns Expr::Index");
                     };
-                    parse_assign_indexed_tail(ts, name, *index)
+                    parse_assign_indexed_tail(ts, name, indices)
                 }
-                // `arr(i) = e;` : forme à parenthèses — le nom sera validé
-                // array à la COMPILATION (ici on parse l'indice).
+                // `arr(i) = e;` / `arr(i,j) = e;` : forme à parenthèses — le
+                // nom sera validé array à la COMPILATION (ici on parse les
+                // indices, séparés par des virgules).
                 TokenKind::LParen => {
                     ts.next(); // `(`
-                    let index = super::expr::parse_expr(ts)?;
-                    if ts.peek().kind == TokenKind::Comma {
-                        return Err(SasError::parse(
-                            "Multi-dimensional arrays are not yet implemented.",
-                            ts.peek().span,
-                        ));
+                    let mut indices = Vec::new();
+                    loop {
+                        indices.push(super::expr::parse_expr(ts)?);
+                        if ts.peek().kind == TokenKind::Comma {
+                            ts.next();
+                            continue;
+                        }
+                        break;
                     }
                     if ts.peek().kind != TokenKind::RParen {
                         return Err(SasError::parse(
@@ -317,7 +321,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
                         ));
                     }
                     ts.next(); // `)`
-                    parse_assign_indexed_tail(ts, var, index)
+                    parse_assign_indexed_tail(ts, var, indices)
                 }
                 _ => Err(SasError::parse(
                     format!(
@@ -1424,7 +1428,7 @@ fn parse_do_body(ts: &mut StatementStream) -> Result<Vec<DsStmt>> {
 fn parse_assign_indexed_tail(
     ts: &mut StatementStream,
     array: String,
-    index: Expr,
+    indices: Vec<Expr>,
 ) -> Result<DsStmt> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
@@ -1438,7 +1442,11 @@ fn parse_assign_indexed_tail(
     ts.next(); // `=`
     let expr = super::expr::parse_expr(ts)?;
     ts.expect_semi()?;
-    Ok(DsStmt::AssignIndexed { array, index, expr })
+    Ok(DsStmt::AssignIndexed {
+        array,
+        indices,
+        expr,
+    })
 }
 
 /// `array arr{3} x y z;` — déclaration d'array 1-D (M2). Délimiteurs de
@@ -1446,9 +1454,9 @@ fn parse_assign_indexed_tail(
 /// Formes : `{n}` taille explicite, `{*}` taille déduite de la liste ;
 /// `$ [len]` array caractère (longueur défaut 8) ; liste de variables
 /// optionnelle (vide → éléments auto-nommés à la compilation), plages
-/// numérotées `x1-x3` expansées ICI. Hors périmètre M2 → erreurs propres :
-/// multi-dimensions, valeurs initiales `(...)`, `_temporary_` et listes
-/// spéciales `_numeric_`/`_character_`/`_all_`.
+/// numérotées `x1-x3` expansées ICI. M16.2 ajoute : dimensions multiples
+/// `{2,3}`, valeurs initiales `(1, 2, 3)` en ordre row-major, `_TEMPORARY_`
+/// et listes spéciales `_NUMERIC_`/`_CHARACTER_`/`_ALL_`.
 fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
     ts.next(); // `array`
     let name_tok = ts.peek().clone();
@@ -1461,7 +1469,7 @@ fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
     validate_sas_name(&name, name_tok.span)?;
     ts.next();
 
-    // ── Dimension : `{n}`, `[n]`, `(n)` ou `{*}`... ─────────────────────
+    // ── Dimensions : `{n}`, `{n, m, ...}`, `[n]`, `(n)` ou `{*}` ─────────
     let open = ts.peek().clone();
     let closer = match open.kind {
         TokenKind::LBrace => TokenKind::RBrace,
@@ -1475,34 +1483,50 @@ fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
         }
     };
     ts.next(); // ouvrant
-    let dim_tok = ts.peek().clone();
-    let size = match dim_tok.kind {
-        TokenKind::Star => {
-            ts.next();
-            None
-        }
-        TokenKind::Num(n) => {
-            if n.fract() != 0.0 || n < 1.0 {
-                return Err(SasError::parse(
-                    "the array dimension must be a positive integer",
-                    dim_tok.span,
-                ));
+    // `dims = None` ⟺ une seule dimension `{*}` (taille déduite de la
+    // liste) ; sinon une ou plusieurs bornes supérieures explicites.
+    let mut dims: Option<Vec<usize>> = None;
+    {
+        let mut collected: Vec<usize> = Vec::new();
+        loop {
+            let dim_tok = ts.peek().clone();
+            match dim_tok.kind {
+                TokenKind::Star => {
+                    if !collected.is_empty() {
+                        return Err(SasError::parse(
+                            "'*' is only allowed as the sole array dimension",
+                            dim_tok.span,
+                        ));
+                    }
+                    ts.next();
+                    // `dims` reste None : taille déduite de la liste (1-D).
+                }
+                TokenKind::Num(n) => {
+                    if n.fract() != 0.0 || n < 1.0 {
+                        return Err(SasError::parse(
+                            "the array dimension must be a positive integer",
+                            dim_tok.span,
+                        ));
+                    }
+                    ts.next();
+                    collected.push(n as usize);
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        "expected a dimension or '*' in the ARRAY statement",
+                        dim_tok.span,
+                    ));
+                }
             }
-            ts.next();
-            Some(n as usize)
+            if ts.peek().kind == TokenKind::Comma {
+                ts.next(); // `,`
+                continue;
+            }
+            break;
         }
-        _ => {
-            return Err(SasError::parse(
-                "expected a dimension or '*' in the ARRAY statement",
-                dim_tok.span,
-            ));
+        if !collected.is_empty() {
+            dims = Some(collected);
         }
-    };
-    if ts.peek().kind == TokenKind::Comma {
-        return Err(SasError::parse(
-            "Multi-dimensional arrays are not yet implemented.",
-            ts.peek().span,
-        ));
     }
     if ts.peek().kind != closer {
         return Err(SasError::parse(
@@ -1530,8 +1554,11 @@ fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
         }
     }
 
-    // ── Liste de variables (plages x1-x3 expansées ici) ──────────────────
+    // ── Liste de variables / mots-clés spéciaux / valeurs initiales ──────
     let mut vars: Vec<String> = Vec::new();
+    let mut temporary = false;
+    let mut special: Option<crate::ast::ArraySpecial> = None;
+    let mut initial: Vec<Expr> = Vec::new();
     loop {
         let tok = ts.peek().clone();
         match &tok.kind {
@@ -1539,25 +1566,40 @@ fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
                 ts.next();
                 return Ok(DsStmt::Array {
                     name,
-                    size,
+                    dims,
                     char_len,
                     vars,
+                    initial,
+                    temporary,
+                    special,
                 });
             }
             TokenKind::Ident(v) => {
                 let v = v.clone();
                 let lower = v.to_ascii_lowercase();
-                if matches!(
-                    lower.as_str(),
-                    "_temporary_" | "_numeric_" | "_character_" | "_all_"
-                ) {
-                    return Err(SasError::parse(
-                        format!(
-                            "{} in the ARRAY statement is not yet implemented.",
-                            v.to_uppercase()
-                        ),
-                        tok.span,
-                    ));
+                match lower.as_str() {
+                    "_temporary_" => {
+                        ts.next();
+                        temporary = true;
+                        continue;
+                    }
+                    "_numeric_" | "_character_" | "_all_" => {
+                        if special.is_some() || !vars.is_empty() {
+                            return Err(SasError::parse(
+                                "a special list (_NUMERIC_/_CHARACTER_/_ALL_) cannot be \
+                                 mixed with named array elements",
+                                tok.span,
+                            ));
+                        }
+                        ts.next();
+                        special = Some(match lower.as_str() {
+                            "_numeric_" => crate::ast::ArraySpecial::Numeric,
+                            "_character_" => crate::ast::ArraySpecial::Character,
+                            _ => crate::ast::ArraySpecial::All,
+                        });
+                        continue;
+                    }
+                    _ => {}
                 }
                 validate_sas_name(&v, tok.span)?;
                 ts.next();
@@ -1578,12 +1620,40 @@ fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
                     vars.push(v);
                 }
             }
-            // `(1 2 3)` : valeurs initiales — hors périmètre M2.
+            // `(1, 2, 3)` : valeurs initiales (row-major). Parenthèses ; les
+            // valeurs peuvent être séparées par des virgules OU des espaces
+            // (SAS accepte les deux). On parse des expressions (littéraux
+            // numériques/chaînes, missings, négatifs).
             TokenKind::LParen => {
-                return Err(SasError::parse(
-                    "Array initial values are not yet implemented.",
-                    tok.span,
-                ));
+                if !initial.is_empty() {
+                    return Err(SasError::parse(
+                        "duplicate initial-value list in the ARRAY statement",
+                        tok.span,
+                    ));
+                }
+                ts.next(); // `(`
+                if ts.peek().kind == TokenKind::RParen {
+                    return Err(SasError::parse(
+                        "the array initial-value list cannot be empty",
+                        ts.peek().span,
+                    ));
+                }
+                loop {
+                    initial.push(super::expr::parse_expr(ts)?);
+                    if ts.peek().kind == TokenKind::Comma {
+                        ts.next(); // séparateur virgule optionnel
+                    }
+                    if ts.peek().kind == TokenKind::RParen {
+                        break;
+                    }
+                    if ts.peek().kind == TokenKind::Semi {
+                        return Err(SasError::parse(
+                            "expected ')' to close the array initial-value list",
+                            ts.peek().span,
+                        ));
+                    }
+                }
+                ts.next(); // `)`
             }
             _ => {
                 return Err(SasError::parse(
@@ -2711,14 +2781,27 @@ mod tests {
 
     // ── ARRAY (M2, lot 3) ────────────────────────────────────────────────
 
+    /// Constructeur d'un `DsStmt::Array` simple pour les tests.
+    fn array_stmt(
+        name: &str,
+        dims: Option<Vec<usize>>,
+        char_len: Option<usize>,
+        vars: Vec<&str>,
+    ) -> DsStmt {
+        DsStmt::Array {
+            name: name.to_string(),
+            dims,
+            char_len,
+            vars: vars.into_iter().map(String::from).collect(),
+            initial: vec![],
+            temporary: false,
+            special: None,
+        }
+    }
+
     #[test]
     fn array_declaration_three_delimiter_forms() {
-        let expected = vec![DsStmt::Array {
-            name: "a".to_string(),
-            size: Some(3),
-            char_len: None,
-            vars: vec!["x".to_string(), "y".to_string(), "z".to_string()],
-        }];
+        let expected = vec![array_stmt("a", Some(vec![3]), None, vec!["x", "y", "z"])];
         for src in [
             "data o; array a{3} x y z; run;",
             "data o; array a[3] x y z; run;",
@@ -2734,12 +2817,7 @@ mod tests {
         let ast = parse("data o; array a{*} x y z; run;").unwrap();
         assert_eq!(
             ast.stmts,
-            vec![DsStmt::Array {
-                name: "a".to_string(),
-                size: None,
-                char_len: None,
-                vars: vec!["x".to_string(), "y".to_string(), "z".to_string()],
-            }]
+            vec![array_stmt("a", None, None, vec!["x", "y", "z"])]
         );
     }
 
@@ -2748,15 +2826,7 @@ mod tests {
         // `array a{3};` : la liste reste vide (auto-noms a1 a2 a3 à la
         // compilation).
         let ast = parse("data o; array a{3}; run;").unwrap();
-        assert_eq!(
-            ast.stmts,
-            vec![DsStmt::Array {
-                name: "a".to_string(),
-                size: Some(3),
-                char_len: None,
-                vars: vec![],
-            }]
-        );
+        assert_eq!(ast.stmts, vec![array_stmt("a", Some(vec![3]), None, vec![])]);
     }
 
     #[test]
@@ -2764,12 +2834,7 @@ mod tests {
         let ast = parse("data o; array c{3} $ 8 c1 c2 c3; run;").unwrap();
         assert_eq!(
             ast.stmts,
-            vec![DsStmt::Array {
-                name: "c".to_string(),
-                size: Some(3),
-                char_len: Some(8),
-                vars: vec!["c1".to_string(), "c2".to_string(), "c3".to_string()],
-            }]
+            vec![array_stmt("c", Some(vec![3]), Some(8), vec!["c1", "c2", "c3"])]
         );
         // `$` sans longueur : défaut 8.
         let ast = parse("data o; array c{2} $ u v; run;").unwrap();
@@ -2784,12 +2849,7 @@ mod tests {
         let ast = parse("data o; array a{3} x1-x3; run;").unwrap();
         assert_eq!(
             ast.stmts,
-            vec![DsStmt::Array {
-                name: "a".to_string(),
-                size: Some(3),
-                char_len: None,
-                vars: vec!["x1".to_string(), "x2".to_string(), "x3".to_string()],
-            }]
+            vec![array_stmt("a", Some(vec![3]), None, vec!["x1", "x2", "x3"])]
         );
         // Largeur de suffixe conservée et plage mêlée à d'autres noms.
         let ast = parse("data o; array a{*} w q01-q03 z; run;").unwrap();
@@ -2813,33 +2873,59 @@ mod tests {
     }
 
     #[test]
-    fn array_multi_dimension_errors() {
-        let err = parse("data o; array a{2,3} x1-x6; run;").unwrap_err();
-        assert!(
-            err.to_string().contains("Multi-dimensional arrays are not yet implemented."),
-            "got: {err}"
-        );
+    fn array_multi_dimension_parses() {
+        // M16.2 : `{2,3}` → dims [2, 3].
+        let ast = parse("data o; array a{2,3} x1-x6; run;").unwrap();
+        let DsStmt::Array { dims, vars, .. } = &ast.stmts[0] else {
+            panic!("expected an ARRAY statement");
+        };
+        assert_eq!(*dims, Some(vec![2, 3]));
+        assert_eq!(vars.len(), 6);
+        // 3-D.
+        let ast = parse("data o; array b{2,3,2} v1-v12; run;").unwrap();
+        let DsStmt::Array { dims, .. } = &ast.stmts[0] else {
+            panic!("expected an ARRAY statement");
+        };
+        assert_eq!(*dims, Some(vec![2, 3, 2]));
     }
 
     #[test]
-    fn array_initial_values_errors() {
-        let err = parse("data o; array a{3} x y z (1 2 3); run;").unwrap_err();
-        assert!(
-            err.to_string().contains("initial values are not yet implemented"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn array_special_lists_error() {
+    fn array_initial_values_parse() {
+        // M16.2 : valeurs initiales `(1, 2, 3)` (virgules) et `(1 2 3)`
+        // (espaces) acceptées.
         for src in [
-            "data o; array a{3} _temporary_; run;",
-            "data o; array a{*} _numeric_; run;",
-            "data o; array a{*} _character_; run;",
-            "data o; array a{*} _all_; run;",
+            "data o; array a{3} x y z (1, 2, 3); run;",
+            "data o; array a{3} x y z (1 2 3); run;",
         ] {
-            let err = parse(src).unwrap_err();
-            assert!(err.to_string().contains("not yet implemented"), "source: {src}, got: {err}");
+            let ast = parse(src).unwrap();
+            let DsStmt::Array { initial, .. } = &ast.stmts[0] else {
+                panic!("expected an ARRAY statement");
+            };
+            assert_eq!(
+                *initial,
+                vec![Expr::Num(1.0), Expr::Num(2.0), Expr::Num(3.0)]
+            );
+        }
+    }
+
+    #[test]
+    fn array_special_lists_parse() {
+        // M16.2 : _TEMPORARY_ et listes spéciales parsées.
+        let ast = parse("data o; array a{3} _temporary_; run;").unwrap();
+        let DsStmt::Array { temporary, .. } = &ast.stmts[0] else {
+            panic!("expected an ARRAY statement");
+        };
+        assert!(*temporary);
+        for (src, want) in [
+            ("data o; array a{*} _numeric_; run;", crate::ast::ArraySpecial::Numeric),
+            ("data o; array a{*} _character_; run;", crate::ast::ArraySpecial::Character),
+            ("data o; array a{*} _all_; run;", crate::ast::ArraySpecial::All),
+        ] {
+            let ast = parse(src).unwrap();
+            let DsStmt::Array { special, .. } = &ast.stmts[0] else {
+                panic!("expected an ARRAY statement");
+            };
+            assert_eq!(*special, Some(want), "source: {src}");
         }
     }
 
@@ -2852,11 +2938,26 @@ mod tests {
                 var: "x".to_string(),
                 expr: Expr::Index {
                     name: "a".to_string(),
-                    index: Box::new(Expr::Binary {
+                    indices: vec![Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(var("i")),
                         right: Box::new(Expr::Num(1.0)),
-                    }),
+                    }],
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn array_multi_index_rvalue_parses() {
+        let ast = parse("data o; x = a{i, j}; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Assign {
+                var: "x".to_string(),
+                expr: Expr::Index {
+                    name: "a".to_string(),
+                    indices: vec![var("i"), var("j")],
                 },
             }]
         );
@@ -2866,13 +2967,26 @@ mod tests {
     fn array_indexed_lvalue_braces_and_brackets() {
         let expected = vec![DsStmt::AssignIndexed {
             array: "a".to_string(),
-            index: var("i"),
+            indices: vec![var("i")],
             expr: Expr::Num(0.0),
         }];
         let ast = parse("data o; a{i} = 0; run;").unwrap();
         assert_eq!(ast.stmts, expected);
         let ast = parse("data o; a[i] = 0; run;").unwrap();
         assert_eq!(ast.stmts, expected);
+    }
+
+    #[test]
+    fn array_multi_index_lvalue_parses() {
+        let ast = parse("data o; a{i, j} = 0; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::AssignIndexed {
+                array: "a".to_string(),
+                indices: vec![var("i"), var("j")],
+                expr: Expr::Num(0.0),
+            }]
+        );
     }
 
     #[test]
@@ -2884,7 +2998,7 @@ mod tests {
             ast.stmts,
             vec![DsStmt::AssignIndexed {
                 array: "a".to_string(),
-                index: var("i"),
+                indices: vec![var("i")],
                 expr: Expr::Binary {
                     op: BinaryOp::Mul,
                     left: Box::new(var("i")),

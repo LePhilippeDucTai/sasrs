@@ -46,9 +46,9 @@ pub struct EvalCtx {
     /// Erreur fatale (fonction inconnue, indice d'array hors bornes...) —
     /// stoppe l'étape.
     pub fatal: Option<String>,
-    /// Arrays 1-D de l'étape : nom UPPERCASE → slots PDV des éléments
+    /// Arrays de l'étape : nom UPPERCASE → définition (slots + dimensions)
     /// (copié depuis `StepProgram.arrays` par l'exécuteur).
-    pub arrays: HashMap<String, Vec<usize>>,
+    pub arrays: HashMap<String, super::ArrayDef>,
     /// Flags de groupe BY `(nom UPPERCASE, first, last)`, dans l'ordre du
     /// BY — mis à jour par le Runner à chaque observation servie par
     /// l'interclassement. Servent les variables automatiques FIRST.x /
@@ -185,30 +185,38 @@ pub fn eval(expr: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         Expr::Binary { op, left, right } => eval_binary(*op, left, right, pdv, ctx),
         Expr::In { expr, list } => eval_in(expr, list, pdv, ctx),
         Expr::Call { name, args } => eval_call(name, args, pdv, ctx),
-        Expr::Index { name, index } => eval_array_ref(name, index, pdv, ctx),
+        Expr::Index { name, indices } => eval_array_ref(name, indices, pdv, ctx),
     }
 }
 
-/// Référence d'array indexée `arr{i}` (rvalue). L'indice est coercé en
-/// numérique puis ARRONDI au plus proche ; missing ou hors 1..=dim →
-/// erreur fatale "Array subscript out of range." qui stoppe l'étape
-/// (comme SAS).
-fn eval_array_ref(name: &str, index: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
-    let idx_val = eval(index, pdv, ctx);
-    if ctx.fatal.is_some() {
-        return Value::missing();
+/// Référence d'array indexée `arr{i}` / `arr{i,j,k}` (rvalue). Chaque indice
+/// est coercé en numérique puis ARRONDI au plus proche ; missing, hors
+/// bornes, ou nombre d'indices invalide → erreur fatale "Array subscript out
+/// of range." qui stoppe l'étape (comme SAS). Un index unique sur un array
+/// multi-dim est interprété linéairement (row-major).
+fn eval_array_ref(name: &str, indices: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+    let mut idxs: Vec<i64> = Vec::with_capacity(indices.len());
+    for index in indices {
+        let idx_val = eval(index, pdv, ctx);
+        if ctx.fatal.is_some() {
+            return Value::missing();
+        }
+        match coerce_num(&idx_val, ctx).map(f64::round) {
+            Some(i) => idxs.push(i as i64),
+            None => {
+                ctx.fatal = Some("ERROR: Array subscript out of range.".to_string());
+                return Value::missing();
+            }
+        }
     }
-    let idx = coerce_num(&idx_val, ctx).map(f64::round);
-    let Some(slots) = ctx.arrays.get(&name.to_uppercase()) else {
+    let Some(def) = ctx.arrays.get(&name.to_uppercase()) else {
         // Impossible après compile() ; garde-fou.
         ctx.fatal = Some(format!("ERROR: Undeclared array referenced: {name}."));
         return Value::missing();
     };
-    match idx {
-        Some(i) if i >= 1.0 && i <= slots.len() as f64 => {
-            pdv.get(slots[i as usize - 1]).clone()
-        }
-        _ => {
+    match def.linear_index(&idxs) {
+        Some(lin) => pdv.get(def.slots[lin]).clone(),
+        None => {
             ctx.fatal = Some("ERROR: Array subscript out of range.".to_string());
             Value::missing()
         }
@@ -451,19 +459,52 @@ fn eval_in(expr: &Expr, list: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
 /// une variable du PDV) ; sinon déléguer à `functions::call`. Fonction
 /// inconnue → ERROR fatal.
 fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
-    // `dim(arr)` : 1 argument dont le nom est un array déclaré → dimension.
-    // Sinon, délégation normale (les fonctions ne connaissent pas DIM →
-    // erreur fonction inconnue).
-    if name.eq_ignore_ascii_case("dim")
-        && args.len() == 1
+    // `dim(arr)` / `hbound(arr[, n])` / `lbound(arr[, n])` : le 1er argument
+    // nomme un array déclaré → fonctions de bornes. DIM/HBOUND renvoient la
+    // borne supérieure de la dimension n (défaut 1) ; LBOUND = 1 (SAS).
+    let is_dim = name.eq_ignore_ascii_case("dim");
+    let is_hbound = name.eq_ignore_ascii_case("hbound");
+    let is_lbound = name.eq_ignore_ascii_case("lbound");
+    if (is_dim || is_hbound || is_lbound)
+        && !args.is_empty()
         && let Expr::Var(n) | Expr::Index { name: n, .. } = &args[0]
-        && let Some(slots) = ctx.arrays.get(&n.to_uppercase())
+        && let Some(def) = ctx.arrays.get(&n.to_uppercase()).cloned()
     {
-        return Value::Num(slots.len() as f64);
+        // Dimension demandée (argument 2 optionnel, défaut 1).
+        let which = if args.len() >= 2 {
+            let dv = eval(&args[1], pdv, ctx);
+            if ctx.fatal.is_some() {
+                return Value::missing();
+            }
+            match coerce_num(&dv, ctx).map(f64::round) {
+                Some(d) if d >= 1.0 => d as usize,
+                _ => {
+                    ctx.fatal = Some(format!(
+                        "ERROR: Invalid dimension argument to {}.",
+                        name.to_uppercase()
+                    ));
+                    return Value::missing();
+                }
+            }
+        } else {
+            1
+        };
+        if which > def.dims.len() {
+            ctx.fatal = Some(format!(
+                "ERROR: Invalid dimension argument to {}.",
+                name.to_uppercase()
+            ));
+            return Value::missing();
+        }
+        if is_lbound {
+            return Value::Num(1.0);
+        }
+        // DIM et HBOUND coïncident (borne inférieure = 1).
+        return Value::Num(def.dims[which - 1] as f64);
     }
-    // `arr(i)` : l'array masque la fonction homonyme (résolution SAS).
-    if args.len() == 1 && ctx.arrays.contains_key(&name.to_uppercase()) {
-        return eval_array_ref(name, &args[0], pdv, ctx);
+    // `arr(i)` / `arr(i,j)` : l'array masque la fonction homonyme (SAS).
+    if !args.is_empty() && ctx.arrays.contains_key(&name.to_uppercase()) {
+        return eval_array_ref(name, args, pdv, ctx);
     }
     // LAGn / DIFn : NE PEUVENT PAS être de simples fonctions car elles ont
     // besoin de l'identité du SITE D'APPEL (chaque LAG/DIF lexical possède sa
@@ -606,6 +647,7 @@ mod tests {
             retained: false,
             from_input: false,
             format: None,
+            temporary: false,
         }
     }
 
@@ -617,6 +659,7 @@ mod tests {
             retained: false,
             from_input: false,
             format: None,
+            temporary: false,
         }
     }
 
