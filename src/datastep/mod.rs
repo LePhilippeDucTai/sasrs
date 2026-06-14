@@ -736,6 +736,11 @@ impl Compiler<'_> {
                 self.datalines = Some(lines.clone());
                 Ok(())
             }
+            // FILE/PUT (M14.2) : déclaratif / interprété directement en
+            // exec.rs depuis l'AST (comme les assignations). Aucune variable
+            // n'entre au PDV via PUT — les variables nommées doivent déjà
+            // exister (résolution de slot à l'exécution, erreur si inconnue).
+            DsStmt::File { .. } | DsStmt::Put(_) => Ok(()),
         }
     }
 

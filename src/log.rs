@@ -67,6 +67,13 @@ impl LogWriter {
         self.message("ERROR", msg);
     }
 
+    /// A verbatim line written by a DATA step PUT to `file log;` (M14.2):
+    /// no "NOTE:" prefix, no source numbering — just the rendered text,
+    /// through the same buffer as every other log line.
+    pub fn put_line(&mut self, line: &str) {
+        self.raw(line);
+    }
+
     /// Forward a pre-prefixed line ("NOTE: ..." / "WARNING: ...") coming
     /// from lower layers (e.g. parquet type coercion).
     pub fn forward(&mut self, line: &str) {

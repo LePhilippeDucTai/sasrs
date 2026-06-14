@@ -75,6 +75,7 @@
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
 use crate::ast::{
     AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
+    PutDest, PutItem,
 };
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
@@ -251,6 +252,8 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "call" => parse_call_routine(ts),
         "infile" => parse_infile(ts),
         "input" => parse_input(ts),
+        "file" => parse_file(ts),
+        "put" => parse_put(ts),
         "datalines" | "cards" | "datalines4" | "cards4" => parse_datalines(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
         "end" => Err(SasError::parse(
@@ -756,6 +759,180 @@ fn input_informat_follows(ts: &StatementStream) -> bool {
             next.span.start == cur.span.end && next.kind == TokenKind::Dot
         }
         // `date9.` : un Ident dont le morceau suivant adjacent est un format.
+        TokenKind::Ident(_) => ident_begins_format(ts),
+        _ => false,
+    }
+}
+
+/// `file <dest> ;` (M14.2). La destination est un littéral chemin
+/// (`'sortie.txt'`) OU le mot-clé `log` / `print`. Toute autre forme →
+/// erreur claire. (Les options FILE — `LRECL=`, `MOD`... — ne sont pas
+/// supportées.)
+fn parse_file(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `file`
+    let tok = ts.peek().clone();
+    let dest = match &tok.kind {
+        TokenKind::Str {
+            value,
+            suffix: StrSuffix::None | StrSuffix::Name,
+        } => {
+            let s = value.clone();
+            ts.next();
+            PutDest::Path(s)
+        }
+        TokenKind::Ident(name) if name.eq_ignore_ascii_case("log") => {
+            ts.next();
+            PutDest::Log
+        }
+        TokenKind::Ident(name) if name.eq_ignore_ascii_case("print") => {
+            ts.next();
+            PutDest::Print
+        }
+        _ => {
+            return Err(SasError::parse(
+                "expected a quoted file path, LOG or PRINT after FILE",
+                tok.span,
+            ));
+        }
+    };
+    ts.expect_semi()?;
+    Ok(DsStmt::File { dest })
+}
+
+/// `put <items> ;` (M14.2). Miroir de sortie d'`input`. Modes pris en
+/// charge :
+/// - liste : `put name age` (format d'affichage de chaque variable) ;
+/// - nommé : `put name= age=` (`name=VALEUR`) ;
+/// - littéral : `put 'Report for' name` ;
+/// - formaté : `put x 8.2` / `put d date9.` ;
+/// - pointeurs `@n`, `+n`, `/`, hold `@`/`@@`, et `put _all_;`.
+///
+/// On lit les tokens jusqu'au `;` final (consommé).
+fn parse_put(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `put`
+    let mut items: Vec<PutItem> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi => {
+                ts.next();
+                return Ok(DsStmt::Put(items));
+            }
+            // `@@` (double hold), `@n` (pointeur de colonne) ou `@` (hold).
+            TokenKind::At => {
+                ts.next(); // `@`
+                if ts.peek().kind == TokenKind::At {
+                    ts.next(); // second `@`
+                    items.push(PutItem::HoldLineDouble);
+                } else if let TokenKind::Num(n) = ts.peek().kind {
+                    if n.fract() != 0.0 || n < 1.0 {
+                        return Err(SasError::parse(
+                            "the column pointer @n must be a positive integer",
+                            ts.peek().span,
+                        ));
+                    }
+                    ts.next();
+                    items.push(PutItem::ColumnPointer(n as usize));
+                } else {
+                    // `@` final (hold simple) — doit être suivi du `;`.
+                    items.push(PutItem::HoldLine);
+                }
+            }
+            // `+n` : avance relative du curseur.
+            TokenKind::Plus => {
+                ts.next(); // `+`
+                let n_tok = ts.peek().clone();
+                let TokenKind::Num(n) = n_tok.kind else {
+                    return Err(SasError::parse(
+                        "expected a positive integer after '+' in the PUT statement",
+                        n_tok.span,
+                    ));
+                };
+                if n.fract() != 0.0 || n < 0.0 {
+                    return Err(SasError::parse(
+                        "the column skip +n must be a non-negative integer",
+                        n_tok.span,
+                    ));
+                }
+                ts.next();
+                items.push(PutItem::SkipColumns(n as usize));
+            }
+            // `/` : passage à la ligne de sortie suivante.
+            TokenKind::Slash => {
+                ts.next();
+                items.push(PutItem::NextLine);
+            }
+            // Un littéral chaîne : écrit verbatim.
+            TokenKind::Str {
+                value,
+                suffix: StrSuffix::None | StrSuffix::Name,
+            } => {
+                let s = value.clone();
+                ts.next();
+                items.push(PutItem::Literal(s));
+            }
+            // Un nom de variable : forme nommée (`name=`), formatée
+            // (`name 8.2`) ou liste (`name`). `_all_` est un cas spécial.
+            TokenKind::Ident(name) => {
+                let name = name.clone();
+                if name.eq_ignore_ascii_case("_all_") {
+                    ts.next();
+                    items.push(PutItem::All);
+                    continue;
+                }
+                validate_sas_name(&name, tok.span)?;
+                ts.next();
+                items.push(parse_put_var(ts, name)?);
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable, a literal, a column pointer or ';' in the PUT statement",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Suffixe d'une variable PUT : `[= | format]`.
+/// - `name=` : forme nommée (`name=VALEUR`). On distingue du début d'une
+///   assignation : dans un PUT, `name=` n'est jamais suivi d'une expression
+///   significative — l'item suivant est un autre item PUT ou le `;`.
+/// - `name fmt.` : forme formatée (format adjacent comme dans FORMAT/INPUT).
+/// - sinon : forme liste (format d'affichage par défaut de la variable).
+fn parse_put_var(ts: &mut StatementStream, name: String) -> Result<PutItem> {
+    // Forme nommée `name=`.
+    if ts.peek().kind == TokenKind::Eq {
+        ts.next(); // `=`
+        return Ok(PutItem::NamedVar(name));
+    }
+    // Forme formatée : un format suit (token adjacent `$`, `8.2`, `date9.`).
+    if put_format_follows(ts) {
+        let token = super::expr::read_format_token(ts)?;
+        return Ok(PutItem::Var {
+            name,
+            format: Some(token),
+        });
+    }
+    // Forme liste pure.
+    Ok(PutItem::Var { name, format: None })
+}
+
+/// Vrai si un format suit (forme formatée d'un item PUT). Identique à
+/// `input_informat_follows` : un `$`, un nombre fractionnaire (`5.2`) ou
+/// entier suivi d'un `.` adjacent (`8.`), ou un Ident adjacent à un morceau
+/// de format (`date9.`).
+fn put_format_follows(ts: &StatementStream) -> bool {
+    let cur = ts.peek();
+    match &cur.kind {
+        TokenKind::Dollar => true,
+        TokenKind::Num(n) => {
+            if n.fract() != 0.0 {
+                return true;
+            }
+            let next = ts.peek2();
+            next.span.start == cur.span.end && next.kind == TokenKind::Dot
+        }
         TokenKind::Ident(_) => ident_begins_format(ts),
         _ => false,
     }
@@ -2991,6 +3168,99 @@ mod tests {
             ast.stmts[1],
             DsStmt::Datalines(vec!["1;2".to_string()])
         );
+    }
+
+    // ── FILE / PUT (M14.2) ───────────────────────────────────────────────
+
+    #[test]
+    fn file_destinations() {
+        let ast = parse("data _null_; file print; file log; file 'out.txt'; run;").unwrap();
+        assert_eq!(ast.stmts[0], DsStmt::File { dest: PutDest::Print });
+        assert_eq!(ast.stmts[1], DsStmt::File { dest: PutDest::Log });
+        assert_eq!(
+            ast.stmts[2],
+            DsStmt::File {
+                dest: PutDest::Path("out.txt".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn file_bad_destination_errors() {
+        let err = parse("data _null_; file frobnicate; run;").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expected a quoted file path, LOG or PRINT after FILE"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn put_list_named_literal() {
+        let ast = parse("data _null_; put 'hi' name age=; run;").unwrap();
+        let DsStmt::Put(items) = &ast.stmts[0] else {
+            panic!("expected a PUT statement, got {:?}", ast.stmts[0]);
+        };
+        assert_eq!(
+            items,
+            &vec![
+                PutItem::Literal("hi".to_string()),
+                PutItem::Var {
+                    name: "name".to_string(),
+                    format: None,
+                },
+                PutItem::NamedVar("age".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn put_formatted_and_pointers() {
+        let ast = parse("data _null_; put @5 x 8.2 +2 d date9. / y @@; run;").unwrap();
+        let DsStmt::Put(items) = &ast.stmts[0] else {
+            panic!("expected a PUT statement");
+        };
+        assert_eq!(items[0], PutItem::ColumnPointer(5));
+        assert_eq!(
+            items[1],
+            PutItem::Var {
+                name: "x".to_string(),
+                format: Some("8.2".to_string()),
+            }
+        );
+        assert_eq!(items[2], PutItem::SkipColumns(2));
+        assert_eq!(
+            items[3],
+            PutItem::Var {
+                name: "d".to_string(),
+                format: Some("date9.".to_string()),
+            }
+        );
+        assert_eq!(items[4], PutItem::NextLine);
+        assert_eq!(
+            items[5],
+            PutItem::Var {
+                name: "y".to_string(),
+                format: None,
+            }
+        );
+        assert_eq!(items[6], PutItem::HoldLineDouble);
+    }
+
+    #[test]
+    fn put_all_and_single_hold() {
+        let ast = parse("data _null_; put _all_ @; run;").unwrap();
+        let DsStmt::Put(items) = &ast.stmts[0] else {
+            panic!("expected a PUT statement");
+        };
+        assert_eq!(items[0], PutItem::All);
+        assert_eq!(items[1], PutItem::HoldLine);
+    }
+
+    #[test]
+    fn put_empty_is_blank_line() {
+        let ast = parse("data _null_; put; run;").unwrap();
+        assert_eq!(ast.stmts[0], DsStmt::Put(Vec::new()));
     }
 
     #[test]

@@ -224,6 +224,52 @@ pub enum InputItem {
     HoldLineDouble,
 }
 
+/// Destination d'un statement FILE (M14.2) : la sortie courante des PUT.
+/// Par défaut (aucun FILE), un PUT écrit dans le LOG (comportement SAS).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PutDest {
+    /// `file 'chemin';` — un fichier texte externe (créé/tronqué à la
+    /// première écriture de l'étape).
+    Path(String),
+    /// `file log;` — le journal SAS (destination par défaut).
+    Log,
+    /// `file print;` — la sortie « listing » (PROC PRINT-like).
+    Print,
+}
+
+/// Un item du statement PUT (M14.2). Miroir de sortie d'`InputItem` :
+/// l'ordre reflète l'ordre textuel, chaque item est rendu séquentiellement
+/// dans la ligne de sortie courante.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PutItem {
+    /// Une variable écrite avec son format d'affichage (ou BESTw./$w. par
+    /// défaut). `format = Some(tok)` applique un format explicite
+    /// (`put x 8.2;`, `put d date9.;`).
+    Var {
+        name: String,
+        format: Option<String>,
+    },
+    /// `put name=;` — écrit `name=VALEUR` (forme nommée).
+    NamedVar(String),
+    /// `put 'texte';` — une chaîne littérale écrite verbatim.
+    Literal(String),
+    /// `@n` : pointeur de colonne absolu (place le curseur en colonne n,
+    /// 1-based).
+    ColumnPointer(usize),
+    /// `+n` : avance le curseur de n colonnes.
+    SkipColumns(usize),
+    /// `/` : passe à la ligne de sortie suivante (saut de ligne dans le
+    /// même PUT).
+    NextLine,
+    /// `@` final : maintient la ligne de sortie (supprime le relâchement
+    /// automatique ; le prochain PUT continue la même ligne physique).
+    HoldLine,
+    /// `@@` final : maintient la ligne de sortie à TRAVERS les itérations.
+    HoldLineDouble,
+    /// `put _all_;` — écrit `nom=valeur` pour chaque variable du PDV.
+    All,
+}
+
 /// DATA step statements (M1 subset + M2 : RETAIN, sum statement, LENGTH ;
 /// M2+ ajoutera DO iterative, ARRAY, MERGE, BY... ; M14 : INFILE/INPUT/
 /// DATALINES).
@@ -346,6 +392,14 @@ pub enum DsStmt {
     /// Toujours le DERNIER statement exécutable de l'étape. Les lignes sont
     /// la source inline des INPUT de l'étape.
     Datalines(Vec<String>),
+    /// `file <dest>;` (M14.2) — fixe la destination courante des PUT
+    /// (fichier externe, LOG ou listing). Déclaratif à l'exécution : un FILE
+    /// change la destination des PUT qui suivent.
+    File { dest: PutDest },
+    /// `put <items>;` (M14.2) — écrit une ligne de texte vers la destination
+    /// courante (le LOG par défaut). Un PUT sans item relâche la ligne
+    /// maintenue / écrit une ligne vide.
+    Put(Vec<PutItem>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

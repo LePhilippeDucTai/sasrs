@@ -138,6 +138,54 @@ struct HeldLine {
     double: bool,
 }
 
+/// Destination résolue d'un PUT (M14.2). `Path` porte le chemin du fichier
+/// externe ; `Log`/`Print` routent vers le journal / le listing.
+#[derive(Clone, PartialEq)]
+enum PutDestKind {
+    Path(String),
+    Log,
+    Print,
+}
+
+/// État de sortie texte du PUT (M14.2). Mirroir de sortie du held-line de
+/// l'INPUT : une destination courante, une ligne de sortie en construction
+/// (`line`), un curseur de colonne 0-based, et le drapeau de hold `@`/`@@`.
+struct PutState {
+    /// Destination courante (par défaut le LOG, conformément à SAS).
+    dest: PutDestKind,
+    /// Ligne de sortie en construction (avant relâchement/flush).
+    line: String,
+    /// Position d'écriture courante (colonne 0-based) dans `line`.
+    cursor: usize,
+    /// Une ligne est-elle en cours de construction (au moins un PUT l'a
+    /// commencée) ? Sert à distinguer une ligne vide explicite d'un état
+    /// vierge au flush de fin d'étape.
+    started: bool,
+    /// Hold simple `@` actif : la ligne n'est PAS relâchée en fin de PUT ;
+    /// relâchée au début de l'itération suivante.
+    hold: bool,
+    /// Hold double `@@` actif : la ligne survit aux itérations.
+    hold_double: bool,
+    /// Lignes de sortie complètes, dans l'ordre de production, taguées par
+    /// leur destination. Rejouées vers le LOG / le listing / les fichiers
+    /// APRÈS la boucle implicite (exec.rs n'a pas `&mut session` en boucle).
+    out: Vec<(PutDestKind, String)>,
+}
+
+impl PutState {
+    fn new() -> Self {
+        PutState {
+            dest: PutDestKind::Log,
+            line: String::new(),
+            cursor: 0,
+            started: false,
+            hold: false,
+            hold_double: false,
+            out: Vec::new(),
+        }
+    }
+}
+
 /// Résultat de la lecture d'UNE variable d'INPUT (M14).
 enum ReadOutcome {
     /// Lecture normale (valeur posée au PDV, missing inclus).
@@ -166,6 +214,8 @@ struct Runner {
     /// Catalogue de formats/informats (clone de session) pour appliquer les
     /// informats de l'INPUT (M14).
     format_catalog: crate::formats::FormatCatalog,
+    /// État de sortie texte des PUT (M14.2 : FILE/PUT).
+    put: PutState,
     /// Mode CONCATÉNATION (sans BY) : index du dataset en cours de lecture.
     cur_ds: usize,
     /// Curseur PAR dataset : sans BY, prochaine ligne brute à charger (y
@@ -292,6 +342,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         text_read: 0,
         held: None,
         format_catalog: session.format_catalog.clone(),
+        put: PutState::new(),
         cur_ds: 0,
         cursors: vec![0; n_datasets],
         filtered: vec![Vec::new(); n_datasets],
@@ -348,6 +399,11 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
                 r.held = None;
             }
         }
+        // Hold de ligne PUT (M14.2) : un `@` simple relâche la ligne au DÉBUT
+        // de l'itération suivante (flush + clear) ; un `@@` la conserve.
+        if r.put.hold && !r.put.hold_double {
+            r.put_release_line();
+        }
 
         let mut flow = Flow::Normal;
         for stmt in &stmts {
@@ -381,6 +437,13 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
         session.macro_engine.set_symbol_global(&name, value);
     }
+
+    // PUT (M14.2) : flush de la ligne maintenue en fin d'étape, puis rejeu
+    // des lignes produites vers leurs destinations. Le rejeu a lieu AVANT les
+    // NOTEs de fin d'étape (la sortie PUT « pendant » l'étape précède la NOTE
+    // « N records were read »/« data set has N obs » dans le log SAS).
+    r.put_flush_at_step_end();
+    r.put_replay(session)?;
 
     // NOTEs d'erreurs/conversions collectées par l'évaluateur.
     if r.ctx.note_num_to_char {
@@ -606,6 +669,10 @@ impl Runner {
             // dans le PDV. Comme SET, l'épuisement de la source termine
             // l'étape IMMÉDIATEMENT (au milieu de l'itération).
             DsStmt::Input(items) => self.exec_input(items),
+            // FILE (M14.2) : change la destination courante des PUT.
+            DsStmt::File { dest } => self.exec_file(dest),
+            // PUT (M14.2) : rend les items dans la ligne de sortie courante.
+            DsStmt::Put(items) => self.exec_put(items),
             // Directives de compilation / déclaratives : rien à exécuter.
             DsStmt::Keep(_)
             | DsStmt::Drop(_)
@@ -1016,6 +1083,213 @@ impl Runner {
     /// Applique un informat à un champ via le catalogue (clone de session).
     fn format_informat(&self, field: &str, spec: &crate::formats::FormatSpec) -> Value {
         self.format_catalog.informat(field, spec)
+    }
+
+    // ── FILE / PUT (M14.2) ───────────────────────────────────────────────
+
+    /// FILE (M14.2) : change la destination courante des PUT. Si une ligne
+    /// non maintenue est en construction et que la destination CHANGE, elle
+    /// est d'abord relâchée vers l'ancienne destination (la ligne « en cours »
+    /// appartient à la destination active au moment de son écriture).
+    fn exec_file(&mut self, dest: &crate::ast::PutDest) -> Result<Flow> {
+        let new_dest = match dest {
+            crate::ast::PutDest::Path(p) => PutDestKind::Path(p.clone()),
+            crate::ast::PutDest::Log => PutDestKind::Log,
+            crate::ast::PutDest::Print => PutDestKind::Print,
+        };
+        if new_dest != self.put.dest {
+            // Relâcher la ligne pendante (non maintenue) vers l'ancienne
+            // destination avant de basculer.
+            if self.put.started && !self.put.hold && !self.put.hold_double {
+                self.put_release_line();
+            }
+            self.put.dest = new_dest;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// PUT (M14.2) : rend chaque item dans la ligne de sortie courante puis,
+    /// sauf hold `@`/`@@` final, relâche la ligne vers la destination.
+    fn exec_put(&mut self, items: &[crate::ast::PutItem]) -> Result<Flow> {
+        use crate::ast::PutItem;
+        // Un nouveau PUT efface le hold simple précédent (la ligne maintenue
+        // par `@` est reprise telle quelle ; un nouveau PUT sans `@` final la
+        // relâchera). Le hold est recalculé pour CE statement.
+        self.put.hold = false;
+        self.put.hold_double = false;
+        self.put.started = true;
+
+        for item in items {
+            match item {
+                PutItem::ColumnPointer(n) => {
+                    self.put.cursor = n.saturating_sub(1);
+                }
+                PutItem::SkipColumns(n) => {
+                    self.put.cursor += n;
+                }
+                PutItem::NextLine => {
+                    // Saut de ligne DANS le même PUT : relâche la ligne
+                    // courante et en commence une nouvelle (même destination).
+                    self.put_release_line();
+                    self.put.started = true;
+                }
+                PutItem::HoldLine => self.put.hold = true,
+                PutItem::HoldLineDouble => {
+                    self.put.hold = true;
+                    self.put.hold_double = true;
+                }
+                PutItem::Literal(s) => {
+                    self.put_write_at(s);
+                    // Un blanc sépare l'item suivant en mode liste.
+                    self.put.cursor += 1;
+                }
+                PutItem::Var { name, format } => {
+                    let text = self.render_put_var(name, format.as_deref())?;
+                    self.put_write_at(&text);
+                    self.put.cursor += 1;
+                }
+                PutItem::NamedVar(name) => {
+                    let val = self.render_put_var(name, None)?;
+                    let text = format!("{}={}", name, val);
+                    self.put_write_at(&text);
+                    self.put.cursor += 1;
+                }
+                PutItem::All => {
+                    // `var=value` pour chaque variable du PDV, séparés d'un
+                    // blanc, dans l'ordre du PDV.
+                    let n = self.pdv.vars().len();
+                    for slot in 0..n {
+                        let name = self.pdv.vars()[slot].name.clone();
+                        let val = self.render_put_slot(slot, None);
+                        let text = format!("{}={}", name, val);
+                        self.put_write_at(&text);
+                        self.put.cursor += 1;
+                    }
+                }
+            }
+        }
+
+        // Fin du PUT : sauf hold, relâcher la ligne.
+        if !self.put.hold && !self.put.hold_double {
+            self.put_release_line();
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// Écrit `text` dans la ligne de sortie courante à partir de la colonne
+    /// `cursor` (0-based), en complétant de blancs si le curseur est au-delà
+    /// de la longueur courante, et avance le curseur après le texte écrit.
+    fn put_write_at(&mut self, text: &str) {
+        let mut chars: Vec<char> = self.put.line.chars().collect();
+        let start = self.put.cursor;
+        // Compléter de blancs jusqu'à `start`.
+        while chars.len() < start {
+            chars.push(' ');
+        }
+        // Écrire (écrasement) à partir de `start`.
+        for (i, c) in text.chars().enumerate() {
+            let pos = start + i;
+            if pos < chars.len() {
+                chars[pos] = c;
+            } else {
+                chars.push(c);
+            }
+        }
+        self.put.cursor = start + text.chars().count();
+        self.put.line = chars.into_iter().collect();
+    }
+
+    /// Relâche (flush + clear) la ligne de sortie courante vers la
+    /// destination active, et réinitialise l'état de ligne.
+    fn put_release_line(&mut self) {
+        let line = std::mem::take(&mut self.put.line);
+        // SAS rogne les blancs de fin de la ligne PUT relâchée.
+        let line = line.trim_end().to_string();
+        let dest = self.put.dest.clone();
+        self.put.out.push((dest, line));
+        self.put.cursor = 0;
+        self.put.started = false;
+        self.put.hold = false;
+        self.put.hold_double = false;
+    }
+
+    /// Flush de fin d'étape : une ligne encore maintenue (`@`/`@@`) ou en
+    /// construction est relâchée.
+    fn put_flush_at_step_end(&mut self) {
+        if self.put.started || !self.put.line.is_empty() {
+            self.put_release_line();
+        }
+    }
+
+    /// Rejoue les lignes PUT produites vers leurs destinations (LOG, listing,
+    /// fichiers externes). Les fichiers sont regroupés par chemin et écrits
+    /// (création/troncature) en une fois.
+    fn put_replay(&mut self, session: &mut Session) -> Result<()> {
+        use std::collections::HashMap;
+        // Tampon par fichier (ordre des lignes préservé).
+        let mut files: HashMap<String, Vec<String>> = HashMap::new();
+        let mut file_order: Vec<String> = Vec::new();
+        for (dest, line) in std::mem::take(&mut self.put.out) {
+            match dest {
+                PutDestKind::Log => session.log.put_line(&line),
+                PutDestKind::Print => session.listing.write_line(&line),
+                PutDestKind::Path(path) => {
+                    files
+                        .entry(path.clone())
+                        .or_insert_with(|| {
+                            file_order.push(path.clone());
+                            Vec::new()
+                        })
+                        .push(line);
+                }
+            }
+        }
+        for path in file_order {
+            let lines = files.remove(&path).unwrap_or_default();
+            let mut content = lines.join("\n");
+            // Terminer le fichier par un saut de ligne (convention texte).
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            std::fs::write(&path, content).map_err(|e| {
+                SasError::runtime(format!("Unable to write the FILE '{path}': {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Rend une variable PUT (par nom) en texte, avec son format explicite
+    /// (`format`), ou son format d'affichage, ou le défaut BESTw./$w.
+    fn render_put_var(&self, name: &str, format: Option<&str>) -> Result<String> {
+        let slot = self.pdv.slot(name).ok_or_else(|| {
+            SasError::runtime(format!("Variable {name} is not on the PUT statement."))
+        })?;
+        Ok(self.render_put_slot(slot, format))
+    }
+
+    /// Rend la valeur du slot PDV `slot` en texte pour un PUT. Ordre de
+    /// résolution du format : format explicite de l'item > format d'affichage
+    /// de la variable > défaut (BEST12. justifié à droite pour un numérique,
+    /// valeur brute pour un caractère). Le résultat est rogné de ses blancs
+    /// de bord (mode liste SAS : les valeurs formatées sont posées « left
+    /// aligned » dans la ligne).
+    fn render_put_slot(&self, slot: usize, format: Option<&str>) -> String {
+        let value = self.pdv.get(slot).clone();
+        // Format explicite, sinon format d'affichage de la variable.
+        let fmt_tok = format
+            .map(str::to_string)
+            .or_else(|| self.pdv.vars()[slot].format.clone());
+        if let Some(tok) = fmt_tok {
+            if let Some(spec) = crate::formats::FormatSpec::parse(&tok) {
+                return self.format_catalog.format(&value, &spec).trim().to_string();
+            }
+        }
+        // Défaut : pas de format.
+        match value {
+            Value::Missing(kind) => kind.display(),
+            Value::Num(f) => format_best(f, 12).trim().to_string(),
+            Value::Char(s) => s,
+        }
     }
 
     /// Exécute une CALL routine (M11.5). v1 : seule `SYMPUT` est supportée.
@@ -3431,5 +3705,238 @@ mod tests {
         .unwrap();
         let ds = read_work(&s, "out");
         assert_eq!(ds.n_obs(), 2);
+    }
+
+    // ── FILE / PUT (M14.2) ───────────────────────────────────────────────
+
+    /// Extrait les lignes PUT du log (celles qui ne sont ni vides, ni un
+    /// écho de source numéroté, ni une NOTE/WARNING/ERROR).
+    fn put_log_lines(log: &str) -> Vec<String> {
+        // L'écho de source SAS est de la forme "<num>     <texte>" : un nombre
+        // suivi d'AU MOINS deux espaces (padding à la colonne 6) puis du texte.
+        // Une ligne PUT purement numérique ("42") n'a pas ce padding.
+        fn is_source_echo(l: &str) -> bool {
+            let mut it = l.char_indices();
+            let mut end = 0;
+            for (i, c) in it.by_ref() {
+                if c.is_ascii_digit() {
+                    end = i + 1;
+                } else {
+                    break;
+                }
+            }
+            if end == 0 {
+                return false;
+            }
+            // Au moins deux espaces après le nombre.
+            l[end..].starts_with("  ")
+        }
+        log.lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.is_empty()
+                    && !t.starts_with("NOTE:")
+                    && !t.starts_with("WARNING:")
+                    && !t.starts_with("ERROR:")
+                    && !is_source_echo(l)
+                    // Les continuations de NOTE timing ("real time...").
+                    && !t.starts_with("real time")
+                    && !t.starts_with("cpu time")
+            })
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn put_list_mode_to_log() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // `data _null_` : sortie PUT seulement, aucun dataset écrit.
+        run("data _null_; set inp; put name age; run;", &mut s).unwrap();
+        let log = s.log.into_string();
+        let lines = put_log_lines(&log);
+        // Age missing (Alice) → "." ; format BEST par défaut.
+        assert_eq!(lines, vec!["Alfred 14", "Alice .", "Barbara 13"]);
+    }
+
+    #[test]
+    fn put_named_form() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data _null_; set inp; if name='Alfred'; put name= age=; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["name=Alfred age=14"]);
+    }
+
+    #[test]
+    fn put_literal_and_var() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data _null_; set inp; if name='Alfred'; put 'Report for' name; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["Report for Alfred"]);
+    }
+
+    #[test]
+    fn put_formatted_numeric() {
+        let mut s = session();
+        run("data _null_; x = 3.14159; put x 8.2; run;", &mut s).unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        // 8.2 → "    3.14" justifié, puis trim de fin (les blancs de tête
+        // restent mais sont rognés par render_put_slot via .trim()).
+        assert_eq!(lines, vec!["3.14"]);
+    }
+
+    #[test]
+    fn put_formatted_date9() {
+        let mut s = session();
+        // 0 = 01JAN1960 (epoch SAS).
+        run("data _null_; d = 0; put d date9.; run;", &mut s).unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["01JAN1960"]);
+    }
+
+    #[test]
+    fn put_column_pointer_and_skip() {
+        let mut s = session();
+        run(
+            "data _null_; x = 1; y = 2; put @5 x +3 y; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        // @5 → "1" en colonne 5 (index 4) ; le curseur passe à la colonne 6
+        // (index 5), +3 l'avance à la colonne 9 (index 8) où s'écrit "2".
+        assert_eq!(lines, vec!["    1    2"]);
+    }
+
+    #[test]
+    fn put_slash_newline_within_one_put() {
+        let mut s = session();
+        run(
+            "data _null_; x = 1; y = 2; put x / y; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn put_single_hold_joins_one_line() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // `put name @;` maintient la ligne ; le PUT suivant (même itération)
+        // la continue, puis la relâche.
+        run(
+            "data _null_; set inp; put name @; put age; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        // Une ligne par observation (hold simple relâché en fin d'itération).
+        assert_eq!(lines, vec!["Alfred 14", "Alice .", "Barbara 13"]);
+    }
+
+    #[test]
+    fn put_double_hold_joins_across_iterations() {
+        let mut s = session();
+        write_class(&s, "inp");
+        // `put name @@;` maintient la ligne À TRAVERS les itérations : les
+        // trois noms s'accumulent sur une seule ligne, relâchée en fin d'étape.
+        run("data _null_; set inp; put name @@; run;", &mut s).unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["Alfred Alice Barbara"]);
+    }
+
+    #[test]
+    fn put_all_writes_every_pdv_var() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data _null_; set inp; if name='Alfred'; put _all_; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        // Ordre PDV : Age (num) puis Name (char) — l'ordre des colonnes de
+        // l'input.
+        assert_eq!(lines, vec!["Age=14 Name=Alfred"]);
+    }
+
+    #[test]
+    fn file_print_routes_to_listing() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data _null_; set inp; if name='Alfred'; file print; put 'in listing' name; run;",
+            &mut s,
+        )
+        .unwrap();
+        let listing = s.listing.into_string();
+        assert!(
+            listing.contains("in listing Alfred"),
+            "listing was: {listing}"
+        );
+        // Rien dans le log côté PUT.
+        let log = s.log.into_string();
+        assert!(!log.contains("in listing"), "log was: {log}");
+    }
+
+    #[test]
+    fn file_log_explicit_routes_to_log() {
+        let mut s = session();
+        run(
+            "data _null_; x = 7; file log; put 'val' x; run;",
+            &mut s,
+        )
+        .unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["val 7"]);
+    }
+
+    #[test]
+    fn file_path_writes_external_file() {
+        let mut s = session();
+        write_class(&s, "inp");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.txt");
+        let path_str = path.to_str().unwrap();
+        let src = format!(
+            "data _null_; set inp; file '{path_str}'; put name age; run;"
+        );
+        run(&src, &mut s).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "Alfred 14\nAlice .\nBarbara 13\n");
+    }
+
+    #[test]
+    fn put_unknown_variable_errors() {
+        let mut s = session();
+        let res = run("data _null_; x = 1; put nosuchvar; run;", &mut s);
+        let err = res.err().expect("expected an error for an unknown PUT variable");
+        assert!(
+            err.to_string().contains("nosuchvar is not on the PUT statement"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn put_default_destination_is_log() {
+        let mut s = session();
+        // Sans FILE, un PUT écrit dans le LOG (défaut SAS).
+        run("data _null_; x = 42; put x; run;", &mut s).unwrap();
+        let lines = put_log_lines(&s.log.into_string());
+        assert_eq!(lines, vec!["42"]);
+        // Rien dans le listing.
+        assert!(!s.listing.into_string().contains("42"));
     }
 }
