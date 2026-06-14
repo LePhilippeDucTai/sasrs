@@ -38,6 +38,7 @@ polars = { version = "0.46", features = [
     "cross_join",
     "semi_anti_join",
     "rank",
+    "csv",
 ] }
 clap = { version = "4", features = ["derive"] }
 thiserror = "2"

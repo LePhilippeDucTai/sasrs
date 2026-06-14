@@ -19,8 +19,10 @@ pub mod common;
 pub mod contents;
 pub mod corr;
 pub mod datasets;
+pub mod export;
 pub mod format;
 pub mod freq;
+pub mod import;
 pub mod means;
 pub mod print;
 pub mod rank;
@@ -51,6 +53,8 @@ pub enum ProcAst {
     Tabulate(tabulate::TabulateAst),
     Report(report::ReportAst),
     Sql(crate::sql::ast::SqlProgram),
+    Import(import::ImportAst),
+    Export(export::ExportAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -135,6 +139,14 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = datasets::parse(ts)?;
             Ok(ProcAst::Datasets(ast))
         }
+        "import" => {
+            let ast = import::parse(ts)?;
+            Ok(ProcAst::Import(ast))
+        }
+        "export" => {
+            let ast = export::parse(ts)?;
+            Ok(ProcAst::Export(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -168,6 +180,8 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Tabulate(a) => tabulate::execute(a, session),
         ProcAst::Report(a) => report::execute(a, session),
         ProcAst::Sql(a) => crate::sql::execute(a, session),
+        ProcAst::Import(a) => import::execute(a, session),
+        ProcAst::Export(a) => export::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).
