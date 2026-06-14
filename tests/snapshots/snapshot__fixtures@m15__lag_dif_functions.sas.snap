@@ -1,0 +1,59 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m15/lag_dif_functions.sas
+---
+==== LOG ====
+
+1     data work.test;
+2       input x;
+3     
+4       /* LAG/LAG1 — value from previous call */
+5       lag_x = lag(x);
+6     
+7       /* LAG2 — value from two calls ago */
+8       lag2_x = lag2(x);
+9     
+10      /* DIF/DIF1 — difference from previous (x - lag(x)) */
+11      dif_x = dif(x);
+12    
+13      /* DIF2 — second difference (x - lag2(x)) */
+14      dif2_x = dif2(x);
+15    
+16      output;
+17    
+18      datalines;
+19    1
+20    2
+21    3
+22    4
+23    5
+24    ;
+25    run;
+NOTE: The data set WORK.TEST has 5 observations and 5 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+26    title 'M15.7 LAG/DIF Functions';
+
+27    proc print data=work.test;
+28    run;
+NOTE: There were 5 observations read from the data set WORK.TEST.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                    M15.7 LAG/DIF Functions
+
+                         Obs    x    lag_x    lag2_x    dif_x    dif2_x
+
+                           1    1        .         .        .         .
+                           2    2        1         .        1         .
+                           3    3        2         1        1         2
+                           4    4        3         2        1         2
+                           5    5        4         3        1         2
+
+==== EXIT 0 ====
