@@ -1,0 +1,60 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m14/put_report.sas
+---
+==== LOG ====
+
+1     data _null_;
+2       x = 3.14159;
+3       name = 'Claude';
+4       put 'Valeur pi = ' x 8.4;
+5       put 'Nom       = ' name $;
+6     run;
+Valeur pi =  3.1416
+Nom       =  Claude
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     data _null_;
+8       do i = 1 to 5;
+9         put i @;
+10      end;
+11      put;
+12    run;
+1 2 3 4 5
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    data _null_;
+14      a = 1; b = 2; c = 'abc';
+15      put _all_;
+16    run;
+a=1 b=2 c=abc
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+17    data _null_;
+18      file print;
+19      put 'Titre du rapport via PUT FILE PRINT';
+20      put '------------------------------------';
+21      do i = 1 to 3;
+22        put 'Ligne ' i;
+23      end;
+24    run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+Titre du rapport via PUT FILE PRINT
+------------------------------------
+Ligne  1
+Ligne  2
+Ligne  3
+
+==== EXIT 0 ====
