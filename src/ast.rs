@@ -530,6 +530,28 @@ pub enum DsStmt {
         point: Option<String>,
         nobs: Option<String>,
     },
+    /// `label_name: <statement>` (M16.6) — un statement étiqueté. Le nom
+    /// d'étiquette est une cible compile-time pour `GOTO`/`LINK`. `stmt` est le
+    /// statement réellement exécuté (un seul ; pour plusieurs, utiliser
+    /// `do; ... end;`). Les étiquettes sont lexicalement portées par l'étape
+    /// DATA et résolues à la compilation.
+    Labeled {
+        name: String,
+        stmt: Box<DsStmt>,
+    },
+    /// `goto label;` / `go to label;` (M16.6) — saut INCONDITIONNEL vers le
+    /// statement étiqueté `label` (au niveau supérieur de l'étape). Termine les
+    /// boucles DO englobantes. Étiquette inconnue → erreur de compilation.
+    Goto(String),
+    /// `link label;` (M16.6) — appel de sous-routine : exécute le code à partir
+    /// du statement étiqueté `label` jusqu'au prochain `RETURN` (ou la fin de
+    /// l'étape), puis reprend juste après le `LINK`. Imbrication autorisée
+    /// (pile d'adresses de retour). Étiquette inconnue → erreur de compilation.
+    Link(String),
+    /// `return;` (M16.6) — retour de la sous-routine `LINK` courante (dépile
+    /// l'adresse de retour). Sans `LINK` actif, RETURN termine l'itération
+    /// courante (output implicite puis itération suivante), comme en SAS.
+    Return,
 }
 
 /// Une clause `when (v1, v2, ...) stmt;` d'un SELECT (M16.1). `values` porte

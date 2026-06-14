@@ -334,6 +334,10 @@ pub struct StepProgram {
     /// Libellés déclarés (LABEL/ATTRIB) : nom UPPERCASE → libellé.
     /// Appliqués aux `VarMeta` de sortie par l'exécuteur.
     pub labels: HashMap<String, String>,
+    /// Étiquettes de contrôle (M16.6) : nom UPPERCASE → index dans `stmts`
+    /// (niveau supérieur de l'étape). Cibles des GOTO/LINK, résolues à la
+    /// compilation. L'exécuteur pilote un compteur de programme sur `stmts`.
+    pub flow_labels: HashMap<String, usize>,
 }
 
 pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> {
@@ -365,6 +369,8 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         do_over_arrays: HashSet::new(),
         update: None,
         modify: None,
+        labels_defined: HashSet::new(),
+        goto_link_refs: Vec::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -434,6 +440,32 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
             "The OUTPUT statement is not allowed with the MODIFY statement.",
         ));
     }
+    // Étiquettes de contrôle (M16.6) : index des `DsStmt::Labeled` AU NIVEAU
+    // SUPÉRIEUR de l'étape. GOTO/LINK ne ciblent QUE des étiquettes de premier
+    // niveau (sauter DANS un bloc DO est indéfini en SAS et non supporté). Une
+    // étiquette définie uniquement dans un bloc imbriqué n'est donc pas une
+    // cible valide.
+    let mut flow_labels: HashMap<String, usize> = HashMap::new();
+    for (i, stmt) in ast.stmts.iter().enumerate() {
+        if let DsStmt::Labeled { name, .. } = stmt {
+            flow_labels.insert(name.to_uppercase(), i);
+        }
+    }
+    // Validation des références GOTO/LINK : la cible doit être une étiquette de
+    // premier niveau. Inconnue (ou seulement imbriquée) → erreur de compilation.
+    for label in &c.goto_link_refs {
+        if !flow_labels.contains_key(label) {
+            if c.labels_defined.contains(label) {
+                return Err(SasError::runtime(format!(
+                    "The label {label} is nested inside a block and cannot be a GOTO/LINK target."
+                )));
+            }
+            return Err(SasError::runtime(format!(
+                "The statement label {label} is not defined in the DATA step."
+            )));
+        }
+    }
+
     let outputs = c.resolve_outputs(&ast.outputs)?;
     let uninitialized = c
         .pdv
@@ -455,6 +487,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         initial_values: c.initial_values,
         arrays: c.arrays,
         labels: c.labels,
+        flow_labels,
     })
 }
 
@@ -575,6 +608,12 @@ struct Compiler<'a> {
     update: Option<PendingUpdate>,
     /// MODIFY compilé (M16.5), résolu dans `walk_stmt` (un seul par étape).
     modify: Option<PendingModify>,
+    /// Étiquettes de statement définies dans l'étape (M16.6 : `name: stmt`),
+    /// en MAJUSCULES. Une étiquette dupliquée → erreur de compilation.
+    labels_defined: HashSet<String>,
+    /// Références d'étiquette des GOTO/LINK (M16.6), en MAJUSCULES. Validées en
+    /// fin de compilation contre `labels_defined` (étiquette inconnue → erreur).
+    goto_link_refs: Vec<String>,
 }
 
 /// État intermédiaire d'un UPDATE pendant la compilation : les datasets sont
@@ -928,6 +967,52 @@ impl Compiler<'_> {
                     return Ok(());
                 }
                 for (name, init) in items {
+                    // RETAIN _ALL_ (M16.6) : retient TOUTES les variables
+                    // connues du PDV À CE POINT (≠ `retain;` nu qui retient le
+                    // PDV entier en fin de compilation). Les variables créées
+                    // APRÈS ce statement ne sont donc PAS retenues. Aucune
+                    // valeur initiale n'est admise sur `_all_` ; il ne crée
+                    // jamais de variable nommée `_ALL_`.
+                    if name.eq_ignore_ascii_case("_all_") {
+                        if init.is_some() {
+                            return Err(SasError::runtime(
+                                "An initial value is not allowed with RETAIN _ALL_.",
+                            ));
+                        }
+                        for slot in 0..self.pdv.vars().len() {
+                            self.retained_slots.insert(slot);
+                        }
+                        continue;
+                    }
+                    // Listes spéciales _NUMERIC_/_CHARACTER_ : retiennent les
+                    // variables du type voulu connues à ce point (mêmes règles
+                    // que _ALL_ — créées après = non retenues).
+                    if name.eq_ignore_ascii_case("_numeric_")
+                        || name.eq_ignore_ascii_case("_character_")
+                    {
+                        if init.is_some() {
+                            return Err(SasError::runtime(
+                                "An initial value is not allowed with a special RETAIN list.",
+                            ));
+                        }
+                        let want = if name.eq_ignore_ascii_case("_numeric_") {
+                            VarType::Num
+                        } else {
+                            VarType::Char
+                        };
+                        let slots: Vec<usize> = self
+                            .pdv
+                            .vars()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, v)| v.ty == want)
+                            .map(|(i, _)| i)
+                            .collect();
+                        for slot in slots {
+                            self.retained_slots.insert(slot);
+                        }
+                        continue;
+                    }
                     match init {
                         // AVEC init : la variable entre au PDV ICI (ordre de
                         // première référence), type/longueur du littéral, et
@@ -1137,6 +1222,30 @@ impl Compiler<'_> {
             // n'entre au PDV via PUT — les variables nommées doivent déjà
             // exister (résolution de slot à l'exécution, erreur si inconnue).
             DsStmt::File { .. } | DsStmt::Put(_) => Ok(()),
+            // Étiquette (M16.6) : enregistre l'étiquette (doublon → erreur) puis
+            // walke le statement étiqueté (il participe pleinement au PDV / aux
+            // validations comme s'il était nu).
+            DsStmt::Labeled { name, stmt } => {
+                let upper = name.to_uppercase();
+                if !self.labels_defined.insert(upper.clone()) {
+                    return Err(SasError::runtime(format!(
+                        "The label {} is defined more than once in the DATA step.",
+                        upper
+                    )));
+                }
+                self.walk_stmt(stmt)
+            }
+            // GOTO/LINK (M16.6) : mémorisent leur référence d'étiquette ; la
+            // validation (étiquette définie ?) a lieu en fin de compilation,
+            // quand TOUTES les étiquettes ont été collectées (une cible peut
+            // apparaître APRÈS le GOTO/LINK).
+            DsStmt::Goto(label) | DsStmt::Link(label) => {
+                self.goto_link_refs.push(label.to_uppercase());
+                Ok(())
+            }
+            // RETURN (M16.6) : aucune validation compile-time (un RETURN sans
+            // LINK actif est licite — termine l'itération courante).
+            DsStmt::Return => Ok(()),
         }
     }
 

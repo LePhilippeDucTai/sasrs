@@ -119,11 +119,20 @@ pub struct StepStats {
     pub written: Vec<(String, usize, usize)>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 enum Flow {
     Normal,
     NextIter,
     EndStep,
+    /// GOTO (M16.6) : saut inconditionnel vers l'étiquette nommée (index résolu
+    /// par le pilote de niveau supérieur). Traverse les boucles DO englobantes.
+    /// Émis depuis une sous-routine LINK, il l'abandonne et remonte jusqu'au
+    /// pilote de premier niveau qui repositionne le compteur de programme.
+    Goto(String),
+    /// RETURN (M16.6) : retour de la sous-routine LINK courante (consommé par
+    /// `exec_link_subroutine`). Sans LINK actif (premier niveau), équivaut à la
+    /// fin d'itération (output implicite).
+    Return,
 }
 
 enum ColBuilder {
@@ -256,6 +265,14 @@ struct Runner {
     /// MODIFY+POINT= (M16.5) : état partagé pour l'accès direct piloté par le
     /// corps. `None` hors de ce cas (boucle séquentielle MODIFY ou UPDATE).
     modify_state: Option<ModifyState>,
+    /// Statements de PREMIER NIVEAU de l'étape (M16.6) — partagés avec les
+    /// boucles d'exécution. Sert à exécuter INLINE le corps d'une sous-routine
+    /// LINK (du statement étiqueté jusqu'au prochain RETURN) sans abandonner la
+    /// structure de boucle DO englobante. Vide tant qu'aucun LINK n'est possible.
+    program: std::rc::Rc<Vec<DsStmt>>,
+    /// Étiquettes de contrôle (M16.6) : nom UPPERCASE → index dans `program`.
+    /// Cibles des LINK exécutés inline et des GOTO résolus par le pilote.
+    flow_labels: std::rc::Rc<HashMap<String, usize>>,
 }
 
 /// État partagé d'un MODIFY+POINT= (M16.5). Le bras `DsStmt::Modify` de
@@ -333,6 +350,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         initial_values,
         arrays,
         labels,
+        flow_labels,
     } = prog;
 
     for name in &uninitialized {
@@ -423,6 +441,8 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         labels,
         call_execute_queue: Vec::new(),
         modify_state: None,
+        program: std::rc::Rc::new(Vec::new()),
+        flow_labels: std::rc::Rc::new(HashMap::new()),
     };
 
     // Interclassement / match-merge : pré-application des WHERE= par dataset
@@ -461,6 +481,11 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     // (c'est l'utilisateur qui pilote l'itération via DO/STOP).
     let suppress_implicit_output = has_explicit_output || point_slot.is_some();
 
+    // M16.6 : programme + étiquettes partagés avec le Runner (LINK exécuté
+    // inline, GOTO résolu par `run_step_body`).
+    r.program = std::rc::Rc::new(stmts);
+    r.flow_labels = std::rc::Rc::new(flow_labels);
+
     loop {
         r.pdv.n_ += 1;
         r.pdv.error_ = false;
@@ -479,13 +504,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             r.put_release_line();
         }
 
-        let mut flow = Flow::Normal;
-        for stmt in &stmts {
-            flow = r.exec_stmt(stmt)?;
-            if flow != Flow::Normal {
-                break;
-            }
-        }
+        let flow = r.run_step_body()?;
         if flow == Flow::EndStep {
             break;
         }
@@ -676,6 +695,8 @@ fn build_um_runner(
         labels,
         call_execute_queue: Vec::new(),
         modify_state: None,
+        program: std::rc::Rc::new(Vec::new()),
+        flow_labels: std::rc::Rc::new(HashMap::new()),
     }
 }
 
@@ -809,6 +830,7 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         initial_values,
         arrays,
         labels,
+        flow_labels,
         ..
     } = prog;
     let upd = update.expect("execute_update requires UpdateData");
@@ -852,6 +874,10 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
     for (slot, v) in initial_values {
         r.pdv.set(slot, v);
     }
+
+    // M16.6 : programme + étiquettes partagés (LINK/GOTO dans un UPDATE).
+    r.program = std::rc::Rc::new(stmts);
+    r.flow_labels = std::rc::Rc::new(flow_labels);
 
     let master = &upd.master;
     let mut master_read = 0usize;
@@ -934,13 +960,7 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
                 }
             }
         }
-        let mut flow = Flow::Normal;
-        for stmt in &stmts {
-            flow = r.exec_stmt(stmt)?;
-            if flow != Flow::Normal {
-                break;
-            }
-        }
+        let flow = r.run_step_body()?;
         if flow == Flow::EndStep {
             break;
         }
@@ -985,6 +1005,7 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         initial_values,
         arrays,
         labels,
+        flow_labels,
         ..
     } = prog;
     let m = modify.expect("execute_modify requires ModifyData");
@@ -1000,6 +1021,9 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
     for (slot, v) in initial_values {
         r.pdv.set(slot, v);
     }
+    // M16.6 : programme + étiquettes partagés (LINK/GOTO dans un MODIFY).
+    r.program = std::rc::Rc::new(stmts);
+    r.flow_labels = std::rc::Rc::new(flow_labels);
     let n_rows = m.data.n_rows;
     if let Some(slot) = m.nobs_slot {
         r.pdv.set(slot, Value::Num(n_rows as f64));
@@ -1028,14 +1052,9 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         });
         r.pdv.n_ += 1;
         r.pdv.error_ = false;
-        for stmt in &stmts {
-            let flow = r.exec_stmt(stmt)?;
-            if let Some(msg) = r.modify_state.as_mut().and_then(|st| st.error.take()) {
-                return Err(SasError::runtime(msg));
-            }
-            if flow != Flow::Normal {
-                break;
-            }
+        let _flow = r.run_step_body()?;
+        if let Some(msg) = r.modify_state.as_mut().and_then(|st| st.error.take()) {
+            return Err(SasError::runtime(msg));
         }
         if let Some(mut state) = r.modify_state.take() {
             capture_modify_state(&mut state, &r.pdv);
@@ -1053,13 +1072,7 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
             r.pdv.reset_non_retained();
             load_row(&mut r.pdv, &m.data, row);
             rows_processed += 1;
-            let mut flow = Flow::Normal;
-            for stmt in &stmts {
-                flow = r.exec_stmt(stmt)?;
-                if flow != Flow::Normal {
-                    break;
-                }
-            }
+            let flow = r.run_step_body()?;
             for (pos, &slot) in m.data.var_slots.iter().enumerate() {
                 buffer[pos][row] = r.pdv.get(slot).clone();
             }
@@ -1304,6 +1317,23 @@ impl Runner {
                 Ok(Flow::Normal)
             }
             DsStmt::CallRoutine { name, args } => self.exec_call_routine(name, args),
+            // Étiquette (M16.6) : l'étiquette elle-même est un marqueur
+            // (résolue par index dans le pilote de niveau supérieur) ; on
+            // exécute simplement le statement étiqueté.
+            DsStmt::Labeled { stmt, .. } => self.exec_stmt(stmt),
+            // GOTO/LINK/RETURN (M16.6) : remontent comme Flow non-Normal
+            // jusqu'au pilote de niveau supérieur (`run_step_body`), qui pilote
+            // le compteur de programme et la pile de retour. Traversent les
+            // boucles DO englobantes (mêmes règles de propagation que EndStep).
+            DsStmt::Goto(label) => Ok(Flow::Goto(label.to_uppercase())),
+            // LINK : exécute la sous-routine INLINE (du label au prochain
+            // RETURN) puis reprend après le LINK (Flow::Normal). Exécuté ICI —
+            // et non remonté — pour qu'un LINK à l'intérieur d'une boucle DO
+            // n'abandonne PAS la boucle (la pile d'appels Rust = pile de
+            // retour). Un Flow non-Normal de la sous-routine (GOTO non local,
+            // DELETE, STOP, fin d'entrée) est propagé tel quel.
+            DsStmt::Link(label) => self.exec_link_subroutine(&label.to_uppercase()),
+            DsStmt::Return => Ok(Flow::Return),
             // INPUT (M14) : lit le PROCHAIN enregistrement de la source texte
             // dans le PDV. Comme SET, l'épuisement de la source termine
             // l'étape IMMÉDIATEMENT (au milieu de l'itération).
@@ -2963,6 +2993,103 @@ impl Runner {
             }
         }
         Ok(None)
+    }
+
+    /// Pilote de niveau supérieur d'UNE itération de l'étape (M16.6). Exécute
+    /// les statements de premier niveau via un COMPTEUR DE PROGRAMME, ce qui
+    /// permet GOTO (saut), LINK (appel de sous-routine, pile d'adresses de
+    /// retour) et RETURN (dépile). Sans aucune de ces directives, c'est un
+    /// parcours séquentiel équivalent à `for stmt in stmts`.
+    ///
+    /// Renvoie le `Flow` TERMINAL de l'itération vu par la boucle implicite :
+    /// `Normal` (corps épuisé → output implicite), `NextIter` (DELETE / IF
+    /// subsetting faux → pas d'output) ou `EndStep` (STOP / fin d'entrée).
+    /// Les `Flow::Goto/Link/Return` sont entièrement consommés ici (jamais
+    /// remontés au-delà).
+    ///
+    /// Sémantique RETURN : avec un LINK actif, dépile l'adresse de retour ;
+    /// sans LINK actif (pile vide), RETURN termine l'itération NORMALEMENT
+    /// (output implicite), comme en SAS. Un LINK sans RETURN atteignant la fin
+    /// du corps fait simplement tomber le PC en bout de liste (retour implicite
+    /// en fin d'étape).
+    fn run_step_body(&mut self) -> Result<Flow> {
+        let program = self.program.clone();
+        let flow_labels = self.flow_labels.clone();
+        let mut pc: usize = 0;
+        // Garde-fou anti-boucle (GOTO pouvant boucler indéfiniment).
+        let mut steps: u64 = 0;
+        while pc < program.len() {
+            steps += 1;
+            if steps > 100_000_000 {
+                return Err(SasError::runtime(
+                    "DATA step control flow (GOTO/LINK) appears to loop infinitely; stopping.",
+                ));
+            }
+            match self.exec_stmt(&program[pc])? {
+                Flow::Normal => pc += 1,
+                Flow::NextIter => return Ok(Flow::NextIter),
+                Flow::EndStep => return Ok(Flow::EndStep),
+                Flow::Goto(label) => {
+                    // Cible validée à la compilation : présente dans flow_labels.
+                    let Some(&target) = flow_labels.get(&label) else {
+                        return Err(SasError::runtime(format!(
+                            "The statement label {label} is not defined in the DATA step."
+                        )));
+                    };
+                    pc = target;
+                }
+                // RETURN au niveau supérieur (hors sous-routine LINK) : fin
+                // d'itération normale (output implicite), comme en SAS.
+                Flow::Return => return Ok(Flow::Normal),
+            }
+        }
+        // Corps épuisé : fin d'itération normale.
+        Ok(Flow::Normal)
+    }
+
+    /// Exécute INLINE le corps d'une sous-routine LINK (M16.6) : du statement
+    /// étiqueté `label` (premier niveau) jusqu'au prochain `RETURN` (ou la fin
+    /// de l'étape). Renvoie le `Flow` à propager au-delà du LINK :
+    /// - `Flow::Normal` après un RETURN (ou la fin de l'étape) → on reprend
+    ///   normalement après le LINK ;
+    /// - `Flow::NextIter`/`EndStep` (DELETE/STOP/fin d'entrée dans la
+    ///   sous-routine) → remontés tels quels (terminent l'itération/l'étape) ;
+    /// - `Flow::Goto` (GOTO dans la sous-routine) → remonté pour saut non local.
+    ///
+    /// Un LINK imbriqué (`link` dans la sous-routine) récursionne ici : la pile
+    /// d'appels Rust EST la pile d'adresses de retour.
+    fn exec_link_subroutine(&mut self, label: &str) -> Result<Flow> {
+        let program = self.program.clone();
+        let flow_labels = self.flow_labels.clone();
+        let Some(&start) = flow_labels.get(label) else {
+            return Err(SasError::runtime(format!(
+                "The statement label {label} is not defined in the DATA step."
+            )));
+        };
+        let mut pc = start;
+        let mut steps: u64 = 0;
+        while pc < program.len() {
+            steps += 1;
+            if steps > 100_000_000 {
+                return Err(SasError::runtime(
+                    "DATA step control flow (LINK) appears to loop infinitely; stopping.",
+                ));
+            }
+            match self.exec_stmt(&program[pc])? {
+                Flow::Normal => pc += 1,
+                // RETURN : fin de la sous-routine → reprise après le LINK.
+                Flow::Return => return Ok(Flow::Normal),
+                // GOTO dans une sous-routine : saut non local (remonté au
+                // pilote de niveau supérieur, qui repositionne le PC global —
+                // la sous-routine est abandonnée, comme en SAS).
+                Flow::Goto(label) => return Ok(Flow::Goto(label)),
+                // DELETE / STOP / fin d'entrée : terminent l'itération/l'étape.
+                Flow::NextIter => return Ok(Flow::NextIter),
+                Flow::EndStep => return Ok(Flow::EndStep),
+            }
+        }
+        // Fin de l'étape atteinte sans RETURN : retour implicite.
+        Ok(Flow::Normal)
     }
 
     /// Garde-fou anti-boucle infinie partagé par DO liste / DO OVER.
@@ -6979,5 +7106,359 @@ mod tests {
         write_num_ds(&s, "b", &[("x", some(&[1.0]))]);
         let e = run_err("data a; modify a; modify b; run;", &mut s);
         assert!(e.contains("Only one SET, MERGE, UPDATE, or MODIFY"), "got: {e}");
+    }
+
+    // ── M16.6 : LINK / RETURN / GOTO / labels / RETAIN _ALL_ ─────────────
+
+    /// LINK/RETURN de base : appel d'une sous-routine étiquetée, retour après.
+    /// Structure SAS idiomatique : la ligne principale se termine par un RETURN
+    /// (output implicite), puis les sous-routines suivent.
+    #[test]
+    fn link_basic_call_and_return() {
+        let mut s = session();
+        run(
+            "data out; x = 1; link sub; y = x; return; \
+             sub: x = 10; return; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        // x=1, LINK sub → x=10, RETURN → reprise : y=x=10, RETURN principal →
+        // output implicite (la sous-routine n'est pas exécutée en chute).
+        assert_eq!(col(&s, "out", "x"), vec![Some(10.0)]);
+        assert_eq!(col(&s, "out", "y"), vec![Some(10.0)]);
+    }
+
+    /// LINK imbriqué : la pile d'adresses de retour est correcte.
+    #[test]
+    fn link_nested_stack() {
+        let mut s = session();
+        run(
+            "data out; a = 0; link one; a = a + 1; return; \
+             one: a = a + 10; link two; a = a + 100; return; \
+             two: a = a + 1000; return; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        // a: 0 → link one → +10 (10) → link two → +1000 (1010) → return one
+        // → +100 (1110) → return main → +1 (1111). stop.
+        assert_eq!(col(&s, "out", "a"), vec![Some(1111.0)]);
+    }
+
+    /// GOTO : saut inconditionnel (les statements entre le GOTO et la cible
+    /// sont ignorés).
+    #[test]
+    fn goto_unconditional_jump() {
+        let mut s = session();
+        run(
+            "data out; x = 1; goto skip; x = 999; skip: y = x; run;",
+            &mut s,
+        )
+        .unwrap();
+        // x=1, GOTO skip → x=999 sauté, y=x=1 ; chute en fin → output implicite.
+        assert_eq!(col(&s, "out", "x"), vec![Some(1.0)]);
+        assert_eq!(col(&s, "out", "y"), vec![Some(1.0)]);
+    }
+
+    /// GOTO qui sort d'une boucle DO (termine la boucle prématurément).
+    #[test]
+    fn goto_breaks_out_of_do_loop() {
+        let mut s = session();
+        run(
+            "data out; total = 0; \
+             do i = 1 to 100; total = total + i; if i = 5 then goto done; end; \
+             done: ; run;",
+            &mut s,
+        )
+        .unwrap();
+        // 1+2+3+4+5 = 15 ; la boucle est terminée par le GOTO à i=5.
+        assert_eq!(col(&s, "out", "total"), vec![Some(15.0)]);
+        assert_eq!(col(&s, "out", "i"), vec![Some(5.0)]);
+    }
+
+    /// GOTO avec plusieurs étiquettes : ciblage correct.
+    #[test]
+    fn goto_multiple_labels_targets_correctly() {
+        let mut s = session();
+        run(
+            "data out; x = 1; goto third; \
+             first: r = 1; goto fin; \
+             second: r = 2; goto fin; \
+             third: r = 3; goto fin; \
+             fin: ; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "r"), vec![Some(3.0)]);
+    }
+
+    /// Étiquette sur divers statements (ici un bloc DO et une assignation).
+    #[test]
+    fn label_on_various_statements() {
+        let mut s = session();
+        run(
+            "data out; goto blk; a = 1; \
+             blk: do; a = 7; b = 8; end; \
+             after: c = 9; run;",
+            &mut s,
+        )
+        .unwrap();
+        // GOTO blk saute `a = 1` ; le bloc DO étiqueté pose a=7,b=8 ; puis c=9.
+        assert_eq!(col(&s, "out", "a"), vec![Some(7.0)]);
+        assert_eq!(col(&s, "out", "b"), vec![Some(8.0)]);
+        assert_eq!(col(&s, "out", "c"), vec![Some(9.0)]);
+    }
+
+    /// RETURN sans LINK actif : termine l'itération (output implicite), pas une
+    /// erreur. La variable assignée APRÈS le RETURN n'est pas affectée.
+    #[test]
+    fn return_without_link_ends_iteration() {
+        let mut s = session();
+        let stats = run(
+            "data out; x = 1; return; x = 2; run;",
+            &mut s,
+        )
+        .unwrap();
+        // RETURN sans LINK → fin d'itération avec output implicite : x=1.
+        assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 1, 1)]);
+        assert_eq!(col(&s, "out", "x"), vec![Some(1.0)]);
+    }
+
+    /// GOTO vers une étiquette inexistante : erreur de compilation.
+    #[test]
+    fn goto_undefined_label_compile_error() {
+        let mut s = session();
+        let e = run_err("data out; x = 1; goto nowhere; run;", &mut s);
+        assert!(
+            e.contains("NOWHERE") && e.contains("not defined"),
+            "got: {e}"
+        );
+    }
+
+    /// LINK vers une étiquette inexistante : erreur de compilation.
+    #[test]
+    fn link_undefined_label_compile_error() {
+        let mut s = session();
+        let e = run_err("data out; x = 1; link nowhere; run;", &mut s);
+        assert!(
+            e.contains("NOWHERE") && e.contains("not defined"),
+            "got: {e}"
+        );
+    }
+
+    /// Étiquette définie deux fois : erreur de compilation.
+    #[test]
+    fn duplicate_label_compile_error() {
+        let mut s = session();
+        let e = run_err("data out; lbl: x = 1; lbl: x = 2; goto lbl; run;", &mut s);
+        assert!(e.contains("LBL") && e.contains("more than once"), "got: {e}");
+    }
+
+    /// GOTO vers une étiquette imbriquée dans un bloc DO : non supporté (erreur).
+    #[test]
+    fn goto_into_nested_block_compile_error() {
+        let mut s = session();
+        let e = run_err(
+            "data out; goto inner; do; inner: x = 1; end; stop; run;",
+            &mut s,
+        );
+        assert!(e.contains("INNER") && e.contains("nested"), "got: {e}");
+    }
+
+    /// RETAIN _ALL_ : toutes les variables connues sont retenues à travers les
+    /// itérations.
+    #[test]
+    fn retain_all_retains_every_variable() {
+        let mut s = session();
+        write_num_ds(&s, "inp", &[("x", some(&[1.0, 2.0, 3.0]))]);
+        run(
+            "data out; set inp; retain a b; a = 0; b = 0; retain _all_; \
+             a = a + x; b = b + 1; run;",
+            &mut s,
+        )
+        .unwrap();
+        // a et b retenus (cumul) : a = 1,3,6 ; b = 1,2,3. Mais `a=0;b=0;` les
+        // remet à 0 AVANT le cumul, à CHAQUE itération → a=x, b=1. On teste donc
+        // que la retenue n'empêche pas la ré-assignation explicite : a=1,2,3.
+        assert_eq!(col(&s, "out", "a"), vec![Some(1.0), Some(2.0), Some(3.0)]);
+        assert_eq!(col(&s, "out", "b"), vec![Some(1.0), Some(1.0), Some(1.0)]);
+    }
+
+    /// RETAIN _ALL_ : effet cumulatif réel (pas de remise à missing entre
+    /// itérations) pour une variable jamais ré-initialisée. `t` est initialisé
+    /// à 0 à la 1re itération seulement, puis RETAIN _ALL_ le préserve.
+    #[test]
+    fn retain_all_accumulates() {
+        let mut s = session();
+        write_num_ds(&s, "inp", &[("x", some(&[1.0, 2.0, 3.0, 4.0]))]);
+        run(
+            "data out; set inp; if _n_ = 1 then t = 0; retain _all_; t = t + x; run;",
+            &mut s,
+        )
+        .unwrap();
+        // t=0 à la 1re obs, retenu ensuite (jamais remis à missing) → cumul :
+        // 1, 3, 6, 10.
+        assert_eq!(
+            col(&s, "out", "t"),
+            vec![Some(1.0), Some(3.0), Some(6.0), Some(10.0)]
+        );
+    }
+
+    /// RETAIN _ALL_ mélangé à un RETAIN explicite avec valeur initiale : la
+    /// valeur initiale du RETAIN explicite est honorée.
+    #[test]
+    fn retain_all_mixed_with_explicit_retain() {
+        let mut s = session();
+        write_num_ds(&s, "inp", &[("x", some(&[1.0, 2.0, 3.0]))]);
+        run(
+            "data out; set inp; retain base 100; if _n_ = 1 then sum = 0; \
+             retain _all_; sum = sum + x; run;",
+            &mut s,
+        )
+        .unwrap();
+        // base retenu avec init 100 (jamais réassigné) ; sum cumulé.
+        assert_eq!(
+            col(&s, "out", "base"),
+            vec![Some(100.0), Some(100.0), Some(100.0)]
+        );
+        assert_eq!(col(&s, "out", "sum"), vec![Some(1.0), Some(3.0), Some(6.0)]);
+    }
+
+    /// Variable créée APRÈS RETAIN _ALL_ : NON retenue automatiquement (remise à
+    /// missing à chaque itération).
+    #[test]
+    fn variable_created_after_retain_all_not_retained() {
+        let mut s = session();
+        write_num_ds(&s, "inp", &[("x", some(&[5.0, 6.0, 7.0]))]);
+        run(
+            "data out; set inp; retain _all_; later = later + x; run;",
+            &mut s,
+        )
+        .unwrap();
+        // `later` n'existe PAS au point du RETAIN _ALL_ (créée par sa 1re
+        // référence ensuite) → non retenue → remise à missing chaque itération
+        // → later = . + x = . (missing propagé).
+        assert_eq!(col(&s, "out", "later"), vec![None, None, None]);
+    }
+
+    /// LINK dans une boucle : l'itération de la boucle reprend après le retour.
+    #[test]
+    fn link_inside_do_loop_continues_iteration() {
+        let mut s = session();
+        run(
+            "data out; total = 0; \
+             do i = 1 to 4; link addit; end; \
+             return; \
+             addit: total = total + i; return; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        // total = 1+2+3+4 = 10 ; la boucle continue après chaque RETURN.
+        assert_eq!(col(&s, "out", "total"), vec![Some(10.0)]);
+        assert_eq!(col(&s, "out", "i"), vec![Some(5.0)]);
+    }
+
+    /// Modifications de variables dans le code LINKé : persistance (PDV partagé).
+    #[test]
+    fn link_modifications_persist() {
+        let mut s = session();
+        run(
+            "data out; x = 5; y = 0; link doit; z = x + y; return; \
+             doit: x = x * 2; y = 100; return; run;",
+            &mut s,
+        )
+        .unwrap();
+        // doit : x=10, y=100 (persistants) ; z = 10 + 100 = 110.
+        assert_eq!(col(&s, "out", "x"), vec![Some(10.0)]);
+        assert_eq!(col(&s, "out", "y"), vec![Some(100.0)]);
+        assert_eq!(col(&s, "out", "z"), vec![Some(110.0)]);
+    }
+
+    /// Entrées multiples vers la même étiquette via LINK (réutilisation).
+    #[test]
+    fn multiple_link_entries_same_label() {
+        let mut s = session();
+        run(
+            "data out; c = 0; link bump; link bump; link bump; return; \
+             bump: c = c + 1; return; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "c"), vec![Some(3.0)]);
+    }
+
+    /// GOTO en arrière formant une boucle, terminée par une condition.
+    #[test]
+    fn goto_backward_forms_loop() {
+        let mut s = session();
+        run(
+            "data out; n = 0; \
+             loop: n = n + 1; if n < 5 then goto loop; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "n"), vec![Some(5.0)]);
+    }
+
+    /// LINK depuis une sous-routine LINK vers une troisième : pile à 2 niveaux,
+    /// chaque RETURN reprend au bon endroit.
+    #[test]
+    fn link_chain_returns_in_order() {
+        let mut s = session();
+        run(
+            "data out; trace = 0; link a; trace = trace * 10 + 9; return; \
+             a: trace = trace * 10 + 1; link b; trace = trace * 10 + 2; return; \
+             b: trace = trace * 10 + 3; return; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        // 0 → a: *10+1 = 1 → b: *10+3 = 13 → ret a: *10+2 = 132 → ret main:
+        // *10+9 = 1329.
+        assert_eq!(col(&s, "out", "trace"), vec![Some(1329.0)]);
+    }
+
+    /// `go to label;` (forme en deux mots) équivalente à `goto label;`.
+    #[test]
+    fn go_to_two_word_form() {
+        let mut s = session();
+        run(
+            "data out; x = 1; go to skip; x = 999; skip: ; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "out", "x"), vec![Some(1.0)]);
+    }
+
+    /// GOTO/LINK fonctionnent sur plusieurs itérations d'un SET (la pile de
+    /// retour est ré-initialisée à chaque itération).
+    #[test]
+    fn link_resets_per_iteration() {
+        let mut s = session();
+        write_num_ds(&s, "inp", &[("x", some(&[1.0, 2.0, 3.0]))]);
+        run(
+            "data out; set inp; link dbl; stop_marker: ; goto past; \
+             dbl: d = x * 2; return; \
+             past: ; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Chaque itération : link dbl (d=2x), retour, goto past (saute rien),
+        // output implicite. d = 2,4,6 sur les 3 obs.
+        assert_eq!(
+            col(&s, "out", "d"),
+            vec![Some(2.0), Some(4.0), Some(6.0)]
+        );
+    }
+
+    /// RETAIN _ALL_ n'autorise pas de valeur initiale.
+    #[test]
+    fn retain_all_rejects_initial_value() {
+        let mut s = session();
+        let e = run_err("data out; x = 1; retain _all_ 5; run;", &mut s);
+        assert!(e.contains("initial value"), "got: {e}");
     }
 }

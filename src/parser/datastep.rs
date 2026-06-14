@@ -202,6 +202,30 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         }
     };
 
+    // Étiquette de statement (M16.6) : `label_name: <statement>`. Un identifiant
+    // suivi d'un `:` introduit une étiquette. On consomme `ident :`, puis on
+    // parse récursivement le statement étiqueté (un seul). Détecté AVANT le
+    // dispatch par mot-clé : n'importe quel identifiant peut être une étiquette.
+    if ts.peek2().kind == TokenKind::Colon {
+        let name = head; // déjà en minuscules ; conservé tel quel (résolu en MAJ)
+        ts.next(); // ident d'étiquette
+        ts.next(); // `:`
+        // Étiquette suivie d'un `;` : statement étiqueté VIDE (no-op), licite en
+        // SAS (`fin: ;`). Le corps est un bloc vide.
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next(); // `;`
+            return Ok(DsStmt::Labeled {
+                name,
+                stmt: Box::new(DsStmt::Block(Vec::new())),
+            });
+        }
+        let stmt = parse_statement(ts)?;
+        return Ok(DsStmt::Labeled {
+            name,
+            stmt: Box::new(stmt),
+        });
+    }
+
     match head.as_str() {
         "set" => parse_set(ts),
         "merge" => parse_merge(ts),
@@ -233,6 +257,14 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
             ts.next();
             ts.expect_semi()?;
             Ok(DsStmt::Stop)
+        }
+        // GOTO (M16.6) : `goto label;` ou `go to label;` (deux tokens).
+        "goto" | "go" => parse_goto(ts, &head),
+        "link" => parse_link(ts),
+        "return" => {
+            ts.next();
+            ts.expect_semi()?;
+            Ok(DsStmt::Return)
         }
         "keep" => {
             ts.next();
@@ -335,6 +367,61 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
             }
         }
     }
+}
+
+/// `goto label;` / `go to label;` (M16.6). Le mot-clé de tête (`goto` ou `go`)
+/// a déjà été identifié ; pour `go`, on consomme le `to` qui suit. La cible est
+/// un identifiant unique (résolu en MAJUSCULES à la compilation).
+fn parse_goto(ts: &mut StatementStream, head: &str) -> Result<DsStmt> {
+    let kw_tok = ts.peek().clone();
+    ts.next(); // `goto` ou `go`
+    if head == "go" {
+        // Forme `go to label;` : le token suivant DOIT être `to`.
+        match ts.peek().ident() {
+            Some(w) if w.eq_ignore_ascii_case("to") => {
+                ts.next();
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected TO after GO (use `go to label;` or `goto label;`)",
+                    ts.peek().span,
+                ));
+            }
+        }
+    }
+    let label_tok = ts.peek().clone();
+    let label = match label_tok.ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a statement label after GOTO",
+                kw_tok.span,
+            ));
+        }
+    };
+    ts.next(); // label
+    ts.expect_semi()?;
+    Ok(DsStmt::Goto(label))
+}
+
+/// `link label;` (M16.6). La cible est un identifiant unique (résolu en
+/// MAJUSCULES à la compilation).
+fn parse_link(ts: &mut StatementStream) -> Result<DsStmt> {
+    let kw_tok = ts.peek().clone();
+    ts.next(); // `link`
+    let label_tok = ts.peek().clone();
+    let label = match label_tok.ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a statement label after LINK",
+                kw_tok.span,
+            ));
+        }
+    };
+    ts.next(); // label
+    ts.expect_semi()?;
+    Ok(DsStmt::Link(label))
 }
 
 /// `set spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
@@ -2717,13 +2804,14 @@ mod tests {
 
     #[test]
     fn unimplemented_statement_errors_but_resyncs() {
-        // `link` n'est pas implémenté (prévu M16.6). L'étape doit échouer MAIS
-        // le stream doit être positionné après le `run;` pour le bloc suivant.
-        let file = SourceFile::new("data o; link target; set i; run; data b; run;");
+        // `proklamation` n'est pas un statement connu (ni assignation, ni sum) :
+        // l'étape doit échouer MAIS le stream doit être positionné après le
+        // `run;` pour le bloc suivant (test de resynchronisation du parser).
+        let file =
+            SourceFile::new("data o; proklamation target; set i; run; data b; run;");
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         let err = parse_data_step(&mut ts).unwrap_err();
-        assert!(err.to_string().to_uppercase().contains("LINK"));
         assert!(err.to_string().contains("not yet implemented"));
         // Resynchronisation : on est sur le `data` de la deuxième étape.
         assert!(ts.peek().is_kw("data"));
