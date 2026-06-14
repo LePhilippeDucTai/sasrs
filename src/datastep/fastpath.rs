@@ -56,6 +56,12 @@ pub fn eligible(prog: &StepProgram) -> bool {
         || input.merge
         || !input.in_flags.is_empty()
         || input.datasets[0].where_.is_some()
+        // Options de niveau statement (M16.4) : END= modifie le PDV par
+        // itération, NOBS= ajoute une affectation pré-boucle, POINT= remplace
+        // la boucle implicite — toutes hors du périmètre vectorisé.
+        || input.end_var.is_some()
+        || input.nobs_slot.is_some()
+        || input.point_slot.is_some()
     {
         return false;
     }
@@ -78,7 +84,7 @@ fn stmt_ok(stmt: &DsStmt, pdv: &Pdv) -> bool {
     match stmt {
         // L'entrée (déjà matérialisée) et les déclaratifs purs : aucun effet à
         // l'exécution dans le chemin ligne-à-ligne — sans risque d'ignorer ici.
-        DsStmt::Set(_)
+        DsStmt::Set { .. }
         | DsStmt::Keep(_)
         | DsStmt::Drop(_)
         | DsStmt::Format(_)

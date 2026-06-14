@@ -130,6 +130,17 @@ pub struct InputData {
     /// Variables IN= du MERGE : `(nom UPPERCASE, index dataset)`. Servies
     /// par `EvalCtx::in_flags` (jamais de slot PDV, comme FIRST./LAST.).
     pub in_flags: Vec<(String, usize)>,
+    /// END= (M16.4) : nom UPPERCASE de la variable automatique temporaire
+    /// (0 pendant l'itération, 1 après lecture de la DERNIÈRE obs du DERNIER
+    /// dataset). Servie par `EvalCtx::end_flag`, jamais écrite en sortie.
+    pub end_var: Option<String>,
+    /// NOBS= (M16.4) : slot PDV de la variable numérique affectée AVANT la
+    /// boucle au nombre TOTAL d'observations (somme des datasets du SET).
+    pub nobs_slot: Option<usize>,
+    /// POINT= (M16.4) : slot PDV de la variable d'index 1-based. Sa présence
+    /// DÉSACTIVE la boucle implicite et l'output implicite : chaque SET lit
+    /// l'obs à l'index courant (erreur si missing/invalide/hors bornes).
+    pub point_slot: Option<usize>,
 }
 
 /// Item INPUT compilé (M14) : un item AST dont les noms de variable sont
@@ -281,6 +292,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         session,
         input_datasets: Vec::new(),
         seen_set: false,
+        set_options: crate::ast::SetOptions::default(),
         seen_merge: false,
         in_flags: Vec::new(),
         by: None,
@@ -436,6 +448,9 @@ struct Compiler<'a> {
     input_datasets: Vec<InputDataset>,
     /// Un statement SET a déjà été rencontré (un second → erreur).
     seen_set: bool,
+    /// Options de niveau statement du SET (M16.4 : end=/nobs=/point=),
+    /// résolues en `build_input` (slots PDV / variable automatique).
+    set_options: crate::ast::SetOptions,
     /// Un statement MERGE a déjà été rencontré (M3). Un second SET/MERGE
     /// dans la même étape → erreur "... is not allowed after ...".
     seen_merge: bool,
@@ -491,7 +506,7 @@ struct Compiler<'a> {
 impl Compiler<'_> {
     fn walk_stmt(&mut self, stmt: &DsStmt) -> Result<()> {
         match stmt {
-            DsStmt::Set(specs) => {
+            DsStmt::Set { specs, options } => {
                 if self.seen_set {
                     return Err(SasError::runtime(
                         "Multiple SET statements are not yet implemented.",
@@ -512,6 +527,31 @@ impl Compiler<'_> {
                     }
                     self.compile_set(spec)?;
                 }
+                // Options de niveau statement (M16.4). NOBS= crée (ou réutilise)
+                // une variable numérique au PDV maintenant (elle est affectée
+                // AVANT la boucle ⇒ doit exister) et la marque retenue (sa
+                // valeur ne doit pas être remise à missing à chaque itération) ;
+                // POINT= référence une variable numérique que l'utilisateur
+                // pilote (créée ici si absente, comme une variable assignée).
+                // END= ne crée JAMAIS de slot (variable automatique temporaire,
+                // servie par EvalCtx, jamais écrite en sortie).
+                if let Some(name) = &options.nobs {
+                    let slot = match self.pdv.slot(name) {
+                        Some(s) => s,
+                        None => self.add_var(name, VarType::Num, 8),
+                    };
+                    self.retained_slots.insert(slot);
+                    self.assigned.insert(name.to_uppercase());
+                }
+                if let Some(name) = &options.point {
+                    if self.pdv.slot(name).is_none() {
+                        self.add_var(name, VarType::Num, 8);
+                    }
+                    // La variable POINT= est pilotée par l'utilisateur : on la
+                    // considère "assignée" (pas de NOTE "uninitialized").
+                    self.assigned.insert(name.to_uppercase());
+                }
+                self.set_options = options.clone();
                 Ok(())
             }
             // MERGE (M3) : comme SET multi-datasets mais en match-merge par
@@ -959,6 +999,17 @@ impl Compiler<'_> {
                 // servie par EvalCtx — jamais de slot PDV (donc jamais
                 // écrite en sortie).
                 if self.in_flags.iter().any(|(n, _)| *n == upper) {
+                    return Ok(());
+                }
+                // Variable END= du SET (M16.4) : automatique temporaire 0/1,
+                // servie par EvalCtx — jamais de slot PDV (donc jamais écrite
+                // en sortie). On la reconnaît au nom déclaré sur le SET.
+                if self
+                    .set_options
+                    .end
+                    .as_ref()
+                    .is_some_and(|e| e.eq_ignore_ascii_case(name))
+                {
                     return Ok(());
                 }
                 if self.arrays.contains_key(&upper) {
@@ -1427,11 +1478,47 @@ impl Compiler<'_> {
             ));
         }
         let in_flags = std::mem::take(&mut self.in_flags);
+
+        // Options de niveau statement du SET (M16.4).
+        let opts = std::mem::take(&mut self.set_options);
+        let end_var = opts.end.as_ref().map(|n| n.to_uppercase());
+        let nobs_slot = match &opts.nobs {
+            Some(n) => Some(self.pdv.slot(n).ok_or_else(|| {
+                SasError::runtime(format!("NOBS= variable {n} is not addressable."))
+            })?),
+            None => None,
+        };
+        let point_slot = match &opts.point {
+            Some(n) => Some(self.pdv.slot(n).ok_or_else(|| {
+                SasError::runtime(format!("POINT= variable {n} is not addressable."))
+            })?),
+            None => None,
+        };
+        // POINT= remplace la boucle implicite : il est incompatible avec un
+        // interclassement BY (l'accès direct n'a pas de sémantique BY) et avec
+        // un MERGE. Les datasets multiples en concaténation sont tolérés (index
+        // global 1..total), mais SAS le déconseille (documenté).
+        if point_slot.is_some() {
+            if !by.is_empty() {
+                return Err(SasError::runtime(
+                    "POINT= cannot be used with a BY statement.",
+                ));
+            }
+            if self.seen_merge {
+                return Err(SasError::runtime(
+                    "POINT= cannot be used with a MERGE statement.",
+                ));
+            }
+        }
+
         Ok(Some(InputData {
             datasets,
             by,
             merge: self.seen_merge,
             in_flags,
+            end_var,
+            nobs_slot,
+            point_slot,
         }))
     }
 

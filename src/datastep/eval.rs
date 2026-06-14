@@ -89,6 +89,10 @@ pub struct EvalCtx {
     /// l'élément courant. Une référence NUE au nom de l'array (lecture ou
     /// écriture) y est redirigée. Empilé/dépilé par le Runner à chaque tour.
     pub do_over: HashMap<String, usize>,
+    /// Variable END= du SET (M16.4) : `(nom UPPERCASE, valeur 0/1)`. Mise à
+    /// jour par le Runner après chaque lecture (1 = dernière obs lue). Servie
+    /// comme variable automatique (jamais de slot PDV).
+    pub end_flag: Option<(String, f64)>,
 }
 
 impl Default for EvalCtx {
@@ -111,6 +115,7 @@ impl Default for EvalCtx {
             rng_state: 0x0000_0007_A120_1960_u64,
             rng_spare: None,
             do_over: HashMap::new(),
+            end_flag: None,
         }
     }
 }
@@ -264,6 +269,10 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     // Variable IN= d'un MERGE : automatique 0/1 servie depuis le contexte.
     if let Some((_, flag)) = ctx.in_flags.iter().find(|(n, _)| *n == upper) {
         return Value::Num(if *flag { 1.0 } else { 0.0 });
+    }
+    // Variable END= du SET (M16.4) : automatique 0/1 servie depuis le contexte.
+    if let Some((_, v)) = ctx.end_flag.as_ref().filter(|(n, _)| *n == upper) {
+        return Value::Num(*v);
     }
     // `DO OVER arr` actif : une référence nue à `arr` désigne l'élément
     // courant (M16.3).

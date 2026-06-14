@@ -51,6 +51,26 @@ pub struct DatasetSpec {
     pub options: DatasetOptions,
 }
 
+/// Options de NIVEAU STATEMENT du `SET` (M16.4), placées APRÈS la liste des
+/// datasets : `set a b end=eof nobs=n point=p;`. À distinguer des options de
+/// DATASET (`DatasetOptions`, entre parenthèses après chaque référence).
+///
+/// - `end` : nom d'une variable temporaire automatique (jamais écrite en
+///   sortie, comme FIRST./LAST.) mise à 0 pendant l'itération et à 1 lorsque
+///   la DERNIÈRE observation du DERNIER dataset a été lue.
+/// - `nobs` : nom d'une variable numérique affectée AVANT la boucle au nombre
+///   total d'observations (somme sur tous les datasets du SET).
+/// - `point` : nom d'une variable numérique d'INDEX (1-based). Sa présence
+///   DÉSACTIVE la boucle implicite et l'output implicite : à chaque exécution
+///   du SET, l'observation à l'index courant est lue. Index missing/invalide/
+///   hors bornes → erreur runtime.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SetOptions {
+    pub end: Option<String>,
+    pub nobs: Option<String>,
+    pub point: Option<String>,
+}
+
 impl DatasetSpec {
     /// Spec sans options (helper pour les constructions simples / tests).
     pub fn plain(dref: DatasetRef) -> Self {
@@ -309,8 +329,12 @@ pub enum DsStmt {
     /// `set lib.a [lib.b ...];` — un ou plusieurs datasets, chacun avec
     /// ses options `(keep=... drop=... rename=(...) where=(...))`. Sans
     /// BY, plusieurs datasets = CONCATÉNATION (a en entier puis b) ; avec
-    /// BY = INTERCLASSEMENT (M3).
-    Set(Vec<DatasetSpec>),
+    /// BY = INTERCLASSEMENT (M3). Les options de niveau statement (M16.4 :
+    /// `end=`/`nobs=`/`point=`) sont portées par `options`.
+    Set {
+        specs: Vec<DatasetSpec>,
+        options: SetOptions,
+    },
     /// `by [descending] v1 [descending] v2 ...;` — clés d'interclassement
     /// du SET (M3). Chaque paire = (nom, descending). Le statement est
     /// purement déclaratif : la sémantique (tri, FIRST./LAST.) est résolue

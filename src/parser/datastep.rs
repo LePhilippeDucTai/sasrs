@@ -348,11 +348,61 @@ fn parse_set(ts: &mut StatementStream) -> Result<DsStmt> {
         ));
     }
     let mut specs = Vec::new();
-    while ts.peek().ident().is_some() {
+    // Liste des datasets : un identifiant SUIVI de `=` est une option de
+    // niveau statement (`end=`/`nobs=`/`point=`), pas un dataset → on arrête
+    // la liste et on bascule sur le parsing des options.
+    while ts.peek().ident().is_some() && ts.peek2().kind != TokenKind::Eq {
         specs.push(ts.parse_dataset_spec()?);
     }
+    let options = parse_set_options(ts)?;
     ts.expect_semi()?;
-    Ok(DsStmt::Set(specs))
+    Ok(DsStmt::Set { specs, options })
+}
+
+/// Options de niveau statement du SET (M16.4) : `end=v`, `nobs=v`, `point=v`,
+/// dans n'importe quel ordre, chacune au plus une fois. Toute autre clé →
+/// erreur de parsing.
+fn parse_set_options(ts: &mut StatementStream) -> Result<crate::ast::SetOptions> {
+    let mut options = crate::ast::SetOptions::default();
+    while let Some(kw) = ts.peek().ident() {
+        if ts.peek2().kind != TokenKind::Eq {
+            break;
+        }
+        let kw = kw.to_ascii_lowercase();
+        let kw_tok = ts.peek().clone();
+        ts.next(); // keyword
+        ts.next(); // `=`
+        let var_tok = ts.peek().clone();
+        let var = match var_tok.ident() {
+            Some(v) => v.to_string(),
+            None => {
+                return Err(SasError::parse(
+                    "expected a variable name after SET option",
+                    var_tok.span,
+                ));
+            }
+        };
+        ts.next(); // variable name
+        let slot = match kw.as_str() {
+            "end" => &mut options.end,
+            "nobs" => &mut options.nobs,
+            "point" => &mut options.point,
+            other => {
+                return Err(SasError::parse(
+                    format!("unknown SET option {other}="),
+                    kw_tok.span,
+                ));
+            }
+        };
+        if slot.is_some() {
+            return Err(SasError::parse(
+                format!("SET option {kw}= specified more than once"),
+                kw_tok.span,
+            ));
+        }
+        *slot = Some(var);
+    }
+    Ok(options)
 }
 
 /// `merge spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
@@ -2266,6 +2316,14 @@ mod tests {
         DatasetSpec::plain(dsref(name))
     }
 
+    /// `DsStmt::Set` sans options de niveau statement (M16.4).
+    fn set_stmt(specs: Vec<DatasetSpec>) -> DsStmt {
+        DsStmt::Set {
+            specs,
+            options: crate::ast::SetOptions::default(),
+        }
+    }
+
     fn var(s: &str) -> Expr {
         Expr::Var(s.to_string())
     }
@@ -2277,7 +2335,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(vec![dspec("inp")]),
+                set_stmt(vec![dspec("inp")]),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -2407,7 +2465,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(vec![dspec("i")]),
+                set_stmt(vec![dspec("i")]),
                 DsStmt::Output(vec![]),
                 DsStmt::Keep(vec!["a".to_string(), "b".to_string()]),
                 DsStmt::Drop(vec!["c".to_string()]),
@@ -2421,7 +2479,7 @@ mod tests {
         let ast = parse("data o; set a lib.b; run;").unwrap();
         assert_eq!(
             ast.stmts,
-            vec![DsStmt::Set(vec![
+            vec![set_stmt(vec![
                 dspec("a"),
                 DatasetSpec::plain(DatasetRef {
                     libref: Some("lib".to_string()),
@@ -2703,13 +2761,13 @@ mod tests {
         assert!(ts.next().is_kw("data"));
         let ast1 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast1.outputs, vec![dspec("a")]);
-        assert_eq!(ast1.stmts, vec![DsStmt::Set(vec![dspec("x")])]);
+        assert_eq!(ast1.stmts, vec![set_stmt(vec![dspec("x")])]);
         // Frontière implicite : `data` non consommé.
         assert!(ts.peek().is_kw("data"));
         ts.next();
         let ast2 = parse_data_step(&mut ts).unwrap();
         assert_eq!(ast2.outputs, vec![dspec("b")]);
-        assert_eq!(ast2.stmts, vec![DsStmt::Set(vec![dspec("y")])]);
+        assert_eq!(ast2.stmts, vec![set_stmt(vec![dspec("y")])]);
     }
 
     // ── DO itératif / conditionnel (M2) ──────────────────────────────────
@@ -3117,7 +3175,7 @@ mod tests {
         assert_eq!(
             ast.stmts,
             vec![
-                DsStmt::Set(vec![dspec("i")]),
+                set_stmt(vec![dspec("i")]),
                 DsStmt::Assign {
                     var: "x".to_string(),
                     expr: Expr::Num(1.0),
@@ -3176,7 +3234,7 @@ mod tests {
             "data o; set inp(keep=name age where=(age > 13) rename=(age=years)); run;",
         )
         .unwrap();
-        let DsStmt::Set(specs) = &ast.stmts[0] else {
+        let DsStmt::Set { specs, .. } = &ast.stmts[0] else {
             panic!("expected a SET statement");
         };
         let spec = &specs[0];
@@ -3203,7 +3261,7 @@ mod tests {
         );
         // Plage numérotée, forme nue.
         let ast = parse("data o; set i(drop=v1-v3 keep=w); run;").unwrap();
-        let DsStmt::Set(specs) = &ast.stmts[0] else {
+        let DsStmt::Set { specs, .. } = &ast.stmts[0] else {
             panic!("expected a SET statement");
         };
         let spec = &specs[0];
@@ -3272,12 +3330,66 @@ mod tests {
     #[test]
     fn set_options_then_second_dataset_parses() {
         let ast = parse("data o; set a(keep=x) b; run;").unwrap();
-        let DsStmt::Set(specs) = &ast.stmts[0] else {
+        let DsStmt::Set { specs, .. } = &ast.stmts[0] else {
             panic!("expected a SET statement");
         };
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].options.keep, Some(vec!["x".to_string()]));
         assert_eq!(specs[1], dspec("b"));
+    }
+
+    // ── SET options END= / NOBS= / POINT= (M16.4) ─────────────────────────
+
+    #[test]
+    fn set_end_nobs_point_options_parse() {
+        let ast = parse("data o; set a b end=eof nobs=n point=p; run;").unwrap();
+        let DsStmt::Set { specs, options } = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0], dspec("a"));
+        assert_eq!(specs[1], dspec("b"));
+        assert_eq!(options.end.as_deref(), Some("eof"));
+        assert_eq!(options.nobs.as_deref(), Some("n"));
+        assert_eq!(options.point.as_deref(), Some("p"));
+    }
+
+    #[test]
+    fn set_options_order_independent() {
+        let ast = parse("data o; set a point=p end=eof; run;").unwrap();
+        let DsStmt::Set { options, .. } = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(options.point.as_deref(), Some("p"));
+        assert_eq!(options.end.as_deref(), Some("eof"));
+        assert!(options.nobs.is_none());
+    }
+
+    #[test]
+    fn set_without_options_has_default() {
+        let ast = parse("data o; set a; run;").unwrap();
+        let DsStmt::Set { options, .. } = &ast.stmts[0] else {
+            panic!("expected a SET statement");
+        };
+        assert_eq!(*options, crate::ast::SetOptions::default());
+    }
+
+    #[test]
+    fn set_unknown_option_errors() {
+        let err = parse("data o; set a bogus=z; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("unknown SET option"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn set_duplicate_option_errors() {
+        let err = parse("data o; set a end=e1 end=e2; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("more than once"),
+            "got: {err}"
+        );
     }
 
     // ── FORMAT / LABEL / ATTRIB (M4) ──────────────────────────────────────
