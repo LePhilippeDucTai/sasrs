@@ -205,6 +205,8 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
     match head.as_str() {
         "set" => parse_set(ts),
         "merge" => parse_merge(ts),
+        "update" => parse_update(ts),
+        "modify" => parse_modify(ts),
         "by" => parse_by(ts),
         "if" => parse_if(ts),
         "do" => parse_do(ts),
@@ -424,6 +426,158 @@ fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::Merge(specs))
+}
+
+/// `update master[(where=(...))] transaction key=k1 k2;` (M16.5) — fusion
+/// maître/transaction. Le maître et la transaction sont deux références de
+/// dataset ; seul le maître accepte des options de dataset (en pratique
+/// `(where=(...))`, dont on extrait l'expression). `key=` est OBLIGATOIRE et
+/// porte une liste (≥1) de noms de variables clé séparés par des espaces.
+fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
+    let upd_tok = ts.peek().clone();
+    ts.next(); // `update`
+    if ts.peek().kind == TokenKind::Semi {
+        return Err(SasError::parse(
+            "Statement UPDATE without a dataset is not yet implemented.",
+            upd_tok.span,
+        ));
+    }
+    // Le maître peut porter des options de dataset (where=). On ne retient
+    // que `where=` (keep/drop/rename/in= sur UPDATE non supportés → erreur).
+    let master_spec = ts.parse_dataset_spec()?;
+    let opts = &master_spec.options;
+    if opts.keep.is_some()
+        || opts.drop.is_some()
+        || !opts.rename.is_empty()
+        || opts.in_.is_some()
+    {
+        return Err(SasError::parse(
+            "Only the WHERE= data set option is supported on the UPDATE master data set.",
+            upd_tok.span,
+        ));
+    }
+    let master_where = master_spec.options.where_.clone();
+    let master = master_spec.dref;
+    // La transaction : une simple référence (pas d'options).
+    let transaction = ts.parse_dataset_ref()?;
+    // `key=` obligatoire.
+    let key_vars = parse_key_option(ts)?;
+    if key_vars.is_empty() {
+        return Err(SasError::parse(
+            "An UPDATE statement requires a KEY= option with at least one variable.",
+            upd_tok.span,
+        ));
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::Update {
+        master,
+        master_where,
+        transaction,
+        key_vars,
+    })
+}
+
+/// `modify dataset [key=k1 k2] [point=p] [nobs=n];` (M16.5) — modification en
+/// place. Le dataset est une référence simple ; `key=` (optionnel) porte la
+/// liste de clés ; `point=`/`nobs=` (optionnels) nomment des variables comme
+/// pour SET. Les options apparaissent dans n'importe quel ordre.
+fn parse_modify(ts: &mut StatementStream) -> Result<DsStmt> {
+    let mod_tok = ts.peek().clone();
+    ts.next(); // `modify`
+    if ts.peek().kind == TokenKind::Semi {
+        return Err(SasError::parse(
+            "Statement MODIFY without a dataset is not yet implemented.",
+            mod_tok.span,
+        ));
+    }
+    let dataset = ts.parse_dataset_ref()?;
+    let mut key_vars: Vec<String> = Vec::new();
+    let mut point: Option<String> = None;
+    let mut nobs: Option<String> = None;
+    // Options `key=`/`point=`/`nobs=` (chacune au plus une fois).
+    while let Some(kw) = ts.peek().ident() {
+        if ts.peek2().kind != TokenKind::Eq {
+            break;
+        }
+        let kw = kw.to_ascii_lowercase();
+        let kw_tok = ts.peek().clone();
+        match kw.as_str() {
+            "key" => {
+                if !key_vars.is_empty() {
+                    return Err(SasError::parse(
+                        "MODIFY option KEY= specified more than once",
+                        kw_tok.span,
+                    ));
+                }
+                key_vars = parse_key_option(ts)?;
+            }
+            "point" | "nobs" => {
+                ts.next(); // keyword
+                ts.next(); // `=`
+                let var_tok = ts.peek().clone();
+                let Some(v) = var_tok.ident().map(str::to_string) else {
+                    return Err(SasError::parse(
+                        "expected a variable name after MODIFY option",
+                        var_tok.span,
+                    ));
+                };
+                ts.next();
+                let slot = if kw == "point" { &mut point } else { &mut nobs };
+                if slot.is_some() {
+                    return Err(SasError::parse(
+                        format!("MODIFY option {kw}= specified more than once"),
+                        kw_tok.span,
+                    ));
+                }
+                *slot = Some(v);
+            }
+            other => {
+                return Err(SasError::parse(
+                    format!("unknown MODIFY option {other}="),
+                    kw_tok.span,
+                ));
+            }
+        }
+    }
+    ts.expect_semi()?;
+    Ok(DsStmt::Modify {
+        dataset,
+        key_vars,
+        point,
+        nobs,
+    })
+}
+
+/// Parse l'option `key=v1 v2 ...` (M16.5) : consomme `key`, `=`, puis une
+/// liste de noms de variables (au moins zéro ; l'appelant impose le minimum).
+/// La liste s'arrête au prochain Ident SUIVI de `=` (option suivante) ou au
+/// `;`. À l'entrée, `ts.peek()` doit être `key` ; sinon liste vide.
+fn parse_key_option(ts: &mut StatementStream) -> Result<Vec<String>> {
+    if !ts.peek().is_kw("key") {
+        return Ok(Vec::new());
+    }
+    ts.next(); // `key`
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            "expected '=' after KEY",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `=`
+    let mut vars = Vec::new();
+    while let Some(name) = ts.peek().ident() {
+        // Un Ident suivi de `=` est l'option suivante (point=/nobs=), pas une
+        // variable clé.
+        if ts.peek2().kind == TokenKind::Eq {
+            break;
+        }
+        let name = name.to_string();
+        let span = ts.peek().span;
+        validate_sas_name(&name, span)?;
+        vars.push(name);
+        ts.next();
+    }
+    Ok(vars)
 }
 
 /// `call <name>(arg [, arg]*);` (M11.5) — appel d'une CALL routine. On
@@ -2563,14 +2717,13 @@ mod tests {
 
     #[test]
     fn unimplemented_statement_errors_but_resyncs() {
-        // `update` n'est pas implémenté (M3 ajoute MERGE, pas UPDATE).
-        // L'étape doit échouer MAIS le stream doit être positionné après le
-        // `run;` pour le bloc suivant.
-        let file = SourceFile::new("data o; update x y; set i; run; data b; run;");
+        // `link` n'est pas implémenté (prévu M16.6). L'étape doit échouer MAIS
+        // le stream doit être positionné après le `run;` pour le bloc suivant.
+        let file = SourceFile::new("data o; link target; set i; run; data b; run;");
         let mut ts = StatementStream::new(&file).unwrap();
         assert!(ts.next().is_kw("data"));
         let err = parse_data_step(&mut ts).unwrap_err();
-        assert!(err.to_string().to_uppercase().contains("UPDATE"));
+        assert!(err.to_string().to_uppercase().contains("LINK"));
         assert!(err.to_string().contains("not yet implemented"));
         // Resynchronisation : on est sur le `data` de la deuxième étape.
         assert!(ts.peek().is_kw("data"));

@@ -253,6 +253,31 @@ struct Runner {
     /// `session.call_execute_queue` (l'exécuteur le rejoue ensuite). Chaque
     /// appel concatène son argument résolu dans l'ordre d'exécution.
     call_execute_queue: Vec<String>,
+    /// MODIFY+POINT= (M16.5) : état partagé pour l'accès direct piloté par le
+    /// corps. `None` hors de ce cas (boucle séquentielle MODIFY ou UPDATE).
+    modify_state: Option<ModifyState>,
+}
+
+/// État partagé d'un MODIFY+POINT= (M16.5). Le bras `DsStmt::Modify` de
+/// `exec_stmt` y charge l'obs à l'index POINT= courant (et capture la
+/// précédente). `cols` est le tampon de réécriture (parallèle à `var_slots`).
+struct ModifyState {
+    /// Slot PDV de la variable d'index POINT=.
+    point_slot: usize,
+    /// Tampon de réécriture : colonnes décodées, modifiées au fil des captures.
+    cols: Vec<Vec<Value>>,
+    /// Slots PDV de chaque colonne (parallèle à `cols`).
+    var_slots: Vec<usize>,
+    /// Ligne actuellement chargée (à capturer au prochain marqueur / en fin).
+    cur_row: Option<usize>,
+    /// "WORK.A" pour les messages d'erreur POINT=.
+    display: String,
+    /// Nombre total d'observations (bornes de l'index POINT=).
+    n_rows: usize,
+    /// Erreur POINT= différée (index invalide), remontée par la boucle externe.
+    error: Option<String>,
+    /// Lignes touchées (chargées au moins une fois) — compteur de lecture.
+    touched: Vec<bool>,
 }
 
 /// Une observation de sortie d'un MERGE, pré-calculée par `build_merge_plan`.
@@ -285,10 +310,22 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         return super::fastpath::run(prog, session);
     }
 
+    // UPDATE/MODIFY (M16.5) ont leur propre boucle d'exécution (sémantique
+    // distincte du SET/MERGE) : on les détourne avant la boucle implicite
+    // générique.
+    if prog.update.is_some() {
+        return execute_update(prog, session);
+    }
+    if prog.modify.is_some() {
+        return execute_modify(prog, session);
+    }
+
     let StepProgram {
         pdv,
         stmts,
         input,
+        update: _,
+        modify: _,
         text_input,
         outputs,
         has_explicit_output,
@@ -385,6 +422,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         merge_cursor: 0,
         labels,
         call_execute_queue: Vec::new(),
+        modify_state: None,
     };
 
     // Interclassement / match-merge : pré-application des WHERE= par dataset
@@ -584,6 +622,522 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     Ok(stats)
 }
 
+/// Construit un Runner « squelette » pour les boucles UPDATE/MODIFY (M16.5),
+/// avec le PDV, les arrays, les builders de sortie et l'instantané macro déjà
+/// posés. Les champs spécifiques au SET/MERGE/texte sont vides.
+fn build_um_runner(
+    pdv: Pdv,
+    outputs: Vec<OutputSpec>,
+    arrays: HashMap<String, super::ArrayDef>,
+    labels: HashMap<String, String>,
+    by: &[ByVar],
+    macro_symbols: HashMap<String, String>,
+    format_catalog: crate::formats::FormatCatalog,
+) -> Runner {
+    let builders: Vec<Vec<ColBuilder>> = outputs
+        .iter()
+        .map(|o| {
+            o.kept_slots
+                .iter()
+                .map(|s| match pdv.vars()[*s].ty {
+                    VarType::Num => ColBuilder::Num(Vec::new()),
+                    VarType::Char => ColBuilder::Char(Vec::new()),
+                })
+                .collect()
+        })
+        .collect();
+    let n_outputs = outputs.len();
+    let by_flags = by.iter().map(|b| (b.name.clone(), true, true)).collect();
+    Runner {
+        pdv,
+        input: None,
+        text: None,
+        text_line: 0,
+        text_read: 0,
+        held: None,
+        format_catalog,
+        put: PutState::new(),
+        cur_ds: 0,
+        cursors: Vec::new(),
+        filtered: Vec::new(),
+        prev_keys: None,
+        rows_read: vec![0; 1],
+        ctx: EvalCtx {
+            arrays,
+            by_flags,
+            macro_symbols,
+            ..EvalCtx::default()
+        },
+        outputs,
+        builders,
+        out_rows: vec![0; n_outputs],
+        merge_plan: Vec::new(),
+        merge_cursor: 0,
+        labels,
+        call_execute_queue: Vec::new(),
+        modify_state: None,
+    }
+}
+
+/// Charge la ligne `row` du dataset matérialisé `ds` dans le PDV (tous ses
+/// slots). Downcast déjà fait à la compilation (colonnes décodées).
+fn load_row(pdv: &mut Pdv, ds: &InputDataset, row: usize) {
+    for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+        pdv.set(*slot, col[row].clone());
+    }
+}
+
+/// Clé d'appariement canonique d'une liste de `Value` (UPDATE/MODIFY KEY=).
+/// Encode la sémantique d'égalité SAS : `. == .`, char insensible aux blancs
+/// finaux. Sert de clé de `HashMap`.
+fn key_string(values: &[Value]) -> String {
+    let mut s = String::new();
+    for v in values {
+        match v {
+            Value::Num(n) => {
+                s.push('N');
+                s.push_str(&format!("{:?}", n));
+            }
+            Value::Missing(k) => {
+                s.push('M');
+                s.push_str(&k.display());
+            }
+            Value::Char(c) => {
+                s.push('C');
+                s.push_str(c.trim_end());
+            }
+        }
+        s.push('\u{1}');
+    }
+    s
+}
+
+/// Émet les NOTEs d'erreurs/conversions accumulées par l'évaluateur + draine
+/// CALL SYMPUT / CALL EXECUTE / PUT (partagé entre les boucles UPDATE/MODIFY).
+fn drain_runner_side_effects(r: &mut Runner, session: &mut Session) -> Result<()> {
+    for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
+        session.macro_engine.set_symbol_global(&name, value);
+    }
+    session
+        .call_execute_queue
+        .extend(std::mem::take(&mut r.call_execute_queue));
+    r.put_flush_at_step_end();
+    r.put_replay(session)?;
+    if r.ctx.note_num_to_char {
+        session
+            .log
+            .note("Numeric values have been converted to character values.");
+    }
+    if r.ctx.note_char_to_num {
+        session
+            .log
+            .note("Character values have been converted to numeric values.");
+    }
+    if r.ctx.division_by_zero > 0 {
+        session.log.note("Division by zero detected.");
+    }
+    if r.ctx.invalid_data > 0 {
+        session.log.note("Invalid numeric data.");
+    }
+    if r.ctx.missing_generated > 0 {
+        session.log.note(
+            "Missing values were generated as a result of performing an operation on missing values.",
+        );
+    }
+    Ok(())
+}
+
+/// Écrit les sorties DATA additionnelles (ordre du statement DATA) à partir des
+/// builders du Runner. Partagé par les boucles UPDATE/MODIFY.
+fn write_runner_outputs(r: &mut Runner, session: &mut Session, stats: &mut StepStats) -> Result<()> {
+    let outputs = std::mem::take(&mut r.outputs);
+    let builders = std::mem::take(&mut r.builders);
+    for ((spec, bset), n_out) in outputs.iter().zip(builders).zip(&r.out_rows) {
+        let mut columns: Vec<Column> = Vec::with_capacity(spec.kept_slots.len());
+        let mut vars: Vec<VarMeta> = Vec::with_capacity(spec.kept_slots.len());
+        for ((slot, b), out_name) in spec.kept_slots.iter().zip(bset).zip(&spec.out_names) {
+            let v = &r.pdv.vars()[*slot];
+            let series = match b {
+                ColBuilder::Num(vals) => Series::new(out_name.as_str().into(), vals),
+                ColBuilder::Char(vals) => Series::new(out_name.as_str().into(), vals),
+            };
+            columns.push(series.into());
+            let label = r.labels.get(&v.name.to_uppercase()).cloned();
+            vars.push(VarMeta {
+                name: out_name.clone(),
+                ty: v.ty,
+                length: v.length,
+                format: v.format.clone(),
+                label,
+            });
+        }
+        let df = DataFrame::new(columns)?;
+        let ds = SasDataset { df, vars };
+        session.libs.get(&spec.libref)?.write(&spec.table, &ds)?;
+        session.last_dataset = Some(spec.display.clone());
+        session.log.note(&format!(
+            "The data set {} has {} observations and {} variables.",
+            spec.display,
+            n_out,
+            spec.kept_slots.len()
+        ));
+        stats
+            .written
+            .push((spec.display.clone(), *n_out, spec.kept_slots.len()));
+    }
+    Ok(())
+}
+
+/// Exécute une étape DATA pilotée par un UPDATE (M16.5).
+///
+/// Le maître est lu séquentiellement (pilote l'itération). Pour chaque obs
+/// maître (qui passe le WHERE= du maître), on cherche la PREMIÈRE obs de la
+/// transaction de même clé ; si trouvée, on superpose ses variables NON
+/// MANQUANTES (hors clés) au PDV. Le corps de l'étape s'exécute puis l'obs est
+/// sortie (output implicite, sauf OUTPUT explicite). Les obs de transaction
+/// sans maître correspondant sont IGNORÉES en v1 (divergence documentée vs SAS,
+/// qui les insère). Plusieurs transactions pour une même clé : seule la
+/// PREMIÈRE est appliquée.
+fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
+    let StepProgram {
+        pdv,
+        stmts,
+        update,
+        outputs,
+        has_explicit_output,
+        uninitialized,
+        initial_values,
+        arrays,
+        labels,
+        ..
+    } = prog;
+    let upd = update.expect("execute_update requires UpdateData");
+
+    for name in &uninitialized {
+        session.log.note(&format!("Variable {name} is uninitialized."));
+    }
+
+    let trans = &upd.transaction;
+    let trans_key_pos: Vec<usize> = upd
+        .key_slots
+        .iter()
+        .map(|&slot| trans.var_slots.iter().position(|&s| s == slot).unwrap())
+        .collect();
+    let mut trans_index: HashMap<String, usize> = HashMap::new();
+    for row in 0..trans.n_rows {
+        let key_vals: Vec<Value> = trans_key_pos
+            .iter()
+            .map(|&pos| trans.columns[pos][row].clone())
+            .collect();
+        trans_index.entry(key_string(&key_vals)).or_insert(row);
+    }
+    let overlay_pos: Vec<(usize, usize)> = upd
+        .overlay_slots
+        .iter()
+        .map(|&slot| (slot, trans.var_slots.iter().position(|&s| s == slot).unwrap()))
+        .collect();
+
+    let macro_symbols = session.macro_engine.symbols_snapshot();
+    let format_catalog = session.format_catalog.clone();
+    let mut r = build_um_runner(
+        pdv,
+        outputs,
+        arrays,
+        labels,
+        &upd.by,
+        macro_symbols,
+        format_catalog,
+    );
+
+    for (slot, v) in initial_values {
+        r.pdv.set(slot, v);
+    }
+
+    let master = &upd.master;
+    let mut master_read = 0usize;
+    let suppress_implicit_output = has_explicit_output;
+
+    // Slots issus UNIQUEMENT de la transaction (absents du maître). Comme ils
+    // sont `from_input`, `reset_non_retained` ne les blanchit pas ; il faut les
+    // remettre à MISSING au début de CHAQUE obs maître pour qu'une obs sans
+    // transaction correspondante ne « traîne » pas la valeur d'une précédente.
+    let trans_only_slots: Vec<usize> = upd
+        .overlay_slots
+        .iter()
+        .copied()
+        .filter(|s| !master.var_slots.contains(s))
+        .collect();
+
+    // Séquence des obs maître RETENUES (après WHERE=). FIRST./LAST. sont
+    // calculés sur les transitions de clé BY DANS cette séquence.
+    let mut kept_rows: Vec<usize> = Vec::with_capacity(master.n_rows);
+    for m_row in 0..master.n_rows {
+        if let Some(w) = &upd.master_where {
+            // Charger seulement les variables maître pour évaluer le WHERE=.
+            load_row(&mut r.pdv, master, m_row);
+            let v = eval(w, &r.pdv, &mut r.ctx);
+            if let Some(msg) = r.ctx.fatal.take() {
+                let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
+                return Err(SasError::runtime(msg));
+            }
+            if !v.truthy() {
+                continue;
+            }
+        }
+        kept_rows.push(m_row);
+    }
+    // Clés BY de chaque obs retenue (vide si pas de BY).
+    let by_keys: Vec<Vec<Value>> = kept_rows
+        .iter()
+        .map(|&row| keys_at(master, row))
+        .collect();
+
+    for (seq, &m_row) in kept_rows.iter().enumerate() {
+        r.pdv.n_ += 1;
+        r.pdv.error_ = false;
+        r.pdv.reset_non_retained();
+        for &slot in &trans_only_slots {
+            let init = match r.pdv.vars()[slot].ty {
+                VarType::Num => Value::missing(),
+                VarType::Char => Value::Char(String::new()),
+            };
+            r.pdv.set(slot, init);
+        }
+        load_row(&mut r.pdv, master, m_row);
+        // FIRST./LAST. par variable BY (préfixe de clés vs voisins retenus).
+        if !upd.by.is_empty() {
+            let cur = &by_keys[seq];
+            for (i, flags) in r.ctx.by_flags.iter_mut().enumerate() {
+                let first = match seq.checked_sub(1) {
+                    None => true,
+                    Some(p) => prefix_changed(cur, &by_keys[p], i),
+                };
+                let last = match by_keys.get(seq + 1) {
+                    None => true,
+                    Some(next) => prefix_changed(cur, next, i),
+                };
+                flags.1 = first;
+                flags.2 = last;
+            }
+        }
+        master_read += 1;
+        let key_vals: Vec<Value> = upd
+            .key_slots
+            .iter()
+            .map(|&slot| r.pdv.get(slot).clone())
+            .collect();
+        if let Some(&t_row) = trans_index.get(&key_string(&key_vals)) {
+            for &(slot, pos) in &overlay_pos {
+                let tv = &trans.columns[pos][t_row];
+                if !tv.is_missing() {
+                    r.pdv.set(slot, tv.clone());
+                }
+            }
+        }
+        let mut flow = Flow::Normal;
+        for stmt in &stmts {
+            flow = r.exec_stmt(stmt)?;
+            if flow != Flow::Normal {
+                break;
+            }
+        }
+        if flow == Flow::EndStep {
+            break;
+        }
+        if flow != Flow::NextIter && !suppress_implicit_output {
+            r.push_outputs();
+        }
+    }
+
+    drain_runner_side_effects(&mut r, session)?;
+
+    let mut stats = StepStats {
+        read: Vec::new(),
+        written: Vec::new(),
+    };
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.",
+        master_read, master.display
+    ));
+    stats.read.push((master.display.clone(), master_read));
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.",
+        trans.n_rows, trans.display
+    ));
+    stats.read.push((trans.display.clone(), trans.n_rows));
+
+    write_runner_outputs(&mut r, session, &mut stats)?;
+    Ok(stats)
+}
+
+/// Exécute une étape DATA pilotée par un MODIFY (M16.5) : modification EN
+/// PLACE. Le dataset est lu (séquentiellement, ou via POINT= en accès direct),
+/// le corps modifie ses variables, et le dataset est RÉÉCRIT à l'identique
+/// (mêmes colonnes/ordre) avec les valeurs modifiées. Pas d'output implicite ;
+/// OUTPUT interdit (vérifié à la compilation).
+fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
+    let StepProgram {
+        pdv,
+        stmts,
+        modify,
+        outputs,
+        uninitialized,
+        initial_values,
+        arrays,
+        labels,
+        ..
+    } = prog;
+    let m = modify.expect("execute_modify requires ModifyData");
+
+    for name in &uninitialized {
+        session.log.note(&format!("Variable {name} is uninitialized."));
+    }
+
+    let macro_symbols = session.macro_engine.symbols_snapshot();
+    let format_catalog = session.format_catalog.clone();
+    let mut r = build_um_runner(pdv, outputs, arrays, labels, &[], macro_symbols, format_catalog);
+
+    for (slot, v) in initial_values {
+        r.pdv.set(slot, v);
+    }
+    let n_rows = m.data.n_rows;
+    if let Some(slot) = m.nobs_slot {
+        r.pdv.set(slot, Value::Num(n_rows as f64));
+    }
+
+    let mut buffer: Vec<Vec<Value>> = m.data.columns.clone();
+    let mut rows_processed = 0usize;
+
+    if let Some(point_slot) = m.point_slot {
+        // ACCÈS DIRECT par POINT= : boucle implicite supprimée. Le corps
+        // (typiquement `do i = 1 to nobs; p = i; modify ds; ...; end;`) pilote
+        // l'itération ; chaque marqueur MODIFY charge l'obs à l'index POINT=
+        // courant et capture la ligne PRÉCÉDEMMENT chargée (les assignations
+        // entre deux marqueurs modifient l'obs courante). La dernière ligne est
+        // capturée en fin d'étape. L'état partagé vit sur le Runner pour que le
+        // bras `DsStmt::Modify` standard l'utilise.
+        r.modify_state = Some(ModifyState {
+            point_slot,
+            cols: m.data.columns.clone(),
+            var_slots: m.data.var_slots.clone(),
+            cur_row: None,
+            display: m.display.clone(),
+            n_rows,
+            error: None,
+            touched: vec![false; n_rows],
+        });
+        r.pdv.n_ += 1;
+        r.pdv.error_ = false;
+        for stmt in &stmts {
+            let flow = r.exec_stmt(stmt)?;
+            if let Some(msg) = r.modify_state.as_mut().and_then(|st| st.error.take()) {
+                return Err(SasError::runtime(msg));
+            }
+            if flow != Flow::Normal {
+                break;
+            }
+        }
+        if let Some(mut state) = r.modify_state.take() {
+            capture_modify_state(&mut state, &r.pdv);
+            buffer[..m.data.var_slots.len()]
+                .clone_from_slice(&state.cols[..m.data.var_slots.len()]);
+            rows_processed = state.touched.iter().filter(|t| **t).count();
+        }
+    } else {
+        // `row` indexe à la fois le chargement et la capture du tampon : la
+        // boucle range est intentionnelle.
+        #[allow(clippy::needless_range_loop)]
+        for row in 0..n_rows {
+            r.pdv.n_ += 1;
+            r.pdv.error_ = false;
+            r.pdv.reset_non_retained();
+            load_row(&mut r.pdv, &m.data, row);
+            rows_processed += 1;
+            let mut flow = Flow::Normal;
+            for stmt in &stmts {
+                flow = r.exec_stmt(stmt)?;
+                if flow != Flow::Normal {
+                    break;
+                }
+            }
+            for (pos, &slot) in m.data.var_slots.iter().enumerate() {
+                buffer[pos][row] = r.pdv.get(slot).clone();
+            }
+            if flow == Flow::EndStep {
+                break;
+            }
+        }
+    }
+
+    drain_runner_side_effects(&mut r, session)?;
+
+    let mut columns: Vec<Column> = Vec::with_capacity(m.out_vars.len());
+    for (pos, meta) in m.out_vars.iter().enumerate() {
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> = buffer[pos].iter().map(value_to_num).collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<String> = buffer[pos]
+                    .iter()
+                    .map(|v| match v {
+                        Value::Char(s) => s.clone(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+    }
+    let df = DataFrame::new(columns)?;
+    let ds = SasDataset {
+        df,
+        vars: m.out_vars.clone(),
+    };
+    session.libs.get(&m.libref)?.write(&m.table, &ds)?;
+    session.last_dataset = Some(m.display.clone());
+
+    let mut stats = StepStats {
+        read: Vec::new(),
+        written: Vec::new(),
+    };
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.",
+        rows_processed, m.display
+    ));
+    stats.read.push((m.display.clone(), rows_processed));
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        m.display,
+        n_rows,
+        m.out_vars.len()
+    ));
+    stats
+        .written
+        .push((m.display.clone(), n_rows, m.out_vars.len()));
+
+    // Les sorties DATA (le dataset nommé par `data X;`) coïncident avec la
+    // table MODIFY réécrite en place : on les IGNORE (pas d'output implicite, et
+    // l'écriture vide des builders écraserait la réécriture). OUTPUT explicite
+    // est déjà interdit à la compilation ; un OUT= vers un autre dataset n'est
+    // pas supporté en v1.
+    let _ = &r.outputs;
+    Ok(stats)
+}
+
+/// Capture les valeurs courantes du PDV dans le tampon `cols` à la ligne MODIFY
+/// chargée (`cur_row`), puis remet le marqueur à `None`. No-op si aucune ligne
+/// n'est chargée.
+fn capture_modify_state(state: &mut ModifyState, pdv: &Pdv) {
+    if let Some(row) = state.cur_row.take() {
+        for (pos, &slot) in state.var_slots.iter().enumerate() {
+            state.cols[pos][row] = pdv.get(slot).clone();
+        }
+    }
+}
+
 impl Runner {
     fn exec_stmt(&mut self, stmt: &DsStmt) -> Result<Flow> {
         match stmt {
@@ -601,6 +1155,20 @@ impl Runner {
                 }
             }
             DsStmt::Merge(_) => self.exec_merge(),
+            // UPDATE (M16.5) : marqueur. La ligne maître est chargée par la
+            // boucle externe (execute_update) AVANT le corps ; ici no-op.
+            DsStmt::Update { .. } => Ok(Flow::Normal),
+            // MODIFY (M16.5) : en lecture séquentielle, marqueur no-op (la
+            // boucle externe charge/capture). En MODIFY+POINT= (modify_state
+            // présent), le marqueur capture la ligne précédente puis charge
+            // l'obs à l'index POINT= courant.
+            DsStmt::Modify { .. } => {
+                if self.modify_state.is_some() {
+                    self.exec_modify_point()
+                } else {
+                    Ok(Flow::Normal)
+                }
+            }
             DsStmt::Assign { var, expr } => {
                 let value = self.eval_checked(expr)?;
                 // `arr = e;` sous un `DO OVER arr` : la cible est l'élément
@@ -1841,6 +2409,44 @@ impl Runner {
             *v = if (idx as usize) == total { 1.0 } else { 0.0 };
         }
         self.input = Some(input);
+        Ok(Flow::Normal)
+    }
+
+    /// MODIFY+POINT= (M16.5) : au marqueur MODIFY, on CAPTURE la ligne
+    /// précédemment chargée (les assignations qui l'ont suivie sont ses
+    /// modifications), puis on CHARGE l'obs à l'index POINT= courant (1-based,
+    /// arrondi). Index missing / hors bornes → erreur différée (relevée par la
+    /// boucle externe). L'état partagé est `self.modify_state`.
+    fn exec_modify_point(&mut self) -> Result<Flow> {
+        // Capture de la ligne précédente.
+        let mut state = self.modify_state.take().expect("modify_state present");
+        capture_modify_state(&mut state, &self.pdv);
+        // Index POINT= courant.
+        let idx_val = self.pdv.get(state.point_slot).clone();
+        let idx = match coerce_num(&idx_val, &mut self.ctx) {
+            Some(f) => f.round() as i64,
+            None => {
+                state.error = Some(format!("Invalid POINT= value for the data set {}.", state.display));
+                self.modify_state = Some(state);
+                self.pdv.error_ = true;
+                return Ok(Flow::EndStep);
+            }
+        };
+        if idx < 1 || (idx as usize) > state.n_rows {
+            state.error = Some(format!("Invalid POINT= value for the data set {}.", state.display));
+            self.modify_state = Some(state);
+            self.pdv.error_ = true;
+            return Ok(Flow::EndStep);
+        }
+        let row = idx as usize - 1;
+        // Charger la ligne `row` depuis le tampon (qui peut déjà porter des
+        // modifications d'un tour précédent — fidèle à la réécriture en place).
+        for (pos, &slot) in state.var_slots.iter().enumerate() {
+            self.pdv.set(slot, state.cols[pos][row].clone());
+        }
+        state.touched[row] = true;
+        state.cur_row = Some(row);
+        self.modify_state = Some(state);
         Ok(Flow::Normal)
     }
 
@@ -5991,5 +6597,387 @@ mod tests {
         .unwrap();
         // n est connu partout ; last_total posé sur eof.
         assert_eq!(num_at(&s, "out", "last_total", 2), Some(3.0));
+    }
+
+    // ── M16.5 : UPDATE / MODIFY ──────────────────────────────────────────
+
+    /// Écrit un dataset avec une colonne char `key` et des colonnes num.
+    /// `keys` = valeurs de la clé char ; `cols` = (nom, valeurs num).
+    fn write_keyed_ds(
+        session: &Session,
+        table: &str,
+        key: &str,
+        keys: &[&str],
+        cols: &[(&str, Vec<Option<f64>>)],
+    ) {
+        let mut columns: Vec<Column> = Vec::new();
+        let mut vars: Vec<VarMeta> = Vec::new();
+        columns.push(Series::new(key.into(), keys.to_vec()).into());
+        vars.push(VarMeta {
+            name: key.to_string(),
+            ty: VarType::Char,
+            length: 8,
+            format: None,
+            label: None,
+        });
+        for (name, vals) in cols {
+            columns.push(Series::new((*name).into(), vals.clone()).into());
+            vars.push(VarMeta {
+                name: (*name).to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            });
+        }
+        let df = DataFrame::new(columns).unwrap();
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write(table, &SasDataset { df, vars })
+            .unwrap();
+    }
+
+    // ----- UPDATE -----
+
+    /// UPDATE de base : transaction superpose le maître par clé (match).
+    #[test]
+    fn update_basic_overlay() {
+        let mut s = session();
+        // maître : id=1,2,3 ; x=10,20,30
+        write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+        // transaction : id=2 ; x=99
+        write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
+        let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "mas", "id"), some(&[1.0, 2.0, 3.0]));
+        // id=2 mis à jour à 99 ; les autres inchangés.
+        assert_eq!(col(&s, "mas", "x"), some(&[10.0, 99.0, 30.0]));
+        assert_eq!(stats.written, vec![("WORK.MAS".to_string(), 3, 2)]);
+        // Deux NOTEs de lecture (maître + transaction).
+        assert_eq!(
+            stats.read,
+            vec![("WORK.MAS".to_string(), 3), ("WORK.TRA".to_string(), 1)]
+        );
+    }
+
+    /// UPDATE : une clé maître sans transaction correspondante reste inchangée.
+    #[test]
+    fn update_no_match_unchanged() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[9.0])), ("x", some(&[99.0]))]);
+        run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "mas", "x"), some(&[10.0, 20.0]));
+    }
+
+    /// UPDATE : une valeur transaction MANQUANTE ne superpose pas (no-update).
+    #[test]
+    fn update_missing_transaction_skips_overlay() {
+        let mut s = session();
+        write_num_ds(
+            &s,
+            "mas",
+            &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0])), ("y", some(&[1.0, 2.0]))],
+        );
+        // transaction id=1 : x=. (manquant → pas de MAJ), y=77 (MAJ).
+        write_num_ds(
+            &s,
+            "tra",
+            &[("id", some(&[1.0])), ("x", vec![None]), ("y", some(&[77.0]))],
+        );
+        run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        // x inchangé (transaction manquante) ; y mis à jour.
+        assert_eq!(col(&s, "mas", "x"), some(&[10.0, 20.0]));
+        assert_eq!(col(&s, "mas", "y"), some(&[77.0, 2.0]));
+    }
+
+    /// UPDATE : la variable clé n'est jamais écrasée par la transaction.
+    #[test]
+    fn update_key_not_overwritten() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[5.0])), ("x", some(&[1.0]))]);
+        // La transaction porte la même clé 5 ; x=42.
+        write_num_ds(&s, "tra", &[("id", some(&[5.0])), ("x", some(&[42.0]))]);
+        run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "mas", "id"), some(&[5.0]));
+        assert_eq!(col(&s, "mas", "x"), some(&[42.0]));
+    }
+
+    /// UPDATE : plusieurs transactions pour une clé → seule la PREMIÈRE compte.
+    #[test]
+    fn update_multiple_transactions_first_wins() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[1.0, 1.0])), ("x", some(&[20.0, 30.0]))]);
+        run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        // Première transaction (20) appliquée, la seconde (30) ignorée.
+        assert_eq!(col(&s, "mas", "x"), some(&[20.0]));
+    }
+
+    /// UPDATE : une transaction sans maître correspondant est IGNORÉE (v1).
+    #[test]
+    fn update_unmatched_transaction_ignored() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[1.0, 2.0])), ("x", some(&[11.0, 22.0]))]);
+        let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        // id=2 (sans maître) n'est PAS inséré : 1 obs en sortie.
+        assert_eq!(col(&s, "mas", "id"), some(&[1.0]));
+        assert_eq!(col(&s, "mas", "x"), some(&[11.0]));
+        assert_eq!(stats.written, vec![("WORK.MAS".to_string(), 1, 2)]);
+    }
+
+    /// UPDATE avec WHERE= sur le maître : les obs filtrées ne sont ni mises à
+    /// jour ni sorties.
+    #[test]
+    fn update_master_where() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
+        let stats = run(
+            "data out; update mas(where=(id>=2)) tra key=id; run;",
+            &mut s,
+        )
+        .unwrap();
+        // id=1 filtré ; id=2 mis à jour, id=3 inchangé.
+        assert_eq!(col(&s, "out", "id"), some(&[2.0, 3.0]));
+        assert_eq!(col(&s, "out", "x"), some(&[99.0, 30.0]));
+        // 2 obs maître lues (id=1 rejeté).
+        assert_eq!(stats.read[0], ("WORK.MAS".to_string(), 2));
+    }
+
+    /// UPDATE avec plusieurs variables clé.
+    #[test]
+    fn update_multiple_keys() {
+        let mut s = session();
+        write_num_ds(
+            &s,
+            "mas",
+            &[("k1", some(&[1.0, 1.0])), ("k2", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+        );
+        // Met à jour seulement (1,2).
+        write_num_ds(
+            &s,
+            "tra",
+            &[("k1", some(&[1.0])), ("k2", some(&[2.0])), ("x", some(&[99.0]))],
+        );
+        run("data mas; update mas tra key=k1 k2; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "mas", "x"), some(&[10.0, 99.0]));
+    }
+
+    /// UPDATE avec clé CARACTÈRE (insensible aux blancs finaux).
+    #[test]
+    fn update_char_key() {
+        let mut s = session();
+        write_keyed_ds(&s, "mas", "name", &["a", "b", "c"], &[("x", some(&[1.0, 2.0, 3.0]))]);
+        write_keyed_ds(&s, "tra", "name", &["b"], &[("x", some(&[20.0]))]);
+        run("data mas; update mas tra key=name; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "mas", "x"), some(&[1.0, 20.0, 3.0]));
+    }
+
+    /// UPDATE : la transaction apporte une NOUVELLE variable absente du maître.
+    #[test]
+    fn update_new_variable_from_transaction() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("z", some(&[5.0]))]);
+        run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+        // z existe (du maître absent → missing), posée pour id=1.
+        assert_eq!(col(&s, "mas", "z"), vec![Some(5.0), None]);
+    }
+
+    /// UPDATE : KEY= absente d'un dataset → erreur de compilation.
+    #[test]
+    fn update_key_not_on_transaction_errors() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
+        write_num_ds(&s, "tra", &[("other", some(&[1.0])), ("x", some(&[20.0]))]);
+        let e = run_err("data mas; update mas tra key=id; run;", &mut s);
+        assert!(e.contains("KEY variable id"), "got: {e}");
+    }
+
+    /// UPDATE : KEY= obligatoire (erreur de parsing si absente).
+    #[test]
+    fn update_requires_key_option() {
+        // Parsing seul : KEY= absente → erreur de parsing (pas d'exécution).
+        let file = SourceFile::new("data mas; update mas tra; run;");
+        let mut ts = StatementStream::new(&file).unwrap();
+        assert!(ts.next().is_kw("data"));
+        let err = crate::parser::datastep::parse_data_step(&mut ts).unwrap_err();
+        assert!(err.to_string().to_uppercase().contains("KEY"), "got: {err}");
+    }
+
+    /// UPDATE avec BY : FIRST./LAST. exposés sur les groupes BY du maître.
+    #[test]
+    fn update_with_by_first_last() {
+        let mut s = session();
+        // maître trié par g : g=1,1,2 ; x=10,20,30.
+        write_num_ds(
+            &s,
+            "mas",
+            &[("g", some(&[1.0, 1.0, 2.0])), ("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))],
+        );
+        write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
+        run(
+            "data out; update mas tra key=id; by g; \
+             f = first.g; l = last.g; run;",
+            &mut s,
+        )
+        .unwrap();
+        // id=2 mis à jour ; FIRST.g sur les 1res obs de chaque groupe g.
+        assert_eq!(col(&s, "out", "x"), some(&[10.0, 99.0, 30.0]));
+        assert_eq!(col(&s, "out", "f"), some(&[1.0, 0.0, 1.0]));
+        assert_eq!(col(&s, "out", "l"), some(&[0.0, 1.0, 1.0]));
+    }
+
+    /// UPDATE avec BY : la mise à jour reste pilotée par KEY= au sein des
+    /// groupes BY (chaque obs maître conserve son comportement).
+    #[test]
+    fn update_with_by_groups_update() {
+        let mut s = session();
+        write_num_ds(
+            &s,
+            "mas",
+            &[("g", some(&[1.0, 2.0])), ("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+        );
+        write_num_ds(&s, "tra", &[("id", some(&[1.0, 2.0])), ("x", some(&[100.0, 200.0]))]);
+        run("data out; update mas tra key=id; by g; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "out", "x"), some(&[100.0, 200.0]));
+    }
+
+    /// UPDATE : le corps peut calculer des variables dérivées.
+    #[test]
+    fn update_with_derived_body_statement() {
+        let mut s = session();
+        write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+        write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("x", some(&[100.0]))]);
+        run("data out; update mas tra key=id; d = x * 2; run;", &mut s).unwrap();
+        // x après MAJ : 100, 20 ; d = 200, 40.
+        assert_eq!(col(&s, "out", "x"), some(&[100.0, 20.0]));
+        assert_eq!(col(&s, "out", "d"), some(&[200.0, 40.0]));
+    }
+
+    // ----- MODIFY -----
+
+    /// MODIFY de base : une modification par assignation persiste en place.
+    #[test]
+    fn modify_basic_assign_persists() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+        let stats = run("data d; modify d; x = x + 1; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "d", "x"), some(&[11.0, 21.0, 31.0]));
+        // Réécriture en place : même nombre d'obs/variables.
+        assert_eq!(stats.written, vec![("WORK.D".to_string(), 3, 2)]);
+        assert_eq!(stats.read, vec![("WORK.D".to_string(), 3)]);
+        assert_eq!(s.last_dataset.as_deref(), Some("WORK.D"));
+    }
+
+    /// MODIFY : conditionnel (modifie seulement certaines obs).
+    #[test]
+    fn modify_conditional_update() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+        run("data d; modify d; if id = 2 then x = 999; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "d", "x"), some(&[10.0, 999.0, 30.0]));
+    }
+
+    /// MODIFY : OUTPUT explicite est INTERDIT (erreur de compilation).
+    #[test]
+    fn modify_output_not_allowed() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[1.0]))]);
+        let e = run_err("data d; modify d; output; run;", &mut s);
+        assert!(e.contains("OUTPUT statement is not allowed"), "got: {e}");
+    }
+
+    /// MODIFY avec KEY= (lecture séquentielle, clés présentes).
+    #[test]
+    fn modify_with_key() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+        run("data d; modify d key=id; x = x * 10; run;", &mut s).unwrap();
+        assert_eq!(col(&s, "d", "x"), some(&[100.0, 200.0]));
+    }
+
+    /// MODIFY + NOBS= : le total est disponible avant la boucle.
+    #[test]
+    fn modify_nobs_available() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[5.0, 6.0, 7.0]))]);
+        run("data d; modify d nobs=n; x = n; run;", &mut s).unwrap();
+        // Chaque obs reçoit le total = 3.
+        assert_eq!(col(&s, "d", "x"), some(&[3.0, 3.0, 3.0]));
+    }
+
+    /// MODIFY + POINT= : accès direct piloté par un DO, modifie toutes les obs.
+    #[test]
+    fn modify_point_loop_all() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[10.0, 20.0, 30.0]))]);
+        let stats = run(
+            "data d; do p = 1 to 3; modify d point=p; x = x + 100; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(col(&s, "d", "x"), some(&[110.0, 120.0, 130.0]));
+        // 3 obs traitées, 3 réécrites.
+        assert_eq!(stats.read, vec![("WORK.D".to_string(), 3)]);
+        assert_eq!(stats.written, vec![("WORK.D".to_string(), 3, 1)]);
+    }
+
+    /// MODIFY + POINT= : accès direct ciblé (une seule obs modifiée).
+    #[test]
+    fn modify_point_single_row() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[10.0, 20.0, 30.0]))]);
+        run(
+            "data d; do p = 2 to 2; modify d point=p; x = 999; end; run;",
+            &mut s,
+        )
+        .unwrap();
+        // Seule la 2e obs change.
+        assert_eq!(col(&s, "d", "x"), some(&[10.0, 999.0, 30.0]));
+    }
+
+    /// MODIFY : char + num, modification d'une colonne char persiste.
+    #[test]
+    fn modify_char_column() {
+        let mut s = session();
+        write_keyed_ds(&s, "d", "grp", &["a", "a", "b"], &[("x", some(&[1.0, 2.0, 3.0]))]);
+        run("data d; modify d; if x >= 2 then grp = 'z'; run;", &mut s).unwrap();
+        assert_eq!(
+            col_str(&s, "d", "grp"),
+            vec![Some("a".into()), Some("z".into()), Some("z".into())]
+        );
+    }
+
+    /// MODIFY : KEY= absente du dataset → erreur de compilation.
+    #[test]
+    fn modify_key_not_present_errors() {
+        let mut s = session();
+        write_num_ds(&s, "d", &[("x", some(&[1.0]))]);
+        let e = run_err("data d; modify d key=nope; run;", &mut s);
+        assert!(e.contains("KEY variable nope"), "got: {e}");
+    }
+
+    /// UPDATE/MODIFY exclusif : pas plus d'une source par étape.
+    #[test]
+    fn update_after_set_is_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+        write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
+        let e = run_err("data out; set a; update a b key=id; run;", &mut s);
+        assert!(e.contains("Only one SET, MERGE, UPDATE, or MODIFY"), "got: {e}");
+    }
+
+    /// MODIFY après MODIFY → erreur.
+    #[test]
+    fn modify_twice_is_error() {
+        let mut s = session();
+        write_num_ds(&s, "a", &[("x", some(&[1.0]))]);
+        write_num_ds(&s, "b", &[("x", some(&[1.0]))]);
+        let e = run_err("data a; modify a; modify b; run;", &mut s);
+        assert!(e.contains("Only one SET, MERGE, UPDATE, or MODIFY"), "got: {e}");
     }
 }

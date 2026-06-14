@@ -69,7 +69,7 @@ pub mod fastpath;
 pub mod functions;
 pub mod pdv;
 
-use crate::ast::{BinaryOp, DataStepAst, DatasetSpec, DoListItem, DsStmt, Expr};
+use crate::ast::{BinaryOp, DataStepAst, DatasetOptions, DatasetSpec, DoListItem, DsStmt, Expr};
 use crate::error::{Result, SasError};
 use crate::missing::num_to_value;
 use crate::session::Session;
@@ -259,10 +259,60 @@ impl ArrayDef {
     }
 }
 
+/// Données d'entrée compilées d'un statement UPDATE (M16.5). Le maître et la
+/// transaction sont matérialisés en colonnes décodées (comme `InputDataset`),
+/// avec le slot PDV de chaque colonne. Les variables clé (`key_slots`) servent
+/// l'appariement. `master_where` est filtré à l'exécution (sur le PDV chargé,
+/// comme SET WHERE=). `by` (optionnel) restreint la fusion aux groupes BY.
+pub struct UpdateData {
+    /// Le maître, lu séquentiellement (pilote l'itération).
+    pub master: InputDataset,
+    /// La transaction, indexée par clé (recherche par `key_slots`).
+    pub transaction: InputDataset,
+    /// Slots PDV des variables clé (ordre du KEY=). Ces slots ne sont jamais
+    /// écrasés par la transaction.
+    pub key_slots: Vec<usize>,
+    /// Slots PDV des variables de la transaction qui peuvent superposer le
+    /// maître (toutes SAUF les clés). Une valeur transaction MANQUANTE ne
+    /// superpose pas (sémantique « missing = no update »).
+    pub overlay_slots: Vec<usize>,
+    /// WHERE= du maître, évalué à l'exécution sur le PDV chargé.
+    pub master_where: Option<Expr>,
+    /// Clés BY (vide = pas de BY) — déclaratif, sert FIRST./LAST.
+    pub by: Vec<ByVar>,
+}
+
+/// Données d'entrée compilées d'un statement MODIFY (M16.5). Le dataset est
+/// matérialisé et RÉÉCRIT en place après l'étape. `key_slots` peut être vide
+/// (lecture séquentielle). `point_slot`/`nobs_slot` reprennent la sémantique
+/// d'accès direct du SET.
+pub struct ModifyData {
+    /// Le dataset à modifier (libref/table pour la réécriture).
+    pub libref: String,
+    pub table: String,
+    /// "WORK.A" pour les NOTEs.
+    pub display: String,
+    /// Le dataset matérialisé en colonnes décodées + slots PDV.
+    pub data: InputDataset,
+    /// Slots PDV des variables clé (vide = lecture séquentielle).
+    pub key_slots: Vec<usize>,
+    /// POINT= : slot PDV de l'index 1-based (accès direct, comme SET POINT=).
+    pub point_slot: Option<usize>,
+    /// NOBS= : slot PDV affecté avant la boucle au nombre d'observations.
+    pub nobs_slot: Option<usize>,
+    /// Métadonnées de sortie (VarMeta) de CHAQUE slot PDV de `data.var_slots`,
+    /// dans l'ordre, pour réécrire le dataset à l'identique (mêmes colonnes).
+    pub out_vars: Vec<crate::dataset::VarMeta>,
+}
+
 pub struct StepProgram {
     pub pdv: Pdv,
     pub stmts: Vec<crate::ast::DsStmt>,
     pub input: Option<InputData>,
+    /// Entrée UPDATE (M16.5), exclusive de `input`/`text_input`/`modify`.
+    pub update: Option<UpdateData>,
+    /// Entrée MODIFY (M16.5), exclusive de `input`/`text_input`/`update`.
+    pub modify: Option<ModifyData>,
     /// Source d'entrée TEXTE (M14 : INFILE/INPUT/DATALINES), parallèle à
     /// `input` (SET). Une étape ne peut avoir QUE l'un des deux.
     pub text_input: Option<TextInput>,
@@ -313,6 +363,8 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         datalines: None,
         seen_input: false,
         do_over_arrays: HashSet::new(),
+        update: None,
+        modify: None,
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -358,12 +410,28 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     }
 
     let input = c.build_input()?;
+    let update = c.build_update()?;
+    let modify = c.build_modify()?;
     let text_input = c.build_text_input()?;
-    // Une étape ne peut pas mélanger SET et INFILE/INPUT (sources d'entrée
-    // concurrentes — règle de cohérence, non supporté).
-    if input.is_some() && text_input.is_some() {
+    // Une étape ne peut pas mélanger plusieurs sources d'entrée concurrentes.
+    let n_sources = [
+        input.is_some(),
+        update.is_some(),
+        modify.is_some(),
+        text_input.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count();
+    if n_sources > 1 {
         return Err(SasError::runtime(
-            "Mixing SET with INFILE/INPUT in the same step is not yet implemented.",
+            "Mixing SET/UPDATE/MODIFY with INFILE/INPUT in the same step is not yet implemented.",
+        ));
+    }
+    // MODIFY interdit l'OUTPUT explicite (les valeurs sont écrites en place).
+    if modify.is_some() && c.has_explicit_output {
+        return Err(SasError::runtime(
+            "The OUTPUT statement is not allowed with the MODIFY statement.",
         ));
     }
     let outputs = c.resolve_outputs(&ast.outputs)?;
@@ -378,6 +446,8 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         pdv: c.pdv,
         stmts: ast.stmts.clone(),
         input,
+        update,
+        modify,
         text_input,
         outputs,
         has_explicit_output: c.has_explicit_output,
@@ -501,6 +571,33 @@ struct Compiler<'a> {
     /// compilation courant : une référence NUE à ce nom y désigne l'élément
     /// courant (lecture/écriture), pas une variable illégale (M16.3).
     do_over_arrays: HashSet<String>,
+    /// UPDATE compilé (M16.5), résolu dans `walk_stmt` (un seul par étape).
+    update: Option<PendingUpdate>,
+    /// MODIFY compilé (M16.5), résolu dans `walk_stmt` (un seul par étape).
+    modify: Option<PendingModify>,
+}
+
+/// État intermédiaire d'un UPDATE pendant la compilation : les datasets sont
+/// matérialisés tout de suite (entrée au PDV) ; les slots clé/overlay et le BY
+/// sont résolus en fin de compilation (`build_update`).
+struct PendingUpdate {
+    master: InputDataset,
+    transaction: InputDataset,
+    master_display: String,
+    key_names: Vec<String>,
+    master_where: Option<Expr>,
+}
+
+/// État intermédiaire d'un MODIFY pendant la compilation.
+struct PendingModify {
+    libref: String,
+    table: String,
+    display: String,
+    data: InputDataset,
+    out_vars: Vec<crate::dataset::VarMeta>,
+    key_names: Vec<String>,
+    point: Option<String>,
+    nobs: Option<String>,
 }
 
 impl Compiler<'_> {
@@ -574,6 +671,80 @@ impl Compiler<'_> {
                     }
                     self.compile_set(spec)?;
                 }
+                Ok(())
+            }
+            // UPDATE (M16.5) : maître + transaction, fusion par KEY=. Comme
+            // SET/MERGE, exclusif (un seul SET/MERGE/UPDATE/MODIFY par étape).
+            DsStmt::Update {
+                master,
+                master_where,
+                transaction,
+                key_vars,
+            } => {
+                if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
+                {
+                    return Err(SasError::runtime(
+                        "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
+                    ));
+                }
+                // Le maître entre au PDV en premier (ordre de référence), puis
+                // la transaction (ses variables nouvelles s'ajoutent).
+                let master_ds = self.materialize_input(master, &DatasetOptions::default())?;
+                let transaction_ds =
+                    self.materialize_input(transaction, &DatasetOptions::default())?;
+                if let Some(w) = master_where {
+                    self.validate_where_vars(w, &master.display())?;
+                }
+                self.update = Some(PendingUpdate {
+                    master: master_ds,
+                    transaction: transaction_ds,
+                    master_display: master.display(),
+                    key_names: key_vars.clone(),
+                    master_where: master_where.clone(),
+                });
+                Ok(())
+            }
+            // MODIFY (M16.5) : un dataset, modification EN PLACE.
+            DsStmt::Modify {
+                dataset,
+                key_vars,
+                point,
+                nobs,
+            } => {
+                if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
+                {
+                    return Err(SasError::runtime(
+                        "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
+                    ));
+                }
+                let (data, out_vars) =
+                    self.materialize_input_with_meta(dataset, &DatasetOptions::default())?;
+                // NOBS= : variable numérique affectée AVANT la boucle (doit
+                // exister, retenue). POINT= : pilotée par l'utilisateur.
+                if let Some(name) = nobs {
+                    let slot = match self.pdv.slot(name) {
+                        Some(s) => s,
+                        None => self.add_var(name, VarType::Num, 8),
+                    };
+                    self.retained_slots.insert(slot);
+                    self.assigned.insert(name.to_uppercase());
+                }
+                if let Some(name) = point {
+                    if self.pdv.slot(name).is_none() {
+                        self.add_var(name, VarType::Num, 8);
+                    }
+                    self.assigned.insert(name.to_uppercase());
+                }
+                self.modify = Some(PendingModify {
+                    libref: dataset.libref_or_work(),
+                    table: dataset.name.clone(),
+                    display: dataset.display(),
+                    data,
+                    out_vars,
+                    key_names: key_vars.clone(),
+                    point: point.clone(),
+                    nobs: nobs.clone(),
+                });
                 Ok(())
             }
             // BY : purement déclaratif ici ; résolu en fin de compilation
@@ -1278,6 +1449,91 @@ impl Compiler<'_> {
     /// Compile UN dataset d'un statement SET : lecture, options de
     /// dataset, entrée des variables au PDV (union en ordre de première
     /// apparition), matérialisation des colonnes.
+    /// Matérialise un dataset (toutes ses colonnes) dans le PDV pour UPDATE/
+    /// MODIFY (M16.5). Comme `compile_set` mais sans KEEP=/DROP=/RENAME= :
+    /// TOUTES les variables entrent au PDV (ordre de première référence), avec
+    /// downcast unique par colonne (jamais de get_row). Renvoie l'`InputDataset`
+    /// matérialisé (colonnes décodées + slots PDV). `opts` réservé (where=
+    /// filtré à l'exécution, non ici).
+    fn materialize_input(
+        &mut self,
+        dref: &crate::ast::DatasetRef,
+        _opts: &DatasetOptions,
+    ) -> Result<InputDataset> {
+        Ok(self.materialize_input_with_meta(dref, _opts)?.0)
+    }
+
+    /// Comme `materialize_input` mais renvoie aussi les `VarMeta` de CHAQUE
+    /// colonne (dans l'ordre `var_slots`), nécessaires à MODIFY pour réécrire
+    /// le dataset à l'identique (mêmes types/longueurs/formats/libellés).
+    fn materialize_input_with_meta(
+        &mut self,
+        dref: &crate::ast::DatasetRef,
+        _opts: &DatasetOptions,
+    ) -> Result<(InputDataset, Vec<crate::dataset::VarMeta>)> {
+        let libref = dref.libref_or_work();
+        let provider = self.session.libs.get(&libref)?;
+        if !provider.exists(&dref.name) {
+            return Err(SasError::runtime(format!(
+                "File {}.DATA does not exist.",
+                dref.display()
+            )));
+        }
+        let (ds, notes) = provider.read(&dref.name)?;
+        for note in &notes {
+            self.session.log.forward(note);
+        }
+        let mut columns = Vec::with_capacity(ds.vars.len());
+        let mut var_slots = Vec::with_capacity(ds.vars.len());
+        let mut out_vars = Vec::with_capacity(ds.vars.len());
+        for (col, meta) in ds.df.get_columns().iter().zip(&ds.vars) {
+            if self
+                .pdv
+                .slot(&meta.name)
+                .is_some_and(|slot| self.pdv.vars()[slot].ty != meta.ty)
+            {
+                return Err(SasError::runtime(format!(
+                    "Variable {} has been defined as both character and numeric.",
+                    meta.name
+                )));
+            }
+            let slot = self.pdv.add_var(PdvVar {
+                name: meta.name.clone(),
+                ty: meta.ty,
+                length: meta.length,
+                retained: false,
+                from_input: true,
+                format: meta.format.clone(),
+                temporary: false,
+            });
+            self.pdv.mark_from_input(slot);
+            var_slots.push(slot);
+            out_vars.push(meta.clone());
+            let s = col.as_materialized_series();
+            let values: Vec<Value> = match meta.ty {
+                VarType::Num => s.f64()?.iter().map(num_to_value).collect(),
+                VarType::Char => s
+                    .str()?
+                    .iter()
+                    .map(|o| Value::Char(o.unwrap_or("").to_string()))
+                    .collect(),
+            };
+            columns.push(values);
+        }
+        let n_rows = ds.n_obs();
+        Ok((
+            InputDataset {
+                display: dref.display(),
+                columns,
+                var_slots,
+                n_rows,
+                where_: None,
+                by_cols: Vec::new(),
+            },
+            out_vars,
+        ))
+    }
+
     fn compile_set(&mut self, spec: &DatasetSpec) -> Result<()> {
         let r = &spec.dref;
         let opts = &spec.options;
@@ -1418,6 +1674,11 @@ impl Compiler<'_> {
     /// localisation de chaque clé dans CHAQUE dataset (`by_cols`),
     /// validation des références FIRST./LAST. contre les variables BY.
     fn build_input(&mut self) -> Result<Option<InputData>> {
+        // UPDATE/MODIFY gèrent leur propre BY (résolu dans build_update/
+        // build_modify) : ne pas consommer `by`/`first_last_refs` ici.
+        if self.update.is_some() || self.modify.is_some() {
+            return Ok(None);
+        }
         let mut datasets = std::mem::take(&mut self.input_datasets);
         let by_items = self.by.take();
         if datasets.is_empty() {
@@ -1519,6 +1780,141 @@ impl Compiler<'_> {
             end_var,
             nobs_slot,
             point_slot,
+        }))
+    }
+
+    /// Assemble l'`UpdateData` final (M16.5) : résolution des clés en slots
+    /// PDV, calcul des slots overlay (variables transaction hors clés),
+    /// résolution du BY optionnel (FIRST./LAST.). Renvoie `None` si pas
+    /// d'UPDATE dans l'étape.
+    fn build_update(&mut self) -> Result<Option<UpdateData>> {
+        let Some(pending) = self.update.take() else {
+            return Ok(None);
+        };
+        let by_items = self.by.take();
+        // Clés : doivent exister dans le PDV (donc dans le maître OU la
+        // transaction). On résout par nom ; une clé absente du maître ET de la
+        // transaction → erreur.
+        let mut key_slots = Vec::with_capacity(pending.key_names.len());
+        for name in &pending.key_names {
+            let Some(slot) = self.pdv.slot(name) else {
+                return Err(SasError::runtime(format!(
+                    "KEY variable {name} is not on the UPDATE data sets."
+                )));
+            };
+            // La clé doit appartenir à la transaction (sert la recherche) ET
+            // au maître (l'obs maître la porte).
+            if !pending.transaction.var_slots.contains(&slot) {
+                return Err(SasError::runtime(format!(
+                    "KEY variable {name} is not on the transaction data set {}.",
+                    pending.transaction.display
+                )));
+            }
+            if !pending.master.var_slots.contains(&slot) {
+                return Err(SasError::runtime(format!(
+                    "KEY variable {name} is not on the master data set {}.",
+                    pending.master_display
+                )));
+            }
+            key_slots.push(slot);
+        }
+        // Slots overlay : toutes les variables de la transaction SAUF les clés.
+        let overlay_slots: Vec<usize> = pending
+            .transaction
+            .var_slots
+            .iter()
+            .copied()
+            .filter(|s| !key_slots.contains(s))
+            .collect();
+
+        // BY optionnel : chaque clé BY doit exister au PDV ; on remplit
+        // `by_cols` du maître (pilote l'itération / FIRST./LAST.).
+        let mut by: Vec<ByVar> = Vec::new();
+        let mut master = pending.master;
+        if let Some(items) = by_items {
+            for (name, descending) in items {
+                let Some(slot) = self.pdv.slot(&name) else {
+                    return Err(SasError::runtime(format!(
+                        "BY variable {name} is not on the master data set {}.",
+                        master.display
+                    )));
+                };
+                let Some(pos) = master.var_slots.iter().position(|&s| s == slot) else {
+                    return Err(SasError::runtime(format!(
+                        "BY variable {name} is not on the master data set {}.",
+                        master.display
+                    )));
+                };
+                master.by_cols.push(pos);
+                by.push(ByVar {
+                    name: name.to_uppercase(),
+                    slot,
+                    descending,
+                });
+            }
+        }
+        // FIRST.x / LAST.x : x doit être une variable BY.
+        for full in &self.first_last_refs {
+            let suffix = full.split_once('.').map(|(_, s)| s).unwrap_or(full.as_str());
+            if !by.iter().any(|b| b.name == suffix) {
+                return Err(SasError::runtime(format!(
+                    "Variable {full} is not defined: {suffix} is not a BY variable."
+                )));
+            }
+        }
+        Ok(Some(UpdateData {
+            master,
+            transaction: pending.transaction,
+            key_slots,
+            overlay_slots,
+            master_where: pending.master_where,
+            by,
+        }))
+    }
+
+    /// Assemble le `ModifyData` final (M16.5) : résolution des clés et des
+    /// slots POINT=/NOBS=. Renvoie `None` si pas de MODIFY dans l'étape.
+    fn build_modify(&mut self) -> Result<Option<ModifyData>> {
+        let Some(pending) = self.modify.take() else {
+            return Ok(None);
+        };
+        let mut key_slots = Vec::with_capacity(pending.key_names.len());
+        for name in &pending.key_names {
+            let Some(slot) = self.pdv.slot(name) else {
+                return Err(SasError::runtime(format!(
+                    "KEY variable {name} is not on the MODIFY data set {}.",
+                    pending.display
+                )));
+            };
+            if !pending.data.var_slots.contains(&slot) {
+                return Err(SasError::runtime(format!(
+                    "KEY variable {name} is not on the MODIFY data set {}.",
+                    pending.display
+                )));
+            }
+            key_slots.push(slot);
+        }
+        let point_slot = match &pending.point {
+            Some(n) => Some(self.pdv.slot(n).ok_or_else(|| {
+                SasError::runtime(format!("POINT= variable {n} is not addressable."))
+            })?),
+            None => None,
+        };
+        let nobs_slot = match &pending.nobs {
+            Some(n) => Some(self.pdv.slot(n).ok_or_else(|| {
+                SasError::runtime(format!("NOBS= variable {n} is not addressable."))
+            })?),
+            None => None,
+        };
+        Ok(Some(ModifyData {
+            libref: pending.libref,
+            table: pending.table,
+            display: pending.display,
+            data: pending.data,
+            key_slots,
+            point_slot,
+            nobs_slot,
+            out_vars: pending.out_vars,
         }))
     }
 

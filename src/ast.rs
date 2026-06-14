@@ -504,6 +504,32 @@ pub enum DsStmt {
         whens: Vec<WhenClause>,
         otherwise: Option<Box<DsStmt>>,
     },
+    /// `update master[(where=(...))] transaction key=k1 k2;` (M16.5) — fusion
+    /// maître/transaction. Le maître est lu séquentiellement ; pour chaque obs
+    /// maître, la transaction correspondante (par clé `key_vars`) est
+    /// superposée (seules les valeurs NON MANQUANTES écrasent ; les variables
+    /// clé ne sont jamais écrasées). L'obs maître mise à jour est sortie. Un
+    /// statement BY optionnel restreint la fusion aux groupes BY. Seules les
+    /// options `(where=(...))` du maître sont portées par `master_where` ;
+    /// `key_vars` est la liste (non vide) des variables de clé.
+    Update {
+        master: DatasetRef,
+        master_where: Option<Expr>,
+        transaction: DatasetRef,
+        key_vars: Vec<String>,
+    },
+    /// `modify dataset key=k1 k2;` (M16.5) — modification EN PLACE. Le dataset
+    /// est lu, ses variables peuvent être modifiées par assignation, puis il
+    /// est RÉÉCRIT (même table) avec les valeurs modifiées. Pas d'output
+    /// implicite (les valeurs modifiées par MODIFY sont finales). Supporte
+    /// `point=`/`nobs=` comme SET pour l'accès direct ; OUTPUT n'est pas
+    /// autorisé (→ erreur). `key_vars` peut être vide (lecture séquentielle).
+    Modify {
+        dataset: DatasetRef,
+        key_vars: Vec<String>,
+        point: Option<String>,
+        nobs: Option<String>,
+    },
 }
 
 /// Une clause `when (v1, v2, ...) stmt;` d'un SELECT (M16.1). `values` porte
