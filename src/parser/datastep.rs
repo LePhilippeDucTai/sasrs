@@ -75,7 +75,7 @@
 use super::{is_block_head_kw, validate_sas_name, StatementStream};
 use crate::ast::{
     AttribItem, DataStepAst, DsStmt, Expr, InfileOptions, InfileSource, InputItem, LengthSpec,
-    PutDest, PutItem,
+    PutDest, PutItem, WhenClause,
 };
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
@@ -208,6 +208,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "by" => parse_by(ts),
         "if" => parse_if(ts),
         "do" => parse_do(ts),
+        "select" => parse_select(ts),
         "output" => {
             // `output;` → toutes les sorties (liste vide) ;
             // `output a [b...];` → sorties ciblées (noms seuls, sans
@@ -1049,6 +1050,170 @@ fn parse_branch_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         if lower == "run" || lower == "quit" || is_block_head_kw(&lower) {
             return Err(SasError::parse(
                 "expected a statement after THEN/ELSE",
+                tok.span,
+            ));
+        }
+    }
+    parse_statement(ts)
+}
+
+/// `select [(expr)]; when (...) stmt; ... [otherwise stmt;] end;` (M16.1).
+///
+/// Forme SÉLECTEUR : `select (expr);` — l'expression entre parenthèses est
+/// évaluée une fois, puis chaque `when (v1, v2, ...)` compare le sélecteur à
+/// la liste de valeurs (sémantique `=` de SAS). Forme BOOLÉENNE :
+/// `select;` — chaque `when (cond)` est une condition booléenne, la première
+/// vraie l'emporte. `otherwise` est optionnelle ; `end;` clôt le bloc.
+///
+/// Le corps d'un WHEN/OTHERWISE est UN statement (comme une branche THEN) :
+/// `do; ... end;` pour plusieurs statements. Un WHEN/OTHERWISE sans corps
+/// (immédiatement suivi de `;`) est licite (no-op) en SAS.
+fn parse_select(ts: &mut StatementStream) -> Result<DsStmt> {
+    let select_tok = ts.peek().clone();
+    ts.next(); // `select`
+
+    // Forme sélecteur : `(expr)` optionnel avant le `;`.
+    let selector = if ts.peek().kind == TokenKind::LParen {
+        ts.next(); // `(`
+        let expr = super::expr::parse_expr(ts)?;
+        if ts.peek().kind != TokenKind::RParen {
+            return Err(SasError::parse(
+                "expected ')' after the SELECT expression",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `)`
+        Some(expr)
+    } else {
+        None
+    };
+    ts.expect_semi()?;
+
+    let mut whens: Vec<WhenClause> = Vec::new();
+    let mut otherwise: Option<Box<DsStmt>> = None;
+    let selector_form = selector.is_some();
+
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Eof => {
+                return Err(SasError::parse(
+                    "missing END for SELECT block.",
+                    select_tok.span,
+                ));
+            }
+            // `;` superflus entre clauses (et un éventuel commentaire `*` géré
+            // par le lexer en amont).
+            TokenKind::Semi => {
+                ts.next();
+            }
+            TokenKind::Ident(s) if s.eq_ignore_ascii_case("when") => {
+                if otherwise.is_some() {
+                    return Err(SasError::parse(
+                        "WHEN is not allowed after OTHERWISE in a SELECT block.",
+                        tok.span,
+                    ));
+                }
+                ts.next(); // `when`
+                let values = parse_when_values(ts, selector_form)?;
+                let body = Box::new(parse_select_branch(ts)?);
+                whens.push(WhenClause { values, body });
+            }
+            TokenKind::Ident(s) if s.eq_ignore_ascii_case("otherwise") => {
+                if otherwise.is_some() {
+                    return Err(SasError::parse(
+                        "Only one OTHERWISE clause is allowed in a SELECT block.",
+                        tok.span,
+                    ));
+                }
+                ts.next(); // `otherwise`
+                otherwise = Some(Box::new(parse_select_branch(ts)?));
+            }
+            TokenKind::Ident(s) if s.eq_ignore_ascii_case("end") => {
+                ts.next(); // `end`
+                ts.expect_semi()?;
+                return Ok(DsStmt::Select {
+                    selector,
+                    whens,
+                    otherwise,
+                });
+            }
+            TokenKind::Ident(s) => {
+                let lower = s.to_ascii_lowercase();
+                if lower == "run" || lower == "quit" || is_block_head_kw(&lower) {
+                    return Err(SasError::parse(
+                        "missing END for SELECT block.",
+                        tok.span,
+                    ));
+                }
+                return Err(SasError::parse(
+                    "expected WHEN, OTHERWISE or END inside the SELECT block",
+                    tok.span,
+                ));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected WHEN, OTHERWISE or END inside the SELECT block",
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// `( v1 [, v2 ...] )` après un WHEN. En forme booléenne (sans sélecteur),
+/// une seule expression (la condition) est autorisée. La liste vide `when ()`
+/// est rejetée.
+fn parse_when_values(ts: &mut StatementStream, selector_form: bool) -> Result<Vec<Expr>> {
+    let open = ts.peek().clone();
+    if open.kind != TokenKind::LParen {
+        return Err(SasError::parse(
+            "expected '(' after WHEN",
+            open.span,
+        ));
+    }
+    ts.next(); // `(`
+    if ts.peek().kind == TokenKind::RParen {
+        return Err(SasError::parse(
+            "expected at least one value in the WHEN list",
+            ts.peek().span,
+        ));
+    }
+    let mut values = vec![super::expr::parse_expr(ts)?];
+    while ts.peek().kind == TokenKind::Comma {
+        if !selector_form {
+            return Err(SasError::parse(
+                "a WHEN condition in a boolean SELECT (no selector) takes a single expression",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `,`
+        values.push(super::expr::parse_expr(ts)?);
+    }
+    if ts.peek().kind != TokenKind::RParen {
+        return Err(SasError::parse(
+            "expected ',' or ')' in the WHEN list",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `)`
+    Ok(values)
+}
+
+/// Corps d'un WHEN/OTHERWISE : UN statement, ou rien (`;` immédiat → no-op,
+/// rendu comme un bloc vide). `run`/`quit`/frontière de bloc ne peuvent pas
+/// servir de corps.
+fn parse_select_branch(ts: &mut StatementStream) -> Result<DsStmt> {
+    if ts.peek().kind == TokenKind::Semi {
+        ts.next(); // `;` — corps vide
+        return Ok(DsStmt::Block(Vec::new()));
+    }
+    let tok = ts.peek().clone();
+    if let Some(s) = tok.ident() {
+        let lower = s.to_ascii_lowercase();
+        if lower == "run" || lower == "quit" || lower == "end" || is_block_head_kw(&lower) {
+            return Err(SasError::parse(
+                "expected a statement after WHEN/OTHERWISE",
                 tok.span,
             ));
         }
@@ -3285,6 +3450,102 @@ mod tests {
                     length: Some(LengthSpec { char: true, len: 10 }),
                 },
             ])]
+        );
+    }
+
+    // ── SELECT / WHEN / OTHERWISE (M16.1) ────────────────────────────────
+
+    #[test]
+    fn select_selector_form_parses() {
+        let ast = parse(
+            "data o; select (x); when (1, 2) y = 1; when (3) y = 2; otherwise y = 0; end; run;",
+        )
+        .unwrap();
+        let DsStmt::Select {
+            selector,
+            whens,
+            otherwise,
+        } = &ast.stmts[0]
+        else {
+            panic!("expected a SELECT statement");
+        };
+        assert_eq!(*selector, Some(var("x")));
+        assert_eq!(whens.len(), 2);
+        // Première clause : deux valeurs.
+        assert_eq!(whens[0].values, vec![Expr::Num(1.0), Expr::Num(2.0)]);
+        assert_eq!(
+            *whens[0].body,
+            DsStmt::Assign {
+                var: "y".to_string(),
+                expr: Expr::Num(1.0),
+            }
+        );
+        assert_eq!(whens[1].values, vec![Expr::Num(3.0)]);
+        assert!(otherwise.is_some());
+    }
+
+    #[test]
+    fn select_boolean_form_parses() {
+        let ast = parse(
+            "data o; select; when (x < 1) y = 1; otherwise y = 0; end; run;",
+        )
+        .unwrap();
+        let DsStmt::Select {
+            selector, whens, ..
+        } = &ast.stmts[0]
+        else {
+            panic!("expected a SELECT statement");
+        };
+        assert_eq!(*selector, None);
+        // Forme booléenne : une seule expression (la condition) par WHEN.
+        assert_eq!(whens[0].values.len(), 1);
+        assert_eq!(
+            whens[0].values[0],
+            Expr::Binary {
+                op: BinaryOp::Lt,
+                left: Box::new(var("x")),
+                right: Box::new(Expr::Num(1.0)),
+            }
+        );
+    }
+
+    #[test]
+    fn select_do_block_body_parses() {
+        let ast = parse(
+            "data o; select (x); when (1) do; a = 1; b = 2; end; end; run;",
+        )
+        .unwrap();
+        let DsStmt::Select { whens, .. } = &ast.stmts[0] else {
+            panic!("expected a SELECT statement");
+        };
+        let DsStmt::Block(stmts) = &*whens[0].body else {
+            panic!("expected a DO block body");
+        };
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn select_boolean_when_rejects_value_list() {
+        // En forme booléenne, une liste de valeurs `when (a, b)` est illégale.
+        let err = parse("data o; select; when (1, 2) y = 1; end; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("single expression"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn select_missing_end_is_error() {
+        let err = parse("data o; select (x); when (1) y = 1; run;").unwrap_err();
+        assert!(err.to_string().contains("missing END"), "got: {err}");
+    }
+
+    #[test]
+    fn select_empty_when_list_is_error() {
+        let err = parse("data o; select (x); when () y = 1; end; run;").unwrap_err();
+        assert!(
+            err.to_string().contains("at least one value"),
+            "got: {err}"
         );
     }
 }

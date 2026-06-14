@@ -400,6 +400,34 @@ pub enum DsStmt {
     /// courante (le LOG par défaut). Un PUT sans item relâche la ligne
     /// maintenue / écrit une ligne vide.
     Put(Vec<PutItem>),
+    /// `select [(expr)]; when (...) stmt; ... otherwise stmt; end;` (M16.1).
+    /// Deux formes :
+    /// - **Sélecteur** : `selector = Some(expr)`. L'expression sélectrice est
+    ///   évaluée UNE fois, puis chaque clause WHEN porte une liste de valeurs
+    ///   (`WhenClause::values`) ; la clause s'applique si le sélecteur est
+    ///   égal (sémantique `=` de SAS, via `sas_cmp`) à l'une d'elles.
+    /// - **Booléen** : `selector = None`. Chaque clause WHEN porte UNE
+    ///   condition (un seul élément dans `values`) évaluée en contexte
+    ///   booléen ; la première vraie s'applique.
+    ///
+    /// Exécution : la PREMIÈRE clause qui correspond exécute son corps (UN
+    /// statement, possiblement un `do; ... end;`) puis le SELECT se termine
+    /// (pas de fall-through). Si aucune clause ne correspond, `otherwise`
+    /// s'exécute s'il est présent, sinon erreur runtime (fidèle à SAS).
+    Select {
+        selector: Option<Expr>,
+        whens: Vec<WhenClause>,
+        otherwise: Option<Box<DsStmt>>,
+    },
+}
+
+/// Une clause `when (v1, v2, ...) stmt;` d'un SELECT (M16.1). `values` porte
+/// la liste de valeurs (forme sélecteur) ou l'unique condition (forme
+/// booléenne). `body` est le statement exécuté quand la clause correspond.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhenClause {
+    pub values: Vec<Expr>,
+    pub body: Box<DsStmt>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

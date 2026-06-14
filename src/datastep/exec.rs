@@ -97,7 +97,7 @@
 //!   existe) : n_ > n_rows + 10_000 → erreur d'exécution. SAS bouclerait
 //!   sans fin ; divergence assumée.
 
-use super::eval::{coerce_num, eval, EvalCtx};
+use super::eval::{coerce_num, eval, sas_values_equal, EvalCtx};
 use super::pdv::Pdv;
 use super::{
     ByVar, InputAction, InputData, InputDataset, OutputSpec, ShortMode, StepProgram, TextInput,
@@ -631,6 +631,11 @@ impl Runner {
                 until.as_ref(),
                 body,
             ),
+            DsStmt::Select {
+                selector,
+                whens,
+                otherwise,
+            } => self.exec_select(selector.as_ref(), whens, otherwise.as_deref()),
             DsStmt::Delete => Ok(Flow::NextIter),
             DsStmt::Output(targets) => {
                 if targets.is_empty() {
@@ -2131,6 +2136,59 @@ impl Runner {
     }
 
     /// Évalue, propage les fatals, reporte `_ERROR_` au PDV.
+    /// SELECT/WHEN/OTHERWISE (M16.1). Cherche la PREMIÈRE clause WHEN qui
+    /// correspond, exécute son corps et retourne (pas de fall-through). Sinon
+    /// OTHERWISE s'il existe, sinon erreur runtime fidèle à SAS.
+    ///
+    /// Forme sélecteur (`selector = Some`) : le sélecteur est évalué UNE seule
+    /// fois ; chaque valeur de WHEN est comparée avec la sémantique `=` de SAS
+    /// (`sas_values_equal`). Forme booléenne (`selector = None`) : chaque WHEN
+    /// porte une unique condition évaluée en contexte booléen.
+    fn exec_select(
+        &mut self,
+        selector: Option<&crate::ast::Expr>,
+        whens: &[crate::ast::WhenClause],
+        otherwise: Option<&DsStmt>,
+    ) -> Result<Flow> {
+        // Sélecteur évalué une seule fois (sémantique SAS).
+        let sel_val = match selector {
+            Some(expr) => Some(self.eval_checked(expr)?),
+            None => None,
+        };
+        for when in whens {
+            let matched = match &sel_val {
+                // Forme sélecteur : vrai si le sélecteur égale l'une des
+                // valeurs listées (court-circuit dès le premier match).
+                Some(sv) => {
+                    let mut hit = false;
+                    for v in &when.values {
+                        let val = self.eval_checked(v)?;
+                        if sas_values_equal(sv.clone(), val, &mut self.ctx) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    hit
+                }
+                // Forme booléenne : la condition (unique) est vraie ?
+                None => {
+                    // Le parser garantit exactement une expression ici.
+                    let cond = &when.values[0];
+                    self.eval_checked(cond)?.truthy()
+                }
+            };
+            if matched {
+                return self.exec_stmt(&when.body);
+            }
+        }
+        match otherwise {
+            Some(body) => self.exec_stmt(body),
+            None => Err(SasError::runtime(
+                "The WHEN list does not match any clause and there is no OTHERWISE clause.",
+            )),
+        }
+    }
+
     fn eval_checked(&mut self, expr: &crate::ast::Expr) -> Result<Value> {
         let v = eval(expr, &self.pdv, &mut self.ctx);
         if let Some(msg) = self.ctx.fatal.take() {
@@ -4534,5 +4592,259 @@ mod tests {
         let res = run("data _null_; call frobnicate(1); run;", &mut s);
         let err = res.err().expect("expected error for unknown CALL routine");
         assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    }
+
+    // ── SELECT / WHEN / OTHERWISE (M16.1) ────────────────────────────────
+
+    #[test]
+    fn select_selector_form_matches_first_value() {
+        // Sélecteur numérique : age 14 → "teen", . → autre, 13 → "kid".
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data out; set inp; length grp $8; \
+             select (age); \
+               when (13) grp='kid'; \
+               when (14, 15) grp='teen'; \
+               otherwise grp='other'; \
+             end; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // age = 14, missing, 13.
+        assert_eq!(
+            str_col(&ds, "grp"),
+            vec!["teen".to_string(), "other".to_string(), "kid".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_selector_multiple_values_in_one_when() {
+        // Une seule clause liste plusieurs valeurs ; n'importe laquelle suffit.
+        let mut s = session();
+        run(
+            "data out; \
+             do x = 1 to 4; \
+               select (x); \
+                 when (1, 3) flag = 1; \
+                 otherwise flag = 0; \
+               end; \
+               output; \
+             end; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "flag", 0), Some(1.0)); // x=1
+        assert_eq!(num_at(&s, "out", "flag", 1), Some(0.0)); // x=2
+        assert_eq!(num_at(&s, "out", "flag", 2), Some(1.0)); // x=3
+        assert_eq!(num_at(&s, "out", "flag", 3), Some(0.0)); // x=4
+    }
+
+    #[test]
+    fn select_selector_char_form() {
+        // Sélecteur caractère ; comparaison ignore les blancs finaux (sas_cmp).
+        let mut s = session();
+        run(
+            "data out; length sex $1 desc $8; \
+             sex = 'F'; \
+             select (sex); \
+               when ('M') desc = 'male'; \
+               when ('F') desc = 'female'; \
+               otherwise desc = 'unknown'; \
+             end; \
+             output; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "desc"), vec!["female".to_string()]);
+    }
+
+    #[test]
+    fn select_boolean_form_first_true_wins() {
+        // Forme booléenne : conditions évaluées dans l'ordre, première vraie.
+        let mut s = session();
+        run(
+            "data out; length band $8; \
+             do x = 5 to 25 by 10; \
+               select; \
+                 when (x < 10) band = 'low'; \
+                 when (x < 20) band = 'mid'; \
+                 otherwise band = 'high'; \
+               end; \
+               output; \
+             end; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // x = 5, 15, 25.
+        assert_eq!(
+            str_col(&ds, "band"),
+            vec!["low".to_string(), "mid".to_string(), "high".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_boolean_form_range_condition() {
+        // Plage exprimée par une condition booléenne 1 <= x <= 10.
+        let mut s = session();
+        run(
+            "data out; length r $8; \
+             do x = 0 to 15 by 5; \
+               select; \
+                 when (x >= 1 and x <= 10) r = 'in'; \
+                 otherwise r = 'out'; \
+               end; \
+               output; \
+             end; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // x = 0(out), 5(in), 10(in), 15(out).
+        assert_eq!(
+            str_col(&ds, "r"),
+            vec![
+                "out".to_string(),
+                "in".to_string(),
+                "in".to_string(),
+                "out".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn select_when_do_block_runs_all_statements() {
+        // Le corps d'un WHEN peut être un do; ... end; (plusieurs statements).
+        let mut s = session();
+        run(
+            "data out; x = 2; \
+             select (x); \
+               when (2) do; a = 10; b = 20; end; \
+               otherwise do; a = 0; b = 0; end; \
+             end; \
+             output; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "a", 0), Some(10.0));
+        assert_eq!(num_at(&s, "out", "b", 0), Some(20.0));
+    }
+
+    #[test]
+    fn select_no_fall_through() {
+        // Pas de fall-through : seule la PREMIÈRE clause vraie s'exécute,
+        // même si une clause suivante correspondrait aussi.
+        let mut s = session();
+        run(
+            "data out; x = 1; n = 0; \
+             select (x); \
+               when (1) n = n + 1; \
+               when (1) n = n + 100; \
+               otherwise n = n + 1000; \
+             end; \
+             output; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "n", 0), Some(1.0));
+    }
+
+    #[test]
+    fn select_missing_value_matches_dot() {
+        // `. = .` est vrai en SAS : un WHEN (.) capture le sélecteur missing.
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data out; set inp; length tag $8; \
+             select (age); \
+               when (.) tag = 'na'; \
+               otherwise tag = 'ok'; \
+             end; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // age = 14, missing, 13.
+        assert_eq!(
+            str_col(&ds, "tag"),
+            vec!["ok".to_string(), "na".to_string(), "ok".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_no_otherwise_no_match_is_runtime_error() {
+        // Sans OTHERWISE et sans WHEN correspondant : erreur runtime (SAS).
+        let mut s = session();
+        let err = run(
+            "data out; x = 99; select (x); when (1) y = 1; end; run;",
+            &mut s,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.to_string().contains("does not match any clause"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn select_no_otherwise_with_match_is_ok() {
+        // Sans OTHERWISE mais avec un WHEN correspondant : pas d'erreur.
+        let mut s = session();
+        run(
+            "data out; x = 1; select (x); when (1) y = 7; end; output; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "y", 0), Some(7.0));
+    }
+
+    #[test]
+    fn select_empty_when_body_is_noop() {
+        // `when (1) ;` corps vide : la clause est prise mais ne fait rien
+        // (pas de fall-through vers OTHERWISE).
+        let mut s = session();
+        run(
+            "data out; x = 1; y = 5; \
+             select (x); \
+               when (1) ; \
+               otherwise y = 0; \
+             end; \
+             output; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(num_at(&s, "out", "y", 0), Some(5.0));
+    }
+
+    #[test]
+    fn select_selector_evaluated_once_via_subsetting() {
+        // Le sélecteur est une expression : 2*x. x=3 → 6 → "six".
+        let mut s = session();
+        run(
+            "data out; length w $8; x = 3; \
+             select (2 * x); \
+               when (6) w = 'six'; \
+               otherwise w = 'no'; \
+             end; \
+             output; \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "w"), vec!["six".to_string()]);
     }
 }

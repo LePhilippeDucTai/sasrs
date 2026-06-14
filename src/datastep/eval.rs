@@ -352,6 +352,16 @@ fn normalize_comparison(l: Value, r: Value, ctx: &mut EvalCtx) -> (Value, Value)
     }
 }
 
+/// Égalité fidèle SAS de deux valeurs déjà évaluées (M16.1, pour SELECT
+/// sélecteur). Réutilise exactement la sémantique de l'opérateur `=` :
+/// alignement des types mixtes via `normalize_comparison` (note de
+/// conversion char→num le cas échéant) puis `sas_cmp` (`. = .` est vrai,
+/// comparaison char insensible aux blancs finaux).
+pub(crate) fn sas_values_equal(l: Value, r: Value, ctx: &mut EvalCtx) -> bool {
+    let (l, r) = normalize_comparison(l, r, ctx);
+    l.sas_cmp(&r) == std::cmp::Ordering::Equal
+}
+
 /// Comparaison fidèle SAS : on traduit l'`Ordering` de `sas_cmp` en
 /// booléen numérique 1.0/0.0. Les missings sont comparables (`. = .` vrai,
 /// `. < 0` vrai) : c'est `sas_cmp` qui encode cet ordre total.

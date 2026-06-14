@@ -525,6 +525,28 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
+            // SELECT (M16.1) : vérifie les références de variables du
+            // sélecteur, de chaque valeur/condition de WHEN, et des corps
+            // (WHEN + OTHERWISE), en ordre textuel.
+            DsStmt::Select {
+                selector,
+                whens,
+                otherwise,
+            } => {
+                if let Some(sel) = selector {
+                    self.walk_expr(sel)?;
+                }
+                for when in whens {
+                    for v in &when.values {
+                        self.walk_expr(v)?;
+                    }
+                    self.walk_stmt(&when.body)?;
+                }
+                if let Some(o) = otherwise {
+                    self.walk_stmt(o)?;
+                }
+                Ok(())
+            }
             // DELETE : purement exécutif, rien à compiler.
             DsStmt::Delete => Ok(()),
             DsStmt::Output(targets) => {
