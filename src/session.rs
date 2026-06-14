@@ -70,4 +70,18 @@ impl Session {
             vectorize: false,
         })
     }
+
+    /// Résout un chemin de fichier externe (INFILE/FILE, PROC IMPORT/EXPORT) :
+    /// absolu → tel quel ; relatif → joint à `base_dir` (le répertoire de
+    /// travail de la session, comme pour les chemins LIBNAME). Garantit un
+    /// comportement cohérent et déterministe (les fixtures relatives résolvent
+    /// sous le tempdir du harnais, pas sous le CWD du processus).
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        let p = PathBuf::from(path);
+        if p.is_absolute() {
+            p
+        } else {
+            self.base_dir.join(p)
+        }
+    }
 }

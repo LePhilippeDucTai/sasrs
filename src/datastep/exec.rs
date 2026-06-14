@@ -484,13 +484,18 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             stats.read.push((ds.display.clone(), *n));
         }
     }
-    // Source texte (M14) : NOTE "N records were read from the infile ...".
+    // Source texte (M14) : NOTE "N records were read from the infile ..."
+    // UNIQUEMENT pour un fichier externe. Pour les données instream
+    // DATALINES/CARDS, SAS n'émet aucune NOTE de ce type (elle est réservée
+    // aux fichiers physiques).
     if let Some(text) = &r.text {
-        session.log.note(&format!(
-            "{} records were read from {}.",
-            r.text_read, text.display
-        ));
-        stats.read.push((text.display.clone(), r.text_read));
+        if text.is_file {
+            session.log.note(&format!(
+                "{} records were read from {}.",
+                r.text_read, text.display
+            ));
+            stats.read.push((text.display.clone(), r.text_read));
+        }
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).
@@ -1251,7 +1256,10 @@ impl Runner {
             if !content.is_empty() {
                 content.push('\n');
             }
-            std::fs::write(&path, content).map_err(|e| {
+            // Chemin relatif résolu sous `base_dir` (cohérent avec LIBNAME et
+            // INFILE) ; le message d'erreur garde le chemin source.
+            let resolved = session.resolve_path(&path);
+            std::fs::write(&resolved, content).map_err(|e| {
                 SasError::runtime(format!("Unable to write the FILE '{path}': {e}"))
             })?;
         }
@@ -3456,9 +3464,16 @@ mod tests {
         assert_eq!(age.get(0), Some(14.0));
         assert_eq!(name.get(1), Some("Bob"));
         assert_eq!(age.get(1), Some(16.0));
+        // Données instream : SAS n'émet PAS de NOTE "records were read from
+        // the infile DATALINES" (réservée aux fichiers externes) — seule la
+        // NOTE du data set apparaît.
         let log = s.log.into_string();
         assert!(
-            log.contains("2 records were read from the infile DATALINES."),
+            !log.contains("records were read from the infile"),
+            "instream DATALINES must not emit an infile-records NOTE; log was: {log}"
+        );
+        assert!(
+            log.contains("The data set WORK.OUT has 2 observations and 2 variables."),
             "log was: {log}"
         );
     }

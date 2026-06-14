@@ -1,6 +1,5 @@
 ---
 source: sas_interpreter/tests/snapshot.rs
-assertion_line: 28
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
 input_file: sas_interpreter/tests/fixtures/m14/import_export.sas
 ---
@@ -11,68 +10,49 @@ NOTE: Libref D was successfully assigned as follows:
             Engine:        PARQUET
             Physical Name: data
 
-2     libname csv1 csv 'data';
-NOTE: Libref CSV1 was successfully assigned as follows:
-            Engine:        CSV
-            Physical Name: data
-
-3     data csv1.aged14;
-4       set d.class;
-5       if age >= 14;
-6       keep name age height;
-7     run;
+2     data work.sub;
+3       set d.class;
+4       if age >= 14;
+5       keep name age height;
+6     run;
 NOTE: There were 19 observations read from the data set D.CLASS.
-NOTE: The data set CSV1.AGED14 has 9 observations and 3 variables.
+NOTE: The data set WORK.SUB has 9 observations and 3 variables.
 NOTE: DATA statement used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
 
-8     title 'Elèves de 14 ans et plus (via LIBNAME CSV)';
+7     proc export data=work.sub
+8       outfile='data/sub.csv'
+9       dbms=csv
+10      replace;
+11    run;
+NOTE: 9 records were written to the file 'data/sub.csv'.
+NOTE: PROCEDURE EXPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
 
-9     proc print data=csv1.aged14;
-10    run;
-NOTE: There were 9 observations read from the data set CSV1.AGED14.
+12    proc import datafile='data/sub.csv'
+13      out=work.reimported
+14      dbms=csv
+15      replace;
+16      getnames=yes;
+17    run;
+NOTE: The data set WORK.REIMPORTED has 9 observations and 3 variables.
+NOTE: PROCEDURE IMPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    title 'Reimported from CSV (age >= 14 subset)';
+
+19    proc print data=work.reimported;
+20    run;
+NOTE: There were 9 observations read from the data set WORK.REIMPORTED.
 NOTE: PROCEDURE PRINT used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
-
-11    data work.check;
-12      set csv1.aged14;
-13    run;
-NOTE: There were 9 observations read from the data set CSV1.AGED14.
-NOTE: The data set WORK.CHECK has 9 observations and 3 variables.
-NOTE: DATA statement used (Total process time):
-            real time           0.00 seconds
-            cpu time            0.00 seconds
-
-14    title 'Copie dans WORK';
-
-15    proc print data=work.check;
-16    run;
-NOTE: There were 9 observations read from the data set WORK.CHECK.
-NOTE: PROCEDURE PRINT used (Total process time):
-            real time           0.00 seconds
-            cpu time            0.00 seconds
-
-17    libname csv1 clear;
-NOTE: Libref CSV1 has been deassigned.
 
 ==== LISTING ====
-                         ElÃ¨ves de 14 ans et plus (via LIBNAME CSV)
-
-                                Obs    name       age    height
-
-                                  1    Alfred      14        69
-                                  2    Carol       14      62.8
-                                  3    Henry       14      63.5
-                                  4    Janet       15      62.5
-                                  5    Judy        14      64.3
-                                  6    Mary        15      66.5
-                                  7    Philip      16        72
-                                  8    Ronald      15        67
-                                  9    William     15      66.5
-
-                                        Copie dans WORK
+                             Reimported from CSV (age >= 14 subset)
 
                                 Obs    name       age    height
 

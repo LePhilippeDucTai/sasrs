@@ -222,13 +222,14 @@ pub fn execute(ast: &ImportAst, session: &mut Session) -> Result<()> {
     // --- Résoudre le séparateur ---
     let sep = resolve_separator(ast)?;
 
-    // --- Lire le DataFrame avec Polars ---
+    // --- Lire le DataFrame avec Polars (chemin relatif résolu sous base_dir) ---
+    let path = session.resolve_path(&ast.datafile);
     let df = CsvReadOptions::default()
         .with_has_header(ast.getnames)
         .with_parse_options(
             CsvParseOptions::default().with_separator(sep),
         )
-        .try_into_reader_with_file_path(Some(ast.datafile.clone().into()))
+        .try_into_reader_with_file_path(Some(path))
         .map_err(|e| SasError::runtime(format!("PROC IMPORT: cannot open '{}': {}", ast.datafile, e)))?
         .finish()
         .map_err(|e| SasError::runtime(format!("PROC IMPORT: error reading '{}': {}", ast.datafile, e)))?;

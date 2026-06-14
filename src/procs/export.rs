@@ -196,8 +196,9 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
     // --- Résoudre le séparateur ---
     let sep = resolve_separator(ast);
 
-    // --- Écrire le fichier CSV ---
-    let mut file = File::create(&ast.outfile).map_err(|e| {
+    // --- Écrire le fichier CSV (chemin relatif résolu sous base_dir) ---
+    let out_path = session.resolve_path(&ast.outfile);
+    let mut file = File::create(&out_path).map_err(|e| {
         SasError::runtime(format!(
             "PROC EXPORT: cannot create '{}': {e}",
             ast.outfile

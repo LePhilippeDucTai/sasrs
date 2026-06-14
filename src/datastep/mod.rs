@@ -182,11 +182,16 @@ pub enum ShortMode {
 /// Source d'entrée texte compilée (M14) : lignes brutes + spécification
 /// INPUT résolue. Parallèle à `InputData` (le chemin SET).
 pub struct TextInput {
-    /// "the infile DATALINES" / "the infile <path>" pour les NOTEs du log.
+    /// "the infile 'path'" pour la NOTE du log (fichier externe seulement).
     pub display: String,
     /// Lignes brutes (DATALINES inline ou contenu du fichier).
     pub lines: Vec<String>,
     pub options: TextOptions,
+    /// `true` si la source est un FICHIER externe (`infile 'path'`). Pour les
+    /// données instream DATALINES/CARDS, SAS n'émet PAS de NOTE "N records
+    /// were read from the infile ..." (réservée aux fichiers physiques) :
+    /// l'exécuteur s'en sert pour ne l'émettre que dans le cas fichier.
+    pub is_file: bool,
 }
 
 /// Une sortie : où écrire et quels slots du PDV.
@@ -1126,10 +1131,14 @@ impl Compiler<'_> {
             return Ok(None);
         }
 
-        // Source : INFILE explicite, sinon DATALINES inline implicite.
-        let (lines, display) = match &infile {
+        // Source : INFILE explicite, sinon DATALINES inline implicite. Un
+        // chemin relatif résout sous `base_dir` (cohérent avec LIBNAME) ; la
+        // NOTE affiche le chemin SOURCE tel quel (entre guillemets, fidèle à
+        // SAS, et stable pour les snapshots — pas de tempdir absolu).
+        let (lines, display, is_file) = match &infile {
             Some((crate::ast::InfileSource::Path(path), _)) => {
-                let content = std::fs::read_to_string(path).map_err(|e| {
+                let resolved = self.session.resolve_path(path);
+                let content = std::fs::read_to_string(&resolved).map_err(|e| {
                     SasError::runtime(format!("Unable to read INFILE '{path}': {e}"))
                 })?;
                 // Lignes sans le `\n` ; un `\r` final est retiré.
@@ -1137,7 +1146,7 @@ impl Compiler<'_> {
                     .lines()
                     .map(|l| l.to_string())
                     .collect();
-                (lines, format!("the infile {path}"))
+                (lines, format!("the infile '{path}'"), true)
             }
             Some((crate::ast::InfileSource::Datalines, _)) | None => {
                 let lines = datalines.clone().ok_or_else(|| {
@@ -1145,7 +1154,7 @@ impl Compiler<'_> {
                         "INPUT/INFILE DATALINES used but no DATALINES block is present.",
                     )
                 })?;
-                (lines, "the infile DATALINES".to_string())
+                (lines, "the infile DATALINES".to_string(), false)
             }
         };
 
@@ -1174,6 +1183,7 @@ impl Compiler<'_> {
             display,
             lines,
             options,
+            is_file,
         }))
     }
 
