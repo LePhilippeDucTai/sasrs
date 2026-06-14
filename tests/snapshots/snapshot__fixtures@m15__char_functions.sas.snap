@@ -1,0 +1,108 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 28
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m15/char_functions.sas
+---
+==== LOG ====
+
+1     data work.test;
+2       /* FIND/FINDC — find substring or character */
+3       s = 'Hello World';
+4       find_o = find(s, 'o');         /* Should be 5 */
+5       find_wo = find(s, 'Wo', 6);    /* Should be 7 (search from pos 6) */
+6       find_not = find(s, 'xyz');     /* Should be 0 */
+7       findc_l = findc(s, 'lo');      /* Should be 3 (first l) */
+8       findc_x = findc(s, 'xyz');     /* Should be 0 */
+9     
+10      /* COUNT/COUNTC — count occurrences */
+11      s2 = 'abracadabra';
+12      count_a = count(s2, 'a');      /* Should be 5 */
+13      count_ab = count(s2, 'ab');    /* Should be 2 */
+14      count_x = count(s2, 'x');      /* Should be 0 */
+15      countc_vowel = countc(s2, 'aeiou');  /* Should be 5 (a,a,a,a,a) */
+16    
+17      /* VERIFY — find first char not in set */
+18      s3 = 'AAABBBCCC';
+19      verify_abc = verify(s3, 'ABC');    /* Should be 0 (all in set) */
+20      verify_ab = verify(s3, 'AB');      /* Should be 7 (first C) */
+21      s4 = 'xyz123';
+22      verify_letters = verify(s4, 'abcdefghijklmnopqrstuvwxyz');  /* 4 (first digit) */
+23    
+24      /* TRANSLATE — character translation */
+25      s5 = 'abc123';
+26      translate_result = translate(s5, 'ABC', 'abc');  /* Should be 'ABC123' */
+27      s6 = 'hello';
+28      translate_vouch = translate(s6, 'AEIOU', 'aeiou');  /* Should be 'hEllO' */
+29    
+30      /* REVERSE — reverse string */
+31      s7 = 'hello';
+32      reverse_s7 = reverse(s7);      /* Should be 'olleh' */
+33      s8 = 'A';
+34      reverse_s8 = reverse(s8);      /* Should be 'A' */
+35    
+36      /* REPEAT — repeat string */
+37      s9 = 'ab';
+38      repeat_3 = repeat(s9, 3);      /* Should be 'ababab' */
+39      repeat_0 = repeat(s9, 0);      /* Should be '' */
+40      repeat_neg = repeat(s9, -1);   /* Should be '' */
+41    
+42      /* PROPCASE — proper case */
+43      s10 = 'hello world';
+44      propcase_s10 = propcase(s10);  /* Should be 'Hello World' */
+45      s11 = 'hello-world-foo';
+46      propcase_dash = propcase(s11, '-');  /* Should be 'Hello-World-Foo' */
+47    
+48      /* COMPBL — compress blanks */
+49      s12 = '  hello   world  ';
+50      compbl_s12 = compbl(s12);      /* Should be 'hello world' (no leading/trailing) */
+51    
+52      /* SUBSTRN — substr without error on out-of-bounds */
+53      s13 = 'hello';
+54      substrn_ok = substrn(s13, 2, 3);   /* Should be 'ell' */
+55      substrn_oob = substrn(s13, 10, 2); /* Should be '' (no error) */
+56    
+57      /* CHAR/BYTE/RANK — ASCII/Unicode */
+58      char_65 = char(65);            /* Should be 'A' */
+59      char_32 = char(32);            /* Should be ' ' (space) */
+60      byte_97 = byte(97);            /* Should be 'a' */
+61      rank_a = rank('A');            /* Should be 65 */
+62      rank_hello = rank('hello');    /* Should be 104 (code of 'h') */
+63    
+64      /* WHICHC — find matching item */
+65      item = 'foo';
+66      which_found = whichc(item, 'bar', 'foo', 'baz');  /* Should be 2 */
+67      which_notfound = whichc(item, 'bar', 'baz', 'qux');  /* Should be 0 */
+68      which_first = whichc('a', 'a', 'b', 'a');  /* Should be 1 */
+69    
+70      /* CATQ — concatenate with quoting */
+71      catq_result = catq('|', 'hello', 'world');  /* Should be 'hello|world' */
+72      catq_quote = catq('|', 'hel|lo', 'world');  /* Should be '"hel|lo"|world' */
+73    
+74      output;
+75    run;
+NOTE: Character values have been converted to numeric values.
+NOTE: Invalid numeric data.
+NOTE: Missing values were generated as a result of performing an operation on missing values.
+NOTE: The data set WORK.TEST has 1 observations and 48 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+76    title 'M15.1 Character Functions';
+
+77    proc print data=work.test;
+78    run;
+NOTE: There were 1 observations read from the data set WORK.TEST.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                   M15.1 Character Functions
+
+Obs    s              find_o    find_wo    find_not    findc_l    findc_x    s2             count_a    count_ab    count_x    countc_vowel    s3           verify_abc    verify_ab    s4        verify_letters    s5        translate_result    s6       translate_vouch    s7       reverse_s7    s8    reverse_s8    s9    repeat_3    repeat_0    repeat_neg    s10            propcase_s10    s11                propcase_dash    s12                compbl_s12    s13      substrn_ok    substrn_oob    char_65    char_32    byte_97    rank_a    rank_hello    item    which_found    which_notfound    which_first    catq_result    catq_quote
+
+  1    Hello World         5          7           0          3          0    abracadabra          5           2          0               5    AAABBBCCC             0            7    xyz123                 4    abc123                   .    hello                  .    hello             .    A              .    ab           .           .             .    hello world               .    hello-world-foo                .      hello   world             .    hello             .              .          .          .          .        65           104    foo               2                 0              1    hello|world    "hel|lo"|world
+
+==== EXIT 0 ====

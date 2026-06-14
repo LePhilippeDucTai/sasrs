@@ -685,6 +685,479 @@ fn fn_scan(args: &[Value], ctx: &mut EvalCtx) -> Value {
     }
 }
 
+/// FIND(s, target[, startPos[, modifiers]]): return 1-based position of first
+/// occurrence of target in s, starting at startPos. If not found, return 0.
+/// Modifiers: 'i' for case-insensitive.
+fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    let target = coerce_char(&args[1]);
+
+    if target.is_empty() {
+        return Value::Num(0.0);
+    }
+
+    let start_pos = if args.len() >= 3 {
+        match coerce_num(&args[2], ctx) {
+            None => return Value::Num(0.0),
+            Some(f) => (f as i64).max(1),
+        }
+    } else {
+        1
+    };
+
+    let case_insensitive = if args.len() >= 4 {
+        let modifiers = coerce_char(&args[3]);
+        modifiers.to_lowercase().contains('i')
+    } else {
+        false
+    };
+
+    let chars: Vec<char> = s.chars().collect();
+    if start_pos < 1 || start_pos as usize > chars.len() {
+        return Value::Num(0.0);
+    }
+
+    let search_from_char_idx = start_pos as usize;  // startPos is exclusive (1-based), skip to next char
+
+    let target_search = if case_insensitive {
+        target.to_lowercase()
+    } else {
+        target.clone()
+    };
+
+    // Search in the substring starting after startPos
+    let search_text = chars[search_from_char_idx..].iter().collect::<String>();
+    if case_insensitive && search_text.is_empty() {
+        return Value::Num(0.0);
+    }
+
+    match if case_insensitive {
+        search_text.to_lowercase().find(&target_search)
+    } else {
+        search_text.find(&target_search)
+    } {
+        None => Value::Num(0.0),
+        Some(byte_pos) => {
+            let found_char_idx = search_text[..byte_pos].chars().count();
+            let char_pos = search_from_char_idx + found_char_idx + 1;
+            Value::Num(char_pos as f64)
+        }
+    }
+}
+
+/// FINDC(s, target[, startPos[, modifiers]]): like FIND but target is a set of
+/// characters; find first char from target in s.
+fn fn_findc(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    let target = coerce_char(&args[1]);
+
+    if target.is_empty() {
+        return Value::Num(0.0);
+    }
+
+    let start_pos = if args.len() >= 3 {
+        match coerce_num(&args[2], ctx) {
+            None => return Value::Num(0.0),
+            Some(f) => (f as i64).max(1),
+        }
+    } else {
+        1
+    };
+
+    let case_insensitive = if args.len() >= 4 {
+        let modifiers = coerce_char(&args[3]);
+        modifiers.to_lowercase().contains('i')
+    } else {
+        false
+    };
+
+    let chars: Vec<char> = s.chars().collect();
+    if start_pos < 1 || start_pos as usize > chars.len() {
+        return Value::Num(0.0);
+    }
+
+    let target_chars: Vec<char> = if case_insensitive {
+        target.to_lowercase().chars().collect()
+    } else {
+        target.chars().collect()
+    };
+
+    for (i, &c) in chars.iter().enumerate().skip((start_pos - 1) as usize) {
+        let test_c = if case_insensitive { c.to_lowercase().to_string() } else { c.to_string() };
+        if target_chars.contains(&test_c.chars().next().unwrap_or('?')) {
+            return Value::Num((i + 1) as f64);
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// COUNT(s, target[, modifiers]): count occurrences of target substring in s.
+/// Modifiers: 'i' for case-insensitive.
+fn fn_count(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    let target = coerce_char(&args[1]);
+
+    if target.is_empty() {
+        return Value::Num(0.0);
+    }
+
+    let case_insensitive = if args.len() >= 3 {
+        let modifiers = coerce_char(&args[2]);
+        modifiers.to_lowercase().contains('i')
+    } else {
+        false
+    };
+
+    let search_str = if case_insensitive { s.to_lowercase() } else { s.clone() };
+    let target_str = if case_insensitive { target.to_lowercase() } else { target.clone() };
+
+    let mut count = 0;
+    let mut start = 0;
+    while let Some(pos) = search_str[start..].find(&target_str as &str) {
+        count += 1;
+        start += pos + target_str.len();
+    }
+    Value::Num(count as f64)
+}
+
+/// COUNTC(s, target[, modifiers]): count occurrences of any character from
+/// target set in s.
+fn fn_countc(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    let target = coerce_char(&args[1]);
+
+    if target.is_empty() {
+        return Value::Num(0.0);
+    }
+
+    let case_insensitive = if args.len() >= 3 {
+        let modifiers = coerce_char(&args[2]);
+        modifiers.to_lowercase().contains('i')
+    } else {
+        false
+    };
+
+    let target_chars: Vec<char> = if case_insensitive {
+        target.to_lowercase().chars().collect()
+    } else {
+        target.chars().collect()
+    };
+
+    let count = s.chars().filter(|c| {
+        let test_c = if case_insensitive {
+            c.to_lowercase().next().unwrap_or('?')
+        } else {
+            *c
+        };
+        target_chars.contains(&test_c)
+    }).count();
+
+    Value::Num(count as f64)
+}
+
+/// VERIFY(s, target[, modifiers]): return 1-based position of first character
+/// in s NOT in target set. Return 0 if all chars in s are in target.
+fn fn_verify(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Num(0.0);
+    }
+    let s = coerce_char(&args[0]);
+    let target = coerce_char(&args[1]);
+
+    if target.is_empty() {
+        return if s.is_empty() { Value::Num(0.0) } else { Value::Num(1.0) };
+    }
+
+    let case_insensitive = if args.len() >= 3 {
+        let modifiers = coerce_char(&args[2]);
+        modifiers.to_lowercase().contains('i')
+    } else {
+        false
+    };
+
+    let target_chars: Vec<char> = if case_insensitive {
+        target.to_lowercase().chars().collect()
+    } else {
+        target.chars().collect()
+    };
+
+    for (i, c) in s.chars().enumerate() {
+        let test_c = if case_insensitive {
+            c.to_lowercase().next().unwrap_or('?')
+        } else {
+            c
+        };
+        if !target_chars.contains(&test_c) {
+            return Value::Num((i + 1) as f64);
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// TRANSLATE(s, to, from): replace each char in from with corresponding char in to.
+/// If to is shorter than from, chars in from beyond len(to) are removed.
+fn fn_translate(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.len() < 3 {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let to = coerce_char(&args[1]);
+    let from = coerce_char(&args[2]);
+
+    if from.is_empty() {
+        return Value::Char(s);
+    }
+
+    let to_chars: Vec<char> = to.chars().collect();
+    let from_chars: Vec<char> = from.chars().collect();
+
+    let result: String = s.chars().map(|c| {
+        match from_chars.iter().position(|&fc| fc == c) {
+            Some(pos) => {
+                if pos < to_chars.len() {
+                    to_chars[pos]
+                } else {
+                    // char in from beyond len(to) → remove it
+                    return '\0';  // placeholder, will be filtered
+                }
+            }
+            None => c,
+        }
+    }).filter(|&c| c != '\0').collect();
+
+    Value::Char(result)
+}
+
+/// REVERSE(s): reverse the string s.
+fn fn_reverse(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Char(String::new()),
+        Some(v) => {
+            let s = coerce_char(v);
+            let reversed: String = s.chars().rev().collect();
+            Value::Char(reversed)
+        }
+    }
+}
+
+/// REPEAT(s, n): repeat string s n times. n is numeric, truncated to integer.
+/// n<0 → "".
+fn fn_repeat(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.len() < 2 {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    match coerce_num(&args[1], ctx) {
+        None => Value::Char(String::new()),
+        Some(f) => {
+            let n = f.trunc() as i64;
+            if n < 0 {
+                Value::Char(String::new())
+            } else {
+                let result = s.repeat(n as usize);
+                Value::Char(result)
+            }
+        }
+    }
+}
+
+/// PROPCASE(s[, delim]): proper case — capitalize first letter of each word
+/// (words separated by delim, default ' ').
+fn fn_propcase(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let delim = if args.len() >= 2 {
+        coerce_char(&args[1])
+    } else {
+        " ".to_string()
+    };
+
+    if delim.is_empty() {
+        // No delimiter: treat entire string as one word
+        if s.is_empty() {
+            return Value::Char(String::new());
+        }
+        let mut chars = s.chars();
+        let first = chars.next().unwrap().to_uppercase().to_string();
+        let rest: String = chars.map(|c| c.to_lowercase().to_string()).collect();
+        return Value::Char(format!("{}{}", first, rest));
+    }
+
+    // Split by delimiter and capitalize each word
+    let delim_chars: Vec<char> = delim.chars().collect();
+    let mut result = String::new();
+    let mut capitalize_next = true;
+
+    for c in s.chars() {
+        if delim_chars.contains(&c) {
+            result.push(c);
+            capitalize_next = true;
+        } else if capitalize_next {
+            for ch in c.to_uppercase() {
+                result.push(ch);
+            }
+            capitalize_next = false;
+        } else {
+            for ch in c.to_lowercase() {
+                result.push(ch);
+            }
+        }
+    }
+
+    Value::Char(result)
+}
+
+/// COMPBL(s): compress multiple blanks to single, remove leading/trailing blanks.
+fn fn_compbl(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let trimmed = s.trim();
+    let result: String = trimmed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Value::Char(result)
+}
+
+/// SUBSTRN(s, pos[, len]): like SUBSTR but out-of-bounds pos returns ""
+/// WITHOUT setting _ERROR_.
+fn fn_substrn(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let s = coerce_char(&args[0]);
+    let chars: Vec<char> = s.chars().collect();
+    let slen = chars.len() as i64;
+
+    let pos = match args.get(1) {
+        None => return Value::Char(String::new()),
+        Some(v) => match coerce_num(v, ctx) {
+            None => return Value::Char(String::new()),
+            Some(f) => f as i64,
+        },
+    };
+
+    // Out of bounds → "" WITHOUT setting _ERROR_
+    if pos < 1 || pos > slen {
+        return Value::Char(String::new());
+    }
+
+    let start = (pos - 1) as usize;
+    let end = if let Some(len_v) = args.get(2) {
+        match coerce_num(len_v, ctx) {
+            None => return Value::Char(String::new()),
+            Some(l) => {
+                let l = l as i64;
+                if l < 0 {
+                    return Value::Char(String::new());
+                }
+                (start + l as usize).min(chars.len())
+            }
+        }
+    } else {
+        chars.len()
+    };
+
+    let result: String = chars[start..end].iter().collect();
+    Value::Char(result)
+}
+
+/// CHAR(n): return character with Unicode code point n (numeric input).
+/// CHAR(0) returns empty string.
+fn fn_char(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Char(String::new()),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::Char(String::new()),
+            Some(f) => {
+                let code = f as u32;
+                if code == 0 {
+                    Value::Char(String::new())
+                } else {
+                    match std::char::from_u32(code) {
+                        Some(c) => Value::Char(c.to_string()),
+                        None => Value::Char(String::new()),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// RANK(s): return Unicode code point of first character of s.
+fn fn_rank(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::Num(0.0),
+        Some(v) => {
+            let s = coerce_char(v);
+            match s.chars().next() {
+                None => Value::Num(0.0),
+                Some(c) => Value::Num(c as u32 as f64),
+            }
+        }
+    }
+}
+
+/// BYTE(n): alias for CHAR(n).
+fn fn_byte(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    fn_char(args, ctx)
+}
+
+/// WHICHC(needle, haystack1[, haystack2, ...]): return 1-based position of
+/// first argument (after needle) that equals needle. Return 0 if none found.
+fn fn_whichc(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Num(0.0);
+    }
+    let needle = coerce_char(&args[0]);
+    for (i, haystack) in args[1..].iter().enumerate() {
+        if coerce_char(haystack) == needle {
+            return Value::Num((i + 1) as f64);
+        }
+    }
+    Value::Num(0.0)
+}
+
+/// CATQ(delim, item1, item2, ...): concatenate items with delimiter, quoting
+/// items that contain delimiter or quotes. Escape internal quotes with double quotes.
+fn fn_catq(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+    if args.is_empty() {
+        return Value::Char(String::new());
+    }
+    let delim = coerce_char(&args[0]);
+    let mut result = Vec::new();
+
+    for item in &args[1..] {
+        let s = coerce_char(item);
+        let needs_quoting = s.contains(&delim) || s.contains('"');
+        let quoted = if needs_quoting {
+            let escaped = s.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        } else {
+            s
+        };
+        result.push(quoted);
+    }
+
+    Value::Char(result.join(&delim))
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Date functions
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1089,6 +1562,23 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("COMPRESS", fn_compress),
     ("TRANWRD", fn_tranwrd),
     ("SCAN", fn_scan),
+    // Character functions M15.1
+    ("FIND", fn_find),
+    ("FINDC", fn_findc),
+    ("COUNT", fn_count),
+    ("COUNTC", fn_countc),
+    ("VERIFY", fn_verify),
+    ("TRANSLATE", fn_translate),
+    ("REVERSE", fn_reverse),
+    ("REPEAT", fn_repeat),
+    ("PROPCASE", fn_propcase),
+    ("COMPBL", fn_compbl),
+    ("SUBSTRN", fn_substrn),
+    ("CHAR", fn_char),
+    ("RANK", fn_rank),
+    ("BYTE", fn_byte),
+    ("WHICHC", fn_whichc),
+    ("CATQ", fn_catq),
     // Date
     ("TODAY", fn_today),
     ("DATE", fn_today),   // DATE() is an alias for TODAY()
@@ -1896,5 +2386,402 @@ mod tests {
     #[test]
     fn intnx_missing_date_is_missing() {
         assert_eq!(invoke("INTNX", &[chr("month"), miss(), num(1.0)]), miss());
+    }
+
+    // ── FIND ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn find_basic() {
+        assert_eq!(invoke("FIND", &[chr("hello world"), chr("world")]), num(7.0));
+    }
+
+    #[test]
+    fn find_not_found() {
+        assert_eq!(invoke("FIND", &[chr("hello"), chr("xyz")]), num(0.0));
+    }
+
+    #[test]
+    fn find_with_start_pos() {
+        // Find "o" starting from position 5 in "hello world"
+        assert_eq!(invoke("FIND", &[chr("hello world"), chr("o"), num(5.0)]), num(8.0));
+    }
+
+    #[test]
+    fn find_case_insensitive() {
+        assert_eq!(invoke("FIND", &[chr("Hello World"), chr("WORLD"), num(1.0), chr("i")]), num(7.0));
+    }
+
+    #[test]
+    fn find_empty_target() {
+        assert_eq!(invoke("FIND", &[chr("hello"), chr("")]), num(0.0));
+    }
+
+    // ── FINDC ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn findc_basic() {
+        assert_eq!(invoke("FINDC", &[chr("hello"), chr("lo")]), num(3.0));
+    }
+
+    #[test]
+    fn findc_not_found() {
+        assert_eq!(invoke("FINDC", &[chr("hello"), chr("xyz")]), num(0.0));
+    }
+
+    #[test]
+    fn findc_with_start_pos() {
+        assert_eq!(invoke("FINDC", &[chr("hello"), chr("lo"), num(4.0)]), num(4.0));
+    }
+
+    #[test]
+    fn findc_case_insensitive() {
+        assert_eq!(invoke("FINDC", &[chr("Hello"), chr("EL"), num(1.0), chr("i")]), num(2.0));
+    }
+
+    // ── COUNT ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn count_basic() {
+        assert_eq!(invoke("COUNT", &[chr("hello hello"), chr("hello")]), num(2.0));
+    }
+
+    #[test]
+    fn count_zero() {
+        assert_eq!(invoke("COUNT", &[chr("hello"), chr("xyz")]), num(0.0));
+    }
+
+    #[test]
+    fn count_overlapping() {
+        assert_eq!(invoke("COUNT", &[chr("aaa"), chr("aa")]), num(1.0));
+    }
+
+    #[test]
+    fn count_case_insensitive() {
+        assert_eq!(invoke("COUNT", &[chr("Hello hello"), chr("HELLO"), chr("i")]), num(2.0));
+    }
+
+    // ── COUNTC ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn countc_basic() {
+        assert_eq!(invoke("COUNTC", &[chr("hello"), chr("lo")]), num(3.0));
+    }
+
+    #[test]
+    fn countc_zero() {
+        assert_eq!(invoke("COUNTC", &[chr("hello"), chr("xyz")]), num(0.0));
+    }
+
+    #[test]
+    fn countc_all_chars_in_set() {
+        assert_eq!(invoke("COUNTC", &[chr("aaa"), chr("a")]), num(3.0));
+    }
+
+    #[test]
+    fn countc_case_insensitive() {
+        assert_eq!(invoke("COUNTC", &[chr("Hello"), chr("EL"), chr("i")]), num(3.0));
+    }
+
+    // ── VERIFY ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn verify_basic() {
+        assert_eq!(invoke("VERIFY", &[chr("hello"), chr("helo")]), num(0.0));
+    }
+
+    #[test]
+    fn verify_first_not_in_set() {
+        assert_eq!(invoke("VERIFY", &[chr("xhello"), chr("helo")]), num(1.0));
+    }
+
+    #[test]
+    fn verify_middle_not_in_set() {
+        assert_eq!(invoke("VERIFY", &[chr("hello world"), chr("hello")]), num(6.0));
+    }
+
+    #[test]
+    fn verify_empty_target() {
+        assert_eq!(invoke("VERIFY", &[chr("hello"), chr("")]), num(1.0));
+        assert_eq!(invoke("VERIFY", &[chr(""), chr("")]), num(0.0));
+    }
+
+    // ── TRANSLATE ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn translate_basic() {
+        assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("HELLO"), chr("hello")]), chr("HELLO"));
+    }
+
+    #[test]
+    fn translate_partial_mapping() {
+        assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("12"), chr("he")]), chr("12llo"));
+    }
+
+    #[test]
+    fn translate_removal() {
+        assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("1"), chr("helo")]), chr("1"));
+    }
+
+    #[test]
+    fn translate_no_change() {
+        assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("abc"), chr("xyz")]), chr("hello"));
+    }
+
+    // ── REVERSE ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn reverse_basic() {
+        assert_eq!(invoke("REVERSE", &[chr("hello")]), chr("olleh"));
+    }
+
+    #[test]
+    fn reverse_empty() {
+        assert_eq!(invoke("REVERSE", &[chr("")]), chr(""));
+    }
+
+    #[test]
+    fn reverse_single_char() {
+        assert_eq!(invoke("REVERSE", &[chr("a")]), chr("a"));
+    }
+
+    // ── REPEAT ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn repeat_basic() {
+        assert_eq!(invoke("REPEAT", &[chr("ab"), num(3.0)]), chr("ababab"));
+    }
+
+    #[test]
+    fn repeat_zero_times() {
+        assert_eq!(invoke("REPEAT", &[chr("hello"), num(0.0)]), chr(""));
+    }
+
+    #[test]
+    fn repeat_negative_times() {
+        assert_eq!(invoke("REPEAT", &[chr("hello"), num(-5.0)]), chr(""));
+    }
+
+    #[test]
+    fn repeat_single_time() {
+        assert_eq!(invoke("REPEAT", &[chr("hello"), num(1.0)]), chr("hello"));
+    }
+
+    #[test]
+    fn repeat_truncates_decimal() {
+        assert_eq!(invoke("REPEAT", &[chr("a"), num(3.7)]), chr("aaa"));
+    }
+
+    // ── PROPCASE ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn propcase_basic() {
+        assert_eq!(invoke("PROPCASE", &[chr("hello world")]), chr("Hello World"));
+    }
+
+    #[test]
+    fn propcase_mixed_case() {
+        assert_eq!(invoke("PROPCASE", &[chr("HELLO world")]), chr("Hello World"));
+    }
+
+    #[test]
+    fn propcase_custom_delimiter() {
+        assert_eq!(invoke("PROPCASE", &[chr("hello-world"), chr("-")]), chr("Hello-World"));
+    }
+
+    #[test]
+    fn propcase_empty() {
+        assert_eq!(invoke("PROPCASE", &[chr("")]), chr(""));
+    }
+
+    #[test]
+    fn propcase_single_word() {
+        assert_eq!(invoke("PROPCASE", &[chr("hello")]), chr("Hello"));
+    }
+
+    // ── COMPBL ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn compbl_multiple_spaces() {
+        assert_eq!(invoke("COMPBL", &[chr("hello    world")]), chr("hello world"));
+    }
+
+    #[test]
+    fn compbl_leading_trailing() {
+        assert_eq!(invoke("COMPBL", &[chr("  hello world  ")]), chr("hello world"));
+    }
+
+    #[test]
+    fn compbl_mixed_whitespace() {
+        assert_eq!(invoke("COMPBL", &[chr("hello  \t  world")]), chr("hello world"));
+    }
+
+    #[test]
+    fn compbl_empty() {
+        assert_eq!(invoke("COMPBL", &[chr("")]), chr(""));
+    }
+
+    // ── SUBSTRN ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn substrn_basic() {
+        assert_eq!(invoke("SUBSTRN", &[chr("hello"), num(2.0), num(3.0)]), chr("ell"));
+    }
+
+    #[test]
+    fn substrn_no_length() {
+        assert_eq!(invoke("SUBSTRN", &[chr("hello"), num(3.0)]), chr("llo"));
+    }
+
+    #[test]
+    fn substrn_out_of_bounds_no_error() {
+        let mut c = ctx();
+        let r = invoke_ctx("SUBSTRN", &[chr("abc"), num(10.0)], &mut c);
+        assert_eq!(r, chr(""));
+        assert!(!c.error_flag);  // Unlike SUBSTR, no error flag
+    }
+
+    #[test]
+    fn substrn_pos_zero_no_error() {
+        let mut c = ctx();
+        let r = invoke_ctx("SUBSTRN", &[chr("abc"), num(0.0)], &mut c);
+        assert_eq!(r, chr(""));
+        assert!(!c.error_flag);
+    }
+
+    // ── CHAR ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn char_ascii() {
+        assert_eq!(invoke("CHAR", &[num(65.0)]), chr("A"));
+    }
+
+    #[test]
+    fn char_space() {
+        assert_eq!(invoke("CHAR", &[num(32.0)]), chr(" "));
+    }
+
+    #[test]
+    fn char_zero() {
+        assert_eq!(invoke("CHAR", &[num(0.0)]), chr(""));
+    }
+
+    #[test]
+    fn char_unicode() {
+        assert_eq!(invoke("CHAR", &[num(233.0)]), chr("é"));
+    }
+
+    // ── RANK ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn rank_ascii() {
+        assert_eq!(invoke("RANK", &[chr("A")]), num(65.0));
+    }
+
+    #[test]
+    fn rank_space() {
+        assert_eq!(invoke("RANK", &[chr(" ")]), num(32.0));
+    }
+
+    #[test]
+    fn rank_empty() {
+        assert_eq!(invoke("RANK", &[chr("")]), num(0.0));
+    }
+
+    #[test]
+    fn rank_first_char_only() {
+        assert_eq!(invoke("RANK", &[chr("ABC")]), num(65.0));
+    }
+
+    #[test]
+    fn rank_unicode() {
+        assert_eq!(invoke("RANK", &[chr("é")]), num(233.0));
+    }
+
+    // ── BYTE ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn byte_basic() {
+        assert_eq!(invoke("BYTE", &[num(65.0)]), chr("A"));
+    }
+
+    #[test]
+    fn byte_same_as_char() {
+        assert_eq!(invoke("BYTE", &[num(72.0)]), invoke("CHAR", &[num(72.0)]));
+    }
+
+    // ── WHICHC ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn whichc_first_match() {
+        assert_eq!(
+            invoke("WHICHC", &[chr("b"), chr("a"), chr("b"), chr("c")]),
+            num(2.0)
+        );
+    }
+
+    #[test]
+    fn whichc_no_match() {
+        assert_eq!(
+            invoke("WHICHC", &[chr("x"), chr("a"), chr("b"), chr("c")]),
+            num(0.0)
+        );
+    }
+
+    #[test]
+    fn whichc_first_is_match() {
+        assert_eq!(
+            invoke("WHICHC", &[chr("a"), chr("a"), chr("b"), chr("c")]),
+            num(1.0)
+        );
+    }
+
+    #[test]
+    fn whichc_empty_needle() {
+        assert_eq!(
+            invoke("WHICHC", &[chr(""), chr(""), chr("b")]),
+            num(1.0)
+        );
+    }
+
+    // ── CATQ ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn catq_no_quoting_needed() {
+        assert_eq!(
+            invoke("CATQ", &[chr(","), chr("a"), chr("b")]),
+            chr("a,b")
+        );
+    }
+
+    #[test]
+    fn catq_quote_on_delimiter() {
+        assert_eq!(
+            invoke("CATQ", &[chr(","), chr("a,b"), chr("c")]),
+            chr("\"a,b\",c")
+        );
+    }
+
+    #[test]
+    fn catq_quote_on_internal_quote() {
+        assert_eq!(
+            invoke("CATQ", &[chr(","), chr("a\"b"), chr("c")]),
+            chr("\"a\"\"b\",c")
+        );
+    }
+
+    #[test]
+    fn catq_both_conditions() {
+        assert_eq!(
+            invoke("CATQ", &[chr(","), chr("a,\"b"), chr("c")]),
+            chr("\"a,\"\"b\",c")
+        );
+    }
+
+    #[test]
+    fn catq_empty_items() {
+        assert_eq!(
+            invoke("CATQ", &[chr(","), chr("a"), chr(""), chr("c")]),
+            chr("a,,c")
+        );
     }
 }
