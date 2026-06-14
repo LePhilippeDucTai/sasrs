@@ -277,6 +277,34 @@ fn exec_data_step(ast: &crate::ast::DataStepAst, session: &mut Session) {
     }
     // SAS imprime la NOTE de timing même quand l'étape a échoué.
     session.log.step_used("DATA statement", &timer);
+    // CALL EXECUTE (M15.6) : le code mis en file pendant l'étape s'exécute
+    // APRÈS son RUN. On draine la file et on rejoue le code concaténé comme un
+    // programme SAS à part entière (il repasse donc par le processeur macro et
+    // les statements globaux/DATA/PROC). Garde de profondeur : le code rejoué
+    // peut lui-même générer du CALL EXECUTE, mais on traite la file en boucle
+    // tant qu'elle se remplit.
+    run_call_execute_queue(session);
+}
+
+/// Rejoue (M15.6) le code mis en file par CALL EXECUTE. Chaque entrée est un
+/// fragment SAS ; on les concatène (séparés par un saut de ligne) et on les
+/// exécute via `run_program`. Si le rejeu re-remplit la file (CALL EXECUTE
+/// imbriqué), on boucle, avec une garde de profondeur anti-récursion infinie.
+fn run_call_execute_queue(session: &mut Session) {
+    let mut depth = 0;
+    while !session.call_execute_queue.is_empty() {
+        depth += 1;
+        if depth > 1000 {
+            session.log.error(
+                "CALL EXECUTE generated too many nested steps (possible infinite loop); stopping.",
+            );
+            session.call_execute_queue.clear();
+            return;
+        }
+        let code = std::mem::take(&mut session.call_execute_queue).join("\n");
+        let src = SourceFile::new(code);
+        let _ = run_program(&src, session);
+    }
 }
 
 #[cfg(test)]
@@ -613,5 +641,41 @@ mod tests {
         );
         assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
         assert!(out.log.contains("Engine:        PARQUET"), "{}", out.log);
+    }
+
+    // ---- M15.6 — CALL EXECUTE end-to-end (post-step replay) -------------
+
+    /// CALL EXECUTE queues code that runs AFTER the current step's RUN.
+    #[test]
+    fn call_execute_runs_queued_step_after_run() {
+        let out = run_det(
+            "data _null_; call execute('data made; v = 7; output; run;'); run;\n\
+             proc print data=made; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // The queued DATA step created WORK.MADE.
+        assert!(
+            out.log
+                .contains("The data set WORK.MADE has 1 observations and 1 variables."),
+            "log was:\n{}",
+            out.log
+        );
+        assert!(out.listing.contains('7'), "listing:\n{}", out.listing);
+    }
+
+    /// CALL EXECUTE, one per input row, builds several statements that run in
+    /// order after the generating step.
+    #[test]
+    fn call_execute_per_row_generates_multiple_steps() {
+        let out = run_det(
+            "data seed; do i = 1 to 3; output; end; run;\n\
+             data _null_; set seed; \
+               call execute('data g'||left(put(i,1.))||'; x=i_val; run;'); run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // Three datasets were generated (WORK.G1, WORK.G2, WORK.G3).
+        assert!(out.log.contains("WORK.G1"), "log:\n{}", out.log);
+        assert!(out.log.contains("WORK.G2"), "log:\n{}", out.log);
+        assert!(out.log.contains("WORK.G3"), "log:\n{}", out.log);
     }
 }

@@ -702,8 +702,20 @@ impl Compiler<'_> {
             // variable PDV — `call symput` écrit dans la table macro, pas
             // dans le PDV). On parcourt donc simplement les arguments pour
             // découvrir les variables référencées.
-            DsStmt::CallRoutine { name: _, args } => {
+            DsStmt::CallRoutine { name, args } => {
+                // CALL SORTN/SORTC (M15.6) acceptent un NOM D'ARRAY entier en
+                // argument (`call sortn(arr)`) — ce n'est pas une référence de
+                // variable illégale, mais le déballage de tous ses éléments.
+                // On ne walke donc PAS un argument qui nomme un array déclaré.
+                let is_sort = name.eq_ignore_ascii_case("sortn")
+                    || name.eq_ignore_ascii_case("sortc");
                 for a in args {
+                    if is_sort
+                        && let Expr::Var(n) = a
+                        && self.arrays.contains_key(&n.to_uppercase())
+                    {
+                        continue;
+                    }
                     self.walk_expr(a)?;
                 }
                 Ok(())

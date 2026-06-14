@@ -110,6 +110,7 @@ use crate::session::Session;
 use crate::value::{format_best, Value, VarType};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 pub struct StepStats {
     /// (display, lignes lues) par input.
@@ -244,6 +245,14 @@ struct Runner {
     merge_plan: Vec<MergeObs>,
     /// Curseur dans `merge_plan` (prochaine obs à servir).
     merge_cursor: usize,
+    /// Labels des variables (nom UPPERCASE → libellé), copié depuis
+    /// `StepProgram.labels`. Sert CALL LABEL(var, result) (M15.6).
+    labels: HashMap<String, String>,
+    /// CALL EXECUTE (M15.6) : texte SAS mis en file pour exécution APRÈS
+    /// l'étape DATA courante. Drainé par `execute` vers
+    /// `session.call_execute_queue` (l'exécuteur le rejoue ensuite). Chaque
+    /// appel concatène son argument résolu dans l'ordre d'exécution.
+    call_execute_queue: Vec<String>,
 }
 
 /// Une observation de sortie d'un MERGE, pré-calculée par `build_merge_plan`.
@@ -360,6 +369,8 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         out_rows: vec![0; n_outputs],
         merge_plan: Vec::new(),
         merge_cursor: 0,
+        labels,
+        call_execute_queue: Vec::new(),
     };
 
     // Interclassement / match-merge : pré-application des WHERE= par dataset
@@ -438,6 +449,14 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         session.macro_engine.set_symbol_global(&name, value);
     }
 
+    // CALL EXECUTE (M15.6) : drain de la file de code généré pendant l'étape
+    // vers la session. L'exécuteur le rejoue APRÈS le RUN de l'étape (fidèle à
+    // SAS : les pas mis en file par CALL EXECUTE s'exécutent une fois l'étape
+    // courante terminée). On préserve l'ordre d'accumulation.
+    session
+        .call_execute_queue
+        .extend(std::mem::take(&mut r.call_execute_queue));
+
     // PUT (M14.2) : flush de la ligne maintenue en fin d'étape, puis rejeu
     // des lignes produites vers leurs destinations. Le rejeu a lieu AVANT les
     // NOTEs de fin d'étape (la sortie PUT « pendant » l'étape précède la NOTE
@@ -513,7 +532,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             columns.push(series.into());
             // Le libellé suit la variable (par son nom de PDV, pas le
             // nom renommé en sortie).
-            let label = labels.get(&v.name.to_uppercase()).cloned();
+            let label = r.labels.get(&v.name.to_uppercase()).cloned();
             vars.push(VarMeta {
                 name: out_name.clone(),
                 ty: v.ty,
@@ -1300,15 +1319,15 @@ impl Runner {
         }
     }
 
-    /// Exécute une CALL routine (M11.5). v1 : seule `SYMPUT` est supportée.
+    /// Exécute une CALL routine. Routines supportées (M11.5 + M15.6) :
+    /// STREAMINIT, SYMPUT, SYMPUTX, MISSING, EXECUTE, SORTN, SORTC, CATS,
+    /// SCAN, LABEL, VNAME. Toute autre → erreur « not yet implemented ».
     ///
-    /// `call symput(name, value);` évalue les deux arguments, convertit le
-    /// nom et la valeur en chaîne (un numérique est formaté en BEST12.
-    /// cadré à gauche, conformément à SAS), et POUSSE la paire dans
-    /// `ctx.symput_writes`. La table macro n'est PAS touchée pendant
-    /// l'étape : le symbole n'est visible qu'APRÈS le RUN (règle SAS) ; le
-    /// drain effectif est fait par `execute` après la boucle implicite.
-    /// Toute autre routine → erreur runtime « not yet implemented ».
+    /// Les routines qui ÉCRIVENT dans un argument (MISSING, SORTN/SORTC, CATS,
+    /// SCAN, LABEL, VNAME) résolvent cet argument en lvalue (variable ou
+    /// élément d'array) via `resolve_lvalue_slot`. SYMPUT/SYMPUTX diffèrent
+    /// l'écriture macro à la fin de l'étape (règle de visibilité SAS) ;
+    /// EXECUTE met du code en file pour exécution post-étape.
     fn exec_call_routine(&mut self, name: &str, args: &[crate::ast::Expr]) -> Result<Flow> {
         // CALL STREAMINIT(seed) — initialise the RNG stream. Accepts an
         // optional single argument (integer seed); no argument → no-op.
@@ -1324,25 +1343,249 @@ impl Runner {
             return Ok(Flow::Normal);
         }
 
-        if !name.eq_ignore_ascii_case("symput") {
-            return Err(SasError::runtime(format!(
-                "CALL routine {} is not yet implemented.",
-                name.to_uppercase()
-            )));
+        let upper = name.to_uppercase();
+        match upper.as_str() {
+            "SYMPUT" => self.call_symput(args, false),
+            "SYMPUTX" => self.call_symput(args, true),
+            "MISSING" => self.call_missing(args),
+            "EXECUTE" => self.call_execute(args),
+            "SORTN" => self.call_sort(args, false),
+            "SORTC" => self.call_sort(args, true),
+            "CATS" => self.call_cats(args),
+            "SCAN" => self.call_scan(args),
+            "LABEL" => self.call_label(args),
+            "VNAME" => self.call_vname(args),
+            _ => Err(SasError::runtime(format!(
+                "CALL routine {upper} is not yet implemented."
+            ))),
         }
+    }
+
+    /// Résout un argument qui DOIT être une variable scalaire ou un élément
+    /// d'array indexé (`var` ou `arr{i}`) en son slot PDV. Utilisé par les
+    /// CALL routines qui écrivent dans leurs arguments (MISSING, CATS, SCAN,
+    /// LABEL, VNAME). Une expression qui n'est pas une lvalue → erreur.
+    fn resolve_lvalue_slot(&mut self, arg: &crate::ast::Expr) -> Result<usize> {
+        use crate::ast::Expr;
+        match arg {
+            Expr::Var(name) => self.pdv.slot(name).ok_or_else(|| {
+                SasError::runtime(format!("Variable {name} is not addressable."))
+            }),
+            Expr::Index { name, index } => {
+                let idx_val = self.eval_checked(index)?;
+                self.resolve_subscript(name, idx_val)
+            }
+            // `arr(i)` se parse en Call ; si le nom est un array, c'est une
+            // référence d'élément.
+            Expr::Call { name, args } if args.len() == 1
+                && self.ctx.arrays.contains_key(&name.to_uppercase()) =>
+            {
+                let idx_val = self.eval_checked(&args[0])?;
+                self.resolve_subscript(name, idx_val)
+            }
+            _ => Err(SasError::runtime(
+                "CALL routine argument must be a variable reference.",
+            )),
+        }
+    }
+
+    /// CALL SYMPUT(name, value) / CALL SYMPUTX(name, value) — écrit un
+    /// symbole macro. SYMPUTX rogne EN PLUS les blancs de tête ET de fin de
+    /// la valeur (et un nombre est formaté sans blancs) ; SYMPUT garde la
+    /// valeur char telle quelle. Les deux trim­ent le nom.
+    fn call_symput(&mut self, args: &[crate::ast::Expr], x: bool) -> Result<Flow> {
         if args.len() != 2 {
-            return Err(SasError::runtime(
-                "CALL SYMPUT requires exactly two arguments (name, value).",
-            ));
+            return Err(SasError::runtime(if x {
+                "CALL SYMPUTX requires exactly two arguments (name, value)."
+            } else {
+                "CALL SYMPUT requires exactly two arguments (name, value)."
+            }));
         }
         let name_val = self.eval_checked(&args[0])?;
         let value_val = self.eval_checked(&args[1])?;
-        // Le nom macro est trimé (SAS rogne les blancs de bord du nom).
         let sym_name = symput_string(name_val);
         let sym_value = symput_string(value_val);
+        // SYMPUTX rogne les deux bords de la valeur ; SYMPUT la garde telle
+        // quelle (mais BEST12. d'un nombre est déjà cadré à gauche).
+        let sym_value = if x {
+            sym_value.trim().to_string()
+        } else {
+            sym_value
+        };
         self.ctx
             .symput_writes
             .push((sym_name.trim().to_string(), sym_value));
+        Ok(Flow::Normal)
+    }
+
+    /// CALL MISSING(var, var, ...) — met chaque variable argument à missing
+    /// (`.` pour numérique, `""` pour caractère). Chaque argument doit être
+    /// une lvalue (variable scalaire ou élément d'array).
+    fn call_missing(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        for arg in args {
+            let slot = self.resolve_lvalue_slot(arg)?;
+            let init = match self.pdv.vars()[slot].ty {
+                VarType::Num => Value::missing(),
+                VarType::Char => Value::Char(String::new()),
+            };
+            self.pdv.set(slot, init);
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL EXECUTE(arg) — met le texte résolu de `arg` en file pour
+    /// exécution APRÈS l'étape DATA courante. `arg` est évalué comme une
+    /// expression caractère ; sa valeur est concaténée (avec un espace de
+    /// séparation) au code mis en file. La file est rejouée par l'exécuteur
+    /// une fois l'étape terminée.
+    ///
+    /// Limites documentées : la résolution macro (`%nrstr`, exécution macro à
+    /// l'évaluation vs à l'exécution) n'est PAS distinguée — le texte est
+    /// rejoué tel quel comme un programme SAS ordinaire (qui passe par le
+    /// processeur macro à son tour). Les références `&`/`%` du texte mis en
+    /// file sont donc résolues au MOMENT du rejeu, pas de l'appel.
+    fn call_execute(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() != 1 {
+            return Err(SasError::runtime(
+                "CALL EXECUTE requires exactly one argument.",
+            ));
+        }
+        let v = self.eval_checked(&args[0])?;
+        let code = match v {
+            Value::Char(s) => s,
+            Value::Num(f) => format_best(f, 12).trim().to_string(),
+            Value::Missing(_) => String::new(),
+        };
+        self.call_execute_queue.push(code);
+        Ok(Flow::Normal)
+    }
+
+    /// CALL SORTN(arr, ...) / CALL SORTC(arr, ...) — trie EN PLACE, par ordre
+    /// croissant (`sas_cmp`), les valeurs des variables/éléments passés en
+    /// arguments. La forme habituelle est un nom d'array (`call sortn(of a[*])`
+    /// — ici on accepte chaque élément ou un array entier), mais SAS accepte
+    /// aussi une liste de variables. On collecte donc tous les slots cibles
+    /// (un argument array entier dépliant ses slots), on récupère les valeurs,
+    /// on les trie, puis on les ré-assigne dans l'ordre des slots.
+    fn call_sort(&mut self, args: &[crate::ast::Expr], char_sort: bool) -> Result<Flow> {
+        use crate::ast::Expr;
+        // Collecte des slots cibles, dans l'ordre des arguments. Un argument
+        // qui nomme un array entier (`call sortn(arr)`) déplie tous ses slots.
+        let mut slots: Vec<usize> = Vec::new();
+        for arg in args {
+            match arg {
+                Expr::Var(name) if self.ctx.arrays.contains_key(&name.to_uppercase()) => {
+                    let elems = self.ctx.arrays[&name.to_uppercase()].clone();
+                    slots.extend(elems);
+                }
+                _ => slots.push(self.resolve_lvalue_slot(arg)?),
+            }
+        }
+        if slots.is_empty() {
+            return Ok(Flow::Normal);
+        }
+        // Cohérence de type : SORTN attend du numérique, SORTC du caractère.
+        // On ne bloque pas (SAS est permissif) mais on lit les valeurs telles
+        // quelles ; `sas_cmp` ordonne num et char dans leur domaine.
+        let _ = char_sort;
+        let mut values: Vec<Value> = slots.iter().map(|&s| self.pdv.get(s).clone()).collect();
+        values.sort_by(|a, b| a.sas_cmp(b));
+        for (&slot, v) in slots.iter().zip(values) {
+            let coerced = self.coerce_assign(v, self.pdv.vars()[slot].ty);
+            self.pdv.set(slot, coerced);
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL CATS(result, item, ...) — concatène `item...` (chacun rogné des
+    /// blancs de bord, comme la fonction CATS) dans la variable caractère
+    /// `result`. Le résultat est tronqué à la longueur de `result` (sémantique
+    /// PDV normale via `set`). Le premier argument est l'lvalue de sortie.
+    fn call_cats(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.is_empty() {
+            return Err(SasError::runtime(
+                "CALL CATS requires at least one argument (the result variable).",
+            ));
+        }
+        let result_slot = self.resolve_lvalue_slot(&args[0])?;
+        let mut out = String::new();
+        for arg in &args[1..] {
+            let v = self.eval_checked(arg)?;
+            let s = match v {
+                Value::Char(s) => s,
+                Value::Num(f) => format_best(f, 12).trim().to_string(),
+                Value::Missing(k) => k.display(),
+            };
+            out.push_str(s.trim());
+        }
+        let coerced = self.coerce_assign(Value::Char(out), self.pdv.vars()[result_slot].ty);
+        self.pdv.set(result_slot, coerced);
+        Ok(Flow::Normal)
+    }
+
+    /// CALL SCAN(string, n, result[, delims]) — extrait le n-ième mot de
+    /// `string` (n<0 = depuis la fin) dans la variable caractère `result`.
+    /// Réutilise la sémantique de la fonction SCAN. Le 3e argument est
+    /// l'lvalue de sortie.
+    fn call_scan(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() < 3 {
+            return Err(SasError::runtime(
+                "CALL SCAN requires at least three arguments (string, n, result).",
+            ));
+        }
+        // Le mot est calculé par la fonction SCAN (string, n[, delims]).
+        let mut fn_args = vec![self.eval_checked(&args[0])?, self.eval_checked(&args[1])?];
+        if let Some(delim_arg) = args.get(3) {
+            fn_args.push(self.eval_checked(delim_arg)?);
+        }
+        let result_slot = self.resolve_lvalue_slot(&args[2])?;
+        let word = super::functions::call("SCAN", &fn_args, &mut self.ctx)
+            .unwrap_or(Value::Char(String::new()));
+        if let Some(msg) = self.ctx.fatal.take() {
+            let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
+            return Err(SasError::runtime(msg));
+        }
+        let coerced = self.coerce_assign(word, self.pdv.vars()[result_slot].ty);
+        self.pdv.set(result_slot, coerced);
+        Ok(Flow::Normal)
+    }
+
+    /// CALL LABEL(var, result) — pose dans la variable caractère `result` le
+    /// libellé de `var`. Si `var` n'a pas de libellé, SAS renvoie le NOM de la
+    /// variable (comportement reproduit ici).
+    fn call_label(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() != 2 {
+            return Err(SasError::runtime(
+                "CALL LABEL requires exactly two arguments (variable, result).",
+            ));
+        }
+        let var_slot = self.resolve_lvalue_slot(&args[0])?;
+        let result_slot = self.resolve_lvalue_slot(&args[1])?;
+        let var_name = self.pdv.vars()[var_slot].name.clone();
+        let label = self
+            .labels
+            .get(&var_name.to_uppercase())
+            .cloned()
+            .unwrap_or(var_name);
+        let coerced = self.coerce_assign(Value::Char(label), self.pdv.vars()[result_slot].ty);
+        self.pdv.set(result_slot, coerced);
+        Ok(Flow::Normal)
+    }
+
+    /// CALL VNAME(var, result) — pose dans la variable caractère `result` le
+    /// NOM de `var` (tel que stocké au PDV, casse de première référence).
+    fn call_vname(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() != 2 {
+            return Err(SasError::runtime(
+                "CALL VNAME requires exactly two arguments (variable, result).",
+            ));
+        }
+        let var_slot = self.resolve_lvalue_slot(&args[0])?;
+        let result_slot = self.resolve_lvalue_slot(&args[1])?;
+        let var_name = self.pdv.vars()[var_slot].name.clone();
+        let coerced =
+            self.coerce_assign(Value::Char(var_name), self.pdv.vars()[result_slot].ty);
+        self.pdv.set(result_slot, coerced);
         Ok(Flow::Normal)
     }
 
@@ -3967,5 +4210,329 @@ mod tests {
         assert_eq!(lines, vec!["42"]);
         // Rien dans le listing.
         assert!(!s.listing.into_string().contains("42"));
+    }
+
+    // =====================================================================
+    // M15.6 — CALL routines
+    // =====================================================================
+
+    fn num_col(ds: &SasDataset, name: &str) -> Vec<Option<f64>> {
+        let c = ds.df.column(name).unwrap().f64().unwrap();
+        (0..ds.n_obs()).map(|i| c.get(i)).collect()
+    }
+    fn str_col(ds: &SasDataset, name: &str) -> Vec<String> {
+        let c = ds.df.column(name).unwrap().str().unwrap();
+        (0..ds.n_obs()).map(|i| c.get(i).unwrap_or("").to_string()).collect()
+    }
+
+    // ---- CALL MISSING ---------------------------------------------------
+
+    #[test]
+    fn call_missing_sets_numeric_to_missing() {
+        let mut s = session();
+        run(
+            "data out; x = 5; y = 10; call missing(x); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(num_col(&ds, "x"), vec![None]);
+        assert_eq!(num_col(&ds, "y"), vec![Some(10.0)]);
+    }
+
+    #[test]
+    fn call_missing_sets_char_to_empty() {
+        let mut s = session();
+        run(
+            "data out; length name $10; name = 'Alice'; call missing(name); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "name"), vec![String::new()]);
+    }
+
+    #[test]
+    fn call_missing_multiple_vars_mixed_types() {
+        let mut s = session();
+        run(
+            "data out; length c $5; a = 1; b = 2; c = 'hi'; call missing(a, b, c); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(num_col(&ds, "a"), vec![None]);
+        assert_eq!(num_col(&ds, "b"), vec![None]);
+        assert_eq!(str_col(&ds, "c"), vec![String::new()]);
+    }
+
+    // ---- CALL EXECUTE ---------------------------------------------------
+
+    #[test]
+    fn call_execute_queues_literal_code() {
+        let mut s = session();
+        run(
+            "data _null_; call execute('data q; v = 7; run;'); run;",
+            &mut s,
+        )
+        .unwrap();
+        // L'étape elle-même ne fait que mettre en file (rejeu = exécuteur).
+        assert_eq!(
+            s.call_execute_queue,
+            vec!["data q; v = 7; run;".to_string()]
+        );
+    }
+
+    #[test]
+    fn call_execute_queues_per_row_in_order() {
+        let mut s = session();
+        write_class(&s, "inp");
+        run(
+            "data _null_; set inp; call execute('proc print; '||name); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.call_execute_queue.len(), 3);
+        assert!(s.call_execute_queue[0].contains("Alfred"));
+        assert!(s.call_execute_queue[2].contains("Barbara"));
+    }
+
+    #[test]
+    fn call_execute_requires_one_argument() {
+        let mut s = session();
+        let res = run("data _null_; call execute('a', 'b'); run;", &mut s);
+        assert!(res.is_err());
+    }
+
+    // ---- CALL SORTN / SORTC --------------------------------------------
+
+    #[test]
+    fn call_sortn_sorts_array_ascending() {
+        let mut s = session();
+        run(
+            "data out; array a{3} a1-a3; a1=3; a2=1; a3=2; call sortn(a); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(num_col(&ds, "a1"), vec![Some(1.0)]);
+        assert_eq!(num_col(&ds, "a2"), vec![Some(2.0)]);
+        assert_eq!(num_col(&ds, "a3"), vec![Some(3.0)]);
+    }
+
+    #[test]
+    fn call_sortn_missing_sorts_first() {
+        let mut s = session();
+        // SAS collation: missing (.) is smaller than any number.
+        run(
+            "data out; array a{3} a1-a3; a1=5; a2=.; a3=1; call sortn(a); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(num_col(&ds, "a1"), vec![None]);
+        assert_eq!(num_col(&ds, "a2"), vec![Some(1.0)]);
+        assert_eq!(num_col(&ds, "a3"), vec![Some(5.0)]);
+    }
+
+    #[test]
+    fn call_sortc_sorts_char_array_ascending() {
+        let mut s = session();
+        run(
+            "data out; array c{3} $5 c1-c3; c1='pear'; c2='apple'; c3='kiwi'; \
+             call sortc(c); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "c1"), vec!["apple".to_string()]);
+        assert_eq!(str_col(&ds, "c2"), vec!["kiwi".to_string()]);
+        assert_eq!(str_col(&ds, "c3"), vec!["pear".to_string()]);
+    }
+
+    #[test]
+    fn call_sortn_explicit_var_list() {
+        let mut s = session();
+        run(
+            "data out; x=9; y=2; z=5; call sortn(x, y, z); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(num_col(&ds, "x"), vec![Some(2.0)]);
+        assert_eq!(num_col(&ds, "y"), vec![Some(5.0)]);
+        assert_eq!(num_col(&ds, "z"), vec![Some(9.0)]);
+    }
+
+    // ---- CALL SYMPUTX ---------------------------------------------------
+
+    #[test]
+    fn call_symputx_trims_value() {
+        let mut s = session();
+        run(
+            "data _null_; length v $20; v = '   hi   '; call symputx('a', v); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.macro_engine.get_symbol("a").as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn call_symputx_numeric_no_blanks() {
+        let mut s = session();
+        run("data _null_; call symputx('n', 42); run;", &mut s).unwrap();
+        assert_eq!(s.macro_engine.get_symbol("n").as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn call_symput_vs_symputx_value_trimming() {
+        // SYMPUT keeps leading blanks of a char value; SYMPUTX trims them.
+        let mut s = session();
+        run(
+            "data _null_; length v $10; v = '  x'; call symput('a', v); call symputx('b', v); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.macro_engine.get_symbol("a").as_deref(), Some("  x"));
+        assert_eq!(s.macro_engine.get_symbol("b").as_deref(), Some("x"));
+    }
+
+    // ---- CALL CATS ------------------------------------------------------
+
+    #[test]
+    fn call_cats_concatenates_stripped() {
+        let mut s = session();
+        run(
+            "data out; length r $20; a='  foo '; b=' bar'; call cats(r, a, b); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "r"), vec!["foobar".to_string()]);
+    }
+
+    #[test]
+    fn call_cats_mixed_num_and_char() {
+        let mut s = session();
+        run(
+            "data out; length r $20; call cats(r, 'x', 12, 'y'); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "r"), vec!["x12y".to_string()]);
+    }
+
+    #[test]
+    fn call_cats_truncates_to_result_length() {
+        let mut s = session();
+        run(
+            "data out; length r $3; call cats(r, 'abcdef'); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "r"), vec!["abc".to_string()]);
+    }
+
+    // ---- CALL SCAN ------------------------------------------------------
+
+    #[test]
+    fn call_scan_extracts_nth_word() {
+        let mut s = session();
+        run(
+            "data out; length w $10; call scan('alpha beta gamma', 2, w); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "w"), vec!["beta".to_string()]);
+    }
+
+    #[test]
+    fn call_scan_negative_index_from_end() {
+        let mut s = session();
+        run(
+            "data out; length w $10; call scan('a b c', -1, w); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "w"), vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn call_scan_custom_delimiter() {
+        let mut s = session();
+        run(
+            "data out; length w $10; call scan('a,b,c', 2, w, ','); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "w"), vec!["b".to_string()]);
+    }
+
+    // ---- CALL LABEL -----------------------------------------------------
+
+    #[test]
+    fn call_label_returns_label() {
+        let mut s = session();
+        run(
+            "data out; length lbl $40; x = 1; label x = 'My X Variable'; \
+             call label(x, lbl); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "lbl"), vec!["My X Variable".to_string()]);
+    }
+
+    #[test]
+    fn call_label_falls_back_to_name_when_no_label() {
+        let mut s = session();
+        run(
+            "data out; length lbl $40; weight = 1; call label(weight, lbl); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // No label declared → SAS returns the variable name.
+        assert_eq!(str_col(&ds, "lbl"), vec!["weight".to_string()]);
+    }
+
+    // ---- CALL VNAME -----------------------------------------------------
+
+    #[test]
+    fn call_vname_returns_variable_name() {
+        let mut s = session();
+        run(
+            "data out; length nm $32; Height = 1; call vname(Height, nm); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // Name preserved with first-reference casing.
+        assert_eq!(str_col(&ds, "nm"), vec!["Height".to_string()]);
+    }
+
+    #[test]
+    fn call_vname_on_array_element() {
+        let mut s = session();
+        run(
+            "data out; length nm $32; array a{3} a1-a3; call vname(a{2}, nm); output; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(str_col(&ds, "nm"), vec!["a2".to_string()]);
+    }
+
+    #[test]
+    fn unknown_call_routine_errors() {
+        let mut s = session();
+        let res = run("data _null_; call frobnicate(1); run;", &mut s);
+        let err = res.err().expect("expected error for unknown CALL routine");
+        assert!(err.to_string().contains("not yet implemented"), "got: {err}");
     }
 }
