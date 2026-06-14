@@ -2,6 +2,7 @@ use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use polars::prelude::*;
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -113,6 +114,129 @@ impl LibraryProvider for DirLibrary {
     }
 }
 
+// ── CsvLibrary ───────────────────────────────────────────────────────────────
+
+/// Bibliothèque virtuelle CSV : chaque table est un fichier `<dir>/<table>.csv`
+/// lu/écrit via le lecteur CSV de Polars. Le moteur est sélectionné par
+/// `LIBNAME ref CSV 'dir';`. Les noms de tables sont normalisés en minuscules
+/// (comme `DirLibrary` avec les parquets) : `WORK.CLASS` → `class.csv`.
+pub struct CsvLibrary {
+    dir: PathBuf,
+}
+
+impl CsvLibrary {
+    /// Crée une bibliothèque CSV pointant sur `dir`.
+    pub fn new(dir: PathBuf) -> Self {
+        CsvLibrary { dir }
+    }
+
+    fn table_path(&self, table: &str) -> PathBuf {
+        self.dir.join(format!("{}.csv", table.to_lowercase()))
+    }
+}
+
+impl LibraryProvider for CsvLibrary {
+    fn list(&self) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(&self.dir)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|e| e == "csv")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                names.push(stem.to_uppercase());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    fn exists(&self, table: &str) -> bool {
+        self.table_path(table).is_file()
+    }
+
+    fn read(&self, table: &str) -> Result<(SasDataset, Vec<String>)> {
+        let path = self.table_path(table);
+        if !path.is_file() {
+            return Err(SasError::runtime(format!(
+                "Table {} does not exist in this library.",
+                table.to_uppercase()
+            )));
+        }
+        let df = CsvReadOptions::default()
+            .with_has_header(true)
+            .try_into_reader_with_file_path(Some(path.clone()))
+            .map_err(|e| {
+                SasError::runtime(format!(
+                    "CsvLibrary: cannot open '{}': {e}",
+                    path.display()
+                ))
+            })?
+            .finish()
+            .map_err(|e| {
+                SasError::runtime(format!(
+                    "CsvLibrary: error reading '{}': {e}",
+                    path.display()
+                ))
+            })?;
+        SasDataset::from_dataframe(df)
+    }
+
+    fn scan(&self, table: &str) -> Result<LazyFrame> {
+        // V1 : lecture eager puis `.lazy()` — acceptable pour PROC SQL sur de
+        // petits fichiers CSV. Une vraie implémentation utiliserait
+        // `LazyCsvReader` (à activer avec la feature Polars `lazy_csv`).
+        Ok(self.read(table)?.0.df.lazy())
+    }
+
+    fn write(&self, table: &str, ds: &SasDataset) -> Result<()> {
+        let path = self.table_path(table);
+        let mut file = File::create(&path).map_err(|e| {
+            SasError::runtime(format!(
+                "CsvLibrary: cannot create '{}': {e}",
+                path.display()
+            ))
+        })?;
+        let mut df = ds.df.clone();
+        CsvWriter::new(&mut file)
+            .include_header(true)
+            .finish(&mut df)
+            .map_err(|e| {
+                SasError::runtime(format!(
+                    "CsvLibrary: error writing '{}': {e}",
+                    path.display()
+                ))
+            })?;
+        Ok(())
+    }
+
+    fn delete(&self, table: &str) -> Result<()> {
+        let path = self.table_path(table);
+        std::fs::remove_file(&path).map_err(|e| {
+            SasError::runtime(format!(
+                "CsvLibrary: cannot delete '{}': {e}",
+                path.display()
+            ))
+        })
+    }
+
+    fn rename(&self, old: &str, new: &str) -> Result<()> {
+        let old_path = self.table_path(old);
+        if !old_path.is_file() {
+            return Err(SasError::runtime(format!(
+                "Table {} does not exist in this library.",
+                old.to_uppercase()
+            )));
+        }
+        let new_path = self.table_path(new);
+        std::fs::rename(&old_path, &new_path)?;
+        Ok(())
+    }
+
+    fn is_cloud(&self) -> bool {
+        false
+    }
+}
+
 enum WorkDir {
     /// Kept alive so the directory survives the session, deleted on drop.
     Temp(#[allow(dead_code)] TempDir),
@@ -156,6 +280,21 @@ impl LibraryManager {
         }
         self.refs
             .insert(libref.to_uppercase(), Arc::new(DirLibrary::new(dir)));
+        Ok(())
+    }
+
+    /// `LIBNAME libref CSV 'dir';` — bibliothèque virtuelle CSV.
+    /// Le répertoire doit exister (même exigence que `assign`).
+    pub fn assign_csv(&mut self, libref: &str, dir: PathBuf) -> Result<()> {
+        validate_libref(libref)?;
+        if !dir.is_dir() {
+            return Err(SasError::runtime(format!(
+                "Library directory {} does not exist.",
+                dir.display()
+            )));
+        }
+        self.refs
+            .insert(libref.to_uppercase(), Arc::new(CsvLibrary::new(dir)));
         Ok(())
     }
 
@@ -351,6 +490,145 @@ fn validate_libref(libref: &str) -> Result<()> {
             "{} is not a valid SAS name for a libref.",
             libref.to_uppercase()
         )))
+    }
+}
+
+#[cfg(test)]
+mod csv_tests {
+    use super::*;
+
+    fn make_ds(vals: Vec<i32>, names: Vec<&str>) -> SasDataset {
+        // Build a small DataFrame with one numeric column and one char column.
+        let numeric = Series::new("x".into(), vals.iter().map(|&v| v as f64).collect::<Vec<_>>());
+        let chars   = Series::new("name".into(), names);
+        let df = DataFrame::new(vec![numeric.into(), chars.into()]).unwrap();
+        SasDataset::from_dataframe(df).unwrap().0
+    }
+
+    #[test]
+    fn csv_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let ds = make_ds(vec![1, 2, 3], vec!["a", "b", "c"]);
+        lib.write("mytable", &ds).unwrap();
+
+        let path = tmp.path().join("mytable.csv");
+        assert!(path.is_file(), "CSV file should exist after write");
+
+        let (ds2, _) = lib.read("mytable").unwrap();
+        assert_eq!(ds2.df.height(), 3, "row count");
+        assert!(ds2.df.column("x").is_ok(), "numeric column present");
+        assert!(ds2.df.column("name").is_ok(), "char column present");
+    }
+
+    #[test]
+    fn csv_round_trip_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let ds = make_ds(vec![10, 20], vec!["foo", "bar"]);
+        lib.write("t", &ds).unwrap();
+        let (ds2, _) = lib.read("t").unwrap();
+        let col = ds2.df.column("x").unwrap();
+        // CSV is read back as floats or ints – check values via to_string.
+        let s: Vec<f64> = col.cast(&DataType::Float64).unwrap()
+            .f64().unwrap().into_no_null_iter().collect();
+        assert_eq!(s, vec![10.0, 20.0]);
+    }
+
+    #[test]
+    fn csv_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        assert!(!lib.exists("none"));
+        let ds = make_ds(vec![1], vec!["x"]);
+        lib.write("none", &ds).unwrap();
+        assert!(lib.exists("none"));
+        // Case-insensitive: table name is lowercased for the file.
+        assert!(lib.exists("NONE"));
+    }
+
+    #[test]
+    fn csv_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        assert_eq!(lib.list().unwrap(), Vec::<String>::new());
+        let ds = make_ds(vec![1], vec!["v"]);
+        lib.write("alpha", &ds).unwrap();
+        lib.write("beta", &ds).unwrap();
+        let names = lib.list().unwrap();
+        assert_eq!(names, vec!["ALPHA".to_string(), "BETA".to_string()]);
+    }
+
+    #[test]
+    fn csv_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let ds = make_ds(vec![1], vec!["v"]);
+        lib.write("todelete", &ds).unwrap();
+        assert!(lib.exists("todelete"));
+        lib.delete("todelete").unwrap();
+        assert!(!lib.exists("todelete"));
+    }
+
+    #[test]
+    fn csv_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let ds = make_ds(vec![1], vec!["v"]);
+        lib.write("old", &ds).unwrap();
+        lib.rename("old", "new").unwrap();
+        assert!(!lib.exists("old"));
+        assert!(lib.exists("new"));
+    }
+
+    #[test]
+    fn csv_rename_nonexistent_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let err = lib.rename("ghost", "new").unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn csv_read_nonexistent_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let err_msg = lib.read("nobody").err().expect("expected error reading non-existent table").to_string();
+        assert!(err_msg.contains("does not exist"), "{err_msg}");
+    }
+
+    #[test]
+    fn csv_scan_lazy_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        let ds = make_ds(vec![42], vec!["q"]);
+        lib.write("lazy", &ds).unwrap();
+        let lf = lib.scan("lazy").unwrap();
+        let df = lf.collect().unwrap();
+        assert_eq!(df.height(), 1);
+    }
+
+    #[test]
+    fn csv_is_not_cloud() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = CsvLibrary::new(tmp.path().to_path_buf());
+        assert!(!lib.is_cloud());
+    }
+
+    #[test]
+    fn assign_csv_registers_libref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = LibraryManager::new(None).unwrap();
+        mgr.assign_csv("csvlib", tmp.path().to_path_buf()).unwrap();
+        let prov = mgr.get("csvlib").unwrap();
+        assert!(!prov.is_cloud());
+    }
+
+    #[test]
+    fn assign_csv_rejects_missing_dir() {
+        let mut mgr = LibraryManager::new(None).unwrap();
+        let err = mgr.assign_csv("x", PathBuf::from("/nonexistent/path/xyz")).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
     }
 }
 

@@ -121,7 +121,7 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
 
 fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     match stmt {
-        GlobalStmt::Libname { libref, path } => {
+        GlobalStmt::Libname { libref, engine, path } => {
             // M13 : routage cloud. Quand la feature `s3` est active et que le
             // chemin commence par `s3://`, on enregistre une `S3Library`
             // (bucket/prefix) au lieu d'une `DirLibrary`. Le chemin affiché
@@ -130,6 +130,7 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             // n'est pas compilé : un chemin `s3://...` est traité comme
             // aujourd'hui (résolu comme un répertoire local, qui n'existe pas →
             // erreur runtime habituelle).
+            // M13 : routage cloud s3://.
             #[cfg(feature = "s3")]
             if path.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("s3://")) {
                 match session.libs.assign_uri(libref, path) {
@@ -140,6 +141,18 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                     Err(e) => session.log.error(&e.to_string()),
                 }
                 return;
+            }
+
+            // M14.4 : XLSX engine deferral — emit an error and return.
+            match engine.as_deref().map(|e| e.to_ascii_uppercase()).as_deref() {
+                Some("XLSX") | Some("EXCEL") | Some("XLS") => {
+                    session.log.error(
+                        "LIBNAME engine XLSX is not yet implemented in this build \
+                         (the calamine/rust_xlsxwriter crates are not available).",
+                    );
+                    return;
+                }
+                _ => {}
             }
 
             let p = PathBuf::from(path);
@@ -155,12 +168,28 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             } else {
                 abs.display().to_string()
             };
-            match session.libs.assign(libref, abs) {
-                Ok(()) => session.log.note(&format!(
-                    "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {shown}",
-                    libref.to_uppercase()
-                )),
-                Err(e) => session.log.error(&e.to_string()),
+
+            // M14.4 : branch on engine.
+            match engine.as_deref().map(|e| e.to_ascii_uppercase()).as_deref() {
+                Some("CSV") => {
+                    match session.libs.assign_csv(libref, abs) {
+                        Ok(()) => session.log.note(&format!(
+                            "Libref {} was successfully assigned as follows:\n      Engine:        CSV\n      Physical Name: {shown}",
+                            libref.to_uppercase()
+                        )),
+                        Err(e) => session.log.error(&e.to_string()),
+                    }
+                }
+                // None | Some("PARQUET") | Some("BASE") | Some("V9") | _ → parquet path
+                _ => {
+                    match session.libs.assign(libref, abs) {
+                        Ok(()) => session.log.note(&format!(
+                            "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {shown}",
+                            libref.to_uppercase()
+                        )),
+                        Err(e) => session.log.error(&e.to_string()),
+                    }
+                }
             }
         }
         GlobalStmt::LibnameClear { libref } => match session.libs.clear(libref) {
@@ -502,5 +531,87 @@ mod tests {
             .log
             .contains("There were 1 observations read from the data set WORK.ZZ."));
         assert!(out.listing.contains("3.5"));
+    }
+
+    /// M14.4 — LIBNAME XLSX emits a clear deferral error.
+    #[test]
+    fn libname_xlsx_engine_deferred_error() {
+        let out = run_det("libname xl xlsx '/tmp';");
+        // The log must contain an ERROR message about XLSX not being available.
+        assert!(
+            out.log.contains("ERROR"),
+            "expected ERROR in log: {}",
+            out.log
+        );
+        assert!(
+            out.log.to_ascii_lowercase().contains("xlsx"),
+            "expected 'xlsx' in error: {}",
+            out.log
+        );
+    }
+
+    /// M14.4 — LIBNAME EXCEL (synonym for XLSX) also deferred.
+    #[test]
+    fn libname_excel_engine_deferred_error() {
+        let out = run_det("libname xl excel '/tmp';");
+        assert!(out.log.contains("ERROR"), "expected ERROR: {}", out.log);
+    }
+
+    /// M14.4 — LIBNAME with CSV engine assigns and reads back a table.
+    #[test]
+    fn libname_csv_engine_end_to_end() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        // Write a CSV file in the temp dir.
+        let csv_path = tmp.path().join("scores.csv");
+        let mut f = std::fs::File::create(&csv_path).unwrap();
+        writeln!(f, "id,score").unwrap();
+        writeln!(f, "1,100").unwrap();
+        writeln!(f, "2,200").unwrap();
+        drop(f);
+
+        let src = format!(
+            "libname csv1 csv '{}';\n\
+             data work.out; set csv1.scores; run;\n\
+             proc print data=work.out; run;\n",
+            tmp.path().display()
+        );
+        let out = crate::run(
+            &src,
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+                vectorize: false,
+            },
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        assert!(
+            out.log.contains("Engine:        CSV"),
+            "expected CSV engine note: {}",
+            out.log
+        );
+        assert!(
+            out.log.contains("2 observations"),
+            "expected 2 obs note: {}",
+            out.log
+        );
+    }
+
+    /// M14.4 — LIBNAME without engine (no engine field) → parquet path unchanged.
+    #[test]
+    fn libname_no_engine_uses_parquet_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = crate::run(
+            &format!("libname p '{}';", tmp.path().display()),
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+                vectorize: false,
+            },
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        assert!(out.log.contains("Engine:        PARQUET"), "{}", out.log);
     }
 }

@@ -413,6 +413,7 @@ pub struct DataStepAst {
 pub enum GlobalStmt {
     Libname {
         libref: String,
+        engine: Option<String>,
         path: String,
     },
     LibnameClear {
