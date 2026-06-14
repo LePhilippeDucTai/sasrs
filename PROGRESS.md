@@ -150,7 +150,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] ⫽ M15.1 — caractère : FIND, FINDC, COUNT, COUNTC, VERIFY, TRANSLATE, REVERSE, REPEAT, PROPCASE, COMPBL, SUBSTRN, CHAR, RANK, BYTE, WHICHC, CATQ (Sonnet, moyen)
 - [x] ⫽ M15.2 — mathématiques : CEIL, FLOOR, SIGN, SIN/COS/TAN/ARSIN/ARCOS/ATAN/ATAN2, SINH/COSH/TANH, FACT, COMB, PERM, GAMMA, LGAMMA, DIGAMMA, BETA, ROUNDZ, RANGE, LARGEST/SMALLEST, ORDINAL (Sonnet, moyen)
 - [x] ⫽ M15.3 — date/heure : DATEPART, TIMEPART, DATETIME, HMS, DHMS, YRDIF, DATDIF, JULDATE, DATEJUL, HOUR/MINUTE/SECOND, NLDATE, INTFMT, INTSHIFT (Opus, moyen)
-- [ ] M15.4 — probabilités : PROBNORM, PROBT, PROBF, PROBCHI, PROBBETA, PROBGAM, CDF, PDF, QUANTILE, SDF, LOGCDF, PROBBNML, POISSON (Fable, élevé — numérique maison, anticipe `src/stat/`)
+- [x] M15.4 — probabilités : PROBNORM, PROBT, PROBF, PROBCHI, PROBBETA, PROBGAM, CDF, PDF, QUANTILE, SDF, LOGCDF, PROBBNML, POISSON (Fable, élevé — numérique maison, anticipe `src/stat/`)
 - [ ] M15.5 — aléatoire : RAND, RANUNI, RANNOR, RANEXP, RANBIN, CALL STREAMINIT/RANUNI ; PRNG MT19937 maison, graine figée sous `--deterministic`, fidélité flux SAS documentée comme approximation (Fable, élevé)
 - [ ] M15.6 — CALL routines : CALL MISSING, CALL EXECUTE (file différée post-step), CALL SORTN/SORTC, CALL SYMPUTX, CALL CATS/SCAN, CALL LABEL, CALL VNAME (Opus, moyen)
 - [ ] M15.7 — LAG/LAGn/DIF/DIFn : FIFO par site d'appel (clé = identité d'expression), `EvalCtx.lag_fifos` (vérifier l'état réel d'abord) (Opus, moyen)
