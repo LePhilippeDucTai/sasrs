@@ -888,6 +888,10 @@ fn base_expr_to_polars(e: &SasExpr, ctx: &Ctx) -> Result<Expr> {
             "PROC SQL: array reference {} is not supported in SQL.",
             name.to_uppercase()
         ))),
+        SasExpr::HashMethod(call) => Err(SasError::runtime(format!(
+            "PROC SQL: hash method call on {} is not supported in SQL.",
+            call.object.to_uppercase()
+        ))),
     }
 }
 

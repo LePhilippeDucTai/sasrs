@@ -352,6 +352,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         labels,
         flow_labels,
         hash_objects,
+        hash_iters,
     } = prog;
 
     for name in &uninitialized {
@@ -433,6 +434,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             end_flag,
             macro_symbols,
             hashes: hash_objects,
+            hash_iters,
             ..EvalCtx::default()
         },
         outputs,
@@ -540,6 +542,10 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
         session.macro_engine.set_symbol_global(&name, value);
     }
+
+    // Hash output (M17.2) : drain des `h.output(dataset:)` accumulés vers les
+    // providers de bibliothèque (où `&mut Session` est disponible).
+    flush_hash_outputs(&mut r, session)?;
 
     // CALL EXECUTE (M15.6) : drain de la file de code généré pendant l'étape
     // vers la session. L'exécuteur le rejoue APRÈS le RUN de l'étape (fidèle à
@@ -649,6 +655,51 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     }
 
     Ok(stats)
+}
+
+/// Écrit les sorties de hash en attente (M17.2) accumulées par
+/// `h.output(dataset:)` vers leurs providers de bibliothèque. Appelée APRÈS la
+/// boucle implicite (`&mut Session` disponible). Chaque sortie devient un
+/// dataset (clés puis données, dans l'ordre de l'objet hash).
+fn flush_hash_outputs(r: &mut Runner, session: &mut Session) -> Result<()> {
+    for out in std::mem::take(&mut r.ctx.hash_outputs) {
+        let mut columns: Vec<Column> = Vec::with_capacity(out.vars.len());
+        for (c, meta) in out.vars.iter().enumerate() {
+            let series = match meta.ty {
+                VarType::Num => {
+                    let vals: Vec<Option<f64>> =
+                        out.rows.iter().map(|row| value_to_num(&row[c])).collect();
+                    Series::new(meta.name.as_str().into(), vals)
+                }
+                VarType::Char => {
+                    let vals: Vec<String> = out
+                        .rows
+                        .iter()
+                        .map(|row| match &row[c] {
+                            Value::Char(s) => s.clone(),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    Series::new(meta.name.as_str().into(), vals)
+                }
+            };
+            columns.push(series.into());
+        }
+        let df = DataFrame::new(columns)?;
+        let ds = SasDataset {
+            df,
+            vars: out.vars.clone(),
+        };
+        session.libs.get(&out.libref)?.write(&out.table, &ds)?;
+        session.last_dataset = Some(out.display.clone());
+        session.log.note(&format!(
+            "The data set {} has {} observations and {} variables.",
+            out.display,
+            out.rows.len(),
+            out.vars.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Construit un Runner « squelette » pour les boucles UPDATE/MODIFY (M16.5),
@@ -1349,12 +1400,15 @@ impl Runner {
             // marqueur déclaratif ; aucune action runtime (l'objet existe pour
             // toute l'étape, comme les objets hash SAS au sein d'une étape DATA).
             DsStmt::DeclareHash { .. } => Ok(Flow::Normal),
-            // Appel de méthode d'objet hash (M17.1).
-            DsStmt::HashMethod {
-                object,
-                method,
-                args,
-            } => self.exec_hash_method(object, method, args),
+            // DECLARE HITER (M17.2) : itérateur enregistré à la compilation
+            // (dans `EvalCtx.hash_iters`). Marqueur déclaratif, aucune action.
+            DsStmt::DeclareHiter { .. } => Ok(Flow::Normal),
+            // Appel de méthode d'objet hash en STATEMENT (M17.1/M17.2) : le code
+            // retour est ignoré.
+            DsStmt::HashMethod(call) => {
+                self.exec_hash_method_rc(&call.object, &call.method, &call.args)?;
+                Ok(Flow::Normal)
+            }
             // INPUT (M14) : lit le PROCHAIN enregistrement de la source texte
             // dans le PDV. Comme SET, l'épuisement de la source termine
             // l'étape IMMÉDIATEMENT (au milieu de l'itération).
@@ -2031,17 +2085,23 @@ impl Runner {
         }
     }
 
-    /// Appel de méthode d'objet hash (M17.1). Seules
-    /// `defineKey`/`defineData`/`defineDone` sont exécutées ; les autres
-    /// (find/add/replace/remove/output/...) parsent mais produisent une erreur
-    /// runtime « not yet implemented » (M17.2).
-    fn exec_hash_method(
+    /// Appel de méthode d'objet hash (M17.1/M17.2). Renvoie le CODE RETOUR
+    /// (0 = succès, ≠0 = échec) — utilisé par la forme expression
+    /// (`rc = h.find();`) et ignoré par la forme statement (`h.find();`).
+    /// Les méthodes `find`/replace copient les données dans le PDV, `clear`/
+    /// `remove`/`add` mutent l'objet, `output` met une sortie en file.
+    fn exec_hash_method_rc(
         &mut self,
         object: &str,
         method: &str,
-        args: &[crate::ast::Expr],
-    ) -> Result<Flow> {
+        args: &[crate::ast::HashArg],
+    ) -> Result<i64> {
         let upper = object.to_uppercase();
+        // Itérateur de hash (DECLARE HITER) : route vers les méthodes
+        // first/next/last/prev avant le dispatch des méthodes d'objet hash.
+        if self.ctx.hash_iters.contains_key(&upper) {
+            return self.exec_hiter_method(&upper, method);
+        }
         if !self.ctx.hashes.contains_key(&upper) {
             return Err(SasError::runtime(format!(
                 "Hash object {upper} has not been declared."
@@ -2050,12 +2110,9 @@ impl Runner {
         let m = method.to_ascii_lowercase();
         match m.as_str() {
             "definekey" | "definedata" => {
-                // Les arguments sont des littéraux chaîne nommant des variables
-                // du PDV (validés à la compilation). On collecte les noms
-                // UPPERCASE dans l'ordre.
                 let mut names = Vec::with_capacity(args.len());
                 for a in args {
-                    let crate::ast::Expr::Str(varname) = a else {
+                    let crate::ast::HashArg::Positional(crate::ast::Expr::Str(varname)) = a else {
                         return Err(SasError::runtime(format!(
                             "Argument of {upper}.{method} must be a quoted variable name."
                         )));
@@ -2068,21 +2125,475 @@ impl Runner {
                 } else {
                     obj.data_vars = names;
                 }
-                Ok(Flow::Normal)
+                Ok(0)
             }
-            "definedone" => {
-                // Finalisation, idempotente. Le chargement éventuel d'un
-                // `dataset:` est différé à M17.2 (le nom est conservé).
+            "definedone" => self.hash_define_done(&upper),
+            "add" => self.hash_add(&upper, args),
+            "replace" => self.hash_replace(&upper, args),
+            "find" => self.hash_find(&upper, args, true),
+            "check" => self.hash_find(&upper, args, false),
+            "remove" => self.hash_remove(&upper, args),
+            "clear" => {
                 let obj = self.ctx.hashes.get_mut(&upper).expect("checked above");
-                obj.defined = true;
-                Ok(Flow::Normal)
+                obj.rows.clear();
+                obj.insertion_order.clear();
+                Ok(0)
             }
-            // find/check/add/replace/remove/clear/output/num_items/... : M17.2.
+            "find_next" => self.hash_find_next(&upper, 1),
+            "find_prev" => self.hash_find_next(&upper, -1),
+            "num_items" | "item_size" => {
+                let obj = self.ctx.hashes.get(&upper).expect("checked above");
+                let n: usize = obj.rows.values().map(|v| v.len()).sum();
+                Ok(n as i64)
+            }
+            "output" => self.hash_output(&upper, args),
             other => Err(SasError::runtime(format!(
                 "Hash method {}.{} is not yet implemented.",
                 upper,
                 other.to_uppercase()
             ))),
+        }
+    }
+
+    /// `defineDone()` (M17.2) : finalise l'objet (idempotent) et, si une option
+    /// `dataset:` était posée, charge ses lignes pré-lues dans le hash.
+    fn hash_define_done(&mut self, upper: &str) -> Result<i64> {
+        let obj = self.ctx.hashes.get(upper).expect("checked above");
+        if obj.defined {
+            return Ok(0);
+        }
+        let load = obj.dataset_cols.clone();
+        let nrows = obj.dataset_nrows;
+        let keys = obj.keys.clone();
+        let data_vars = obj.data_vars.clone();
+        let multidata = obj.multidata;
+        let duplicate = obj.duplicate.clone();
+        if let Some(cols) = load {
+            for row in 0..nrows {
+                let key_vals: Vec<Value> = keys
+                    .iter()
+                    .map(|k| cols.get(k).map_or(Value::missing(), |c| c[row].clone()))
+                    .collect();
+                let data_vals: Vec<Value> = data_vars
+                    .iter()
+                    .map(|d| cols.get(d).map_or(Value::missing(), |c| c[row].clone()))
+                    .collect();
+                self.hash_insert(upper, key_vals, data_vals, multidata, &duplicate, false)?;
+            }
+        }
+        let obj = self.ctx.hashes.get_mut(upper).expect("checked above");
+        obj.defined = true;
+        Ok(0)
+    }
+
+    /// Récupère les valeurs des variables clé d'un hash depuis le PDV (ou
+    /// depuis l'argument nommé `key:` s'il est fourni).
+    fn hash_key_values(
+        &mut self,
+        upper: &str,
+        named: &std::collections::HashMap<String, Value>,
+    ) -> Result<Vec<Value>> {
+        let keys = self.ctx.hashes.get(upper).expect("checked").keys.clone();
+        let mut vals = Vec::with_capacity(keys.len());
+        for k in &keys {
+            // `key:` nommé n'est supporté que pour une clé unique (cas courant).
+            if let (1, Some(v)) = (keys.len(), named.get("key")) {
+                vals.push(v.clone());
+                continue;
+            }
+            let slot = self.pdv.slot(k).ok_or_else(|| {
+                SasError::runtime(format!("Hash key variable {k} is not addressable."))
+            })?;
+            vals.push(self.pdv.get(slot).clone());
+        }
+        Ok(vals)
+    }
+
+    /// Récupère les valeurs des variables données d'un hash depuis le PDV (ou
+    /// depuis l'argument nommé `data:` pour une donnée unique).
+    fn hash_data_values(
+        &mut self,
+        upper: &str,
+        named: &std::collections::HashMap<String, Value>,
+    ) -> Result<Vec<Value>> {
+        let data_vars = self.ctx.hashes.get(upper).expect("checked").data_vars.clone();
+        let mut vals = Vec::with_capacity(data_vars.len());
+        for d in &data_vars {
+            if let (1, Some(v)) = (data_vars.len(), named.get("data")) {
+                vals.push(v.clone());
+                continue;
+            }
+            let slot = self.pdv.slot(d).ok_or_else(|| {
+                SasError::runtime(format!("Hash data variable {d} is not addressable."))
+            })?;
+            vals.push(self.pdv.get(slot).clone());
+        }
+        Ok(vals)
+    }
+
+    /// Évalue les arguments nommés (`key:`, `data:`, `dataset:`) d'un appel.
+    fn hash_named_args(
+        &mut self,
+        args: &[crate::ast::HashArg],
+    ) -> Result<std::collections::HashMap<String, Value>> {
+        use crate::ast::HashArg;
+        let mut map = std::collections::HashMap::new();
+        for a in args {
+            if let HashArg::Named(name, expr) = a {
+                let v = self.eval_checked(expr)?;
+                map.insert(name.clone(), v);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Insère une entrée dans un hash, en respectant multidata/duplicate.
+    /// `from_replace` = appel issu de `replace` (remplace toujours la 1re
+    /// entrée existante sans tenir compte de `duplicate`).
+    fn hash_insert(
+        &mut self,
+        upper: &str,
+        key_vals: Vec<Value>,
+        data_vals: Vec<Value>,
+        multidata: bool,
+        duplicate: &Option<String>,
+        from_replace: bool,
+    ) -> Result<i64> {
+        let key = super::hash_key(&key_vals);
+        let obj = self.ctx.hashes.get_mut(upper).expect("checked");
+        if let Some(existing) = obj.rows.get_mut(&key) {
+            if from_replace {
+                // replace : écrase la 1re entrée (ou ajoute si multidata vide).
+                existing[0] = data_vals;
+                return Ok(0);
+            }
+            if multidata {
+                existing.push(data_vals);
+                return Ok(0);
+            }
+            match duplicate.as_deref() {
+                Some("replace") | Some("r") => {
+                    existing[0] = data_vals;
+                    Ok(0)
+                }
+                Some("error") | Some("e") => {
+                    // SAS : code retour ≠0 (et NOTE), l'entrée n'est pas ajoutée.
+                    Ok(1)
+                }
+                // Défaut : la 1re valeur est conservée, l'ajout est ignoré.
+                _ => Ok(1),
+            }
+        } else {
+            obj.rows.insert(key.clone(), vec![data_vals]);
+            obj.key_values.insert(key.clone(), key_vals);
+            obj.insertion_order.push(key);
+            Ok(0)
+        }
+    }
+
+    /// `add()` / `add(key:..., data:...)` (M17.2).
+    fn hash_add(&mut self, upper: &str, args: &[crate::ast::HashArg]) -> Result<i64> {
+        let named = self.hash_named_args(args)?;
+        let key_vals = self.hash_key_values(upper, &named)?;
+        let data_vals = self.hash_data_values(upper, &named)?;
+        let (multidata, duplicate) = {
+            let o = self.ctx.hashes.get(upper).expect("checked");
+            (o.multidata, o.duplicate.clone())
+        };
+        self.hash_insert(upper, key_vals, data_vals, multidata, &duplicate, false)
+    }
+
+    /// `replace()` (M17.2) — remplace les données de la clé courante (ou ajoute).
+    fn hash_replace(&mut self, upper: &str, args: &[crate::ast::HashArg]) -> Result<i64> {
+        let named = self.hash_named_args(args)?;
+        let key_vals = self.hash_key_values(upper, &named)?;
+        let data_vals = self.hash_data_values(upper, &named)?;
+        let key = super::hash_key(&key_vals);
+        let multidata = self.ctx.hashes.get(upper).expect("checked").multidata;
+        if self.ctx.hashes.get(upper).expect("checked").rows.contains_key(&key) {
+            self.hash_insert(upper, key_vals, data_vals, multidata, &None, true)
+        } else {
+            // Pas d'entrée : replace se comporte comme add.
+            self.hash_insert(upper, key_vals, data_vals, multidata, &None, false)
+        }
+    }
+
+    /// `find()` (copie les données dans le PDV) ou `check()` (ne copie pas).
+    /// Code retour 0 si la clé existe, ≠0 sinon. Avec multidata, positionne le
+    /// curseur sur la 1re entrée (pour find_next).
+    fn hash_find(
+        &mut self,
+        upper: &str,
+        args: &[crate::ast::HashArg],
+        copy_data: bool,
+    ) -> Result<i64> {
+        let named = self.hash_named_args(args)?;
+        let key_vals = self.hash_key_values(upper, &named)?;
+        let key = super::hash_key(&key_vals);
+        let found = {
+            let o = self.ctx.hashes.get(upper).expect("checked");
+            o.rows.get(&key).map(|entries| entries[0].clone())
+        };
+        match found {
+            Some(data_vals) => {
+                // Positionne le curseur multidata sur la 1re entrée.
+                self.ctx
+                    .hashes
+                    .get_mut(upper)
+                    .expect("checked")
+                    .set_find_cursor(&key, 0);
+                if copy_data {
+                    self.hash_copy_data(upper, &data_vals)?;
+                }
+                Ok(0)
+            }
+            None => Ok(1),
+        }
+    }
+
+    /// `find_next()` / `find_prev()` (M17.2, multidata) : avance le curseur de
+    /// l'entrée multidata courante de `step` (+1 / −1) et copie ses données.
+    fn hash_find_next(&mut self, upper: &str, step: i64) -> Result<i64> {
+        let next = {
+            let o = self.ctx.hashes.get(upper).expect("checked");
+            let Some((key, idx)) = o.find_cursor.clone() else {
+                return Ok(1);
+            };
+            let entries = o.rows.get(&key);
+            match entries {
+                Some(list) => {
+                    let new_idx = idx as i64 + step;
+                    if new_idx < 0 || new_idx as usize >= list.len() {
+                        None
+                    } else {
+                        Some((key, new_idx as usize, list[new_idx as usize].clone()))
+                    }
+                }
+                None => None,
+            }
+        };
+        match next {
+            Some((key, idx, data_vals)) => {
+                self.ctx
+                    .hashes
+                    .get_mut(upper)
+                    .expect("checked")
+                    .set_find_cursor(&key, idx);
+                self.hash_copy_data(upper, &data_vals)?;
+                Ok(0)
+            }
+            None => Ok(1),
+        }
+    }
+
+    /// `remove()` (M17.2) — supprime l'entrée de la clé courante.
+    fn hash_remove(&mut self, upper: &str, args: &[crate::ast::HashArg]) -> Result<i64> {
+        let named = self.hash_named_args(args)?;
+        let key_vals = self.hash_key_values(upper, &named)?;
+        let key = super::hash_key(&key_vals);
+        let obj = self.ctx.hashes.get_mut(upper).expect("checked");
+        if obj.rows.remove(&key).is_some() {
+            obj.insertion_order.retain(|k| k != &key);
+            Ok(0)
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Copie une liste de valeurs de données dans les slots PDV des variables
+    /// données du hash (avec coercition de type au besoin).
+    fn hash_copy_data(&mut self, upper: &str, data_vals: &[Value]) -> Result<()> {
+        let data_vars = self.ctx.hashes.get(upper).expect("checked").data_vars.clone();
+        for (d, val) in data_vars.iter().zip(data_vals) {
+            if let Some(slot) = self.pdv.slot(d) {
+                let coerced = self.coerce_assign(val.clone(), self.pdv.vars()[slot].ty);
+                self.pdv.set(slot, coerced);
+            }
+        }
+        Ok(())
+    }
+
+    /// `output(dataset:'lib.tab')` (M17.2) — met en file une sortie du hash
+    /// (clés puis données, dans l'ordre de visite). L'écriture effective est
+    /// faite après l'étape par `flush_hash_outputs`.
+    fn hash_output(&mut self, upper: &str, args: &[crate::ast::HashArg]) -> Result<i64> {
+        let named = self.hash_named_args(args)?;
+        let dsname = named
+            .get("dataset")
+            .map(|v| match v {
+                Value::Char(s) => s.trim().to_string(),
+                _ => String::new(),
+            })
+            .ok_or_else(|| {
+                SasError::runtime(format!("{upper}.output requires a dataset: argument."))
+            })?;
+        let (libref, table) = match dsname.split_once('.') {
+            Some((l, t)) => (l.to_uppercase(), t.to_string()),
+            None => ("WORK".to_string(), dsname.clone()),
+        };
+        let display = format!("{libref}.{}", table.to_uppercase());
+        // Métadonnées des colonnes : clés puis données, depuis le PDV.
+        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let col_names: Vec<String> = obj.keys.iter().chain(&obj.data_vars).cloned().collect();
+        let order = self.hash_visit_order(upper);
+        let mut vars = Vec::with_capacity(col_names.len());
+        for name in &col_names {
+            let slot = self.pdv.slot(name).ok_or_else(|| {
+                SasError::runtime(format!("Hash variable {name} is not in the PDV for output."))
+            })?;
+            let v = &self.pdv.vars()[slot];
+            vars.push(VarMeta {
+                name: v.name.clone(),
+                ty: v.ty,
+                length: v.length,
+                format: v.format.clone(),
+                label: self.labels.get(&v.name.to_uppercase()).cloned(),
+            });
+        }
+        // Lignes : pour chaque clé (ordre de visite), chaque entrée de données.
+        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let n_keys = obj.keys.len();
+        let mut rows: Vec<Vec<Value>> = Vec::new();
+        for key in &order {
+            // Décodage de la clé encodée n'est pas possible ; on reconstitue
+            // les valeurs de clé à partir de l'ordre de visite via la 1re
+            // entrée — mais la clé encodée perd le type. On stocke donc les
+            // valeurs de clé séparément.
+            if let Some(entries) = obj.rows.get(key) {
+                for data_vals in entries {
+                    let mut row = Vec::with_capacity(n_keys + data_vals.len());
+                    // Les valeurs de clé sont conservées via `key_values`.
+                    if let Some(kv) = obj.key_values.get(key) {
+                        row.extend(kv.iter().cloned());
+                    } else {
+                        row.extend(std::iter::repeat_n(Value::missing(), n_keys));
+                    }
+                    row.extend(data_vals.iter().cloned());
+                    rows.push(row);
+                }
+            }
+        }
+        self.ctx.hash_outputs.push(super::eval::HashOutput {
+            libref,
+            table,
+            display,
+            vars,
+            rows,
+        });
+        Ok(0)
+    }
+
+    /// Ordre de visite des clés d'un hash (M17.2) : tri par clés via `sas_cmp`
+    /// si `ordered:` (yes/ascending → croissant, descending → décroissant),
+    /// sinon ordre d'insertion.
+    fn hash_visit_order(&self, upper: &str) -> Vec<String> {
+        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let mut order = obj.insertion_order.clone();
+        if let Some(ord) = &obj.ordered {
+            let descending = ord == "descending" || ord == "d";
+            let active = matches!(
+                ord.as_str(),
+                "yes" | "y" | "a" | "ascending" | "descending" | "d"
+            );
+            if active {
+                order.sort_by(|a, b| {
+                    let ka = obj.key_values.get(a);
+                    let kb = obj.key_values.get(b);
+                    let mut c = match (ka, kb) {
+                        (Some(va), Some(vb)) => va
+                            .iter()
+                            .zip(vb)
+                            .map(|(x, y)| x.sas_cmp(y))
+                            .find(|o| *o != Ordering::Equal)
+                            .unwrap_or(Ordering::Equal),
+                        _ => Ordering::Equal,
+                    };
+                    if descending {
+                        c = c.reverse();
+                    }
+                    c
+                });
+            }
+        }
+        order
+    }
+
+    /// Méthode d'itérateur de hash (M17.2) : `first`/`next`/`last`/`prev`.
+    /// Positionne le curseur de l'itérateur dans l'ordre de visite de l'objet
+    /// hash lié, puis copie la clé+les données de l'entrée courante dans le
+    /// PDV. Code retour 0 si une entrée existe à la nouvelle position, ≠0 si
+    /// l'itérateur sort des bornes (le PDV n'est alors pas modifié).
+    fn exec_hiter_method(&mut self, iter_upper: &str, method: &str) -> Result<i64> {
+        let m = method.to_ascii_lowercase();
+        let hash = self
+            .ctx
+            .hash_iters
+            .get(iter_upper)
+            .expect("checked")
+            .hash
+            .clone();
+        // Ordre de visite APLATI (clé, index d'entrée) — multidata développé.
+        let order = self.hash_visit_order(&hash);
+        let mut flat: Vec<(String, usize)> = Vec::new();
+        {
+            let obj = self.ctx.hashes.get(&hash).expect("bound hash exists");
+            for key in &order {
+                if let Some(entries) = obj.rows.get(key) {
+                    for i in 0..entries.len() {
+                        flat.push((key.clone(), i));
+                    }
+                }
+            }
+        }
+        if flat.is_empty() {
+            self.ctx.hash_iters.get_mut(iter_upper).expect("checked").pos = None;
+            return Ok(1);
+        }
+        let cur = self.ctx.hash_iters.get(iter_upper).expect("checked").pos;
+        let new_pos: Option<usize> = match m.as_str() {
+            "first" => Some(0),
+            "last" => Some(flat.len() - 1),
+            "next" => match cur {
+                Some(p) if p + 1 < flat.len() => Some(p + 1),
+                Some(_) => None,
+                None => Some(0),
+            },
+            "prev" => match cur {
+                Some(p) if p > 0 => Some(p - 1),
+                Some(_) => None,
+                None => Some(flat.len() - 1),
+            },
+            other => {
+                return Err(SasError::runtime(format!(
+                    "Hash iterator method {}.{} is not supported.",
+                    iter_upper,
+                    other.to_uppercase()
+                )));
+            }
+        };
+        match new_pos {
+            Some(p) => {
+                self.ctx.hash_iters.get_mut(iter_upper).expect("checked").pos = Some(p);
+                let (key, idx) = flat[p].clone();
+                let (key_vals, data_vals) = {
+                    let obj = self.ctx.hashes.get(&hash).expect("bound hash exists");
+                    (
+                        obj.key_values.get(&key).cloned().unwrap_or_default(),
+                        obj.rows.get(&key).map(|e| e[idx].clone()).unwrap_or_default(),
+                    )
+                };
+                // Copie des clés puis des données dans le PDV.
+                let keys = self.ctx.hashes.get(&hash).expect("bound").keys.clone();
+                for (k, v) in keys.iter().zip(&key_vals) {
+                    if let Some(slot) = self.pdv.slot(k) {
+                        let coerced = self.coerce_assign(v.clone(), self.pdv.vars()[slot].ty);
+                        self.pdv.set(slot, coerced);
+                    }
+                }
+                self.hash_copy_data(&hash, &data_vals)?;
+                Ok(0)
+            }
+            None => Ok(1),
         }
     }
 
@@ -3335,6 +3846,13 @@ impl Runner {
     }
 
     fn eval_checked(&mut self, expr: &crate::ast::Expr) -> Result<Value> {
+        // Méthode d'objet hash en expression (M17.2) : `rc = h.find();`.
+        // Interceptée ICI (et non dans l'évaluateur immuable) car la méthode
+        // mute le PDV et les objets hash. Renvoie le code retour numérique.
+        if let crate::ast::Expr::HashMethod(call) = expr {
+            let rc = self.exec_hash_method_rc(&call.object, &call.method, &call.args)?;
+            return Ok(Value::Num(rc as f64));
+        }
         let v = eval(expr, &self.pdv, &mut self.ctx);
         if let Some(msg) = self.ctx.fatal.take() {
             // Les fatals de l'évaluateur portent déjà le préfixe "ERROR: " ;
@@ -7582,10 +8100,11 @@ mod tests {
         assert!(!s.debug_hashes.get("H").unwrap().multidata);
     }
 
-    /// Option dataset: conservée (chargement différé à M17.2).
+    /// Option dataset: conservée et pré-lue à la compilation (M17.2).
     #[test]
     fn hash_declare_dataset_option() {
         let mut s = session();
+        write_class(&s, "lookup");
         run(
             "data _null_; declare hash h(dataset:'work.lookup'); run;",
             &mut s,
@@ -7682,15 +8201,18 @@ mod tests {
         assert!(h2.multidata);
     }
 
-    /// defineKey sur une variable inconnue → erreur de compilation.
+    /// defineKey sur une variable encore inconnue : SAS la crée au PDV
+    /// (numérique par défaut). L'étape s'exécute sans erreur.
     #[test]
-    fn hash_define_key_unknown_variable_errors() {
+    fn hash_define_key_creates_variable() {
         let mut s = session();
-        let e = run_err(
-            "data _null_; declare hash h(); h.defineKey('nosuchvar'); run;",
+        run(
+            "data _null_; declare hash h(); h.defineKey('nosuchvar'); h.defineDone(); run;",
             &mut s,
-        );
-        assert!(e.to_uppercase().contains("NOSUCHVAR"), "got: {e}");
+        )
+        .unwrap();
+        let h = s.debug_hashes.get("H").unwrap();
+        assert_eq!(h.keys, vec!["NOSUCHVAR".to_string()]);
     }
 
     /// Méthode sur un objet non déclaré → erreur de compilation.
@@ -7704,18 +8226,404 @@ mod tests {
         assert!(e.to_uppercase().contains("GHOST"), "got: {e}");
     }
 
-    /// Méthode non implémentée (find) → erreur runtime « not yet implemented »
-    /// (M17.2). L'objet est déclaré et défini ; find n'est pas câblé.
+    /// Méthode réellement inconnue → erreur runtime « not yet implemented ».
     #[test]
     fn hash_unimplemented_method_errors() {
         let mut s = session();
         let e = run_err(
-            "data _null_; k = 1; declare hash h(); h.defineKey('k'); h.defineDone(); h.find(); run;",
+            "data _null_; k = 1; declare hash h(); h.defineKey('k'); h.defineDone(); h.bogusmethod(); run;",
             &mut s,
         );
         assert!(
-            e.to_uppercase().contains("NOT YET IMPLEMENTED") && e.to_uppercase().contains("FIND"),
+            e.to_uppercase().contains("NOT YET IMPLEMENTED")
+                && e.to_uppercase().contains("BOGUSMETHOD"),
             "got: {e}"
+        );
+    }
+
+    // ── M17.2 : méthodes de données + HITER + dataset/ordered/multidata ──
+
+    /// add puis find : round-trip clé→données via le PDV.
+    #[test]
+    fn hash_add_find_roundtrip() {
+        let mut s = session();
+        let stats = run(
+            "data out; \
+             if _n_ = 1 then do; \
+               declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+               k = 10; v = 100; h.add(); \
+               k = 20; v = 200; h.add(); \
+             end; \
+             k = 20; v = .; rc = h.find(); output; \
+             stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(stats.written[0].1, 1);
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(200.0));
+        assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// find copie les données dans le PDV ; check ne les copie pas.
+    #[test]
+    fn hash_check_does_not_copy() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 99; h.add(); \
+             k = 1; v = -1; rc = h.check(); output; \
+             stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        // check trouve (rc=0) mais NE copie PAS v (reste -1).
+        assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(-1.0));
+    }
+
+    /// find sur clé absente → rc ≠ 0, données du PDV inchangées.
+    #[test]
+    fn hash_find_miss_nonzero() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 5; h.add(); \
+             k = 999; v = 5; rc = h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_ne!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(5.0));
+    }
+
+    /// replace remplace les données d'une clé existante.
+    #[test]
+    fn hash_replace_updates() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 10; h.add(); \
+             k = 1; v = 77; h.replace(); \
+             k = 1; v = .; rc = h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(77.0));
+    }
+
+    /// remove supprime l'entrée (find ensuite échoue) ; num_items diminue.
+    #[test]
+    fn hash_remove_and_num_items() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 1; h.add(); k = 2; v = 2; h.add(); \
+             n1 = h.num_items; \
+             k = 1; rc1 = h.remove(); \
+             n2 = h.num_items; \
+             k = 1; rc2 = h.find(); \
+             output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("n1").unwrap().f64().unwrap().get(0), Some(2.0));
+        assert_eq!(ds.df.column("n2").unwrap().f64().unwrap().get(0), Some(1.0));
+        assert_eq!(ds.df.column("rc1").unwrap().f64().unwrap().get(0), Some(0.0));
+        assert_ne!(ds.df.column("rc2").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// clear vide le hash (num_items → 0).
+    #[test]
+    fn hash_clear_empties() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 1; h.add(); k = 2; v = 2; h.add(); \
+             h.clear(); n = h.num_items; output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("n").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// num_items en forme expression vs statement (rc ignoré en statement).
+    #[test]
+    fn hash_method_statement_and_expression() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 1; h.add(); \
+             k = 1; v = .; h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        // h.find() en statement copie quand même les données.
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(1.0));
+    }
+
+    /// output écrit le contenu du hash dans un dataset.
+    #[test]
+    fn hash_output_to_dataset() {
+        let mut s = session();
+        run(
+            "data _null_; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 3; v = 30; h.add(); k = 1; v = 10; h.add(); k = 2; v = 20; h.add(); \
+             h.output(dataset:'work.hout'); stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "hout");
+        assert_eq!(ds.n_obs(), 3);
+        // Pas d'option ordered: → ordre d'insertion 3,1,2.
+        let k = ds.df.column("k").unwrap().f64().unwrap();
+        assert_eq!(k.get(0), Some(3.0));
+        assert_eq!(k.get(1), Some(1.0));
+        assert_eq!(k.get(2), Some(2.0));
+    }
+
+    /// output respecte ordered:'ascending' (tri croissant par clé).
+    #[test]
+    fn hash_output_ordered_ascending() {
+        let mut s = session();
+        run(
+            "data _null_; \
+             declare hash h(ordered:'ascending'); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 3; v = 30; h.add(); k = 1; v = 10; h.add(); k = 2; v = 20; h.add(); \
+             h.output(dataset:'work.hout'); stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "hout");
+        let k = ds.df.column("k").unwrap().f64().unwrap();
+        assert_eq!(k.get(0), Some(1.0));
+        assert_eq!(k.get(1), Some(2.0));
+        assert_eq!(k.get(2), Some(3.0));
+    }
+
+    /// output respecte ordered:'descending'.
+    #[test]
+    fn hash_output_ordered_descending() {
+        let mut s = session();
+        run(
+            "data _null_; \
+             declare hash h(ordered:'descending'); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 10; h.add(); k = 3; v = 30; h.add(); k = 2; v = 20; h.add(); \
+             h.output(dataset:'work.hout'); stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "hout");
+        let k = ds.df.column("k").unwrap().f64().unwrap();
+        assert_eq!(k.get(0), Some(3.0));
+        assert_eq!(k.get(1), Some(2.0));
+        assert_eq!(k.get(2), Some(1.0));
+    }
+
+    /// dataset: charge la table dans le hash au defineDone.
+    #[test]
+    fn hash_dataset_load() {
+        let mut s = session();
+        write_class(&s, "lk");
+        // Age est la clé, Name la donnée. find(Age=13) → Name="Barbara".
+        run(
+            "data out; \
+             declare hash h(dataset:'work.lk'); h.defineKey('Age'); h.defineData('Name'); h.defineDone(); \
+             Age = 13; length Name $7; Name = ''; rc = h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+        assert_eq!(
+            ds.df.column("Name").unwrap().str().unwrap().get(0),
+            Some("Barbara")
+        );
+    }
+
+    /// multidata: plusieurs données par clé, parcourues par find + find_next.
+    #[test]
+    fn hash_multidata_find_next() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(multidata:'yes'); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 100; h.add(); k = 1; v = 200; h.add(); k = 1; v = 300; h.add(); \
+             k = 1; v = .; rc = h.find(); v1 = v; \
+             rc2 = h.find_next(); v2 = v; \
+             rc3 = h.find_next(); v3 = v; \
+             rc4 = h.find_next(); \
+             output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v1").unwrap().f64().unwrap().get(0), Some(100.0));
+        assert_eq!(ds.df.column("v2").unwrap().f64().unwrap().get(0), Some(200.0));
+        assert_eq!(ds.df.column("v3").unwrap().f64().unwrap().get(0), Some(300.0));
+        // find_next au-delà → rc ≠ 0.
+        assert_ne!(ds.df.column("rc4").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// duplicate:'replace' écrase la donnée d'une clé existante (sans multidata).
+    #[test]
+    fn hash_duplicate_replace() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(duplicate:'replace'); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 1; h.add(); k = 1; v = 2; h.add(); \
+             k = 1; v = .; h.find(); n = h.num_items; output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(2.0));
+        assert_eq!(ds.df.column("n").unwrap().f64().unwrap().get(0), Some(1.0));
+    }
+
+    /// duplicate par défaut : la 1re valeur est conservée, l'ajout est ignoré.
+    #[test]
+    fn hash_duplicate_default_keeps_first() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = 1; v = 1; h.add(); k = 1; v = 2; rc = h.add(); \
+             k = 1; v = .; h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(1.0));
+        // add d'un doublon → rc ≠ 0.
+        assert_ne!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// HITER first/next : parcours avant dans l'ordre d'insertion.
+    #[test]
+    fn hash_iter_first_next() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             declare hiter hi('h'); \
+             k = 5; v = 50; h.add(); k = 6; v = 60; h.add(); \
+             rc = hi.first(); k1 = k; v1 = v; \
+             rc2 = hi.next(); k2 = k; v2 = v; \
+             rc3 = hi.next(); \
+             output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("k1").unwrap().f64().unwrap().get(0), Some(5.0));
+        assert_eq!(ds.df.column("v1").unwrap().f64().unwrap().get(0), Some(50.0));
+        assert_eq!(ds.df.column("k2").unwrap().f64().unwrap().get(0), Some(6.0));
+        assert_eq!(ds.df.column("v2").unwrap().f64().unwrap().get(0), Some(60.0));
+        assert_ne!(ds.df.column("rc3").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// HITER last/prev : parcours arrière.
+    #[test]
+    fn hash_iter_last_prev() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             declare hiter hi('h'); \
+             k = 1; v = 10; h.add(); k = 2; v = 20; h.add(); k = 3; v = 30; h.add(); \
+             rc = hi.last(); k1 = k; \
+             rc2 = hi.prev(); k2 = k; \
+             rc3 = hi.prev(); k3 = k; \
+             rc4 = hi.prev(); \
+             output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("k1").unwrap().f64().unwrap().get(0), Some(3.0));
+        assert_eq!(ds.df.column("k2").unwrap().f64().unwrap().get(0), Some(2.0));
+        assert_eq!(ds.df.column("k3").unwrap().f64().unwrap().get(0), Some(1.0));
+        assert_ne!(ds.df.column("rc4").unwrap().f64().unwrap().get(0), Some(0.0));
+    }
+
+    /// HITER respecte ordered:'descending' (first = clé max).
+    #[test]
+    fn hash_iter_ordered_descending() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(ordered:'descending'); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             declare hiter hi('h'); \
+             k = 1; v = 10; h.add(); k = 3; v = 30; h.add(); k = 2; v = 20; h.add(); \
+             rc = hi.first(); k1 = k; \
+             rc2 = hi.next(); k2 = k; \
+             output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("k1").unwrap().f64().unwrap().get(0), Some(3.0));
+        assert_eq!(ds.df.column("k2").unwrap().f64().unwrap().get(0), Some(2.0));
+    }
+
+    /// HITER lié à un hash non déclaré → erreur de compilation.
+    #[test]
+    fn hash_iter_unknown_hash_errors() {
+        let mut s = session();
+        let e = run_err("data _null_; declare hiter hi('ghost'); run;", &mut s);
+        assert!(e.to_uppercase().contains("GHOST"), "got: {e}");
+    }
+
+    /// add avec arguments nommés key:/data:.
+    #[test]
+    fn hash_add_named_args() {
+        let mut s = session();
+        run(
+            "data out; \
+             declare hash h(); h.defineKey('k'); h.defineData('v'); h.defineDone(); \
+             k = .; v = .; h.add(key: 7, data: 70); \
+             k = 7; v = .; h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(70.0));
+    }
+
+    /// Clés/données caractère : round-trip add/find avec trim SAS.
+    #[test]
+    fn hash_char_key_data() {
+        let mut s = session();
+        run(
+            "data out; \
+             length name $10 city $10; \
+             declare hash h(); h.defineKey('name'); h.defineData('city'); h.defineDone(); \
+             name = 'alice'; city = 'paris'; h.add(); \
+             name = 'bob'; city = 'rome'; h.add(); \
+             name = 'bob'; city = ''; rc = h.find(); output; stop; run;",
+            &mut s,
+        )
+        .unwrap();
+        let ds = read_work(&s, "out");
+        assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
+        assert_eq!(
+            ds.df.column("city").unwrap().str().unwrap().get(0).map(str::trim),
+            Some("rome")
         );
     }
 }

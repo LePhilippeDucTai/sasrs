@@ -748,10 +748,13 @@ fn parse_declare(ts: &mut StatementStream) -> Result<DsStmt> {
             ));
         }
     };
+    if obj_type == "hiter" {
+        return parse_declare_hiter(ts);
+    }
     if obj_type != "hash" {
         return Err(SasError::parse(
             format!(
-                "DECLARE of object type {} is not yet implemented (only HASH).",
+                "DECLARE of object type {} is not yet implemented (only HASH/HITER).",
                 obj_type.to_uppercase()
             ),
             ts.peek().span,
@@ -834,6 +837,50 @@ fn parse_declare(ts: &mut StatementStream) -> Result<DsStmt> {
     Ok(DsStmt::DeclareHash { name, options })
 }
 
+/// `declare hiter hi('h');` (M17.2) — déclaration d'un itérateur de hash. La
+/// tête `declare`/`dcl` est consommée, `hiter` est en position courante. On lit
+/// le nom de l'itérateur puis, entre parenthèses, un littéral chaîne nommant
+/// l'objet hash à parcourir.
+fn parse_declare_hiter(ts: &mut StatementStream) -> Result<DsStmt> {
+    ts.next(); // `hiter`
+    let name = match ts.peek().ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected an iterator name after DECLARE HITER",
+                ts.peek().span,
+            ));
+        }
+    };
+    ts.next(); // nom de l'itérateur
+    if ts.peek().kind != TokenKind::LParen {
+        return Err(SasError::parse(
+            "expected '(' with the hash object name after DECLARE HITER",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `(`
+    let hash_name = match &ts.peek().kind {
+        TokenKind::Str { value, .. } => value.clone(),
+        _ => {
+            return Err(SasError::parse(
+                "expected a quoted hash object name for DECLARE HITER",
+                ts.peek().span,
+            ));
+        }
+    };
+    ts.next(); // chaîne
+    if ts.peek().kind != TokenKind::RParen {
+        return Err(SasError::parse(
+            "expected ')' to close DECLARE HITER",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `)`
+    ts.expect_semi()?;
+    Ok(DsStmt::DeclareHiter { name, hash_name })
+}
+
 /// `h.method(args);` (M17.1) — appel de méthode d'objet hash. La forme
 /// `ident . ident (` est détectée par `parse_statement` AVANT le dispatch par
 /// mot-clé. Les arguments sont des expressions séparées par des virgules
@@ -855,10 +902,41 @@ fn parse_hash_method(ts: &mut StatementStream) -> Result<DsStmt> {
     ts.next(); // méthode
     // `(` garanti par le motif de détection.
     ts.next(); // `(`
+    let args = parse_hash_args(ts, &object, &method)?;
+    ts.expect_semi()?;
+    Ok(DsStmt::HashMethod(Box::new(crate::ast::HashMethodCall {
+        object,
+        method,
+        args,
+    })))
+}
+
+/// Parse la liste d'arguments d'un appel de méthode hash (la `(` est déjà
+/// consommée ; consomme la `)`). Chaque argument est positionnel (une
+/// expression : `'k'`, `1`) ou nommé (`key: expr`, `data: expr`,
+/// `dataset: 'lib.tab'`). Liste vide autorisée.
+pub(crate) fn parse_hash_args(
+    ts: &mut StatementStream,
+    object: &str,
+    method: &str,
+) -> Result<Vec<crate::ast::HashArg>> {
+    use crate::ast::HashArg;
     let mut args = Vec::new();
     if ts.peek().kind != TokenKind::RParen {
         loop {
-            args.push(super::expr::parse_expr(ts)?);
+            // Argument nommé `name : expr` ? (ident suivi d'un `:`).
+            if let Some(name) = ts.peek().ident().map(str::to_string) {
+                if ts.peek2().kind == TokenKind::Colon {
+                    ts.next(); // nom
+                    ts.next(); // `:`
+                    let value = super::expr::parse_expr(ts)?;
+                    args.push(HashArg::Named(name.to_ascii_lowercase(), value));
+                } else {
+                    args.push(HashArg::Positional(super::expr::parse_expr(ts)?));
+                }
+            } else {
+                args.push(HashArg::Positional(super::expr::parse_expr(ts)?));
+            }
             match ts.peek().kind {
                 TokenKind::Comma => {
                     ts.next();
@@ -878,12 +956,7 @@ fn parse_hash_method(ts: &mut StatementStream) -> Result<DsStmt> {
         ));
     }
     ts.next(); // `)`
-    ts.expect_semi()?;
-    Ok(DsStmt::HashMethod {
-        object,
-        method,
-        args,
-    })
+    Ok(args)
 }
 
 /// `infile <source> [options] ;` (M14). La source est un littéral chemin
@@ -4486,29 +4559,76 @@ mod tests {
                     name: "h".to_string(),
                     options: vec![],
                 },
-                DsStmt::HashMethod {
+                DsStmt::HashMethod(Box::new(crate::ast::HashMethodCall {
                     object: "h".to_string(),
                     method: "defineKey".to_string(),
-                    args: vec![Expr::Str("k1".to_string()), Expr::Str("k2".to_string())],
-                },
-                DsStmt::HashMethod {
+                    args: vec![
+                        crate::ast::HashArg::Positional(Expr::Str("k1".to_string())),
+                        crate::ast::HashArg::Positional(Expr::Str("k2".to_string())),
+                    ],
+                })),
+                DsStmt::HashMethod(Box::new(crate::ast::HashMethodCall {
                     object: "h".to_string(),
                     method: "defineData".to_string(),
-                    args: vec![Expr::Str("v".to_string())],
-                },
-                DsStmt::HashMethod {
+                    args: vec![crate::ast::HashArg::Positional(Expr::Str("v".to_string()))],
+                })),
+                DsStmt::HashMethod(Box::new(crate::ast::HashMethodCall {
                     object: "h".to_string(),
                     method: "defineDone".to_string(),
                     args: vec![],
-                },
+                })),
             ]
         );
     }
 
     #[test]
     fn parse_declare_non_hash_object_errors() {
-        // Type d'objet autre que HASH (ex. HITER) → erreur de parsing (M17.2).
-        let err = parse("data _null_; declare hiter it('h'); run;").unwrap_err();
-        assert!(err.to_string().to_uppercase().contains("HITER"));
+        // Type d'objet ni HASH ni HITER → erreur de parsing.
+        let err = parse("data _null_; declare bogus it('h'); run;").unwrap_err();
+        assert!(err.to_string().to_uppercase().contains("BOGUS"));
+    }
+
+    #[test]
+    fn parse_declare_hiter() {
+        let ast = parse("data _null_; declare hiter hi('h'); run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::DeclareHiter {
+                name: "hi".to_string(),
+                hash_name: "h".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_hash_method_as_expression() {
+        let ast = parse("data _null_; rc = h.find(); run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::Assign {
+                var: "rc".to_string(),
+                expr: Expr::HashMethod(Box::new(crate::ast::HashMethodCall {
+                    object: "h".to_string(),
+                    method: "find".to_string(),
+                    args: vec![],
+                })),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_hash_method_named_args() {
+        let ast = parse("data _null_; h.add(key: 1, data: 'x'); run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::HashMethod(Box::new(crate::ast::HashMethodCall {
+                object: "h".to_string(),
+                method: "add".to_string(),
+                args: vec![
+                    crate::ast::HashArg::Named("key".to_string(), Expr::Num(1.0)),
+                    crate::ast::HashArg::Named("data".to_string(), Expr::Str("x".to_string())),
+                ],
+            }))]
+        );
     }
 }

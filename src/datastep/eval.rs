@@ -97,6 +97,27 @@ pub struct EvalCtx {
     /// lignes). Copié depuis `StepProgram.hash_objects` par l'exécuteur ;
     /// defineKey/defineData/defineDone (et M17.2 find/add/...) y opèrent.
     pub hashes: HashMap<String, super::HashObject>,
+    /// Itérateurs de hash de l'étape (M17.2) : nom UPPERCASE → itérateur
+    /// (objet lié + position). Copié depuis `StepProgram.hash_iters` par
+    /// l'exécuteur ; first/next/last/prev y opèrent.
+    pub hash_iters: HashMap<String, super::HashIter>,
+    /// Sorties de hash en attente (M17.2) : `h.output(dataset:'lib.tab')`
+    /// accumule ici `(libref, table, vars, lignes)` ; le drain (écriture via
+    /// le provider de bibliothèque) est fait par `exec::execute` APRÈS la
+    /// boucle implicite, là où `&mut Session` est disponible.
+    pub hash_outputs: Vec<HashOutput>,
+}
+
+/// Une sortie de hash en attente (M17.2). `vars` porte les `VarMeta` des
+/// colonnes (clés puis données), `rows` les lignes décodées (parallèles à
+/// `vars`).
+#[derive(Debug, Clone)]
+pub struct HashOutput {
+    pub libref: String,
+    pub table: String,
+    pub display: String,
+    pub vars: Vec<crate::dataset::VarMeta>,
+    pub rows: Vec<Vec<Value>>,
 }
 
 impl Default for EvalCtx {
@@ -121,6 +142,8 @@ impl Default for EvalCtx {
             do_over: HashMap::new(),
             end_flag: None,
             hashes: HashMap::new(),
+            hash_iters: HashMap::new(),
+            hash_outputs: Vec::new(),
         }
     }
 }
@@ -201,6 +224,17 @@ pub fn eval(expr: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         Expr::In { expr, list } => eval_in(expr, list, pdv, ctx),
         Expr::Call { name, args } => eval_call(name, args, pdv, ctx),
         Expr::Index { name, indices } => eval_array_ref(name, indices, pdv, ctx),
+        // Méthode d'objet hash en expression (M17.2) : nécessite une mutation
+        // du PDV/des objets hash → traitée par `exec::eval_checked` (qui a
+        // `&mut self`). Ici, l'évaluateur immuable ne peut rien faire : on
+        // signale un fatal de garde (ne devrait jamais être atteint en
+        // production — `eval_checked` intercepte d'abord).
+        Expr::HashMethod(_) => {
+            ctx.fatal = Some(
+                "ERROR: Hash method calls cannot be evaluated in this context.".to_string(),
+            );
+            Value::missing()
+        }
     }
 }
 

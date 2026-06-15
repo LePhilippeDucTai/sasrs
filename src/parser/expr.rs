@@ -326,6 +326,52 @@ fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
             // (SAS tolère `first. age`). Tout AUTRE ident suivi d'un `.`
             // reste une erreur de syntaxe (pas de lib.member en expression) :
             // le `.` non consommé fait échouer l'appelant.
+            // Appel de méthode d'objet hash en expression (M17.2) :
+            // `h.find()`, `h.check()`, ... — `ident . ident (`. Renvoie un
+            // `Expr::HashMethod` (code retour numérique). Détecté avant la
+            // règle FIRST./LAST. (un hash ne s'appelle jamais `first`/`last`
+            // sans parenthèses, et inversement).
+            if ts.peek().kind == TokenKind::Dot
+                && ts.peek2().ident().is_some()
+                && ts.peek_nth(2).kind == TokenKind::LParen
+                && !name.eq_ignore_ascii_case("first")
+                && !name.eq_ignore_ascii_case("last")
+            {
+                ts.next(); // `.`
+                let method = ts
+                    .peek()
+                    .ident()
+                    .expect("checked an ident after '.'")
+                    .to_string();
+                ts.next(); // méthode
+                ts.next(); // `(`
+                let args =
+                    super::datastep::parse_hash_args(ts, &name, &method)?;
+                return Ok(Expr::HashMethod(Box::new(crate::ast::HashMethodCall {
+                    object: name,
+                    method,
+                    args,
+                })));
+            }
+            // Attribut d'objet hash sans parenthèses (M17.2) : `h.num_items`.
+            // Détecté seulement pour l'attribut connu `num_items` (les autres
+            // `ident.ident` sans parenthèse restent une erreur de syntaxe).
+            if ts.peek().kind == TokenKind::Dot
+                && ts
+                    .peek2()
+                    .ident()
+                    .is_some_and(|m| m.eq_ignore_ascii_case("num_items"))
+                && ts.peek_nth(2).kind != TokenKind::LParen
+            {
+                ts.next(); // `.`
+                let method = ts.peek().ident().unwrap().to_string();
+                ts.next(); // attribut
+                return Ok(Expr::HashMethod(Box::new(crate::ast::HashMethodCall {
+                    object: name,
+                    method,
+                    args: Vec::new(),
+                })));
+            }
             if ts.peek().kind == TokenKind::Dot
                 && (name.eq_ignore_ascii_case("first") || name.eq_ignore_ascii_case("last"))
             {
