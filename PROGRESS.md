@@ -172,7 +172,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 
 ## M18 — formats & informats
 - [x] ⫽ M18.1 — étoffer `format_builtin`/`informat_builtin` : COMMAX, DOLLARX, EURO, NEGPAREN, HEX, BINARY, OCTAL, ROMAN, WORDS, FRACT, SCIENTIFIC, dates (WEEKDATE, DOWNAME, MONNAME, QTR, YYQ, JULIAN, B8601*/E8601* ISO), $QUOTE, $HEX, $UPCASE (Sonnet, moyen-élevé). 69 nouveaux tests (1603 total, 0 warning). Différés : $UPCASE comme informat, informat pour HEX/BINARY/OCTAL/ROMAN, FRACT avec dénominateur exact > 64.
-- [ ] M18.2 — INVALUE (informats utilisateur) : lever `procs/format.rs:78`, `FormatCatalog.user_informats`, lookup avant builtin (Sonnet, moyen)
+- [x] M18.2 — INVALUE (informats utilisateur) : lever `procs/format.rs:78`, `FormatCatalog.user_informats`, lookup avant builtin (Sonnet, moyen). `UserInformat` dans `userdef.rs` (plages de chaînes → `Value` num ou char ; `_SAME_`, `other=`, bornes LOW/HIGH, exclusives) ; `FormatCatalog::define_informat` + résolution AVANT les builtins ; `fn_input`/`fn_put` corrigés pour utiliser `ctx.format_catalog` (et non `default()`) ; `format_catalog` ajouté à `EvalCtx` (initialisé depuis la session) ; statement INPUT et fonction INPUT() résolvent les informats utilisateur. 71 nouveaux tests (1674 total, 0 warning, 0 `.snap.new`).
 - [ ] M18.3 — PICTURE : `enum FormatKind{Value,Picture,Invalue}` dans `userdef.rs`, templates `99/99/9999`, directives PREFIX/MULT/FILL (Opus, moyen)
 - [ ] Fixtures `m18/` + snapshots. DoD
 

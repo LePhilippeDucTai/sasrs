@@ -21,7 +21,7 @@
 //! produces `name="$CITYFMT"`, which matches the catalog key exactly.
 
 use crate::error::{Result, SasError};
-use crate::formats::userdef::{Bound, Range, UserFormat};
+use crate::formats::userdef::{Bound, InformatRange, InformatValue, Range, UserFormat, UserInformat};
 use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -29,6 +29,8 @@ use crate::token::TokenKind;
 pub struct FormatAst {
     /// (nom, définition brute à parser en UserFormat)
     pub values: Vec<(String, UserFormat)>,
+    /// (nom, définition brute à parser en UserInformat) — M18.2
+    pub invalues: Vec<(String, UserInformat)>,
 }
 
 /// Parse `proc format; value ... ; [value ... ;] run;`
@@ -49,6 +51,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
     }
 
     let mut values: Vec<(String, UserFormat)> = Vec::new();
+    let mut invalues: Vec<(String, UserInformat)> = Vec::new();
 
     loop {
         // Skip stray semicolons.
@@ -73,18 +76,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
             let (name, uf) = parse_value_stmt(ts)?;
             values.push((name, uf));
         } else if ts.peek().is_kw("invalue") {
-            let span = ts.peek().span;
-            return Err(SasError::parse(
-                "INVALUE in PROC FORMAT is not yet implemented.",
-                span,
-            ));
+            ts.next(); // consume "invalue"
+            let (name, ui) = parse_invalue_stmt(ts)?;
+            invalues.push((name, ui));
         } else {
             // Unknown sub-statement: skip it.
             ts.skip_to_semi();
         }
     }
 
-    Ok(FormatAst { values })
+    Ok(FormatAst { values, invalues })
 }
 
 /// Parse one VALUE statement (after the "value" keyword has been consumed):
@@ -356,11 +357,249 @@ fn parse_string_literal(ts: &mut StatementStream) -> Result<String> {
     }
 }
 
+// ── INVALUE parsing (M18.2) ──────────────────────────────────────────────────
+
+/// Parse one INVALUE statement (after the "invalue" keyword has been consumed):
+///   [$]<inforname>  'key'=value  ['key'=value ...] [other=value] ;
+///
+/// Keys are always character strings (quoted); the result (`value`) is:
+///   - a numeric literal   → `InformatValue::Num(f64)`
+///   - a quoted string     → `InformatValue::Char(String)`
+///   - `_SAME_` keyword    → `InformatValue::Same`
+///   - `.`/`._`/`.A`..`.Z`→ `InformatValue::Missing(kind_str)`
+fn parse_invalue_stmt(ts: &mut StatementStream) -> Result<(String, UserInformat)> {
+    // --- informat name: optional `$` then identifier ---
+    let is_char_result = ts.peek().kind == TokenKind::Dollar;
+    if is_char_result {
+        ts.next(); // consume `$`
+    }
+
+    let name_tok = ts.peek().clone();
+    let base_name = match name_tok.ident() {
+        Some(n) => n.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected an informat name after INVALUE",
+                name_tok.span,
+            ));
+        }
+    };
+    ts.next();
+
+    // Build stored name (include `$` prefix for char informats).
+    let name = if is_char_result {
+        format!("${}", base_name)
+    } else {
+        base_name
+    };
+
+    // --- parse 'key'=result pairs until `;` ---
+    let mut ranges: Vec<InformatRange> = Vec::new();
+    let mut other: Option<InformatValue> = None;
+
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            break;
+        }
+
+        // OTHER keyword.
+        if ts.peek().is_kw("other") {
+            ts.next(); // consume "other"
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after OTHER in INVALUE",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // consume `=`
+            let iv = parse_informat_value(ts)?;
+            other = Some(iv);
+            continue;
+        }
+
+        // Parse a group of key ranges sharing a single result value.
+        // Keys are always character strings (quoted strings or LOW/HIGH).
+        let group_ranges = parse_invalue_range_group(ts)?;
+
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "expected '=' after key range specification in INVALUE",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // consume `=`
+
+        let result = parse_informat_value(ts)?;
+
+        for mut r in group_ranges {
+            r.result = result.clone();
+            ranges.push(r);
+        }
+    }
+
+    let ui = UserInformat { is_char_result, ranges, other };
+    Ok((name, ui))
+}
+
+/// Parse a comma-separated group of character key ranges for INVALUE.
+/// Returns Vec<InformatRange> with placeholder `result` values (caller fills in).
+fn parse_invalue_range_group(ts: &mut StatementStream) -> Result<Vec<InformatRange>> {
+    let mut out: Vec<InformatRange> = Vec::new();
+    loop {
+        let r = parse_invalue_single_range(ts)?;
+        out.push(r);
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+        } else {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a single key range for INVALUE: `'A'`, `'A'-'Z'`, `low-'C'`, etc.
+fn parse_invalue_single_range(ts: &mut StatementStream) -> Result<InformatRange> {
+    // INVALUE keys are always char-mode bounds.
+    let (from_bound, from_lt_before_minus) = parse_invalue_bound_with_lt(ts)?;
+
+    let has_range = ts.peek().kind == TokenKind::Minus;
+
+    if !has_range {
+        let to = from_bound.clone();
+        return Ok(InformatRange {
+            from: from_bound,
+            to,
+            from_exclusive: false,
+            to_exclusive: false,
+            result: InformatValue::Same, // placeholder, caller replaces
+        });
+    }
+
+    ts.next(); // consume `-`
+
+    let to_exclusive = if ts.peek().kind == TokenKind::Lt {
+        ts.next(); // consume `<`
+        true
+    } else {
+        false
+    };
+
+    let (to_bound, _) = parse_invalue_bound_with_lt(ts)?;
+
+    Ok(InformatRange {
+        from: from_bound,
+        to: to_bound,
+        from_exclusive: from_lt_before_minus,
+        to_exclusive,
+        result: InformatValue::Same, // placeholder, caller replaces
+    })
+}
+
+/// Parse an INVALUE key bound with optional leading `<` (from_exclusive marker).
+fn parse_invalue_bound_with_lt(ts: &mut StatementStream) -> Result<(Bound, bool)> {
+    let bound = parse_invalue_bound(ts)?;
+    // Check for `<` immediately followed by `-` (from_exclusive pattern).
+    let had_lt = if ts.peek().kind == TokenKind::Lt && ts.peek2().kind == TokenKind::Minus {
+        ts.next(); // consume `<`
+        true
+    } else {
+        false
+    };
+    Ok((bound, had_lt))
+}
+
+/// Parse one INVALUE key bound: LOW, HIGH, or a quoted string.
+fn parse_invalue_bound(ts: &mut StatementStream) -> Result<Bound> {
+    if ts.peek().is_kw("low") {
+        ts.next();
+        return Ok(Bound::Low);
+    }
+    if ts.peek().is_kw("high") {
+        ts.next();
+        return Ok(Bound::High);
+    }
+    // Must be a quoted string.
+    let s = parse_string_literal(ts)?;
+    Ok(Bound::Char(s))
+}
+
+/// Parse the result value on the right-hand side of `=` in an INVALUE mapping:
+///   numeric literal  → `InformatValue::Num`
+///   quoted string    → `InformatValue::Char`
+///   `_SAME_`         → `InformatValue::Same`
+///   `.` / `._` / `.A`..`.Z` → `InformatValue::Missing`
+fn parse_informat_value(ts: &mut StatementStream) -> Result<InformatValue> {
+    // `_SAME_` keyword (identifier).
+    if let Some(id) = ts.peek().ident() {
+        if id.eq_ignore_ascii_case("_same_") {
+            ts.next();
+            return Ok(InformatValue::Same);
+        }
+    }
+
+    // Missing value: starts with `.`
+    if ts.peek().kind == TokenKind::Dot {
+        ts.next(); // consume `.`
+        // Check for special suffix: `_` or letter.
+        if let Some(id) = ts.peek().ident() {
+            let s = id.to_uppercase();
+            if s == "_" || (s.len() == 1 && s.chars().next().unwrap().is_ascii_uppercase()) {
+                ts.next();
+                return Ok(InformatValue::Missing(s));
+            }
+        }
+        return Ok(InformatValue::Missing(".".to_string()));
+    }
+
+    // Quoted string → character result.
+    if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
+        let s = value.clone();
+        ts.next();
+        return Ok(InformatValue::Char(s));
+    }
+
+    // Numeric literal (possibly negative).
+    let negative = if ts.peek().kind == TokenKind::Minus {
+        if matches!(ts.peek2().kind, TokenKind::Num(_)) {
+            ts.next(); // consume `-`
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    match ts.peek().kind.clone() {
+        TokenKind::Num(n) => {
+            ts.next();
+            let v = if negative { -n } else { n };
+            Ok(InformatValue::Num(v))
+        }
+        _ => Err(SasError::parse(
+            "expected a result value (number, quoted string, _SAME_, or missing) in INVALUE",
+            ts.peek().span,
+        )),
+    }
+}
+
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
     for (name, uf) in &ast.values {
         let uname = name.to_uppercase();
         session.log.note(&format!("Format {} has been output.", uname));
         session.format_catalog.define(&uname, uf.clone());
+    }
+    for (name, ui) in &ast.invalues {
+        let uname = name.to_uppercase();
+        session.log.note(&format!("Informat {} has been output.", uname));
+        session.format_catalog.define_informat(&uname, ui.clone());
     }
     Ok(())
 }
@@ -518,11 +757,83 @@ mod tests {
     }
 
     #[test]
-    fn parse_invalue_errors() {
-        let result = parse_format_src("proc format; invalue f '1'=1; run;");
-        assert!(result.is_err());
-        let msg = result.err().unwrap().to_string();
-        assert!(msg.contains("INVALUE"), "msg: {msg}");
+    fn parse_invalue_numeric_basic() {
+        // INVALUE without $ → numeric result.
+        let ast = parse_format_src(
+            "proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.invalues.len(), 1);
+        let (name, ui) = &ast.invalues[0];
+        assert_eq!(name, "grade");
+        assert!(!ui.is_char_result);
+        assert_eq!(ui.ranges.len(), 5);
+        // First range: 'A'=4
+        assert!(matches!(ui.ranges[0].from, Bound::Char(ref s) if s == "A"));
+        assert!(matches!(ui.ranges[0].result, InformatValue::Num(n) if n == 4.0));
+        // Last range: 'F'=0
+        assert!(matches!(ui.ranges[4].result, InformatValue::Num(n) if n == 0.0));
+    }
+
+    #[test]
+    fn parse_invalue_char_with_dollar() {
+        // INVALUE with $ → character result.
+        let ast = parse_format_src(
+            "proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.invalues.len(), 1);
+        let (name, ui) = &ast.invalues[0];
+        assert_eq!(name, "$size");
+        assert!(ui.is_char_result);
+        assert_eq!(ui.ranges.len(), 3);
+        assert!(matches!(&ui.ranges[0].result, InformatValue::Char(s) if s == "Small"));
+        assert!(matches!(&ui.ranges[2].result, InformatValue::Char(s) if s == "Large"));
+    }
+
+    #[test]
+    fn parse_invalue_other_and_same() {
+        // `_same_` → Same variant; `other=.` (unquoted dot) → Missing.
+        let ast = parse_format_src(
+            "proc format; invalue $code low-'Z'=_same_ other=.; run;",
+        )
+        .unwrap();
+        let (_, ui) = &ast.invalues[0];
+        assert!(matches!(ui.ranges[0].result, InformatValue::Same));
+        assert!(matches!(ui.other, Some(InformatValue::Missing(_))));
+    }
+
+    #[test]
+    fn parse_invalue_quoted_string_other() {
+        // `other='?'` → Char variant (quoted string result).
+        let ast = parse_format_src(
+            "proc format; invalue $code 'A'='Alpha' other='?'; run;",
+        )
+        .unwrap();
+        let (_, ui) = &ast.invalues[0];
+        assert!(matches!(&ui.other, Some(InformatValue::Char(s)) if s == "?"));
+    }
+
+    #[test]
+    fn parse_invalue_range_with_exclusion() {
+        let ast = parse_format_src(
+            "proc format; invalue f 'A'-<'Z'=1; run;",
+        )
+        .unwrap();
+        let (_, ui) = &ast.invalues[0];
+        assert!(!ui.ranges[0].from_exclusive);
+        assert!(ui.ranges[0].to_exclusive);
+    }
+
+    #[test]
+    fn parse_invalue_mixed_with_value() {
+        // Can have both VALUE and INVALUE in same PROC FORMAT.
+        let ast = parse_format_src(
+            "proc format; value sexfmt 1='Male'; invalue grade 'A'=4; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.values.len(), 1);
+        assert_eq!(ast.invalues.len(), 1);
     }
 
     // ── execute tests ─────────────────────────────────────────────────────────
@@ -557,6 +868,7 @@ mod tests {
                     other: Some("Unknown".to_string()),
                 },
             )],
+            invalues: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -600,5 +912,101 @@ mod tests {
             session.format_catalog.format(&Value::Num(99.0), &spec),
             "?"
         );
+    }
+
+    // ── INVALUE execute tests (M18.2) ─────────────────────────────────────────
+
+    fn run_format_src(src: &str) -> crate::session::Session {
+        let mut session = make_session();
+        let source = SourceFile::new(src);
+        let mut ts = StatementStream::new(&source).unwrap();
+        ts.next(); // proc
+        ts.next(); // format
+        let ast = parse(&mut ts).unwrap();
+        execute(&ast, &mut session).unwrap();
+        session
+    }
+
+    #[test]
+    fn execute_invalue_numeric_registered_in_catalog() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;",
+        );
+
+        let spec = FormatSpec::parse("GRADE.").unwrap();
+        assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
+        assert_eq!(session.format_catalog.informat("B", &spec), Value::Num(3.0));
+        assert_eq!(session.format_catalog.informat("F", &spec), Value::Num(0.0));
+
+        // NOTE logged for informat.
+        let log = session.log.into_string();
+        assert!(log.contains("Informat GRADE has been output."), "log: {log}");
+    }
+
+    #[test]
+    fn execute_invalue_char_dollar_registered() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;",
+        );
+
+        let spec = FormatSpec::parse("$SIZE.").unwrap();
+        assert_eq!(session.format_catalog.informat("S", &spec), Value::Char("Small".to_string()));
+        assert_eq!(session.format_catalog.informat("M", &spec), Value::Char("Medium".to_string()));
+        assert_eq!(session.format_catalog.informat("L", &spec), Value::Char("Large".to_string()));
+    }
+
+    #[test]
+    fn execute_invalue_unmatched_returns_missing() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; invalue grade 'A'=4 'B'=3; run;",
+        );
+
+        let spec = FormatSpec::parse("GRADE.").unwrap();
+        // "X" not matched, no other → missing.
+        assert_eq!(session.format_catalog.informat("X", &spec), Value::missing());
+    }
+
+    #[test]
+    fn execute_invalue_other_fallback() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; invalue grade 'A'=4 'B'=3 other=.; run;",
+        );
+
+        let spec = FormatSpec::parse("GRADE.").unwrap();
+        assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
+        assert_eq!(session.format_catalog.informat("Z", &spec), Value::missing());
+    }
+
+    #[test]
+    fn execute_invalue_and_value_coexist() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; \
+             value sexfmt 1='Male' 2='Female'; \
+             invalue grade 'A'=4 'B'=3; \
+             run;",
+        );
+
+        // VALUE format still works.
+        let fspec = FormatSpec::parse("SEXFMT.").unwrap();
+        assert_eq!(session.format_catalog.format(&Value::Num(1.0), &fspec), "Male");
+
+        // INVALUE informat also works.
+        let ispec = FormatSpec::parse("GRADE.").unwrap();
+        assert_eq!(session.format_catalog.informat("A", &ispec), Value::Num(4.0));
     }
 }

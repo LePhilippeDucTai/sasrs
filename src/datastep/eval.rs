@@ -106,6 +106,11 @@ pub struct EvalCtx {
     /// le provider de bibliothèque) est fait par `exec::execute` APRÈS la
     /// boucle implicite, là où `&mut Session` est disponible.
     pub hash_outputs: Vec<HashOutput>,
+    /// Catalogue de formats/informats (M18.2) — copié depuis la session pour
+    /// que les fonctions PUT() et INPUT() puissent résoudre les formats et
+    /// informats utilisateur. L'évaluateur n'a pas accès à `Session`, donc
+    /// on passe le catalogue ici au début de chaque étape DATA.
+    pub format_catalog: crate::formats::FormatCatalog,
 }
 
 /// Une sortie de hash en attente (M17.2). `vars` porte les `VarMeta` des
@@ -144,6 +149,7 @@ impl Default for EvalCtx {
             hashes: HashMap::new(),
             hash_iters: HashMap::new(),
             hash_outputs: Vec::new(),
+            format_catalog: crate::formats::FormatCatalog::default(),
         }
     }
 }

@@ -104,12 +104,20 @@ impl FormatSpec {
 #[derive(Default, Clone)]
 pub struct FormatCatalog {
     user: HashMap<String, userdef::UserFormat>,
+    /// User-defined informats (PROC FORMAT INVALUE, M18.2) keyed by upcased
+    /// name (with `$` prefix for char informats, e.g. `$SIZE`).
+    user_informats: HashMap<String, userdef::UserInformat>,
 }
 
 impl FormatCatalog {
-    /// Register a user-defined format (from PROC FORMAT) keyed by upcased name.
+    /// Register a user-defined format (from PROC FORMAT VALUE) keyed by upcased name.
     pub fn define(&mut self, name: &str, fmt: userdef::UserFormat) {
         self.user.insert(name.to_uppercase(), fmt);
+    }
+
+    /// Register a user-defined informat (from PROC FORMAT INVALUE, M18.2).
+    pub fn define_informat(&mut self, name: &str, inf: userdef::UserInformat) {
+        self.user_informats.insert(name.to_uppercase(), inf);
     }
 
     /// PUT: value → formatted string (SAS-justified, width spec.w).
@@ -174,15 +182,26 @@ impl FormatCatalog {
     /// INPUT: string → value.
     ///
     /// Resolution order:
-    ///   1. builtin::informat_builtin
-    ///   2. Fallback: trim; empty/"." → missing; parse as f64 → Num; else Char.
+    ///   1. User informat (M18.2) — checked BEFORE builtins so user can shadow.
+    ///   2. builtin::informat_builtin
+    ///   3. Fallback: trim; empty/"." → missing; parse as f64 → Num; else Char.
     pub fn informat(&self, s: &str, spec: &FormatSpec) -> Value {
-        // 1. Try builtin.
+        // 1. Try user informat (M18.2) — shadows builtins.
+        let uname = spec.name.to_uppercase();
+        if let Some(ui) = self.user_informats.get(&uname) {
+            if let Some(v) = ui.lookup(s) {
+                return v;
+            }
+            // User informat matched by name but no range matched — return missing.
+            return Value::missing();
+        }
+
+        // 2. Try builtin.
         if let Some(v) = builtin::informat_builtin(s, spec) {
             return v;
         }
 
-        // 2. Fallback.
+        // 3. Fallback.
         let trimmed = s.trim();
         if trimmed.is_empty() || trimmed == "." {
             return Value::missing();
@@ -386,5 +405,119 @@ mod tests {
         let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: None, d: None };
         let result = cat.informat("hello", &spec);
         assert_eq!(result, Value::Char("hello".into()));
+    }
+
+    // ── FormatCatalog::user_informats (M18.2) ─────────────────────────────────
+
+    use crate::formats::userdef::{InformatRange, InformatValue, UserInformat};
+
+    fn make_grade_informat() -> UserInformat {
+        UserInformat {
+            is_char_result: false,
+            ranges: vec![
+                InformatRange {
+                    from: userdef::Bound::Char("A".to_string()),
+                    to: userdef::Bound::Char("A".to_string()),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    result: InformatValue::Num(4.0),
+                },
+                InformatRange {
+                    from: userdef::Bound::Char("B".to_string()),
+                    to: userdef::Bound::Char("B".to_string()),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    result: InformatValue::Num(3.0),
+                },
+                InformatRange {
+                    from: userdef::Bound::Char("F".to_string()),
+                    to: userdef::Bound::Char("F".to_string()),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    result: InformatValue::Num(0.0),
+                },
+            ],
+            other: Some(InformatValue::Missing(".".to_string())),
+        }
+    }
+
+    #[test]
+    fn user_informat_registered_and_resolved() {
+        let mut cat = catalog();
+        cat.define_informat("GRADE", make_grade_informat());
+        let spec = FormatSpec::parse("GRADE.").unwrap();
+        assert_eq!(cat.informat("A", &spec), Value::Num(4.0));
+        assert_eq!(cat.informat("B", &spec), Value::Num(3.0));
+        assert_eq!(cat.informat("F", &spec), Value::Num(0.0));
+    }
+
+    #[test]
+    fn user_informat_unmatched_returns_missing() {
+        let mut cat = catalog();
+        cat.define_informat("GRADE", make_grade_informat());
+        let spec = FormatSpec::parse("GRADE.").unwrap();
+        // "X" not in any range; other = missing → Value::missing().
+        assert_eq!(cat.informat("X", &spec), Value::missing());
+    }
+
+    #[test]
+    fn user_informat_shadows_builtin() {
+        // There's no builtin informat named "GRADE", but let's confirm that
+        // if a user informat is registered under a builtin-sounding name it wins.
+        // We use "$CHAR" style to confirm the name resolution is correct:
+        // actually just confirm user wins over fallback for any name.
+        let mut cat = catalog();
+        // Override the fallback for format "MYNUM" — a name no builtin claims.
+        cat.define_informat(
+            "MYNUM",
+            UserInformat {
+                is_char_result: false,
+                ranges: vec![InformatRange {
+                    from: userdef::Bound::Char("one".to_string()),
+                    to: userdef::Bound::Char("one".to_string()),
+                    from_exclusive: false,
+                    to_exclusive: false,
+                    result: InformatValue::Num(1.0),
+                }],
+                other: None,
+            },
+        );
+        let spec = FormatSpec::parse("MYNUM.").unwrap();
+        // "one" → 1.0 from user informat (not the fallback which would give Char).
+        assert_eq!(cat.informat("one", &spec), Value::Num(1.0));
+        // "two" → no range + no other → missing (user informat claimed the name).
+        assert_eq!(cat.informat("two", &spec), Value::missing());
+    }
+
+    #[test]
+    fn char_user_informat_resolved() {
+        let mut cat = catalog();
+        cat.define_informat(
+            "$SIZE",
+            UserInformat {
+                is_char_result: true,
+                ranges: vec![
+                    InformatRange {
+                        from: userdef::Bound::Char("S".to_string()),
+                        to: userdef::Bound::Char("S".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Char("Small".to_string()),
+                    },
+                    InformatRange {
+                        from: userdef::Bound::Char("L".to_string()),
+                        to: userdef::Bound::Char("L".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Char("Large".to_string()),
+                    },
+                ],
+                other: Some(InformatValue::Char("Unknown".to_string())),
+            },
+        );
+        let spec = FormatSpec::parse("$SIZE.").unwrap();
+        assert_eq!(cat.informat("S", &spec), Value::Char("Small".to_string()));
+        assert_eq!(cat.informat("L", &spec), Value::Char("Large".to_string()));
+        assert_eq!(cat.informat("XL", &spec), Value::Char("Unknown".to_string()));
     }
 }

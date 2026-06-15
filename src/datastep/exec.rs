@@ -435,6 +435,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             macro_symbols,
             hashes: hash_objects,
             hash_iters,
+            format_catalog: session.format_catalog.clone(),
             ..EvalCtx::default()
         },
         outputs,
@@ -735,7 +736,7 @@ fn build_um_runner(
         text_line: 0,
         text_read: 0,
         held: None,
-        format_catalog,
+        format_catalog: format_catalog.clone(),
         put: PutState::new(),
         cur_ds: 0,
         cursors: Vec::new(),
@@ -746,6 +747,7 @@ fn build_um_runner(
             arrays,
             by_flags,
             macro_symbols,
+            format_catalog,
             ..EvalCtx::default()
         },
         outputs,

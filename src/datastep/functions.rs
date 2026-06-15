@@ -2873,7 +2873,7 @@ fn fn_intnx(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// du caractère. Le second argument est le token de format (poussé en
 /// `Value::Char` par le parser). Format invalide ou args manquants → chaîne
 /// vide.
-fn fn_put(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+fn fn_put(args: &[Value], ctx: &mut EvalCtx) -> Value {
     if args.len() != 2 {
         return Value::Char(String::new());
     }
@@ -2884,7 +2884,8 @@ fn fn_put(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let Some(spec) = crate::formats::FormatSpec::parse(&token) else {
         return Value::Char(String::new());
     };
-    let result = crate::formats::FormatCatalog::default().format(&args[0], &spec);
+    // Use the session's format catalog so user-defined formats (PROC FORMAT) are resolved.
+    let result = ctx.format_catalog.format(&args[0], &spec);
     Value::Char(result)
 }
 
@@ -2892,7 +2893,7 @@ fn fn_put(args: &[Value], _ctx: &mut EvalCtx) -> Value {
 /// numérique ou un caractère selon l'informat. Le second argument est le
 /// token d'informat (poussé en `Value::Char` par le parser). Informat
 /// invalide ou args manquants → missing.
-fn fn_input(args: &[Value], _ctx: &mut EvalCtx) -> Value {
+fn fn_input(args: &[Value], ctx: &mut EvalCtx) -> Value {
     if args.len() != 2 {
         return Value::missing();
     }
@@ -2904,7 +2905,8 @@ fn fn_input(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let Some(spec) = crate::formats::FormatSpec::parse(&token) else {
         return Value::missing();
     };
-    crate::formats::FormatCatalog::default().informat(&source, &spec)
+    // Use the session's format catalog so user-defined informats (PROC FORMAT INVALUE) are resolved.
+    ctx.format_catalog.informat(&source, &spec)
 }
 
 /// SYMGET (M11.5) : `symget('name')` lit la valeur de la variable macro
@@ -4848,6 +4850,141 @@ mod tests {
     #[test]
     fn input_wrong_arity_returns_missing() {
         assert_eq!(invoke("INPUT", &[chr("123")]), miss());
+    }
+
+    // ── INPUT / PUT with user-defined formats & informats (M18.2) ────────────
+
+    fn make_ctx_with_grade_informat() -> EvalCtx {
+        use crate::formats::userdef::{Bound, InformatRange, InformatValue, UserInformat};
+        let mut cat = crate::formats::FormatCatalog::default();
+        cat.define_informat(
+            "GRADE",
+            UserInformat {
+                is_char_result: false,
+                ranges: vec![
+                    InformatRange {
+                        from: Bound::Char("A".to_string()),
+                        to: Bound::Char("A".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Num(4.0),
+                    },
+                    InformatRange {
+                        from: Bound::Char("B".to_string()),
+                        to: Bound::Char("B".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Num(3.0),
+                    },
+                    InformatRange {
+                        from: Bound::Char("F".to_string()),
+                        to: Bound::Char("F".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Num(0.0),
+                    },
+                ],
+                other: Some(InformatValue::Missing(".".to_string())),
+            },
+        );
+        EvalCtx { format_catalog: cat, ..EvalCtx::default() }
+    }
+
+    fn make_ctx_with_size_char_informat() -> EvalCtx {
+        use crate::formats::userdef::{Bound, InformatRange, InformatValue, UserInformat};
+        let mut cat = crate::formats::FormatCatalog::default();
+        cat.define_informat(
+            "$SIZE",
+            UserInformat {
+                is_char_result: true,
+                ranges: vec![
+                    InformatRange {
+                        from: Bound::Char("S".to_string()),
+                        to: Bound::Char("S".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Char("Small".to_string()),
+                    },
+                    InformatRange {
+                        from: Bound::Char("L".to_string()),
+                        to: Bound::Char("L".to_string()),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        result: InformatValue::Char("Large".to_string()),
+                    },
+                ],
+                other: Some(InformatValue::Char("Unknown".to_string())),
+            },
+        );
+        EvalCtx { format_catalog: cat, ..EvalCtx::default() }
+    }
+
+    #[test]
+    fn input_user_informat_numeric_via_function() {
+        // INPUT("A", grade.) → 4.0 using user-defined informat.
+        let mut c = make_ctx_with_grade_informat();
+        assert_eq!(invoke_ctx("INPUT", &[chr("A"), chr("grade.")], &mut c), num(4.0));
+        assert_eq!(invoke_ctx("INPUT", &[chr("B"), chr("grade.")], &mut c), num(3.0));
+        assert_eq!(invoke_ctx("INPUT", &[chr("F"), chr("grade.")], &mut c), num(0.0));
+    }
+
+    #[test]
+    fn input_user_informat_unmatched_returns_missing() {
+        // "X" not in grade informat; other=. → missing.
+        let mut c = make_ctx_with_grade_informat();
+        assert_eq!(invoke_ctx("INPUT", &[chr("X"), chr("grade.")], &mut c), miss());
+    }
+
+    #[test]
+    fn input_user_char_informat_via_function() {
+        // INPUT("S", $size.) → "Small" using char user-defined informat.
+        let mut c = make_ctx_with_size_char_informat();
+        assert_eq!(
+            invoke_ctx("INPUT", &[chr("S"), chr("$size.")], &mut c),
+            chr("Small")
+        );
+        assert_eq!(
+            invoke_ctx("INPUT", &[chr("L"), chr("$size.")], &mut c),
+            chr("Large")
+        );
+        assert_eq!(
+            invoke_ctx("INPUT", &[chr("XL"), chr("$size.")], &mut c),
+            chr("Unknown")
+        );
+    }
+
+    #[test]
+    fn put_user_format_via_function() {
+        // PUT(1, sexfmt.) → "Male" using user-defined format.
+        use crate::formats::userdef::{Bound, Range, UserFormat};
+        let mut cat = crate::formats::FormatCatalog::default();
+        cat.define(
+            "SEXFMT",
+            UserFormat {
+                is_char: false,
+                ranges: vec![
+                    Range {
+                        from: Bound::Num(1.0),
+                        to: Bound::Num(1.0),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        label: "Male".to_string(),
+                    },
+                    Range {
+                        from: Bound::Num(2.0),
+                        to: Bound::Num(2.0),
+                        from_exclusive: false,
+                        to_exclusive: false,
+                        label: "Female".to_string(),
+                    },
+                ],
+                other: Some("Unknown".to_string()),
+            },
+        );
+        let mut c = EvalCtx { format_catalog: cat, ..EvalCtx::default() };
+        assert_eq!(invoke_ctx("PUT", &[num(1.0), chr("sexfmt.")], &mut c), chr("Male"));
+        assert_eq!(invoke_ctx("PUT", &[num(2.0), chr("sexfmt.")], &mut c), chr("Female"));
+        assert_eq!(invoke_ctx("PUT", &[num(99.0), chr("sexfmt.")], &mut c), chr("Unknown"));
     }
 
     // ── INTCK ─────────────────────────────────────────────────────────────────
