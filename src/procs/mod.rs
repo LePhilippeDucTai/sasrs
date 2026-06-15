@@ -15,7 +15,9 @@
 //! aucun dataset créé dans la session → ERROR (comme SAS _LAST_ vide).
 
 pub mod append;
+pub mod catalog;
 pub mod common;
+pub mod compare;
 pub mod contents;
 pub mod corr;
 pub mod datasets;
@@ -24,7 +26,9 @@ pub mod format;
 pub mod freq;
 pub mod import;
 pub mod means;
+pub mod options;
 pub mod print;
+pub mod printto;
 pub mod rank;
 pub mod report;
 pub mod sort;
@@ -55,6 +59,10 @@ pub enum ProcAst {
     Sql(crate::sql::ast::SqlProgram),
     Import(import::ImportAst),
     Export(export::ExportAst),
+    Compare(compare::CompareAst),
+    Printto(printto::PrinttoAst),
+    Options(options::OptionsAst),
+    Catalog(catalog::CatalogAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -147,6 +155,22 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = export::parse(ts)?;
             Ok(ProcAst::Export(ast))
         }
+        "compare" => {
+            let ast = compare::parse(ts)?;
+            Ok(ProcAst::Compare(ast))
+        }
+        "printto" => {
+            let ast = printto::parse(ts)?;
+            Ok(ProcAst::Printto(ast))
+        }
+        "options" => {
+            let ast = options::parse(ts)?;
+            Ok(ProcAst::Options(ast))
+        }
+        "catalog" => {
+            let ast = catalog::parse(ts)?;
+            Ok(ProcAst::Catalog(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -182,6 +206,10 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Sql(a) => crate::sql::execute(a, session),
         ProcAst::Import(a) => import::execute(a, session),
         ProcAst::Export(a) => export::execute(a, session),
+        ProcAst::Compare(a) => compare::execute(a, session),
+        ProcAst::Printto(a) => printto::execute(a, session),
+        ProcAst::Options(a) => options::execute(a, session),
+        ProcAst::Catalog(a) => catalog::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

@@ -78,6 +78,14 @@ pub struct Session {
     /// en M17.2). Aucun coût ni champ en build de production.
     #[cfg(test)]
     pub debug_hashes: std::collections::HashMap<String, crate::datastep::HashObject>,
+    /// M21.1 — PROC PRINTTO : destination de redirection du LOG.
+    /// `None` = destination par défaut (LogWriter interne).
+    /// v1 : stocké mais pas encore routé (routage différé à M22 ODS).
+    pub printto_log: Option<std::path::PathBuf>,
+    /// M21.1 — PROC PRINTTO : destination de redirection du LISTING (PRINT).
+    /// `None` = destination par défaut (ListingWriter interne).
+    /// v1 : stocké mais pas encore routé (routage différé à M22 ODS).
+    pub printto_print: Option<std::path::PathBuf>,
 }
 
 impl Session {
@@ -107,6 +115,8 @@ impl Session {
             call_execute_queue: Vec::new(),
             #[cfg(test)]
             debug_hashes: std::collections::HashMap::new(),
+            printto_log: None,
+            printto_print: None,
         })
     }
 

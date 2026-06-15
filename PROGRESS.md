@@ -190,7 +190,12 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] Fixtures `m20/` (dictionary, views_update) + snapshots **vérifiés à la main** : dictionary → DICTIONARY.TABLES/COLUMNS/MACROS + alias sashelp.v*, LIKE sur les vues dictionnaire ; views_update → CREATE VIEW girls (9 filles), UPDATE weight+5 si age≥14 (9 lignes, arithmétique +5 exacte), INSERT depuis sous-requête FROM(UNION) (4 amorce age=15 + 7 insérées age∈{11,12}=11 final), DROP VIEW. m1–m19 octet-identiques. `cargo test` vert (1817 + snapshot). **M20 TERMINÉ.**
 
 ## M21 — complétion des procs existants + procs utilitaires
-- [ ] ⫽ M21.1 — `PROC COMPARE`, `PROC PRINTTO`, `PROC OPTIONS`, `PROC CATALOG` (Sonnet, moyen)
+- [x] ⫽ M21.1 — `PROC COMPARE`, `PROC PRINTTO`, `PROC OPTIONS`, `PROC CATALOG` (Sonnet, moyen)
+  — **PROC COMPARE** (`src/procs/compare.rs`) : BASE=/COMPARE= obligatoires, NOVALUES, BRIEFSUMMARY, OUT=. Rapport listing en 4 sections (Data Set Summary, Variables Summary, Observation Summary, Values Comparison). Comparaison via `sas_cmp` (. = ., char trim trailing blanks). Tolérance numérique = 0 (pas de CRITERION= v1). OUT= dataset avec _TYPE_/_OBS_ + colonnes communes. +11 tests.
+  — **PROC PRINTTO** (`src/procs/printto.rs`) : LOG=/PRINT=/NEW, reset nu (`proc printto;`). v1 : stocke les chemins dans `Session.printto_log`/`printto_print` (nouveaux champs), émet NOTE ; routage réel différé à M22 ODS (invariant snapshots préservé). +6 tests.
+  — **PROC OPTIONS** (`src/procs/options.rs`) : affiche les options au LOG (pas au listing). Sans liste → toutes ; avec liste → seulement celles demandées ; option inconnue → WARNING. Options exposées : OBS, FIRSTOBS, LINESIZE, PAGESIZE, CENTER, DATE, MPRINT, MLOGIC, SYMBOLGEN. +6 tests.
+  — **PROC CATALOG** (`src/procs/catalog.rs`) : run-group proc jusqu'à `quit;`. CONTENTS liste les formats utilisateur depuis `FormatCatalog`. DELETE/COPY : no-op gracieux + NOTE. `FormatCatalog::user_format_names()` ajouté. +5 tests.
+  — **Total** : +43 tests (1817 → 1860). 0 warning `-D warnings`. 0 `.snap.new`. Déviations v1 documentées : tolérance CRITERION= (COMPARE), routage physique (PRINTTO), vrais .sas7bcat (CATALOG).
 - [ ] M21.2 — FREQ : Fisher exact, AGREE (kappa), MEASURES (odds ratio, RR), TREND (Cochran-Armitage), CHISQ 1 voie, `TABLES ... / OUT=` (Opus, élevé)
 - [ ] M21.3 — UNIVARIATE : tests de normalité (Shapiro-Wilk, Kolmogorov, Anderson-Darling), HISTOGRAM/QQPLOT (→ images M29), percentiles étendus (Fable, élevé)
 - [ ] M21.4 — TABULATE/REPORT avancés : 3ᵉ dim, croisements multi-VAR/stats, ALL, PCTN/PCTSUM (TABULATE) ; ACROSS, COMPUTE, BREAK/RBREAK, LINE, WHERE, OUT= (REPORT) (Opus, élevé)

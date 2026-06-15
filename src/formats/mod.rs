@@ -128,6 +128,13 @@ impl FormatCatalog {
         self.user_pictures.insert(name.to_uppercase(), pic);
     }
 
+    /// Return a sorted list of user-defined format names (M21.1 — PROC CATALOG CONTENTS).
+    pub fn user_format_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.user.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
+
     /// PUT: value → formatted string (SAS-justified, width spec.w).
     ///
     /// Resolution order:
