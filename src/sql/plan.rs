@@ -1014,44 +1014,102 @@ fn aggregate_to_polars(
     }
 }
 
-/// Traduit un prédicat SQL `expr LIKE pattern` en expression Polars SANS
-/// dépendre de la feature `regex` de Polars (non activée dans ce crate). On
-/// couvre les formes courantes via `starts_with` / `ends_with` /
-/// `contains_literal` / égalité :
-///   - `abc`      → eq (aucun joker)
-///   - `abc%`     → starts_with("abc")
-///   - `%abc`     → ends_with("abc")
-///   - `%`        → is_not_null (tout non-missing)
-/// Le joker `_` (un caractère), les motifs `%` multiples au milieu ET la
-/// forme `%abc%` (substring) nécessiteraient la feature `regex` de Polars
-/// (non activée) : on lève alors une ERROR propre (documenté).
+/// Traduit un prédicat SQL `expr LIKE pattern` en expression Polars.
+///
+/// Sémantique SAS du LIKE (cf. SAS SQL) :
+///   - `%`  : correspond à zéro caractère ou plus,
+///   - `_`  : correspond à exactement un caractère,
+///   - tout autre caractère se compare littéralement,
+///   - la comparaison est **sensible à la casse** (contrairement à `=` SAS
+///     qui l'est aussi sur les char ; SAS ne fait PAS de upcase ici),
+///   - une valeur missing (null) ne matche jamais → résultat null/false.
+///
+/// On n'utilise PAS la feature `regex` de Polars (non activée). Pour couvrir
+/// l'intégralité des motifs (y compris `_`, les `%` internes et la forme
+/// substring `%abc%`), on optimise les cas courants en primitives Polars
+/// (`eq` / `starts_with` / `ends_with` / `contains_literal`) et on retombe sur
+/// un matcher SAS maison appliqué via `Expr::map` pour les cas généraux.
 fn like_to_match(a: Expr, pattern: &str) -> Result<Expr> {
-    if pattern.contains('_') {
-        return Err(SasError::runtime(
-            "PROC SQL: the '_' wildcard in LIKE is not supported yet.",
-        ));
+    // Cas spéciaux purement composés de jokers `%` → tout non-missing matche.
+    // (`%`, `%%`, ... = "zéro ou plus" répété = "n'importe quoi".)
+    if !pattern.is_empty() && pattern.chars().all(|c| c == '%') {
+        return Ok(a.clone().is_not_null());
     }
-    if pattern == "%" {
-        return Ok(a.is_not_null());
-    }
-    let leading = pattern.starts_with('%');
-    let trailing = pattern.ends_with('%');
-    let core = pattern.trim_matches('%');
-    if core.contains('%') {
-        return Err(SasError::runtime(
-            "PROC SQL: this LIKE pattern is not supported yet (internal '%').",
-        ));
-    }
-    Ok(match (leading, trailing) {
-        (false, false) => a.eq(lit(core.to_string())),
-        (false, true) => a.str().starts_with(lit(core.to_string())),
-        (true, false) => a.str().ends_with(lit(core.to_string())),
-        (true, true) => {
-            return Err(SasError::runtime(
-                "PROC SQL: the '%...%' (substring) LIKE pattern is not supported yet.",
-            ));
+
+    // Optimisations : motifs sans `_` et sans plusieurs `%` internes.
+    // On les traduit en primitives Polars natives (plus rapides, vectorisées).
+    // Pour la forme `%abc%`, on retombe sur le matcher maison pour éviter
+    // les dépendances regex.
+    if !pattern.contains('_') {
+        let leading = pattern.starts_with('%');
+        let trailing = pattern.ends_with('%');
+        let core = pattern.trim_matches('%');
+        if !core.contains('%') && (leading, trailing) != (true, true) {
+            let core = core.to_string();
+            return Ok(match (leading, trailing) {
+                // Pas de joker du tout → égalité exacte.
+                (false, false) => a.eq(lit(core)),
+                // `abc%` → commence par "abc".
+                (false, true) => a.str().starts_with(lit(core)),
+                // `%abc` → finit par "abc".
+                (true, false) => a.str().ends_with(lit(core)),
+                // `%abc%` → gérée par le matcher maison ci-dessous.
+                (true, true) => unreachable!(),
+            });
         }
-    })
+    }
+
+    // Cas général (joker `_`, ou plusieurs `%` internes) : matcher SAS maison
+    // appliqué élément par élément via une UDF Polars renvoyant un booléen.
+    let pat = pattern.to_string();
+    Ok(a.map(
+        move |col: Column| {
+            let s = col.str()?;
+            let out: BooleanChunked = s
+                .iter()
+                .map(|opt| opt.map(|v| sas_like_match(v, &pat)))
+                .collect();
+            Ok(Some(out.into_column()))
+        },
+        GetOutput::from_type(DataType::Boolean),
+    ))
+}
+
+/// Matcher SAS `LIKE` pour une seule valeur (sensible à la casse) :
+/// `%` = 0+ caractères, `_` = exactement 1 caractère, le reste littéral.
+/// Implémentation par backtracking glob classique (sur les `char`, pour gérer
+/// l'UTF-8 correctement).
+fn sas_like_match(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    // i : index dans le texte, j : index dans le motif.
+    let (mut i, mut j) = (0usize, 0usize);
+    // Dernier `%` rencontré et position du texte au moment de ce `%` : permet
+    // le backtracking (avancer d'un caractère dans le texte si la suite échoue).
+    let mut star_j: Option<usize> = None;
+    let mut star_i = 0usize;
+    while i < t.len() {
+        if j < p.len() && (p[j] == t[i] || p[j] == '_') {
+            i += 1;
+            j += 1;
+        } else if j < p.len() && p[j] == '%' {
+            star_j = Some(j);
+            star_i = i;
+            j += 1;
+        } else if let Some(sj) = star_j {
+            // Échec : le dernier `%` absorbe un caractère de plus.
+            j = sj + 1;
+            star_i += 1;
+            i = star_i;
+        } else {
+            return false;
+        }
+    }
+    // Texte épuisé : le reste du motif doit être uniquement des `%`.
+    while j < p.len() && p[j] == '%' {
+        j += 1;
+    }
+    j == p.len()
 }
 
 #[cfg(test)]
