@@ -55,6 +55,13 @@ pub struct Session {
     /// terminée (sémantique SAS : les instructions CALL EXECUTE s'exécutent
     /// après le RUN de l'étape qui les a générées).
     pub call_execute_queue: Vec<String>,
+    /// Test-only (M17.1) : instantané des objets hash de la DERNIÈRE étape DATA
+    /// exécutée (nom UPPERCASE → objet final). Peuplé par `datastep::execute`
+    /// sous `cfg(test)` pour observer keys/data_vars/options/defined depuis les
+    /// tests unitaires (les méthodes find/add qui exposeraient l'état arrivent
+    /// en M17.2). Aucun coût ni champ en build de production.
+    #[cfg(test)]
+    pub debug_hashes: std::collections::HashMap<String, crate::datastep::HashObject>,
 }
 
 impl Session {
@@ -76,6 +83,8 @@ impl Session {
             macro_engine: crate::preprocess::MacroEngine::new(deterministic),
             vectorize: false,
             call_execute_queue: Vec::new(),
+            #[cfg(test)]
+            debug_hashes: std::collections::HashMap::new(),
         })
     }
 

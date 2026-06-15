@@ -226,7 +226,20 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         });
     }
 
+    // Appel de méthode d'objet hash (M17.1) : `h.method(args);`. Détecté
+    // AVANT le dispatch par mot-clé — `ident . ident (` en début de statement
+    // est un appel de méthode (la forme `lib.table` n'apparaît jamais seule en
+    // tête d'un statement exécutable). On vérifie le motif complet pour ne pas
+    // intercepter par erreur une autre construction.
+    if ts.peek2().kind == TokenKind::Dot
+        && ts.peek_nth(2).ident().is_some()
+        && ts.peek_nth(3).kind == TokenKind::LParen
+    {
+        return parse_hash_method(ts);
+    }
+
     match head.as_str() {
+        "declare" | "dcl" => parse_declare(ts),
         "set" => parse_set(ts),
         "merge" => parse_merge(ts),
         "update" => parse_update(ts),
@@ -713,6 +726,164 @@ fn parse_call_routine(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     ts.expect_semi()?;
     Ok(DsStmt::CallRoutine { name, args })
+}
+
+/// `declare hash h(opt:val, ...);` / `dcl hash h();` (M17.1) — déclaration
+/// d'un objet hash. La tête (`declare`/`dcl`) est déjà en position courante.
+/// Après le mot-clé `hash` (seul type d'objet géré ; `hiter` est différé à
+/// M17.2 → erreur claire), on lit le nom de l'objet, puis une liste
+/// optionnelle d'options `clé:valeur` entre parenthèses (virgules séparatrices).
+/// Chaque valeur est un littéral chaîne (`'yes'`) ou numérique, normalisée en
+/// `String`. Parenthèses vides (`h()`) ou absentes (`h`) → aucune option.
+fn parse_declare(ts: &mut StatementStream) -> Result<DsStmt> {
+    let decl_tok = ts.peek().clone();
+    ts.next(); // `declare` / `dcl`
+    // Type de l'objet : seul `hash` est géré en M17.1.
+    let obj_type = match ts.peek().ident() {
+        Some(s) => s.to_ascii_lowercase(),
+        None => {
+            return Err(SasError::parse(
+                "expected an object type (HASH) after DECLARE",
+                ts.peek().span,
+            ));
+        }
+    };
+    if obj_type != "hash" {
+        return Err(SasError::parse(
+            format!(
+                "DECLARE of object type {} is not yet implemented (only HASH).",
+                obj_type.to_uppercase()
+            ),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `hash`
+    let name = match ts.peek().ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a hash object name after DECLARE HASH",
+                ts.peek().span,
+            ));
+        }
+    };
+    ts.next(); // nom de l'objet
+    let mut options = Vec::new();
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next(); // `(`
+        if ts.peek().kind != TokenKind::RParen {
+            loop {
+                // Clé de l'option : un identifiant (`ordered`, `duplicate`,
+                // `multidata`, `dataset`...).
+                let key = match ts.peek().ident() {
+                    Some(s) => s.to_ascii_lowercase(),
+                    None => {
+                        return Err(SasError::parse(
+                            "expected a hash option name",
+                            ts.peek().span,
+                        ));
+                    }
+                };
+                ts.next(); // clé
+                if ts.peek().kind != TokenKind::Colon {
+                    return Err(SasError::parse(
+                        format!("expected ':' after hash option {}", key.to_uppercase()),
+                        ts.peek().span,
+                    ));
+                }
+                ts.next(); // `:`
+                // Valeur : un littéral chaîne ou numérique, normalisée en
+                // String.
+                let val_tok = ts.peek().clone();
+                let value = match &val_tok.kind {
+                    TokenKind::Str { value, .. } => value.clone(),
+                    TokenKind::Num(n) => crate::value::format_best(*n, 12),
+                    _ => {
+                        return Err(SasError::parse(
+                            format!(
+                                "expected a literal value for hash option {}",
+                                key.to_uppercase()
+                            ),
+                            val_tok.span,
+                        ));
+                    }
+                };
+                ts.next(); // valeur
+                options.push((key, value));
+                match ts.peek().kind {
+                    TokenKind::Comma => {
+                        ts.next();
+                    }
+                    _ => break,
+                }
+            }
+        }
+        if ts.peek().kind != TokenKind::RParen {
+            return Err(SasError::parse(
+                format!(
+                    "expected ')' to close the options of hash object {}",
+                    name.to_uppercase()
+                ),
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `)`
+    }
+    let _ = decl_tok;
+    ts.expect_semi()?;
+    Ok(DsStmt::DeclareHash { name, options })
+}
+
+/// `h.method(args);` (M17.1) — appel de méthode d'objet hash. La forme
+/// `ident . ident (` est détectée par `parse_statement` AVANT le dispatch par
+/// mot-clé. Les arguments sont des expressions séparées par des virgules
+/// (liste vide autorisée pour `defineDone()`). La validation de la méthode est
+/// faite à l'exécution.
+fn parse_hash_method(ts: &mut StatementStream) -> Result<DsStmt> {
+    let object = ts
+        .peek()
+        .ident()
+        .expect("matched an Ident head in parse_statement")
+        .to_string();
+    ts.next(); // objet
+    ts.next(); // `.`
+    let method = ts
+        .peek()
+        .ident()
+        .expect("matched an Ident after '.' in parse_statement")
+        .to_string();
+    ts.next(); // méthode
+    // `(` garanti par le motif de détection.
+    ts.next(); // `(`
+    let mut args = Vec::new();
+    if ts.peek().kind != TokenKind::RParen {
+        loop {
+            args.push(super::expr::parse_expr(ts)?);
+            match ts.peek().kind {
+                TokenKind::Comma => {
+                    ts.next();
+                }
+                _ => break,
+            }
+        }
+    }
+    if ts.peek().kind != TokenKind::RParen {
+        return Err(SasError::parse(
+            format!(
+                "expected ')' to close the arguments of {}.{}",
+                object.to_uppercase(),
+                method
+            ),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // `)`
+    ts.expect_semi()?;
+    Ok(DsStmt::HashMethod {
+        object,
+        method,
+        args,
+    })
 }
 
 /// `infile <source> [options] ;` (M14). La source est un littéral chemin
@@ -4242,5 +4413,102 @@ mod tests {
             ast.stmts,
             vec![DsStmt::Retain(vec![("dt".to_string(), Some(Expr::Num(60.0)))])]
         );
+    }
+
+    // ── M17.1 : DECLARE HASH + méthodes ──────────────────────────────────
+
+    #[test]
+    fn parse_declare_hash_no_options() {
+        let ast = parse("data _null_; declare hash h(); run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::DeclareHash {
+                name: "h".to_string(),
+                options: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_declare_hash_no_parens() {
+        // Sans parenthèses du tout.
+        let ast = parse("data _null_; declare hash h; run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::DeclareHash {
+                name: "h".to_string(),
+                options: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_dcl_alias_with_options() {
+        // Alias `dcl` + options key:value séparées par virgules.
+        let ast =
+            parse("data _null_; dcl hash h(ordered:'yes', duplicate:'replace', multidata:'yes'); run;")
+                .unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::DeclareHash {
+                name: "h".to_string(),
+                options: vec![
+                    ("ordered".to_string(), "yes".to_string()),
+                    ("duplicate".to_string(), "replace".to_string()),
+                    ("multidata".to_string(), "yes".to_string()),
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_declare_hash_dataset_option() {
+        let ast = parse("data _null_; declare hash h(dataset:'work.lookup'); run;").unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![DsStmt::DeclareHash {
+                name: "h".to_string(),
+                options: vec![("dataset".to_string(), "work.lookup".to_string())],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_hash_define_key_data_done() {
+        let ast = parse(
+            "data _null_; declare hash h(); h.defineKey('k1', 'k2'); h.defineData('v'); h.defineDone(); run;",
+        )
+        .unwrap();
+        assert_eq!(
+            ast.stmts,
+            vec![
+                DsStmt::DeclareHash {
+                    name: "h".to_string(),
+                    options: vec![],
+                },
+                DsStmt::HashMethod {
+                    object: "h".to_string(),
+                    method: "defineKey".to_string(),
+                    args: vec![Expr::Str("k1".to_string()), Expr::Str("k2".to_string())],
+                },
+                DsStmt::HashMethod {
+                    object: "h".to_string(),
+                    method: "defineData".to_string(),
+                    args: vec![Expr::Str("v".to_string())],
+                },
+                DsStmt::HashMethod {
+                    object: "h".to_string(),
+                    method: "defineDone".to_string(),
+                    args: vec![],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_declare_non_hash_object_errors() {
+        // Type d'objet autre que HASH (ex. HITER) → erreur de parsing (M17.2).
+        let err = parse("data _null_; declare hiter it('h'); run;").unwrap_err();
+        assert!(err.to_string().to_uppercase().contains("HITER"));
     }
 }

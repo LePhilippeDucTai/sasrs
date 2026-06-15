@@ -351,6 +351,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         arrays,
         labels,
         flow_labels,
+        hash_objects,
     } = prog;
 
     for name in &uninitialized {
@@ -431,6 +432,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             in_flags,
             end_flag,
             macro_symbols,
+            hashes: hash_objects,
             ..EvalCtx::default()
         },
         outputs,
@@ -520,6 +522,14 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
                 "DATA step appears to loop infinitely (no input rows consumed); stopping.",
             ));
         }
+    }
+
+    // Test-only (M17.1) : expose l'état final des objets hash à la session
+    // pour inspection unitaire (keys/data_vars/options/defined). En production
+    // ce bloc n'existe pas.
+    #[cfg(test)]
+    {
+        session.debug_hashes = r.ctx.hashes.clone();
     }
 
     // CALL SYMPUT (M11.5) : drain des écritures différées vers la table
@@ -1334,6 +1344,17 @@ impl Runner {
             // DELETE, STOP, fin d'entrée) est propagé tel quel.
             DsStmt::Link(label) => self.exec_link_subroutine(&label.to_uppercase()),
             DsStmt::Return => Ok(Flow::Return),
+            // DECLARE HASH (M17.1) : l'objet et ses options sont déjà résolus à
+            // la compilation (dans `EvalCtx.hashes`). Le statement DECLARE est un
+            // marqueur déclaratif ; aucune action runtime (l'objet existe pour
+            // toute l'étape, comme les objets hash SAS au sein d'une étape DATA).
+            DsStmt::DeclareHash { .. } => Ok(Flow::Normal),
+            // Appel de méthode d'objet hash (M17.1).
+            DsStmt::HashMethod {
+                object,
+                method,
+                args,
+            } => self.exec_hash_method(object, method, args),
             // INPUT (M14) : lit le PROCHAIN enregistrement de la source texte
             // dans le PDV. Comme SET, l'épuisement de la source termine
             // l'étape IMMÉDIATEMENT (au milieu de l'itération).
@@ -2006,6 +2027,61 @@ impl Runner {
             "VNAME" => self.call_vname(args),
             _ => Err(SasError::runtime(format!(
                 "CALL routine {upper} is not yet implemented."
+            ))),
+        }
+    }
+
+    /// Appel de méthode d'objet hash (M17.1). Seules
+    /// `defineKey`/`defineData`/`defineDone` sont exécutées ; les autres
+    /// (find/add/replace/remove/output/...) parsent mais produisent une erreur
+    /// runtime « not yet implemented » (M17.2).
+    fn exec_hash_method(
+        &mut self,
+        object: &str,
+        method: &str,
+        args: &[crate::ast::Expr],
+    ) -> Result<Flow> {
+        let upper = object.to_uppercase();
+        if !self.ctx.hashes.contains_key(&upper) {
+            return Err(SasError::runtime(format!(
+                "Hash object {upper} has not been declared."
+            )));
+        }
+        let m = method.to_ascii_lowercase();
+        match m.as_str() {
+            "definekey" | "definedata" => {
+                // Les arguments sont des littéraux chaîne nommant des variables
+                // du PDV (validés à la compilation). On collecte les noms
+                // UPPERCASE dans l'ordre.
+                let mut names = Vec::with_capacity(args.len());
+                for a in args {
+                    let crate::ast::Expr::Str(varname) = a else {
+                        return Err(SasError::runtime(format!(
+                            "Argument of {upper}.{method} must be a quoted variable name."
+                        )));
+                    };
+                    names.push(varname.to_uppercase());
+                }
+                let obj = self.ctx.hashes.get_mut(&upper).expect("checked above");
+                if m == "definekey" {
+                    obj.keys = names;
+                } else {
+                    obj.data_vars = names;
+                }
+                Ok(Flow::Normal)
+            }
+            "definedone" => {
+                // Finalisation, idempotente. Le chargement éventuel d'un
+                // `dataset:` est différé à M17.2 (le nom est conservé).
+                let obj = self.ctx.hashes.get_mut(&upper).expect("checked above");
+                obj.defined = true;
+                Ok(Flow::Normal)
+            }
+            // find/check/add/replace/remove/clear/output/num_items/... : M17.2.
+            other => Err(SasError::runtime(format!(
+                "Hash method {}.{} is not yet implemented.",
+                upper,
+                other.to_uppercase()
             ))),
         }
     }
@@ -7460,5 +7536,186 @@ mod tests {
         let mut s = session();
         let e = run_err("data out; x = 1; retain _all_ 5; run;", &mut s);
         assert!(e.contains("initial value"), "got: {e}");
+    }
+
+    // ── M17.1 : DECLARE HASH + defineKey/defineData/defineDone ───────────
+
+    /// DECLARE HASH sans option crée l'objet (options par défaut).
+    #[test]
+    fn hash_declare_no_options() {
+        let mut s = session();
+        run("data _null_; declare hash h(); run;", &mut s).unwrap();
+        let h = s.debug_hashes.get("H").expect("hash H exists");
+        assert!(h.ordered.is_none());
+        assert!(h.duplicate.is_none());
+        assert!(!h.multidata);
+        assert!(h.dataset.is_none());
+        assert!(h.keys.is_empty());
+        assert!(h.data_vars.is_empty());
+        assert!(!h.defined);
+    }
+
+    /// Options ordered/duplicate/multidata parsées et stockées (minuscules).
+    #[test]
+    fn hash_declare_options_parsed() {
+        let mut s = session();
+        run(
+            "data _null_; declare hash h(ordered:'YES', duplicate:'replace', multidata:'yes'); run;",
+            &mut s,
+        )
+        .unwrap();
+        let h = s.debug_hashes.get("H").unwrap();
+        assert_eq!(h.ordered.as_deref(), Some("yes"));
+        assert_eq!(h.duplicate.as_deref(), Some("replace"));
+        assert!(h.multidata);
+    }
+
+    /// multidata:'no' (ou absent) → false.
+    #[test]
+    fn hash_declare_multidata_no() {
+        let mut s = session();
+        run(
+            "data _null_; declare hash h(multidata:'no'); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert!(!s.debug_hashes.get("H").unwrap().multidata);
+    }
+
+    /// Option dataset: conservée (chargement différé à M17.2).
+    #[test]
+    fn hash_declare_dataset_option() {
+        let mut s = session();
+        run(
+            "data _null_; declare hash h(dataset:'work.lookup'); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(
+            s.debug_hashes.get("H").unwrap().dataset.as_deref(),
+            Some("work.lookup")
+        );
+    }
+
+    /// Option inconnue → erreur de compilation.
+    #[test]
+    fn hash_declare_unknown_option_errors() {
+        let mut s = session();
+        let e = run_err("data _null_; declare hash h(bogus:'x'); run;", &mut s);
+        assert!(e.to_uppercase().contains("BOGUS"), "got: {e}");
+    }
+
+    /// defineKey avec une seule variable.
+    #[test]
+    fn hash_define_key_single() {
+        let mut s = session();
+        run(
+            "data _null_; k = 1; declare hash h(); h.defineKey('k'); h.defineDone(); run;",
+            &mut s,
+        )
+        .unwrap();
+        let h = s.debug_hashes.get("H").unwrap();
+        assert_eq!(h.keys, vec!["K".to_string()]);
+        assert!(h.defined);
+    }
+
+    /// defineKey avec plusieurs variables (ordre préservé, UPPERCASE).
+    #[test]
+    fn hash_define_key_multiple() {
+        let mut s = session();
+        run(
+            "data _null_; k1 = 1; k2 = 'a'; declare hash h(); h.defineKey('k1', 'k2'); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(
+            s.debug_hashes.get("H").unwrap().keys,
+            vec!["K1".to_string(), "K2".to_string()]
+        );
+    }
+
+    /// defineData simple et multiple.
+    #[test]
+    fn hash_define_data_single_and_multiple() {
+        let mut s = session();
+        run(
+            "data _null_; k = 1; v1 = 2; v2 = 3; declare hash h(); h.defineKey('k'); h.defineData('v1', 'v2'); run;",
+            &mut s,
+        )
+        .unwrap();
+        let h = s.debug_hashes.get("H").unwrap();
+        assert_eq!(h.keys, vec!["K".to_string()]);
+        assert_eq!(h.data_vars, vec!["V1".to_string(), "V2".to_string()]);
+    }
+
+    /// defineDone est idempotent (deux appels → toujours defined, pas d'erreur).
+    #[test]
+    fn hash_define_done_idempotent() {
+        let mut s = session();
+        run(
+            "data _null_; k = 1; declare hash h(); h.defineKey('k'); h.defineDone(); h.defineDone(); run;",
+            &mut s,
+        )
+        .unwrap();
+        assert!(s.debug_hashes.get("H").unwrap().defined);
+    }
+
+    /// Plusieurs objets hash dans la même étape, indépendants.
+    #[test]
+    fn hash_multiple_objects() {
+        let mut s = session();
+        run(
+            "data _null_; a = 1; b = 2; \
+             declare hash h1(); h1.defineKey('a'); h1.defineDone(); \
+             declare hash h2(multidata:'yes'); h2.defineKey('b'); h2.defineData('a'); h2.defineDone(); \
+             run;",
+            &mut s,
+        )
+        .unwrap();
+        let h1 = s.debug_hashes.get("H1").unwrap();
+        let h2 = s.debug_hashes.get("H2").unwrap();
+        assert_eq!(h1.keys, vec!["A".to_string()]);
+        assert!(h1.data_vars.is_empty());
+        assert!(!h1.multidata);
+        assert_eq!(h2.keys, vec!["B".to_string()]);
+        assert_eq!(h2.data_vars, vec!["A".to_string()]);
+        assert!(h2.multidata);
+    }
+
+    /// defineKey sur une variable inconnue → erreur de compilation.
+    #[test]
+    fn hash_define_key_unknown_variable_errors() {
+        let mut s = session();
+        let e = run_err(
+            "data _null_; declare hash h(); h.defineKey('nosuchvar'); run;",
+            &mut s,
+        );
+        assert!(e.to_uppercase().contains("NOSUCHVAR"), "got: {e}");
+    }
+
+    /// Méthode sur un objet non déclaré → erreur de compilation.
+    #[test]
+    fn hash_method_on_undeclared_object_errors() {
+        let mut s = session();
+        let e = run_err(
+            "data _null_; k = 1; ghost.defineKey('k'); run;",
+            &mut s,
+        );
+        assert!(e.to_uppercase().contains("GHOST"), "got: {e}");
+    }
+
+    /// Méthode non implémentée (find) → erreur runtime « not yet implemented »
+    /// (M17.2). L'objet est déclaré et défini ; find n'est pas câblé.
+    #[test]
+    fn hash_unimplemented_method_errors() {
+        let mut s = session();
+        let e = run_err(
+            "data _null_; k = 1; declare hash h(); h.defineKey('k'); h.defineDone(); h.find(); run;",
+            &mut s,
+        );
+        assert!(
+            e.to_uppercase().contains("NOT YET IMPLEMENTED") && e.to_uppercase().contains("FIND"),
+            "got: {e}"
+        );
     }
 }

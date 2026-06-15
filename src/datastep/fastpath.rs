@@ -71,6 +71,9 @@ pub fn eligible(prog: &StepProgram) -> bool {
         || !prog.uninitialized.is_empty()
         || !prog.initial_values.is_empty()
         || !prog.arrays.is_empty()
+        // Objets hash (M17.1) : DECLARE/define* opèrent par itération, hors
+        // périmètre vectorisé.
+        || !prog.hash_objects.is_empty()
     {
         return false;
     }

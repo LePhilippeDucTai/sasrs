@@ -259,6 +259,65 @@ impl ArrayDef {
     }
 }
 
+/// Objet hash de l'étape DATA (M17.1). Créé par `DECLARE HASH h(...)`, défini
+/// par `defineKey`/`defineData`/`defineDone`, puis manipulé par find/add/etc.
+/// (M17.2). Stocké dans `EvalCtx.hashes` (nom UPPERCASE → objet).
+///
+/// `rows` indexe les données par clé encodée (sémantique d'égalité SAS via
+/// `hash_key` : `. == .`, char insensible aux blancs finaux). Chaque entrée est
+/// une LISTE de jeux de données : sans `multidata`, une seule entrée par clé
+/// (l'ajout remplace ou est rejeté selon `duplicate`) ; avec `multidata:'yes'`,
+/// plusieurs jeux de données peuvent partager une clé.
+#[derive(Debug, Clone, Default)]
+pub struct HashObject {
+    /// Option `ordered:` (`'yes'`/`'ascending'`/`'descending'`/`'no'`),
+    /// normalisée en minuscules. `None` = non spécifiée (= `'no'`).
+    pub ordered: Option<String>,
+    /// Option `duplicate:` (`'replace'`/`'error'`/`'no'`), en minuscules.
+    /// `None` = défaut (comportement SAS : la première valeur est conservée,
+    /// l'ajout d'une clé existante est ignoré sans erreur).
+    pub duplicate: Option<String>,
+    /// Option `multidata:'yes'` : plusieurs jeux de données par clé.
+    pub multidata: bool,
+    /// Option `dataset:'lib.table'` : table à charger au `defineDone` (le
+    /// chargement effectif est différé à M17.2 ; le nom est conservé ici).
+    pub dataset: Option<String>,
+    /// Colonnes clé (noms UPPERCASE, dans l'ordre de `defineKey`).
+    pub keys: Vec<String>,
+    /// Colonnes données (noms UPPERCASE, dans l'ordre de `defineData`).
+    pub data_vars: Vec<String>,
+    /// Données : clé encodée → liste de jeux de valeurs de données (un seul
+    /// élément sans `multidata`). Parallèle à `data_vars`.
+    pub rows: std::collections::HashMap<String, Vec<Vec<Value>>>,
+    /// `defineDone()` a été appelé : l'objet est finalisé (idempotent).
+    pub defined: bool,
+}
+
+/// Clé d'appariement canonique d'une liste de `Value` pour un objet hash
+/// (M17.1). Encode la sémantique d'égalité SAS (`. == .`, char insensible aux
+/// blancs finaux) — identique à la clé UPDATE/MODIFY. Sert de clé de `HashMap`.
+pub fn hash_key(values: &[Value]) -> String {
+    let mut s = String::new();
+    for v in values {
+        match v {
+            Value::Num(n) => {
+                s.push('N');
+                s.push_str(&format!("{n:?}"));
+            }
+            Value::Missing(k) => {
+                s.push('M');
+                s.push_str(&k.display());
+            }
+            Value::Char(c) => {
+                s.push('C');
+                s.push_str(c.trim_end());
+            }
+        }
+        s.push('\u{1}');
+    }
+    s
+}
+
 /// Données d'entrée compilées d'un statement UPDATE (M16.5). Le maître et la
 /// transaction sont matérialisés en colonnes décodées (comme `InputDataset`),
 /// avec le slot PDV de chaque colonne. Les variables clé (`key_slots`) servent
@@ -338,6 +397,11 @@ pub struct StepProgram {
     /// (niveau supérieur de l'étape). Cibles des GOTO/LINK, résolues à la
     /// compilation. L'exécuteur pilote un compteur de programme sur `stmts`.
     pub flow_labels: HashMap<String, usize>,
+    /// Objets hash déclarés (M17.1) : nom UPPERCASE → objet initial (options
+    /// résolues, sans clés/données ni lignes). L'exécuteur les copie dans
+    /// `EvalCtx.hashes` au début de l'étape ; defineKey/defineData/defineDone
+    /// les remplissent à l'exécution.
+    pub hash_objects: HashMap<String, HashObject>,
 }
 
 pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> {
@@ -371,6 +435,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         modify: None,
         labels_defined: HashSet::new(),
         goto_link_refs: Vec::new(),
+        hash_objects: HashMap::new(),
     };
     for stmt in &ast.stmts {
         c.walk_stmt(stmt)?;
@@ -488,6 +553,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         arrays: c.arrays,
         labels: c.labels,
         flow_labels,
+        hash_objects: c.hash_objects,
     })
 }
 
@@ -614,6 +680,10 @@ struct Compiler<'a> {
     /// Références d'étiquette des GOTO/LINK (M16.6), en MAJUSCULES. Validées en
     /// fin de compilation contre `labels_defined` (étiquette inconnue → erreur).
     goto_link_refs: Vec<String>,
+    /// Objets hash déclarés (M17.1) : nom UPPERCASE → objet initial (options
+    /// résolues). Un DECLARE HASH y enregistre l'objet ; un appel de méthode
+    /// le référence (objet inconnu → erreur de compilation).
+    hash_objects: HashMap<String, HashObject>,
 }
 
 /// État intermédiaire d'un UPDATE pendant la compilation : les datasets sont
@@ -1246,6 +1316,85 @@ impl Compiler<'_> {
             // RETURN (M16.6) : aucune validation compile-time (un RETURN sans
             // LINK actif est licite — termine l'itération courante).
             DsStmt::Return => Ok(()),
+            // DECLARE HASH (M17.1) : enregistre l'objet hash avec ses options
+            // résolues. Un objet redéclaré écrase le précédent (SAS permet de
+            // re-DECLARE ; le dernier gagne). Les options inconnues → erreur.
+            DsStmt::DeclareHash { name, options } => {
+                let mut obj = HashObject::default();
+                for (key, value) in options {
+                    match key.as_str() {
+                        "ordered" => obj.ordered = Some(value.trim().to_ascii_lowercase()),
+                        "duplicate" => obj.duplicate = Some(value.trim().to_ascii_lowercase()),
+                        "multidata" => {
+                            obj.multidata = matches!(
+                                value.trim().to_ascii_lowercase().as_str(),
+                                "yes" | "y" | "1"
+                            );
+                        }
+                        "dataset" | "data" => obj.dataset = Some(value.clone()),
+                        // hashexp/suminc/... : différés (M17.2) — erreur claire.
+                        other => {
+                            return Err(SasError::runtime(format!(
+                                "Hash object option {} is not supported.",
+                                other.to_uppercase()
+                            )));
+                        }
+                    }
+                }
+                self.hash_objects.insert(name.to_uppercase(), obj);
+                Ok(())
+            }
+            // Appel de méthode d'objet hash (M17.1) : l'objet doit être déclaré.
+            // Pour defineKey/defineData, les arguments sont des littéraux chaîne
+            // nommant des variables du PDV (validées si elles existent). Les
+            // autres méthodes (find/add/...) parsent mais sont exécutées en
+            // M17.2 ; ici on valide seulement leurs arguments d'expression.
+            DsStmt::HashMethod {
+                object,
+                method,
+                args,
+            } => {
+                let upper = object.to_uppercase();
+                if !self.hash_objects.contains_key(&upper) {
+                    return Err(SasError::runtime(format!(
+                        "Hash object {} has not been declared.",
+                        upper
+                    )));
+                }
+                let m = method.to_ascii_lowercase();
+                if m == "definekey" || m == "definedata" {
+                    // Chaque argument doit être un littéral chaîne nommant une
+                    // variable du PDV. La variable doit exister (defineKey/
+                    // defineData référencent des colonnes du PDV).
+                    for a in args {
+                        match a {
+                            Expr::Str(varname) => {
+                                if self.pdv.slot(varname).is_none() {
+                                    return Err(SasError::runtime(format!(
+                                        "Variable {} in the hash {} definition does not exist.",
+                                        varname.to_uppercase(),
+                                        method
+                                    )));
+                                }
+                            }
+                            // `defineData(all:'yes')` et variantes différées.
+                            _ => {
+                                return Err(SasError::runtime(format!(
+                                    "Argument of {}.{} must be a quoted variable name.",
+                                    upper, method
+                                )));
+                            }
+                        }
+                    }
+                } else {
+                    // defineDone / find / add / ... : walke les arguments
+                    // d'expression (validation des variables référencées).
+                    for a in args {
+                        self.walk_expr(a)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 

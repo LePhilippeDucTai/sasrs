@@ -93,6 +93,10 @@ pub struct EvalCtx {
     /// jour par le Runner après chaque lecture (1 = dernière obs lue). Servie
     /// comme variable automatique (jamais de slot PDV).
     pub end_flag: Option<(String, f64)>,
+    /// Objets hash de l'étape (M17.1) : nom UPPERCASE → objet (clés, données,
+    /// lignes). Copié depuis `StepProgram.hash_objects` par l'exécuteur ;
+    /// defineKey/defineData/defineDone (et M17.2 find/add/...) y opèrent.
+    pub hashes: HashMap<String, super::HashObject>,
 }
 
 impl Default for EvalCtx {
@@ -116,6 +120,7 @@ impl Default for EvalCtx {
             rng_spare: None,
             do_over: HashMap::new(),
             end_flag: None,
+            hashes: HashMap::new(),
         }
     }
 }

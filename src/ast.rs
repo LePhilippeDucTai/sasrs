@@ -552,6 +552,29 @@ pub enum DsStmt {
     /// l'adresse de retour). Sans `LINK` actif, RETURN termine l'itération
     /// courante (output implicite puis itération suivante), comme en SAS.
     Return,
+    /// `declare hash h(opt:val, ...);` / `dcl hash h();` (M17.1) — crée un
+    /// objet hash nommé `name`. Les options sont des paires `clé:valeur`
+    /// (`ordered:'yes'`, `duplicate:'replace'`, `multidata:'yes'`,
+    /// `dataset:'lib.table'`), séparées par des virgules ; chaque valeur est
+    /// un littéral chaîne ou numérique normalisé en `String`. L'objet est
+    /// défini ensuite par les méthodes `defineKey`/`defineData`/`defineDone`
+    /// (M17.1) puis manipulé par find/add/etc. (M17.2).
+    DeclareHash {
+        name: String,
+        options: Vec<(String, String)>,
+    },
+    /// `h.method(args);` (M17.1) — appel d'une méthode d'un objet hash.
+    /// `object` est le nom de l'objet hash (résolu en MAJUSCULES à la
+    /// compilation/exécution) ; `method` le nom de la méthode (casse
+    /// préservée, résolue insensible à la casse) ; `args` ses arguments. Pour
+    /// M17.1, seules `defineKey`/`defineData`/`defineDone` sont exécutées ;
+    /// les autres (find/add/...) parsent mais produisent une erreur runtime
+    /// « not yet implemented » (M17.2).
+    HashMethod {
+        object: String,
+        method: String,
+        args: Vec<Expr>,
+    },
 }
 
 /// Une clause `when (v1, v2, ...) stmt;` d'un SELECT (M16.1). `values` porte
