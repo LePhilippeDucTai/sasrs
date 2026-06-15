@@ -1,0 +1,11 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m19/sasautos/mylib.sas
+---
+==== LOG ====
+
+==== LISTING ====
+
+==== EXIT 0 ====

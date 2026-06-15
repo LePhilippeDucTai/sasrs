@@ -1,0 +1,124 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m19/macro_advanced.sas
+---
+==== LOG ====
+M19.1 unquoted: Hello Alice
+
+1     data _null_;
+2         file 'incmac.sas';
+3         length line $200;
+4         line = byte(37) || 'macro get_name(id);';                            put line;
+5         line = '  data work.gn; nm = "' || byte(38) || 'id"; output; run;';  put line;
+6         line = byte(37) || 'mend;';                                          put line;
+7     run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+8     data work.gn; nm = "SAS"; output; run;;
+NOTE: The data set WORK.GN has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+9     data _null_;
+10        file 'mylib.sas';
+11        length line $200;
+12        line = byte(37) || 'macro mylib(value=);';                              put line;
+13        line = '  data work.auto; v = ' || byte(38) || 'value; output; run;';   put line;
+14        line = byte(37) || 'mend;';                                             put line;
+15    run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    options sasautos='.';
+
+17    data _null_; run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    data work.auto; v = 42; output; run;
+NOTE: The data set WORK.AUTO has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    options mprint mlogic symbolgen;
+
+20    data _null_; run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+The name is: Alice
+SYMBOLGEN:  Macro variable NAME resolves to Alice
+MLOGIC(TEST_LOGIC):  Beginning execution.
+MLOGIC(TEST_LOGIC):  Parameter N has value 3
+MLOGIC(TEST_LOGIC):  %IF condition &n = 3 is TRUE
+N is three
+MLOGIC(TEST_LOGIC):  Ending execution.
+
+21    title "Report for Alice";
+
+22    options nomprint nomlogic nosymbolgen;
+
+23    title;
+
+24    data _null_; run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    data _null_; run;
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+26    data work.result; x = 99; output; run;
+NOTE: The data set WORK.RESULT has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    proc print data=work.gn;     run;
+NOTE: There were 1 observations read from the data set WORK.GN.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    proc print data=work.auto;   run;
+NOTE: There were 1 observations read from the data set WORK.AUTO.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+29    proc print data=work.result; run;
+NOTE: There were 1 observations read from the data set WORK.RESULT.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                         The SAS System
+
+                                           Obs    nm
+
+                                             1    SAS
+
+                                         The SAS System
+
+                                           Obs     v
+
+                                             1    42
+
+                                         The SAS System
+
+                                           Obs     x
+
+                                             1    99
+
+==== EXIT 0 ====

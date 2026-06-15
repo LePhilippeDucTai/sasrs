@@ -260,6 +260,23 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                         },
                         None => {}
                     }
+                } else if name.eq_ignore_ascii_case("sasautos") {
+                    // M19.2 — SASAUTOS= fixe le(s) répertoire(s) de bibliothèques
+                    // autocall. On accepte une valeur simple (un répertoire) :
+                    //   OPTIONS SASAUTOS='dir';  ou  OPTIONS SASAUTOS=dir;
+                    // Les guillemets éventuels sont retirés par le parser
+                    // global ; le chemin relatif est résolu contre `base_dir`
+                    // (même base que %include/LIBNAME). La forme liste
+                    // `(d1 d2)` n'est pas gérée ici (différée).
+                    match value.as_deref() {
+                        Some(v) if !v.is_empty() => {
+                            let dir = session.resolve_path(v);
+                            session.macro_engine.set_sasautos_path(vec![dir]);
+                        }
+                        _ => session
+                            .log
+                            .error("The value for the SASAUTOS option is missing."),
+                    }
                 } else if let Some(flag) = parse_macro_trace_flag(name) {
                     // M19.3 — options de trace booléennes : MPRINT/MLOGIC/
                     // SYMBOLGEN (et leurs formes NO...). Appliquées à la session
@@ -489,6 +506,39 @@ mod tests {
             .contains("Libref MYLIB was successfully assigned as follows:"));
         assert!(out.log.contains("Physical Name:"));
         assert!(out.log.contains("Libref MYLIB has been deassigned."));
+    }
+
+    #[test]
+    fn options_sasautos_enables_autocall() {
+        // M19.2 — `OPTIONS SASAUTOS='dir';` (chemin relatif résolu contre
+        // base_dir) doit câbler la recherche autocall : une macro non définie
+        // dans le code est cherchée comme `nom.sas` dans ce répertoire et
+        // compilée paresseusement à l'invocation.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("auto")).unwrap();
+        std::fs::write(
+            dir.path().join("auto").join("greet.sas"),
+            "%macro greet(who); %put HELLO &who from autocall; %mend;\n",
+        )
+        .unwrap();
+        // L'option doit être posée AVANT l'expansion du segment qui invoque la
+        // macro autocall : on place une frontière de segment (`run;`) entre les
+        // deux (l'expansion est interfoliée par segment).
+        let out = run(
+            "options sasautos='auto';\ndata _null_; run;\n%greet(WORLD);\n",
+            RunOptions {
+                work_dir: None,
+                base_dir: Some(dir.path().to_path_buf()),
+                deterministic: true,
+                vectorize: false,
+            },
+        );
+        assert_eq!(out.exit_code, 0, "{}", out.log);
+        assert!(
+            out.log.contains("HELLO WORLD from autocall"),
+            "autocall macro did not run; log was:\n{}",
+            out.log
+        );
     }
 
     #[test]
