@@ -32,3 +32,17 @@ pub fn write_class_parquet(dir: &Path) {
     let mut file = File::create(dir.join("class.parquet")).unwrap();
     ParquetWriter::new(&mut file).finish(&mut df).unwrap();
 }
+
+/// Écrit `<dir>/pets.csv` à côté de `class.parquet` ; ignoré par les
+/// fixtures qui ne le référencent pas (chemin relatif → snapshots stables).
+pub fn write_pets_csv(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("pets.csv"),
+        "name,species,age,weight\n\
+         Rex,Dog,5,30.5\n\
+         Felix,Cat,3,4.2\n\
+         Tweety,Bird,1,0.1\n",
+    )
+    .unwrap();
+}
