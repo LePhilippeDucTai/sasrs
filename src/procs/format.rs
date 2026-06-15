@@ -21,7 +21,10 @@
 //! produces `name="$CITYFMT"`, which matches the catalog key exactly.
 
 use crate::error::{Result, SasError};
-use crate::formats::userdef::{Bound, InformatRange, InformatValue, Range, UserFormat, UserInformat};
+use crate::formats::userdef::{
+    Bound, InformatRange, InformatValue, PictureDirectives, PictureRange, Range, UserFormat,
+    UserInformat, UserPicture,
+};
 use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -31,6 +34,8 @@ pub struct FormatAst {
     pub values: Vec<(String, UserFormat)>,
     /// (nom, définition brute à parser en UserInformat) — M18.2
     pub invalues: Vec<(String, UserInformat)>,
+    /// (nom, définition brute à parser en UserPicture) — M18.3
+    pub pictures: Vec<(String, UserPicture)>,
 }
 
 /// Parse `proc format; value ... ; [value ... ;] run;`
@@ -52,6 +57,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
 
     let mut values: Vec<(String, UserFormat)> = Vec::new();
     let mut invalues: Vec<(String, UserInformat)> = Vec::new();
+    let mut pictures: Vec<(String, UserPicture)> = Vec::new();
 
     loop {
         // Skip stray semicolons.
@@ -79,13 +85,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
             ts.next(); // consume "invalue"
             let (name, ui) = parse_invalue_stmt(ts)?;
             invalues.push((name, ui));
+        } else if ts.peek().is_kw("picture") {
+            ts.next(); // consume "picture"
+            let (name, up) = parse_picture_stmt(ts)?;
+            pictures.push((name, up));
         } else {
             // Unknown sub-statement: skip it.
             ts.skip_to_semi();
         }
     }
 
-    Ok(FormatAst { values, invalues })
+    Ok(FormatAst { values, invalues, pictures })
 }
 
 /// Parse one VALUE statement (after the "value" keyword has been consumed):
@@ -176,6 +186,191 @@ fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, UserFormat)> {
 
     let uf = UserFormat { is_char, ranges, other };
     Ok((name, uf))
+}
+
+// ── PICTURE parsing (M18.3) ──────────────────────────────────────────────────
+
+/// Parse one PICTURE statement (after the "picture" keyword has been consumed):
+///   <picname>  <range>='template' [(dirs)]  [<range>='template' [(dirs)]] ... ;
+///
+/// PICTURE formats are always numeric (no `$`). Each range maps to a picture
+/// template string, optionally followed by parenthesised directives
+/// (`PREFIX=` / `MULT=` / `FILL=`).
+fn parse_picture_stmt(ts: &mut StatementStream) -> Result<(String, UserPicture)> {
+    let name_tok = ts.peek().clone();
+    let name = match name_tok.ident() {
+        Some(n) => n.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "expected a picture name after PICTURE",
+                name_tok.span,
+            ));
+        }
+    };
+    ts.next();
+
+    let mut ranges: Vec<PictureRange> = Vec::new();
+    let mut other: Option<(String, PictureDirectives)> = None;
+
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            break;
+        }
+
+        // OTHER keyword → fallback template.
+        if ts.peek().is_kw("other") {
+            ts.next();
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after OTHER in PICTURE",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // `=`
+            let template = parse_string_literal(ts)?;
+            let directives = parse_picture_directives(ts)?;
+            other = Some((template, directives));
+            continue;
+        }
+
+        // A group of numeric ranges sharing one template (comma list).
+        let group = parse_picture_range_group(ts)?;
+
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "expected '=' after range specification in PICTURE",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `=`
+
+        let template = parse_string_literal(ts)?;
+        let directives = parse_picture_directives(ts)?;
+
+        for (from, to, from_excl, to_excl) in group {
+            ranges.push(PictureRange {
+                from,
+                to,
+                from_exclusive: from_excl,
+                to_exclusive: to_excl,
+                template: template.clone(),
+                directives: directives.clone(),
+            });
+        }
+    }
+
+    Ok((name, UserPicture { ranges, other }))
+}
+
+/// Parse a comma-separated group of numeric picture ranges (no template yet).
+/// Returns tuples `(from, to, from_exclusive, to_exclusive)`.
+fn parse_picture_range_group(
+    ts: &mut StatementStream,
+) -> Result<Vec<(Bound, Bound, bool, bool)>> {
+    let mut out = Vec::new();
+    loop {
+        // Reuse the numeric VALUE range parser (is_char = false).
+        let r = parse_single_range(ts, false)?;
+        out.push((r.from, r.to, r.from_exclusive, r.to_exclusive));
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+        } else {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Parse the optional `(PREFIX='...' MULT=n FILL='c' ...)` directive list that
+/// follows a picture template. Returns defaults when no `(` is present.
+/// Directives are space-separated `KEY=VALUE` pairs.
+fn parse_picture_directives(ts: &mut StatementStream) -> Result<PictureDirectives> {
+    let mut dir = PictureDirectives::default();
+    if ts.peek().kind != TokenKind::LParen {
+        return Ok(dir);
+    }
+    ts.next(); // `(`
+
+    loop {
+        if ts.peek().kind == TokenKind::RParen {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            return Err(SasError::parse(
+                "unterminated directive list in PICTURE (missing ')')",
+                ts.peek().span,
+            ));
+        }
+
+        let key_tok = ts.peek().clone();
+        let key = match key_tok.ident() {
+            Some(k) => k.to_lowercase(),
+            None => {
+                return Err(SasError::parse(
+                    "expected a directive name (PREFIX/MULT/FILL) in PICTURE",
+                    key_tok.span,
+                ));
+            }
+        };
+        ts.next();
+
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "expected '=' after directive name in PICTURE",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // `=`
+
+        match key.as_str() {
+            "prefix" => {
+                dir.prefix = Some(parse_string_literal(ts)?);
+            }
+            "fill" => {
+                let s = parse_string_literal(ts)?;
+                dir.fill = s.chars().next();
+            }
+            "mult" | "multiplier" => {
+                // MULT=n — a (possibly negative, possibly decimal) number.
+                let negative = if ts.peek().kind == TokenKind::Minus
+                    && matches!(ts.peek2().kind, TokenKind::Num(_))
+                {
+                    ts.next();
+                    true
+                } else {
+                    false
+                };
+                match ts.peek().kind.clone() {
+                    TokenKind::Num(n) => {
+                        ts.next();
+                        dir.mult = Some(if negative { -n } else { n });
+                    }
+                    _ => {
+                        return Err(SasError::parse(
+                            "expected a number after MULT= in PICTURE",
+                            ts.peek().span,
+                        ));
+                    }
+                }
+            }
+            other => {
+                return Err(SasError::parse(
+                    format!("unsupported PICTURE directive '{other}'"),
+                    key_tok.span,
+                ));
+            }
+        }
+    }
+
+    Ok(dir)
 }
 
 /// Parse a comma-separated list of range specs that share a single label.
@@ -601,6 +796,11 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
         session.log.note(&format!("Informat {} has been output.", uname));
         session.format_catalog.define_informat(&uname, ui.clone());
     }
+    for (name, up) in &ast.pictures {
+        let uname = name.to_uppercase();
+        session.log.note(&format!("Format {} has been output.", uname));
+        session.format_catalog.define_picture(&uname, up.clone());
+    }
     Ok(())
 }
 
@@ -869,6 +1069,7 @@ mod tests {
                 },
             )],
             invalues: vec![],
+            pictures: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -1008,5 +1209,190 @@ mod tests {
         // INVALUE informat also works.
         let ispec = FormatSpec::parse("GRADE.").unwrap();
         assert_eq!(session.format_catalog.informat("A", &ispec), Value::Num(4.0));
+    }
+
+    // ── PICTURE parse tests (M18.3) ───────────────────────────────────────────
+
+    #[test]
+    fn parse_picture_string_bounds_rejected() {
+        // PICTURE is numeric-only: quoted (string) bounds are a parse error.
+        let ast = parse_format_src(
+            "proc format; picture mmddyy '01'-'12' = '99/99/9999'; run;",
+        );
+        assert!(ast.is_err());
+    }
+
+    #[test]
+    fn parse_picture_numeric_range_template() {
+        let ast = parse_format_src(
+            "proc format; picture mmddyy low-high = '99/99/9999'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.pictures.len(), 1);
+        let (name, up) = &ast.pictures[0];
+        assert_eq!(name, "mmddyy");
+        assert_eq!(up.ranges.len(), 1);
+        assert_eq!(up.ranges[0].template, "99/99/9999");
+        assert!(matches!(up.ranges[0].from, Bound::Low));
+        assert!(matches!(up.ranges[0].to, Bound::High));
+    }
+
+    #[test]
+    fn parse_picture_with_prefix_directive() {
+        let ast = parse_format_src(
+            "proc format; picture dollarpic low-high = '000,000,009.99' (prefix='$'); run;",
+        )
+        .unwrap();
+        let (_, up) = &ast.pictures[0];
+        assert_eq!(up.ranges[0].directives.prefix.as_deref(), Some("$"));
+        assert_eq!(up.ranges[0].directives.mult, None);
+        assert_eq!(up.ranges[0].directives.fill, None);
+    }
+
+    #[test]
+    fn parse_picture_with_mult_and_fill() {
+        let ast = parse_format_src(
+            "proc format; picture pct other = '009.9%' (mult=100 fill='*'); run;",
+        )
+        .unwrap();
+        let (_, up) = &ast.pictures[0];
+        assert!(up.ranges.is_empty());
+        let (tpl, dir) = up.other.as_ref().unwrap();
+        assert_eq!(tpl, "009.9%");
+        assert_eq!(dir.mult, Some(100.0));
+        assert_eq!(dir.fill, Some('*'));
+    }
+
+    #[test]
+    fn parse_picture_multiple_ranges() {
+        let ast = parse_format_src(
+            "proc format; picture p 0-9='9' 10-high='999'; run;",
+        )
+        .unwrap();
+        let (_, up) = &ast.pictures[0];
+        assert_eq!(up.ranges.len(), 2);
+        assert_eq!(up.ranges[0].template, "9");
+        assert_eq!(up.ranges[1].template, "999");
+    }
+
+    #[test]
+    fn parse_picture_coexists_with_value() {
+        let ast = parse_format_src(
+            "proc format; value sexfmt 1='Male'; picture p low-high='009'; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.values.len(), 1);
+        assert_eq!(ast.pictures.len(), 1);
+    }
+
+    // ── PICTURE execute tests (M18.3) ─────────────────────────────────────────
+
+    #[test]
+    fn execute_picture_registered_and_applies() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; picture dollarpic low-high = '000,000,009.99' (prefix='$'); run;",
+        );
+        let spec = FormatSpec::parse("DOLLARPIC.").unwrap();
+        // No width → rendered as-is.
+        assert_eq!(
+            session.format_catalog.format(&Value::Num(1234.5), &spec),
+            "$1,234.50"
+        );
+        // NOTE logged.
+        let log = session.log.into_string();
+        assert!(log.contains("Format DOLLARPIC has been output."), "log: {log}");
+    }
+
+    #[test]
+    fn execute_picture_mult_directive() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; picture pct low-high = '009.9%' (mult=100); run;",
+        );
+        let spec = FormatSpec::parse("PCT.").unwrap();
+        assert_eq!(session.format_catalog.format(&Value::Num(0.125), &spec), "  1.3%");
+    }
+
+    #[test]
+    fn execute_picture_with_width_right_justifies() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; picture p low-high = '009'; run;",
+        );
+        let spec = FormatSpec::parse("P10.").unwrap();
+        // Rendered "  5" then right-justified to width 10.
+        let out = session.format_catalog.format(&Value::Num(5.0), &spec);
+        assert_eq!(out.len(), 10);
+        assert!(out.ends_with("5"));
+    }
+
+    #[test]
+    fn execute_picture_missing_value() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        let session = run_format_src(
+            "proc format; picture p low-high = '009.99'; run;",
+        );
+        let spec = FormatSpec::parse("P5.").unwrap();
+        // Numeric missing intercepted before picture → missing char, right-justified.
+        assert_eq!(session.format_catalog.format(&Value::missing(), &spec), "    .");
+    }
+
+    #[test]
+    fn execute_picture_shadows_builtin_name() {
+        use crate::formats::FormatSpec;
+        use crate::value::Value;
+
+        // Define a picture named COMMA (a builtin format name) — user picture wins.
+        let session = run_format_src(
+            "proc format; picture comma low-high = '009'; run;",
+        );
+        let spec = FormatSpec::parse("COMMA.").unwrap();
+        // Builtin COMMA on 5 would give "5"; our picture '009' gives "  5".
+        assert_eq!(session.format_catalog.format(&Value::Num(5.0), &spec), "  5");
+    }
+
+    fn run_det(src: &str) -> crate::RunOutcome {
+        crate::run(
+            src,
+            crate::RunOptions {
+                work_dir: None,
+                base_dir: None,
+                deterministic: true,
+                vectorize: false,
+            },
+        )
+    }
+
+    #[test]
+    fn execute_picture_via_put_function() {
+        // PUT(value, picture.) through the data step function path.
+        let out = run_det(
+            "proc format; picture dp low-high='000,009.99' (prefix='$'); run;\n\
+             data _null_; x = 1234.5; y = put(x, dp.); put y=; run;",
+        );
+        assert_eq!(out.exit_code, 0, "log: {}", out.log);
+        // PUT y= renders "y=$1,234.50" (PUT() result trimmed of leading blanks).
+        assert!(out.log.contains("$1,234.50"), "log: {}", out.log);
+    }
+
+    #[test]
+    fn execute_picture_via_format_statement() {
+        // FORMAT statement + PROC PRINT path.
+        let out = run_det(
+            "proc format; picture dp low-high='009.99'; run;\n\
+             data t; x = 12.34; format x dp.; output; run;\n\
+             proc print data=t; run;",
+        );
+        assert_eq!(out.exit_code, 0, "log: {}", out.log);
+        assert!(out.listing.contains("12.34"), "listing: {}", out.listing);
     }
 }

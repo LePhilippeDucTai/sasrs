@@ -107,6 +107,9 @@ pub struct FormatCatalog {
     /// User-defined informats (PROC FORMAT INVALUE, M18.2) keyed by upcased
     /// name (with `$` prefix for char informats, e.g. `$SIZE`).
     user_informats: HashMap<String, userdef::UserInformat>,
+    /// User-defined PICTURE formats (PROC FORMAT PICTURE, M18.3) keyed by
+    /// upcased name. Picture formats apply to NUMERIC values only.
+    user_pictures: HashMap<String, userdef::UserPicture>,
 }
 
 impl FormatCatalog {
@@ -118,6 +121,11 @@ impl FormatCatalog {
     /// Register a user-defined informat (from PROC FORMAT INVALUE, M18.2).
     pub fn define_informat(&mut self, name: &str, inf: userdef::UserInformat) {
         self.user_informats.insert(name.to_uppercase(), inf);
+    }
+
+    /// Register a user-defined PICTURE format (PROC FORMAT PICTURE, M18.3).
+    pub fn define_picture(&mut self, name: &str, pic: userdef::UserPicture) {
+        self.user_pictures.insert(name.to_uppercase(), pic);
     }
 
     /// PUT: value → formatted string (SAS-justified, width spec.w).
@@ -136,7 +144,7 @@ impl FormatCatalog {
             return right_justify(&ch, w);
         }
 
-        // 1. Try user format.
+        // 1. Try user VALUE format.
         let uname = spec.name.to_uppercase();
         if let Some(uf) = self.user.get(&uname) {
             if let Some(label) = uf.lookup(v) {
@@ -144,6 +152,16 @@ impl FormatCatalog {
                 return match spec.w {
                     Some(w) => right_justify(&s, w as usize),
                     None => s,
+                };
+            }
+        }
+
+        // 1b. Try user PICTURE format (M18.3) — numeric only, before builtins.
+        if let Some(pic) = self.user_pictures.get(&uname) {
+            if let Some(rendered) = pic.render(v) {
+                return match spec.w {
+                    Some(w) => right_justify(&rendered, w as usize),
+                    None => rendered,
                 };
             }
         }
