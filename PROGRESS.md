@@ -171,7 +171,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [ ] Fixtures `m17/` + snapshots. DoD
 
 ## M18 — formats & informats
-- [ ] ⫽ M18.1 — étoffer `format_builtin`/`informat_builtin` : COMMAX, DOLLARX, EURO, NEGPAREN, HEX, BINARY, OCTAL, ROMAN, WORDS, FRACT, SCIENTIFIC, dates (WEEKDATE, DOWNAME, MONNAME, QTR, YYQ, JULIAN, B8601*/E8601* ISO), $QUOTE, $HEX, $UPCASE (Sonnet, moyen-élevé)
+- [x] ⫽ M18.1 — étoffer `format_builtin`/`informat_builtin` : COMMAX, DOLLARX, EURO, NEGPAREN, HEX, BINARY, OCTAL, ROMAN, WORDS, FRACT, SCIENTIFIC, dates (WEEKDATE, DOWNAME, MONNAME, QTR, YYQ, JULIAN, B8601*/E8601* ISO), $QUOTE, $HEX, $UPCASE (Sonnet, moyen-élevé). 69 nouveaux tests (1603 total, 0 warning). Différés : $UPCASE comme informat, informat pour HEX/BINARY/OCTAL/ROMAN, FRACT avec dénominateur exact > 64.
 - [ ] M18.2 — INVALUE (informats utilisateur) : lever `procs/format.rs:78`, `FormatCatalog.user_informats`, lookup avant builtin (Sonnet, moyen)
 - [ ] M18.3 — PICTURE : `enum FormatKind{Value,Picture,Invalue}` dans `userdef.rs`, templates `99/99/9999`, directives PREFIX/MULT/FILL (Opus, moyen)
 - [ ] Fixtures `m18/` + snapshots. DoD

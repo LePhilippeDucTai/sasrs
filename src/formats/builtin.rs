@@ -85,6 +85,163 @@ const MONTHS_FULL: [&str; 12] = [
     "December",
 ];
 
+/// Short day-of-week names (3-letter), Sunday=0.
+const DOW_SHORT: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// Full day-of-week names, Sunday=0.
+const DOW_FULL: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New helpers for M18.1 formats
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert integer to Roman numerals (1–3999). Returns empty string for out-of-range.
+fn to_roman(mut n: u32) -> String {
+    if n == 0 || n > 3999 {
+        return String::new();
+    }
+    const VALS: &[(u32, &str)] = &[
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"),  (90, "XC"), (50, "L"),  (40, "XL"),
+        (10, "X"),   (9, "IX"),  (5, "V"),   (4, "IV"),
+        (1, "I"),
+    ];
+    let mut result = String::new();
+    for &(val, sym) in VALS {
+        while n >= val {
+            result.push_str(sym);
+            n -= val;
+        }
+    }
+    result
+}
+
+/// Convert integer to English words (simple, 0–999_999_999).
+fn to_words(n: i64) -> String {
+    if n == 0 {
+        return "ZERO".into();
+    }
+    let (neg, n) = if n < 0 { (true, (-n) as u64) } else { (false, n as u64) };
+    let s = to_words_unsigned(n);
+    if neg {
+        format!("NEGATIVE {}", s)
+    } else {
+        s
+    }
+}
+
+fn to_words_unsigned(n: u64) -> String {
+    const ONES: &[&str] = &[
+        "", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+        "TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN",
+        "SEVENTEEN", "EIGHTEEN", "NINETEEN",
+    ];
+    const TENS: &[&str] = &[
+        "", "", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY",
+    ];
+
+    if n == 0 {
+        return String::new();
+    }
+
+    if n < 20 {
+        return ONES[n as usize].into();
+    }
+    if n < 100 {
+        let t = TENS[(n / 10) as usize];
+        let o = ONES[(n % 10) as usize];
+        if o.is_empty() {
+            return t.into();
+        }
+        return format!("{}-{}", t, o);
+    }
+    if n < 1000 {
+        let h = ONES[(n / 100) as usize];
+        let rest = n % 100;
+        if rest == 0 {
+            return format!("{} HUNDRED", h);
+        }
+        return format!("{} HUNDRED {}", h, to_words_unsigned(rest));
+    }
+    if n < 1_000_000 {
+        let thousands = n / 1000;
+        let rest = n % 1000;
+        let t = to_words_unsigned(thousands);
+        if rest == 0 {
+            return format!("{} THOUSAND", t);
+        }
+        return format!("{} THOUSAND {}", t, to_words_unsigned(rest));
+    }
+    if n < 1_000_000_000 {
+        let millions = n / 1_000_000;
+        let rest = n % 1_000_000;
+        let m = to_words_unsigned(millions);
+        if rest == 0 {
+            return format!("{} MILLION", m);
+        }
+        return format!("{} MILLION {}", m, to_words_unsigned(rest));
+    }
+    // Fallback for very large numbers: just show digits
+    format!("{}", n)
+}
+
+/// Reduce a fraction to lowest terms.
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// Format a float as a simple fraction (limited denominator ≤ 64 for v1).
+fn to_fract(v: f64) -> String {
+    if v == 0.0 {
+        return "0".into();
+    }
+    let negative = v < 0.0;
+    let abs = v.abs();
+    let whole = abs.floor() as u64;
+    let frac = abs - whole as f64;
+
+    if frac < 1e-9 {
+        // Integer value
+        let s = if whole == 0 { "0".into() } else { format!("{}", whole) };
+        return if negative { format!("-{}", s) } else { s };
+    }
+
+    // Find best fraction with denominator ≤ 64
+    let mut best_num = 1u64;
+    let mut best_den = 1u64;
+    let mut best_err = f64::MAX;
+    for den in 1u64..=64 {
+        let num = (frac * den as f64).round() as u64;
+        let err = (frac - num as f64 / den as f64).abs();
+        if err < best_err {
+            best_err = err;
+            best_num = num;
+            best_den = den;
+        }
+    }
+
+    // Reduce
+    let g = gcd(best_num, best_den);
+    best_num /= g;
+    best_den /= g;
+
+    let frac_str = format!("{}/{}", best_num, best_den);
+    let s = if whole == 0 {
+        frac_str
+    } else {
+        format!("{} {}", whole, frac_str)
+    };
+    if negative { format!("-{}", s) } else { s }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Numeric format helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +340,72 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 }
             });
         }
+
+        // $QUOTE: wrap value in double quotes  "hello"
+        "$QUOTE" => {
+            let inner = match v {
+                Value::Char(c) => c.clone(),
+                Value::Num(n) => format_best(*n, 12),
+                Value::Missing(k) => k.display(),
+            };
+            let quoted = format!("\"{}\"", inner);
+            return Some(match spec.w {
+                None => quoted,
+                Some(w) => {
+                    let w = w as usize;
+                    let mut out = quoted;
+                    out.truncate(w);
+                    while out.len() < w {
+                        out.push(' ');
+                    }
+                    out
+                }
+            });
+        }
+
+        // $HEX: each byte of the string → two uppercase hex chars
+        "$HEX" => {
+            let s = match v {
+                Value::Char(c) => c.clone(),
+                Value::Num(n) => format_best(*n, 12),
+                Value::Missing(k) => k.display(),
+            };
+            let hex: String = s.bytes().map(|b| format!("{:02X}", b)).collect();
+            return Some(match spec.w {
+                None => hex,
+                Some(w) => {
+                    let w = w as usize;
+                    let mut out = hex;
+                    out.truncate(w);
+                    while out.len() < w {
+                        out.push(' ');
+                    }
+                    out
+                }
+            });
+        }
+
+        // $UPCASE: uppercase the string
+        "$UPCASE" => {
+            let s = match v {
+                Value::Char(c) => c.to_uppercase(),
+                Value::Num(n) => format_best(*n, 12).to_uppercase(),
+                Value::Missing(k) => k.display(),
+            };
+            return Some(match spec.w {
+                None => s,
+                Some(w) => {
+                    let w = w as usize;
+                    let mut out = s;
+                    out.truncate(w);
+                    while out.len() < w {
+                        out.push(' ');
+                    }
+                    out
+                }
+            });
+        }
+
         _ => {}
     }
 
@@ -424,6 +647,421 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
 
         // TIMEw.d → hh:mm:ss
         "TIME" => {
+            let (hh, mm, ss) = secs_to_time(fval);
+            let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
+            let w = spec.w.unwrap_or(8) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        // ── COMMAX: like COMMA but with period as thousands sep and comma as decimal
+        // European-style: 1.234,56
+        "COMMAX" => {
+            let d = spec.d.unwrap_or(0) as usize;
+            let negative = fval < 0.0;
+            let abs_val = fval.abs();
+            // Format with d decimals
+            let s = format!("{:.prec$}", abs_val, prec = d);
+            // Split on '.' (Rust decimal point)
+            let (int_part, dec_part) = match s.find('.') {
+                Some(p) => (&s[..p], &s[p + 1..]),
+                None => (s.as_str(), ""),
+            };
+            // Add periods as thousands separators
+            let rev: String = int_part
+                .chars()
+                .rev()
+                .enumerate()
+                .flat_map(|(i, c)| {
+                    if i > 0 && i % 3 == 0 {
+                        vec!['.', c]
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect();
+            let int_with_sep: String = rev.chars().rev().collect();
+            let formatted = if d > 0 {
+                if negative {
+                    format!("-{},{}", int_with_sep, dec_part)
+                } else {
+                    format!("{},{}", int_with_sep, dec_part)
+                }
+            } else {
+                if negative {
+                    format!("-{}", int_with_sep)
+                } else {
+                    int_with_sep
+                }
+            };
+            match spec.w {
+                None => Some(formatted),
+                Some(w) => {
+                    let w = w as usize;
+                    if formatted.len() <= w {
+                        Some(right_justify(&formatted, w))
+                    } else {
+                        Some("*".repeat(w))
+                    }
+                }
+            }
+        }
+
+        // ── DOLLARX: like DOLLAR but European-decimal style ($1.234,56)
+        "DOLLARX" => {
+            let d = spec.d.unwrap_or(0) as usize;
+            let negative = fval < 0.0;
+            let abs_val = fval.abs();
+            let s = format!("{:.prec$}", abs_val, prec = d);
+            let (int_part, dec_part) = match s.find('.') {
+                Some(p) => (&s[..p], &s[p + 1..]),
+                None => (s.as_str(), ""),
+            };
+            // Thousands with periods
+            let rev: String = int_part
+                .chars()
+                .rev()
+                .enumerate()
+                .flat_map(|(i, c)| {
+                    if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+                })
+                .collect();
+            let int_with_sep: String = rev.chars().rev().collect();
+            let formatted = if d > 0 {
+                if negative {
+                    format!("-${},{}", int_with_sep, dec_part)
+                } else {
+                    format!("${},{}", int_with_sep, dec_part)
+                }
+            } else {
+                if negative {
+                    format!("-${}", int_with_sep)
+                } else {
+                    format!("${}", int_with_sep)
+                }
+            };
+            match spec.w {
+                None => Some(formatted),
+                Some(w) => {
+                    let w = w as usize;
+                    if formatted.len() <= w {
+                        Some(right_justify(&formatted, w))
+                    } else {
+                        Some("*".repeat(w))
+                    }
+                }
+            }
+        }
+
+        // ── EURO: European style with € prefix (€1.234,56)
+        "EURO" | "EUROX" => {
+            let d = spec.d.unwrap_or(0) as usize;
+            let negative = fval < 0.0;
+            let abs_val = fval.abs();
+            let s = format!("{:.prec$}", abs_val, prec = d);
+            let (int_part, dec_part) = match s.find('.') {
+                Some(p) => (&s[..p], &s[p + 1..]),
+                None => (s.as_str(), ""),
+            };
+            let rev: String = int_part
+                .chars()
+                .rev()
+                .enumerate()
+                .flat_map(|(i, c)| {
+                    if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+                })
+                .collect();
+            let int_with_sep: String = rev.chars().rev().collect();
+            let formatted = if d > 0 {
+                if negative {
+                    format!("-€{},{}", int_with_sep, dec_part)
+                } else {
+                    format!("€{},{}", int_with_sep, dec_part)
+                }
+            } else {
+                if negative {
+                    format!("-€{}", int_with_sep)
+                } else {
+                    format!("€{}", int_with_sep)
+                }
+            };
+            match spec.w {
+                None => Some(formatted),
+                Some(w) => {
+                    let w = w as usize;
+                    if formatted.len() <= w {
+                        Some(right_justify(&formatted, w))
+                    } else {
+                        Some("*".repeat(w))
+                    }
+                }
+            }
+        }
+
+        // ── NEGPAREN: negative numbers in parentheses; positives as-is
+        "NEGPAREN" => {
+            let d = spec.d.unwrap_or(0) as usize;
+            let formatted = if fval < 0.0 {
+                let abs_val = fval.abs();
+                let s = format!("{:.prec$}", abs_val, prec = d);
+                let with_commas = add_commas(&s);
+                format!("({})", with_commas)
+            } else {
+                let s = format!("{:.prec$}", fval, prec = d);
+                add_commas(&s)
+            };
+            match spec.w {
+                None => Some(formatted),
+                Some(w) => {
+                    let w = w as usize;
+                    if formatted.len() <= w {
+                        Some(right_justify(&formatted, w))
+                    } else {
+                        Some("*".repeat(w))
+                    }
+                }
+            }
+        }
+
+        // ── HEX: integer to hexadecimal uppercase
+        "HEX" => {
+            let n = fval.round() as i64;
+            let s = if n < 0 {
+                // SAS HEX format renders negative as two's complement in 16 hex digits
+                format!("{:016X}", n as u64)
+            } else {
+                format!("{:X}", n)
+            };
+            match spec.w {
+                None => Some(s),
+                Some(w) => {
+                    let w = w as usize;
+                    if s.len() <= w {
+                        Some(right_justify(&s, w))
+                    } else {
+                        Some(s[s.len() - w..].to_string()) // keep rightmost
+                    }
+                }
+            }
+        }
+
+        // ── BINARY: integer to binary representation
+        "BINARY" => {
+            let n = fval.round() as i64;
+            let s = if n < 0 {
+                format!("{:064b}", n as u64)
+            } else {
+                format!("{:b}", n)
+            };
+            match spec.w {
+                None => Some(s),
+                Some(w) => {
+                    let w = w as usize;
+                    if s.len() <= w {
+                        Some(right_justify(&s, w))
+                    } else {
+                        Some(s[s.len() - w..].to_string())
+                    }
+                }
+            }
+        }
+
+        // ── OCTAL: integer to octal
+        "OCTAL" => {
+            let n = fval.round() as u64;
+            let s = format!("{:o}", n);
+            match spec.w {
+                None => Some(s),
+                Some(w) => {
+                    let w = w as usize;
+                    if s.len() <= w {
+                        Some(right_justify(&s, w))
+                    } else {
+                        Some("*".repeat(w))
+                    }
+                }
+            }
+        }
+
+        // ── ROMAN: Roman numeral notation (1–3999)
+        "ROMAN" => {
+            let n = fval.round() as u32;
+            let s = to_roman(n);
+            if s.is_empty() {
+                // out of range → use numeric fallback
+                let fallback = format!("{}", fval.round() as i64);
+                return Some(match spec.w {
+                    None => fallback,
+                    Some(w) => right_justify(&fallback, w as usize),
+                });
+            }
+            match spec.w {
+                None => Some(s),
+                Some(w) => Some(right_justify(&s, w as usize)),
+            }
+        }
+
+        // ── WORDS: English words representation
+        "WORDS" => {
+            let n = fval.round() as i64;
+            let s = to_words(n);
+            match spec.w {
+                None => Some(s),
+                Some(w) => {
+                    let w = w as usize;
+                    let mut out = s;
+                    if out.len() > w {
+                        out.truncate(w);
+                    } else {
+                        while out.len() < w {
+                            out.push(' ');
+                        }
+                    }
+                    Some(out)
+                }
+            }
+        }
+
+        // ── FRACT: fractional notation (0.5 → 1/2)
+        "FRACT" => {
+            let s = to_fract(fval);
+            match spec.w {
+                None => Some(s),
+                Some(w) => Some(right_justify(&s, w as usize)),
+            }
+        }
+
+        // ── SCIENTIFIC: scientific notation (SAS-style: 1.23E+02)
+        "SCIENTIFIC" => {
+            let d = spec.d.unwrap_or(2) as usize;
+            let w = spec.w.unwrap_or(12) as usize;
+            // Format as xExx style: coefficient with d decimals, exponent with sign and 2 digits
+            let s = if fval == 0.0 {
+                format!("{:.prec$}E+00", 0.0, prec = d)
+            } else {
+                let exp = fval.abs().log10().floor() as i32;
+                let coeff = fval / 10f64.powi(exp);
+                if exp >= 0 {
+                    format!("{:.prec$}E+{:02}", coeff, exp, prec = d)
+                } else {
+                    format!("{:.prec$}E-{:02}", coeff, -exp, prec = d)
+                }
+            };
+            if s.len() <= w {
+                Some(right_justify(&s, w))
+            } else {
+                Some("*".repeat(w))
+            }
+        }
+
+        // ── Date formats (M18.1 additions) ──────────────────────────────────
+
+        // WEEKDATE: abbreviated day of week (MON, TUE, etc.)
+        "WEEKDATE" => {
+            let date = days_to_date(fval)?;
+            // chrono weekday: Monday=0 in num_days_from_monday(); Sunday=6
+            // We need Sunday=0 for our DOW_SHORT array
+            let dow = date.weekday().num_days_from_sunday() as usize;
+            let s = DOW_SHORT[dow];
+            let w = spec.w.unwrap_or(3) as usize;
+            Some(right_justify(s, w))
+        }
+
+        // DOWNAME: full day name (Monday, Tuesday, etc.)
+        "DOWNAME" => {
+            let date = days_to_date(fval)?;
+            let dow = date.weekday().num_days_from_sunday() as usize;
+            let s = DOW_FULL[dow];
+            let w = spec.w.unwrap_or(9) as usize; // "Wednesday" = 9 chars
+            Some(right_justify(s, w))
+        }
+
+        // MONNAME: full month name (January, February, etc.)
+        "MONNAME" => {
+            let date = days_to_date(fval)?;
+            let s = MONTHS_FULL[(date.month() - 1) as usize];
+            let w = spec.w.unwrap_or(9) as usize; // "September" = 9 chars
+            Some(right_justify(s, w))
+        }
+
+        // QTR: quarter number Q1–Q4
+        "QTR" | "QTRR" => {
+            let date = days_to_date(fval)?;
+            let q = ((date.month() - 1) / 3) + 1;
+            let s = format!("{}", q);
+            let w = spec.w.unwrap_or(1) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        // YYQ: year + quarter (2024Q1)
+        "YYQ" => {
+            let date = days_to_date(fval)?;
+            let q = ((date.month() - 1) / 3) + 1;
+            let s = format!("{}Q{}", date.year(), q);
+            let w = spec.w.unwrap_or(6) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        // JULIAN: Julian day format YYYYDDD (day-of-year)
+        "JULIAN" => {
+            let date = days_to_date(fval)?;
+            let doy = date.ordinal(); // 1-based day of year
+            let s = format!("{:04}{:03}", date.year(), doy);
+            let w = spec.w.unwrap_or(7) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        // B8601DA / B8601DT / B8601TM — ISO 8601 basic (no separators)
+        "B8601DA" => {
+            // YYYYMMDD
+            let date = days_to_date(fval)?;
+            let s = format!("{:04}{:02}{:02}", date.year(), date.month(), date.day());
+            let w = spec.w.unwrap_or(8) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        "B8601DT" => {
+            // YYYYMMDDTHHmmss
+            let dt = secs_to_datetime(fval)?;
+            let s = format!(
+                "{:04}{:02}{:02}T{:02}{:02}{:02}",
+                dt.year(), dt.month(), dt.day(),
+                dt.hour(), dt.minute(), dt.second()
+            );
+            let w = spec.w.unwrap_or(15) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        "B8601TM" => {
+            // HHmmss
+            let (hh, mm, ss) = secs_to_time(fval);
+            let s = format!("{:02}{:02}{:02}", hh, mm, ss);
+            let w = spec.w.unwrap_or(6) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        // E8601DA / E8601DT / E8601TM — ISO 8601 extended (with separators)
+        "E8601DA" => {
+            // YYYY-MM-DD
+            let date = days_to_date(fval)?;
+            let s = format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
+            let w = spec.w.unwrap_or(10) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        "E8601DT" => {
+            // YYYY-MM-DDTHH:mm:ss
+            let dt = secs_to_datetime(fval)?;
+            let s = format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                dt.year(), dt.month(), dt.day(),
+                dt.hour(), dt.minute(), dt.second()
+            );
+            let w = spec.w.unwrap_or(19) as usize;
+            Some(right_justify(&s, w))
+        }
+
+        "E8601TM" => {
+            // HH:mm:ss
             let (hh, mm, ss) = secs_to_time(fval);
             let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
             let w = spec.w.unwrap_or(8) as usize;
@@ -1155,5 +1793,564 @@ mod tests {
     #[test]
     fn add_commas_small() {
         assert_eq!(add_commas("42"), "42");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // M18.1 — new format tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── COMMAX ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn commax_basic() {
+        // 123456.78 → "123.456,78" (European separators)
+        let v = Value::Num(123456.78);
+        let s = format_builtin(&v, &spec("COMMAX", Some(12), Some(2))).unwrap();
+        let t = s.trim();
+        assert_eq!(t, "123.456,78");
+    }
+
+    #[test]
+    fn commax_negative() {
+        let v = Value::Num(-1234.5);
+        let s = format_builtin(&v, &spec("COMMAX", None, Some(1))).unwrap();
+        assert_eq!(s, "-1.234,5");
+    }
+
+    #[test]
+    fn commax_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("COMMAX", None, Some(0))).unwrap();
+        assert_eq!(s, "0");
+    }
+
+    // ── DOLLARX ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dollarx_basic() {
+        let v = Value::Num(1234.56);
+        let s = format_builtin(&v, &spec("DOLLARX", Some(12), Some(2))).unwrap();
+        let t = s.trim();
+        assert_eq!(t, "$1.234,56");
+    }
+
+    #[test]
+    fn dollarx_negative() {
+        let v = Value::Num(-50.0);
+        let s = format_builtin(&v, &spec("DOLLARX", None, Some(2))).unwrap();
+        assert_eq!(s, "-$50,00");
+    }
+
+    // ── EURO ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn euro_basic() {
+        // €1.234,56 — note: € is multi-byte in UTF-8 so we check content
+        let v = Value::Num(1234.56);
+        let s = format_builtin(&v, &spec("EURO", None, Some(2))).unwrap();
+        assert!(s.contains('€'), "expected € in: {s}");
+        assert!(s.contains("1.234"), "expected thousands sep in: {s}");
+        assert!(s.contains(",56"), "expected comma decimal in: {s}");
+    }
+
+    #[test]
+    fn euro_no_decimals() {
+        let v = Value::Num(1000.0);
+        let s = format_builtin(&v, &spec("EURO", None, Some(0))).unwrap();
+        assert_eq!(s, "€1.000");
+    }
+
+    // ── NEGPAREN ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn negparen_negative() {
+        let v = Value::Num(-123.0);
+        let s = format_builtin(&v, &spec("NEGPAREN", None, Some(0))).unwrap();
+        assert_eq!(s, "(123)");
+    }
+
+    #[test]
+    fn negparen_positive() {
+        let v = Value::Num(456.0);
+        let s = format_builtin(&v, &spec("NEGPAREN", None, Some(0))).unwrap();
+        assert_eq!(s, "456");
+    }
+
+    #[test]
+    fn negparen_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("NEGPAREN", None, Some(0))).unwrap();
+        assert_eq!(s, "0");
+    }
+
+    // ── HEX ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hex_format_255() {
+        let v = Value::Num(255.0);
+        let s = format_builtin(&v, &spec("HEX", None, None)).unwrap();
+        assert_eq!(s, "FF");
+    }
+
+    #[test]
+    fn hex_format_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("HEX", None, None)).unwrap();
+        assert_eq!(s, "0");
+    }
+
+    #[test]
+    fn hex_format_with_width() {
+        let v = Value::Num(255.0);
+        let s = format_builtin(&v, &spec("HEX", Some(8), None)).unwrap();
+        assert_eq!(s, "      FF");
+    }
+
+    // ── BINARY ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn binary_format_255() {
+        let v = Value::Num(255.0);
+        let s = format_builtin(&v, &spec("BINARY", None, None)).unwrap();
+        assert_eq!(s, "11111111");
+    }
+
+    #[test]
+    fn binary_format_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("BINARY", None, None)).unwrap();
+        assert_eq!(s, "0");
+    }
+
+    #[test]
+    fn binary_format_10() {
+        let v = Value::Num(10.0);
+        let s = format_builtin(&v, &spec("BINARY", None, None)).unwrap();
+        assert_eq!(s, "1010");
+    }
+
+    // ── OCTAL ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn octal_format_255() {
+        let v = Value::Num(255.0);
+        let s = format_builtin(&v, &spec("OCTAL", None, None)).unwrap();
+        assert_eq!(s, "377");
+    }
+
+    #[test]
+    fn octal_format_8() {
+        let v = Value::Num(8.0);
+        let s = format_builtin(&v, &spec("OCTAL", None, None)).unwrap();
+        assert_eq!(s, "10");
+    }
+
+    // ── ROMAN ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn roman_nine() {
+        let v = Value::Num(9.0);
+        let s = format_builtin(&v, &spec("ROMAN", None, None)).unwrap();
+        assert_eq!(s, "IX");
+    }
+
+    #[test]
+    fn roman_1994() {
+        let v = Value::Num(1994.0);
+        let s = format_builtin(&v, &spec("ROMAN", None, None)).unwrap();
+        assert_eq!(s, "MCMXCIV");
+    }
+
+    #[test]
+    fn roman_one() {
+        let v = Value::Num(1.0);
+        let s = format_builtin(&v, &spec("ROMAN", None, None)).unwrap();
+        assert_eq!(s, "I");
+    }
+
+    #[test]
+    fn roman_forty() {
+        let v = Value::Num(40.0);
+        let s = format_builtin(&v, &spec("ROMAN", None, None)).unwrap();
+        assert_eq!(s, "XL");
+    }
+
+    // ── WORDS ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn words_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("WORDS", None, None)).unwrap();
+        assert_eq!(s, "ZERO");
+    }
+
+    #[test]
+    fn words_one() {
+        let v = Value::Num(1.0);
+        let s = format_builtin(&v, &spec("WORDS", None, None)).unwrap();
+        assert_eq!(s, "ONE");
+    }
+
+    #[test]
+    fn words_123() {
+        let v = Value::Num(123.0);
+        let s = format_builtin(&v, &spec("WORDS", None, None)).unwrap();
+        assert_eq!(s, "ONE HUNDRED TWENTY-THREE");
+    }
+
+    #[test]
+    fn words_1000() {
+        let v = Value::Num(1000.0);
+        let s = format_builtin(&v, &spec("WORDS", None, None)).unwrap();
+        assert_eq!(s, "ONE THOUSAND");
+    }
+
+    #[test]
+    fn words_negative() {
+        let v = Value::Num(-5.0);
+        let s = format_builtin(&v, &spec("WORDS", None, None)).unwrap();
+        assert_eq!(s, "NEGATIVE FIVE");
+    }
+
+    // ── FRACT ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fract_half() {
+        let v = Value::Num(0.5);
+        let s = format_builtin(&v, &spec("FRACT", None, None)).unwrap();
+        assert_eq!(s, "1/2");
+    }
+
+    #[test]
+    fn fract_integer() {
+        let v = Value::Num(3.0);
+        let s = format_builtin(&v, &spec("FRACT", None, None)).unwrap();
+        assert_eq!(s, "3");
+    }
+
+    #[test]
+    fn fract_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("FRACT", None, None)).unwrap();
+        assert_eq!(s, "0");
+    }
+
+    #[test]
+    fn fract_one_third() {
+        let v = Value::Num(1.0 / 3.0);
+        let s = format_builtin(&v, &spec("FRACT", None, None)).unwrap();
+        // Should be 1/3 or close fraction
+        assert!(s.contains('/'), "expected fraction: {s}");
+    }
+
+    // ── SCIENTIFIC ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn scientific_basic() {
+        let v = Value::Num(123.0);
+        let s = format_builtin(&v, &spec("SCIENTIFIC", Some(12), Some(2))).unwrap();
+        let t = s.trim();
+        // 1.23E+02
+        assert!(t.contains('E'), "expected E in: {t}");
+        assert!(t.contains("1.23"), "expected 1.23 in: {t}");
+    }
+
+    #[test]
+    fn scientific_zero() {
+        let v = Value::Num(0.0);
+        let s = format_builtin(&v, &spec("SCIENTIFIC", None, Some(2))).unwrap();
+        assert!(s.contains("0.00E"), "expected 0.00E in: {s}");
+    }
+
+    #[test]
+    fn scientific_small() {
+        let v = Value::Num(0.001);
+        let s = format_builtin(&v, &spec("SCIENTIFIC", None, Some(2))).unwrap();
+        assert!(s.contains("E-"), "expected E- in: {s}");
+    }
+
+    // ── $QUOTE ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn quote_basic() {
+        let v = Value::Char("hello".into());
+        let s = format_builtin(&v, &spec("$QUOTE", None, None)).unwrap();
+        assert_eq!(s, "\"hello\"");
+    }
+
+    #[test]
+    fn quote_with_width() {
+        let v = Value::Char("hi".into());
+        let s = format_builtin(&v, &spec("$QUOTE", Some(6), None)).unwrap();
+        assert_eq!(s, "\"hi\"  ");
+    }
+
+    // ── $HEX ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hex_char_format() {
+        let v = Value::Char("A".into());
+        let s = format_builtin(&v, &spec("$HEX", None, None)).unwrap();
+        assert_eq!(s, "41"); // 'A' = 0x41
+    }
+
+    #[test]
+    fn hex_char_hello() {
+        let v = Value::Char("hi".into());
+        let s = format_builtin(&v, &spec("$HEX", None, None)).unwrap();
+        assert_eq!(s, "6869"); // h=0x68, i=0x69
+    }
+
+    // ── $UPCASE ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upcase_basic() {
+        let v = Value::Char("hello world".into());
+        let s = format_builtin(&v, &spec("$UPCASE", None, None)).unwrap();
+        assert_eq!(s, "HELLO WORLD");
+    }
+
+    #[test]
+    fn upcase_already_upper() {
+        let v = Value::Char("ABC".into());
+        let s = format_builtin(&v, &spec("$UPCASE", None, None)).unwrap();
+        assert_eq!(s, "ABC");
+    }
+
+    // ── WEEKDATE ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn weekdate_monday() {
+        // 2020-01-06 is a Monday
+        let d = day_num(2020, 1, 6);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("WEEKDATE", None, None)).unwrap();
+        assert_eq!(s.trim(), "MON");
+    }
+
+    #[test]
+    fn weekdate_sunday() {
+        // 2020-01-05 is a Sunday
+        let d = day_num(2020, 1, 5);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("WEEKDATE", None, None)).unwrap();
+        assert_eq!(s.trim(), "SUN");
+    }
+
+    // ── DOWNAME ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn downame_wednesday() {
+        // 2020-01-08 is a Wednesday
+        let d = day_num(2020, 1, 8);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("DOWNAME", None, None)).unwrap();
+        assert_eq!(s.trim(), "Wednesday");
+    }
+
+    // ── MONNAME ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn monname_january() {
+        let d = day_num(2020, 1, 15);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("MONNAME", None, None)).unwrap();
+        assert_eq!(s.trim(), "January");
+    }
+
+    #[test]
+    fn monname_september() {
+        let d = day_num(2020, 9, 1);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("MONNAME", None, None)).unwrap();
+        assert_eq!(s.trim(), "September");
+    }
+
+    // ── QTR ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn qtr_q1() {
+        let d = day_num(2024, 1, 15);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("QTR", None, None)).unwrap();
+        assert_eq!(s, "1");
+    }
+
+    #[test]
+    fn qtr_q3() {
+        let d = day_num(2024, 7, 1);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("QTR", None, None)).unwrap();
+        assert_eq!(s, "3");
+    }
+
+    #[test]
+    fn qtr_q4() {
+        let d = day_num(2024, 12, 31);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("QTR", None, None)).unwrap();
+        assert_eq!(s, "4");
+    }
+
+    // ── YYQ ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn yyq_2024q1() {
+        let d = day_num(2024, 1, 15);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("YYQ", None, None)).unwrap();
+        assert_eq!(s.trim(), "2024Q1");
+    }
+
+    #[test]
+    fn yyq_2024q4() {
+        let d = day_num(2024, 10, 1);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("YYQ", None, None)).unwrap();
+        assert_eq!(s.trim(), "2024Q4");
+    }
+
+    // ── JULIAN ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn julian_new_year() {
+        let d = day_num(2024, 1, 1);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("JULIAN", None, None)).unwrap();
+        assert_eq!(s.trim(), "2024001");
+    }
+
+    #[test]
+    fn julian_last_day() {
+        let d = day_num(2024, 12, 31);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("JULIAN", None, None)).unwrap();
+        let t = s.trim();
+        assert!(t.starts_with("2024"), "expected 2024... in: {t}");
+        assert!(t.ends_with("366"), "2024 is leap year so day 366: {t}");
+    }
+
+    // ── B8601 / E8601 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn b8601da_basic() {
+        let d = day_num(2020, 3, 15);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("B8601DA", None, None)).unwrap();
+        assert_eq!(s.trim(), "20200315");
+    }
+
+    #[test]
+    fn e8601da_basic() {
+        let d = day_num(2020, 3, 15);
+        let v = Value::Num(d);
+        let s = format_builtin(&v, &spec("E8601DA", None, None)).unwrap();
+        assert_eq!(s.trim(), "2020-03-15");
+    }
+
+    #[test]
+    fn e8601dt_basic() {
+        // 2020-01-01 12:34:56
+        let d = day_num(2020, 1, 1);
+        let secs = d * 86400.0 + 12.0 * 3600.0 + 34.0 * 60.0 + 56.0;
+        let v = Value::Num(secs);
+        let s = format_builtin(&v, &spec("E8601DT", None, None)).unwrap();
+        assert_eq!(s.trim(), "2020-01-01T12:34:56");
+    }
+
+    #[test]
+    fn b8601dt_basic() {
+        let d = day_num(2020, 1, 1);
+        let secs = d * 86400.0 + 12.0 * 3600.0 + 34.0 * 60.0 + 56.0;
+        let v = Value::Num(secs);
+        let s = format_builtin(&v, &spec("B8601DT", None, None)).unwrap();
+        assert_eq!(s.trim(), "20200101T123456");
+    }
+
+    #[test]
+    fn e8601tm_basic() {
+        let v = Value::Num(45296.0); // 12:34:56
+        let s = format_builtin(&v, &spec("E8601TM", None, None)).unwrap();
+        assert_eq!(s.trim(), "12:34:56");
+    }
+
+    #[test]
+    fn b8601tm_basic() {
+        let v = Value::Num(45296.0); // 12:34:56
+        let s = format_builtin(&v, &spec("B8601TM", None, None)).unwrap();
+        assert_eq!(s.trim(), "123456");
+    }
+
+    // ── Width + missing value edge cases ─────────────────────────────────────
+
+    #[test]
+    fn hex_missing_returns_dot() {
+        // Missing values: format_builtin receives them only via the Missing arm
+        let v = Value::Missing(crate::value::MissingKind::Dot);
+        // HEX is a numeric format; missing is handled by catalog before builtin,
+        // but if it reaches builtin the Missing arm returns right-justified "."
+        let s = format_builtin(&v, &spec("HEX", Some(5), None)).unwrap();
+        assert_eq!(s, "    .");
+    }
+
+    #[test]
+    fn roman_width_right_justified() {
+        let v = Value::Num(4.0); // IV
+        let s = format_builtin(&v, &spec("ROMAN", Some(8), None)).unwrap();
+        assert_eq!(s, "      IV");
+    }
+
+    #[test]
+    fn negparen_large_with_commas() {
+        let v = Value::Num(-1234567.0);
+        let s = format_builtin(&v, &spec("NEGPAREN", None, Some(0))).unwrap();
+        assert_eq!(s, "(1,234,567)");
+    }
+
+    // ── Roman numeral helper unit tests ──────────────────────────────────────
+
+    #[test]
+    fn roman_helper_iv() {
+        assert_eq!(to_roman(4), "IV");
+    }
+
+    #[test]
+    fn roman_helper_mcmxcix() {
+        assert_eq!(to_roman(1999), "MCMXCIX");
+    }
+
+    #[test]
+    fn roman_helper_out_of_range() {
+        assert_eq!(to_roman(0), "");
+        assert_eq!(to_roman(4000), "");
+    }
+
+    // ── Words helper unit tests ───────────────────────────────────────────────
+
+    #[test]
+    fn words_million() {
+        assert_eq!(to_words(1_000_000), "ONE MILLION");
+    }
+
+    #[test]
+    fn words_complex() {
+        assert_eq!(to_words(999), "NINE HUNDRED NINETY-NINE");
+    }
+
+    // ── Fract helper unit tests ───────────────────────────────────────────────
+
+    #[test]
+    fn fract_quarter() {
+        assert_eq!(to_fract(0.25), "1/4");
+    }
+
+    #[test]
+    fn fract_one_and_half() {
+        assert_eq!(to_fract(1.5), "1 1/2");
+    }
+
+    #[test]
+    fn fract_negative_half() {
+        assert_eq!(to_fract(-0.5), "-1/2");
     }
 }
