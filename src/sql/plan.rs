@@ -115,6 +115,12 @@ pub(crate) fn normalize_specials(mut lf: LazyFrame) -> Result<LazyFrame> {
 }
 
 pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
+    // 0. Sous-requêtes (M20.2) : résolution préalable des sous-requêtes
+    // non-corrélées (scalaire / IN / EXISTS) en littéraux. Les sous-requêtes
+    // corrélées sont détectées et signalées par une erreur documentée.
+    let resolved = resolve_subqueries(query, session)?;
+    let query = &resolved;
+
     // 1. FROM + joins.
     let mut lf = build_from(query, session)?;
 
@@ -189,6 +195,302 @@ pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFra
     }
 
     Ok(lf)
+}
+
+// ----------------------------------------------------------------------------
+// 0. Sous-requêtes (M20.2)
+// ----------------------------------------------------------------------------
+//
+// Stratégie : pré-passe qui réécrit le `SelectStmt` en remplaçant chaque
+// sous-requête NON-CORRÉLÉE par un littéral :
+//   - scalaire `(SELECT ...)`      → la valeur unique (Num/Str/Missing) ;
+//   - `x IN (SELECT ...)`          → `x IN (v1, v2, ...)` (liste matérialisée) ;
+//   - `[NOT] EXISTS (SELECT ...)`  → booléen constant (1=true / 0=false).
+// Les sous-requêtes corrélées (qui référencent une colonne d'une table de la
+// requête EXTÉRIEURE) ne sont pas matérialisables ainsi : on lève une erreur
+// documentée.
+
+/// Réécrit récursivement `query` en résolvant ses sous-requêtes non-corrélées.
+fn resolve_subqueries(query: &SelectStmt, session: &mut Session) -> Result<SelectStmt> {
+    let outer = visible_names(query);
+    let mut out = query.clone();
+
+    if let Some(w) = &out.where_ {
+        let mut w = w.clone();
+        rewrite_sql_expr(&mut w, &outer, session)?;
+        out.where_ = Some(w);
+    }
+    for it in &mut out.items {
+        rewrite_sql_expr(&mut it.expr, &outer, session)?;
+    }
+    if let Some(h) = &out.having {
+        let mut h = h.clone();
+        rewrite_sql_expr(&mut h, &outer, session)?;
+        out.having = Some(h);
+    }
+    for j in &mut out.joins {
+        if let Some(on) = &j.on {
+            let mut on = on.clone();
+            rewrite_sql_expr(&mut on, &outer, session)?;
+            j.on = Some(on);
+        }
+    }
+    if let Some((op, all, rhs)) = &out.set_op {
+        let rhs2 = resolve_subqueries(rhs, session)?;
+        out.set_op = Some((op.clone(), *all, Box::new(rhs2)));
+    }
+    Ok(out)
+}
+
+/// Ensemble (minuscule) des alias et noms de tables d'une requête, pour la
+/// détection de corrélation.
+fn visible_names(query: &SelectStmt) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut add = |fi: &super::ast::FromItem| {
+        if let Some(a) = &fi.alias {
+            names.push(a.to_ascii_lowercase());
+        }
+        names.push(fi.table.name.to_ascii_lowercase());
+    };
+    for fi in &query.from {
+        add(fi);
+    }
+    for j in &query.joins {
+        add(&j.table);
+    }
+    names
+}
+
+/// Réécrit en place les sous-requêtes d'une expression. `outer` = noms visibles
+/// dans la requête englobante (pour détecter la corrélation).
+fn rewrite_sql_expr(e: &mut SqlExpr, outer: &[String], session: &mut Session) -> Result<()> {
+    match e {
+        SqlExpr::Subquery(q) => {
+            ensure_not_correlated(q, outer)?;
+            let lit = eval_scalar_subquery(q, session)?;
+            *e = lit;
+        }
+        SqlExpr::InSubquery {
+            expr,
+            query,
+            negated,
+        } => {
+            rewrite_sql_expr(expr, outer, session)?;
+            ensure_not_correlated(query, outer)?;
+            let list = eval_column_subquery(query, session)?;
+            // On émet une chaîne d'égalités `expr = v1 OR expr = v2 OR ...`
+            // (membre droit matérialisé) plutôt que `Expr::In` : cela évite les
+            // problèmes de diffusion (`is_in` sur une liste d'une seule ligne ne
+            // se diffuse pas sur N lignes) et respecte la sémantique missing
+            // (un `expr = .` se traduit en is_null via le traducteur). Une liste
+            // vide → faux partout (`1 = 0`).
+            let mut pred: Option<SqlExpr> = None;
+            for v in list {
+                let eq = SqlExpr::Binary {
+                    op: BinaryOp::Eq,
+                    left: expr.clone(),
+                    right: Box::new(SqlExpr::Base(v)),
+                };
+                pred = Some(match pred {
+                    None => eq,
+                    Some(acc) => SqlExpr::Binary {
+                        op: BinaryOp::Or,
+                        left: Box::new(acc),
+                        right: Box::new(eq),
+                    },
+                });
+            }
+            let mut built = pred.unwrap_or(SqlExpr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(SqlExpr::Base(SasExpr::Num(1.0))),
+                right: Box::new(SqlExpr::Base(SasExpr::Num(0.0))),
+            });
+            if *negated {
+                built = SqlExpr::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(built),
+                };
+            }
+            *e = built;
+        }
+        SqlExpr::Exists { query, negated } => {
+            ensure_not_correlated(query, outer)?;
+            let any = subquery_has_rows(query, session)?;
+            let truth = any ^ *negated;
+            // Booléen constant pour un prédicat WHERE : `1 = 1` (vrai, conserve
+            // toutes les lignes) / `1 = 0` (faux, les élimine). On NE peut PAS
+            // utiliser un littéral numérique nu — un filtre Polars exige une
+            // expression BOOLÉENNE, pas un float.
+            let rhs = if truth { 1.0 } else { 0.0 };
+            *e = SqlExpr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(SqlExpr::Base(SasExpr::Num(1.0))),
+                right: Box::new(SqlExpr::Base(SasExpr::Num(rhs))),
+            };
+        }
+        SqlExpr::Binary { left, right, .. } => {
+            rewrite_sql_expr(left, outer, session)?;
+            rewrite_sql_expr(right, outer, session)?;
+        }
+        SqlExpr::Unary { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
+        SqlExpr::Between {
+            expr, low, high, ..
+        } => {
+            rewrite_sql_expr(expr, outer, session)?;
+            rewrite_sql_expr(low, outer, session)?;
+            rewrite_sql_expr(high, outer, session)?;
+        }
+        SqlExpr::IsNull { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
+        SqlExpr::Like { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
+        SqlExpr::Aggregate { arg: Some(a), .. } => rewrite_sql_expr(a, outer, session)?,
+        SqlExpr::Aggregate { .. }
+        | SqlExpr::Base(_)
+        | SqlExpr::Star
+        | SqlExpr::QualifiedStar(_)
+        | SqlExpr::Qualified { .. }
+        | SqlExpr::Calculated(_) => {}
+    }
+    Ok(())
+}
+
+/// Lève une erreur documentée si la sous-requête est corrélée, c.-à-d. si elle
+/// référence un alias/table de la requête EXTÉRIEURE qu'elle ne redéfinit pas
+/// localement.
+fn ensure_not_correlated(query: &SelectStmt, outer: &[String]) -> Result<()> {
+    let local = visible_names(query);
+    let mut refs = Vec::new();
+    collect_qualified_tables(query, &mut refs);
+    for r in refs {
+        let r = r.to_ascii_lowercase();
+        if outer.contains(&r) && !local.contains(&r) {
+            return Err(SasError::runtime(
+                "PROC SQL: correlated subqueries are not supported yet \
+                 (the subquery references a column from an outer query).",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Collecte les préfixes de table des références qualifiées `table.col` d'une
+/// requête, récursivement dans les sous-requêtes imbriquées.
+fn collect_qualified_tables(query: &SelectStmt, out: &mut Vec<String>) {
+    fn walk(e: &SqlExpr, out: &mut Vec<String>) {
+        match e {
+            SqlExpr::Qualified { table, .. } => out.push(table.clone()),
+            SqlExpr::Binary { left, right, .. } => {
+                walk(left, out);
+                walk(right, out);
+            }
+            SqlExpr::Unary { expr, .. } => walk(expr, out),
+            SqlExpr::Between {
+                expr, low, high, ..
+            } => {
+                walk(expr, out);
+                walk(low, out);
+                walk(high, out);
+            }
+            SqlExpr::IsNull { expr, .. } | SqlExpr::Like { expr, .. } => walk(expr, out),
+            SqlExpr::Aggregate { arg: Some(a), .. } => walk(a, out),
+            SqlExpr::Subquery(q) => collect_qualified_tables(q, out),
+            SqlExpr::InSubquery { expr, query, .. } => {
+                walk(expr, out);
+                collect_qualified_tables(query, out);
+            }
+            SqlExpr::Exists { query, .. } => collect_qualified_tables(query, out),
+            _ => {}
+        }
+    }
+    for it in &query.items {
+        walk(&it.expr, out);
+    }
+    if let Some(w) = &query.where_ {
+        walk(w, out);
+    }
+    if let Some(h) = &query.having {
+        walk(h, out);
+    }
+    for j in &query.joins {
+        if let Some(on) = &j.on {
+            walk(on, out);
+        }
+    }
+}
+
+/// Évalue une sous-requête scalaire : une seule colonne ; on prend la valeur de
+/// la PREMIÈRE ligne (absence de ligne → missing).
+fn eval_scalar_subquery(query: &SelectStmt, session: &mut Session) -> Result<SqlExpr> {
+    let df = lower_select(query, session)?.collect()?;
+    if df.width() != 1 {
+        return Err(SasError::runtime(
+            "PROC SQL: a scalar subquery must select exactly one column.",
+        ));
+    }
+    let col = df.get_columns()[0].as_materialized_series();
+    if col.is_empty() {
+        return Ok(SqlExpr::Base(SasExpr::Missing(MissingKind::Dot)));
+    }
+    any_value_to_base(col, 0)
+}
+
+/// Évalue une sous-requête de colonne (membre droit d'un IN) en une liste de
+/// littéraux `Expr`. Les nulls sont ignorés.
+fn eval_column_subquery(query: &SelectStmt, session: &mut Session) -> Result<Vec<SasExpr>> {
+    let df = lower_select(query, session)?.collect()?;
+    if df.width() != 1 {
+        return Err(SasError::runtime(
+            "PROC SQL: a subquery used with IN must select exactly one column.",
+        ));
+    }
+    let col = df.get_columns()[0].as_materialized_series();
+    let mut list = Vec::with_capacity(col.len());
+    for i in 0..col.len() {
+        // Les missings ne sont pas inclus dans la liste IN.
+        match any_value_to_base(col, i)? {
+            SqlExpr::Base(SasExpr::Missing(_)) => {}
+            SqlExpr::Base(b) => list.push(b),
+            _ => {}
+        }
+    }
+    Ok(list)
+}
+
+/// Vrai si la sous-requête renvoie au moins une ligne (pour EXISTS).
+fn subquery_has_rows(query: &SelectStmt, session: &mut Session) -> Result<bool> {
+    let df = lower_select(query, session)?.limit(1).collect()?;
+    Ok(df.height() > 0)
+}
+
+/// Convertit la valeur (ligne `idx`) d'une série en littéral `SqlExpr::Base`.
+fn any_value_to_base(series: &Series, idx: usize) -> Result<SqlExpr> {
+    use polars::prelude::AnyValue;
+    let av = series
+        .get(idx)
+        .map_err(|e| SasError::runtime(format!("PROC SQL: failed to read subquery value: {e}")))?;
+    let base = match av {
+        AnyValue::Null => SasExpr::Missing(MissingKind::Dot),
+        AnyValue::Float64(f) => {
+            if f.is_nan() {
+                SasExpr::Missing(MissingKind::Dot)
+            } else {
+                SasExpr::Num(f)
+            }
+        }
+        AnyValue::Float32(f) => SasExpr::Num(f as f64),
+        AnyValue::Int64(n) => SasExpr::Num(n as f64),
+        AnyValue::Int32(n) => SasExpr::Num(n as f64),
+        AnyValue::UInt32(n) => SasExpr::Num(n as f64),
+        AnyValue::UInt64(n) => SasExpr::Num(n as f64),
+        AnyValue::Boolean(b) => SasExpr::Num(if b { 1.0 } else { 0.0 }),
+        AnyValue::String(s) => SasExpr::Str(s.to_string()),
+        AnyValue::StringOwned(s) => SasExpr::Str(s.to_string()),
+        other => {
+            return Err(SasError::runtime(format!(
+                "PROC SQL: subquery produced an unsupported value type ({other:?})."
+            )));
+        }
+    };
+    Ok(SqlExpr::Base(base))
 }
 
 // ----------------------------------------------------------------------------
@@ -370,7 +672,14 @@ fn apply_group_by_project(query: &SelectStmt, lf: LazyFrame, ctx: &Ctx) -> Resul
         }
     }
 
-    let mut out = lf.group_by(keys).agg(agg_exprs);
+    // Sans clé de GROUP BY (agrégation sur toute la table → une seule ligne),
+    // `group_by([])` est invalide pour Polars : on projette directement les
+    // agrégats. C'est le cas d'une sous-requête scalaire `(select avg(x) ...)`.
+    let mut out = if keys.is_empty() {
+        lf.select(agg_exprs)
+    } else {
+        lf.group_by(keys).agg(agg_exprs)
+    };
 
     // HAVING : référence les agrégats par leur colonne.
     if let Some(h) = &query.having {
@@ -793,6 +1102,8 @@ fn item_has_aggregate(e: &SqlExpr) -> bool {
         | SqlExpr::Star
         | SqlExpr::QualifiedStar(_)
         | SqlExpr::Qualified { .. } => false,
+        // Résolues en littéraux avant l'abaissement.
+        SqlExpr::Subquery(_) | SqlExpr::InSubquery { .. } | SqlExpr::Exists { .. } => false,
     }
 }
 
@@ -842,6 +1153,8 @@ fn references_bare_column(e: &SqlExpr) -> bool {
         SqlExpr::Like { expr, .. } => references_bare_column(expr),
         SqlExpr::Calculated(_) => false,
         SqlExpr::Star | SqlExpr::QualifiedStar(_) => false,
+        // Résolues en littéraux avant l'abaissement.
+        SqlExpr::Subquery(_) | SqlExpr::InSubquery { .. } | SqlExpr::Exists { .. } => false,
     }
 }
 
@@ -914,6 +1227,12 @@ fn sql_expr_to_polars(e: &SqlExpr, ctx: &Ctx) -> Result<Expr> {
                 UnaryOp::Not => a.not(),
             })
         }
+        // Les sous-requêtes sont résolues en littéraux par `resolve_subqueries`
+        // AVANT l'abaissement. Si l'une survit ici, c'est un chemin non couvert
+        // (ex. `translate_predicate` du DELETE, qui n'effectue pas la passe).
+        SqlExpr::Subquery(_) | SqlExpr::InSubquery { .. } | SqlExpr::Exists { .. } => Err(
+            SasError::runtime("PROC SQL: subqueries are not supported in this context."),
+        ),
     }
 }
 
@@ -1737,5 +2056,185 @@ mod tests {
         let col = out.column("x").unwrap().f64().unwrap();
         assert_eq!(col.iter().filter(|o| o.is_none()).count(), 1);
         assert_eq!(col.iter().flatten().collect::<Vec<f64>>(), vec![7.0]);
+    }
+
+    // ---- M20.2 : sous-requêtes (non-corrélées + corrélées) ---------------
+
+    /// Erreur d'abaissement (collect inclus) d'une requête SQL.
+    fn run_err(src: &str, session: &mut Session) -> String {
+        let sel = first_select(src);
+        match lower_select(&sel, session).and_then(|lf| Ok(lf.collect()?)) {
+            Ok(_) => panic!("expected an error for {src:?}"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn scalar_subquery_in_select_list() {
+        // `(select count(*) from t)` est constant pour chaque ligne.
+        let mut s = make_session();
+        write_people(&mut s);
+        let out = run("select name, (select count(*) from t) as n from t;", &mut s);
+        assert_eq!(out.height(), 4);
+        let ns: Vec<f64> = out
+            .column("n")
+            .unwrap()
+            .cast(&DataType::Float64)
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
+        assert!(ns.iter().all(|v| (*v - 4.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn scalar_subquery_in_where() {
+        // age > avg(age) : moyenne = (10+14+13+11)/4 = 12 → garde 14 et 13.
+        let mut s = make_session();
+        write_people(&mut s);
+        let out = run(
+            "select name, age from t where age > (select avg(age) from t);",
+            &mut s,
+        );
+        let ages: Vec<f64> = out
+            .column("age")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
+        assert_eq!(ages, vec![14.0, 13.0]);
+    }
+
+    #[test]
+    fn in_subquery_filters() {
+        // x IN (select k from keys) : matérialise {1,3}.
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0, 3.0, 4.0]].unwrap();
+        let keys = df!["k" => [1.0_f64, 3.0]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "KEYS", keys, vec![num("k")]);
+        let out = run("select x from t where x in (select k from keys);", &mut s);
+        let xs = nums(&out, "x");
+        assert_eq!(xs, vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn not_in_subquery_filters() {
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0, 3.0, 4.0]].unwrap();
+        let keys = df!["k" => [1.0_f64, 3.0]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "KEYS", keys, vec![num("k")]);
+        let out = run(
+            "select x from t where x not in (select k from keys);",
+            &mut s,
+        );
+        assert_eq!(nums(&out, "x"), vec![2.0, 4.0]);
+    }
+
+    #[test]
+    fn exists_subquery_true_keeps_all() {
+        // EXISTS non-corrélé : la sous-requête a des lignes → conserve tout.
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0, 3.0]].unwrap();
+        let other = df!["y" => [9.0_f64]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "OTHER", other, vec![num("y")]);
+        let out = run("select x from t where exists (select y from other);", &mut s);
+        assert_eq!(out.height(), 3);
+    }
+
+    #[test]
+    fn exists_subquery_false_drops_all() {
+        // EXISTS non-corrélé faux (sous-requête vide après WHERE) → 0 ligne.
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0, 3.0]].unwrap();
+        let other = df!["y" => [9.0_f64]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "OTHER", other, vec![num("y")]);
+        let out = run(
+            "select x from t where exists (select y from other where y > 100);",
+            &mut s,
+        );
+        assert_eq!(out.height(), 0);
+    }
+
+    #[test]
+    fn not_exists_subquery_inverts() {
+        // NOT EXISTS d'une sous-requête vide → vrai → conserve tout.
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0]].unwrap();
+        let other = df!["y" => [9.0_f64]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "OTHER", other, vec![num("y")]);
+        let out = run(
+            "select x from t where not exists (select y from other where y > 100);",
+            &mut s,
+        );
+        assert_eq!(out.height(), 2);
+    }
+
+    #[test]
+    fn scalar_subquery_empty_is_missing() {
+        // Une sous-requête scalaire sans ligne → missing ; `age > .` est faux
+        // partout → 0 ligne.
+        let mut s = make_session();
+        write_people(&mut s);
+        let out = run(
+            "select name from t where age > (select age from t where age > 100);",
+            &mut s,
+        );
+        assert_eq!(out.height(), 0);
+    }
+
+    #[test]
+    fn in_subquery_string_values() {
+        // IN sur des valeurs char.
+        let mut s = make_session();
+        write_people(&mut s);
+        let keep = df!["s" => ["F"]].unwrap();
+        write_table(&mut s, "KEEP", keep, vec![chr("s", 1)]);
+        let out = run("select name from t where sex in (select s from keep);", &mut s);
+        // Seules Cy et Di sont F.
+        assert_eq!(out.height(), 2);
+        assert_eq!(sorted_strs(&out, "name"), vec!["Cy", "Di"]);
+    }
+
+    #[test]
+    fn correlated_subquery_errors() {
+        // Sous-requête corrélée (référence `t.age` de la requête externe) :
+        // erreur documentée.
+        let mut s = make_session();
+        write_people(&mut s);
+        let err = run_err(
+            "select name from t where age > \
+             (select avg(age) from u where u.sex = t.sex);",
+            &mut s,
+        );
+        assert!(
+            err.contains("correlated subqueries are not supported"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn nested_non_correlated_subquery() {
+        // Sous-requête à deux niveaux, toutes non-corrélées.
+        let mut s = make_session();
+        let t = df!["x" => [1.0_f64, 2.0, 3.0, 4.0]].unwrap();
+        let a = df!["k" => [2.0_f64, 3.0, 4.0]].unwrap();
+        let b = df!["m" => [2.0_f64, 3.0]].unwrap();
+        write_table(&mut s, "T", t, vec![num("x")]);
+        write_table(&mut s, "A", a, vec![num("k")]);
+        write_table(&mut s, "B", b, vec![num("m")]);
+        // x IN (k IN (m)) → A∩B sur la valeur = {2,3} → filtre T à {2,3}.
+        let out = run(
+            "select x from t where x in \
+             (select k from a where k in (select m from b));",
+            &mut s,
+        );
+        assert_eq!(nums(&out, "x"), vec![2.0, 3.0]);
     }
 }

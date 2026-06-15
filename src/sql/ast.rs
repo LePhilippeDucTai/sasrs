@@ -99,4 +99,13 @@ pub enum SqlExpr {
     Like { expr: Box<SqlExpr>, pattern: String, negated: bool },
     Binary { op: crate::ast::BinaryOp, left: Box<SqlExpr>, right: Box<SqlExpr> },
     Unary { op: crate::ast::UnaryOp, expr: Box<SqlExpr> },
+    /// Sous-requête scalaire `(SELECT ...)` : doit renvoyer une seule colonne /
+    /// une seule ligne. Évaluée (non-corrélée) avant l'abaissement Polars.
+    Subquery(Box<SelectStmt>),
+    /// `expr [NOT] IN (SELECT ...)` : la sous-requête fournit une colonne de
+    /// valeurs. Non-corrélée → évaluée puis transformée en liste.
+    InSubquery { expr: Box<SqlExpr>, query: Box<SelectStmt>, negated: bool },
+    /// `[NOT] EXISTS (SELECT ...)` : vrai si la sous-requête renvoie ≥ 1 ligne.
+    /// Non-corrélée → évaluée puis réduite à un booléen constant.
+    Exists { query: Box<SelectStmt>, negated: bool },
 }

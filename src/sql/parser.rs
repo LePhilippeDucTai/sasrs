@@ -16,8 +16,10 @@
 //!   contexte, CALCULATED, agrégats, BETWEEN/IS NULL/LIKE).
 //! - GROUP BY positionnel (`group by 1, 2`) : entiers littéraux.
 //! - `select *` et `a.*`.
-//! - Sous-requêtes : HORS périmètre M6 (ERROR propre "subqueries not
-//!   yet supported") — lever la limite en M8.
+//! - Sous-requêtes (M20.2) : scalaires `(SELECT ...)`, `IN (SELECT ...)` et
+//!   `[NOT] EXISTS (SELECT ...)` non-corrélées sont parsées en nœuds dédiés
+//!   (`SqlExpr::Subquery` / `InSubquery` / `Exists`) puis résolues à
+//!   l'abaissement. Les sous-requêtes en FROM restent hors périmètre.
 //!
 //! ## Approche d'implémentation des expressions
 //! On NE délègue PAS bloc à `parser::expr::parse_expr` pour l'ensemble
@@ -855,14 +857,16 @@ fn parse_sql_unary(ts: &mut StatementStream) -> Result<SqlExpr> {
 fn parse_sql_atom(ts: &mut StatementStream) -> Result<SqlExpr> {
     let tok = ts.peek().clone();
 
-    // `( <sqlexpr> )` — ou sous-requête interdite.
+    // `( SELECT ... )` — sous-requête scalaire (M20.2).
+    if tok.kind == TokenKind::LParen && ts.peek2().is_kw("select") {
+        ts.next(); // (
+        let query = parse_select(ts)?;
+        expect_rparen(ts)?;
+        return Ok(SqlExpr::Subquery(Box::new(query)));
+    }
+
+    // `( <sqlexpr> )` — parenthèses ordinaires.
     if tok.kind == TokenKind::LParen {
-        if ts.peek2().is_kw("select") {
-            return Err(SasError::parse(
-                "Subqueries are not yet supported in PROC SQL.",
-                ts.peek2().span,
-            ));
-        }
         ts.next(); // (
         let inner = parse_sql_expr(ts)?;
         if ts.peek().kind != TokenKind::RParen {
@@ -875,6 +879,25 @@ fn parse_sql_atom(ts: &mut StatementStream) -> Result<SqlExpr> {
     if let TokenKind::Ident(name) = &tok.kind {
         let lower = name.to_ascii_lowercase();
         let name = name.clone();
+
+        // `EXISTS ( SELECT ... )` (M20.2). Le `NOT` préfixe est géré au niveau
+        // booléen (parse_sql_not) → `NOT (EXISTS ...)`.
+        if lower == "exists" && ts.peek2().kind == TokenKind::LParen {
+            ts.next(); // EXISTS
+            ts.next(); // (
+            if !ts.peek().is_kw("select") {
+                return Err(SasError::parse(
+                    "expected SELECT after EXISTS (",
+                    ts.peek().span,
+                ));
+            }
+            let query = parse_select(ts)?;
+            expect_rparen(ts)?;
+            return Ok(SqlExpr::Exists {
+                query: Box::new(query),
+                negated: false,
+            });
+        }
 
         // CALCULATED <ident>.
         if lower == "calculated" {
@@ -1332,11 +1355,16 @@ fn parse_sql_in(ts: &mut StatementStream, left: SqlExpr, negated: bool) -> Resul
     if ts.peek().kind != TokenKind::LParen {
         return Err(SasError::parse("expected '(' after IN", ts.peek().span));
     }
+    // `expr [NOT] IN ( SELECT ... )` — sous-requête de liste (M20.2).
     if ts.peek2().is_kw("select") {
-        return Err(SasError::parse(
-            "Subqueries are not yet supported in PROC SQL.",
-            ts.peek2().span,
-        ));
+        ts.next(); // (
+        let query = parse_select(ts)?;
+        expect_rparen(ts)?;
+        return Ok(SqlExpr::InSubquery {
+            expr: Box::new(left),
+            query: Box::new(query),
+            negated,
+        });
     }
     ts.next(); // (
     let mut list = Vec::new();
@@ -1786,18 +1814,74 @@ mod tests {
     }
 
     #[test]
-    fn subquery_in_where_errors() {
-        let err = parse("select * from a where x in (select y from b);")
-            .err()
-            .map(|e| e.to_string());
-        // `IN (select ...)` : la parenthèse suivie de SELECT déclenche l'erreur
-        // sous-requête au niveau de l'atome.
-        assert!(
-            err.as_deref()
-                .map(|s| s.contains("Subqueries are not yet supported"))
-                .unwrap_or(false),
-            "got: {err:?}"
+    fn subquery_in_where_parses() {
+        // M20.2 : `x IN (SELECT ...)` parse en `SqlExpr::InSubquery`.
+        let stmt = one("select * from a where x in (select y from b);");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        let SqlExpr::InSubquery {
+            expr,
+            query,
+            negated,
+        } = sel.where_.unwrap()
+        else {
+            panic!("expected InSubquery");
+        };
+        assert_eq!(*expr, var("x"));
+        assert!(!negated);
+        assert_eq!(query.items[0].expr, var("y"));
+        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None }]);
+    }
+
+    #[test]
+    fn scalar_subquery_parses() {
+        // M20.2 : `(SELECT ...)` en position scalaire dans le select-list.
+        let stmt = one("select (select count(*) from b) as n from a;");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        assert_eq!(sel.items[0].alias, Some("n".to_string()));
+        let SqlExpr::Subquery(q) = &sel.items[0].expr else {
+            panic!("expected Subquery, got {:?}", sel.items[0].expr);
+        };
+        assert_eq!(
+            q.items[0].expr,
+            SqlExpr::Aggregate {
+                func: "COUNT".to_string(),
+                distinct: false,
+                arg: None,
+                star: true,
+            }
         );
+    }
+
+    #[test]
+    fn exists_subquery_parses() {
+        // M20.2 : `EXISTS (SELECT ...)` et `NOT EXISTS (...)`.
+        let stmt = one("select * from a where exists (select 1 from b);");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        let SqlExpr::Exists { query, negated } = sel.where_.unwrap() else {
+            panic!("expected Exists");
+        };
+        assert!(!negated);
+        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None }]);
+
+        let stmt = one("select * from a where not exists (select 1 from b);");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        // `NOT EXISTS` → Unary(Not, Exists).
+        let SqlExpr::Unary { op, expr } = sel.where_.unwrap() else {
+            panic!("expected Unary(Not, Exists)");
+        };
+        assert_eq!(op, UnaryOp::Not);
+        assert!(matches!(*expr, SqlExpr::Exists { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_in_subquery_parses() {
+        // M20.2 : `x NOT IN (SELECT ...)` → InSubquery { negated: true }.
+        let stmt = one("select * from a where x not in (select y from b);");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        let SqlExpr::InSubquery { negated, .. } = sel.where_.unwrap() else {
+            panic!("expected InSubquery");
+        };
+        assert!(negated);
     }
 
     #[test]
