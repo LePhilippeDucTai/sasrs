@@ -412,6 +412,56 @@ impl MacroEngine {
                 }
             }
 
+            // `%sysevalf(expr [, conv])` — évaluation FLOTTANTE (M19.1).
+            if c == '%' && Self::matches_kw_paren(&chars, i, "sysevalf") {
+                if let Some(next) = self.consume_sysevalf(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%cmpres(text)` / `%qcmpres(text)` — compression des blancs (M19.1).
+            if c == '%' && Self::matches_kw_paren(&chars, i, "qcmpres") {
+                if let Some(next) = self.consume_cmpres(&chars, "qcmpres", true, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "cmpres") {
+                if let Some(next) = self.consume_cmpres(&chars, "cmpres", false, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%symexist(name)` / `%sysmexist(name)` / `%sysget(name)` (M19.1).
+            if c == '%' && Self::matches_kw_paren(&chars, i, "symexist") {
+                if let Some(next) = self.consume_symexist(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "sysmexist") {
+                if let Some(next) = self.consume_sysmexist(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+            if c == '%' && Self::matches_kw_paren(&chars, i, "sysget") {
+                if let Some(next) = self.consume_sysget(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%unquote(text)` — ré-active la résolution `&`/`%` masquée (M19.1).
+            if c == '%' && Self::matches_kw_paren(&chars, i, "unquote") {
+                if let Some(next) = self.consume_unquote(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
             // `%superq(name)` — valeur d'une variable SANS résolution, masquée.
             if c == '%' && Self::matches_kw_paren(&chars, i, "superq") {
                 if let Some(next) = self.consume_superq(&chars, i, &mut out) {
@@ -603,7 +653,11 @@ impl MacroEngine {
                     || Self::matches_kw_paren(chars, j, "nrstr")
                     || Self::matches_kw_paren(chars, j, "bquote")
                     || Self::matches_kw_paren(chars, j, "nrbquote")
-                    || Self::matches_kw_paren(chars, j, "superq"))
+                    || Self::matches_kw_paren(chars, j, "superq")
+                    || Self::matches_kw_paren(chars, j, "cmpres")
+                    || Self::matches_kw_paren(chars, j, "qcmpres")
+                    || Self::matches_kw_paren(chars, j, "unquote")
+                    || Self::matches_kw_paren(chars, j, "sysevalf"))
             {
                 // Avancer jusqu'à la `(` puis sauter la région équilibrée.
                 let mut p = j + 1;
@@ -1435,6 +1489,224 @@ impl MacroEngine {
             out.push_str(&expanded);
         }
         Some(after)
+    }
+
+    // ── M19.1 : fonctions macro différées ───────────────────────────────────
+
+    /// Consomme `%unquote ( text )`. C'est l'INVERSE des fonctions de quoting
+    /// (`%str`/`%nrstr`/`%bquote`/`%superq`/`%q*`) : il « dé-masque » le texte et
+    /// RÉ-ACTIVE la résolution des déclencheurs `&`/`%` qui avaient été rendus
+    /// inertes par le schéma de sentinelles.
+    ///
+    /// Interaction avec le schéma de sentinelles (point délicat) : les fonctions
+    /// de quoting remplacent `&`/`%`/ponctuation par des sentinelles `MASK_BASE+k`.
+    /// `%unquote` procède en trois temps :
+    ///   1. résoudre les `&refs` ENCORE actifs de l'argument (texte non masqué) ;
+    ///   2. `unmask` → rétablir les littéraux d'origine, ce qui ressuscite tout
+    ///      `&`/`%` précédemment masqué ;
+    ///   3. ré-`process_impl` le texte dé-masqué → les `&`/`%` ressuscités sont
+    ///      maintenant résolus comme des déclencheurs normaux.
+    /// La passe `unmask` finale de `expand_open_code` ne fait alors plus rien sur
+    /// ce fragment (déjà dé-masqué). Rend l'index après la `)`.
+    fn consume_unquote(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + 1 + "unquote".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // 1. expanser l'argument tel quel : tout `%str`/`%nrstr`/`%q*` imbriqué
+        //    s'exécute et POSE ses sentinelles (déclencheurs `&`/`%` masqués) ;
+        // 2. `unmask` → rétablit les littéraux, ce qui RESSUSCITE `&`/`%` ;
+        // 3. ré-`process_impl` → ces déclencheurs ressuscités sont maintenant
+        //    résolus comme des déclencheurs normaux. La passe `unmask` finale de
+        //    `expand_open_code` ne fait plus rien sur ce fragment.
+        let expanded = self.process_impl(&inner);
+        let unmasked = Self::unmask(&expanded);
+        let reexpanded = self.process_impl(&unmasked);
+        out.push_str(&reexpanded);
+        Some(after)
+    }
+
+    /// Consomme `%cmpres ( text )` / `%qcmpres ( text )`. Résout les `&refs`,
+    /// puis COMPRESSE les blancs : rogne les blancs de bord et réduit toute
+    /// suite de blancs interne à UN seul espace (fidèle à SAS CMPRES). La
+    /// variante `q` masque le résultat (ponctuation + déclencheurs) comme les
+    /// autres `%q*`. Rend l'index après la `)`.
+    fn consume_cmpres(
+        &mut self,
+        chars: &[char],
+        kw: &str,
+        masked: bool,
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        let resolved = self.resolve_value(&inner);
+        let compressed = Self::compress_blanks(&resolved);
+        if masked {
+            out.push_str(&Self::mask_special(&compressed, true));
+        } else {
+            out.push_str(&compressed);
+        }
+        Some(after)
+    }
+
+    /// Rogne les blancs de bord et réduit chaque suite de blancs interne à un
+    /// unique espace. Helper de `%cmpres`/`%qcmpres`.
+    fn compress_blanks(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut prev_blank = false;
+        for c in s.trim().chars() {
+            if c.is_whitespace() {
+                if !prev_blank {
+                    out.push(' ');
+                    prev_blank = true;
+                }
+            } else {
+                out.push(c);
+                prev_blank = false;
+            }
+        }
+        out
+    }
+
+    /// Lit l'argument NOM d'une fonction `%kw ( name )` (commune à `%symexist`,
+    /// `%sysmexist`, `%sysget`). Résout les `&refs` de l'argument puis rogne les
+    /// blancs et un éventuel `&` de tête (SAS accepte `%symexist(&x)`). Rend
+    /// `(nom, index après la `)`)`, ou `None` si la parenthèse manque.
+    fn read_name_arg(&mut self, chars: &[char], kw: &str, i: usize) -> Option<(String, usize)> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        let resolved = self.resolve_value(&inner);
+        let name = resolved.trim().trim_start_matches('&').trim().to_string();
+        Some((name, after))
+    }
+
+    /// Consomme `%symexist ( name )`. Rend `1` si la variable macro existe (dans
+    /// une portée locale OU globale), `0` sinon. Rend l'index après la `)`.
+    fn consume_symexist(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let (name, after) = self.read_name_arg(chars, "symexist", i)?;
+        let exists = self.lookup(&name).is_some();
+        out.push_str(if exists { "1" } else { "0" });
+        Some(after)
+    }
+
+    /// Consomme `%sysmexist ( name )`. Rend `1` si la macro (définie via
+    /// `%macro`) existe, `0` sinon. Rend l'index après la `)`.
+    fn consume_sysmexist(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let (name, after) = self.read_name_arg(chars, "sysmexist", i)?;
+        let exists = self.macros.contains_key(&name.to_uppercase());
+        out.push_str(if exists { "1" } else { "0" });
+        Some(after)
+    }
+
+    /// Consomme `%sysget ( name )`. Rend la valeur de la variable d'environnement
+    /// nommée. Une variable inexistante rend la CHAÎNE VIDE (SAS émet un WARNING ;
+    /// on se contente de produire vide pour rester déterministe). Cf. la note de
+    /// déterminisme dans l'en-tête du module. Rend l'index après la `)`.
+    fn consume_sysget(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let (name, after) = self.read_name_arg(chars, "sysget", i)?;
+        if let Ok(v) = std::env::var(&name) {
+            out.push_str(&v);
+        }
+        Some(after)
+    }
+
+    /// Consomme `%sysevalf ( expr [, conv] )` : évaluation FLOTTANTE de `expr`
+    /// (contrairement à `%eval` qui est entier seulement). Le résultat brut est
+    /// un `f64` ; un éventuel deuxième argument `conv` le convertit :
+    /// - `BOOLEAN` → `1` si non nul (et non missing), `0` sinon ;
+    /// - `CEIL`    → plafond, formaté en entier ;
+    /// - `FLOOR`   → plancher, formaté en entier ;
+    /// - `INTEGER` → troncature vers zéro, formaté en entier ;
+    /// - absent    → le flottant formaté (entier sans décimales si exact).
+    /// `&refs`/macros imbriquées dans `expr` sont résolues d'abord. Erreur de
+    /// syntaxe → note d'erreur (pas de panic). Rend l'index après la `)`.
+    fn consume_sysevalf(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + 1 + "sysevalf".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens(chars, j)?;
+        // L'argument peut contenir des &refs/macros : résoudre AVANT de découper
+        // les virgules (les nombres ne contiennent pas de virgule de niveau sup.).
+        let resolved = self.resolve_value(&inner);
+        let expanded = self.process_impl(&resolved);
+        let parts = Self::split_top_level_commas(&expanded);
+        let expr = parts.first().map(String::as_str).unwrap_or("").trim();
+        let conv = parts.get(1).map(|s| s.trim().to_ascii_uppercase());
+        match Self::eval_float(expr) {
+            Ok(v) => out.push_str(&Self::format_sysevalf(v, conv.as_deref())),
+            Err(e) => Self::emit_error(out, &e),
+        }
+        Some(after)
+    }
+
+    /// Formate le résultat flottant de `%sysevalf` selon la conversion demandée.
+    fn format_sysevalf(v: f64, conv: Option<&str>) -> String {
+        match conv {
+            Some("BOOLEAN") => {
+                if v != 0.0 && !v.is_nan() {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
+            Some("CEIL") => Self::format_float(v.ceil()),
+            Some("FLOOR") => Self::format_float(v.floor()),
+            Some("INTEGER") => Self::format_float(v.trunc()),
+            _ => Self::format_float(v),
+        }
+    }
+
+    /// Formate un `f64` en texte façon SAS : un entier exact perd ses décimales
+    /// (`3.0` → `"3"`), sinon on emploie une représentation compacte sans zéros
+    /// finaux superflus.
+    fn format_float(v: f64) -> String {
+        if v.is_nan() {
+            return String::new();
+        }
+        if v == v.trunc() && v.abs() < 1e15 {
+            return format!("{}", v as i64);
+        }
+        // Représentation compacte : `{}` sur f64 rend déjà la plus courte forme
+        // fidèle sans zéros finaux superflus.
+        format!("{v}")
+    }
+
+    /// Évalue une expression arithmétique FLOTTANTE (pour `%sysevalf`). Supporte
+    /// `+ - * / **`, parenthèses, comparaisons (`= ne < <= > >= eq …` → 1/0),
+    /// logique (`and or not & | ^`) et l'unaire `+`/`-`. Tout est calculé en
+    /// `f64` (division réelle, `**` réelle). Un opérande non numérique → erreur.
+    fn eval_float(expr: &str) -> Result<f64, MacroError> {
+        let toks = Self::tokenize_eval(expr)?;
+        let mut p = FloatParser { toks: &toks, pos: 0 };
+        let v = p.parse_expr()?;
+        if p.pos != p.toks.len() {
+            return Err(MacroError::new(format!(
+                "ERROR: A syntax error was detected in the %SYSEVALF expression: {expr}"
+            )));
+        }
+        Ok(v)
     }
 
     // ── M12.2 : quoting étendu (%superq, %bquote, %nrbquote) ─────────────────
@@ -2301,10 +2573,39 @@ impl MacroEngine {
                         i += 1;
                     }
                 }
-                _ if c.is_ascii_digit() => {
+                _ if c.is_ascii_digit() || c == '.' => {
                     let start = i;
                     while matches!(chars.get(i), Some(d) if d.is_ascii_digit()) {
                         i += 1;
+                    }
+                    // Partie fractionnaire / exposant : marque un littéral FLOTTANT
+                    // (`7.5`, `.5`, `1e3`). `%eval` (entier) le verra comme un
+                    // `Word` et émettra l'erreur « character operand » ; `%sysevalf`
+                    // (flottant) le parse en `f64`.
+                    let mut is_float = false;
+                    if chars.get(i) == Some(&'.') {
+                        is_float = true;
+                        i += 1;
+                        while matches!(chars.get(i), Some(d) if d.is_ascii_digit()) {
+                            i += 1;
+                        }
+                    }
+                    if matches!(chars.get(i), Some('e' | 'E'))
+                        && matches!(
+                            chars.get(i + 1),
+                            Some(d) if d.is_ascii_digit()
+                                || ((*d == '+' || *d == '-')
+                                    && matches!(chars.get(i + 2), Some(e) if e.is_ascii_digit()))
+                        )
+                    {
+                        is_float = true;
+                        i += 1; // 'e'
+                        if matches!(chars.get(i), Some('+' | '-')) {
+                            i += 1;
+                        }
+                        while matches!(chars.get(i), Some(d) if d.is_ascii_digit()) {
+                            i += 1;
+                        }
                     }
                     // Un opérande alphanumérique mixte (ex. `3a`) est un mot.
                     if matches!(chars.get(i), Some(d) if d.is_ascii_alphabetic() || *d == '_') {
@@ -2314,6 +2615,9 @@ impl MacroEngine {
                         }
                         let w: String = chars[wstart..i].iter().collect();
                         toks.push(EvalTok::Word(w));
+                    } else if is_float {
+                        // Littéral flottant : porté comme `Word` (entier le rejette).
+                        toks.push(EvalTok::Word(chars[start..i].iter().collect()));
                     } else {
                         let s: String = chars[start..i].iter().collect();
                         match s.parse::<i64>() {
@@ -2559,6 +2863,190 @@ impl<'a> EvalParser<'a> {
             ))),
             other => Err(MacroError::new(format!(
                 "ERROR: A syntax error was detected in the %EVAL expression near {other:?}"
+            ))),
+        }
+    }
+}
+
+/// Analyseur récursif-descendant FLOTTANT pour `%sysevalf` (M19.1). Même
+/// grammaire que [`EvalParser`] mais en `f64` : division réelle, `**` réelle,
+/// comparaisons/logique rendant `1.0`/`0.0`. Réutilise les `EvalTok` produits
+/// par `MacroEngine::tokenize_eval` ; un littéral flottant arrive comme
+/// `EvalTok::Word` (que cet analyseur parse en nombre, contrairement à
+/// l'analyseur entier qui le rejette).
+struct FloatParser<'a> {
+    toks: &'a [EvalTok],
+    pos: usize,
+}
+
+impl FloatParser<'_> {
+    fn peek(&self) -> Option<&EvalTok> {
+        self.toks.get(self.pos)
+    }
+
+    fn bump(&mut self) -> Option<&EvalTok> {
+        let t = self.toks.get(self.pos);
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn parse_expr(&mut self) -> Result<f64, MacroError> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> Result<f64, MacroError> {
+        let mut left = self.parse_and()?;
+        while matches!(self.peek(), Some(EvalTok::Or)) {
+            self.bump();
+            let right = self.parse_and()?;
+            left = ((left != 0.0) || (right != 0.0)) as i64 as f64;
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> Result<f64, MacroError> {
+        let mut left = self.parse_not()?;
+        while matches!(self.peek(), Some(EvalTok::And)) {
+            self.bump();
+            let right = self.parse_not()?;
+            left = ((left != 0.0) && (right != 0.0)) as i64 as f64;
+        }
+        Ok(left)
+    }
+
+    fn parse_not(&mut self) -> Result<f64, MacroError> {
+        let mut negs = 0;
+        while matches!(self.peek(), Some(EvalTok::Not)) {
+            self.bump();
+            negs += 1;
+        }
+        let v = self.parse_cmp()?;
+        if negs % 2 == 1 {
+            Ok((v == 0.0) as i64 as f64)
+        } else {
+            Ok(v)
+        }
+    }
+
+    fn parse_cmp(&mut self) -> Result<f64, MacroError> {
+        let left = self.parse_add()?;
+        if let Some(op) = self.peek().cloned() {
+            let is_cmp = matches!(
+                op,
+                EvalTok::Eq
+                    | EvalTok::Ne
+                    | EvalTok::Lt
+                    | EvalTok::Le
+                    | EvalTok::Gt
+                    | EvalTok::Ge
+            );
+            if is_cmp {
+                self.bump();
+                let right = self.parse_add()?;
+                let r = match op {
+                    EvalTok::Eq => left == right,
+                    EvalTok::Ne => left != right,
+                    EvalTok::Lt => left < right,
+                    EvalTok::Le => left <= right,
+                    EvalTok::Gt => left > right,
+                    EvalTok::Ge => left >= right,
+                    _ => unreachable!(),
+                };
+                return Ok(r as i64 as f64);
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_add(&mut self) -> Result<f64, MacroError> {
+        let mut left = self.parse_mul()?;
+        loop {
+            match self.peek() {
+                Some(EvalTok::Plus) => {
+                    self.bump();
+                    left += self.parse_mul()?;
+                }
+                Some(EvalTok::Minus) => {
+                    self.bump();
+                    left -= self.parse_mul()?;
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_mul(&mut self) -> Result<f64, MacroError> {
+        let mut left = self.parse_pow()?;
+        loop {
+            match self.peek() {
+                Some(EvalTok::Star) => {
+                    self.bump();
+                    left *= self.parse_pow()?;
+                }
+                Some(EvalTok::Slash) => {
+                    self.bump();
+                    let right = self.parse_pow()?;
+                    if right == 0.0 {
+                        return Err(MacroError::new(
+                            "ERROR: Division by zero detected in the %SYSEVALF expression",
+                        ));
+                    }
+                    // Division RÉELLE (≠ %eval qui tronque).
+                    left /= right;
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_pow(&mut self) -> Result<f64, MacroError> {
+        let base = self.parse_unary()?;
+        if matches!(self.peek(), Some(EvalTok::Pow)) {
+            self.bump();
+            // Associatif à droite.
+            let exp = self.parse_pow()?;
+            return Ok(base.powf(exp));
+        }
+        Ok(base)
+    }
+
+    fn parse_unary(&mut self) -> Result<f64, MacroError> {
+        match self.peek() {
+            Some(EvalTok::Plus) => {
+                self.bump();
+                self.parse_unary()
+            }
+            Some(EvalTok::Minus) => {
+                self.bump();
+                Ok(-self.parse_unary()?)
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> Result<f64, MacroError> {
+        match self.bump() {
+            Some(EvalTok::Int(n)) => Ok(*n as f64),
+            Some(EvalTok::Word(w)) => w.parse::<f64>().map_err(|_| {
+                MacroError::new(format!(
+                    "ERROR: A character operand was found in the %SYSEVALF function where a numeric operand is required: {w}"
+                ))
+            }),
+            Some(EvalTok::LParen) => {
+                let v = self.parse_expr()?;
+                match self.bump() {
+                    Some(EvalTok::RParen) => Ok(v),
+                    _ => Err(MacroError::new(
+                        "ERROR: A syntax error was detected in the %SYSEVALF expression: expected ')'",
+                    )),
+                }
+            }
+            other => Err(MacroError::new(format!(
+                "ERROR: A syntax error was detected in the %SYSEVALF expression near {other:?}"
             ))),
         }
     }
@@ -3319,5 +3807,160 @@ mod macro_tests {
         // x indéfini : &x reste, est mis en MAJ (inchangé), puis masqué donc
         // inerte ; la sortie finale (unmask) montre `&X` littéral.
         assert_eq!(expand("%qupcase(a&x)"), "A&X");
+    }
+
+    // --- M19.1 : %unquote ---
+
+    #[test]
+    fn unquote_reenables_resolution_after_nrstr() {
+        // %nrstr masque le `&` : sans %unquote, `&x` reste littéral. %unquote
+        // ré-active la résolution → la valeur de x est splicée.
+        assert_eq!(expand("%let x=hi; %unquote(%nrstr(&x))"), "hi");
+    }
+
+    #[test]
+    fn unquote_roundtrip_plain_text() {
+        // Texte sans déclencheur : %unquote est l'identité.
+        assert_eq!(expand("%unquote(abc)"), "abc");
+    }
+
+    #[test]
+    fn unquote_reenables_macro_call() {
+        // %nrstr masque le `%` d'un appel ; %unquote le ré-active → la macro
+        // s'exécute et émet son corps.
+        assert_eq!(expand("%macro m; got %mend; %unquote(%nrstr(%m))"), "got");
+    }
+
+    // --- M19.1 : %cmpres / %qcmpres ---
+
+    #[test]
+    fn cmpres_compresses_internal_blanks() {
+        assert_eq!(expand("%cmpres(a    b     c)"), "a b c");
+    }
+
+    #[test]
+    fn cmpres_trims_edges() {
+        assert_eq!(expand("%cmpres(   hello   world   )"), "hello world");
+    }
+
+    #[test]
+    fn cmpres_resolves_refs() {
+        assert_eq!(expand("%let v=  x   y  ; %cmpres(&v)"), "x y");
+    }
+
+    #[test]
+    fn qcmpres_masks_result() {
+        // Le résultat de %qcmpres est masqué : un `;` interne ne termine pas le
+        // %let. La valeur stockée (puis ré-émise) garde le `;` littéral.
+        assert_eq!(expand("%let v=%qcmpres(a ;  b); &v"), "a ; b");
+    }
+
+    // --- M19.1 : %symexist ---
+
+    #[test]
+    fn symexist_found() {
+        assert_eq!(expand("%let a=1; %symexist(a)"), "1");
+    }
+
+    #[test]
+    fn symexist_not_found() {
+        assert_eq!(expand("%symexist(nope)"), "0");
+    }
+
+    #[test]
+    fn symexist_accepts_ampersand_name() {
+        // %symexist(&which) : &which désigne le NOM à tester.
+        assert_eq!(expand("%let a=1; %let which=a; %symexist(&which)"), "1");
+    }
+
+    // --- M19.1 : %sysmexist ---
+
+    #[test]
+    fn sysmexist_defined_macro() {
+        assert_eq!(expand("%macro foo; %mend; %sysmexist(foo)"), "1");
+    }
+
+    #[test]
+    fn sysmexist_undefined_macro() {
+        assert_eq!(expand("%sysmexist(bar)"), "0");
+    }
+
+    // --- M19.1 : %sysget (env var posée en mémoire dans le test) ---
+
+    #[test]
+    fn sysget_reads_env_var() {
+        // SAFETY: test mono-thread sur une variable d'env dédiée à ce test ;
+        // posée puis retirée localement.
+        unsafe {
+            std::env::set_var("SASRS_TEST_VAR_M19", "hello_env");
+        }
+        assert_eq!(expand("%sysget(SASRS_TEST_VAR_M19)"), "hello_env");
+        unsafe {
+            std::env::remove_var("SASRS_TEST_VAR_M19");
+        }
+    }
+
+    #[test]
+    fn sysget_unset_is_empty() {
+        // SAFETY: variable d'env dédiée, jamais posée ailleurs.
+        unsafe {
+            std::env::remove_var("SASRS_DEFINITELY_UNSET_M19");
+        }
+        assert_eq!(expand("%sysget(SASRS_DEFINITELY_UNSET_M19)"), "");
+    }
+
+    // --- M19.1 : %sysevalf (évaluation flottante) ---
+
+    #[test]
+    fn sysevalf_float_division() {
+        assert_eq!(expand("%sysevalf(7/2)"), "3.5");
+    }
+
+    #[test]
+    fn sysevalf_vs_eval_integer_division() {
+        // %eval tronque (entier) ; %sysevalf est réel.
+        assert_eq!(expand("%eval(7/2)"), "3");
+        assert_eq!(expand("%sysevalf(7/2)"), "3.5");
+    }
+
+    #[test]
+    fn sysevalf_decimal_literals() {
+        assert_eq!(expand("%sysevalf(0.5 + 0.25)"), "0.75");
+    }
+
+    #[test]
+    fn sysevalf_integer_result_has_no_decimals() {
+        assert_eq!(expand("%sysevalf(4/2)"), "2");
+    }
+
+    #[test]
+    fn sysevalf_conv_boolean() {
+        assert_eq!(expand("%sysevalf(3.5, boolean)"), "1");
+        assert_eq!(expand("%sysevalf(0, boolean)"), "0");
+    }
+
+    #[test]
+    fn sysevalf_conv_ceil_floor_integer() {
+        assert_eq!(expand("%sysevalf(7/2, ceil)"), "4");
+        assert_eq!(expand("%sysevalf(7/2, floor)"), "3");
+        assert_eq!(expand("%sysevalf(7/2, integer)"), "3");
+        assert_eq!(expand("%sysevalf(-7/2, integer)"), "-3");
+        assert_eq!(expand("%sysevalf(-7/2, floor)"), "-4");
+    }
+
+    #[test]
+    fn sysevalf_resolves_refs() {
+        assert_eq!(expand("%let n=5; %sysevalf(&n / 2)"), "2.5");
+    }
+
+    #[test]
+    fn sysevalf_power_is_real() {
+        assert_eq!(expand("%sysevalf(2 ** 0.5)"), f64::sqrt(2.0).to_string());
+    }
+
+    #[test]
+    fn sysevalf_syntax_error_no_panic() {
+        let out = expand("%sysevalf(2 + + )");
+        assert!(out.contains("ERROR"), "got: {out}");
     }
 }
