@@ -22,7 +22,15 @@ pub struct SqlProgram {
 pub enum SqlStmt {
     Select(SelectStmt),
     CreateTableAs { table: DatasetRef, query: SelectStmt },
+    /// `CREATE VIEW <name> AS <select>` (M20.4) : alias de requête réutilisable,
+    /// stocké en mémoire (jamais matérialisé) dans `Session.views`.
+    CreateView { name: DatasetRef, query: Box<SelectStmt> },
     DropTable(Vec<DatasetRef>),
+    /// `DROP VIEW <ref> [, <ref> ...]` (M20.4) : supprime une vue de
+    /// `Session.views`.
+    DropView(Vec<DatasetRef>),
+    /// `UPDATE <table> SET col=expr [, ...] [WHERE cond]` (M20.4).
+    Update { table: DatasetRef, assignments: Vec<(String, SqlExpr)>, where_: Option<SqlExpr> },
     InsertValues { table: DatasetRef, columns: Vec<String>, rows: Vec<Vec<Expr>> },
     InsertSelect { table: DatasetRef, query: SelectStmt },
     DeleteFrom { table: DatasetRef, where_: Option<SqlExpr> },
@@ -60,6 +68,10 @@ pub struct SelectItem {
 pub struct FromItem {
     pub table: DatasetRef,
     pub alias: Option<String>,
+    /// Sous-requête en FROM (M20.4) : `FROM (SELECT ...) [AS] alias`. Quand
+    /// présent, `table` est un placeholder synthétique (nom = alias) et la
+    /// source réelle est cette requête, abaissée à la volée.
+    pub subquery: Option<Box<SelectStmt>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

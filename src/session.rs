@@ -49,6 +49,10 @@ pub struct Session {
     /// _LAST_: most recently created dataset, e.g. "WORK.A" — the default
     /// input of procs without DATA=.
     pub last_dataset: Option<String>,
+    /// PROC SQL views (M20.4) : `CREATE VIEW v AS SELECT ...`. Purely in
+    /// memory (jamais de parquet) ; clé = nom UPPERCASE de la vue (espace WORK
+    /// implicite). Résolues à l'abaissement quand une `FROM` cible une vue.
+    pub views: std::collections::HashMap<String, crate::sql::ast::SelectStmt>,
     pub deterministic: bool,
     /// User-defined format catalog (populated by PROC FORMAT).
     pub format_catalog: crate::formats::FormatCatalog,
@@ -95,6 +99,7 @@ impl Session {
             options,
             base_dir,
             last_dataset: None,
+            views: std::collections::HashMap::new(),
             deterministic,
             format_catalog: crate::formats::FormatCatalog::default(),
             macro_engine,

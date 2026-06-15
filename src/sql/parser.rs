@@ -104,6 +104,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<Option<SqlStmt>> {
         "select" => Ok(Some(SqlStmt::Select(parse_select(ts)?))),
         "create" => Ok(Some(parse_create(ts)?)),
         "drop" => Ok(Some(parse_drop(ts)?)),
+        "update" => Ok(Some(parse_update(ts)?)),
         "insert" => Ok(Some(parse_insert(ts)?)),
         "delete" => Ok(Some(parse_delete(ts)?)),
         "describe" => Ok(Some(parse_describe(ts)?)),
@@ -116,9 +117,14 @@ fn parse_statement(ts: &mut StatementStream) -> Result<Option<SqlStmt>> {
     }
 }
 
-/// `CREATE TABLE <ref> AS <select>`.
+/// `CREATE TABLE <ref> AS <select>` ou `CREATE VIEW <ref> AS <select>`.
+/// Le mot-clé après CREATE (table/view) discrimine. Tout autre objet
+/// (`INDEX`, ...) → erreur propre.
 fn parse_create(ts: &mut StatementStream) -> Result<SqlStmt> {
     ts.next(); // CREATE
+    if ts.peek().is_kw("view") {
+        return parse_create_view(ts);
+    }
     expect_kw(ts, "table")?;
     let table = ts.parse_dataset_ref()?;
     expect_kw(ts, "as")?;
@@ -132,9 +138,37 @@ fn parse_create(ts: &mut StatementStream) -> Result<SqlStmt> {
     Ok(SqlStmt::CreateTableAs { table, query })
 }
 
-/// `DROP TABLE <ref> [, <ref> ...]`.
+/// `CREATE VIEW <ref> AS <select>` (M20.4). Symétrique de CREATE TABLE AS,
+/// le mot-clé VIEW étant déjà en tête (non consommé).
+fn parse_create_view(ts: &mut StatementStream) -> Result<SqlStmt> {
+    expect_kw(ts, "view")?;
+    let name = ts.parse_dataset_ref()?;
+    expect_kw(ts, "as")?;
+    if !ts.peek().is_kw("select") {
+        return Err(SasError::parse(
+            "expected SELECT after CREATE VIEW ... AS",
+            ts.peek().span,
+        ));
+    }
+    let query = parse_select(ts)?;
+    Ok(SqlStmt::CreateView {
+        name,
+        query: Box::new(query),
+    })
+}
+
+/// `DROP TABLE <ref> [, <ref> ...]` ou `DROP VIEW <ref> [, <ref> ...]`.
 fn parse_drop(ts: &mut StatementStream) -> Result<SqlStmt> {
     ts.next(); // DROP
+    if ts.peek().is_kw("view") {
+        ts.next(); // VIEW
+        let mut refs = vec![ts.parse_dataset_ref()?];
+        while ts.peek().kind == TokenKind::Comma {
+            ts.next();
+            refs.push(ts.parse_dataset_ref()?);
+        }
+        return Ok(SqlStmt::DropView(refs));
+    }
     expect_kw(ts, "table")?;
     let mut refs = vec![ts.parse_dataset_ref()?];
     while ts.peek().kind == TokenKind::Comma {
@@ -142,6 +176,50 @@ fn parse_drop(ts: &mut StatementStream) -> Result<SqlStmt> {
         refs.push(ts.parse_dataset_ref()?);
     }
     Ok(SqlStmt::DropTable(refs))
+}
+
+/// `UPDATE <ref> SET col1=expr1 [, col2=expr2 ...] [WHERE <sqlexpr>]`.
+/// SET est obligatoire et exige au moins une assignation.
+fn parse_update(ts: &mut StatementStream) -> Result<SqlStmt> {
+    ts.next(); // UPDATE
+    let table = ts.parse_dataset_ref()?;
+    expect_kw(ts, "set")?;
+    let mut assignments = Vec::new();
+    loop {
+        let col_tok = ts.peek().clone();
+        let Some(col) = col_tok.ident().map(str::to_string) else {
+            return Err(SasError::parse(
+                "expected a column name in the SET clause",
+                col_tok.span,
+            ));
+        };
+        ts.next();
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "expected '=' in the SET clause",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // =
+        let value = parse_sql_expr(ts)?;
+        assignments.push((col, value));
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+        } else {
+            break;
+        }
+    }
+    let where_ = if ts.peek().is_kw("where") {
+        ts.next();
+        Some(parse_sql_expr(ts)?)
+    } else {
+        None
+    };
+    Ok(SqlStmt::Update {
+        table,
+        assignments,
+        where_,
+    })
 }
 
 /// `DELETE FROM <ref> [WHERE <sqlexpr>]`.
@@ -477,18 +555,38 @@ fn parse_from_list(ts: &mut StatementStream) -> Result<Vec<FromItem>> {
     Ok(items)
 }
 
-/// from-item : `lib.table | table [[AS] alias]`. Une `(` ouvrirait une
-/// sous-requête → erreur propre.
+/// from-item : `lib.table | table [[AS] alias]` ou `( SELECT ... ) [[AS] alias]`
+/// (sous-requête en FROM, M20.4). Le placeholder `table` d'une sous-requête
+/// prend pour nom l'alias (ou un nom synthétique), jamais résolu physiquement.
 fn parse_from_item(ts: &mut StatementStream) -> Result<FromItem> {
     if ts.peek().kind == TokenKind::LParen {
-        return Err(SasError::parse(
-            "Subqueries are not yet supported in PROC SQL.",
-            ts.peek().span,
-        ));
+        ts.next(); // (
+        if !ts.peek().is_kw("select") {
+            return Err(SasError::parse(
+                "expected SELECT in the FROM subquery",
+                ts.peek().span,
+            ));
+        }
+        let query = parse_select(ts)?;
+        expect_rparen(ts)?;
+        let alias = maybe_table_alias(ts)?;
+        let placeholder = alias.clone().unwrap_or_else(|| "__derived__".to_string());
+        return Ok(FromItem {
+            table: crate::ast::DatasetRef {
+                libref: None,
+                name: placeholder,
+            },
+            alias,
+            subquery: Some(Box::new(query)),
+        });
     }
     let table = ts.parse_dataset_ref()?;
     let alias = maybe_table_alias(ts)?;
-    Ok(FromItem { table, alias })
+    Ok(FromItem {
+        table,
+        alias,
+        subquery: None,
+    })
 }
 
 /// Alias d'une table : `AS nom` ou `nom` nu (pas un mot-clé de clause).
@@ -1458,7 +1556,7 @@ mod tests {
         assert_eq!(sel.items.len(), 1);
         assert_eq!(sel.items[0].expr, SqlExpr::Star);
         assert_eq!(sel.items[0].alias, None);
-        assert_eq!(sel.from, vec![FromItem { table: dref("a"), alias: None }]);
+        assert_eq!(sel.from, vec![FromItem { table: dref("a"), alias: None, subquery: None }]);
         assert!(!sel.distinct);
     }
 
@@ -1479,6 +1577,7 @@ mod tests {
                     name: "class".to_string(),
                 },
                 alias: None,
+                subquery: None,
             }]
         );
         assert_eq!(
@@ -1519,6 +1618,7 @@ mod tests {
             vec![FromItem {
                 table: dref("t"),
                 alias: Some("a".to_string()),
+                subquery: None,
             }]
         );
         // GROUP BY 1 (positionnel)
@@ -1552,6 +1652,7 @@ mod tests {
             vec![FromItem {
                 table: dref("t1"),
                 alias: Some("a".to_string()),
+                subquery: None,
             }]
         );
         assert_eq!(sel.joins.len(), 1);
@@ -1561,6 +1662,7 @@ mod tests {
             FromItem {
                 table: dref("t2"),
                 alias: Some("b".to_string()),
+                subquery: None,
             }
         );
         assert_eq!(
@@ -1760,7 +1862,7 @@ mod tests {
         assert_eq!(op, SetOp::Union);
         assert!(all);
         assert_eq!(rhs.items[0].expr, var("x"));
-        assert_eq!(rhs.from, vec![FromItem { table: dref("b"), alias: None }]);
+        assert_eq!(rhs.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
     }
 
     #[test]
@@ -1805,12 +1907,15 @@ mod tests {
     // ── Erreurs ──────────────────────────────────────────────────────────
 
     #[test]
-    fn subquery_in_from_errors() {
-        let err = parse("select * from (select x from b);").unwrap_err();
-        assert!(
-            err.to_string().contains("Subqueries are not yet supported"),
-            "got: {err}"
-        );
+    fn subquery_in_from_parses() {
+        // M20.4 : `FROM (SELECT ...) [AS] alias` est désormais supporté.
+        let stmt = one("select * from (select x from b) as u;");
+        let SqlStmt::Select(sel) = stmt else { panic!() };
+        assert_eq!(sel.from.len(), 1);
+        assert_eq!(sel.from[0].alias.as_deref(), Some("u"));
+        let sub = sel.from[0].subquery.as_ref().expect("FROM subquery");
+        assert_eq!(sub.items.len(), 1);
+        assert_eq!(sub.items[0].expr, var("x"));
     }
 
     #[test]
@@ -1829,7 +1934,7 @@ mod tests {
         assert_eq!(*expr, var("x"));
         assert!(!negated);
         assert_eq!(query.items[0].expr, var("y"));
-        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None }]);
+        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
     }
 
     #[test]
@@ -1861,7 +1966,7 @@ mod tests {
             panic!("expected Exists");
         };
         assert!(!negated);
-        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None }]);
+        assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
 
         let stmt = one("select * from a where not exists (select 1 from b);");
         let SqlStmt::Select(sel) = stmt else { panic!() };
@@ -1894,5 +1999,82 @@ mod tests {
             err.to_string().contains("INTO clause is not yet supported"),
             "got: {err}"
         );
+    }
+
+    // ── M20.4 ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn create_view_parses() {
+        let stmt = one("create view v as select x from t where x > 1;");
+        let SqlStmt::CreateView { name, query } = stmt else {
+            panic!("expected CreateView");
+        };
+        assert_eq!(name, dref("v"));
+        assert_eq!(query.items.len(), 1);
+        assert_eq!(query.items[0].expr, var("x"));
+        assert!(query.where_.is_some());
+    }
+
+    #[test]
+    fn create_table_still_parses_as_table() {
+        // Le discriminant table/view ne doit pas casser CREATE TABLE.
+        let stmt = one("create table b as select x from t;");
+        assert!(matches!(stmt, SqlStmt::CreateTableAs { .. }));
+    }
+
+    #[test]
+    fn drop_view_parses() {
+        let stmt = one("drop view v, w;");
+        let SqlStmt::DropView(refs) = stmt else {
+            panic!("expected DropView");
+        };
+        assert_eq!(refs, vec![dref("v"), dref("w")]);
+    }
+
+    #[test]
+    fn drop_table_still_parses() {
+        let stmt = one("drop table t;");
+        assert!(matches!(stmt, SqlStmt::DropTable(_)));
+    }
+
+    #[test]
+    fn update_single_column_no_where() {
+        let stmt = one("update t set x = 1;");
+        let SqlStmt::Update {
+            table,
+            assignments,
+            where_,
+        } = stmt
+        else {
+            panic!("expected Update");
+        };
+        assert_eq!(table, dref("t"));
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].0, "x");
+        assert_eq!(assignments[0].1, SqlExpr::Base(Expr::Num(1.0)));
+        assert!(where_.is_none());
+    }
+
+    #[test]
+    fn update_multiple_columns_with_where() {
+        let stmt = one("update t set x = x + 1, y = 'z' where x > 5;");
+        let SqlStmt::Update {
+            assignments,
+            where_,
+            ..
+        } = stmt
+        else {
+            panic!("expected Update");
+        };
+        assert_eq!(assignments.len(), 2);
+        assert_eq!(assignments[0].0, "x");
+        assert_eq!(assignments[1].0, "y");
+        assert!(where_.is_some());
+    }
+
+    #[test]
+    fn update_requires_set() {
+        let err = parse("update t where x > 1;").unwrap_err();
+        assert!(err.to_string().contains("SET"), "got: {err}");
     }
 }

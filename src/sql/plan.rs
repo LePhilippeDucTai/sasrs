@@ -93,6 +93,13 @@ pub(crate) fn translate_predicate(pred: &SqlExpr) -> Result<Expr> {
     sql_expr_to_polars(pred, &Ctx::empty())
 }
 
+/// Traduit une expression SQL scalaire nue (sans CALCULATED ni agrégats) en
+/// expression Polars, contexte vide. Utilisé par `UPDATE ... SET` (cf.
+/// sql/mod.rs) pour évaluer chaque assignation contre la frame scannée.
+pub(crate) fn translate_expr(e: &SqlExpr) -> Result<Expr> {
+    sql_expr_to_polars(e, &Ctx::empty())
+}
+
 /// Réplique l'effet eager de `missing::nullify_specials` sur une LazyFrame :
 /// pour chaque colonne Float64, NaN-payload (missings spéciaux) → null, afin
 /// que les comparaisons Polars d'un `WHERE` voient bien les missings.
@@ -233,6 +240,20 @@ fn resolve_subqueries(query: &SelectStmt, session: &mut Session) -> Result<Selec
             let mut on = on.clone();
             rewrite_sql_expr(&mut on, &outer, session)?;
             j.on = Some(on);
+        }
+    }
+    // Sous-requêtes en FROM (M20.4) : résolues récursivement avant
+    // l'abaissement (elles peuvent elles-mêmes contenir des sous-requêtes).
+    for fi in &mut out.from {
+        if let Some(sub) = &fi.subquery {
+            let resolved = resolve_subqueries(sub, session)?;
+            fi.subquery = Some(Box::new(resolved));
+        }
+    }
+    for j in &mut out.joins {
+        if let Some(sub) = &j.table.subquery {
+            let resolved = resolve_subqueries(sub, session)?;
+            j.table.subquery = Some(Box::new(resolved));
         }
     }
     if let Some((op, all, rhs)) = &out.set_op {
@@ -514,25 +535,42 @@ fn scan_normalized(session: &Session, lib: &str, table: &str) -> Result<LazyFram
     normalize_specials(lf)
 }
 
+/// Scanne une source de `FROM`/JOIN : soit une VUE SQL stockée en session
+/// (M20.4), soit une table physique via `scan_normalized`. Une vue est
+/// reconnue dans l'espace WORK (libref absent ou `WORK`) par son nom
+/// UPPERCASE présent dans `Session.views` ; sa requête stockée est abaissée
+/// récursivement (vues imbriquées admises). La frame résultat est déjà
+/// coercée/normalisée par `lower_select`, on n'y rejoue pas `normalize_specials`.
+/// Scanne une source de `FROM`/JOIN : sous-requête en FROM (M20.4), vue SQL
+/// stockée, ou table physique. Une sous-requête (`FROM (SELECT ...) alias`)
+/// est abaissée récursivement. Une vue est reconnue dans l'espace WORK
+/// (libref absent / `WORK`) par son nom UPPERCASE présent dans
+/// `Session.views`. Sinon → `scan_normalized` (table physique / dictionnaire).
+fn scan_source(session: &mut Session, item: &super::ast::FromItem) -> Result<LazyFrame> {
+    if let Some(sub) = &item.subquery {
+        return lower_select(sub, session);
+    }
+    let lib = item.table.libref_or_work();
+    let name = item.table.name.to_uppercase();
+    if lib == "WORK" {
+        if let Some(view_query) = session.views.get(&name).cloned() {
+            return lower_select(&view_query, session);
+        }
+    }
+    scan_normalized(session, &lib, &name)
+}
+
 fn build_from(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
     let Some(first) = query.from.first() else {
         return Err(SasError::runtime(
             "PROC SQL: a SELECT must have a FROM clause.",
         ));
     };
-    let mut lf = scan_normalized(
-        session,
-        &first.table.libref_or_work(),
-        &first.table.name.to_uppercase(),
-    )?;
+    let mut lf = scan_source(session, first)?;
 
     // Tables FROM additionnelles (séparées par des virgules) = cross join.
     for extra in query.from.iter().skip(1) {
-        let rhs = scan_normalized(
-            session,
-            &extra.table.libref_or_work(),
-            &extra.table.name.to_uppercase(),
-        )?;
+        let rhs = scan_source(session, extra)?;
         lf = lf.join(
             rhs,
             [] as [Expr; 0],
@@ -543,11 +581,7 @@ fn build_from(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
 
     // Joins explicites.
     for join in &query.joins {
-        let rhs = scan_normalized(
-            session,
-            &join.table.table.libref_or_work(),
-            &join.table.table.name.to_uppercase(),
-        )?;
+        let rhs = scan_source(session, &join.table)?;
         lf = apply_join(lf, rhs, join)?;
     }
 
