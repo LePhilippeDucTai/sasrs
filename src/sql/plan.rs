@@ -498,6 +498,14 @@ fn any_value_to_base(series: &Series, idx: usize) -> Result<SqlExpr> {
 // ----------------------------------------------------------------------------
 
 fn scan_normalized(session: &Session, lib: &str, table: &str) -> Result<LazyFrame> {
+    // Dictionary tables (M20.3) : `DICTIONARY.TABLES/COLUMNS/MACROS` et leurs
+    // vues `sashelp.v*` sont matérialisées à la volée depuis l'état de session,
+    // puis injectées dans le pipeline standard (WHERE/SELECT/ORDER BY normaux).
+    // Leurs colonnes numériques sont déjà des Float64 sans NaN-payload, donc on
+    // saute `normalize_specials` (no-op) et on rend la frame telle quelle.
+    if let Some(kind) = super::dictionary::dictionary_kind(lib, table) {
+        return super::dictionary::build_dictionary(session, kind);
+    }
     let provider = session.libs.get(lib)?;
     let lf = provider.scan(table)?;
     // Normalisation des missings spéciaux (NaN-payload → null) sur chaque
@@ -2236,5 +2244,149 @@ mod tests {
             &mut s,
         );
         assert_eq!(nums(&out, "x"), vec![2.0, 3.0]);
+    }
+
+    // ------------------------------------------------------------------------
+    // M20.3 — dictionary tables (DICTIONARY.TABLES/COLUMNS/MACROS, sashelp.v*)
+    // ------------------------------------------------------------------------
+
+    /// Valeurs string d'une colonne (dans l'ordre des lignes), nulls → "".
+    fn strs(df: &DataFrame, col: &str) -> Vec<String> {
+        df.column(col)
+            .unwrap()
+            .str()
+            .unwrap()
+            .into_iter()
+            .map(|o| o.unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn dictionary_tables_lists_datasets() {
+        let mut s = make_session();
+        write_people(&mut s); // WORK.T
+        write_table(
+            &mut s,
+            "U",
+            df!["a" => [1.0_f64, 2.0]].unwrap(),
+            vec![num("a")],
+        );
+        let out = run(
+            "select libname, memname, nobs, nvar from dictionary.tables \
+             order by memname;",
+            &mut s,
+        );
+        assert_eq!(strs(&out, "memname"), vec!["T", "U"]);
+        assert_eq!(strs(&out, "libname"), vec!["WORK", "WORK"]);
+        // T : 4 lignes / 4 variables ; U : 2 lignes / 1 variable.
+        let nobs: Vec<f64> = out.column("nobs").unwrap().f64().unwrap().into_no_null_iter().collect();
+        let nvar: Vec<f64> = out.column("nvar").unwrap().f64().unwrap().into_no_null_iter().collect();
+        assert_eq!(nobs, vec![4.0, 2.0]);
+        assert_eq!(nvar, vec![4.0, 1.0]);
+    }
+
+    #[test]
+    fn dictionary_columns_lists_variables() {
+        let mut s = make_session();
+        write_people(&mut s); // name char(8), sex char(1), age num, height num
+        let out = run(
+            "select name, type, length, varnum from dictionary.columns \
+             where memname = 'T' order by varnum;",
+            &mut s,
+        );
+        assert_eq!(strs(&out, "name"), vec!["name", "sex", "age", "height"]);
+        assert_eq!(strs(&out, "type"), vec!["char", "char", "num", "num"]);
+        let length: Vec<f64> = out.column("length").unwrap().f64().unwrap().into_no_null_iter().collect();
+        assert_eq!(length, vec![8.0, 1.0, 8.0, 8.0]);
+        let varnum: Vec<f64> = out.column("varnum").unwrap().f64().unwrap().into_no_null_iter().collect();
+        assert_eq!(varnum, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn dictionary_macros_lists_globals() {
+        let mut s = make_session();
+        s.macro_engine.set_symbol_global("MYVAR", "hello".to_string());
+        let out = run(
+            "select scope, name, value from dictionary.macros \
+             where name = 'MYVAR';",
+            &mut s,
+        );
+        assert_eq!(out.height(), 1);
+        assert_eq!(strs(&out, "scope"), vec!["GLOBAL"]);
+        assert_eq!(strs(&out, "name"), vec!["MYVAR"]);
+        assert_eq!(strs(&out, "value"), vec!["hello"]);
+    }
+
+    #[test]
+    fn dictionary_macros_automatic_scope() {
+        let mut s = make_session();
+        // Variables automatiques amorcées (SYSVER, etc.) → scope AUTOMATIC.
+        let out = run(
+            "select scope, name from dictionary.macros where name = 'SYSVER';",
+            &mut s,
+        );
+        assert_eq!(out.height(), 1);
+        assert_eq!(strs(&out, "scope"), vec!["AUTOMATIC"]);
+    }
+
+    #[test]
+    fn dictionary_where_filter() {
+        let mut s = make_session();
+        write_people(&mut s); // T : age 10..14
+        let out = run(
+            "select name, type from dictionary.columns \
+             where memname = 'T' and type = 'num' order by name;",
+            &mut s,
+        );
+        // Seules age et height sont numériques.
+        assert_eq!(strs(&out, "name"), vec!["age", "height"]);
+    }
+
+    #[test]
+    fn sashelp_vcolumn_alias() {
+        let mut s = make_session();
+        write_people(&mut s);
+        // sashelp.vcolumn doit produire exactement les mêmes données que
+        // DICTIONARY.COLUMNS.
+        let a = run(
+            "select name, type from sashelp.vcolumn where memname = 'T' \
+             order by varnum;",
+            &mut s,
+        );
+        let b = run(
+            "select name, type from dictionary.columns where memname = 'T' \
+             order by varnum;",
+            &mut s,
+        );
+        assert_eq!(strs(&a, "name"), strs(&b, "name"));
+        assert_eq!(strs(&a, "type"), strs(&b, "type"));
+        assert_eq!(strs(&a, "name"), vec!["name", "sex", "age", "height"]);
+    }
+
+    #[test]
+    fn dictionary_columns_column_order() {
+        let mut s = make_session();
+        write_people(&mut s);
+        // SELECT * doit respecter l'ordre canonique des colonnes dictionary.
+        let out = run("select * from dictionary.columns;", &mut s);
+        let names: Vec<&str> = out.get_column_names().iter().map(|n| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "libname", "memname", "name", "type", "length", "npos",
+                "varnum", "label", "format", "informat",
+            ]
+        );
+    }
+
+    #[test]
+    fn sashelp_vtable_alias() {
+        let mut s = make_session();
+        write_people(&mut s);
+        let out = run(
+            "select memname from sashelp.vtable order by memname;",
+            &mut s,
+        );
+        assert_eq!(strs(&out, "memname"), vec!["T"]);
     }
 }

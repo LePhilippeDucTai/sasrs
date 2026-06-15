@@ -1,0 +1,107 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m20/dictionary.sas
+---
+==== LOG ====
+
+1     proc sql;
+2         title "DICTIONARY.TABLES — lister tous les datasets";
+3         select libname, memname, nobs, nvar
+4         from dictionary.tables
+5         order by memname;
+6     
+7         title "sashelp.vtable (alias) — même requête";
+8         select libname, memname, nobs, nvar
+9         from sashelp.vtable
+10        order by memname;
+11    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    proc sql;
+13        title "DICTIONARY.COLUMNS — variables du dataset CLASS";
+14        select name, type, length, varnum
+15        from dictionary.columns
+16        where memname = 'CLASS'
+17        order by varnum;
+18    
+19        title "sashelp.vcolumn (alias) — même requête";
+20        select name, type, length, varnum
+21        from sashelp.vcolumn
+22        where memname = 'CLASS'
+23        order by varnum;
+24    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    proc sql;
+26        title "DICTIONARY.MACROS — variables macro globales";
+27        select scope, name, value
+28        from dictionary.macros
+29        where name like 'MY%'
+30        order by name;
+31    
+32        title "sashelp.vmacro (alias) — même requête";
+33        select scope, name, value
+34        from sashelp.vmacro
+35        where name like 'MY%'
+36        order by name;
+37    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+38    proc sql;
+39        title "DICTIONARY.COLUMNS avec WHERE";
+40        select name, type, length
+41        from dictionary.columns
+42        where memname = 'CLASS' and type = 'num'
+43        order by name;
+44    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                         The SAS System
+
+                               libname    memname    nobs    nvar
+
+
+                                         The SAS System
+
+                               libname    memname    nobs    nvar
+
+
+                                         The SAS System
+
+                                name    type    length    varnum
+
+
+                                         The SAS System
+
+                                name    type    length    varnum
+
+
+                                         The SAS System
+
+                                    scope     name     value
+
+                                    GLOBAL    MYVAR    hello
+
+                                         The SAS System
+
+                                    scope     name     value
+
+                                    GLOBAL    MYVAR    hello
+
+                                         The SAS System
+
+                                     name    type    length
+
+
+==== EXIT 0 ====

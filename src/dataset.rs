@@ -57,21 +57,24 @@ impl SasDataset {
             vars.push(meta);
         }
 
-        // Métadonnées SAS (format/label) persistées dans un sidecar JSON :
-        // le Parquet ne porte que types et données ; format et libellé (qui,
-        // en SAS, ne sont QUE de l'affichage) survivent au round-trip via ce
-        // fichier annexe. Absent → on garde les VarMeta dérivés du Parquet
-        // (rétro-compatible : datasets écrits sans format/label).
+        // Métadonnées SAS (format/label/longueur) persistées dans un sidecar JSON :
+        // le Parquet ne porte que types et données ; format, libellé et longueur
+        // déclarée (qui, en SAS, ne sont QUE de l'affichage) survivent au round-trip
+        // via ce fichier annexe. Absent → on garde les VarMeta dérivés du Parquet
+        // (rétro-compatible : datasets écrits sans format/label/longueur explicite).
         if let Some(meta_map) = read_sidecar(path) {
             for v in &mut vars {
                 if let Some(saved) = meta_map.get(&v.name.to_uppercase()) {
-                    // Le format/libellé sauvegardé l'emporte (y compris pour
+                    // Le format/libellé/longueur sauvegardés l'emportent (y compris pour
                     // remplacer le DATE9. inféré d'une colonne Date physique).
                     if saved.format.is_some() {
                         v.format = saved.format.clone();
                     }
                     if saved.label.is_some() {
                         v.label = saved.label.clone();
+                    }
+                    if let Some(saved_len) = saved.length {
+                        v.length = saved_len;
                     }
                 }
             }
@@ -112,13 +115,15 @@ impl SasDataset {
     }
 }
 
-/// Métadonnée SAS persistée par variable (format/libellé). Le type et la
-/// longueur se redéduisent du Parquet ; seuls format et libellé doivent être
+/// Métadonnée SAS persistée par variable (format/libellé/longueur déclarée).
+/// Le type se redéduit du Parquet ; format, libellé et longueur doivent être
 /// conservés à part.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedMeta {
     format: Option<String>,
     label: Option<String>,
+    #[serde(default)]
+    length: Option<usize>,
 }
 
 /// Chemin du sidecar JSON associé à un fichier parquet (`t.parquet` →
@@ -129,12 +134,16 @@ fn sidecar_path(path: &Path) -> std::path::PathBuf {
     std::path::PathBuf::from(s)
 }
 
-/// Écrit le sidecar de métadonnées si AU MOINS une variable porte un format
-/// ou un libellé ; sinon, supprime un sidecar éventuellement obsolète (et
-/// n'en crée aucun — round-trip identique pour les datasets sans
-/// format/label, stabilité des snapshots existants).
+/// Écrit le sidecar de métadonnées si AU MOINS une variable porte un format,
+/// un libellé ou une longueur déclarée ; sinon, supprime un sidecar éventuellement
+/// obsolète (et n'en crée aucun — round-trip identique pour les datasets sans
+/// format/label/longueur explicite, stabilité des snapshots existants).
 fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
-    let has_meta = vars.iter().any(|v| v.format.is_some() || v.label.is_some());
+    let has_meta = vars.iter().any(|v| {
+        v.format.is_some()
+            || v.label.is_some()
+            || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
+    });
     let sc = sidecar_path(path);
     if !has_meta {
         let _ = std::fs::remove_file(&sc);
@@ -148,6 +157,11 @@ fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
                 SavedMeta {
                     format: v.format.clone(),
                     label: v.label.clone(),
+                    length: if v.ty == VarType::Char {
+                        Some(v.length)
+                    } else {
+                        None
+                    },
                 },
             )
         })

@@ -32,6 +32,7 @@
 #![allow(unused_variables, dead_code)]
 
 pub mod ast;
+pub mod dictionary;
 pub mod parser;
 pub mod plan;
 

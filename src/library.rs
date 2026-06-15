@@ -330,6 +330,15 @@ impl LibraryManager {
             .cloned()
             .ok_or_else(|| SasError::runtime(format!("Libref {} is not assigned.", libref.to_uppercase())))
     }
+
+    /// Noms (MAJUSCULES) de toutes les bibliothèques assignées, triés. Sert aux
+    /// dictionary tables (`DICTIONARY.TABLES`/`COLUMNS`) qui doivent énumérer
+    /// chaque bibliothèque connue de la session (M20.3).
+    pub fn librefs(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.refs.keys().cloned().collect();
+        v.sort();
+        v
+    }
 }
 
 /// Backend de stockage S3 (ou compatible S3) derrière la feature `s3`.

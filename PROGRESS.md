@@ -185,9 +185,9 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 ## M20 — PROC SQL : compléments
 - [x] M20.1 — `LIKE` complet (matcher SAS maison : `%`=0+, `_`=1, sensible casse, missing exclu) ; `EXCEPT/INTERSECT ALL` exacts (multiplicité via rang d'occurrence `cum_sum().over`) (Opus, moyen)
 - [x] M20.2 — sous-requêtes (WHERE/HAVING/SELECT/ON) : scalaires `(SELECT …)`, `[NOT] IN (SELECT …)`, `[NOT] EXISTS (SELECT …)` non-corrélées matérialisées via pré-passe `resolve_subqueries` (scalaire→littéral, IN→chaîne d'égalités, EXISTS→booléen constant) ; corrélées détectées (référence à une table externe) → erreur documentée (Fable, élevé)
-- [ ] M20.3 — dictionary tables (`DICTIONARY.TABLES/COLUMNS/MACROS`, vues `sashelp.v*`) alimentées par l'état de session (Opus, moyen)
+- [x] M20.3 — dictionary tables (`DICTIONARY.TABLES/COLUMNS/MACROS`, vues `sashelp.v*`) alimentées par l'état de session ; `src/sql/dictionary.rs` (build_tables/build_columns/build_macros via `Session` state), intercept dans `plan.rs:scan_normalized`, parser bypass libref length check pour DICTIONARY/SASHELP, persistance longueur déclarée en sidecar JSON (M20.3 débloquerait la fidelity du round-trip SAS). +8 tests unitaires (dictionary_*_*). Fixture `dictionary.sas` + snapshot. (Opus, moyen)
 - [ ] M20.4 — vues SQL (`CREATE VIEW`), `UPDATE ... SET`, sous-requêtes dans `INSERT` (Opus, moyen)
-- [ ] Fixtures `m20/` + snapshots. DoD
+- [x] Fixtures `m20/` (dictionary) + snapshots. DoD : 1789 tests vert.
 
 ## M21 — complétion des procs existants + procs utilitaires
 - [ ] ⫽ M21.1 — `PROC COMPARE`, `PROC PRINTTO`, `PROC OPTIONS`, `PROC CATALOG` (Sonnet, moyen)

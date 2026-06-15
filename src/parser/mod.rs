@@ -227,9 +227,11 @@ impl<'a> StatementStream<'a> {
         };
         self.next();
         validate_sas_name(&member, member_tok.span)?;
-        if first.len() > 8 {
+        let first_upper = first.to_uppercase();
+        // Allow special system librefs (DICTIONARY, SASHELP) that exceed 8 characters.
+        if first.len() > 8 && !matches!(first_upper.as_str(), "DICTIONARY" | "SASHELP") {
             return Err(SasError::parse(
-                format!("The libref {} exceeds 8 characters.", first.to_uppercase()),
+                format!("The libref {} exceeds 8 characters.", first_upper),
                 tok.span,
             ));
         }
