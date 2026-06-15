@@ -53,11 +53,14 @@
 //! jointure / agrégation / comparaison, les missings spéciaux sont null.
 //!
 //! ## Couverture des set-ops
-//! UNION [ALL] : `concat` vertical (+ `.unique` sauf ALL). EXCEPT [ALL] et
-//! INTERSECT [ALL] : anti-/semi-join sur TOUTES les colonnes (avec
-//! `join_nulls(true)`), `.unique` sauf ALL. (ALL ne duplique pas
-//! fidèlement la multiplicité pour EXCEPT/INTERSECT — approximation
-//! documentée ; UNION ALL est exact.)
+//! UNION [ALL] : `concat` vertical (+ `.unique` sauf ALL). EXCEPT et
+//! INTERSECT (DISTINCT) : anti-/semi-join sur TOUTES les colonnes (avec
+//! `join_nulls(true)`) + `.unique`. Les variantes ALL honorent EXACTEMENT la
+//! multiplicité SAS : EXCEPT ALL conserve `max(0, n_gauche - n_droite)` copies
+//! de chaque ligne, INTERSECT ALL en conserve `min(n_gauche, n_droite)`. On y
+//! parvient sans itérer ligne à ligne en numérotant l'occurrence de chaque
+//! ligne identique (rang cumulatif via une fenêtre `over` sur toutes les
+//! colonnes) puis en faisant la jointure sur (colonnes + rang).
 
 #![allow(unused_variables, dead_code)]
 
@@ -673,31 +676,94 @@ fn apply_set_op(lhs: LazyFrame, rhs: LazyFrame, op: &SetOp, all: bool) -> Result
             }
         }
         SetOp::Except => {
-            // Anti-join sur toutes les colonnes du lhs.
             let on = lhs_columns(&lhs)?;
-            let mut args = JoinArgs::new(JoinType::Anti);
-            args.join_nulls = true;
-            let on_l: Vec<Expr> = on.iter().map(|c| col(c.clone())).collect();
-            let out = lhs.join(rhs, &on_l, &on_l, args);
             if all {
-                Ok(out)
+                // EXCEPT ALL : conserver max(0, n_gauche - n_droite) copies de
+                // chaque ligne. On numérote l'occurrence de chaque ligne
+                // identique (rang 1, 2, ...) des deux côtés, puis on
+                // anti-jointe sur (colonnes + rang). Une ligne de gauche de
+                // rang k survit ssi la droite n'a PAS de ligne identique de
+                // rang k, c.-à-d. n_droite < k.
+                set_op_all(lhs, rhs, &on, JoinType::Anti)
             } else {
+                let mut args = JoinArgs::new(JoinType::Anti);
+                args.join_nulls = true;
+                let on_l: Vec<Expr> = on.iter().map(|c| col(c.clone())).collect();
+                let out = lhs.join(rhs, &on_l, &on_l, args);
                 Ok(out.unique(None, UniqueKeepStrategy::Any))
             }
         }
         SetOp::Intersect => {
             let on = lhs_columns(&lhs)?;
-            let mut args = JoinArgs::new(JoinType::Semi);
-            args.join_nulls = true;
-            let on_l: Vec<Expr> = on.iter().map(|c| col(c.clone())).collect();
-            let out = lhs.join(rhs, &on_l, &on_l, args);
             if all {
-                Ok(out)
+                // INTERSECT ALL : conserver min(n_gauche, n_droite) copies. Une
+                // ligne de gauche de rang k survit ssi la droite a une ligne
+                // identique de rang k (n_droite >= k) → semi-join sur
+                // (colonnes + rang).
+                set_op_all(lhs, rhs, &on, JoinType::Semi)
             } else {
+                let mut args = JoinArgs::new(JoinType::Semi);
+                args.join_nulls = true;
+                let on_l: Vec<Expr> = on.iter().map(|c| col(c.clone())).collect();
+                let out = lhs.join(rhs, &on_l, &on_l, args);
                 Ok(out.unique(None, UniqueKeepStrategy::Any))
             }
         }
     }
+}
+
+/// Nom de la colonne interne portant le rang d'occurrence. Préfixe improbable
+/// pour ne pas entrer en collision avec une vraie variable SAS (max 32 car.,
+/// jamais d'espace ni de `#`).
+const OCC_RANK_COL: &str = "# sasrs occ rank #";
+
+/// Implémente EXCEPT ALL / INTERSECT ALL en respectant la multiplicité exacte.
+///
+/// Idée : pour chaque ligne, on calcule son rang d'occurrence parmi les lignes
+/// identiques (1 pour la première copie, 2 pour la deuxième, ...) via une
+/// fenêtre `cum_sum().over(toutes les colonnes)`. On joint alors gauche et
+/// droite sur (toutes les colonnes + rang) :
+///   - `Anti` (EXCEPT ALL)  → gardent les (ligne, rang) absents à droite,
+///     soit `max(0, n_gauche - n_droite)` copies ;
+///   - `Semi` (INTERSECT ALL) → gardent les (ligne, rang) présents à droite,
+///     soit `min(n_gauche, n_droite)` copies.
+/// La colonne de rang est retirée du résultat. `join_nulls(true)` assure que
+/// `. = .` matche (sémantique SAS).
+fn set_op_all(
+    lhs: LazyFrame,
+    rhs: LazyFrame,
+    on: &[String],
+    how: JoinType,
+) -> Result<LazyFrame> {
+    let partition: Vec<Expr> = on.iter().map(|c| col(c.clone())).collect();
+    // Rang d'occurrence = somme cumulée, partitionnée par toutes les colonnes,
+    // d'une constante 1 MATÉRIALISÉE en colonne. (Un `lit(1)` scalaire ne se
+    // diffuse pas correctement dans `over` : Polars exige une expression de la
+    // longueur du groupe ; on passe donc par une vraie colonne `col(ONE)`.)
+    // `cum_sum` sur des entiers non-nuls donne 1, 2, 3... pour les lignes
+    // identiques.
+    const ONE_COL: &str = "# sasrs one #";
+    let rank_expr = col(ONE_COL)
+        .cum_sum(false)
+        .over(partition.clone())
+        .alias(OCC_RANK_COL);
+    let lhs_r = lhs
+        .with_column(lit(1i32).alias(ONE_COL))
+        .with_column(rank_expr.clone())
+        .drop([col(ONE_COL)]);
+    let rhs_r = rhs
+        .with_column(lit(1i32).alias(ONE_COL))
+        .with_column(rank_expr)
+        .drop([col(ONE_COL)]);
+
+    let mut on_cols: Vec<Expr> = partition;
+    on_cols.push(col(OCC_RANK_COL));
+
+    let mut args = JoinArgs::new(how);
+    args.join_nulls = true;
+    let out = lhs_r.join(rhs_r, &on_cols, &on_cols, args);
+    // La colonne de rang ne doit pas apparaître dans le résultat.
+    Ok(out.drop([col(OCC_RANK_COL)]))
 }
 
 fn lhs_columns(lf: &LazyFrame) -> Result<Vec<String>> {
@@ -1435,5 +1501,241 @@ mod tests {
         write_people(&mut s);
         let out = run("select name from t where age between 11 and 13;", &mut s);
         assert_eq!(out.height(), 2);
+    }
+
+    // ---- M20.1 : LIKE complet (regex maison SAS) -------------------------
+
+    /// Récupère les valeurs d'une colonne char (triées) pour comparaison.
+    fn sorted_strs(df: &DataFrame, col: &str) -> Vec<String> {
+        let mut v: Vec<String> = df
+            .column(col)
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .map(|o| o.unwrap().to_string())
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn write_words(session: &mut Session) {
+        let df = df![
+            "w" => ["abc", "abx", "xbc", "axc", "abcd", "ABC", "a_c"],
+        ]
+        .unwrap();
+        write_table(session, "W", df, vec![chr("w", 8)]);
+    }
+
+    #[test]
+    fn like_prefix_percent() {
+        let mut s = make_session();
+        write_words(&mut s);
+        let out = run("select w from w where w like 'ab%';", &mut s);
+        // ab* : abc, abx, abcd (pas ABC — sensible à la casse).
+        assert_eq!(sorted_strs(&out, "w"), vec!["abc", "abcd", "abx"]);
+    }
+
+    #[test]
+    fn like_suffix_percent() {
+        let mut s = make_session();
+        write_words(&mut s);
+        let out = run("select w from w where w like '%bc';", &mut s);
+        // *bc : abc, xbc (a_c ne finit pas par bc).
+        assert_eq!(sorted_strs(&out, "w"), vec!["abc", "xbc"]);
+    }
+
+    #[test]
+    fn like_contains_percent() {
+        let mut s = make_session();
+        write_words(&mut s);
+        let out = run("select w from w where w like '%b%';", &mut s);
+        // contient b : abc, abx, xbc, abcd (pas axc, ABC, a_c).
+        assert_eq!(sorted_strs(&out, "w"), vec!["abc", "abcd", "abx", "xbc"]);
+    }
+
+    #[test]
+    fn like_underscore_single_char() {
+        let mut s = make_session();
+        write_words(&mut s);
+        // 'a_c' : a, un caractère QUELCONQUE, c → abc, axc, a_c (3 lettres).
+        // Pas abcd (4 lettres), pas xbc, pas ABC.
+        let out = run("select w from w where w like 'a_c';", &mut s);
+        assert_eq!(sorted_strs(&out, "w"), vec!["a_c", "abc", "axc"]);
+    }
+
+    #[test]
+    fn like_underscore_is_literal_one_char() {
+        // Vérifie que `_` matche un seul caractère, pas zéro ni plusieurs.
+        let mut s = make_session();
+        let df = df!["w" => ["ac", "abc", "abbc"]].unwrap();
+        write_table(&mut s, "W", df, vec![chr("w", 8)]);
+        let out = run("select w from w where w like 'a_c';", &mut s);
+        // Seul "abc" (a + 1 char + c).
+        assert_eq!(sorted_strs(&out, "w"), vec!["abc"]);
+    }
+
+    #[test]
+    fn like_exact_no_wildcard() {
+        let mut s = make_session();
+        write_words(&mut s);
+        let out = run("select w from w where w like 'abc';", &mut s);
+        assert_eq!(sorted_strs(&out, "w"), vec!["abc"]);
+    }
+
+    #[test]
+    fn like_internal_percent_and_underscore() {
+        // Motif mixte : 'a%c_' avec un `%` interne et un `_` final.
+        let mut s = make_session();
+        let df = df!["w" => ["abcd", "ac1", "abxcZ", "abc", "axxxcc"]].unwrap();
+        write_table(&mut s, "W", df, vec![chr("w", 8)]);
+        let out = run("select w from w where w like 'a%c_';", &mut s);
+        // a, n'importe quoi, c, puis exactement 1 char :
+        //   abcd (a|b|c|d ✓), ac1 (a||c|1 ✓), abxcZ (a|bx|c|Z ✓),
+        //   axxxcc (a|xxx|c|c ✓). Pas abc (rien après c).
+        assert_eq!(
+            sorted_strs(&out, "w"),
+            vec!["abcd", "abxcZ", "ac1", "axxxcc"]
+        );
+    }
+
+    #[test]
+    fn like_case_sensitive() {
+        // SAS LIKE est sensible à la casse (pas d'upcase implicite).
+        let mut s = make_session();
+        write_words(&mut s);
+        let out = run("select w from w where w like 'ABC';", &mut s);
+        assert_eq!(sorted_strs(&out, "w"), vec!["ABC"]);
+    }
+
+    #[test]
+    fn like_missing_never_matches() {
+        let mut s = make_session();
+        let df = df!["w" => [Some("abc"), None, Some("axc")]].unwrap();
+        write_table(&mut s, "W", df, vec![chr("w", 8)]);
+        // 'a%c' matche abc et axc ; le null ne matche jamais.
+        let out = run("select w from w where w like 'a%c';", &mut s);
+        assert_eq!(out.height(), 2);
+        // Même un motif "tout" (%) exclut les missing.
+        let out2 = run("select w from w where w like '%';", &mut s);
+        assert_eq!(out2.height(), 2);
+    }
+
+    #[test]
+    fn like_compared_with_equals() {
+        // LIKE 'abc' (sans joker) ≡ = 'abc'.
+        let mut s = make_session();
+        write_words(&mut s);
+        let like = run("select w from w where w like 'abc';", &mut s);
+        let eq = run("select w from w where w = 'abc';", &mut s);
+        assert_eq!(sorted_strs(&like, "w"), sorted_strs(&eq, "w"));
+    }
+
+    // ---- M20.1 : EXCEPT / INTERSECT ALL (multiplicité exacte) ------------
+
+    /// Tables avec dupliqués pour tester la multiplicité.
+    fn write_multi(session: &mut Session) {
+        // A : 1 apparaît 3×, 2 apparaît 1×, 3 apparaît 2×.
+        let a = df!["x" => [1.0_f64, 1.0, 1.0, 2.0, 3.0, 3.0]].unwrap();
+        // B : 1 apparaît 1×, 3 apparaît 1×, 4 apparaît 1×.
+        let b = df!["x" => [1.0_f64, 3.0, 4.0]].unwrap();
+        write_table(session, "A", a, vec![num("x")]);
+        write_table(session, "B", b, vec![num("x")]);
+    }
+
+    fn nums(df: &DataFrame, col: &str) -> Vec<f64> {
+        let mut v: Vec<f64> = df
+            .column(col)
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v
+    }
+
+    #[test]
+    fn except_distinct() {
+        let mut s = make_session();
+        write_multi(&mut s);
+        // EXCEPT (DISTINCT) : valeurs de A absentes de B, dédupliquées → {2}.
+        let out = run("select x from a except select x from b;", &mut s);
+        assert_eq!(nums(&out, "x"), vec![2.0]);
+    }
+
+    #[test]
+    fn except_all_keeps_multiplicity() {
+        let mut s = make_session();
+        write_multi(&mut s);
+        // EXCEPT ALL : max(0, nA - nB) copies.
+        //   1 : 3-1 = 2 copies ; 2 : 1-0 = 1 ; 3 : 2-1 = 1 ; 4 : absent de A.
+        let out = run("select x from a except all select x from b;", &mut s);
+        assert_eq!(nums(&out, "x"), vec![1.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn intersect_distinct() {
+        let mut s = make_session();
+        write_multi(&mut s);
+        // INTERSECT (DISTINCT) : valeurs communes dédupliquées → {1, 3}.
+        let out = run("select x from a intersect select x from b;", &mut s);
+        assert_eq!(nums(&out, "x"), vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn intersect_all_keeps_multiplicity() {
+        let mut s = make_session();
+        write_multi(&mut s);
+        // INTERSECT ALL : min(nA, nB) copies.
+        //   1 : min(3,1) = 1 ; 3 : min(2,1) = 1 ; 2 et 4 : absents d'un côté.
+        let out = run("select x from a intersect all select x from b;", &mut s);
+        assert_eq!(nums(&out, "x"), vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn intersect_all_both_sides_duplicated() {
+        // Cas où les deux côtés ont plusieurs copies : min(2,3)=2.
+        let mut s = make_session();
+        let a = df!["x" => [5.0_f64, 5.0, 6.0]].unwrap();
+        let b = df!["x" => [5.0_f64, 5.0, 5.0, 6.0, 6.0]].unwrap();
+        write_table(&mut s, "A", a, vec![num("x")]);
+        write_table(&mut s, "B", b, vec![num("x")]);
+        let out = run("select x from a intersect all select x from b;", &mut s);
+        // 5 : min(2,3)=2 ; 6 : min(1,2)=1.
+        assert_eq!(nums(&out, "x"), vec![5.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn except_all_missing_values() {
+        // Les missing (null) participent comme une valeur ordinaire (`. = .`).
+        let mut s = make_session();
+        let a = df!["x" => [Some(1.0_f64), None, None, Some(2.0)]].unwrap();
+        let b = df!["x" => [None, Some(2.0)]].unwrap();
+        write_table(&mut s, "A", a, vec![num("x")]);
+        write_table(&mut s, "B", b, vec![num("x")]);
+        // EXCEPT ALL : null 2-1=1 copie ; 1 : 1-0=1 ; 2 : 1-1=0.
+        let out = run("select x from a except all select x from b;", &mut s);
+        let col = out.column("x").unwrap().f64().unwrap();
+        assert_eq!(out.height(), 2);
+        let n_null = col.iter().filter(|o| o.is_none()).count();
+        let vals: Vec<f64> = col.iter().flatten().collect();
+        assert_eq!(n_null, 1);
+        assert_eq!(vals, vec![1.0]);
+    }
+
+    #[test]
+    fn intersect_all_missing_values() {
+        let mut s = make_session();
+        let a = df!["x" => [None, None, Some(7.0_f64)]].unwrap();
+        let b = df!["x" => [None, Some(7.0_f64), Some(7.0)]].unwrap();
+        write_table(&mut s, "A", a, vec![num("x")]);
+        write_table(&mut s, "B", b, vec![num("x")]);
+        // INTERSECT ALL : null min(2,1)=1 ; 7 min(1,2)=1.
+        let out = run("select x from a intersect all select x from b;", &mut s);
+        assert_eq!(out.height(), 2);
+        let col = out.column("x").unwrap().f64().unwrap();
+        assert_eq!(col.iter().filter(|o| o.is_none()).count(), 1);
+        assert_eq!(col.iter().flatten().collect::<Vec<f64>>(), vec![7.0]);
     }
 }
