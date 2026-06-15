@@ -79,6 +79,16 @@ pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
         let raw = &orig.text[start..end];
         // Expansion avec l'état vivant (visibilité des symput antérieurs).
         let expanded = session.macro_engine.expand_open_code(raw);
+        // M19.3 — relayer au log les lignes produites par l'expansion (écho
+        // MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`), AVANT d'exécuter le
+        // segment expansé (elles précèdent le code dans le log SAS).
+        for line in session.macro_engine.take_pending_log_lines() {
+            session.log.put_line(&line);
+        }
+        // M19.3 — `%call execute(...)` côté macro : mettre en file pour exécution
+        // après le segment courant (même file que le CALL EXECUTE des étapes).
+        let macro_ce = session.macro_engine.take_pending_call_execute();
+        session.call_execute_queue.extend(macro_ce);
         let seg_src = SourceFile::new(expanded);
         let mut stream = match StatementStream::new(&seg_src) {
             Ok(s) => s,
@@ -93,6 +103,11 @@ pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
             session.log.echo_source(&line_texts);
             run_one_block(block, session);
         }
+        // M19.3 — un `%call execute(...)` en code ouvert (hors étape DATA) doit
+        // tout de même être rejoué après le segment qui l'a produit. Les DATA
+        // steps drainent déjà la file à leur RUN ; ce drain couvre le code
+        // ouvert pur (segment sans étape DATA).
+        run_call_execute_queue(session);
     }
     Ok(())
 }
@@ -245,6 +260,26 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                         },
                         None => {}
                     }
+                } else if let Some(flag) = parse_macro_trace_flag(name) {
+                    // M19.3 — options de trace booléennes : MPRINT/MLOGIC/
+                    // SYMBOLGEN (et leurs formes NO...). Appliquées à la session
+                    // ET propagées au processeur macro (qui décide de l'écho).
+                    let (which, on) = flag;
+                    match which {
+                        "mprint" => {
+                            session.options.mprint = on;
+                            session.macro_engine.set_mprint(on);
+                        }
+                        "mlogic" => {
+                            session.options.mlogic = on;
+                            session.macro_engine.set_mlogic(on);
+                        }
+                        "symbolgen" => {
+                            session.options.symbolgen = on;
+                            session.macro_engine.set_symbolgen(on);
+                        }
+                        _ => {}
+                    }
                 } else {
                     session.log.warning(&format!(
                         "Option {} is not yet supported.",
@@ -254,6 +289,25 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             }
         }
     }
+}
+
+/// M19.3 — reconnaît une option de trace macro booléenne. Rend
+/// `Some((canon, on))` où `canon` est `"mprint"`/`"mlogic"`/`"symbolgen"` et
+/// `on` est `false` pour la forme préfixée `NO` (ex. `NOMPRINT`). `None` si
+/// l'option n'est pas une option de trace.
+fn parse_macro_trace_flag(name: &str) -> Option<(&'static str, bool)> {
+    let lower = name.to_ascii_lowercase();
+    let (body, on) = match lower.strip_prefix("no") {
+        Some(rest) if matches!(rest, "mprint" | "mlogic" | "symbolgen") => (rest.to_string(), false),
+        _ => (lower, true),
+    };
+    let canon = match body.as_str() {
+        "mprint" => "mprint",
+        "mlogic" => "mlogic",
+        "symbolgen" => "symbolgen",
+        _ => return None,
+    };
+    Some((canon, on))
 }
 
 fn exec_data_step(ast: &crate::ast::DataStepAst, session: &mut Session) {

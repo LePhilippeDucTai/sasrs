@@ -99,6 +99,32 @@ pub struct MacroEngine {
     /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
     /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
     autocall_tried: std::collections::HashSet<String>,
+    /// M19.3 — option `MPRINT` : si vrai, chaque ligne de code produite par
+    /// l'expansion d'une macro est écho­tée au log (préfixe `MPRINT(nom):`).
+    /// OFF par défaut.
+    mprint: bool,
+    /// M19.3 — option `MLOGIC` : si vrai, les décisions d'exécution du
+    /// processeur macro (entrée/sortie de macro, conditions `%if`, itérations
+    /// `%do`) sont écho­tées au log (préfixe `MLOGIC(nom):`). OFF par défaut.
+    mlogic: bool,
+    /// M19.3 — option `SYMBOLGEN` : si vrai, chaque résolution `&symbol` est
+    /// écho­tée au log (`SYMBOLGEN:  Macro variable X resolves to ...`). OFF par
+    /// défaut.
+    symbolgen: bool,
+    /// M19.3 — tampon de lignes de log produites pendant l'expansion (écho
+    /// MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`). L'engine n'a pas accès au
+    /// `LogWriter` (emprunté ailleurs) ; il accumule ici et l'exécuteur draine
+    /// après chaque `expand_open_code` via `take_pending_log_lines`.
+    pending_log_lines: Vec<String>,
+    /// M19.3 — file de fragments de code SAS produits par `%call execute(...)`
+    /// en code macro, à exécuter APRÈS l'étape/segment courant (même sémantique
+    /// que le `CALL EXECUTE` côté DATA step). Drainé par l'exécuteur via
+    /// `take_pending_call_execute`.
+    pending_call_execute: Vec<String>,
+    /// M19.3 — pile des noms de macros en cours d'expansion, pour étiqueter les
+    /// lignes `MPRINT(nom):` / `MLOGIC(nom):`. La macro la plus interne est en
+    /// fin de pile. Vide en code ouvert.
+    macro_stack: Vec<String>,
 }
 
 /// Définition d'une macro capturée par `%macro name(params); <body> %mend;`.
@@ -181,6 +207,63 @@ impl MacroEngine {
     /// répertoires, dans l'ordre (premier trouvé gagne).
     pub fn set_sasautos_path(&mut self, path: Vec<std::path::PathBuf>) {
         self.sasautos_path = path;
+    }
+
+    /// M19.3 — active/désactive l'option de trace `MPRINT` (écho du code
+    /// produit par l'expansion macro). OFF par défaut.
+    pub fn set_mprint(&mut self, on: bool) {
+        self.mprint = on;
+    }
+
+    /// M19.3 — active/désactive l'option de trace `MLOGIC` (écho des décisions
+    /// d'exécution du processeur macro). OFF par défaut.
+    pub fn set_mlogic(&mut self, on: bool) {
+        self.mlogic = on;
+    }
+
+    /// M19.3 — active/désactive l'option de trace `SYMBOLGEN` (écho de chaque
+    /// résolution `&symbol`). OFF par défaut.
+    pub fn set_symbolgen(&mut self, on: bool) {
+        self.symbolgen = on;
+    }
+
+    /// M19.3 — état courant des options de trace (lecture).
+    pub fn mprint(&self) -> bool {
+        self.mprint
+    }
+    pub fn mlogic(&self) -> bool {
+        self.mlogic
+    }
+    pub fn symbolgen(&self) -> bool {
+        self.symbolgen
+    }
+
+    /// M19.3 — draine les lignes de log accumulées pendant l'expansion (écho
+    /// MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`). L'exécuteur les transfère
+    /// vers le `LogWriter` après chaque `expand_open_code`.
+    pub fn take_pending_log_lines(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_log_lines)
+    }
+
+    /// M19.3 — draine les fragments de code mis en file par `%call execute(...)`
+    /// en code macro, à exécuter après le segment courant.
+    pub fn take_pending_call_execute(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_call_execute)
+    }
+
+    /// M19.3 — écho d'une ligne de log (helper interne). On la pousse dans le
+    /// tampon ; l'exécuteur la relaiera au `LogWriter`.
+    fn log_line(&mut self, line: impl Into<String>) {
+        self.pending_log_lines.push(line.into());
+    }
+
+    /// M19.3 — étiquette de macro courante pour MPRINT/MLOGIC : nom de la macro
+    /// la plus interne en cours d'expansion, ou chaîne vide en code ouvert.
+    fn current_macro_label(&self) -> String {
+        self.macro_stack
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).
@@ -343,6 +426,47 @@ impl MacroEngine {
         current
     }
 
+    /// M19.3 — produit les lignes SYMBOLGEN pour un token `&...` (potentiellement
+    /// indirect `&&v&i`). On résout l'indirection jusqu'à obtenir un (ou
+    /// plusieurs) `&name` direct(s), puis on émet une ligne par variable
+    /// effectivement consultée, façon SAS :
+    /// `SYMBOLGEN:  Macro variable NAME resolves to VALUE`.
+    /// Les variables indéfinies ne produisent pas de ligne (SAS warne ailleurs).
+    fn symbolgen_trace(&mut self, run: &str) {
+        // Réduit l'indirection : tant qu'il reste des `&&`, on résout une passe
+        // (qui transforme `&&`→`&` et substitue les `&name` directs internes).
+        let mut current = run.to_string();
+        for _ in 0..Self::MAX_RESOLVE_ITERS {
+            if !current.contains("&&") {
+                break;
+            }
+            let next = self.resolve_refs_once(&current);
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        // À ce stade `current` ne contient plus que des `&name` directs.
+        let chars: Vec<char> = current.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '&' {
+                if let Some((name, after)) = Self::read_name(&chars, i + 1) {
+                    if let Some(v) = self.lookup(&name) {
+                        self.log_line(format!(
+                            "SYMBOLGEN:  Macro variable {} resolves to {}",
+                            name.to_uppercase(),
+                            v
+                        ));
+                    }
+                    i = after;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
     /// Une passe de résolution des `&ref` sur une chaîne, sans réinjection.
     fn resolve_refs_once(&self, text: &str) -> String {
         let chars: Vec<char> = text.chars().collect();
@@ -396,6 +520,24 @@ impl MacroEngine {
             // `%let` insensible à la casse.
             if c == '%' && Self::matches_let(&chars, i) {
                 if let Some(next) = self.consume_let(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
+            // n'émet RIEN dans le flux de code.
+            if c == '%' && Self::matches_kw(&chars, i, "put") {
+                if let Some(next) = self.consume_put(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%call execute(text);` (M19.3) — met en file un fragment de code
+            // SAS à exécuter APRÈS le segment courant (sémantique CALL EXECUTE).
+            if c == '%' && Self::matches_kw(&chars, i, "call") {
+                if let Some(next) = self.consume_macro_call(&chars, i, &mut out) {
                     i = next;
                     continue;
                 }
@@ -642,6 +784,13 @@ impl MacroEngine {
                         next += 1;
                     }
                     let run: String = chars[amp_start..next].iter().collect();
+                    // M19.3 — SYMBOLGEN : écho de chaque résolution `&symbol`.
+                    // On trace la résolution finale au point fixe de la chaîne
+                    // (pour `&&v&i` l'indirection est résolue avant l'écho :
+                    // SAS trace alors la variable réellement consultée).
+                    if self.symbolgen {
+                        self.symbolgen_trace(&run);
+                    }
                     let resolved = self.resolve_value(&run);
                     out.push_str(&resolved);
                     i = next;
@@ -851,6 +1000,103 @@ impl MacroEngine {
         self.include_depth -= 1;
         out.push_str(&expanded);
         Some(resume)
+    }
+
+    /// M19.3 — consomme un `%put <texte>;` à partir de `i` (sur le `%`). Le
+    /// texte va jusqu'au prochain `;` de niveau supérieur (en sautant les
+    /// régions à parenthèses équilibrées des fonctions macro, pour ne pas
+    /// couper sur un `;` interne). Il est résolu (`&var` + `%function`) puis
+    /// écrit AU LOG via le tampon `pending_log_lines` — `%put` n'émet RIEN dans
+    /// le flux de code. Rend l'index après le `;` (un `\n` final préservé).
+    ///
+    /// Conformément à SAS, `%put;` (sans argument) écrit une ligne vide.
+    fn consume_put(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%put".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        let arg_start = j;
+        // Texte jusqu'au `;` de niveau 0 (parenthèses équilibrées sautées).
+        let mut paren = 0i32;
+        while j < chars.len() {
+            let ch = chars[j];
+            if ch == '(' {
+                paren += 1;
+            } else if ch == ')' {
+                if paren > 0 {
+                    paren -= 1;
+                }
+            } else if ch == ';' && paren == 0 {
+                break;
+            }
+            j += 1;
+        }
+        if chars.get(j) != Some(&';') {
+            return None; // pas de `;` terminal : abandon, on ne consomme rien.
+        }
+        let raw: String = chars[arg_start..j].iter().collect();
+        j += 1; // après le `;`
+        // Résolution immédiate (interprétation des `&var` et `%function`).
+        let resolved = if raw.contains('%') {
+            // Ré-expansion complète (gère `%upcase`, `%sysfunc`, etc.), puis
+            // dé-masquage des sentinelles `%str`/`%nrstr`.
+            Self::unmask(&self.process_impl(&raw))
+        } else if raw.contains('&') {
+            Self::unmask(&self.resolve_value(&raw))
+        } else {
+            Self::unmask(&raw)
+        };
+        // SAS rogne le blanc de tête laissé après `%put` ; le reste est verbatim.
+        self.log_line(resolved.trim_end().to_string());
+        Some(Self::skip_trailing_newline(chars, j, out))
+    }
+
+    /// M19.3 — consomme un `%call <routine>(args);` à partir de `i` (sur le
+    /// `%`). Seul `%call execute(text)` est interprété : le texte (résolu) est
+    /// mis en file dans `pending_call_execute` pour exécution APRÈS le segment
+    /// courant, comme le `CALL EXECUTE` côté DATA step. Les autres routines
+    /// sont consommées sans effet (note SAS-like). N'émet RIEN dans le flux.
+    /// Rend l'index après le `;` (un `\n` final préservé), ou `None` si la
+    /// syntaxe ne tient pas.
+    fn consume_macro_call(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%call".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        let (routine, after_name) = Self::read_name(chars, j)?;
+        j = after_name;
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after_paren) = Self::read_balanced_parens(chars, j)?;
+        j = after_paren;
+        // Consommer un `;` terminal optionnel.
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        if routine.eq_ignore_ascii_case("execute") {
+            // L'argument est résolu (macro + symboles) puis mis en file.
+            let code = if inner.contains('%') {
+                Self::unmask(&self.process_impl(&inner))
+            } else if inner.contains('&') {
+                Self::unmask(&self.resolve_value(&inner))
+            } else {
+                Self::unmask(&inner)
+            };
+            self.pending_call_execute.push(code);
+        } else {
+            out.push_str(&format!(
+                "/* %call {}: only EXECUTE is supported in macro code */",
+                routine
+            ));
+        }
+        Some(Self::skip_trailing_newline(chars, j, out))
     }
 
     /// Préserve un éventuel `\n` immédiatement après l'index `j` (poussé dans
@@ -1194,11 +1440,46 @@ impl MacroEngine {
 
         // Liaison des paramètres -> portée locale.
         let scope = Self::bind_params(&def.params, &pos_args, &kw_args);
+        let label = name.to_uppercase();
+        // M19.3 — MLOGIC : décision d'entrée de macro.
+        if self.mlogic {
+            self.log_line(format!("MLOGIC({label}):  Beginning execution."));
+            // Écho de la valeur reçue par chaque paramètre (façon SAS).
+            for param in &def.params {
+                let pname = match param {
+                    MacroParam::Positional(n) => n,
+                    MacroParam::Keyword { name, .. } => name,
+                };
+                let val = scope.get(&pname.to_uppercase()).cloned().unwrap_or_default();
+                self.log_line(format!(
+                    "MLOGIC({label}):  Parameter {} has value {}",
+                    pname.to_uppercase(),
+                    val
+                ));
+            }
+        }
         self.scopes.push(scope);
+        self.macro_stack.push(label.clone());
         self.depth += 1;
         let expanded = self.process_impl(&def.body);
         self.depth -= 1;
+        self.macro_stack.pop();
         self.scopes.pop();
+        // M19.3 — MPRINT : écho du code produit par la macro, ligne à ligne.
+        // Chaque ligne NON VIDE (après trim) du texte expansé est écho­tée
+        // avec le préfixe `MPRINT(nom):`.
+        if self.mprint {
+            for line in expanded.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    self.log_line(format!("MPRINT({label}):   {trimmed}"));
+                }
+            }
+        }
+        // M19.3 — MLOGIC : décision de sortie de macro.
+        if self.mlogic {
+            self.log_line(format!("MLOGIC({label}):  Ending execution."));
+        }
         out.push_str(&expanded);
         resume
     }
@@ -2171,6 +2452,16 @@ impl MacroEngine {
                 false
             }
         };
+        // M19.3 — MLOGIC : décision de la condition `%if`.
+        if self.mlogic {
+            let label = self.current_macro_label();
+            self.log_line(format!(
+                "MLOGIC({}):  %IF condition {} is {}",
+                label,
+                cond.trim(),
+                if take_then { "TRUE" } else { "FALSE" }
+            ));
+        }
 
         // Parser l'action du THEN (group ou fragment) -> (texte, index_après).
         let (then_text, after_then) = Self::scan_action(chars, j)?;
@@ -4352,5 +4643,107 @@ mod macro_tests {
         // Définition inline : elle prime, autocall n'est pas consulté.
         let out = e.expand_open_code("%macro m; INLINE %mend; %m");
         assert_eq!(out.trim(), "INLINE");
+    }
+
+    // --- M19.3 : trace options + %put + %call execute ---
+
+    #[test]
+    fn put_simple_text() {
+        let mut e = MacroEngine::new(true);
+        let _out = e.expand_open_code("%put Hello world;");
+        let logs = e.take_pending_log_lines();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0], "Hello world");
+    }
+
+    #[test]
+    fn put_with_symbol_resolution() {
+        let mut e = MacroEngine::new(true);
+        let _out = e.expand_open_code("%let name=Alice; %put Hello &name;");
+        let logs = e.take_pending_log_lines();
+        assert!(logs.iter().any(|l| l.contains("Hello Alice")));
+    }
+
+    #[test]
+    fn put_empty_line() {
+        let mut e = MacroEngine::new(true);
+        let _out = e.expand_open_code("%put;");
+        let logs = e.take_pending_log_lines();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0], "");
+    }
+
+    #[test]
+    fn mprint_flag_echoes_macro_output() {
+        let mut e = MacroEngine::new(true);
+        e.set_mprint(true);
+        let _out = e.expand_open_code("%macro m; DATA x; RUN; %mend; %m");
+        let logs = e.take_pending_log_lines();
+        assert!(logs.iter().any(|l| l.starts_with("MPRINT(M):")));
+        assert!(logs.iter().any(|l| l.contains("DATA x")));
+    }
+
+    #[test]
+    fn mlogic_flag_echoes_macro_entry_exit() {
+        let mut e = MacroEngine::new(true);
+        e.set_mlogic(true);
+        let _out = e.expand_open_code("%macro m(a=1); x=&a; %mend; %m(a=5)");
+        let logs = e.take_pending_log_lines();
+        assert!(logs.iter().any(|l| l.contains("Beginning execution")));
+        assert!(logs.iter().any(|l| l.contains("Parameter A has value 5")));
+        assert!(logs.iter().any(|l| l.contains("Ending execution")));
+    }
+
+    #[test]
+    fn mlogic_flag_echoes_if_condition() {
+        let mut e = MacroEngine::new(true);
+        e.set_mlogic(true);
+        let _out = e.expand_open_code("%macro m; %if 1=1 %then YES; %else NO; %mend; %m");
+        let logs = e.take_pending_log_lines();
+        assert!(logs.iter().any(|l| l.contains("is TRUE")));
+    }
+
+    #[test]
+    fn symbolgen_flag_echoes_symbol_resolution() {
+        let mut e = MacroEngine::new(true);
+        e.set_symbolgen(true);
+        // SYMBOLGEN traces when a symbol is USED in the expansion, not just defined
+        let _out = e.expand_open_code("%let x=abc; data &x;");
+        let logs = e.take_pending_log_lines();
+        assert!(logs.iter().any(|l| l.contains("Macro variable X resolves to abc")), "got logs: {:?}", logs);
+    }
+
+    #[test]
+    fn call_execute_queues_code() {
+        let mut e = MacroEngine::new(true);
+        let _out = e.expand_open_code("%macro m; %call execute(data step here;); %mend; %m");
+        let queue = e.take_pending_call_execute();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0], "data step here;");
+    }
+
+    #[test]
+    fn call_execute_resolves_symbols() {
+        let mut e = MacroEngine::new(true);
+        let _out = e.expand_open_code("%let step=SET x; %macro m; %call execute(&step run;); %mend; %m");
+        let queue = e.take_pending_call_execute();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0], "SET x run;");
+    }
+
+    #[test]
+    fn multiple_trace_flags_interact() {
+        let mut e = MacroEngine::new(true);
+        e.set_mprint(true);
+        e.set_mlogic(true);
+        e.set_symbolgen(true);
+        let _out = e.expand_open_code(
+            "%let x=5; %macro m; %if &x > 3 %then YES; %mend; %m"
+        );
+        let logs = e.take_pending_log_lines();
+        // Should have logs from MLOGIC and MPRINT at minimum
+        assert!(logs.iter().any(|l| l.contains("MLOGIC")), "got logs: {:?}", logs);
+        assert!(logs.iter().any(|l| l.contains("is TRUE")), "got logs: {:?}", logs);
+        assert!(logs.iter().any(|l| l.contains("MPRINT")), "got logs: {:?}", logs);
     }
 }
