@@ -1,0 +1,123 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m20/views_update.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sql;
+3         create table work.students as
+4         select name, sex, age, height, weight from d.class;
+5     quit;
+NOTE: Table WORK.STUDENTS created, with 19 rows and 5 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     proc sql;
+7         create view work.girls as
+8         select name, age, height from work.students
+9         where sex = 'F';
+10    
+11        title "Vue girls (sex=F)";
+12        select * from work.girls order by name;
+13    quit;
+NOTE: SQL view WORK.GIRLS has been defined.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    proc sql;
+15        update work.students
+16        set weight = weight + 5
+17        where age >= 14;
+18    
+19        title "Après UPDATE weight+5 si age>=14";
+20        select name, age, weight from work.students
+21        where age >= 14
+22        order by name;
+23    quit;
+NOTE: 9 rows were updated in WORK.STUDENTS.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+24    proc sql;
+25        create table work.summary as
+26        select name, age from work.students where age = 15;
+27    
+28        insert into work.summary
+29        select name, age from
+30            (select name, age from work.students where age = 11
+31             union
+32             select name, age from work.students where age = 12) as combined;
+33    
+34        title "Summary après INSERT depuis sous-requête FROM(UNION)";
+35        select * from work.summary order by age, name;
+36    quit;
+NOTE: Table WORK.SUMMARY created, with 4 rows and 2 columns.
+NOTE: 7 rows were inserted into WORK.SUMMARY.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+37    proc sql;
+38        drop view work.girls;
+39    quit;
+NOTE: View WORK.GIRLS has been dropped.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                         The SAS System
+
+                                    name       age    height
+
+                                    Alice       13      56.5
+                                    Barbara     13      65.3
+                                    Carol       14      62.8
+                                    Jane        12      59.8
+                                    Janet       15      62.5
+                                    Joyce       11      51.3
+                                    Judy        14      64.3
+                                    Louise      12      56.3
+                                    Mary        15      66.5
+
+                                         The SAS System
+
+                                    name       age    weight
+
+                                    Alfred      14     117.5
+                                    Carol       14     107.5
+                                    Henry       14     107.5
+                                    Janet       15     117.5
+                                    Judy        14        95
+                                    Mary        15       117
+                                    Philip      16       155
+                                    Ronald      15       138
+                                    William     15       117
+
+                                         The SAS System
+
+                                         name       age
+
+                                         Joyce       11
+                                         Thomas      11
+                                         James       12
+                                         Jane        12
+                                         John        12
+                                         Louise      12
+                                         Robert      12
+                                         Janet       15
+                                         Mary        15
+                                         Ronald      15
+                                         William     15
+
+==== EXIT 0 ====
