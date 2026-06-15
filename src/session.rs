@@ -71,6 +71,11 @@ impl Session {
         deterministic: bool,
     ) -> crate::error::Result<Self> {
         let options = SasOptions::default();
+        // M19.2 : le processeur macro résout les chemins relatifs de
+        // `%include 'fichier';` contre le répertoire de base de la session
+        // (même base que LIBNAME/INFILE). `SASAUTOS` reste vide par défaut.
+        let mut macro_engine = crate::preprocess::MacroEngine::new(deterministic);
+        macro_engine.set_include_base_dir(base_dir.clone());
         Ok(Session {
             libs: LibraryManager::new(work_dir)?,
             log: LogWriter::new(deterministic),
@@ -80,7 +85,7 @@ impl Session {
             last_dataset: None,
             deterministic,
             format_catalog: crate::formats::FormatCatalog::default(),
-            macro_engine: crate::preprocess::MacroEngine::new(deterministic),
+            macro_engine,
             vectorize: false,
             call_execute_queue: Vec::new(),
             #[cfg(test)]

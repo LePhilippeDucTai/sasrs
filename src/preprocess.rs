@@ -83,6 +83,22 @@ pub struct MacroEngine {
     scopes: Vec<std::collections::HashMap<String, String>>,
     /// Profondeur d'invocation courante (garde anti-récursion infinie).
     depth: usize,
+    /// M19.2 — répertoire de base pour résoudre les chemins relatifs de
+    /// `%include 'fichier';` (calé sur `Session::base_dir`). Vide par défaut
+    /// (chemins relatifs résolus au CWD).
+    include_base_dir: std::path::PathBuf,
+    /// M19.2 — chemins de bibliothèques autocall (`SASAUTOS`). Pour
+    /// `%nomMacro(...)` non défini, on cherche `nommacro.sas` dans ces
+    /// répertoires (premier trouvé gagne), on le compile (= `process_impl` du
+    /// fichier qui enregistre la `%macro`) puis on invoque. Vide par défaut.
+    sasautos_path: Vec<std::path::PathBuf>,
+    /// M19.2 — profondeur d'imbrication courante des `%include` (garde contre
+    /// les inclusions cycliques). Plafonnée à `MAX_INCLUDE_DEPTH`.
+    include_depth: usize,
+    /// M19.2 — noms (MAJUSCULES) de macros dont la recherche autocall a déjà
+    /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
+    /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
+    autocall_tried: std::collections::HashSet<String>,
 }
 
 /// Définition d'une macro capturée par `%macro name(params); <body> %mend;`.
@@ -152,6 +168,19 @@ impl MacroEngine {
         let mut engine = Self::default();
         engine.seed_automatic_vars(deterministic);
         engine
+    }
+
+    /// M19.2 — fixe le répertoire de base servant à résoudre les chemins
+    /// relatifs de `%include 'fichier';` (cf. `Session::base_dir`).
+    pub fn set_include_base_dir(&mut self, dir: std::path::PathBuf) {
+        self.include_base_dir = dir;
+    }
+
+    /// M19.2 — fixe les répertoires de bibliothèques autocall (`SASAUTOS`).
+    /// Une macro `%nom` non définie sera cherchée comme `nom.sas` dans ces
+    /// répertoires, dans l'ordre (premier trouvé gagne).
+    pub fn set_sasautos_path(&mut self, path: Vec<std::path::PathBuf>) {
+        self.sasautos_path = path;
     }
 
     /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).
@@ -264,6 +293,11 @@ impl MacroEngine {
     /// Profondeur maximale d'invocation de macro (garde anti-récursion).
     const MAX_MACRO_DEPTH: usize = 100;
 
+    /// M19.2 — profondeur maximale d'imbrication des `%include` (garde contre
+    /// les inclusions cycliques : un fichier qui s'inclut lui-même, ou un cycle
+    /// A→B→A). Au-delà, l'inclusion est refusée avec une note SAS-like.
+    const MAX_INCLUDE_DEPTH: usize = 50;
+
     /// Cherche un symbole macro par nom (insensible casse) : pile de portées du
     /// plus interne au plus externe, puis table globale. Rend la valeur si
     /// trouvée.
@@ -362,6 +396,16 @@ impl MacroEngine {
             // `%let` insensible à la casse.
             if c == '%' && Self::matches_let(&chars, i) {
                 if let Some(next) = self.consume_let(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // `%include 'chemin';` (M19.2) — charge le fichier, l'expanse
+            // récursivement et splice le résultat À LA PLACE du statement,
+            // AVANT de poursuivre le scan du segment courant.
+            if c == '%' && Self::matches_kw(&chars, i, "include") {
+                if let Some(next) = self.consume_include(&chars, i, &mut out) {
                     i = next;
                     continue;
                 }
@@ -546,10 +590,17 @@ impl MacroEngine {
                 }
             }
 
-            // Invocation `%name` ou `%name(args)` d'une macro DÉFINIE.
+            // Invocation `%name` ou `%name(args)` d'une macro DÉFINIE — ou, à
+            // défaut, chargée paresseusement depuis une bibliothèque autocall
+            // (`SASAUTOS`, M19.2). `try_autocall` compile `nom.sas` au premier
+            // appel (idempotent via `autocall_tried`).
             if c == '%' {
                 if let Some((name, after)) = Self::read_name(&chars, i + 1) {
-                    if self.macros.contains_key(&name.to_uppercase()) {
+                    let key = name.to_uppercase();
+                    if !self.macros.contains_key(&key) {
+                        self.try_autocall(&name);
+                    }
+                    if self.macros.contains_key(&key) {
                         let next = self.expand_invocation(&chars, i + 1, &name, after, &mut out);
                         i = next;
                         continue;
@@ -697,6 +748,161 @@ impl MacroEngine {
             j += 1;
         }
         Some(j)
+    }
+}
+
+impl MacroEngine {
+    /// M19.2 — consomme un `%include 'chemin';` à partir de `i` (qui pointe sur
+    /// le `%`), charge le fichier référencé, l'expanse RÉCURSIVEMENT (les
+    /// `%macro` qu'il définit s'enregistrent dans l'état vivant de l'engine, et
+    /// son code ouvert est émis) et splice le résultat dans `out` À LA PLACE du
+    /// statement. Rend l'index APRÈS le `;` (un `\n` final est préservé pour la
+    /// numérotation), ou `None` si la syntaxe ne tient pas (le `%` est alors
+    /// laissé brut).
+    ///
+    /// # Formes reconnues
+    /// - `%include 'chemin';` / `%include "chemin";` : littéral entre guillemets.
+    ///   Le chemin est résolu via `include_base_dir` (relatif) ou tel quel
+    ///   (absolu).
+    ///
+    /// # Cas d'erreur (jamais de `panic`)
+    /// - profondeur d'inclusion > `MAX_INCLUDE_DEPTH` (cycle présumé) → un
+    ///   commentaire de note SAS-like est émis, le statement est consommé ;
+    /// - fichier illisible/absent → idem (commentaire d'erreur) ;
+    /// - `%include` sans guillemets (ex. `%include fileref;` ou `*` / stdin) →
+    ///   non supporté ici : un commentaire de note est émis et le statement
+    ///   consommé jusqu'au `;`.
+    fn consume_include(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%include".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        // Chemin entre guillemets simples ou doubles.
+        let quote = match chars.get(j) {
+            Some(&q @ ('\'' | '"')) => q,
+            _ => {
+                // Forme non supportée (fileref nu, `*` stdin) : consommer jusqu'au
+                // `;` et émettre une note plutôt que de laisser un résidu.
+                let mut k = j;
+                while k < chars.len() && chars[k] != ';' {
+                    k += 1;
+                }
+                if chars.get(k) != Some(&';') {
+                    return None;
+                }
+                out.push_str(
+                    "/* %include: only quoted file paths are supported (fileref/stdin deferred) */",
+                );
+                return Some(Self::skip_trailing_newline(chars, k + 1, out));
+            }
+        };
+        j += 1; // après le guillemet ouvrant
+        let path_start = j;
+        while j < chars.len() && chars[j] != quote {
+            j += 1;
+        }
+        if chars.get(j) != Some(&quote) {
+            return None; // guillemet non fermé
+        }
+        let path: String = chars[path_start..j].iter().collect();
+        j += 1; // après le guillemet fermant
+                // Consommer le reste jusqu'au `;` terminal (options éventuelles ignorées).
+        while j < chars.len() && chars[j] != ';' {
+            j += 1;
+        }
+        if chars.get(j) != Some(&';') {
+            return None;
+        }
+        let resume = Self::skip_trailing_newline(chars, j + 1, out);
+
+        // Garde contre les inclusions cycliques (profondeur max).
+        if self.include_depth >= Self::MAX_INCLUDE_DEPTH {
+            out.push_str(&format!(
+                "/* %include nesting limit ({}) reached for '{}' */",
+                Self::MAX_INCLUDE_DEPTH,
+                path
+            ));
+            return Some(resume);
+        }
+
+        // Résolution du chemin : absolu → tel quel ; relatif → joint à la base.
+        let resolved = {
+            let p = std::path::PathBuf::from(&path);
+            if p.is_absolute() {
+                p
+            } else {
+                self.include_base_dir.join(p)
+            }
+        };
+        let contents = match std::fs::read_to_string(&resolved) {
+            Ok(text) => text,
+            Err(e) => {
+                out.push_str(&format!(
+                    "/* %include: cannot read '{}': {} */",
+                    path, e
+                ));
+                return Some(resume);
+            }
+        };
+
+        // Expansion récursive du fichier inclus avec l'état VIVANT de l'engine.
+        self.include_depth += 1;
+        let expanded = self.process_impl(&contents);
+        self.include_depth -= 1;
+        out.push_str(&expanded);
+        Some(resume)
+    }
+
+    /// Préserve un éventuel `\n` immédiatement après l'index `j` (poussé dans
+    /// `out`) afin de conserver la numérotation des lignes, comme le font les
+    /// autres `consume_*`. Rend l'index après ce `\n` (ou `j` inchangé).
+    fn skip_trailing_newline(chars: &[char], mut j: usize, out: &mut String) -> usize {
+        while matches!(chars.get(j), Some(c) if *c == ' ' || *c == '\t') {
+            j += 1;
+        }
+        if chars.get(j) == Some(&'\n') {
+            out.push('\n');
+            j += 1;
+        }
+        j
+    }
+
+    /// M19.2 — chargement paresseux d'une macro autocall (`SASAUTOS`).
+    ///
+    /// Appelé à l'expansion de `%nom(...)` lorsque `nom` n'est PAS encore défini
+    /// dans `self.macros`. Cherche `nom.sas` (nom en minuscules) dans chaque
+    /// répertoire de `sasautos_path` (premier trouvé gagne), lit le fichier et
+    /// l'expanse via `process_impl` (ce qui ENREGISTRE la `%macro` qu'il
+    /// contient ; toute sortie de code ouvert du fichier est ignorée — un
+    /// fichier autocall ne doit définir que la macro). La tentative est mémoïsée
+    /// dans `autocall_tried` (trouvée ou non), pour ne pas relire le disque à
+    /// chaque appel suivant.
+    fn try_autocall(&mut self, name: &str) {
+        let key = name.to_uppercase();
+        if self.autocall_tried.contains(&key) {
+            return;
+        }
+        self.autocall_tried.insert(key);
+        if self.sasautos_path.is_empty() {
+            return;
+        }
+        let filename = format!("{}.sas", name.to_lowercase());
+        // Premier fichier lisible gagne. On lit AVANT d'appeler `process_impl`
+        // pour ne pas garder `self.sasautos_path` emprunté pendant l'expansion
+        // (qui prend `&mut self`).
+        let mut found: Option<String> = None;
+        for dir in &self.sasautos_path {
+            let candidate = dir.join(&filename);
+            if let Ok(contents) = std::fs::read_to_string(&candidate) {
+                found = Some(contents);
+                break;
+            }
+        }
+        if let Some(contents) = found {
+            // Compilation : on expanse le fichier (qui enregistre la `%macro`)
+            // et on jette la sortie de code ouvert.
+            let _ = self.process_impl(&contents);
+        }
     }
 }
 
@@ -3962,5 +4168,189 @@ mod macro_tests {
     fn sysevalf_syntax_error_no_panic() {
         let out = expand("%sysevalf(2 + + )");
         assert!(out.contains("ERROR"), "got: {out}");
+    }
+
+    // --- M19.2 : %include + bibliothèques autocall (SASAUTOS) ---
+
+    use std::io::Write;
+
+    /// Crée un engine déterministe dont la base d'inclusion est `dir`.
+    fn engine_in(dir: &std::path::Path) -> MacroEngine {
+        let mut e = MacroEngine::new(true);
+        e.set_include_base_dir(dir.to_path_buf());
+        e
+    }
+
+    /// Écrit `content` dans `dir/name` et rend le chemin.
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn include_simple_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "inc.sas", "%let x = 42;");
+        let mut e = engine_in(dir.path());
+        // Le %include charge inc.sas (pose &x), puis &x se résout.
+        let out = e.expand_open_code("%include 'inc.sas'; &x");
+        assert_eq!(out.trim(), "42");
+    }
+
+    #[test]
+    fn include_double_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "inc.sas", "data a;run;");
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include \"inc.sas\";");
+        assert!(out.contains("data a;run;"), "got: {out}");
+    }
+
+    #[test]
+    fn include_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "abs.sas", "%let y = hi;");
+        // Engine sans base : on utilise un chemin absolu.
+        let mut e = MacroEngine::new(true);
+        let stmt = format!("%include '{}'; &y", p.display());
+        let out = e.expand_open_code(&stmt);
+        assert_eq!(out.trim(), "hi");
+    }
+
+    #[test]
+    fn include_defines_macro_then_invoked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "mac.sas", "%macro greet; hello %mend;");
+        let mut e = engine_in(dir.path());
+        // Le fichier inclus DÉFINIT %greet ; l'appel suivant l'expanse.
+        let out = e.expand_open_code("%include 'mac.sas'; %greet");
+        assert_eq!(out.trim(), "hello");
+    }
+
+    #[test]
+    fn include_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        // a.sas inclut b.sas ; b.sas pose &z.
+        write_file(dir.path(), "b.sas", "%let z = nested;");
+        write_file(dir.path(), "a.sas", "%include 'b.sas';");
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include 'a.sas'; &z");
+        assert_eq!(out.trim(), "nested");
+    }
+
+    #[test]
+    fn include_missing_file_emits_note_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include 'does_not_exist.sas'; after");
+        assert!(out.contains("cannot read"), "got: {out}");
+        // Le scan se poursuit après le statement.
+        assert!(out.contains("after"), "got: {out}");
+    }
+
+    #[test]
+    fn include_cycle_hits_depth_limit_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        // self.sas s'inclut lui-même : la garde de profondeur arrête le cycle.
+        write_file(dir.path(), "self.sas", "%include 'self.sas';");
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include 'self.sas';");
+        assert!(out.contains("nesting limit"), "got: {out}");
+    }
+
+    #[test]
+    fn include_fileref_form_unsupported_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include myref; tail");
+        assert!(out.contains("only quoted file paths"), "got: {out}");
+        assert!(out.contains("tail"), "got: {out}");
+    }
+
+    #[test]
+    fn autocall_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "sayhi.sas", "%macro sayhi; HI %mend;");
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        // %sayhi non défini : chargé paresseusement depuis sayhi.sas.
+        let out = e.expand_open_code("%sayhi");
+        assert_eq!(out.trim(), "HI");
+    }
+
+    #[test]
+    fn autocall_with_args() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            dir.path(),
+            "dbl.sas",
+            "%macro dbl(x); &x&x %mend;",
+        );
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        let out = e.expand_open_code("%dbl(ab)");
+        assert_eq!(out.trim(), "abab");
+    }
+
+    #[test]
+    fn autocall_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        // outer appelle inner ; les deux sont des fichiers autocall.
+        write_file(dir.path(), "inner.sas", "%macro inner; IN %mend;");
+        write_file(
+            dir.path(),
+            "outer.sas",
+            "%macro outer; [%inner] %mend;",
+        );
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        let out = e.expand_open_code("%outer");
+        assert_eq!(out.trim(), "[IN]");
+    }
+
+    #[test]
+    fn autocall_first_dir_wins() {
+        let d1 = tempfile::tempdir().unwrap();
+        let d2 = tempfile::tempdir().unwrap();
+        write_file(d1.path(), "pick.sas", "%macro pick; ONE %mend;");
+        write_file(d2.path(), "pick.sas", "%macro pick; TWO %mend;");
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![d1.path().to_path_buf(), d2.path().to_path_buf()]);
+        let out = e.expand_open_code("%pick");
+        assert_eq!(out.trim(), "ONE");
+    }
+
+    #[test]
+    fn autocall_not_found_left_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        // Macro introuvable : `%nope` laissé verbatim (comportement historique).
+        let out = e.expand_open_code("%nope");
+        assert_eq!(out, "%nope");
+    }
+
+    #[test]
+    fn autocall_tried_only_once() {
+        // Même sans fichier, la deuxième invocation ne doit pas re-tenter le
+        // disque ni paniquer ; le résultat reste verbatim.
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        let out = e.expand_open_code("%miss %miss");
+        assert_eq!(out, "%miss %miss");
+    }
+
+    #[test]
+    fn defined_macro_takes_priority_over_autocall() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "m.sas", "%macro m; FROMDISK %mend;");
+        let mut e = MacroEngine::new(true);
+        e.set_sasautos_path(vec![dir.path().to_path_buf()]);
+        // Définition inline : elle prime, autocall n'est pas consulté.
+        let out = e.expand_open_code("%macro m; INLINE %mend; %m");
+        assert_eq!(out.trim(), "INLINE");
     }
 }
