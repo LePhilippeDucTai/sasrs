@@ -1,3 +1,4 @@
+use crate::ast::DatasetRef;
 use crate::library::LibraryManager;
 use crate::log::LogWriter;
 use crate::output::{OutputDestination, TextListing};
@@ -89,6 +90,14 @@ pub struct Session {
     /// M22.2 — nom (UPPERCASE) de la destination de sortie courante portée par
     /// `self.listing`. "LISTING" par défaut. Sert à `ODS CLOSE` sans nom.
     pub current_destination: String,
+    /// M22.3 — registre `ODS OUTPUT` : capture des tables ODS vers des datasets.
+    /// Clé = nom de table ODS en UPPERCASE (ex. "SUMMARY"), valeur = cible
+    /// dataset. **Vide par défaut** : tant qu'aucun `ODS OUTPUT` n'a été émis, la
+    /// capture est inactive et le listing reste byte-identique. Un proc qui
+    /// produit une table ODS connue consulte ce registre via
+    /// [`Session::ods_output_target`] ; s'il y trouve sa table, il écrit le
+    /// résultat tabulaire comme dataset (en plus du listing).
+    pub ods_output_map: HashMap<String, DatasetRef>,
     pub options: SasOptions,
     /// Directory against which relative LIBNAME paths resolve.
     pub base_dir: PathBuf,
@@ -153,6 +162,7 @@ impl Session {
             output_destinations: HashMap::new(),
             ods_options: OdsOptions::default(),
             current_destination: "LISTING".to_string(),
+            ods_output_map: HashMap::new(),
             options,
             base_dir,
             last_dataset: None,
@@ -219,6 +229,32 @@ impl Session {
             self.listing = Box::new(TextListing::new(self.options.ls));
             self.current_destination = "LISTING".to_string();
         }
+    }
+
+    /// M22.3 — enregistre des mappings `ODS OUTPUT table=ds`. Le nom de table
+    /// ODS est stocké en UPPERCASE (matching insensible à la casse). Un mapping
+    /// pour une table déjà enregistrée écrase l'ancien (sémantique SAS : le
+    /// dernier `ODS OUTPUT` gagne).
+    pub fn set_ods_output(&mut self, mappings: &[(String, DatasetRef)]) {
+        for (table, dref) in mappings {
+            self.ods_output_map
+                .insert(table.to_ascii_uppercase(), dref.clone());
+        }
+    }
+
+    /// M22.3 — purge tous les mappings `ODS OUTPUT` (équivalent
+    /// `ODS OUTPUT CLOSE ;`). Après cet appel la capture est de nouveau inactive
+    /// et le listing redevient byte-identique au comportement par défaut.
+    pub fn clear_ods_output(&mut self) {
+        self.ods_output_map.clear();
+    }
+
+    /// M22.3 — renvoie la cible dataset enregistrée pour une table ODS donnée
+    /// (matching insensible à la casse), ou `None` si aucune capture n'est
+    /// active pour cette table. Les procs consultent cette méthode AVANT
+    /// d'écrire une table capturée.
+    pub fn ods_output_target(&self, table: &str) -> Option<DatasetRef> {
+        self.ods_output_map.get(&table.to_ascii_uppercase()).cloned()
     }
 
     /// M22.2 — applique une option globale ODS (CENTER/NOCENTER, DATE/NODATE,

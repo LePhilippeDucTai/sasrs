@@ -830,7 +830,140 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
         )?;
     }
 
+    // --- ODS OUTPUT Summary= (M22.3) ---
+    // Capture la table ODS "Summary" comme dataset si `ODS OUTPUT Summary=...`
+    // est actif. Inactif par défaut (registre vide) → aucun effet, listing
+    // byte-identique. La table Summary = une ligne par variable de VAR, avec
+    // colonnes Variable + une par statistique du rapport.
+    if let Some(target) = session.ods_output_target("Summary") {
+        write_ods_summary(
+            session,
+            &ds,
+            &var_cols,
+            &var_values,
+            weight_values.as_deref(),
+            &report_stats,
+            ast.alpha,
+            &target,
+        )?;
+    }
+
     Ok(())
+}
+
+/// M22.3 — écrit la table ODS "Summary" de PROC MEANS comme dataset SAS.
+///
+/// Structure (périmètre v1) : une observation par variable analysée (VAR),
+/// colonne caractère `Variable` (nom de la variable) puis une colonne numérique
+/// par statistique du rapport (N, Mean, StdDev, Min, Max par défaut). Les stats
+/// sont calculées sur l'ensemble des lignes (pas de partition CLASS/BY en v1 :
+/// si CLASS/BY sont présents, on agrège globalement et une NOTE le documente).
+#[allow(clippy::too_many_arguments)]
+fn write_ods_summary(
+    session: &mut Session,
+    ds: &SasDataset,
+    var_cols: &[usize],
+    var_values: &[Vec<Value>],
+    weight_values: Option<&[Value]>,
+    report_stats: &[String],
+    alpha: f64,
+    target: &DatasetRef,
+) -> Result<()> {
+    let n_obs = ds.n_obs();
+    let all_rows: Vec<usize> = (0..n_obs).collect();
+
+    // Colonne caractère "Variable" : un nom de variable par ligne.
+    let var_names: Vec<Option<String>> = var_cols
+        .iter()
+        .map(|&ci| Some(ds.vars[ci].name.clone()))
+        .collect();
+    let name_len = var_cols
+        .iter()
+        .map(|&ci| ds.vars[ci].name.len())
+        .max()
+        .unwrap_or(8)
+        .max(8);
+
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+
+    columns.push(Series::new("Variable".into(), var_names).into());
+    vars.push(VarMeta {
+        name: "Variable".to_string(),
+        ty: VarType::Char,
+        length: name_len,
+        format: None,
+        label: None,
+    });
+
+    // Une colonne numérique par statistique demandée.
+    for stat in report_stats {
+        let colname = ods_summary_stat_colname(stat);
+        let vals: Vec<Option<f64>> = (0..var_cols.len())
+            .map(|vi| {
+                let v = match weight_values {
+                    Some(wv) => {
+                        let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, &all_rows);
+                        compute_weighted(stat, &pairs, nmiss, alpha)
+                    }
+                    None => {
+                        let (xs, nmiss) = partition_numeric(&var_values[vi], &all_rows);
+                        compute(stat, &xs, nmiss, alpha)
+                    }
+                };
+                value_to_num(&v)
+            })
+            .collect();
+        columns.push(Series::new(colname.as_str().into(), vals).into());
+        vars.push(num_var_meta(&colname));
+    }
+
+    let df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df, vars };
+
+    let out_libref = target.libref_or_work();
+    let out_table = target.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars = out_ds.vars.len();
+
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars
+    ));
+
+    Ok(())
+}
+
+/// Nom de colonne du dataset Summary pour une statistique du rapport.
+/// (StdDev pour `std`/`stddev` ; libellé capitalisé pour les autres.)
+fn ods_summary_stat_colname(stat: &str) -> String {
+    match stat.to_ascii_lowercase().as_str() {
+        "n" => "N".to_string(),
+        "nmiss" => "NMiss".to_string(),
+        "mean" => "Mean".to_string(),
+        "std" | "stddev" => "StdDev".to_string(),
+        "min" => "Min".to_string(),
+        "max" => "Max".to_string(),
+        "sum" => "Sum".to_string(),
+        "range" => "Range".to_string(),
+        "stderr" => "StdErr".to_string(),
+        "cv" => "CV".to_string(),
+        "median" => "Median".to_string(),
+        "clm" => "CLM".to_string(),
+        "lclm" => "LowerCLMean".to_string(),
+        "uclm" => "UpperCLMean".to_string(),
+        other => {
+            let mut c = other.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        }
+    }
 }
 
 /// Emit the SAS BY heading line into the listing: `var1=val1 var2=val2`.
@@ -2138,5 +2271,121 @@ mod tests {
         let ast = parse_means("proc means data=a; var x; weight w; run;").unwrap();
         assert_eq!(ast.weight.as_deref(), Some("w"));
         assert_eq!(ast.var, vec!["x"]);
+    }
+
+    // ─────────────────────── ODS OUTPUT Summary= (M22.3) ────────────────────
+
+    fn means_ast_var_x() -> MeansAst {
+        MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: false,
+            stats: vec![],
+            class: vec![],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            alpha: 0.05,
+            output: None,
+        }
+    }
+
+    #[test]
+    fn ods_output_summary_captures_dataset() {
+        let mut session = make_session();
+        let df = df!["x" => [Some(2.0_f64), Some(4.0), Some(6.0)]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        // Activate ODS OUTPUT Summary=means_out.
+        session.set_ods_output(&[(
+            "summary".into(),
+            DatasetRef { libref: None, name: "means_out".into() },
+        )]);
+
+        let ast = means_ast_var_x();
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("MEANS_OUT").unwrap();
+        assert_eq!(out.n_obs(), 1, "one row per VAR variable");
+        // Columns: Variable, N, Mean, StdDev, Min, Max.
+        let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["Variable", "N", "Mean", "StdDev", "Min", "Max"]);
+
+        // Variable name column is char "x".
+        let var_idx = out.vars.iter().position(|v| v.name == "Variable").unwrap();
+        assert_eq!(out.vars[var_idx].ty, VarType::Char);
+
+        assert_eq!(read_num_col(&session, "MEANS_OUT", "N"), vec![Value::Num(3.0)]);
+        assert_eq!(read_num_col(&session, "MEANS_OUT", "Mean"), vec![Value::Num(4.0)]);
+        // std of [2,4,6] = 2.
+        assert_eq!(read_num_col(&session, "MEANS_OUT", "StdDev"), vec![Value::Num(2.0)]);
+        assert_eq!(read_num_col(&session, "MEANS_OUT", "Min"), vec![Value::Num(2.0)]);
+        assert_eq!(read_num_col(&session, "MEANS_OUT", "Max"), vec![Value::Num(6.0)]);
+
+        // last_dataset points at the captured dataset.
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.MEANS_OUT"));
+    }
+
+    #[test]
+    fn ods_output_summary_case_insensitive_table_name() {
+        let mut session = make_session();
+        let df = df!["x" => [Some(1.0_f64), Some(3.0)]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        // Registered under a different casing; matching must be case-insensitive.
+        session.set_ods_output(&[(
+            "SuMMaRy".into(),
+            DatasetRef { libref: None, name: "o".into() },
+        )]);
+
+        execute(&means_ast_var_x(), &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 1);
+        assert_eq!(read_num_col(&session, "O", "Mean"), vec![Value::Num(2.0)]);
+    }
+
+    #[test]
+    fn ods_output_inactive_writes_no_dataset() {
+        // Invariant: with an empty ods_output_map, no capture dataset is written.
+        let mut session = make_session();
+        let df = df!["x" => [Some(2.0_f64), Some(4.0)]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        execute(&means_ast_var_x(), &mut session).unwrap();
+
+        // No "SUMMARY" dataset, and last_dataset unchanged (still the input T).
+        assert!(session.libs.get("WORK").unwrap().read("SUMMARY").is_err());
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.T"));
+    }
+
+    #[test]
+    fn ods_output_summary_multiple_vars_one_row_each() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [Some(1.0_f64), Some(3.0)],
+            "y" => [Some(10.0_f64), Some(20.0)],
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+        write_dataset(&mut session, "T", ds);
+
+        session.set_ods_output(&[(
+            "summary".into(),
+            DatasetRef { libref: None, name: "o".into() },
+        )]);
+
+        let mut ast = means_ast_var_x();
+        ast.var = vec!["x".into(), "y".into()];
+        execute(&ast, &mut session).unwrap();
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        assert_eq!(out.n_obs(), 2, "one row per VAR variable");
+        assert_eq!(
+            read_num_col(&session, "O", "Mean"),
+            vec![Value::Num(2.0), Value::Num(15.0)]
+        );
     }
 }

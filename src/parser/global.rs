@@ -22,7 +22,7 @@
 //!   "Option XXX is not yet supported".
 
 use super::{title_level, StatementStream};
-use crate::ast::{GlobalStmt, OdsAction};
+use crate::ast::{DatasetRef, GlobalStmt, OdsAction};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
 
@@ -103,6 +103,12 @@ pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
         }
     };
 
+    // `ODS OUTPUT ...` — capture de tables ODS vers des datasets (M22.3).
+    if first == "output" {
+        ts.next(); // consume `output`
+        return parse_ods_output(ts);
+    }
+
     // `ODS CLOSE [name] ;` — verbe en tête, destination optionnelle après.
     if first == "close" {
         ts.next(); // consume `close`
@@ -161,6 +167,68 @@ pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
         action,
         file,
         style,
+    })
+}
+
+/// Parse `ODS OUTPUT ...` (le mot-clé `OUTPUT` a déjà été consommé) — M22.3.
+///
+/// Formes reconnues :
+/// - `ODS OUTPUT table=ds [table2=ds2 ...] ;` → liste de mappings
+///   (nom de table ODS → dataset cible). Le nom de table ODS est conservé tel
+///   quel ici (la mise en UPPERCASE est faite à l'exécution, le matching étant
+///   insensible à la casse).
+/// - `ODS OUTPUT CLOSE ;` → purge tous les mappings.
+fn parse_ods_output(ts: &mut StatementStream) -> Result<GlobalStmt> {
+    // `ODS OUTPUT CLOSE ;` — désactive la capture.
+    if ts.peek().ident().map(|s| s.eq_ignore_ascii_case("close")) == Some(true)
+        && ts.peek2().kind != TokenKind::Eq
+    {
+        ts.next(); // consume `close`
+        ts.expect_semi()?;
+        return Ok(GlobalStmt::OdsOutput {
+            mappings: Vec::new(),
+            close: true,
+        });
+    }
+
+    let mut mappings: Vec<(String, DatasetRef)> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        let name_tok = ts.peek().clone();
+        let table = match name_tok.ident() {
+            Some(s) => s.to_string(),
+            None => {
+                return Err(SasError::parse(
+                    "Expected an ODS table name (e.g. Summary=ds) in ODS OUTPUT",
+                    name_tok.span,
+                ));
+            }
+        };
+        ts.next(); // consume table name
+        if ts.peek().kind != TokenKind::Eq {
+            return Err(SasError::parse(
+                "ODS OUTPUT requires '<ods-table>=<dataset>'",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // consume `=`
+        let dref = ts.parse_dataset_ref()?;
+        mappings.push((table, dref));
+    }
+
+    if mappings.is_empty() {
+        return Err(SasError::parse(
+            "ODS OUTPUT requires at least one '<ods-table>=<dataset>' mapping or CLOSE",
+            ts.peek().span,
+        ));
+    }
+
+    ts.expect_semi()?;
+    Ok(GlobalStmt::OdsOutput {
+        mappings,
+        close: false,
     })
 }
 
@@ -855,5 +923,76 @@ mod tests {
                 style: None,
             }
         );
+    }
+
+    // ── ODS OUTPUT (M22.3) ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_ods_output_single_mapping() {
+        let stmt = parse("ods output Summary=out;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::OdsOutput {
+                mappings: vec![(
+                    "Summary".into(),
+                    DatasetRef {
+                        libref: None,
+                        name: "out".into(),
+                    }
+                )],
+                close: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_output_two_mappings() {
+        let stmt = parse("ods output a=x b=y;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::OdsOutput {
+                mappings: vec![
+                    ("a".into(), DatasetRef { libref: None, name: "x".into() }),
+                    ("b".into(), DatasetRef { libref: None, name: "y".into() }),
+                ],
+                close: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_output_qualified_target() {
+        let stmt = parse("ods output OneWayFreqs=work.freq_out;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::OdsOutput {
+                mappings: vec![(
+                    "OneWayFreqs".into(),
+                    DatasetRef {
+                        libref: Some("work".into()),
+                        name: "freq_out".into(),
+                    }
+                )],
+                close: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_output_close() {
+        let stmt = parse("ods output close;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::OdsOutput {
+                mappings: vec![],
+                close: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_output_requires_equals() {
+        let err = parse("ods output Summary;").unwrap_err();
+        assert!(!err.to_string().is_empty());
     }
 }

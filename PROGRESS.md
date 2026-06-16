@@ -226,7 +226,13 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 ## M22 — couche de routage ODS + capture
 - [x] M22.1 — trait `OutputDestination { page_header; write_table; write_line; blank }` dans `src/output/` ; `TextListing` = comportement actuel, `Session.listing: Box<dyn OutputDestination>` + registre multi-destinations. Invariant : listing texte par défaut byte-identique. (+9 tests, 1959 → 1968, 0 warning, 0 `.snap.new`)
 - [x] M22.2 — parseur du statement `ODS` (ouvrir/fermer destinations) + options globales NOCENTER/DATE/NUMBER (Opus, moyen). (+19 tests, 1968 → 1987, 0 warning, 0 `.snap.new`)
-- [ ] M22.3 — ODS OUTPUT → datasets (mapping nom-de-table ODS → `OUT=`) ; utile pour tester les procs stat à venir (Opus, moyen-élevé)
+- [x] M22.3 — ODS OUTPUT → datasets (mapping nom-de-table ODS → `OUT=`) ; utile pour tester les procs stat à venir (Opus, moyen-élevé)
+  — **Parser** (`global.rs`, `parse_ods_output`) : `ODS OUTPUT table=ds [table2=ds2 ...] ;` → `GlobalStmt::OdsOutput { mappings: Vec<(String, DatasetRef)>, close: bool }` ; `ODS OUTPUT CLOSE ;` → `close=true` (purge). Nom de table ODS conservé tel quel à l'AST, UPPERCASE à l'exécution (matching insensible à la casse). Erreur propre si `=` ou cible manquante.
+  — **Session** : `ods_output_map: HashMap<String, DatasetRef>` (clé table ODS UPPERCASE), méthodes `set_ods_output` / `clear_ods_output` / `ods_output_target`. **Vide par défaut** → capture inactive, listing byte-identique (invariant m1–m21).
+  — **Executor** : `GlobalStmt::OdsOutput` enregistre/purge les mappings.
+  — **Capture branchée : PROC MEANS table "Summary"** (`means.rs`, `write_ods_summary`). Après le rapport, si `ods_output_target("Summary")` est `Some`, écrit un dataset = une obs par variable de VAR, colonne char `Variable` + une colonne numérique par stat du rapport (N/Mean/StdDev/Min/Max par défaut, libellés via `ods_summary_stat_colname`). Réutilise `compute`/`compute_weighted`/`partition_numeric`/`partition_weighted` existants. `last_dataset` mis à jour + NOTE de création. v1 : agrégation globale (CLASS/BY non partitionnés dans Summary — à brancher au cas par cas).
+  — **DIFFÉRÉ / au cas par cas** : autres tables ODS (FREQ OneWayFreqs/CrossTabFreqs, UNIVARIATE Moments, etc.) non encore branchées — l'infra est en place, il suffit que chaque proc consulte `ods_output_target("<Table>")` ; partition CLASS/BY dans Summary ; ODS SELECT/EXCLUDE restent différés (parser les rejette proprement).
+  — **Tests** : +5 parser (single/two/qualified mappings, CLOSE, erreur sans `=`), +4 exécution (capture Summary colonnes+valeurs, table case-insensitive, inactif→aucun dataset & listing inchangé, multi-VAR 1 obs/var). +9 total (1987 → 1996 lib). 0 warning `-D warnings`, 0 `.snap.new`, 0 `todo!()`.
 - [ ] M22.4 — destination HTML (tables CSS, fichier `.html`) (Sonnet, moyen)
 - [ ] Fixtures `m22/` + snapshots (texte inchangé ; HTML/dataset capturés vérifiés). DoD
 

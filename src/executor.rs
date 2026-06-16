@@ -318,6 +318,13 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             session.ods_options.date = *date;
             session.ods_options.number = *number;
         }
+        GlobalStmt::OdsOutput { mappings, close } => {
+            if *close {
+                session.clear_ods_output();
+            } else {
+                session.set_ods_output(mappings);
+            }
+        }
     }
 }
 

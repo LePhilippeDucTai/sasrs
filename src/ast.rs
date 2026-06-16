@@ -673,6 +673,20 @@ pub enum GlobalStmt {
         /// `true` = numéro de page (défaut), `false` = NONUMBER.
         number: bool,
     },
+    /// M22.3 — statement `ODS OUTPUT` : capture la sortie tabulaire d'un PROC
+    /// sous forme de dataset SAS au lieu (ou en plus) du listing.
+    ///
+    /// Formes reconnues :
+    /// - `ODS OUTPUT table=ds [table2=ds2 ...] ;` → enregistre des mappings
+    ///   (nom de table ODS → cible dataset). Le nom de table ODS est
+    ///   insensible à la casse (stocké UPPERCASE côté session).
+    /// - `ODS OUTPUT CLOSE ;` → vide tous les mappings (désactive la capture).
+    OdsOutput {
+        /// Paires (nom-de-table-ODS, cible dataset). Vide si `close == true`.
+        mappings: Vec<(String, DatasetRef)>,
+        /// `true` pour `ODS OUTPUT CLOSE ;` (purge des mappings).
+        close: bool,
+    },
 }
 
 /// M22.2 — action d'un statement `ODS` sur une destination.
