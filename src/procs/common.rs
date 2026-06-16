@@ -329,6 +329,47 @@ pub(crate) fn chisq_sf(x: f64, df: f64) -> f64 {
     gammq(df / 2.0, x / 2.0)
 }
 
+// ───────────────────────── normal CDF / combinatorics ─────────────────────
+//
+// Helpers used by PROC FREQ's advanced statistics (Fisher exact test via
+// hypergeometric probabilities, Cochran-Armitage trend test via the standard
+// normal CDF). All numeric, no external crate.
+
+/// Error function erf(x), via the regularized lower incomplete gamma
+/// P(1/2, x²). Reuses the `ln_gamma`-based `gser`/`gcf` machinery above.
+fn erf(x: f64) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    // P(1/2, x²) = lower regularized incomplete gamma = 1 - Q(1/2, x²).
+    let p = 1.0 - gammq(0.5, x * x);
+    if x > 0.0 {
+        p
+    } else {
+        -p
+    }
+}
+
+/// Standard normal CDF Φ(z) = P(Z <= z), matching SAS PROBNORM. Accuracy
+/// ~1e-10 over the useful range.
+pub fn probnorm(z: f64) -> f64 {
+    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
+}
+
+/// Natural log of n! = ln Γ(n+1), for n >= 0.
+pub fn ln_factorial(n: u64) -> f64 {
+    ln_gamma(n as f64 + 1.0)
+}
+
+/// Natural log of the binomial coefficient C(n, k). Returns -inf when
+/// k > n (coefficient 0).
+pub fn ln_choose(n: u64, k: u64) -> f64 {
+    if k > n {
+        return f64::NEG_INFINITY;
+    }
+    ln_factorial(n) - ln_factorial(k) - ln_factorial(n - k)
+}
+
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
 /// and the variable name (display, original case).
 pub struct ByCol {

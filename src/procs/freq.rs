@@ -16,6 +16,24 @@
 //!   lignes par cellule).
 //! - out= (1 voie) : colonnes <var>, COUNT, PERCENT.
 //!
+//! ## Statistiques avancées (M21.2)
+//! Options après `/` sur le statement TABLES :
+//! - **CHISQ** : en deux voies → Pearson + Likelihood Ratio (M10) ; en UNE
+//!   voie → test d'ajustement à l'équiprobabilité ("Chi-Square Test for Equal
+//!   Proportions", DF = k-1).
+//! - **FISHER** / **EXACT** : test exact de Fisher pour les tables 2×2
+//!   (probabilités hypergéométriques exactes : F, left/right one-sided, P,
+//!   two-sided). r×c (> 2×2) → note de non-support (différé, sans panic).
+//! - **MEASURES** / **RELRISK** : odds ratio + risques relatifs cohorte
+//!   (Col1/Col2) avec IC 95 % Wald sur l'échelle log, pour les tables 2×2.
+//!   Cellules nulles → estimation manquante ("."), jamais de division par 0.
+//! - **AGREE** : kappa simple de Cohen pour une table CARRÉE (Po, Pe, ASE,
+//!   IC 95 %). Table non carrée → note propre.
+//! - **TREND** : test de tendance de Cochran-Armitage pour une table 2×c ou
+//!   r×2 (scores 1..k, statistique Z, p uni/bilatérale via `probnorm`).
+//! Les blocs ne s'impriment que si leur option est demandée : la sortie par
+//! défaut (et le CHISQ deux voies) restent byte-identiques.
+//!
 //! ## Choix de rendu (documenté pour l'orchestrateur)
 //! - Titre centré "The FREQ Procedure" via `page_header()` puis une ligne
 //!   centrée.
@@ -40,7 +58,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{chisq_sf, decode_column};
+use crate::procs::common::{chisq_sf, decode_column, ln_choose, probnorm};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -63,8 +81,16 @@ pub struct TableRequest {
     pub norow: bool,
     pub nocol: bool,
     pub nocum: bool,
-    /// CHISQ statistics request (two-way only).
+    /// CHISQ statistics request (one-way goodness-of-fit OR two-way).
     pub chisq: bool,
+    /// Fisher exact test (two-way 2x2).
+    pub fisher: bool,
+    /// AGREE (Cohen's simple kappa, square two-way table).
+    pub agree: bool,
+    /// MEASURES / RELRISK (odds ratio + relative risks, 2x2).
+    pub measures: bool,
+    /// TREND (Cochran-Armitage trend test, 2xc or rx2).
+    pub trend: bool,
 }
 
 fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
@@ -190,6 +216,10 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
     let mut nocol = false;
     let mut nocum = false;
     let mut chisq = false;
+    let mut fisher = false;
+    let mut agree = false;
+    let mut measures = false;
+    let mut trend = false;
     if ts.peek().kind == TokenKind::Slash {
         ts.next();
         loop {
@@ -222,6 +252,18 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
             } else if ts.peek().is_kw("chisq") {
                 ts.next();
                 chisq = true;
+            } else if ts.peek().is_kw("fisher") || ts.peek().is_kw("exact") {
+                ts.next();
+                fisher = true;
+            } else if ts.peek().is_kw("agree") {
+                ts.next();
+                agree = true;
+            } else if ts.peek().is_kw("measures") || ts.peek().is_kw("relrisk") {
+                ts.next();
+                measures = true;
+            } else if ts.peek().is_kw("trend") {
+                ts.next();
+                trend = true;
             } else if let Some(name) = ts.peek().ident().map(str::to_string) {
                 // Unknown option: ignore leniently (skip the token, and any
                 // `=value` that follows).
@@ -265,6 +307,10 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
             nocol,
             nocum,
             chisq,
+            fisher,
+            agree,
+            measures,
+            trend,
         })
         .collect())
 }
@@ -480,12 +526,56 @@ fn one_way(
             .write_line(&format!("Frequency Missing = {n_missing}"));
     }
 
+    // CHISQ one-way: goodness-of-fit against equal proportions.
+    if req.chisq {
+        chisq_one_way_block(session, &cats);
+    }
+
     // OUT= dataset (one-way only).
     if let Some(out) = &req.out {
         write_one_way_out(session, ds, col_idx, &cats, denom, out)?;
     }
 
     Ok(())
+}
+
+/// One-way goodness-of-fit chi-square test against equal proportions
+/// (TESTP= defaulting to 1/k per category). Statistic Σ(obs-exp)²/exp with
+/// exp = N/k, DF = k-1. Degenerate cases (k < 2 or N = 0) are skipped with a
+/// graceful note.
+fn chisq_one_way_block(session: &mut Session, cats: &[Category]) {
+    let k = cats.len();
+    let n: usize = cats.iter().map(|c| c.freq).sum();
+
+    session.listing.blank();
+    if k < 2 || n == 0 {
+        session
+            .listing
+            .write_line("Chi-Square Test for Equal Proportions is not computable for this table.");
+        return;
+    }
+
+    let exp = n as f64 / k as f64;
+    let mut chisq = 0.0_f64;
+    for c in cats {
+        let d = c.freq as f64 - exp;
+        chisq += d * d / exp;
+    }
+    let df = (k - 1) as f64;
+    let p = chisq_sf(chisq, df);
+
+    session
+        .listing
+        .write_line("Chi-Square Test for Equal Proportions");
+    session.listing.blank();
+    let headers = vec!["Statistic".to_string(), "Value".to_string()];
+    let aligns = vec![Align::Left, Align::Right];
+    let rows = vec![
+        vec!["Chi-Square".to_string(), format!("{chisq:.4}")],
+        vec!["DF".to_string(), format!("{}", k - 1)],
+        vec!["Pr > ChiSq".to_string(), fmt_chisq_p(p)],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
 }
 
 /// Build and write the OUT= dataset for a one-way table: columns <var>,
@@ -759,8 +849,374 @@ fn two_way(
     if req.chisq {
         chisq_block(session, &row_name, &col_name, &freq, &row_tot, &col_tot, grand);
     }
+    if req.fisher {
+        fisher_block(session, &freq, &row_tot, &col_tot, grand);
+    }
+    if req.trend {
+        trend_block(session, &freq, &row_tot, &col_tot, grand);
+    }
+    if req.measures {
+        measures_block(session, &freq);
+    }
+    if req.agree {
+        agree_block(session, &freq, &row_tot, &col_tot, grand);
+    }
 
     Ok(())
+}
+
+/// Fisher's exact test. Full exact two-sided p-value for 2x2 tables (sum of
+/// hypergeometric probabilities ≤ that of the observed table), plus the
+/// left/right one-sided tails and the observed table probability. Tables
+/// larger than 2x2 are deferred with a graceful note (no panic).
+fn fisher_block(
+    session: &mut Session,
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) {
+    let nr = row_tot.len();
+    let nc = col_tot.len();
+    session.listing.blank();
+    session.listing.write_line("Fisher's Exact Test");
+    session.listing.blank();
+
+    if nr != 2 || nc != 2 {
+        session
+            .listing
+            .write_line("Fisher's exact test for tables larger than 2x2 is not supported.");
+        return;
+    }
+    if grand == 0 {
+        session
+            .listing
+            .write_line("Fisher's Exact Test is not computable for this table.");
+        return;
+    }
+
+    // Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
+    // count a = freq[0][0] determines the whole table. a ranges over
+    // [max(0, r1+c1-n), min(r1, c1)]. The hypergeometric probability of a is
+    // C(r1,a)·C(r2,c1-a)/C(n,c1).
+    let r1 = row_tot[0] as i64;
+    let r2 = row_tot[1] as i64;
+    let c1 = col_tot[0] as i64;
+    let n = grand as i64;
+    let a_obs = freq[0][0] as i64;
+
+    let ln_p = |a: i64| -> f64 {
+        let b = c1 - a; // freq[1][0]
+        ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, b as u64)
+            - ln_choose(n as u64, c1 as u64)
+    };
+
+    let lo = 0.max(r1 + c1 - n);
+    let hi = r1.min(c1);
+    let p_obs = ln_p(a_obs).exp();
+
+    let mut p_left = 0.0_f64; // P(A <= a_obs)
+    let mut p_right = 0.0_f64; // P(A >= a_obs)
+    let mut p_two = 0.0_f64; // sum of probs <= p_obs (with tolerance)
+    let tol = 1e-7;
+    for a in lo..=hi {
+        let p = ln_p(a).exp();
+        if a <= a_obs {
+            p_left += p;
+        }
+        if a >= a_obs {
+            p_right += p;
+        }
+        if p <= p_obs * (1.0 + tol) {
+            p_two += p;
+        }
+    }
+    let clamp = |p: f64| p.clamp(0.0, 1.0);
+
+    let headers = vec!["Statistic".to_string(), "Value".to_string()];
+    let aligns = vec![Align::Left, Align::Right];
+    let rows = vec![
+        vec!["Cell (1,1) Frequency (F)".to_string(), format!("{a_obs}")],
+        vec![
+            "Left-sided Pr <= F".to_string(),
+            fmt_chisq_p(clamp(p_left)),
+        ],
+        vec![
+            "Right-sided Pr >= F".to_string(),
+            fmt_chisq_p(clamp(p_right)),
+        ],
+        vec!["Table Probability (P)".to_string(), fmt_chisq_p(clamp(p_obs))],
+        vec!["Two-sided Pr <= P".to_string(), fmt_chisq_p(clamp(p_two))],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// Cochran-Armitage trend test. Requires a 2-row (or 2-column) table; the
+/// non-binary dimension supplies ordinal scores 1..k. Reports the Z statistic
+/// with one- and two-sided normal-approximation p-values. Other shapes are
+/// deferred with a graceful note.
+fn trend_block(
+    session: &mut Session,
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) {
+    let nr = row_tot.len();
+    let nc = col_tot.len();
+    session.listing.blank();
+    session.listing.write_line("Cochran-Armitage Trend Test");
+    session.listing.blank();
+
+    if grand == 0 || (nr != 2 && nc != 2) || nr < 2 || nc < 2 {
+        session
+            .listing
+            .write_line("The Cochran-Armitage Trend Test requires a 2xC or Rx2 table.");
+        return;
+    }
+
+    // Orient so that there are 2 rows and `k` ordinal columns. If the table is
+    // Rx2 instead, transpose roles (scores along rows).
+    // We compute using the first row's counts (n_{1i}) against column totals.
+    // T = Σ s_i (n_{1i} - r1 * c_i / N).
+    // Var(T) = (r1*r2/N) * [ Σ c_i s_i² - (Σ c_i s_i)² / N ].
+    let (cells_row1, marg): (Vec<f64>, Vec<f64>);
+    let r1f: f64;
+    let r2f: f64;
+    if nr == 2 {
+        cells_row1 = (0..nc).map(|c| freq[0][c] as f64).collect();
+        marg = col_tot.iter().map(|&c| c as f64).collect();
+        r1f = row_tot[0] as f64;
+        r2f = row_tot[1] as f64;
+    } else {
+        // Rx2: treat columns as the binary dimension, rows as ordinal scores.
+        cells_row1 = (0..nr).map(|r| freq[r][0] as f64).collect();
+        marg = row_tot.iter().map(|&r| r as f64).collect();
+        r1f = col_tot[0] as f64;
+        r2f = col_tot[1] as f64;
+    }
+    let k = cells_row1.len();
+    let scores: Vec<f64> = (1..=k).map(|i| i as f64).collect();
+    let nf = grand as f64;
+
+    let mut t = 0.0_f64;
+    let mut sum_cs = 0.0_f64; // Σ c_i s_i
+    let mut sum_cs2 = 0.0_f64; // Σ c_i s_i²
+    for i in 0..k {
+        t += scores[i] * (cells_row1[i] - r1f * marg[i] / nf);
+        sum_cs += marg[i] * scores[i];
+        sum_cs2 += marg[i] * scores[i] * scores[i];
+    }
+    let var = (r1f * r2f / nf) * (sum_cs2 - sum_cs * sum_cs / nf);
+
+    if var <= 0.0 {
+        session
+            .listing
+            .write_line("The Cochran-Armitage Trend Test is not computable for this table.");
+        return;
+    }
+    let z = t / var.sqrt();
+    // One-sided p toward the observed direction; two-sided = 2*one-sided.
+    let p_one = 1.0 - probnorm(z.abs());
+    let p_two = (2.0 * p_one).min(1.0);
+
+    let headers = vec!["Statistic".to_string(), "Value".to_string()];
+    let aligns = vec![Align::Left, Align::Right];
+    let rows = vec![
+        vec!["Statistic (Z)".to_string(), format!("{z:.4}")],
+        vec!["One-sided Pr".to_string(), fmt_chisq_p(p_one.clamp(0.0, 1.0))],
+        vec!["Two-sided Pr".to_string(), fmt_chisq_p(p_two.clamp(0.0, 1.0))],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// MEASURES / RELRISK: odds ratio and the two cohort relative risks for a 2x2
+/// table, each with a 95% confidence interval (Wald, on the log scale). Cells
+/// containing zeros yield missing estimates rather than dividing by zero.
+fn measures_block(session: &mut Session, freq: &[Vec<usize>]) {
+    session.listing.blank();
+    session
+        .listing
+        .write_line("Estimates of the Relative Risk (Row1/Row2)");
+    session.listing.blank();
+
+    if freq.len() != 2 || freq[0].len() != 2 || freq[1].len() != 2 {
+        session
+            .listing
+            .write_line("Relative risk estimates require a 2x2 table.");
+        return;
+    }
+
+    let a = freq[0][0] as f64;
+    let b = freq[0][1] as f64;
+    let c = freq[1][0] as f64;
+    let d = freq[1][1] as f64;
+
+    let headers = vec![
+        "Type of Study".to_string(),
+        "Value".to_string(),
+        "95% Confidence Limits".to_string(),
+    ];
+    let aligns = vec![Align::Left, Align::Right, Align::Left];
+    let mut rows: Vec<Vec<String>> = Vec::new();
+
+    // Helper rendering "lo   hi" or "." when an estimate is undefined.
+    let limits = |lo: f64, hi: f64, ok: bool| -> String {
+        if ok {
+            format!("{lo:.4}   {hi:.4}")
+        } else {
+            ".".to_string()
+        }
+    };
+
+    // Odds ratio = ad/bc; SE(ln OR) = sqrt(1/a+1/b+1/c+1/d).
+    if a > 0.0 && b > 0.0 && c > 0.0 && d > 0.0 {
+        let or = (a * d) / (b * c);
+        let se = (1.0 / a + 1.0 / b + 1.0 / c + 1.0 / d).sqrt();
+        let (lo, hi) = (
+            (or.ln() - 1.96 * se).exp(),
+            (or.ln() + 1.96 * se).exp(),
+        );
+        rows.push(vec![
+            "Case-Control (Odds Ratio)".to_string(),
+            format!("{or:.4}"),
+            limits(lo, hi, true),
+        ]);
+    } else {
+        rows.push(vec![
+            "Case-Control (Odds Ratio)".to_string(),
+            ".".to_string(),
+            ".".to_string(),
+        ]);
+    }
+
+    // Cohort (Col1 Risk): RR = [a/(a+b)] / [c/(c+d)].
+    let r1 = a + b;
+    let r2 = c + d;
+    if r1 > 0.0 && r2 > 0.0 && a > 0.0 && c > 0.0 {
+        let rr = (a / r1) / (c / r2);
+        let se = (b / (a * r1) + d / (c * r2)).sqrt();
+        let (lo, hi) = ((rr.ln() - 1.96 * se).exp(), (rr.ln() + 1.96 * se).exp());
+        rows.push(vec![
+            "Cohort (Col1 Risk)".to_string(),
+            format!("{rr:.4}"),
+            limits(lo, hi, true),
+        ]);
+    } else {
+        rows.push(vec![
+            "Cohort (Col1 Risk)".to_string(),
+            ".".to_string(),
+            ".".to_string(),
+        ]);
+    }
+
+    // Cohort (Col2 Risk): RR = [b/(a+b)] / [d/(c+d)].
+    if r1 > 0.0 && r2 > 0.0 && b > 0.0 && d > 0.0 {
+        let rr = (b / r1) / (d / r2);
+        let se = (a / (b * r1) + c / (d * r2)).sqrt();
+        let (lo, hi) = ((rr.ln() - 1.96 * se).exp(), (rr.ln() + 1.96 * se).exp());
+        rows.push(vec![
+            "Cohort (Col2 Risk)".to_string(),
+            format!("{rr:.4}"),
+            limits(lo, hi, true),
+        ]);
+    } else {
+        rows.push(vec![
+            "Cohort (Col2 Risk)".to_string(),
+            ".".to_string(),
+            ".".to_string(),
+        ]);
+    }
+
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// AGREE: Cohen's simple kappa coefficient for a square table, with its
+/// asymptotic standard error and a 95% confidence interval. Non-square tables
+/// are rejected with a graceful note.
+fn agree_block(
+    session: &mut Session,
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) {
+    let nr = row_tot.len();
+    let nc = col_tot.len();
+    session.listing.blank();
+    session.listing.write_line("Simple Kappa Coefficient");
+    session.listing.blank();
+
+    if nr != nc {
+        session
+            .listing
+            .write_line("AGREE requires a square table.");
+        return;
+    }
+    if grand == 0 {
+        session
+            .listing
+            .write_line("Simple Kappa Coefficient is not computable for this table.");
+        return;
+    }
+
+    let n = grand as f64;
+    // Observed agreement Po = Σ p_ii ; expected Pe = Σ p_i+ · p_+i.
+    let mut po = 0.0_f64;
+    let mut pe = 0.0_f64;
+    for i in 0..nr {
+        po += freq[i][i] as f64 / n;
+        pe += (row_tot[i] as f64 / n) * (col_tot[i] as f64 / n);
+    }
+
+    if (1.0 - pe).abs() < 1e-12 {
+        session
+            .listing
+            .write_line("Simple Kappa Coefficient is not computable (perfect expected agreement).");
+        return;
+    }
+    let kappa = (po - pe) / (1.0 - pe);
+
+    // Asymptotic standard error under H1 (Fleiss et al.), the SAS ASE.
+    // ASE = sqrt( [ A + B - C ] / [ (1-Pe)² · n ] ) with
+    //   A = Σ p_ii [1 - (p_i+ + p_+i)(1 - kappa)]²
+    //   B = (1-kappa)² Σ_{i≠j} p_ij (p_+i + p_j+)²
+    //   C = (kappa - Pe(1-kappa))²
+    let p = |i: usize, j: usize| freq[i][j] as f64 / n;
+    let pr = |i: usize| row_tot[i] as f64 / n; // p_i+ (row marginal)
+    let pc = |j: usize| col_tot[j] as f64 / n; // p_+j (col marginal)
+
+    let mut term_a = 0.0_f64;
+    for i in 0..nr {
+        let s = 1.0 - (pr(i) + pc(i)) * (1.0 - kappa);
+        term_a += p(i, i) * s * s;
+    }
+    let mut term_b = 0.0_f64;
+    for i in 0..nr {
+        for j in 0..nc {
+            if i != j {
+                let s = pc(i) + pr(j);
+                term_b += p(i, j) * s * s;
+            }
+        }
+    }
+    term_b *= (1.0 - kappa) * (1.0 - kappa);
+    let term_c = (kappa - pe * (1.0 - kappa)).powi(2);
+
+    let var = (term_a + term_b - term_c) / ((1.0 - pe).powi(2) * n);
+    let ase = if var > 0.0 { var.sqrt() } else { 0.0 };
+    let lower = kappa - 1.96 * ase;
+    let upper = kappa + 1.96 * ase;
+
+    let headers = vec!["Statistic".to_string(), "Value".to_string()];
+    let aligns = vec![Align::Left, Align::Right];
+    let rows = vec![
+        vec!["Kappa".to_string(), format!("{kappa:.4}")],
+        vec!["ASE".to_string(), format!("{ase:.4}")],
+        vec!["95% Lower Conf Limit".to_string(), format!("{lower:.4}")],
+        vec!["95% Upper Conf Limit".to_string(), format!("{upper:.4}")],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
 }
 
 /// Format a p-value SAS-style: `<.0001`, else 4 decimals (mirrors corr.rs).
@@ -917,6 +1373,10 @@ mod tests {
             nocol: false,
             nocum: false,
             chisq: false,
+            fisher: false,
+            agree: false,
+            measures: false,
+            trend: false,
         }
     }
 
@@ -1291,5 +1751,335 @@ mod tests {
         assert!((pearson - 0.793651).abs() < 1e-4, "{pearson}");
         let p = chisq_sf(pearson, 1.0);
         assert!((p - 0.3730).abs() < 1e-3, "p={p}");
+    }
+
+    // ───────────────────── M21.2 advanced statistics ─────────────────────
+
+    /// Render the listing produced by a block fn for assertions.
+    fn run_block<F: FnOnce(&mut Session)>(f: F) -> String {
+        let mut session = make_session();
+        f(&mut session);
+        session.listing.into_string()
+    }
+
+    fn margins(freq: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, usize) {
+        let nr = freq.len();
+        let nc = freq[0].len();
+        let row_tot: Vec<usize> = (0..nr).map(|r| freq[r].iter().sum()).collect();
+        let col_tot: Vec<usize> = (0..nc).map(|c| (0..nr).map(|r| freq[r][c]).sum()).collect();
+        let grand: usize = row_tot.iter().sum();
+        (row_tot, col_tot, grand)
+    }
+
+    // ---- parser ----
+
+    #[test]
+    fn parse_new_stat_options() {
+        let ast =
+            parse_freq("proc freq data=a; tables a*b / chisq fisher agree measures trend; run;")
+                .unwrap();
+        let t = &ast.tables[0];
+        assert!(t.chisq && t.fisher && t.agree && t.measures && t.trend);
+    }
+
+    #[test]
+    fn parse_exact_and_relrisk_aliases() {
+        let ast = parse_freq("proc freq data=a; tables a*b / exact relrisk; run;").unwrap();
+        let t = &ast.tables[0];
+        assert!(t.fisher, "exact -> fisher");
+        assert!(t.measures, "relrisk -> measures");
+    }
+
+    // ---- CHISQ one-way goodness of fit ----
+
+    #[test]
+    fn chisq_one_way_equal_proportions() {
+        // 4 categories, counts 10,20,30,40. N=100, exp=25 each.
+        // chisq = (15²+5²+5²+15²)/25 = (225+25+25+225)/25 = 500/25 = 20.
+        // DF=3, p = chisq_sf(20,3) ~ 0.00017.
+        let cats = vec![
+            Category { value: Value::Num(1.0), freq: 10 },
+            Category { value: Value::Num(2.0), freq: 20 },
+            Category { value: Value::Num(3.0), freq: 30 },
+            Category { value: Value::Num(4.0), freq: 40 },
+        ];
+        let out = run_block(|s| chisq_one_way_block(s, &cats));
+        assert!(out.contains("Chi-Square Test for Equal Proportions"), "{out}");
+        assert!(out.contains("20.0000"), "{out}");
+        let p = chisq_sf(20.0, 3.0);
+        assert!((p - 0.00017).abs() < 1e-4, "p={p}");
+    }
+
+    #[test]
+    fn chisq_one_way_uniform_is_zero() {
+        let cats = vec![
+            Category { value: Value::Num(1.0), freq: 25 },
+            Category { value: Value::Num(2.0), freq: 25 },
+            Category { value: Value::Num(3.0), freq: 25 },
+            Category { value: Value::Num(4.0), freq: 25 },
+        ];
+        let out = run_block(|s| chisq_one_way_block(s, &cats));
+        assert!(out.contains("0.0000"), "{out}");
+    }
+
+    #[test]
+    fn chisq_one_way_degenerate_note() {
+        let cats = vec![Category { value: Value::Num(1.0), freq: 5 }];
+        let out = run_block(|s| chisq_one_way_block(s, &cats));
+        assert!(out.contains("not computable"), "{out}");
+    }
+
+    // ---- Fisher exact ----
+
+    #[test]
+    fn fisher_2x2_symmetric_classic() {
+        // [[3,1],[1,3]] : documented SAS two-sided p ~ 0.4857.
+        let freq = vec![vec![3, 1], vec![1, 3]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("Fisher's Exact Test"), "{out}");
+        assert!(out.contains("Two-sided Pr <= P"), "{out}");
+        assert!(out.contains("0.4857"), "two-sided 0.4857 expected:\n{out}");
+    }
+
+    #[test]
+    fn fisher_2x2_numeric_values() {
+        // Recompute the canonical case exactly: r1=r2=c1=c2=4, n=8.
+        // p(a)=C(4,a)C(4,4-a)/C(8,4). C(8,4)=70.
+        // a=0:1*1/70, a=1:4*4/70, a=2:6*6/70, a=3:4*4/70, a=4:1*1/70.
+        let c84 = 70.0;
+        let pa = |a: u64| -> f64 {
+            let lc = ln_choose(4, a) + ln_choose(4, 4 - a);
+            lc.exp() / c84
+        };
+        // observed a=3 -> p_obs = 16/70.
+        let p_obs = pa(3);
+        assert!((p_obs - 16.0 / 70.0).abs() < 1e-12);
+        // two-sided = sum of probs <= p_obs = a in {0,1,3,4} (a=2 is 36/70 > 16/70).
+        let two = pa(0) + pa(1) + pa(3) + pa(4);
+        assert!((two - (1.0 + 16.0 + 16.0 + 1.0) / 70.0).abs() < 1e-12);
+        assert!((two - 0.485714).abs() < 1e-5, "two={two}");
+        // right-sided P(A>=3) = (16+1)/70 = 0.242857.
+        let right = pa(3) + pa(4);
+        assert!((right - 17.0 / 70.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fisher_larger_than_2x2_deferred() {
+        let freq = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("larger than 2x2"), "{out}");
+    }
+
+    // ---- MEASURES (odds ratio / RR) ----
+
+    #[test]
+    fn measures_odds_ratio_exact() {
+        // [[20,10],[5,25]] : OR = (20*25)/(10*5) = 500/50 = 10.
+        let freq = vec![vec![20, 10], vec![5, 25]];
+        let out = run_block(|s| measures_block(s, &freq));
+        assert!(out.contains("Odds Ratio"), "{out}");
+        assert!(out.contains("10.0000"), "OR=10 expected:\n{out}");
+        // RR col1 = (20/30)/(5/30) = (0.6667)/(0.1667) = 4.
+        assert!(out.contains("4.0000"), "RR col1 = 4 expected:\n{out}");
+    }
+
+    #[test]
+    fn measures_odds_ratio_ci() {
+        // OR=10, SE = sqrt(1/20+1/10+1/5+1/25)=sqrt(0.39)=0.62450.
+        // ln10=2.302585; CI = exp(2.302585 ∓ 1.96*0.62450) = [2.9405, 34.008].
+        let se = (1.0 / 20.0 + 1.0 / 10.0 + 1.0 / 5.0 + 1.0 / 25.0_f64).sqrt();
+        assert!((se - 0.624500).abs() < 1e-4, "se={se}");
+        let or: f64 = 10.0;
+        let lo = (or.ln() - 1.96 * se).exp();
+        let hi = (or.ln() + 1.96 * se).exp();
+        assert!((lo - 2.9405).abs() < 1e-3, "lo={lo}");
+        assert!((hi - 34.008).abs() < 1e-2, "hi={hi}");
+    }
+
+    #[test]
+    fn measures_zero_cell_no_panic() {
+        // b=0 -> OR undefined; must not panic and must print ".".
+        let freq = vec![vec![5, 0], vec![3, 7]];
+        let out = run_block(|s| measures_block(s, &freq));
+        assert!(out.contains("Odds Ratio"), "{out}");
+        // Odds ratio row carries "." because b=0.
+        assert!(out.contains('.'), "{out}");
+    }
+
+    #[test]
+    fn measures_requires_2x2() {
+        let freq = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let out = run_block(|s| measures_block(s, &freq));
+        assert!(out.contains("require a 2x2"), "{out}");
+    }
+
+    // ---- AGREE (kappa) ----
+
+    #[test]
+    fn agree_kappa_hand_computed() {
+        // Diagonal-heavy 2x2 agreement table:
+        // [[20,5],[10,15]] : N=50.
+        // Po = (20+15)/50 = 0.70.
+        // row tot = [25,25], col tot = [30,20].
+        // Pe = (25/50)(30/50) + (25/50)(20/50) = 0.5*0.6 + 0.5*0.4 = 0.3+0.2 = 0.5.
+        // kappa = (0.70-0.50)/(1-0.50) = 0.20/0.50 = 0.40.
+        let freq = vec![vec![20, 5], vec![10, 15]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| agree_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("Simple Kappa Coefficient"), "{out}");
+        assert!(out.contains("0.4000"), "kappa=0.40 expected:\n{out}");
+    }
+
+    #[test]
+    fn agree_perfect_agreement_kappa_one() {
+        // Pure diagonal -> Po=1 -> kappa = 1.
+        let freq = vec![vec![10, 0], vec![0, 10]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| agree_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("1.0000"), "kappa=1 expected:\n{out}");
+    }
+
+    #[test]
+    fn agree_requires_square() {
+        let freq = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| agree_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("requires a square table"), "{out}");
+    }
+
+    #[test]
+    fn agree_3x3_kappa() {
+        // 3x3 with strong diagonal.
+        // [[10,1,1],[1,10,1],[1,1,10]] N=36.
+        // Po = 30/36 = 0.833333.
+        // each row tot=12, col tot=12 -> Pe = 3*(12/36)(12/36) = 3*(1/9)=0.333333.
+        // kappa = (0.833333-0.333333)/(1-0.333333) = 0.5/0.666667 = 0.75.
+        let freq = vec![vec![10, 1, 1], vec![1, 10, 1], vec![1, 1, 10]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| agree_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("0.7500"), "kappa=0.75 expected:\n{out}");
+    }
+
+    // ---- TREND (Cochran-Armitage) ----
+
+    #[test]
+    fn trend_monotone_increasing() {
+        // 2x3 table, ordinal columns 1..3, clear increasing trend in row 1.
+        // row0 (cases): [5,10,20], row1 (controls): [20,10,5].
+        // col tot = [25,20,25], N=70, r1=35, r2=35.
+        let freq = vec![vec![5, 10, 20], vec![20, 10, 5]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| trend_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("Cochran-Armitage Trend Test"), "{out}");
+        assert!(out.contains("Statistic (Z)"), "{out}");
+
+        // Hand recompute: scores s=[1,2,3]. row0=[5,10,20], col tot=[25,20,25],
+        // N=70, r1=35, r2=35.
+        // T = Σ s_i (n_{1i} - r1*c_i/N)
+        //   = 1*(5 - 35*25/70) + 2*(10 - 35*20/70) + 3*(20 - 35*25/70)
+        //   = 1*(5-12.5) + 2*(10-10) + 3*(20-12.5)
+        //   = -7.5 + 0 + 22.5 = 15.
+        // Σ c_i s_i = 25*1+20*2+25*3 = 25+40+75 = 140.
+        // Σ c_i s_i² = 25*1+20*4+25*9 = 25+80+225 = 330.
+        // Var = (35*35/70)*(330 - 140²/70) = 17.5 * (330-280) = 17.5*50 = 875.
+        // Z = 15/sqrt(875) = 15/29.58 = 0.5071.
+        let t = 15.0_f64;
+        let var: f64 = (35.0 * 35.0 / 70.0) * (330.0 - 140.0 * 140.0 / 70.0);
+        let z = t / var.sqrt();
+        assert!((z - 0.5071).abs() < 1e-3, "z={z}");
+        assert!(out.contains("0.5071"), "Z=0.5071 expected:\n{out}");
+        let p_two = (2.0 * (1.0 - probnorm(z.abs()))).min(1.0);
+        assert!((p_two - 0.6121).abs() < 1e-3, "p_two={p_two}");
+    }
+
+    #[test]
+    fn trend_requires_binary_dimension() {
+        let freq = vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| trend_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("requires a 2xC or Rx2"), "{out}");
+    }
+
+    #[test]
+    fn trend_rx2_orientation() {
+        // 3x2 (rows are ordinal). Should compute (transposed roles), no panic.
+        let freq = vec![vec![5, 20], vec![10, 10], vec![20, 5]];
+        let (rt, ct, g) = margins(&freq);
+        let out = run_block(|s| trend_block(s, &freq, &rt, &ct, g));
+        assert!(out.contains("Statistic (Z)"), "{out}");
+    }
+
+    // ---- common.rs numeric helpers ----
+
+    #[test]
+    fn probnorm_known_values() {
+        assert!((probnorm(0.0) - 0.5).abs() < 1e-9);
+        assert!((probnorm(1.96) - 0.975).abs() < 1e-4, "{}", probnorm(1.96));
+        assert!((probnorm(-1.96) - 0.025).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ln_choose_known_values() {
+        assert!((ln_choose(8, 4).exp() - 70.0).abs() < 1e-6);
+        assert!((ln_choose(5, 2).exp() - 10.0).abs() < 1e-6);
+        assert!(ln_choose(3, 5) == f64::NEG_INFINITY);
+    }
+
+    // ---- end-to-end through execute() ----
+
+    #[test]
+    fn execute_fisher_measures_agree_end_to_end() {
+        let mut session = make_session();
+        // Build [[20,10],[5,25]] from raw columns.
+        let mut r: Vec<&str> = Vec::new();
+        let mut c: Vec<f64> = Vec::new();
+        for _ in 0..20 { r.push("a"); c.push(1.0); }
+        for _ in 0..10 { r.push("a"); c.push(2.0); }
+        for _ in 0..5 { r.push("b"); c.push(1.0); }
+        for _ in 0..25 { r.push("b"); c.push(2.0); }
+        let df = df!["r" => r, "c" => c].unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut req = tr(&["r", "c"], false, None);
+        req.fisher = true;
+        req.measures = true;
+        req.agree = true;
+        let ast = FreqAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            tables: vec![req],
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Fisher's Exact Test"), "{listing}");
+        assert!(listing.contains("Estimates of the Relative Risk"), "{listing}");
+        assert!(listing.contains("Simple Kappa Coefficient"), "{listing}");
+        assert!(listing.contains("10.0000"), "OR=10:\n{listing}");
+    }
+
+    #[test]
+    fn execute_one_way_chisq_end_to_end() {
+        let mut session = make_session();
+        let mut x: Vec<f64> = Vec::new();
+        for _ in 0..10 { x.push(1.0); }
+        for _ in 0..20 { x.push(2.0); }
+        for _ in 0..30 { x.push(3.0); }
+        for _ in 0..40 { x.push(4.0); }
+        let df = df!["x" => x].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut req = tr(&["x"], false, None);
+        req.chisq = true;
+        let ast = FreqAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            tables: vec![req],
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Chi-Square Test for Equal Proportions"), "{listing}");
+        assert!(listing.contains("20.0000"), "{listing}");
     }
 }
