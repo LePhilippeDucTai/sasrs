@@ -14,6 +14,12 @@ pub enum SasError {
 
     #[error("data engine error: {0}")]
     Polars(#[from] polars::error::PolarsError),
+
+    #[error("numerical error: {0}")]
+    Numerical(String),
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl SasError {

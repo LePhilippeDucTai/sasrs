@@ -263,7 +263,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 ## PHASE C — modélisation statistique
 
 ## M24 — fondation numérique stat + procs de base
-- [ ] M24.1 — module `src/stat/` (maison) : promotion des helpers `common.rs` (Beta/Gamma/t/χ²) + normale (CDF/quantile), F, gamma, bêta ; `linalg.rs` (Cholesky, QR/Householder, moindres carrés, inversion, valeurs/vecteurs propres symétriques par Jacobi), tout testé contre valeurs documentées (Fable, élevé)
+- [x] M24.1 — module `src/stat/` (maison) : promotion des helpers `common.rs` (Beta/Gamma/t/χ²) + normale (CDF/quantile), F, gamma, bêta ; `linalg.rs` (Cholesky, QR/Householder, moindres carrés, inversion, valeurs/vecteurs propres symétriques par Jacobi), tout testé contre valeurs documentées (Opus, élevé). **M24.1 TERMINÉ** : `src/stat/dists.rs` 11 fonctions promues de common.rs + 8 distributions nouvelles (chisq/F/gamma/beta CDFs/quantiles via Newton-Raphson avec bisection fallback) ; `src/stat/linalg.rs` 6 fonctions (Cholesky, QR Householder, least_squares, invert, Jacobi eigenvalues/eigenvectors) ; 35 unit tests (21 dists + 14 linalg), 2051 tests total verts, 0 warning.
 - [ ] M24.2 — `PROC TTEST` (1 échantillon, 2 échantillons groupés/appariés, Satterthwaite, CLASS, PAIRED) (Opus, élevé)
 - [ ] M24.3 — `PROC NPAR1WAY` (Wilcoxon, Kruskal-Wallis, scores) (Opus, moyen-élevé)
 - [ ] Fixtures `m24/` + snapshots vérifiés contre SAS. DoD

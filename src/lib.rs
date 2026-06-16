@@ -22,6 +22,7 @@ pub mod procs;
 pub mod session;
 pub mod source;
 pub mod sql;
+pub mod stat;
 pub mod token;
 pub mod value;
 
