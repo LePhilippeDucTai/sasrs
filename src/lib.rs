@@ -89,25 +89,42 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
         session.log.error(&e.to_string());
     }
 
-    // M22.4 — filet de sécurité : si une destination HTML avec fichier cible est
-    // encore ouverte à la fin du programme (fixture sans `ODS HTML CLOSE`), on
-    // l'écrit maintenant. La NOTE va dans le log AVANT `log.into_string()`.
-    if let Some((path, html)) = session.listing.finalize() {
+    // M23 — filet de sécurité : si une destination avec fichier cible est encore
+    // ouverte à la fin du programme (fixture sans `ODS CLOSE`), on l'écrit
+    // maintenant. La NOTE va dans le log AVANT `log.into_string()`.
+    if let Some((path, bytes)) = session.listing.finalize_to_bytes() {
+        let label = session.listing.dest_type_label();
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("output")
+            .to_string();
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => {
+                session.log.note(&format!("Writing {} file: {}", label, file_name));
+            }
+            Err(e) => {
+                session.log.note(&format!(
+                    "WARNING: Could not write {} file {}: {}",
+                    label, file_name, e
+                ));
+            }
+        }
+    } else if let Some((path, content)) = session.listing.finalize() {
+        let label = session.listing.dest_type_label();
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("output.html")
             .to_string();
-        match std::fs::write(&path, &html) {
+        match std::fs::write(&path, &content) {
             Ok(()) => {
-                session
-                    .log
-                    .note(&format!("Writing HTML Body file: {}", file_name));
+                session.log.note(&format!("Writing {} file: {}", label, file_name));
             }
             Err(e) => {
                 session.log.note(&format!(
-                    "WARNING: Could not write HTML file {}: {}",
-                    file_name, e
+                    "WARNING: Could not write {} file {}: {}",
+                    label, file_name, e
                 ));
             }
         }

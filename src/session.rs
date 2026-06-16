@@ -230,23 +230,41 @@ impl Session {
         // Fermer la destination courante (ou explicitement LISTING) → revenir au
         // listing texte par défaut byte-identique.
         if key == "LISTING" || key == self.current_destination {
-            // M22.4 : finaliser la destination courante (écriture fichier HTML…)
-            // avant de la remplacer par le listing texte.
-            if let Some((path, html)) = self.listing.finalize() {
+            // M23 : finaliser la destination courante avant de la remplacer.
+            // Formats binaires (Excel, PDF) d'abord, puis formats texte (HTML, RTF).
+            if let Some((path, bytes)) = self.listing.finalize_to_bytes() {
+                let label = self.listing.dest_type_label();
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("output")
+                    .to_string();
+                match std::fs::write(&path, &bytes) {
+                    Ok(()) => {
+                        self.log.note(&format!("Writing {} file: {}", label, file_name));
+                    }
+                    Err(e) => {
+                        self.log.note(&format!(
+                            "WARNING: Could not write {} file {}: {}",
+                            label, file_name, e
+                        ));
+                    }
+                }
+            } else if let Some((path, content)) = self.listing.finalize() {
+                let label = self.listing.dest_type_label();
                 let file_name = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("output.html")
                     .to_string();
-                match std::fs::write(&path, &html) {
+                match std::fs::write(&path, &content) {
                     Ok(()) => {
-                        self.log
-                            .note(&format!("Writing HTML Body file: {}", file_name));
+                        self.log.note(&format!("Writing {} file: {}", label, file_name));
                     }
                     Err(e) => {
                         self.log.note(&format!(
-                            "WARNING: Could not write HTML file {}: {}",
-                            file_name, e
+                            "WARNING: Could not write {} file {}: {}",
+                            label, file_name, e
                         ));
                     }
                 }

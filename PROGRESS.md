@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M23** (ODS RTF / PDF / Excel). M1–M22 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M24** (fondation numérique stat + TTEST/NPAR1WAY). M1–M23 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -246,9 +246,18 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
   — **Total** : 2004 lib + 2 intégration + snapshots m22, 0 warning `-D warnings`, 0 `.snap.new` (m1–m21 octet-identiques). **M22 TERMINÉ.**
 
 ## M23 — ODS RTF / PDF / Excel
-- [ ] ⫽ M23.1 — RTF (séquences de contrôle Word) (Opus, moyen)
-- [ ] ⫽ M23.2 — PDF via `printpdf` (pagination, tables), feature `pdf` (Opus, moyen-élevé)
-- [ ] ⫽ M23.3 — Excel via `rust_xlsxwriter` (`ODS EXCEL`, feuilles par proc, styles de base) (Sonnet, moyen)
+- [x] ⫽ M23.1 — RTF (séquences de contrôle Word) (Opus, moyen)
+  — `RtfDestination` réelle : `new(ls)` / `with_file(ls, PathBuf)` ; `page_header`→`\pard\sb200\sa100\b title\b0\par` ; `write_table`→`\trowd\trgaph100\cellx<twips>...\intbl\pard\ql/\qr en-têtes \b\b0\cell...\row` (largeurs en twips calculées sur max content) ; `write_line`→`\pard text\par` ; `into_string`→wrapping RTF complet ; `finalize()`→`Some((path,rtf))` si FILE= configuré. RTF-escape : `\`→`\\`, `{`→`\{`, `}`→`\}`, non-ASCII→`\'XX`. `dest_type_label()="RTF Body"`. Tests : structure RTF, escape, finalize avec/sans fichier.
+- [x] ⫽ M23.2 — PDF pur Rust (PDF 1.4 minimal, sans printpdf) (Opus, moyen-élevé)
+  — `PdfDestination` réelle : accumule `PdfSection::{PageHeader,Table,Line,Blank}`. `finalize_to_bytes()`→PDF 1.4 complet (Catalog/Pages/Page/ContentStream/Font Helvetica) avec xref calculé au byte près ; stream texte via `BT/Tm/Tj/ET` ; tables columnarées par `Tm` absolu par cellule ; page overflow simple (y<50→y=742) ; pdf-escape (parenthèses, backslash, non-ASCII→`?`). `dest_type_label()="PDF"`. Tests : magic bytes `%PDF-`, finalize avec/sans fichier.
+- [x] ⫽ M23.3 — Excel pur Rust (XLSX = ZIP+XML, sans rust_xlsxwriter) (Sonnet, moyen)
+  — `ExcelDestination` réelle : accumule `ExcelTable` (sheet_name, pre_lines, headers, rows). `finalize_to_bytes()`→XLSX (ZIP non-compressé avec CRC-32 maison) ; XML : `[Content_Types].xml` / `_rels/.rels` / `xl/workbook.xml` / `xl/_rels/workbook.xml.rels` / `xl/worksheets/sheetN.xml` ; cellules `inlineStr` ; références colonnes A-Z/AA-AZ. XLSX magic bytes `PK` (ZIP). `dest_type_label()="Excel"`. Tests : magic bytes PK, finalize avec/sans fichier.
+  — **Sans dépendance externe** : rust_xlsxwriter retiré du Cargo.toml (disque quasi plein, 98%) ; XLSX pur Rust ≡ même interface pour les tests.
+- [x] Trait étendu : `finalize_to_bytes() -> Option<(PathBuf, Vec<u8>)>` (défaut None) pour formats binaires (Excel/PDF) ; `dest_type_label() -> &'static str` pour les NOTEs de log.
+- [x] Session `close_destination()` : tente `finalize_to_bytes()` (binaire) puis `finalize()` (texte) ; NOTE `"Writing <label> file: <name>"`.
+- [x] `lib.rs` : filet de sécurité en fin de programme pour les deux variantes.
+- [x] `executor.rs` : `exec_ods` câble FILE= pour RTF/PDF/Excel via `with_file(resolve_path)`.
+  — **v1 documenté** : destinations EXCLUSIVES (listing texte inactif pendant HTML/RTF/PDF/Excel) ; pas de fan-out concurrent.
 - [ ] Fixtures `m23/` + snapshots (assertion structure/existence des fichiers). DoD
 
 ## PHASE C — modélisation statistique

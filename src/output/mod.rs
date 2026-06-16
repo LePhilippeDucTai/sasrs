@@ -74,6 +74,20 @@ pub trait OutputDestination {
     fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
         None
     }
+
+    /// Finalise pour les formats binaires (Excel, PDF) : retourne les octets
+    /// du fichier à écrire sur disque. Défaut : None (format texte ou pas de
+    /// fichier). Les destinations binaires DOIVENT implémenter cette méthode
+    /// plutôt que `finalize()`.
+    fn finalize_to_bytes(&mut self) -> Option<(std::path::PathBuf, Vec<u8>)> {
+        None
+    }
+
+    /// Étiquette du type de destination pour les messages de log (NOTE "Writing
+    /// <label> file: …"). Chaque destination surcharge cette méthode.
+    fn dest_type_label(&self) -> &'static str {
+        "HTML Body"
+    }
 }
 
 /// Destination texte par défaut : adaptateur au-dessus de [`ListingWriter`].
@@ -305,81 +319,685 @@ table.sas th,table.sas td{{border:1px solid #888;padding:4px;}}\
 }
 
 // ---------------------------------------------------------------------------
-// Squelette commun des destinations no-op (RTF/PDF/Excel)
+// RtfDestination — M23.1 : destination RTF réelle
 // ---------------------------------------------------------------------------
 
-/// Squelette commun des destinations no-op (RTF/PDF/Excel) tant que leur
-/// rendu n'est pas implémenté (M23). Conserve néanmoins titre et
-/// LINESIZE pour que le statement `ODS` puisse les configurer sans surprise.
-macro_rules! stub_destination {
-    ($name:ident, $doc:expr) => {
-        #[doc = $doc]
-        pub struct $name {
-            title: Option<String>,
-            ls: usize,
-        }
-
-        impl $name {
-            /// Crée la destination (no-op pour l'instant).
-            pub fn new(ls: usize) -> Self {
-                $name { title: None, ls }
-            }
-        }
-
-        impl OutputDestination for $name {
-            fn page_header(&mut self) {
-                // no-op : rendu différé (M23).
-            }
-
-            fn write_table(
-                &mut self,
-                _headers: &[String],
-                _aligns: &[Align],
-                _rows: &[Vec<String>],
-            ) {
-                // no-op : rendu différé (M23).
-            }
-
-            fn write_line(&mut self, _line: &str) {
-                // no-op : rendu différé (M23).
-            }
-
-            fn blank(&mut self) {
-                // no-op : rendu différé (M23).
-            }
-
-            fn set_title(&mut self, title: Option<String>) {
-                self.title = title;
-            }
-
-            fn set_ls(&mut self, ls: usize) {
-                self.ls = ls;
-            }
-
-            fn ls(&self) -> usize {
-                self.ls
-            }
-
-            fn into_string(&mut self) -> String {
-                // Aucune sortie en mémoire pour l'instant.
-                String::new()
-            }
-        }
-    };
+/// Destination RTF (Rich Text Format). Génère un fichier RTF valide avec
+/// tables et mise en forme de base.
+pub struct RtfDestination {
+    buf: String,
+    title: Option<String>,
+    ls: usize,
+    file: Option<std::path::PathBuf>,
 }
 
-stub_destination!(
-    RtfDestination,
-    "Destination RTF (séquences de contrôle Word). Stub no-op ; remplie en M23.1."
-);
-stub_destination!(
-    PdfDestination,
-    "Destination PDF (pagination, tables). Stub no-op ; remplie en M23.2 (feature `pdf`)."
-);
-stub_destination!(
-    ExcelDestination,
-    "Destination Excel (`ODS EXCEL`, feuilles par proc). Stub no-op ; remplie en M23.3."
-);
+impl RtfDestination {
+    /// Crée la destination RTF sans fichier cible.
+    pub fn new(ls: usize) -> Self {
+        RtfDestination { buf: String::new(), title: None, ls, file: None }
+    }
+
+    /// Crée la destination RTF avec un fichier cible.
+    pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
+        RtfDestination { buf: String::new(), title: None, ls, file: Some(file) }
+    }
+
+    /// Échappe les caractères spéciaux RTF.
+    fn rtf_escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 8);
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '{' => out.push_str("\\{"),
+                '}' => out.push_str("\\}"),
+                c if c.is_ascii() => out.push(c),
+                c if (c as u32) <= 0xFF => {
+                    out.push_str(&format!("\\'{}",
+                        format!("{:02x}", c as u32)));
+                }
+                c => {
+                    out.push_str(&format!("\\u{}?", c as u32));
+                }
+            }
+        }
+        out
+    }
+}
+
+impl OutputDestination for RtfDestination {
+    fn page_header(&mut self) {
+        let title = self.title.clone().unwrap_or_else(|| "The SAS System".to_string());
+        self.buf.push_str(&format!(
+            "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
+            Self::rtf_escape(&title)
+        ));
+    }
+
+    fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
+        // Compute column widths in twips
+        let col_widths: Vec<usize> = (0..headers.len()).map(|i| {
+            let header_len = headers.get(i).map(|s| s.len()).unwrap_or(0);
+            let max_data_len = rows.iter()
+                .map(|r| r.get(i).map(|s| s.len()).unwrap_or(0))
+                .max()
+                .unwrap_or(0);
+            (header_len.max(max_data_len) * 120).max(720)
+        }).collect();
+
+        // Build header row
+        let mut cum_widths: Vec<usize> = Vec::with_capacity(col_widths.len());
+        let mut cum = 0usize;
+        for w in &col_widths {
+            cum += w;
+            cum_widths.push(cum);
+        }
+
+        // Helper closure to emit a row
+        let emit_row = |buf: &mut String, cells: &[String], is_header: bool, aligns: &[Align]| {
+            buf.push_str("\\trowd\\trgaph100");
+            for cw in &cum_widths {
+                buf.push_str(&format!("\\cellx{}", cw));
+            }
+            buf.push('\n');
+            for (i, cell) in cells.iter().enumerate() {
+                let align = aligns.get(i).copied().unwrap_or(Align::Left);
+                let align_ctrl = match align { Align::Right => "\\qr", Align::Left => "\\ql" };
+                if is_header {
+                    buf.push_str(&format!(
+                        "\\pard\\intbl{} \\b {}\\b0\\cell ",
+                        align_ctrl,
+                        RtfDestination::rtf_escape(cell)
+                    ));
+                } else {
+                    buf.push_str(&format!(
+                        "\\pard\\intbl{} {}\\cell ",
+                        align_ctrl,
+                        RtfDestination::rtf_escape(cell)
+                    ));
+                }
+            }
+            buf.push_str("\\row\n");
+        };
+
+        emit_row(&mut self.buf, headers, true, aligns);
+        for row in rows {
+            emit_row(&mut self.buf, row, false, aligns);
+        }
+        self.buf.push_str("\\pard\\par\n");
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.buf.push_str(&format!("\\pard {}\\par\n", Self::rtf_escape(line)));
+    }
+
+    fn blank(&mut self) {
+        self.buf.push_str("\\pard\\par\n");
+    }
+
+    fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+    }
+
+    fn set_ls(&mut self, ls: usize) {
+        self.ls = ls;
+    }
+
+    fn ls(&self) -> usize {
+        self.ls
+    }
+
+    fn into_string(&mut self) -> String {
+        if self.buf.is_empty() {
+            return String::new();
+        }
+        let body = std::mem::take(&mut self.buf);
+        format!(
+            "{{\\rtf1\\ansi\\ansicpg1252\\deff0\n{{\\fonttbl{{\\f0\\froman\\fcharset0 Times New Roman;}}}}\n\\f0\\fs24\n{body}}}"
+        )
+    }
+
+    fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
+        let path = self.file.clone()?;
+        let content = self.into_string();
+        if content.is_empty() {
+            None
+        } else {
+            Some((path, content))
+        }
+    }
+
+    fn dest_type_label(&self) -> &'static str {
+        "RTF Body"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExcelDestination — M23.3 : destination Excel réelle (rust_xlsxwriter)
+// ---------------------------------------------------------------------------
+
+struct ExcelTable {
+    sheet_name: String,
+    pre_lines: Vec<String>,
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+/// Destination Excel (`ODS EXCEL`). Utilise `rust_xlsxwriter` pour générer
+/// un fichier `.xlsx` valide. Le contenu est accumulé en mémoire et matérialisé
+/// lors de `finalize_to_bytes()`.
+pub struct ExcelDestination {
+    title: Option<String>,
+    ls: usize,
+    file: Option<std::path::PathBuf>,
+    tables: Vec<ExcelTable>,
+    pending_lines: Vec<String>,
+}
+
+impl ExcelDestination {
+    /// Crée la destination Excel sans fichier cible.
+    pub fn new(ls: usize) -> Self {
+        ExcelDestination {
+            title: None, ls, file: None,
+            tables: Vec::new(), pending_lines: Vec::new(),
+        }
+    }
+
+    /// Crée la destination Excel avec un fichier cible.
+    pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
+        ExcelDestination {
+            title: None, ls, file: Some(file),
+            tables: Vec::new(), pending_lines: Vec::new(),
+        }
+    }
+}
+
+impl OutputDestination for ExcelDestination {
+    fn page_header(&mut self) {
+        // no-op : le titre/en-tête est géré par table
+    }
+
+    fn write_table(&mut self, headers: &[String], _aligns: &[Align], rows: &[Vec<String>]) {
+        let sheet_name = format!("Table {}", self.tables.len() + 1);
+        let pre_lines = std::mem::take(&mut self.pending_lines);
+        self.tables.push(ExcelTable {
+            sheet_name,
+            pre_lines,
+            headers: headers.to_vec(),
+            rows: rows.to_vec(),
+        });
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.pending_lines.push(line.to_string());
+    }
+
+    fn blank(&mut self) {
+        // no-op
+    }
+
+    fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+    }
+
+    fn set_ls(&mut self, ls: usize) {
+        self.ls = ls;
+    }
+
+    fn ls(&self) -> usize {
+        self.ls
+    }
+
+    fn into_string(&mut self) -> String {
+        String::new()
+    }
+
+    fn finalize_to_bytes(&mut self) -> Option<(std::path::PathBuf, Vec<u8>)> {
+        let path = self.file.clone()?;
+        if self.tables.is_empty() && self.pending_lines.is_empty() {
+            return None;
+        }
+        let bytes = xlsx_build(&self.tables, &self.pending_lines);
+        Some((path, bytes))
+    }
+
+    fn dest_type_label(&self) -> &'static str {
+        "Excel"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// XLSX writer pur Rust — utilisé par ExcelDestination (M23.3)
+// Produit un fichier XLSX (ZIP de fichiers XML) sans dépendance externe.
+// ---------------------------------------------------------------------------
+
+/// Référence de colonne Excel (0→"A", 25→"Z", 26→"AA", …).
+fn xlsx_col_ref(mut n: usize) -> String {
+    let mut s = String::new();
+    loop {
+        s.push(char::from(b'A' + (n % 26) as u8));
+        if n < 26 { break; }
+        n = n / 26 - 1;
+    }
+    s.chars().rev().collect()
+}
+
+/// Échappe un contenu pour l'insérer dans un attribut ou texte XML.
+fn xlsx_xml_escape(v: &str) -> String {
+    v.replace('&', "&amp;")
+     .replace('<', "&lt;")
+     .replace('>', "&gt;")
+     .replace('"', "&quot;")
+}
+
+/// Génère le XML d'une feuille (`xl/worksheets/sheetN.xml`).
+fn xlsx_sheet_xml(pre_lines: &[String], headers: &[String], rows: &[Vec<String>]) -> Vec<u8> {
+    let mut x = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
+        <sheetData>"
+    );
+    let mut r = 1usize;
+    for line in pre_lines {
+        x.push_str(&format!(
+            "<row r=\"{r}\"><c r=\"A{r}\" t=\"inlineStr\"><is><t>{}</t></is></c></row>",
+            xlsx_xml_escape(line)
+        ));
+        r += 1;
+    }
+    if !headers.is_empty() {
+        x.push_str(&format!("<row r=\"{r}\">"));
+        for (c, h) in headers.iter().enumerate() {
+            x.push_str(&format!(
+                "<c r=\"{}{r}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+                xlsx_col_ref(c), xlsx_xml_escape(h)
+            ));
+        }
+        x.push_str("</row>");
+        r += 1;
+    }
+    for row in rows {
+        x.push_str(&format!("<row r=\"{r}\">"));
+        for (c, v) in row.iter().enumerate() {
+            x.push_str(&format!(
+                "<c r=\"{}{r}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
+                xlsx_col_ref(c), xlsx_xml_escape(v)
+            ));
+        }
+        x.push_str("</row>");
+        r += 1;
+    }
+    x.push_str("</sheetData></worksheet>");
+    x.into_bytes()
+}
+
+/// CRC-32 variante ZIP (polynôme 0xEDB88320).
+fn crc32_zip(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        let idx = ((crc ^ b as u32) & 0xFF) as usize;
+        // Calcule le coefficient à la volée pour éviter une table statique globale.
+        let mut coeff = idx as u32;
+        for _ in 0..8 {
+            coeff = if coeff & 1 != 0 { 0xEDB88320 ^ (coeff >> 1) } else { coeff >> 1 };
+        }
+        crc = coeff ^ (crc >> 8);
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
+fn zip_u16(buf: &mut Vec<u8>, v: u16) { buf.extend_from_slice(&v.to_le_bytes()); }
+fn zip_u32(buf: &mut Vec<u8>, v: u32) { buf.extend_from_slice(&v.to_le_bytes()); }
+
+/// Construit un ZIP sans compression (store) à partir de paires (nom, octets).
+fn build_zip_stored(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut offsets: Vec<u32> = Vec::new();
+    let mut crcs: Vec<u32> = Vec::new();
+
+    // Enregistrements locaux
+    for (name, data) in entries.iter() {
+        let crc = crc32_zip(data);
+        crcs.push(crc);
+        offsets.push(out.len() as u32);
+        let nb = name.as_bytes();
+        zip_u32(&mut out, 0x04034B50); // local file header signature
+        zip_u16(&mut out, 20);         // version needed
+        zip_u16(&mut out, 0);          // flags
+        zip_u16(&mut out, 0);          // compression = store
+        zip_u16(&mut out, 0);          // mod time
+        zip_u16(&mut out, 0);          // mod date
+        zip_u32(&mut out, crc);
+        zip_u32(&mut out, data.len() as u32); // compressed size
+        zip_u32(&mut out, data.len() as u32); // uncompressed size
+        zip_u16(&mut out, nb.len() as u16);
+        zip_u16(&mut out, 0); // extra field length
+        out.extend_from_slice(nb);
+        out.extend_from_slice(data);
+    }
+
+    // Répertoire central
+    let cd_start = out.len() as u32;
+    for (i, (name, data)) in entries.iter().enumerate() {
+        let nb = name.as_bytes();
+        zip_u32(&mut out, 0x02014B50); // central dir signature
+        zip_u16(&mut out, 20);         // version made by
+        zip_u16(&mut out, 20);         // version needed
+        zip_u16(&mut out, 0);
+        zip_u16(&mut out, 0);          // compression
+        zip_u16(&mut out, 0);
+        zip_u16(&mut out, 0);
+        zip_u32(&mut out, crcs[i]);
+        zip_u32(&mut out, data.len() as u32);
+        zip_u32(&mut out, data.len() as u32);
+        zip_u16(&mut out, nb.len() as u16);
+        zip_u16(&mut out, 0);  // extra length
+        zip_u16(&mut out, 0);  // comment length
+        zip_u16(&mut out, 0);  // disk start
+        zip_u16(&mut out, 0);  // internal attrs
+        zip_u32(&mut out, 0);  // external attrs
+        zip_u32(&mut out, offsets[i]);
+        out.extend_from_slice(nb);
+    }
+    let cd_end = out.len() as u32;
+
+    // End of central directory
+    zip_u32(&mut out, 0x06054B50);
+    zip_u16(&mut out, 0);
+    zip_u16(&mut out, 0);
+    zip_u16(&mut out, entries.len() as u16);
+    zip_u16(&mut out, entries.len() as u16);
+    zip_u32(&mut out, cd_end - cd_start);
+    zip_u32(&mut out, cd_start);
+    zip_u16(&mut out, 0); // comment length
+
+    out
+}
+
+/// Construit un fichier XLSX complet pour les tables et lignes libres données.
+fn xlsx_build(tables: &[ExcelTable], pending_lines: &[String]) -> Vec<u8> {
+    // Feuilles : une par table, ou une feuille vide/texte si pas de tables.
+    let mut sheets: Vec<(String, Vec<u8>)> = Vec::new();
+    if tables.is_empty() {
+        sheets.push(("Sheet1".into(), xlsx_sheet_xml(pending_lines, &[], &[])));
+    } else {
+        for t in tables {
+            sheets.push((
+                t.sheet_name.clone(),
+                xlsx_sheet_xml(&t.pre_lines, &t.headers, &t.rows),
+            ));
+        }
+    }
+    let n = sheets.len();
+
+    // [Content_Types].xml
+    let mut ct = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+        <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+        <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+        <Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+    );
+    for i in 1..=n {
+        ct.push_str(&format!(
+            "<Override PartName=\"/xl/worksheets/sheet{i}.xml\" \
+             ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        ));
+    }
+    ct.push_str("</Types>");
+
+    // _rels/.rels
+    let rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+        <Relationship Id=\"rId1\" \
+        Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" \
+        Target=\"xl/workbook.xml\"/></Relationships>";
+
+    // xl/workbook.xml
+    let mut wb = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" \
+        xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"
+    );
+    for (i, (name, _)) in sheets.iter().enumerate() {
+        let id = i + 1;
+        wb.push_str(&format!(
+            "<sheet name=\"{}\" sheetId=\"{id}\" r:id=\"rId{id}\"/>",
+            xlsx_xml_escape(name)
+        ));
+    }
+    wb.push_str("</sheets></workbook>");
+
+    // xl/_rels/workbook.xml.rels
+    let mut wb_rels = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+    );
+    for i in 1..=n {
+        wb_rels.push_str(&format!(
+            "<Relationship Id=\"rId{i}\" \
+             Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" \
+             Target=\"worksheets/sheet{i}.xml\"/>"
+        ));
+    }
+    wb_rels.push_str("</Relationships>");
+
+    // Assemblage ZIP
+    let mut zip_entries: Vec<(&str, Vec<u8>)> = vec![
+        ("[Content_Types].xml", ct.into_bytes()),
+        ("_rels/.rels", rels.as_bytes().to_vec()),
+        ("xl/workbook.xml", wb.into_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.into_bytes()),
+    ];
+    // Les noms des feuilles doivent vivre assez longtemps pour la construction.
+    let sheet_names: Vec<String> = (1..=n).map(|i| format!("xl/worksheets/sheet{i}.xml")).collect();
+    for (i, (_, xml_bytes)) in sheets.into_iter().enumerate() {
+        zip_entries.push((sheet_names[i].as_str(), xml_bytes));
+    }
+
+    build_zip_stored(&zip_entries)
+}
+
+// ---------------------------------------------------------------------------
+// PdfDestination — M23.2 : destination PDF pure Rust (PDF 1.4 minimal)
+// ---------------------------------------------------------------------------
+
+enum PdfSection {
+    PageHeader(String),
+    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
+    Line(String),
+    Blank,
+}
+
+/// Destination PDF (PDF 1.4 minimal, sans dépendance externe). Génère un
+/// fichier PDF valide avec texte et tables simples.
+pub struct PdfDestination {
+    title: Option<String>,
+    ls: usize,
+    file: Option<std::path::PathBuf>,
+    sections: Vec<PdfSection>,
+}
+
+impl PdfDestination {
+    /// Crée la destination PDF sans fichier cible.
+    pub fn new(ls: usize) -> Self {
+        PdfDestination { title: None, ls, file: None, sections: Vec::new() }
+    }
+
+    /// Crée la destination PDF avec un fichier cible.
+    pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
+        PdfDestination { title: None, ls, file: Some(file), sections: Vec::new() }
+    }
+
+    fn pdf_escape(s: &str) -> String {
+        s.chars().map(|c| match c {
+            '(' => "\\(".to_string(),
+            ')' => "\\)".to_string(),
+            '\\' => "\\\\".to_string(),
+            c if c.is_ascii() && c >= ' ' => c.to_string(),
+            _ => "?".to_string(),
+        }).collect()
+    }
+
+    fn build_pdf_content(&self) -> String {
+        let mut out = String::new();
+        out.push_str("BT\n");
+
+        let margin_x: f32 = 50.0;
+        let mut y: f32 = 742.0;
+        let line_h: f32 = 14.0;
+        let col_gap: f32 = 6.0;
+
+        for section in &self.sections {
+            match section {
+                PdfSection::PageHeader(title) => {
+                    out.push_str("/F1 14 Tf\n");
+                    out.push_str(&format!("{:.1} {:.1} Tm\n", margin_x, y));
+                    out.push_str(&format!("({}) Tj\n", Self::pdf_escape(title)));
+                    y -= 20.0;
+                }
+                PdfSection::Line(text) => {
+                    out.push_str("/F1 10 Tf\n");
+                    out.push_str(&format!("{:.1} {:.1} Tm\n", margin_x, y));
+                    out.push_str(&format!("({}) Tj\n", Self::pdf_escape(text)));
+                    y -= line_h;
+                }
+                PdfSection::Blank => {
+                    y -= line_h;
+                }
+                PdfSection::Table { headers, rows } => {
+                    out.push_str("/F1 10 Tf\n");
+                    let col_widths: Vec<f32> = (0..headers.len()).map(|i| {
+                        let max_len = std::iter::once(headers.get(i).map(|s| s.len()).unwrap_or(0))
+                            .chain(rows.iter().map(|r| r.get(i).map(|s| s.len()).unwrap_or(0)))
+                            .max().unwrap_or(6);
+                        (max_len as f32 * col_gap).max(50.0)
+                    }).collect();
+
+                    // Header row
+                    let mut cx = margin_x;
+                    for (i, header) in headers.iter().enumerate() {
+                        out.push_str(&format!("{:.1} {:.1} Tm\n", cx, y));
+                        out.push_str(&format!("({}) Tj\n", Self::pdf_escape(header)));
+                        cx += col_widths.get(i).copied().unwrap_or(50.0);
+                    }
+                    y -= line_h;
+
+                    // Data rows
+                    for row in rows {
+                        let mut cx = margin_x;
+                        for (i, cell) in row.iter().enumerate() {
+                            out.push_str(&format!("{:.1} {:.1} Tm\n", cx, y));
+                            out.push_str(&format!("({}) Tj\n", Self::pdf_escape(cell)));
+                            cx += col_widths.get(i).copied().unwrap_or(50.0);
+                        }
+                        y -= line_h;
+                        if y < 50.0 { y = 742.0; }
+                    }
+                    y -= line_h;
+                }
+            }
+        }
+
+        out.push_str("ET\n");
+        out
+    }
+
+    fn build_pdf_document(title: &Option<String>, content: String) -> Vec<u8> {
+        let _t = title.as_deref().unwrap_or("SAS Output");
+        let content_bytes = content.as_bytes().len();
+
+        let obj1 = "<<\n/Type /Catalog\n/Pages 2 0 R\n>>".to_string();
+        let obj2 = "<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>".to_string();
+        let obj3 = "<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n/Contents 4 0 R\n/Resources <<\n/Font <<\n/F1 5 0 R\n>>\n>>\n>>".to_string();
+        let obj4 = format!("<<\n/Length {}\n>>\nstream\n{}\nendstream", content_bytes, content);
+        let obj5 = "<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>".to_string();
+
+        let objects: Vec<(usize, String)> = vec![
+            (1, obj1), (2, obj2), (3, obj3), (4, obj4), (5, obj5),
+        ];
+
+        let mut pdf: Vec<u8> = Vec::new();
+        let header = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n";
+        pdf.extend_from_slice(header);
+
+        let mut offsets: Vec<usize> = Vec::new();
+        for (obj_num, body) in &objects {
+            offsets.push(pdf.len());
+            let obj_str = format!("{} 0 obj\n{}\nendobj\n", obj_num, body);
+            pdf.extend_from_slice(obj_str.as_bytes());
+        }
+
+        let xref_offset = pdf.len();
+        let xref_header = format!("xref\n0 {}\n", objects.len() + 1);
+        pdf.extend_from_slice(xref_header.as_bytes());
+        // free entry
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in &offsets {
+            pdf.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+        }
+
+        let trailer = format!(
+            "trailer\n<<\n/Size {}\n/Root 1 0 R\n>>\nstartxref\n{}\n%%EOF\n",
+            objects.len() + 1,
+            xref_offset
+        );
+        pdf.extend_from_slice(trailer.as_bytes());
+
+        pdf
+    }
+}
+
+impl OutputDestination for PdfDestination {
+    fn page_header(&mut self) {
+        let title = self.title.clone().unwrap_or_else(|| "The SAS System".to_string());
+        self.sections.push(PdfSection::PageHeader(title));
+    }
+
+    fn write_table(&mut self, headers: &[String], _aligns: &[Align], rows: &[Vec<String>]) {
+        self.sections.push(PdfSection::Table {
+            headers: headers.to_vec(),
+            rows: rows.to_vec(),
+        });
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.sections.push(PdfSection::Line(line.to_string()));
+    }
+
+    fn blank(&mut self) {
+        self.sections.push(PdfSection::Blank);
+    }
+
+    fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+    }
+
+    fn set_ls(&mut self, ls: usize) {
+        self.ls = ls;
+    }
+
+    fn ls(&self) -> usize {
+        self.ls
+    }
+
+    fn into_string(&mut self) -> String {
+        String::new()
+    }
+
+    fn finalize_to_bytes(&mut self) -> Option<(std::path::PathBuf, Vec<u8>)> {
+        let path = self.file.clone()?;
+        if self.sections.is_empty() {
+            return None;
+        }
+        let content = self.build_pdf_content();
+        let bytes = Self::build_pdf_document(&self.title, content);
+        Some((path, bytes))
+    }
+
+    fn dest_type_label(&self) -> &'static str {
+        "PDF"
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -581,5 +1199,106 @@ mod tests {
         assert!(html.contains("<p>content</p>"), "contenu attendu");
         // Après finalize, buf est vide.
         assert_eq!(h.into_string(), "", "buf doit être vide après finalize");
+    }
+
+    // --- Tests M23.1 : RtfDestination réelle ---
+
+    #[test]
+    fn rtf_table_renders_structure() {
+        let mut r = RtfDestination::new(96);
+        r.write_table(
+            &["Name".into(), "Age".into()],
+            &[Align::Left, Align::Right],
+            &[vec!["Alfred".into(), "14".into()]],
+        );
+        let out = r.into_string();
+        assert!(out.starts_with("{\\rtf1"), "RTF header manquant: {out}");
+        assert!(out.contains("\\trowd"), "table RTF manquante: {out}");
+        assert!(out.contains("Alfred"), "valeur manquante: {out}");
+        assert!(out.contains("\\qr"), "alignement right manquant: {out}");
+        assert!(out.contains("14"), "age manquant: {out}");
+    }
+
+    #[test]
+    fn rtf_escape_special_chars() {
+        let mut r = RtfDestination::new(96);
+        r.write_line("a\\b{c}d");
+        let out = r.into_string();
+        assert!(out.contains("a\\\\b\\{c\\}d"), "RTF escape rate: {out}");
+    }
+
+    #[test]
+    fn rtf_without_file_finalize_none() {
+        let mut r = RtfDestination::new(96);
+        r.write_line("test");
+        assert!(r.finalize().is_none());
+    }
+
+    #[test]
+    fn rtf_with_file_finalize_some() {
+        let tmp = std::env::temp_dir().join("test_ods.rtf");
+        let mut r = RtfDestination::with_file(96, tmp.clone());
+        r.write_line("hello");
+        let result = r.finalize();
+        assert!(result.is_some());
+        let (path, content) = result.unwrap();
+        assert_eq!(path, tmp);
+        assert!(content.starts_with("{\\rtf1"), "RTF content: {content}");
+    }
+
+    // --- Tests M23.3 : ExcelDestination réelle ---
+
+    #[test]
+    fn excel_without_file_finalize_to_bytes_none() {
+        let mut e = ExcelDestination::new(96);
+        e.write_table(
+            &["x".into()],
+            &[Align::Right],
+            &[vec!["1".into()]],
+        );
+        assert!(e.finalize_to_bytes().is_none());
+    }
+
+    #[test]
+    fn excel_with_file_finalize_to_bytes_some() {
+        let tmp = std::env::temp_dir().join("test_ods.xlsx");
+        let mut e = ExcelDestination::with_file(96, tmp.clone());
+        e.write_table(
+            &["Name".into(), "Age".into()],
+            &[Align::Left, Align::Right],
+            &[vec!["Alfred".into(), "14".into()]],
+        );
+        let result = e.finalize_to_bytes();
+        assert!(result.is_some(), "finalize_to_bytes devrait retourner Some");
+        let (path, bytes) = result.unwrap();
+        assert_eq!(path, tmp);
+        // Les fichiers XLSX commencent par PK (ZIP magic bytes)
+        assert!(bytes.starts_with(b"PK"), "XLSX doit commencer par PK: {:?}", &bytes[..4]);
+    }
+
+    // --- Tests M23.2 : PdfDestination réelle ---
+
+    #[test]
+    fn pdf_without_file_finalize_to_bytes_none() {
+        let mut p = PdfDestination::new(96);
+        p.write_line("test");
+        assert!(p.finalize_to_bytes().is_none());
+    }
+
+    #[test]
+    fn pdf_with_file_finalize_to_bytes_some() {
+        let tmp = std::env::temp_dir().join("test_ods.pdf");
+        let mut p = PdfDestination::with_file(96, tmp.clone());
+        p.write_line("The SAS System");
+        p.write_table(
+            &["Name".into(), "Age".into()],
+            &[Align::Left, Align::Right],
+            &[vec!["Alfred".into(), "14".into()]],
+        );
+        let result = p.finalize_to_bytes();
+        assert!(result.is_some(), "finalize_to_bytes devrait retourner Some");
+        let (path, bytes) = result.unwrap();
+        assert_eq!(path, tmp);
+        assert!(bytes.starts_with(b"%PDF-"), "PDF magic bytes: {:?}", &bytes[..5]);
     }
 }

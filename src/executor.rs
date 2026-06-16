@@ -373,22 +373,31 @@ fn exec_ods(
                 }
             }
             "rtf" => {
-                session.open_destination("rtf", Box::new(RtfDestination::new(ls)));
-                session
-                    .log
-                    .note("ODS RTF destination rendering is deferred to M23.");
+                if let Some(f) = file {
+                    let path = session.resolve_path(f);
+                    session.open_destination("rtf", Box::new(RtfDestination::with_file(ls, path)));
+                } else {
+                    session.open_destination("rtf", Box::new(RtfDestination::new(ls)));
+                    session.log.note("ODS RTF sans FILE= : la sortie RTF n'est pas materialisee (v1).");
+                }
             }
             "pdf" => {
-                session.open_destination("pdf", Box::new(PdfDestination::new(ls)));
-                session
-                    .log
-                    .note("ODS PDF destination rendering is deferred to M23.");
+                if let Some(f) = file {
+                    let path = session.resolve_path(f);
+                    session.open_destination("pdf", Box::new(PdfDestination::with_file(ls, path)));
+                } else {
+                    session.open_destination("pdf", Box::new(PdfDestination::new(ls)));
+                    session.log.note("ODS PDF sans FILE= : la sortie PDF n'est pas materialisee (v1).");
+                }
             }
             "excel" => {
-                session.open_destination("excel", Box::new(ExcelDestination::new(ls)));
-                session
-                    .log
-                    .note("ODS EXCEL destination rendering is deferred to M23.");
+                if let Some(f) = file {
+                    let path = session.resolve_path(f);
+                    session.open_destination("excel", Box::new(ExcelDestination::with_file(ls, path)));
+                } else {
+                    session.open_destination("excel", Box::new(ExcelDestination::new(ls)));
+                    session.log.note("ODS EXCEL sans FILE= : la sortie Excel n'est pas materialisee (v1).");
+                }
             }
             other => {
                 session.log.warning(&format!(
@@ -532,11 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_ods_rtf_emits_deferral_note() {
+    fn execute_ods_rtf_without_file_emits_note() {
         let out = run_det("ods rtf;\n");
         assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
         assert!(
-            out.log.contains("ODS RTF destination rendering is deferred"),
+            out.log.contains("ODS RTF sans FILE="),
             "{}",
             out.log
         );
