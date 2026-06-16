@@ -22,7 +22,7 @@
 //!   "Option XXX is not yet supported".
 
 use super::{title_level, StatementStream};
-use crate::ast::GlobalStmt;
+use crate::ast::{GlobalStmt, OdsAction};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
 
@@ -48,18 +48,174 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
     } else if kw == "options" {
         ts.next(); // consume `options`
         parse_options(ts)
+    } else if kw == "ods" {
+        ts.next(); // consume `ods`
+        parse_ods_statement(ts)
     } else if let Some(n) = title_level(&kw) {
         ts.next(); // consume `titleN`
         parse_title(ts, n)
     } else {
         Err(SasError::parse(
             format!(
-                "Expected LIBNAME, OPTIONS, or TITLEn; got '{}'",
+                "Expected LIBNAME, OPTIONS, ODS, or TITLEn; got '{}'",
                 kw.to_uppercase()
             ),
             head.span,
         ))
     }
+}
+
+// ── ODS ──────────────────────────────────────────────────────────────────────
+
+/// Parse a statement `ODS` (Output Delivery System), schéma large v1.
+///
+/// Le mot-clé `ODS` a déjà été consommé par l'appelant. Formes reconnues :
+/// - `ODS LISTING ;`                 → ouvre le listing texte (défaut)
+/// - `ODS HTML ;`                    → ouvre la destination HTML
+/// - `ODS RTF|PDF|EXCEL ;`           → stubs (parse no-op, rendu différé M23)
+/// - `ODS HTML CLOSE ;`              → ferme la destination HTML
+/// - `ODS CLOSE ;` / `ODS CLOSE name ;` → ferme la destination (courante / nommée)
+/// - `ODS _ALL_ CLOSE ;`             → ferme tout (traité comme CLOSE générique)
+///
+/// Options reconnues (parsées, stockées pour M22.4+) : `FILE='...'`,
+/// `STYLE=name`, `OPTIONS=...` (ignorée). `SELECT`/`EXCLUDE` → différés M22.3.
+pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
+    // `ODS ;` nu : no-op accepté.
+    if ts.peek().kind == TokenKind::Semi {
+        ts.expect_semi()?;
+        return Ok(GlobalStmt::Ods {
+            destination: "listing".to_string(),
+            action: OdsAction::Open,
+            file: None,
+            style: None,
+        });
+    }
+
+    // Premier mot : soit un verbe global (`CLOSE`), soit un nom de destination.
+    let first_tok = ts.peek().clone();
+    let first = match first_tok.ident() {
+        Some(s) => s.to_ascii_lowercase(),
+        None => {
+            return Err(SasError::parse(
+                "ODS requires a destination name or a CLOSE keyword",
+                first_tok.span,
+            ));
+        }
+    };
+
+    // `ODS CLOSE [name] ;` — verbe en tête, destination optionnelle après.
+    if first == "close" {
+        ts.next(); // consume `close`
+        let dest = if let Some(name) = ts.peek().ident() {
+            let d = name.to_ascii_lowercase();
+            ts.next();
+            d
+        } else {
+            // `ODS CLOSE ;` — ferme la destination courante (alias listing).
+            "listing".to_string()
+        };
+        let (file, style) = parse_ods_options(ts)?;
+        ts.expect_semi()?;
+        return Ok(GlobalStmt::Ods {
+            destination: dest,
+            action: OdsAction::Close,
+            file,
+            style,
+        });
+    }
+
+    // Sinon, `first` est un nom de destination : listing / html / rtf / pdf /
+    // excel / _all_ / autre.
+    let destination = first;
+    ts.next(); // consume destination name
+
+    // Action suivant la destination : CLOSE / SELECT / EXCLUDE / (défaut OPEN).
+    let action = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+        Some(ref a) if a == "close" => {
+            ts.next();
+            OdsAction::Close
+        }
+        Some(ref a) if a == "open" => {
+            ts.next();
+            OdsAction::Open
+        }
+        Some(ref a) if a == "select" => {
+            return Err(SasError::parse(
+                "ODS SELECT is not yet supported (deferred to M22.3)",
+                ts.peek().span,
+            ));
+        }
+        Some(ref a) if a == "exclude" => {
+            return Err(SasError::parse(
+                "ODS EXCLUDE is not yet supported (deferred to M22.3)",
+                ts.peek().span,
+            ));
+        }
+        _ => OdsAction::Open,
+    };
+
+    let (file, style) = parse_ods_options(ts)?;
+    ts.expect_semi()?;
+    Ok(GlobalStmt::Ods {
+        destination,
+        action,
+        file,
+        style,
+    })
+}
+
+/// Parse les options d'un statement `ODS` jusqu'au `;` : `FILE=`, `STYLE=`,
+/// `OPTIONS=` (ignorée). Renvoie `(file, style)`. Les options inconnues lèvent
+/// une erreur de parse (schéma large v1 strict sur les options).
+fn parse_ods_options(ts: &mut StatementStream) -> Result<(Option<String>, Option<String>)> {
+    let mut file: Option<String> = None;
+    let mut style: Option<String> = None;
+
+    loop {
+        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        let name_tok = ts.peek().clone();
+        let name = match name_tok.ident() {
+            Some(s) => s.to_ascii_lowercase(),
+            None => {
+                return Err(SasError::parse(
+                    "Expected an ODS option name (FILE=, STYLE=, ...) or ';'",
+                    name_tok.span,
+                ));
+            }
+        };
+        ts.next(); // consume option name
+
+        match name.as_str() {
+            "file" | "style" | "options" => {
+                // Toutes ces options attendent `= valeur`.
+                if ts.peek().kind != TokenKind::Eq {
+                    return Err(SasError::parse(
+                        format!("ODS option {} requires a value (e.g. {}=...)", name.to_uppercase(), name.to_uppercase()),
+                        ts.peek().span,
+                    ));
+                }
+                ts.next(); // consume `=`
+                let val_tok = ts.peek().clone();
+                let value = parse_option_value(ts, &val_tok.span)?;
+                match name.as_str() {
+                    "file" => file = Some(value),
+                    "style" => style = Some(value),
+                    // OPTIONS= : parsée mais ignorée en v1.
+                    _ => {}
+                }
+            }
+            other => {
+                return Err(SasError::parse(
+                    format!("ODS option '{}' is not supported in this build.", other.to_uppercase()),
+                    name_tok.span,
+                ));
+            }
+        }
+    }
+
+    Ok((file, style))
 }
 
 // ── LIBNAME ─────────────────────────────────────────────────────────────────
@@ -548,6 +704,156 @@ mod tests {
         assert_eq!(
             stmt,
             GlobalStmt::Options(vec![("decimals".into(), Some("2.5".into()))])
+        );
+    }
+
+    // ── ODS ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_ods_listing() {
+        let stmt = parse("ODS LISTING ;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "listing".into(),
+                action: OdsAction::Open,
+                file: None,
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_html_open() {
+        let stmt = parse("ods html;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Open,
+                file: None,
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_html_with_file() {
+        let stmt = parse("ODS HTML FILE='out.html';").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Open,
+                file: Some("out.html".into()),
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_html_with_file_and_style() {
+        let stmt = parse("ods html file='r.html' style=journal;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Open,
+                file: Some("r.html".into()),
+                style: Some("journal".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_rtf_pdf_excel_stubs() {
+        for (src, dest) in [
+            ("ods rtf;", "rtf"),
+            ("ods pdf;", "pdf"),
+            ("ods excel;", "excel"),
+        ] {
+            let stmt = parse(src).unwrap();
+            assert_eq!(
+                stmt,
+                GlobalStmt::Ods {
+                    destination: dest.into(),
+                    action: OdsAction::Open,
+                    file: None,
+                    style: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn parse_ods_close_destination_after_name() {
+        let stmt = parse("ODS HTML CLOSE;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Close,
+                file: None,
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_close_verb_with_name() {
+        let stmt = parse("ods close html;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Close,
+                file: None,
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_close_bare_defaults_listing() {
+        let stmt = parse("ODS CLOSE;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "listing".into(),
+                action: OdsAction::Close,
+                file: None,
+                style: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ods_select_is_deferred_error() {
+        let err = parse("ods html select foo;").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.to_lowercase().contains("select") && msg.contains("M22.3"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_ods_unknown_option_is_error() {
+        let err = parse("ods html bogus=1;").unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn parse_ods_case_insensitive() {
+        let stmt = parse("Ods Html Close ;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Ods {
+                destination: "html".into(),
+                action: OdsAction::Close,
+                file: None,
+                style: None,
+            }
         );
     }
 }

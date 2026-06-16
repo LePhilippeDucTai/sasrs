@@ -30,7 +30,7 @@
 //! lexer. Le code retour est dérivé des compteurs du LogWriter par
 //! lib.rs (0 propre / 1 warnings / 2 erreurs).
 
-use crate::ast::GlobalStmt;
+use crate::ast::{GlobalStmt, OdsAction};
 use crate::datastep;
 use crate::error::Result;
 use crate::log::StepTimer;
@@ -277,6 +277,11 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                             .log
                             .error("The value for the SASAUTOS option is missing."),
                     }
+                } else if value.is_none() && session.set_ods_option(name) {
+                    // M22.2 — options globales ODS booléennes (CENTER/NOCENTER,
+                    // DATE/NODATE, NUMBER/NONUMBER) posées sur `session.ods_options`.
+                    // Stockées seulement (application au rendu différée M22.3+) :
+                    // pas d'effet visible sur le listing texte par défaut.
                 } else if let Some(flag) = parse_macro_trace_flag(name) {
                     // M19.3 — options de trace booléennes : MPRINT/MLOGIC/
                     // SYMBOLGEN (et leurs formes NO...). Appliquées à la session
@@ -304,6 +309,78 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                     ));
                 }
             }
+        }
+        GlobalStmt::Ods { destination, action, file, style } => {
+            exec_ods(session, destination, *action, file.as_deref(), style.as_deref());
+        }
+        GlobalStmt::OdsOptions { nocenter, date, number } => {
+            session.ods_options.nocenter = *nocenter;
+            session.ods_options.date = *date;
+            session.ods_options.number = *number;
+        }
+    }
+}
+
+/// M22.2 — exécute un statement `ODS` : ouvre/ferme la destination demandée.
+///
+/// Invariant : la destination courante reste `session.listing`. `ODS LISTING`
+/// réinstalle le listing texte par défaut ; `ODS HTML` ouvre la destination
+/// HTML ; RTF/PDF/EXCEL sont des stubs (note « différé M23 »). `CLOSE` ferme la
+/// destination nommée. FILE=/STYLE= sont stockés dans l'AST mais utilisés
+/// seulement en M22.4+ (aucune action fichier ici).
+fn exec_ods(
+    session: &mut Session,
+    destination: &str,
+    action: OdsAction,
+    _file: Option<&str>,
+    _style: Option<&str>,
+) {
+    use crate::output::{HtmlDestination, RtfDestination, PdfDestination, ExcelDestination, TextListing};
+
+    let dest = destination.to_ascii_lowercase();
+    let ls = session.options.ls;
+
+    match action {
+        OdsAction::Close => {
+            session.close_destination(&dest);
+        }
+        OdsAction::Open => match dest.as_str() {
+            "listing" => {
+                session.open_destination("listing", Box::new(TextListing::new(ls)));
+            }
+            "html" => {
+                session.open_destination("html", Box::new(HtmlDestination::new(ls)));
+            }
+            "rtf" => {
+                session.open_destination("rtf", Box::new(RtfDestination::new(ls)));
+                session
+                    .log
+                    .note("ODS RTF destination rendering is deferred to M23.");
+            }
+            "pdf" => {
+                session.open_destination("pdf", Box::new(PdfDestination::new(ls)));
+                session
+                    .log
+                    .note("ODS PDF destination rendering is deferred to M23.");
+            }
+            "excel" => {
+                session.open_destination("excel", Box::new(ExcelDestination::new(ls)));
+                session
+                    .log
+                    .note("ODS EXCEL destination rendering is deferred to M23.");
+            }
+            other => {
+                session.log.warning(&format!(
+                    "ODS destination {} is not supported in this build.",
+                    other.to_uppercase()
+                ));
+            }
+        },
+        OdsAction::Select | OdsAction::Exclude => {
+            // Différé M22.3 ; le parser rejette déjà ces formes, donc inatteignable.
+            session
+                .log
+                .note("ODS SELECT/EXCLUDE is deferred to M22.3.");
         }
     }
 }
@@ -418,6 +495,46 @@ mod tests {
     }
 
     #[test]
+    fn execute_ods_opens_listing_and_html() {
+        // ODS LISTING / ODS HTML / ODS CLOSE parsent et s'exécutent sans erreur,
+        // et le listing texte reste fonctionnel après bascule.
+        let out = run_det(
+            "ods listing;\n\
+             ods html file='out.html';\n\
+             ods html close;\n\
+             data a; x = 1; run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // Le listing texte par défaut fonctionne toujours après la bascule ODS.
+        assert!(out.listing.contains("Obs"), "{}", out.listing);
+    }
+
+    #[test]
+    fn execute_ods_rtf_emits_deferral_note() {
+        let out = run_det("ods rtf;\n");
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        assert!(
+            out.log.contains("ODS RTF destination rendering is deferred"),
+            "{}",
+            out.log
+        );
+    }
+
+    #[test]
+    fn execute_global_ods_options_no_warning() {
+        // NOCENTER/NODATE/NONUMBER sont reconnues comme options ODS et ne
+        // déclenchent pas de WARNING "not yet supported".
+        let out = run_det("options nocenter nodate nonumber;\n");
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        assert!(
+            !out.log.contains("is not yet supported"),
+            "unexpected warning in log:\n{}",
+            out.log
+        );
+    }
+
+    #[test]
     fn error_recovery_continues_session() {
         let out = run_det(
             "frobnicate;\n\
@@ -458,9 +575,11 @@ mod tests {
 
     #[test]
     fn options_ls_applied_and_unknown_option_warns() {
-        let out = run_det("options ls=120 nocenter;");
+        // M22.2 — CENTER/NOCENTER/DATE/NODATE/NUMBER/NONUMBER are now handled
+        // as ODS options, so no warning. Test with an actually unknown option.
+        let out = run_det("options ls=120 unknownopt;");
         assert_eq!(out.exit_code, 1, "{}", out.log);
-        assert!(out.log.contains("WARNING: Option NOCENTER is not yet supported."));
+        assert!(out.log.contains("WARNING: Option UNKNOWNOPT is not yet supported."));
     }
 
     #[test]

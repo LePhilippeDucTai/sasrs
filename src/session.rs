@@ -39,6 +39,35 @@ impl Default for SasOptions {
     }
 }
 
+/// M22.2 — options globales ODS appliquées au rendu des destinations.
+///
+/// Ces options correspondent aux options système SAS classiques
+/// (CENTER/NOCENTER, DATE/NODATE, NUMBER/NONUMBER). En M22.2 elles sont
+/// stockées sur la session et exposées aux destinations via `session.ods_options`
+/// ; leur application effective au rendu (centrage, ligne de date/numéro de page)
+/// arrive en M22.3+. Les valeurs par défaut reproduisent les défauts SAS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OdsOptions {
+    /// `false` = sortie centrée (défaut SAS) ; `true` = NOCENTER (alignée à
+    /// gauche).
+    pub nocenter: bool,
+    /// `true` = afficher la date (défaut SAS) ; `false` = NODATE.
+    pub date: bool,
+    /// `true` = numéroter les pages (défaut SAS) ; `false` = NONUMBER.
+    pub number: bool,
+}
+
+impl Default for OdsOptions {
+    fn default() -> Self {
+        // Défauts SAS : CENTER, DATE, NUMBER actifs.
+        OdsOptions {
+            nocenter: false,
+            date: true,
+            number: true,
+        }
+    }
+}
+
 /// Everything a step needs to execute: libraries, output writers, options.
 pub struct Session {
     pub libs: LibraryManager,
@@ -53,6 +82,13 @@ pub struct Session {
     /// seul `listing` (texte) est actif tant qu'aucun `ODS` n'a ouvert de
     /// destination supplémentaire.
     pub output_destinations: HashMap<String, Box<dyn OutputDestination>>,
+    /// M22.2 — options globales ODS (CENTER/NOCENTER, DATE/NODATE,
+    /// NUMBER/NONUMBER), modifiées via [`Session::set_ods_option`] et exposées
+    /// aux destinations de sortie. Défauts SAS (centré, date, numéro).
+    pub ods_options: OdsOptions,
+    /// M22.2 — nom (UPPERCASE) de la destination de sortie courante portée par
+    /// `self.listing`. "LISTING" par défaut. Sert à `ODS CLOSE` sans nom.
+    pub current_destination: String,
     pub options: SasOptions,
     /// Directory against which relative LIBNAME paths resolve.
     pub base_dir: PathBuf,
@@ -115,6 +151,8 @@ impl Session {
             log: LogWriter::new(deterministic),
             listing: Box::new(TextListing::new(options.ls)),
             output_destinations: HashMap::new(),
+            ods_options: OdsOptions::default(),
+            current_destination: "LISTING".to_string(),
             options,
             base_dir,
             last_dataset: None,
@@ -143,5 +181,149 @@ impl Session {
         } else {
             self.base_dir.join(p)
         }
+    }
+
+    /// M22.2 — ouvre une destination ODS.
+    ///
+    /// La destination « courante » de la session reste toujours
+    /// `self.listing: Box<dyn OutputDestination>` (le défaut texte ou la
+    /// dernière destination ouverte). Ouvrir `listing` réinstalle la
+    /// destination texte par défaut ; ouvrir une autre destination la pose
+    /// comme `listing` courant ET l'enregistre dans `output_destinations`
+    /// (indexée par nom UPPERCASE) pour qu'`ODS CLOSE` puisse la retrouver.
+    ///
+    /// Invariant : la LINESIZE de la session est propagée à la nouvelle
+    /// destination pour préserver la cohérence de l'en-tête de page. Le nom de
+    /// la destination courante est mémorisé dans `current_destination` afin que
+    /// `ODS CLOSE` (sans nom) sache quoi fermer.
+    pub fn open_destination(&mut self, name: &str, mut dest: Box<dyn OutputDestination>) {
+        let key = name.to_ascii_uppercase();
+        dest.set_ls(self.options.ls);
+        // La destination courante de la session reste toujours `self.listing` ;
+        // on y installe la destination demandée et on note son nom.
+        self.listing = dest;
+        self.current_destination = key;
+    }
+
+    /// M22.2 — ferme une destination ODS nommée.
+    ///
+    /// Si la destination fermée est la destination courante (ou `LISTING`), on
+    /// rétablit le listing texte par défaut comme destination courante. Une
+    /// destination supplémentaire enregistrée (M22.3+) est retirée du registre.
+    pub fn close_destination(&mut self, name: &str) {
+        let key = name.to_ascii_uppercase();
+        self.output_destinations.remove(&key);
+        // Fermer la destination courante (ou explicitement LISTING) → revenir au
+        // listing texte par défaut byte-identique.
+        if key == "LISTING" || key == self.current_destination {
+            self.listing = Box::new(TextListing::new(self.options.ls));
+            self.current_destination = "LISTING".to_string();
+        }
+    }
+
+    /// M22.2 — applique une option globale ODS (CENTER/NOCENTER, DATE/NODATE,
+    /// NUMBER/NONUMBER) à la session. Renvoie `true` si `name` est reconnue.
+    pub fn set_ods_option(&mut self, name: &str) -> bool {
+        match name.to_ascii_lowercase().as_str() {
+            "center" => {
+                self.ods_options.nocenter = false;
+                true
+            }
+            "nocenter" => {
+                self.ods_options.nocenter = true;
+                true
+            }
+            "date" => {
+                self.ods_options.date = true;
+                true
+            }
+            "nodate" => {
+                self.ods_options.date = false;
+                true
+            }
+            "number" => {
+                self.ods_options.number = true;
+                true
+            }
+            "nonumber" => {
+                self.ods_options.number = false;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{HtmlDestination, TextListing};
+
+    fn new_session() -> Session {
+        let tmp = std::env::temp_dir();
+        Session::new(None, tmp, true).expect("session")
+    }
+
+    #[test]
+    fn default_ods_options_are_sas_defaults() {
+        let s = new_session();
+        assert!(!s.ods_options.nocenter);
+        assert!(s.ods_options.date);
+        assert!(s.ods_options.number);
+    }
+
+    #[test]
+    fn set_ods_option_flags() {
+        let mut s = new_session();
+        assert!(s.set_ods_option("nocenter"));
+        assert!(s.ods_options.nocenter);
+        assert!(s.set_ods_option("center"));
+        assert!(!s.ods_options.nocenter);
+
+        assert!(s.set_ods_option("nodate"));
+        assert!(!s.ods_options.date);
+        assert!(s.set_ods_option("date"));
+        assert!(s.ods_options.date);
+
+        assert!(s.set_ods_option("nonumber"));
+        assert!(!s.ods_options.number);
+        assert!(s.set_ods_option("NUMBER"));
+        assert!(s.ods_options.number);
+
+        // Option inconnue → false, pas de modification.
+        assert!(!s.set_ods_option("frobnicate"));
+    }
+
+    #[test]
+    fn open_listing_keeps_current() {
+        let mut s = new_session();
+        // La destination courante par défaut est un listing texte avec LS=96.
+        assert_eq!(s.listing.ls(), 96);
+        s.open_destination("listing", Box::new(TextListing::new(96)));
+        assert_eq!(s.listing.ls(), 96);
+        // Aucune destination additionnelle enregistrée.
+        assert!(s.output_destinations.is_empty());
+    }
+
+    #[test]
+    fn open_html_becomes_current() {
+        let mut s = new_session();
+        s.open_destination("html", Box::new(HtmlDestination::new(96)));
+        // HTML est la destination courante : son rendu mémoire est vide (stub),
+        // et son nom est mémorisé.
+        assert_eq!(s.current_destination, "HTML");
+        assert_eq!(s.listing.into_string(), "");
+    }
+
+    #[test]
+    fn close_html_restores_text_listing() {
+        let mut s = new_session();
+        s.open_destination("html", Box::new(HtmlDestination::new(96)));
+        s.close_destination("html");
+        assert_eq!(s.current_destination, "LISTING");
+        // Le listing texte par défaut redevient la destination courante :
+        // un write_line est rendu verbatim.
+        s.listing.write_line("hello");
+        assert_eq!(s.listing.into_string(), "hello\n");
     }
 }

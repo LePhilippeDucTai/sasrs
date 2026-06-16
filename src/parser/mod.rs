@@ -81,7 +81,7 @@ pub(crate) fn title_level(name: &str) -> Option<u8> {
 /// Mot-clé qui ouvre un bloc (frontière de step implicite). Les statements
 /// globaux sont des frontières de step en SAS, au même titre que DATA/PROC.
 fn is_block_head_kw(lower: &str) -> bool {
-    matches!(lower, "data" | "proc" | "libname" | "options") || title_level(lower).is_some()
+    matches!(lower, "data" | "proc" | "libname" | "options" | "ods") || title_level(lower).is_some()
 }
 
 fn validate_sas_name(name: &str, span: Span) -> Result<()> {

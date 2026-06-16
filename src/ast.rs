@@ -643,4 +643,47 @@ pub enum GlobalStmt {
     },
     /// Parsed OPTIONS name=value / flag list; unknown options warn.
     Options(Vec<(String, Option<String>)>),
+    /// M22.2 — statement `ODS` : ouvre/ferme une destination de sortie.
+    ///
+    /// Schéma large v1 :
+    /// - `ODS LISTING ;`  → ouvre le listing texte (défaut)
+    /// - `ODS HTML ;`     → ouvre la destination HTML
+    /// - `ODS RTF|PDF|EXCEL ;` → stubs (parse no-op, rendu différé M23)
+    /// - `ODS CLOSE <dest> ;` / `ODS <dest> CLOSE ;` → ferme la destination
+    ///
+    /// `file`/`style` (FILE=/STYLE=) sont parsés mais seulement stockés ici ;
+    /// leur usage réel arrive en M22.4+ (écriture fichier / styles).
+    Ods {
+        /// Nom de destination en minuscules ("listing", "html", "rtf", …).
+        destination: String,
+        action: OdsAction,
+        /// Option FILE= (chemin de sortie). Différé M22.4+.
+        file: Option<String>,
+        /// Option STYLE= (nom de style). Différé M22.4+.
+        style: Option<String>,
+    },
+    /// M22.2 — options globales ODS portées par `OPTIONS` SAS classiques
+    /// (CENTER/NOCENTER, DATE/NODATE, NUMBER/NONUMBER). Stockées sur la session
+    /// et exposées aux destinations.
+    OdsOptions {
+        /// `false` = centré (défaut SAS), `true` = NOCENTER.
+        nocenter: bool,
+        /// `true` = afficher la date (défaut), `false` = NODATE.
+        date: bool,
+        /// `true` = numéro de page (défaut), `false` = NONUMBER.
+        number: bool,
+    },
+}
+
+/// M22.2 — action d'un statement `ODS` sur une destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OdsAction {
+    /// Ouvre la destination (forme par défaut : `ODS HTML ;`).
+    Open,
+    /// Ferme la destination (`ODS HTML CLOSE ;` / `ODS CLOSE ...`).
+    Close,
+    /// `ODS <dest> SELECT ...` — différé M22.3.
+    Select,
+    /// `ODS <dest> EXCLUDE ...` — différé M22.3.
+    Exclude,
 }
