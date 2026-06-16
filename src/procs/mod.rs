@@ -26,6 +26,7 @@ pub mod format;
 pub mod freq;
 pub mod import;
 pub mod means;
+pub mod npar1way;
 pub mod options;
 pub mod print;
 pub mod printto;
@@ -34,6 +35,7 @@ pub mod report;
 pub mod sort;
 pub mod tabulate;
 pub mod transpose;
+pub mod ttest;
 pub mod univariate;
 
 use crate::error::{Result, SasError};
@@ -63,6 +65,8 @@ pub enum ProcAst {
     Printto(printto::PrinttoAst),
     Options(options::OptionsAst),
     Catalog(catalog::CatalogAst),
+    TTest(ttest::TTestAst),
+    Npar1way(npar1way::NparAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -171,6 +175,14 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = catalog::parse(ts)?;
             Ok(ProcAst::Catalog(ast))
         }
+        "ttest" => {
+            let ast = ttest::parse(ts)?;
+            Ok(ProcAst::TTest(ast))
+        }
+        "npar1way" => {
+            let ast = npar1way::parse(ts)?;
+            Ok(ProcAst::Npar1way(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -210,6 +222,8 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Printto(a) => printto::execute(a, session),
         ProcAst::Options(a) => options::execute(a, session),
         ProcAst::Catalog(a) => catalog::execute(a, session),
+        ProcAst::TTest(a) => ttest::execute(a, session),
+        ProcAst::Npar1way(a) => npar1way::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).
