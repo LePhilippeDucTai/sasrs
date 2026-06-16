@@ -328,18 +328,18 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     }
 }
 
-/// M22.2 — exécute un statement `ODS` : ouvre/ferme la destination demandée.
+/// M22.2/M22.4 — exécute un statement `ODS` : ouvre/ferme la destination demandée.
 ///
 /// Invariant : la destination courante reste `session.listing`. `ODS LISTING`
 /// réinstalle le listing texte par défaut ; `ODS HTML` ouvre la destination
-/// HTML ; RTF/PDF/EXCEL sont des stubs (note « différé M23 »). `CLOSE` ferme la
-/// destination nommée. FILE=/STYLE= sont stockés dans l'AST mais utilisés
-/// seulement en M22.4+ (aucune action fichier ici).
+/// HTML (M22.4 : avec fichier si FILE= est fourni) ; RTF/PDF/EXCEL sont des
+/// stubs (note « différé M23 »). `CLOSE` ferme la destination nommée (M22.4 :
+/// déclenche l'écriture du fichier HTML si applicable).
 fn exec_ods(
     session: &mut Session,
     destination: &str,
     action: OdsAction,
-    _file: Option<&str>,
+    file: Option<&str>,
     _style: Option<&str>,
 ) {
     use crate::output::{HtmlDestination, RtfDestination, PdfDestination, ExcelDestination, TextListing};
@@ -356,7 +356,21 @@ fn exec_ods(
                 session.open_destination("listing", Box::new(TextListing::new(ls)));
             }
             "html" => {
-                session.open_destination("html", Box::new(HtmlDestination::new(ls)));
+                // M22.4 : si FILE= est fourni, ouvrir avec un fichier cible ;
+                // sinon émettre une NOTE informant que la sortie n'est pas
+                // matérialisée (aucun fichier).
+                if let Some(f) = file {
+                    let path = session.resolve_path(f);
+                    session.open_destination(
+                        "html",
+                        Box::new(HtmlDestination::with_file(ls, path)),
+                    );
+                } else {
+                    session.open_destination("html", Box::new(HtmlDestination::new(ls)));
+                    session.log.note(
+                        "ODS HTML sans FILE= : la sortie HTML n\u{2019}est pas mat\u{e9}rialis\u{e9}e (v1).",
+                    );
+                }
             }
             "rtf" => {
                 session.open_destination("rtf", Box::new(RtfDestination::new(ls)));

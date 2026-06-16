@@ -89,6 +89,30 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
         session.log.error(&e.to_string());
     }
 
+    // M22.4 — filet de sécurité : si une destination HTML avec fichier cible est
+    // encore ouverte à la fin du programme (fixture sans `ODS HTML CLOSE`), on
+    // l'écrit maintenant. La NOTE va dans le log AVANT `log.into_string()`.
+    if let Some((path, html)) = session.listing.finalize() {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("output.html")
+            .to_string();
+        match std::fs::write(&path, &html) {
+            Ok(()) => {
+                session
+                    .log
+                    .note(&format!("Writing HTML Body file: {}", file_name));
+            }
+            Err(e) => {
+                session.log.note(&format!(
+                    "WARNING: Could not write HTML file {}: {}",
+                    file_name, e
+                ));
+            }
+        }
+    }
+
     let exit_code = if session.log.errors > 0 {
         2
     } else if session.log.warnings > 0 {

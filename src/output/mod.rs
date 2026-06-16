@@ -67,6 +67,13 @@ pub trait OutputDestination {
     /// disque). Remplace l'ancien `ListingWriter::into_string` (qui consommait
     /// `self`, impossible derrière un `Box<dyn …>`).
     fn into_string(&mut self) -> String;
+
+    /// Finalise la destination : si elle cible un fichier, renvoie
+    /// `Some((path, contenu))` pour que l'appelant écrive le fichier sur disque.
+    /// La valeur par défaut (listing texte et stubs) renvoie `None`.
+    fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
+        None
+    }
 }
 
 /// Destination texte par défaut : adaptateur au-dessus de [`ListingWriter`].
@@ -128,8 +135,181 @@ impl OutputDestination for TextListing {
     }
 }
 
-/// Squelette commun des destinations no-op (HTML/RTF/PDF/Excel) tant que leur
-/// rendu n'est pas implémenté (M22.4 / M23). Conserve néanmoins titre et
+// ---------------------------------------------------------------------------
+// HtmlDestination — M22.4 : destination HTML réelle (tables CSS + fichier)
+// ---------------------------------------------------------------------------
+
+/// Destination HTML (tables CSS, fichier `.html`).
+///
+/// Génère du HTML valide avec une feuille de style CSS embarquée. La sortie
+/// est accumulée en mémoire dans `buf` puis drainée par [`into_string`] soit
+/// explicitement (via le trait [`OutputDestination`]), soit implicitement lors
+/// d'un [`close_destination`] via [`finalize`].
+///
+/// Cycle de vie :
+/// - `new(ls)` : pas de fichier cible → `finalize()` renvoie `None`.
+/// - `with_file(ls, path)` : fichier cible → `finalize()` renvoie
+///   `Some((path, html_complet))`.
+pub struct HtmlDestination {
+    buf: String,
+    title: Option<String>,
+    ls: usize,
+    file: Option<std::path::PathBuf>,
+    wrote_anything: bool,
+}
+
+impl HtmlDestination {
+    /// Crée la destination HTML sans fichier cible (sortie en mémoire seulement).
+    pub fn new(ls: usize) -> Self {
+        HtmlDestination {
+            buf: String::new(),
+            title: None,
+            ls,
+            file: None,
+            wrote_anything: false,
+        }
+    }
+
+    /// Crée la destination HTML avec un fichier cible.
+    pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
+        HtmlDestination {
+            buf: String::new(),
+            title: None,
+            ls,
+            file: Some(file),
+            wrote_anything: false,
+        }
+    }
+
+    /// Échappe les caractères HTML spéciaux.
+    ///
+    /// L'ordre est critique : `&` doit être traité EN PREMIER pour éviter de
+    /// ré-échapper les séquences `&amp;` produites ensuite.
+    fn html_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+}
+
+impl OutputDestination for HtmlDestination {
+    fn page_header(&mut self) {
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "The SAS System".to_string());
+        self.buf.push_str(&format!(
+            "<h1 class=\"systitle\">{}</h1>\n",
+            Self::html_escape(&title)
+        ));
+        self.wrote_anything = true;
+    }
+
+    fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
+        self.buf.push_str("<table class=\"sas\">\n<thead>\n<tr>");
+        for (i, h) in headers.iter().enumerate() {
+            let align_attr = match aligns.get(i).copied().unwrap_or(Align::Left) {
+                Align::Right => " style=\"text-align:right\"",
+                Align::Left => "",
+            };
+            self.buf.push_str(&format!(
+                "<th{attr}>{text}</th>",
+                attr = align_attr,
+                text = Self::html_escape(h)
+            ));
+        }
+        self.buf.push_str("</tr>\n</thead>\n<tbody>\n");
+        for row in rows {
+            self.buf.push_str("<tr>");
+            for (i, cell) in row.iter().enumerate() {
+                let align_attr = match aligns.get(i).copied().unwrap_or(Align::Left) {
+                    Align::Right => " style=\"text-align:right\"",
+                    Align::Left => "",
+                };
+                self.buf.push_str(&format!(
+                    "<td{attr}>{text}</td>",
+                    attr = align_attr,
+                    text = Self::html_escape(cell)
+                ));
+            }
+            self.buf.push_str("</tr>\n");
+        }
+        self.buf.push_str("</tbody>\n</table>\n");
+        self.wrote_anything = true;
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.buf
+            .push_str(&format!("<p>{}</p>\n", Self::html_escape(line)));
+        self.wrote_anything = true;
+    }
+
+    fn blank(&mut self) {
+        // no-op : les paragraphes HTML séparent naturellement le contenu.
+    }
+
+    fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+    }
+
+    fn set_ls(&mut self, ls: usize) {
+        self.ls = ls;
+    }
+
+    fn ls(&self) -> usize {
+        self.ls
+    }
+
+    /// Draine la sortie accumulée sous forme de document HTML complet.
+    ///
+    /// Si `buf` est vide (rien n'a été écrit), renvoie une chaîne vide
+    /// (comportement idempotent identique à `TextListing::into_string`).
+    /// Après cet appel `buf` est vide : un second appel renvoie `""`.
+    fn into_string(&mut self) -> String {
+        if self.buf.is_empty() {
+            return String::new();
+        }
+        let body = std::mem::take(&mut self.buf);
+        self.wrote_anything = false;
+        format!(
+            "<!DOCTYPE html>\n\
+             <html>\n\
+             <head>\n\
+             <meta charset=\"utf-8\">\n\
+             <style>\
+table.sas{{border-collapse:collapse;}} \
+table.sas th,table.sas td{{border:1px solid #888;padding:4px;}}\
+</style>\n\
+             </head>\n\
+             <body>\n\
+             {body}\
+             </body>\n\
+             </html>\n"
+        )
+    }
+
+    /// Finalise la destination : si un fichier cible a été configuré, renvoie
+    /// `Some((path, html_complet))` pour que l'appelant l'écrive sur disque.
+    /// Sinon renvoie `None`.
+    fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
+        let path = self.file.clone()?;
+        let html = self.into_string();
+        if html.is_empty() {
+            // Rien à écrire (destination ouverte mais inutilisée).
+            None
+        } else {
+            Some((path, html))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Squelette commun des destinations no-op (RTF/PDF/Excel)
+// ---------------------------------------------------------------------------
+
+/// Squelette commun des destinations no-op (RTF/PDF/Excel) tant que leur
+/// rendu n'est pas implémenté (M23). Conserve néanmoins titre et
 /// LINESIZE pour que le statement `ODS` puisse les configurer sans surprise.
 macro_rules! stub_destination {
     ($name:ident, $doc:expr) => {
@@ -148,7 +328,7 @@ macro_rules! stub_destination {
 
         impl OutputDestination for $name {
             fn page_header(&mut self) {
-                // no-op : rendu différé (M22.4 / M23).
+                // no-op : rendu différé (M23).
             }
 
             fn write_table(
@@ -157,15 +337,15 @@ macro_rules! stub_destination {
                 _aligns: &[Align],
                 _rows: &[Vec<String>],
             ) {
-                // no-op : rendu différé (M22.4 / M23).
+                // no-op : rendu différé (M23).
             }
 
             fn write_line(&mut self, _line: &str) {
-                // no-op : rendu différé (M22.4 / M23).
+                // no-op : rendu différé (M23).
             }
 
             fn blank(&mut self) {
-                // no-op : rendu différé (M22.4 / M23).
+                // no-op : rendu différé (M23).
             }
 
             fn set_title(&mut self, title: Option<String>) {
@@ -188,10 +368,6 @@ macro_rules! stub_destination {
     };
 }
 
-stub_destination!(
-    HtmlDestination,
-    "Destination HTML (tables CSS, fichier `.html`). Stub no-op ; remplie en M22.4."
-);
 stub_destination!(
     RtfDestination,
     "Destination RTF (séquences de contrôle Word). Stub no-op ; remplie en M23.1."
@@ -296,22 +472,13 @@ mod tests {
         assert_eq!(d.into_string(), "");
     }
 
-    #[test]
-    fn html_stub_is_noop() {
-        let mut h = HtmlDestination::new(96);
-        h.page_header();
-        h.write_line("ignored");
-        h.write_table(&["a".into()], &[Align::Left], &[vec!["1".into()]]);
-        h.blank();
-        assert_eq!(h.into_string(), "");
-        assert_eq!(h.ls(), 96);
-    }
+    // html_stub_is_noop retiré : HtmlDestination est désormais une vraie
+    // destination (M22.4), remplacé par les tests html_* ci-dessous.
 
     #[test]
     fn stub_destinations_implement_trait() {
-        // Toutes les destinations stub sont utilisables comme trait objects.
+        // Les destinations stub RTF/PDF/Excel sont utilisables comme trait objects.
         let dests: Vec<Box<dyn OutputDestination>> = vec![
-            Box::new(HtmlDestination::new(80)),
             Box::new(RtfDestination::new(80)),
             Box::new(PdfDestination::new(80)),
             Box::new(ExcelDestination::new(80)),
@@ -319,5 +486,100 @@ mod tests {
         for d in dests {
             assert_eq!(d.ls(), 80);
         }
+    }
+
+    // --- Tests M22.4 : HtmlDestination réelle ---
+
+    #[test]
+    fn html_table_renders_escaped_cells() {
+        let mut h = HtmlDestination::new(96);
+        h.write_table(
+            &["Name".into(), "Value <x>".into()],
+            &[Align::Left, Align::Right],
+            &[
+                vec!["a & b".into(), "42".into()],
+                vec!["<tag>".into(), "99".into()],
+            ],
+        );
+        let out = h.into_string();
+        // Présence de la structure de table.
+        assert!(out.contains("<table"), "pas de <table : {out}");
+        assert!(out.contains("</table>"), "pas de </table> : {out}");
+        // Échappement dans en-tête.
+        assert!(out.contains("Value &lt;x&gt;"), "échappement header raté : {out}");
+        // Échappement dans cellule.
+        assert!(out.contains("a &amp; b"), "échappement & raté : {out}");
+        assert!(out.contains("&lt;tag&gt;"), "échappement < raté : {out}");
+        // Alignement droite sur la 2ᵉ colonne.
+        assert!(out.contains("text-align:right"), "alignement right manquant : {out}");
+    }
+
+    #[test]
+    fn html_into_string_wraps_document() {
+        let mut h = HtmlDestination::new(96);
+        h.write_line("hello");
+        let out = h.into_string();
+        // Structure HTML obligatoire.
+        assert!(out.contains("<!DOCTYPE html>"), "DOCTYPE manquant : {out}");
+        assert!(out.contains("<style"), "style manquant : {out}");
+        assert!(out.contains("<body>"), "<body> manquant : {out}");
+        assert!(out.contains("</body>"), "</body> manquant : {out}");
+        assert!(out.contains("<p>hello</p>"), "<p> manquant : {out}");
+        // Second drain → chaîne vide (idempotent).
+        assert_eq!(h.into_string(), "", "second drain non vide");
+    }
+
+    #[test]
+    fn html_without_file_finalize_none() {
+        let mut h = HtmlDestination::new(96);
+        h.write_line("test");
+        // Sans fichier cible, finalize() renvoie None.
+        assert!(h.finalize().is_none());
+    }
+
+    #[test]
+    fn html_empty_into_string_is_empty() {
+        // Rien d'écrit → into_string() renvoie "" (pas de document vide).
+        let mut h = HtmlDestination::new(96);
+        assert_eq!(h.into_string(), "");
+    }
+
+    #[test]
+    fn html_page_header_uses_title() {
+        let mut h = HtmlDestination::new(96);
+        h.set_title(Some("Mon Rapport".to_string()));
+        h.page_header();
+        let out = h.into_string();
+        assert!(out.contains("Mon Rapport"), "titre absent : {out}");
+        assert!(out.contains("class=\"systitle\""), "classe systitle absente : {out}");
+    }
+
+    #[test]
+    fn html_page_header_default_title() {
+        let mut h = HtmlDestination::new(96);
+        h.page_header();
+        let out = h.into_string();
+        assert!(out.contains("The SAS System"), "titre par défaut absent : {out}");
+    }
+
+    #[test]
+    fn html_ls_accessor() {
+        let h = HtmlDestination::new(80);
+        assert_eq!(h.ls(), 80);
+    }
+
+    #[test]
+    fn html_with_file_finalize_some() {
+        let tmp = std::env::temp_dir().join("test_html_finalize.html");
+        let mut h = HtmlDestination::with_file(96, tmp.clone());
+        h.write_line("content");
+        let result = h.finalize();
+        assert!(result.is_some(), "finalize devrait renvoyer Some");
+        let (path, html) = result.unwrap();
+        assert_eq!(path, tmp);
+        assert!(html.contains("<!DOCTYPE html>"), "HTML complet attendu");
+        assert!(html.contains("<p>content</p>"), "contenu attendu");
+        // Après finalize, buf est vide.
+        assert_eq!(h.into_string(), "", "buf doit être vide après finalize");
     }
 }

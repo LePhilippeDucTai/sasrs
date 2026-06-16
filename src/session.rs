@@ -220,12 +220,37 @@ impl Session {
     /// Si la destination fermée est la destination courante (ou `LISTING`), on
     /// rétablit le listing texte par défaut comme destination courante. Une
     /// destination supplémentaire enregistrée (M22.3+) est retirée du registre.
+    ///
+    /// M22.4 : AVANT de remplacer la destination courante, appelle `finalize()`
+    /// sur elle. Si `finalize()` renvoie `Some((path, html))`, écrit le fichier
+    /// sur disque et émet une NOTE dans le log.
     pub fn close_destination(&mut self, name: &str) {
         let key = name.to_ascii_uppercase();
         self.output_destinations.remove(&key);
         // Fermer la destination courante (ou explicitement LISTING) → revenir au
         // listing texte par défaut byte-identique.
         if key == "LISTING" || key == self.current_destination {
+            // M22.4 : finaliser la destination courante (écriture fichier HTML…)
+            // avant de la remplacer par le listing texte.
+            if let Some((path, html)) = self.listing.finalize() {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("output.html")
+                    .to_string();
+                match std::fs::write(&path, &html) {
+                    Ok(()) => {
+                        self.log
+                            .note(&format!("Writing HTML Body file: {}", file_name));
+                    }
+                    Err(e) => {
+                        self.log.note(&format!(
+                            "WARNING: Could not write HTML file {}: {}",
+                            file_name, e
+                        ));
+                    }
+                }
+            }
             self.listing = Box::new(TextListing::new(self.options.ls));
             self.current_destination = "LISTING".to_string();
         }
@@ -361,5 +386,45 @@ mod tests {
         // un write_line est rendu verbatim.
         s.listing.write_line("hello");
         assert_eq!(s.listing.into_string(), "hello\n");
+    }
+
+    /// M22.4 — close_destination avec un fichier cible écrit le HTML sur disque.
+    #[test]
+    fn close_html_with_file_writes_document() {
+        use crate::output::HtmlDestination;
+
+        let tmp_file = std::env::temp_dir().join("sas_test_close_html.html");
+        // Nettoyer une éventuelle exécution précédente.
+        let _ = std::fs::remove_file(&tmp_file);
+
+        let mut s = new_session();
+        s.open_destination(
+            "html",
+            Box::new(HtmlDestination::with_file(96, tmp_file.clone())),
+        );
+        // Écrire une table connue via la destination courante.
+        s.listing.write_table(
+            &["Name".into(), "Score".into()],
+            &[crate::output::Align::Left, crate::output::Align::Right],
+            &[vec!["Alice".into(), "42".into()]],
+        );
+        // Fermer → doit écrire le fichier + NOTE + rétablir TextListing.
+        s.close_destination("html");
+
+        // La destination est redevenue un TextListing.
+        assert_eq!(s.current_destination, "LISTING");
+        s.listing.write_line("after");
+        assert_eq!(s.listing.into_string(), "after\n");
+
+        // Le fichier HTML existe et contient la table + une valeur connue.
+        assert!(tmp_file.exists(), "fichier HTML non créé");
+        let content = std::fs::read_to_string(&tmp_file).expect("lecture fichier");
+        assert!(content.contains("<table"), "balise <table absente");
+        assert!(content.contains("Alice"), "valeur Alice absente");
+        assert!(content.contains("42"), "valeur 42 absente");
+        assert!(content.contains("<!DOCTYPE html>"), "DOCTYPE manquant");
+
+        // Nettoyer.
+        let _ = std::fs::remove_file(&tmp_file);
     }
 }
