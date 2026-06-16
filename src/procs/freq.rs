@@ -413,7 +413,7 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
     session.listing.page_header();
     // Centered procedure title line.
     let title = "The FREQ Procedure";
-    let ls = session.listing.ls;
+    let ls = session.listing.ls();
     let pad = ls.saturating_sub(title.len()) / 2;
     session
         .listing

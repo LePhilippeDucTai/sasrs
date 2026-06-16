@@ -218,7 +218,7 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             // M1 : seul TITLE1 est rendu par le listing ; les autres niveaux
             // sont acceptés sans effet.
             if *n == 1 {
-                session.listing.title = text.clone();
+                session.listing.set_title(text.clone());
             }
         }
         GlobalStmt::Options(opts) => {
@@ -227,7 +227,7 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                     match value.as_deref().and_then(|v| v.parse::<usize>().ok()) {
                         Some(v) if (40..=256).contains(&v) => {
                             session.options.ls = v;
-                            session.listing.ls = v;
+                            session.listing.set_ls(v);
                         }
                         _ => session.log.error(&format!(
                             "The value {} is not a valid LINESIZE value (40..256).",

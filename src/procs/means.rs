@@ -787,7 +787,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
         // Title printed once per proc invocation.
         session.listing.page_header();
         let title = "The MEANS Procedure";
-        let ls = session.listing.ls;
+        let ls = session.listing.ls();
         let pad = ls.saturating_sub(title.len()) / 2;
         session
             .listing

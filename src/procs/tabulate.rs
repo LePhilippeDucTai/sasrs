@@ -608,7 +608,7 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
     // --- listing ---
     session.listing.page_header();
     let title = "The TABULATE Procedure";
-    let ls = session.listing.ls;
+    let ls = session.listing.ls();
     let pad = ls.saturating_sub(title.len()) / 2;
     session
         .listing

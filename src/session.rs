@@ -1,6 +1,7 @@
 use crate::library::LibraryManager;
-use crate::listing::ListingWriter;
 use crate::log::LogWriter;
+use crate::output::{OutputDestination, TextListing};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// System options (OPTIONS statement). M1 honors LS=; everything else is
@@ -42,7 +43,16 @@ impl Default for SasOptions {
 pub struct Session {
     pub libs: LibraryManager,
     pub log: LogWriter,
-    pub listing: ListingWriter,
+    /// Destination de sortie par défaut (M22.1). Auparavant un `ListingWriter`
+    /// concret ; désormais un trait object [`OutputDestination`] initialisé à
+    /// [`TextListing`] (listing texte byte-identique). Le statement `ODS`
+    /// (M22.2+) configurera d'autres destinations via `output_destinations`.
+    pub listing: Box<dyn OutputDestination>,
+    /// Destinations ODS ouvertes par `ODS <dest> OPEN` (M22.2+), indexées par
+    /// nom de destination (UPPERCASE : HTML/RTF/PDF/EXCEL/…). Vide par défaut ;
+    /// seul `listing` (texte) est actif tant qu'aucun `ODS` n'a ouvert de
+    /// destination supplémentaire.
+    pub output_destinations: HashMap<String, Box<dyn OutputDestination>>,
     pub options: SasOptions,
     /// Directory against which relative LIBNAME paths resolve.
     pub base_dir: PathBuf,
@@ -103,7 +113,8 @@ impl Session {
         Ok(Session {
             libs: LibraryManager::new(work_dir)?,
             log: LogWriter::new(deterministic),
-            listing: ListingWriter::new(options.ls),
+            listing: Box::new(TextListing::new(options.ls)),
+            output_destinations: HashMap::new(),
             options,
             base_dir,
             last_dataset: None,

@@ -816,7 +816,7 @@ fn num_var_meta(name: &str) -> VarMeta {
 
 /// Write a centered line within LINESIZE.
 fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls;
+    let ls = session.listing.ls();
     let pad = ls.saturating_sub(text.len()) / 2;
     session
         .listing
