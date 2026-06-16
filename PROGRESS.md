@@ -225,7 +225,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 
 ## M22 — couche de routage ODS + capture
 - [x] M22.1 — trait `OutputDestination { page_header; write_table; write_line; blank }` dans `src/output/` ; `TextListing` = comportement actuel, `Session.listing: Box<dyn OutputDestination>` + registre multi-destinations. Invariant : listing texte par défaut byte-identique. (+9 tests, 1959 → 1968, 0 warning, 0 `.snap.new`)
-- [ ] M22.2 — parseur du statement `ODS` (ouvrir/fermer destinations) + options globales NOCENTER/DATE/NUMBER (Opus, moyen)
+- [x] M22.2 — parseur du statement `ODS` (ouvrir/fermer destinations) + options globales NOCENTER/DATE/NUMBER (Opus, moyen). (+19 tests, 1968 → 1987, 0 warning, 0 `.snap.new`)
 - [ ] M22.3 — ODS OUTPUT → datasets (mapping nom-de-table ODS → `OUT=`) ; utile pour tester les procs stat à venir (Opus, moyen-élevé)
 - [ ] M22.4 — destination HTML (tables CSS, fichier `.html`) (Sonnet, moyen)
 - [ ] Fixtures `m22/` + snapshots (texte inchangé ; HTML/dataset capturés vérifiés). DoD
