@@ -1,0 +1,168 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m21/freq_stats.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title "CHISQ une voie - sex (F=9, M=10)";
+
+3     proc freq data=d.class;
+4         tables sex / chisq;
+5     run;
+NOTE: PROCEDURE FREQ used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     data fishtab;
+7         input grp $ outcome $;
+8         datalines;
+9     A yes
+10    A yes
+11    A yes
+12    A no
+13    B yes
+14    B no
+15    B no
+16    B no
+17    ;
+18    run;
+NOTE: The data set WORK.FISHTAB has 8 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    title "Fisher exact + MEASURES sur 2x2 [[3,1],[1,3]]";
+
+20    proc freq data=fishtab;
+21        tables grp*outcome / fisher measures;
+22    run;
+NOTE: PROCEDURE FREQ used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+23    data ratings;
+24        input r1 $ r2 $;
+25        datalines;
+26    P P
+27    P P
+28    P P
+29    P P
+30    P N
+31    N P
+32    N N
+33    N N
+34    N N
+35    N N
+36    ;
+37    run;
+NOTE: The data set WORK.RATINGS has 10 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+38    title "AGREE (kappa) sur 2x2 [[4,1],[1,4]] -> kappa=0.6";
+
+39    proc freq data=ratings;
+40        tables r1*r2 / agree;
+41    run;
+NOTE: PROCEDURE FREQ used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+42    title;
+
+==== LISTING ====
+                                CHISQ une voie - sex (F=9, M=10)
+
+                                       The FREQ Procedure
+
+           sex    Frequency    Percent    Cumulative Frequency    Cumulative Percent
+
+           F              9      47.37                       9                 47.37
+           M             10      52.63                      19                100.00
+
+Chi-Square Test for Equal Proportions
+
+                                      Statistic      Value
+
+                                      Chi-Square    0.0526
+                                      DF                 1
+                                      Pr > ChiSq    0.8185
+
+                         Fisher exact + MEASURES sur 2x2 [[3,1],[1,3]]
+
+                                       The FREQ Procedure
+
+Table of grp by outcome
+
+Cell contents: Frequency / Percent / Row Pct / Col Pct
+
+                               grp         no      yes     Total
+
+                               A            1        3         4
+                                        12.50    37.50     50.00
+                                        25.00    75.00
+                                        25.00    75.00
+                               B            3        1         4
+                                        37.50    12.50     50.00
+                                        75.00    25.00
+                                        75.00    25.00
+                               Total        4        4         8
+                                        50.00    50.00    100.00
+
+Fisher's Exact Test
+
+                               Statistic                    Value
+
+                               Cell (1,1) Frequency (F)         1
+                               Left-sided Pr <= F          0.2429
+                               Right-sided Pr >= F         0.9857
+                               Table Probability (P)       0.2286
+                               Two-sided Pr <= P           0.4857
+
+Estimates of the Relative Risk (Row1/Row2)
+
+                  Type of Study                 Value    95% Confidence Limits
+
+                  Case-Control (Odds Ratio)    0.1111    0.0045   2.7277
+                  Cohort (Col1 Risk)           0.3333    0.0557   1.9949
+                  Cohort (Col2 Risk)           3.0000    0.5013   17.9545
+
+                        AGREE (kappa) sur 2x2 [[4,1],[1,4]] -> kappa=0.6
+
+                                       The FREQ Procedure
+
+Table of r1 by r2
+
+Cell contents: Frequency / Percent / Row Pct / Col Pct
+
+                               r1           N        P     Total
+
+                               N            4        1         5
+                                        40.00    10.00     50.00
+                                        80.00    20.00
+                                        80.00    20.00
+                               P            1        4         5
+                                        10.00    40.00     50.00
+                                        20.00    80.00
+                                        20.00    80.00
+                               Total        5        5        10
+                                        50.00    50.00    100.00
+
+Simple Kappa Coefficient
+
+                                 Statistic                Value
+
+                                 Kappa                   0.6000
+                                 ASE                     0.2530
+                                 95% Lower Conf Limit    0.1042
+                                 95% Upper Conf Limit    1.0958
+
+==== EXIT 0 ====

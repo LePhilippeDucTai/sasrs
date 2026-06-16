@@ -1,0 +1,104 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m21/compare_report.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data base_ds;
+3         input id x y;
+4         datalines;
+5     1 10 100
+6     2 20 200
+7     3 30 300
+8     ;
+9     run;
+NOTE: The data set WORK.BASE_DS has 3 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    data comp_ds;
+11        input id x y;
+12        datalines;
+13    1 10 100
+14    2 25 200
+15    3 30 305
+16    ;
+17    run;
+NOTE: The data set WORK.COMP_DS has 3 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    title "COMPARE base vs comp (diff x ligne 2, y ligne 3)";
+
+19    proc compare base=base_ds compare=comp_ds;
+20    run;
+NOTE: There were 2 observations with at least one unequal value.
+NOTE: PROCEDURE COMPARE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+21    title "REPORT mean par sexe, WHERE age>=13, RBREAK total general";
+
+22    proc report data=d.class nowd;
+23        column sex age height;
+24        define sex / group;
+25        define age / analysis mean;
+26        define height / analysis mean;
+27        where age >= 13;
+28        rbreak after / summarize;
+29    run;
+NOTE: There were 12 observations read from the data set D.CLASS.
+NOTE: PROCEDURE REPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+30    title;
+
+==== LISTING ====
+                        COMPARE base vs comp (diff x ligne 2, y ligne 3)
+
+The COMPARE Procedure
+
+Data Set Summary
+
+                 Dataset         Role       Label    Observations    Variables
+
+                 WORK.BASE_DS    BASE                           3            3
+                 WORK.COMP_DS    COMPARE                        3            3
+
+Variables Summary
+
+Number of Variables in Common: 3
+
+Observation Summary
+
+Number of Observations in Common: 3
+Number of Observations with Differences: 2
+Number of Observations in Agreement: 1
+
+Values Comparison Summary
+
+                            Variable    Type    N Diffs    Max Diff
+
+                            ID          Num           0           0
+                            X           Num           1    5.000000
+                            Y           Num           1    5.000000
+
+                   REPORT mean par sexe, WHERE age>=13, RBREAK total general
+
+                                  sex      age          height
+
+                                  F         14    62.983333333
+                                  M       14.5           66.75
+                                         14.25    64.866666667
+
+==== EXIT 0 ====
