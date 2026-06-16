@@ -52,22 +52,44 @@
 //! du calcul (et de l'affectation de groupe). On suit `Value::sas_cmp` pour
 //! l'ordre, donc la collation est identique à PROC SORT.
 //!
+//! ## Méthodes de rang (M21.5)
+//! Par défaut PROC RANK émet le rang ordinaire (avec TIES). Les options de
+//! méthode transforment ce rang ordinaire `r` (1-based, ajusté par TIES) sur
+//! les `k` valeurs non-missing :
+//! - `FRACTION` : `r / k`.
+//! - `NPLUS1`   : `r / (k + 1)`.
+//! - `PERCENT`  : `100 * r / k`.
+//! - `NORMAL=BLOM|TUKEY|VW` : score normal `Φ⁻¹(y)` où
+//!     - BLOM  : `y = (r - 3/8) / (k + 1/4)`
+//!     - TUKEY : `y = (r - 1/3) / (k + 1/3)`
+//!     - VW    : `y = r / (k + 1)`
+//! - `SAVAGE` : score exponentiel (Savage). Pour l'ordinal `m` (1..=k),
+//!   `s_m = (Σ_{j=k-m+1}^{k} 1/j) − 1`. Les ties reçoivent l'agrégat de leurs
+//!   scores ordinaux selon TIES (MEAN → moyenne, LOW → premier, HIGH →
+//!   dernier, DENSE → score de l'ordinal LOW du groupe d'égalité).
+//! GROUPS= a priorité sur les méthodes (émet le numéro de groupe). Les méthodes
+//! sont mutuellement exclusives (deux options → erreur claire).
+//!
+//! ## BY (M21.5)
+//! `by [descending] v1 ... ;` : l'entrée doit être triée par les clés BY
+//! (vérifié via `common::by_groups`, `sas_cmp`, sinon erreur « not sorted »).
+//! Les rangs/scores sont recalculés INDÉPENDAMMENT dans chaque groupe BY ; la
+//! sortie concatène les groupes dans l'ordre d'entrée (groupes contigus).
+//!
 //! ## Choix / simplifications documentés (pour l'orchestrateur)
-//! - BY : NON implémenté (différé). `by` provoque une erreur claire « not yet
-//!   implemented » plutôt qu'un no-op.
-//! - Méthodes de rang autres que rang/GROUPS : FRACTION, PERCENT, NORMAL,
-//!   SAVAGE, NPLUS1, etc. → erreur claire « not yet implemented ».
 //! - Les colonnes de rang/groupe sont numériques (f64) ; rang missing =
 //!   `Value::missing()` → null. Les colonnes pass-through sont recopiées
 //!   telles quelles (la série Polars d'origine est conservée, donc les
 //!   payloads de missings spéciaux sont préservés bit à bit).
+//! - Variance nulle / `k = 0` : pas de panic ; toute valeur non calculable
+//!   reste missing.
 
 use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{by_groups, decode_column, phi_inv, resolve_by_cols};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType};
@@ -82,12 +104,42 @@ pub enum Ties {
     Dense,
 }
 
+/// NORMAL= score formula variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalScore {
+    Blom,
+    Tukey,
+    Vw,
+}
+
+/// Ranking method (transformation applied to the TIES-adjusted ordinary rank).
+/// `GROUPS=` is handled separately and takes priority over any method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    /// Ordinary rank (default).
+    Rank,
+    /// `r / k`.
+    Fraction,
+    /// `r / (k + 1)`.
+    NPlus1,
+    /// `100 * r / k`.
+    Percent,
+    /// Savage (exponential) scores.
+    Savage,
+    /// Normal scores `Φ⁻¹(y)`.
+    Normal(NormalScore),
+}
+
 pub struct RankAst {
     pub data: Option<DatasetRef>,
     pub out: Option<DatasetRef>,
     pub descending: bool,
     pub ties: Ties,
     pub groups: Option<usize>,
+    /// Ranking method (default = ordinary rank). Ignored when `groups` is set.
+    pub method: Method,
+    /// BY variables (var, descending). Empty = no BY grouping.
+    pub by: Vec<(String, bool)>,
     /// Explicit VAR list (empty = default to all numeric variables).
     pub var: Vec<String>,
     /// Optional RANKS list (empty = none → ranks replace the originals).
@@ -103,6 +155,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
     let mut descending = false;
     let mut ties = Ties::Mean;
     let mut groups: Option<usize> = None;
+    let mut method = Method::Rank;
+
+    // Set the method, rejecting a second mutually-exclusive method option.
+    let set_method = |m: Method, cur: &mut Method| -> Result<()> {
+        if *cur != Method::Rank {
+            return Err(SasError::runtime(
+                "Only one ranking-method option (FRACTION, PERCENT, NORMAL=, \
+                 SAVAGE or NPLUS1) may be specified on PROC RANK.",
+            ));
+        }
+        *cur = m;
+        Ok(())
+    };
 
     // --- PROC RANK statement options, until `;` ---
     loop {
@@ -167,16 +232,41 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             }
             groups = Some(n as usize);
             ts.next();
-        } else if ts.peek().is_kw("fraction")
-            || ts.peek().is_kw("percent")
-            || ts.peek().is_kw("normal")
-            || ts.peek().is_kw("savage")
-            || ts.peek().is_kw("nplus1")
-        {
-            let name = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::runtime(format!(
-                "The {name} ranking-method option of PROC RANK is not yet implemented."
-            )));
+        } else if ts.peek().is_kw("fraction") {
+            ts.next();
+            set_method(Method::Fraction, &mut method)?;
+        } else if ts.peek().is_kw("nplus1") {
+            ts.next();
+            set_method(Method::NPlus1, &mut method)?;
+        } else if ts.peek().is_kw("percent") {
+            ts.next();
+            set_method(Method::Percent, &mut method)?;
+        } else if ts.peek().is_kw("savage") {
+            ts.next();
+            set_method(Method::Savage, &mut method)?;
+        } else if ts.peek().is_kw("normal") {
+            ts.next();
+            expect_eq(ts, "NORMAL")?;
+            let tok = ts.peek().clone();
+            let name = tok.ident().ok_or_else(|| {
+                SasError::parse("expected a NORMAL= method (BLOM|TUKEY|VW)", tok.span)
+            })?;
+            let score = match name.to_ascii_lowercase().as_str() {
+                "blom" => NormalScore::Blom,
+                "tukey" => NormalScore::Tukey,
+                "vw" => NormalScore::Vw,
+                other => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unknown NORMAL= method '{}' (expected BLOM, TUKEY or VW).",
+                            other.to_uppercase()
+                        ),
+                        tok.span,
+                    ));
+                }
+            };
+            ts.next();
+            set_method(Method::Normal(score), &mut method)?;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -198,6 +288,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
     // --- sub-statements until run;/quit; ---
     let mut var: Vec<String> = Vec::new();
     let mut ranks: Vec<String> = Vec::new();
+    let mut by: Vec<(String, bool)> = Vec::new();
 
     loop {
         while ts.peek().kind == TokenKind::Semi {
@@ -223,9 +314,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             ranks = ts.parse_name_list()?;
             ts.expect_semi()?;
         } else if ts.peek().is_kw("by") {
-            return Err(SasError::runtime(
-                "The BY statement of PROC RANK is not yet implemented.",
-            ));
+            ts.next();
+            by = crate::procs::means::parse_by_list(ts)?;
         } else {
             // Unknown sub-statement: skip it (recovery, like corr/means).
             ts.skip_to_semi();
@@ -238,6 +328,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
         descending,
         ties,
         groups,
+        method,
+        by,
         var,
         ranks,
     })
@@ -280,11 +372,20 @@ fn resolve_input(ast: &RankAst, session: &Session) -> Result<DatasetRef> {
 
 // ───────────────────────── ranking core ─────────────────────────
 
-/// Compute the rank (or group) output for one decoded column.
+/// Compute the rank/group/score output for one decoded column.
 ///
-/// Returns a vector of `Value` aligned to the input rows: `Value::Num(rank)`
+/// Returns a vector of `Value` aligned to the input rows: `Value::Num(..)`
 /// for non-missing input cells, `Value::missing()` for missing cells.
-fn rank_column(col: &[Value], descending: bool, ties: Ties, groups: Option<usize>) -> Vec<Value> {
+///
+/// `groups` (GROUPS=) takes priority over `method`; otherwise the TIES-adjusted
+/// ordinary rank is transformed per `method`.
+fn rank_column(
+    col: &[Value],
+    descending: bool,
+    ties: Ties,
+    groups: Option<usize>,
+    method: Method,
+) -> Vec<Value> {
     let n = col.len();
 
     // Indices of non-missing cells (special missings are NaN via value_to_num).
@@ -313,9 +414,25 @@ fn rank_column(col: &[Value], descending: bool, ties: Ties, groups: Option<usize
         return out;
     }
 
+    // SAVAGE needs the cumulative reverse-harmonic per ordinal. Precompute
+    // s_m = (sum_{j=k-m+1}^{k} 1/j) - 1 for m = 1..=k.
+    let savage = matches!(method, Method::Savage);
+    let savage_scores: Vec<f64> = if savage {
+        let mut acc = 0.0;
+        let mut v = Vec::with_capacity(k);
+        // m=1 adds 1/k, m=2 adds 1/(k-1), ... m=k adds 1/1.
+        for m in 1..=k {
+            acc += 1.0 / (k - m + 1) as f64;
+            v.push(acc - 1.0);
+        }
+        v
+    } else {
+        Vec::new()
+    };
+
     // Walk the sorted order, grouping consecutive equal values (sas_cmp).
     // For each tie group occupying ordinal positions lo..=hi (1-based), assign
-    // either a rank (no GROUPS=) or a group number (GROUPS=).
+    // a group number (GROUPS=) or the (possibly transformed) rank/score.
     let mut pos = 0usize; // 0-based offset into `idx`
     let mut dense_rank = 0usize; // consecutive distinct-value counter (DENSE)
     while pos < k {
@@ -336,12 +453,29 @@ fn rank_column(col: &[Value], descending: bool, ties: Ties, groups: Option<usize
                 let g = g.min(ng - 1);
                 g as f64
             }
-            None => match ties {
-                Ties::Mean => (lo + hi) as f64 / 2.0,
-                Ties::Low => lo as f64,
-                Ties::High => hi as f64,
-                Ties::Dense => dense_rank as f64,
-            },
+            None if savage => {
+                // Savage scores: aggregate the per-ordinal scores over the tie
+                // group according to TIES (MEAN → average, LOW/HIGH → endpoint
+                // ordinal's score, DENSE → LOW ordinal's score).
+                match ties {
+                    Ties::Mean => {
+                        let sum: f64 = savage_scores[pos..end].iter().sum();
+                        sum / (end - pos) as f64
+                    }
+                    Ties::Low | Ties::Dense => savage_scores[lo - 1],
+                    Ties::High => savage_scores[hi - 1],
+                }
+            }
+            None => {
+                // TIES-adjusted ordinary rank, then the method transform.
+                let r = match ties {
+                    Ties::Mean => (lo + hi) as f64 / 2.0,
+                    Ties::Low => lo as f64,
+                    Ties::High => hi as f64,
+                    Ties::Dense => dense_rank as f64,
+                };
+                transform_rank(r, k, method)
+            }
         };
 
         for &orig in &idx[pos..end] {
@@ -351,6 +485,29 @@ fn rank_column(col: &[Value], descending: bool, ties: Ties, groups: Option<usize
     }
 
     out
+}
+
+/// Transform a TIES-adjusted ordinary rank `r` (over `k` non-missing values)
+/// per the ranking `method`. SAVAGE is handled in `rank_column` (it needs the
+/// ordinal, not just `r`); this covers RANK/FRACTION/NPLUS1/PERCENT/NORMAL.
+fn transform_rank(r: f64, k: usize, method: Method) -> f64 {
+    let kf = k as f64;
+    match method {
+        Method::Rank => r,
+        Method::Fraction => r / kf,
+        Method::NPlus1 => r / (kf + 1.0),
+        Method::Percent => 100.0 * r / kf,
+        Method::Normal(score) => {
+            let y = match score {
+                NormalScore::Blom => (r - 0.375) / (kf + 0.25),
+                NormalScore::Tukey => (r - 1.0 / 3.0) / (kf + 1.0 / 3.0),
+                NormalScore::Vw => r / (kf + 1.0),
+            };
+            phi_inv(y)
+        }
+        // SAVAGE never reaches here (handled in rank_column).
+        Method::Savage => r,
+    }
 }
 
 // ───────────────────────── execute ─────────────────────────
@@ -411,18 +568,47 @@ pub fn execute(ast: &RankAst, session: &mut Session) -> Result<()> {
         )));
     }
 
-    // Compute the rank output for each VAR column (decode each ONCE).
+    // Resolve BY columns and partition rows into contiguous BY groups (the
+    // input must be sorted by the BY key). Without BY → a single group of all
+    // rows in input order.
+    let n_obs = ds.n_obs();
+    let in_display = format!("{in_libref}.{in_table}");
+    let by_cols = resolve_by_cols(&ds, &ast.by)?;
+    let groups_rows: Vec<Vec<usize>> = if by_cols.is_empty() {
+        vec![(0..n_obs).collect()]
+    } else {
+        let by_values: Vec<Vec<Value>> = by_cols
+            .iter()
+            .map(|c| decode_column(&ds, c.col_idx))
+            .collect::<Result<_>>()?;
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+        by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
+            .into_iter()
+            .map(|(_key, rows)| rows)
+            .collect()
+    };
+
+    // Compute the rank output for each VAR column (decode each ONCE), ranking
+    // INDEPENDENTLY within each BY group and scattering back into row order.
     let mut rank_values: Vec<Vec<Value>> = Vec::with_capacity(var_cols.len());
     for &ci in &var_cols {
         let col = decode_column(&ds, ci)?;
-        rank_values.push(rank_column(&col, ast.descending, ast.ties, ast.groups));
+        let mut out = vec![Value::missing(); n_obs];
+        for rows in &groups_rows {
+            let sub: Vec<Value> = rows.iter().map(|&r| col[r].clone()).collect();
+            let ranked = rank_column(&sub, ast.descending, ast.ties, ast.groups, ast.method);
+            for (j, &r) in rows.iter().enumerate() {
+                out[r] = ranked[j].clone();
+            }
+        }
+        rank_values.push(out);
     }
 
     // Build the output dataset. Preserve every input column and its order; the
     // only changes are: ranked columns replaced in place (no RANKS), or new
     // rank columns appended (RANKS). Pass-through columns keep their original
     // Polars series verbatim (special-missing payloads preserved).
-    let n_obs = ds.n_obs();
     let mut columns: Vec<Column> = Vec::with_capacity(ds.vars.len() + ast.ranks.len());
     let mut vars: Vec<VarMeta> = Vec::with_capacity(ds.vars.len() + ast.ranks.len());
 
@@ -600,24 +786,10 @@ mod tests {
         assert!(r.err().unwrap().to_string().contains("BOGUS"));
     }
 
-    #[test]
-    fn parse_unsupported_method_errors() {
-        for m in ["fraction", "percent", "normal", "savage"] {
-            let r = parse_rank(&format!("proc rank {m}; var x; run;"));
-            assert!(r.is_err(), "method {m} should error");
-            assert!(
-                r.err().unwrap().to_string().contains("not yet implemented"),
-                "method {m} message"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_by_not_implemented() {
-        let r = parse_rank("proc rank data=a; by g; var x; run;");
-        assert!(r.is_err());
-        assert!(r.err().unwrap().to_string().contains("not yet implemented"));
-    }
+    // NB : les méthodes FRACTION/PERCENT/NORMAL/SAVAGE et le statement BY sont
+    // désormais implémentés (M21.5) — voir `parse_method_options`,
+    // `parse_by_now_supported`, `method_*` et `execute_by_*`. Les anciens tests
+    // « not yet implemented » ont été retirés en conséquence.
 
     #[test]
     fn parse_unknown_option_errors() {
@@ -634,13 +806,13 @@ mod tests {
 
     #[test]
     fn rank_basic_ascending() {
-        let out = rank_column(&nums(&[30.0, 10.0, 20.0]), false, Ties::Mean, None);
+        let out = rank_column(&nums(&[30.0, 10.0, 20.0]), false, Ties::Mean, None, Method::Rank);
         assert_eq!(out, nums(&[3.0, 1.0, 2.0]));
     }
 
     #[test]
     fn rank_descending() {
-        let out = rank_column(&nums(&[30.0, 10.0, 20.0]), true, Ties::Mean, None);
+        let out = rank_column(&nums(&[30.0, 10.0, 20.0]), true, Ties::Mean, None, Method::Rank);
         // 30 largest → rank 1.
         assert_eq!(out, nums(&[1.0, 3.0, 2.0]));
     }
@@ -649,19 +821,19 @@ mod tests {
     fn rank_ties_all_variants() {
         let data = nums(&[10.0, 20.0, 20.0, 40.0]);
         assert_eq!(
-            rank_column(&data, false, Ties::Mean, None),
+            rank_column(&data, false, Ties::Mean, None, Method::Rank),
             nums(&[1.0, 2.5, 2.5, 4.0])
         );
         assert_eq!(
-            rank_column(&data, false, Ties::Low, None),
+            rank_column(&data, false, Ties::Low, None, Method::Rank),
             nums(&[1.0, 2.0, 2.0, 4.0])
         );
         assert_eq!(
-            rank_column(&data, false, Ties::High, None),
+            rank_column(&data, false, Ties::High, None, Method::Rank),
             nums(&[1.0, 3.0, 3.0, 4.0])
         );
         assert_eq!(
-            rank_column(&data, false, Ties::Dense, None),
+            rank_column(&data, false, Ties::Dense, None, Method::Rank),
             nums(&[1.0, 2.0, 2.0, 3.0])
         );
     }
@@ -674,7 +846,7 @@ mod tests {
             Value::Num(30.0),
             Value::Num(20.0),
         ];
-        let out = rank_column(&data, false, Ties::Mean, None);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Rank);
         assert_eq!(out[0], Value::Num(1.0));
         assert!(out[1].is_missing());
         assert_eq!(out[2], Value::Num(3.0));
@@ -685,7 +857,7 @@ mod tests {
     fn rank_groups_partition() {
         // 10 distinct values, groups=4 → group = floor(4*r/11), r=1..10.
         let data = nums(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
-        let out = rank_column(&data, false, Ties::Mean, Some(4));
+        let out = rank_column(&data, false, Ties::Mean, Some(4), Method::Rank);
         let expected: Vec<f64> = (1..=10).map(|r| ((4 * r) / 11).min(3) as f64).collect();
         assert_eq!(out, nums(&expected));
         // sanity: groups are within 0..3.
@@ -700,7 +872,7 @@ mod tests {
     fn rank_groups_ties_share_group() {
         // Tied values must land in the same group (same LOW ordinal r).
         let data = nums(&[10.0, 20.0, 20.0, 40.0]);
-        let out = rank_column(&data, false, Ties::Mean, Some(2));
+        let out = rank_column(&data, false, Ties::Mean, Some(2), Method::Rank);
         // r for the two 20s is 2 (LOW), so both share the same group.
         assert_eq!(out[1], out[2]);
     }
@@ -720,6 +892,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into()],
             ranks: vec![],
         };
@@ -755,6 +929,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into()],
             ranks: vec!["rx".into()],
         };
@@ -782,6 +958,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into(), "y".into()],
             ranks: vec!["rx".into()], // only one name for two vars
         };
@@ -811,6 +989,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec![], // default: all numerics (x, y), not g
             ranks: vec![],
         };
@@ -835,6 +1015,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into()],
             ranks: vec![],
         };
@@ -866,6 +1048,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: Some(4),
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into()],
             ranks: vec!["grp".into()],
         };
@@ -889,6 +1073,8 @@ mod tests {
             descending: false,
             ties: Ties::Mean,
             groups: None,
+            method: Method::Rank,
+            by: vec![],
             var: vec!["x".into()],
             ranks: vec![],
         };
@@ -898,5 +1084,242 @@ mod tests {
         let x = read_num_col(&session, "T", "x");
         assert_eq!(x, nums(&[3.0, 1.0, 2.0]));
         assert_eq!(session.last_dataset.as_deref(), Some("WORK.T"));
+    }
+
+    // ───────────── method parse tests ─────────────
+
+    #[test]
+    fn parse_method_options() {
+        assert_eq!(parse_rank("proc rank fraction; var x; run;").unwrap().method, Method::Fraction);
+        assert_eq!(parse_rank("proc rank nplus1; var x; run;").unwrap().method, Method::NPlus1);
+        assert_eq!(parse_rank("proc rank percent; var x; run;").unwrap().method, Method::Percent);
+        assert_eq!(parse_rank("proc rank savage; var x; run;").unwrap().method, Method::Savage);
+        assert_eq!(
+            parse_rank("proc rank normal=blom; var x; run;").unwrap().method,
+            Method::Normal(NormalScore::Blom)
+        );
+        assert_eq!(
+            parse_rank("proc rank normal=tukey; var x; run;").unwrap().method,
+            Method::Normal(NormalScore::Tukey)
+        );
+        assert_eq!(
+            parse_rank("proc rank normal=vw; var x; run;").unwrap().method,
+            Method::Normal(NormalScore::Vw)
+        );
+    }
+
+    #[test]
+    fn parse_normal_requires_method() {
+        assert!(parse_rank("proc rank normal=bogus; var x; run;").is_err());
+        assert!(parse_rank("proc rank normal; var x; run;").is_err());
+    }
+
+    #[test]
+    fn parse_two_methods_errors() {
+        let r = parse_rank("proc rank fraction percent; var x; run;");
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("Only one ranking-method"));
+    }
+
+    #[test]
+    fn parse_by_now_supported() {
+        let ast = parse_rank("proc rank data=a; by g; var x; run;").unwrap();
+        assert_eq!(ast.by, vec![("g".to_string(), false)]);
+        let ast2 = parse_rank("proc rank data=a; by descending g h; var x; run;").unwrap();
+        assert_eq!(ast2.by, vec![("g".to_string(), true), ("h".to_string(), false)]);
+    }
+
+    // ───────────── method core tests (hand-verified) ─────────────
+
+    fn approx_eq(out: &[Value], exp: &[f64]) {
+        assert_eq!(out.len(), exp.len());
+        for (o, e) in out.iter().zip(exp) {
+            match o {
+                Value::Num(v) => assert!((v - e).abs() < 1e-9, "got {v}, want {e}"),
+                _ => panic!("missing where {e} expected"),
+            }
+        }
+    }
+
+    #[test]
+    fn method_fraction() {
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Fraction);
+        approx_eq(&out, &[0.25, 0.50, 0.75, 1.00]);
+    }
+
+    #[test]
+    fn method_nplus1() {
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::NPlus1);
+        approx_eq(&out, &[0.2, 0.4, 0.6, 0.8]);
+    }
+
+    #[test]
+    fn method_percent() {
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Percent);
+        approx_eq(&out, &[25.0, 50.0, 75.0, 100.0]);
+    }
+
+    #[test]
+    fn method_normal_blom() {
+        // y = (r - 0.375)/4.25 for r=1..4, then Phi^-1.
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Normal(NormalScore::Blom));
+        let exp: Vec<f64> = (1..=4)
+            .map(|r| phi_inv((r as f64 - 0.375) / 4.25))
+            .collect();
+        approx_eq(&out, &exp);
+        // BLOM scores are antisymmetric for symmetric ranks: s1 = -s4, s2 = -s3.
+        if let (Value::Num(a), Value::Num(d)) = (&out[0], &out[3]) {
+            assert!((a + d).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn method_normal_vw() {
+        // van der Waerden: y = r/(n+1) = r/5.
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Normal(NormalScore::Vw));
+        let exp: Vec<f64> = (1..=4).map(|r| phi_inv(r as f64 / 5.0)).collect();
+        approx_eq(&out, &exp);
+    }
+
+    #[test]
+    fn method_savage_no_ties() {
+        // n=4: s_m = (sum_{j=n-m+1}^{n} 1/j) - 1.
+        let data = nums(&[10.0, 20.0, 30.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Savage);
+        let s1 = 1.0 / 4.0 - 1.0;
+        let s2 = 1.0 / 4.0 + 1.0 / 3.0 - 1.0;
+        let s3 = 1.0 / 4.0 + 1.0 / 3.0 + 1.0 / 2.0 - 1.0;
+        let s4 = 1.0 / 4.0 + 1.0 / 3.0 + 1.0 / 2.0 + 1.0 - 1.0;
+        approx_eq(&out, &[s1, s2, s3, s4]);
+        // Savage scores sum to ~0.
+        let sum: f64 = out.iter().map(|v| if let Value::Num(x) = v { *x } else { 0.0 }).sum();
+        assert!(sum.abs() < 1e-9);
+    }
+
+    #[test]
+    fn method_savage_ties_mean() {
+        // Two tied 20s occupy ordinals 2 and 3; MEAN → average of s2 and s3.
+        let data = nums(&[10.0, 20.0, 20.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Savage);
+        let s2 = 1.0 / 4.0 + 1.0 / 3.0 - 1.0;
+        let s3 = 1.0 / 4.0 + 1.0 / 3.0 + 1.0 / 2.0 - 1.0;
+        let mid = (s2 + s3) / 2.0;
+        if let (Value::Num(a), Value::Num(b)) = (&out[1], &out[2]) {
+            assert!((a - mid).abs() < 1e-9 && (b - mid).abs() < 1e-9);
+        } else {
+            panic!("ties not numeric");
+        }
+    }
+
+    #[test]
+    fn method_fraction_with_ties() {
+        // Ties::Mean rank of two 20s is 2.5 → fraction 2.5/4 = 0.625.
+        let data = nums(&[10.0, 20.0, 20.0, 40.0]);
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Fraction);
+        approx_eq(&out, &[0.25, 0.625, 0.625, 1.0]);
+    }
+
+    #[test]
+    fn method_empty_column_no_panic() {
+        let data = vec![Value::missing(), Value::missing()];
+        let out = rank_column(&data, false, Ties::Mean, None, Method::Fraction);
+        assert!(out.iter().all(|v| v.is_missing()));
+        let out2 = rank_column(&data, false, Ties::Mean, None, Method::Savage);
+        assert!(out2.iter().all(|v| v.is_missing()));
+    }
+
+    // ───────────── BY execute tests (hand-verified) ─────────────
+
+    #[test]
+    fn execute_by_independent_groups() {
+        let mut session = make_session();
+        // Two BY groups (g=a: 10,30,20 ; g=b: 5,15). Ranks recomputed per group.
+        let df = df![
+            "g" => ["a", "a", "a", "b", "b"],
+            "x" => [10.0_f64, 30.0, 20.0, 5.0, 15.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = RankAst {
+            data: Some(dref("T")),
+            out: Some(dref("O")),
+            descending: false,
+            ties: Ties::Mean,
+            groups: None,
+            method: Method::Rank,
+            by: vec![("g".into(), false)],
+            var: vec!["x".into()],
+            ranks: vec!["rx".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let rx = read_num_col(&session, "O", "rx");
+        // Group a: 10→1, 30→3, 20→2. Group b: 5→1, 15→2.
+        assert_eq!(rx, nums(&[1.0, 3.0, 2.0, 1.0, 2.0]));
+    }
+
+    #[test]
+    fn execute_by_fraction_per_group() {
+        let mut session = make_session();
+        // Group a has 2 obs, group b has 3 obs → different denominators.
+        let df = df![
+            "g" => ["a", "a", "b", "b", "b"],
+            "x" => [10.0_f64, 20.0, 10.0, 20.0, 30.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = RankAst {
+            data: Some(dref("T")),
+            out: Some(dref("O")),
+            descending: false,
+            ties: Ties::Mean,
+            groups: None,
+            method: Method::Fraction,
+            by: vec![("g".into(), false)],
+            var: vec!["x".into()],
+            ranks: vec!["fx".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let fx = read_num_col(&session, "O", "fx");
+        // a: 1/2, 2/2 ; b: 1/3, 2/3, 3/3.
+        approx_eq(&fx, &[0.5, 1.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
+    }
+
+    #[test]
+    fn execute_by_not_sorted_errors() {
+        let mut session = make_session();
+        // BY key not sorted (a, b, a) → by_groups must error.
+        let df = df![
+            "g" => ["a", "b", "a"],
+            "x" => [10.0_f64, 20.0, 30.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = RankAst {
+            data: Some(dref("T")),
+            out: None,
+            descending: false,
+            ties: Ties::Mean,
+            groups: None,
+            method: Method::Rank,
+            by: vec![("g".into(), false)],
+            var: vec!["x".into()],
+            ranks: vec![],
+        };
+        let r = execute(&ast, &mut session);
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("not sorted"));
     }
 }
