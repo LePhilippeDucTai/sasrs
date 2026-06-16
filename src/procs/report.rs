@@ -44,38 +44,51 @@
 //! simplification documentée). Ligne d'en-tête supprimée sous `noheader`.
 //! Numériques formatés comme PRINT/means (`format_best`) ; missing → `.`.
 //!
-//! ## DEFERRALS (erreurs PROPRES + doc ici) — v1 ne supporte PAS :
-//!   - usage `ACROSS`               → "PROC REPORT v1 does not support the
-//!                                     ACROSS usage."
-//!   - blocs `COMPUTE`/`ENDCOMP` et colonnes calculées
-//!                                  → "PROC REPORT v1 does not support COMPUTE
-//!                                     blocks."
-//!   - lignes de synthèse `BREAK`/`RBREAK`
-//!                                  → "PROC REPORT v1 does not support
-//!                                     BREAK/RBREAK statements."
-//!   - statements `LINE`            → "PROC REPORT v1 does not support LINE
-//!                                     statements."
-//!   - `WHERE`                      → "PROC REPORT v1 does not support the
-//!                                     WHERE statement."
+//! ## FONCTIONNALITÉS AVANCÉES (M21.4) — désormais supportées :
+//!   - usage `ACROSS` : les valeurs distinctes de la variable across deviennent
+//!     des COLONNES ; cellule = stat de l'ANALYSIS var au croisement
+//!     GROUP×ACROSS. v1 : exactement 1 across + 1 analysis ; en-tête à deux
+//!     niveaux APLATI en une ligne "valeur STAT" (le listing n'a pas de
+//!     spanner). OUT= sur un rapport ACROSS est différé proprement (note).
+//!   - `WHERE <cond>;` : filtre les observations AVANT le rapport. Évaluateur
+//!     d'expression local (ce fichier) fidèle SAS : comparaisons via
+//!     `Value::sas_cmp` (`. = .` vrai, char insensible aux blancs finaux),
+//!     logique sur la véracité SAS, `in (...)`. Appels de fonctions/arrays non
+//!     gérés → missing de garde (pas de panic).
+//!   - `BREAK AFTER <var> / summarize;` : ligne de sous-total recalculée
+//!     (ANALYSIS via `means::compute`) après chaque changement du groupe.
+//!   - `RBREAK AFTER / summarize;` : ligne de total général en bas. OL/DOL/
+//!     SKIP/PAGE acceptés mais cosmétiques (no-op v1).
+//!   - `COMPUTE <col>; <col> = <expr>; endcomp;` : affectation simple par ligne.
+//!     `COMPUTE AFTER; line <items>; endcomp;` : ligne de texte libre. Les
+//!     COMPUTE complexes (fonctions, `_C1_`, formats) sont différés PROPREMENT
+//!     (erreur claire au parse).
+//!   - `OUT=<ref>` : écrit les lignes du corps du rapport (détail/groupe +
+//!     sous-totaux BREAK ; le total RBREAK est exclu) comme dataset, en
+//!     respectant le type SAS de chaque colonne, et émet la NOTE de création.
+//!
+//! ## DEFERRALS RESTANTS (erreurs/notes PROPRES) — v1 ne supporte PAS :
 //!   - options DEFINE complexes au-delà de order=/label (FLOW, FORMAT=,
 //!                                     WIDTH=, SPACING=, multi-label, ...)
 //!                                  → "PROC REPORT v1 does not support the
 //!                                     DEFINE option 'XXX'."
-//!   - `OUT=` et tout dataset de sortie : v1 n'écrit AUCUN dataset et ne
-//!     touche pas `last_dataset`.
-//!   - options PROC autres que nowd/nowindow/noheader/headline/headskip
+//!   - COMPUTE non trivial (fonctions, références `_Cn_`, formats) → erreur
+//!     claire au parse.
+//!   - options PROC autres que nowd/nowindow/noheader/headline/headskip/out=
 //!                                  → "Unexpected option 'XXX' on PROC REPORT
 //!                                     statement."
 
-use crate::ast::DatasetRef;
+use crate::ast::{DatasetRef, Expr};
 use crate::error::{Result, SasError};
 use crate::listing::Align;
+use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{decode_column, group_by_keys, partition_numeric};
 use crate::procs::means;
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
+use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
 
 /// Usage of a column in the report.
@@ -86,6 +99,13 @@ pub enum Usage {
     Group,
     /// ANALYSIS with a statistic keyword (sum/mean/min/max/n/std).
     Analysis(String),
+    /// ACROSS: the distinct values of this variable become COLUMNS. The
+    /// crossing of GROUP rows × ACROSS columns is filled with the statistic of
+    /// the (single) ANALYSIS variable.
+    Across,
+    /// COMPUTED: a column produced by a `compute` block (`define x /
+    /// computed;`); it has no underlying dataset variable.
+    Computed,
 }
 
 /// Sort direction for ORDER/GROUP usage.
@@ -110,6 +130,54 @@ pub struct ReportAst {
     /// COLUMN list (display order). `None` → all variables in dataset order.
     pub columns: Option<Vec<String>>,
     pub defines: Vec<Define>,
+    /// `where <condition>;` — subsetting predicate applied before the report.
+    pub where_: Option<Expr>,
+    /// `out=<ref>` — write the report rows as a dataset.
+    pub out: Option<DatasetRef>,
+    /// `break after <var> / summarize;` — one summary line after each group.
+    pub breaks: Vec<Break>,
+    /// `rbreak after / summarize;` — a grand-total summary line at the bottom.
+    pub rbreak: Option<Break>,
+    /// `compute <target>; ... endcomp;` blocks.
+    pub computes: Vec<Compute>,
+}
+
+/// A `break after <var> / summarize;` (BREAK) or `rbreak after / summarize;`
+/// (RBREAK) statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Break {
+    /// Group variable the break is taken after. `None` for RBREAK.
+    pub var: Option<String>,
+    /// `summarize`: recompute ANALYSIS stats over the break range.
+    pub summarize: bool,
+}
+
+/// A `compute <target>; ... endcomp;` block. v1 supports `line` statements and
+/// simple `<col> = <expr>;` assignments. The target identifies the location: a
+/// column name, or `after`/`before` for report-level computes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compute {
+    /// `compute <target>;` — column name, or "after"/"before".
+    pub target: String,
+    /// Statements inside the block, in order.
+    pub stmts: Vec<ComputeStmt>,
+}
+
+/// A statement inside a COMPUTE block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputeStmt {
+    /// `<col> = <expr>;`
+    Assign { col: String, expr: Expr },
+    /// `line <item> [item ...];` — free-text line; items are literals or refs.
+    Line(Vec<LineItem>),
+}
+
+/// An item in a `line` statement: a string literal or a bare expression
+/// (typically a column reference resolved per group).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineItem {
+    Literal(String),
+    Expr(Expr),
 }
 
 /// Statistic keywords accepted after an ANALYSIS usage on a DEFINE.
@@ -127,6 +195,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
     let mut noheader = false;
     let mut columns: Option<Vec<String>> = None;
     let mut defines: Vec<Define> = Vec::new();
+    let mut where_: Option<Expr> = None;
+    let mut out: Option<DatasetRef> = None;
+    let mut breaks: Vec<Break> = Vec::new();
+    let mut rbreak: Option<Break> = None;
+    let mut computes: Vec<Compute> = Vec::new();
 
     // --- PROC REPORT statement options, until `;` ---
     loop {
@@ -144,6 +217,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
             }
             ts.next();
             data = Some(ts.parse_dataset_ref()?);
+        } else if ts.peek().is_kw("out") {
+            ts.next();
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse("expected '=' after OUT", ts.peek().span));
+            }
+            ts.next();
+            out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("nowd") || ts.peek().is_kw("nowindow") {
             // No-op: we never open an interactive window.
             ts.next();
@@ -187,21 +267,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
             ts.next();
             defines.push(parse_define(ts)?);
         } else if ts.peek().is_kw("compute") {
-            return Err(SasError::runtime(
-                "PROC REPORT v1 does not support COMPUTE blocks.",
-            ));
-        } else if ts.peek().is_kw("break") || ts.peek().is_kw("rbreak") {
-            return Err(SasError::runtime(
-                "PROC REPORT v1 does not support BREAK/RBREAK statements.",
-            ));
-        } else if ts.peek().is_kw("line") {
-            return Err(SasError::runtime(
-                "PROC REPORT v1 does not support LINE statements.",
-            ));
+            ts.next();
+            computes.push(parse_compute(ts)?);
+        } else if ts.peek().is_kw("break") {
+            ts.next();
+            breaks.push(parse_break(ts, false)?);
+        } else if ts.peek().is_kw("rbreak") {
+            ts.next();
+            rbreak = Some(parse_break(ts, true)?);
         } else if ts.peek().is_kw("where") {
-            return Err(SasError::runtime(
-                "PROC REPORT v1 does not support the WHERE statement.",
-            ));
+            ts.next();
+            where_ = Some(crate::parser::expr::parse_expr(ts)?);
+            ts.expect_semi()?;
         } else {
             let span = ts.peek().span;
             let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
@@ -217,7 +294,155 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
         noheader,
         columns,
         defines,
+        where_,
+        out,
+        breaks,
+        rbreak,
+        computes,
     })
+}
+
+/// Parse a `break` / `rbreak` statement, after the keyword was consumed.
+/// `break after <var> [/ summarize ...];`  |  `rbreak after [/ summarize ...];`
+fn parse_break(ts: &mut StatementStream, is_rbreak: bool) -> Result<Break> {
+    // Optional `after` / `before` location keyword. v1 treats both as the
+    // summary line placed AFTER the range (the meaningful case); `before` is
+    // accepted and documented as placed-after.
+    if ts.peek().is_kw("after") || ts.peek().is_kw("before") {
+        ts.next();
+    }
+
+    // For BREAK, a group variable name follows (absent for RBREAK).
+    let var = if !is_rbreak {
+        match ts.peek().ident().map(str::to_string) {
+            Some(v) if ts.peek().kind != TokenKind::Slash => {
+                ts.next();
+                Some(v)
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name after BREAK",
+                    ts.peek().span,
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // Optional `/ <options>`. v1 understands SUMMARIZE; OL/DOL/SKIP/PAGE and
+    // similar cosmetic options are accepted and ignored (documented).
+    let mut summarize = false;
+    if ts.peek().kind == TokenKind::Slash {
+        ts.next();
+        loop {
+            match &ts.peek().kind {
+                TokenKind::Semi | TokenKind::Eof => break,
+                TokenKind::Ident(raw) => {
+                    if raw.eq_ignore_ascii_case("summarize") {
+                        summarize = true;
+                    }
+                    // Other options (ol, dol, skip, page, suppress, ...) are
+                    // cosmetic presentation flags → accepted, no-op in v1.
+                    ts.next();
+                }
+                _ => {
+                    ts.next();
+                }
+            }
+        }
+    }
+    ts.expect_semi()?;
+    Ok(Break { var, summarize })
+}
+
+/// Parse a `compute <target>; ... endcomp;` block, after `compute` consumed.
+fn parse_compute(ts: &mut StatementStream) -> Result<Compute> {
+    // Target: a column name or `after`/`before`.
+    let target = match ts.peek().ident().map(str::to_string) {
+        Some(t) => {
+            ts.next();
+            t
+        }
+        None => {
+            return Err(SasError::parse(
+                "expected a target after COMPUTE",
+                ts.peek().span,
+            ));
+        }
+    };
+    // Skip any trailing options on the compute statement (e.g. `/ character`)
+    // up to the `;`.
+    while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+        ts.next();
+    }
+    ts.expect_semi()?;
+
+    let mut stmts: Vec<ComputeStmt> = Vec::new();
+    loop {
+        while ts.peek().kind == TokenKind::Semi {
+            ts.next();
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            return Err(SasError::parse(
+                "expected ENDCOMP to close COMPUTE block",
+                ts.peek().span,
+            ));
+        }
+        if ts.peek().is_kw("endcomp") {
+            ts.next();
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
+            break;
+        }
+        if ts.peek().is_kw("line") {
+            ts.next();
+            stmts.push(ComputeStmt::Line(parse_line_items(ts)?));
+            ts.expect_semi()?;
+        } else if let Some(col) = ts.peek().ident().map(str::to_string) {
+            // Expect `<col> = <expr>;`. Anything else inside a COMPUTE is
+            // deferred CLEANLY (no panic): error with a clear message.
+            ts.next();
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::runtime(format!(
+                    "PROC REPORT v1 supports only simple '<col> = <expr>;' \
+                     assignments and LINE statements inside COMPUTE (got '{}').",
+                    col.to_uppercase()
+                )));
+            }
+            ts.next(); // '='
+            let expr = crate::parser::expr::parse_expr(ts)?;
+            ts.expect_semi()?;
+            stmts.push(ComputeStmt::Assign { col, expr });
+        } else {
+            return Err(SasError::parse(
+                "unexpected token inside COMPUTE block",
+                ts.peek().span,
+            ));
+        }
+    }
+    Ok(Compute { target, stmts })
+}
+
+/// Parse the items of a `line` statement up to (but not consuming) the `;`.
+fn parse_line_items(ts: &mut StatementStream) -> Result<Vec<LineItem>> {
+    let mut items = Vec::new();
+    loop {
+        match &ts.peek().kind {
+            TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::Str { value, .. } => {
+                items.push(LineItem::Literal(value.clone()));
+                ts.next();
+            }
+            _ => {
+                // Parse a bare expression (column reference, number, ...).
+                let e = crate::parser::expr::parse_expr(ts)?;
+                items.push(LineItem::Expr(e));
+            }
+        }
+    }
+    Ok(items)
 }
 
 /// Parse a DEFINE statement body, after `define` was consumed, through `;`.
@@ -304,14 +529,12 @@ fn parse_define(ts: &mut StatementStream) -> Result<Define> {
                             ts.next();
                         }
                         "across" => {
-                            return Err(SasError::runtime(
-                                "PROC REPORT v1 does not support the ACROSS usage.",
-                            ));
+                            usage = Some(Usage::Across);
+                            ts.next();
                         }
                         "computed" => {
-                            return Err(SasError::runtime(
-                                "PROC REPORT v1 does not support COMPUTE blocks.",
-                            ));
+                            usage = Some(Usage::Computed);
+                            ts.next();
                         }
                         other => {
                             return Err(SasError::runtime(format!(
@@ -419,7 +642,7 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     for note in notes {
         session.log.forward(&note);
     }
-    let n_obs = ds.n_obs();
+    let n_obs_total = ds.n_obs();
 
     // --- Resolve the column list (display order). ---
     let col_names: Vec<String> = match &ast.columns {
@@ -430,6 +653,24 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     // --- Build the per-column plan, applying DEFINEs and type defaults. ---
     let mut plan: Vec<ColPlan> = Vec::with_capacity(col_names.len());
     for cname in &col_names {
+        let def = ast
+            .defines
+            .iter()
+            .find(|d| d.var.eq_ignore_ascii_case(cname));
+
+        // COMPUTED columns have no underlying dataset variable.
+        if matches!(def.map(|d| &d.usage), Some(Usage::Computed)) {
+            plan.push(ColPlan {
+                idx: usize::MAX,
+                usage: Usage::Computed,
+                dir: def.map(|d| d.order).unwrap_or(OrderDir::Ascending),
+                header: def
+                    .and_then(|d| d.label.clone())
+                    .unwrap_or_else(|| cname.clone()),
+            });
+            continue;
+        }
+
         let idx = ds
             .vars
             .iter()
@@ -437,11 +678,6 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
             .ok_or_else(|| {
                 SasError::runtime(format!("Variable {} not found.", cname.to_uppercase()))
             })?;
-
-        let def = ast
-            .defines
-            .iter()
-            .find(|d| d.var.eq_ignore_ascii_case(cname));
 
         let usage = match def {
             Some(d) => d.usage.clone(),
@@ -464,11 +700,46 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
         });
     }
 
-    // Decode every planned column once.
-    let decoded: Vec<Vec<Value>> = plan
+    // Decode every planned column once (COMPUTED columns decode to all-missing).
+    let decoded_all: Vec<Vec<Value>> = plan
         .iter()
-        .map(|c| decode_column(&ds, c.idx))
+        .map(|c| {
+            if c.idx == usize::MAX {
+                Ok(vec![Value::missing(); n_obs_total])
+            } else {
+                decode_column(&ds, c.idx)
+            }
+        })
         .collect::<Result<_>>()?;
+
+    // --- WHERE: build the surviving-rows index. ---
+    let live_rows: Vec<usize> = if let Some(cond) = &ast.where_ {
+        // Build a name→decoded-column lookup over ALL dataset variables (not
+        // just the planned columns) so the predicate can reference any var.
+        let where_cols = decode_named_columns(&ds)?;
+        (0..n_obs_total)
+            .filter(|&r| {
+                let v = eval_row_expr(cond, &where_cols, r);
+                v.truthy()
+            })
+            .collect()
+    } else {
+        (0..n_obs_total).collect()
+    };
+    let n_obs = live_rows.len();
+
+    // Project the decoded columns onto the surviving rows so downstream code
+    // indexes 0..n_obs contiguously.
+    let decoded: Vec<Vec<Value>> = decoded_all
+        .iter()
+        .map(|col| live_rows.iter().map(|&r| col[r].clone()).collect())
+        .collect();
+
+    // --- ACROSS branch: distinct values of the across var become columns. ---
+    let has_across = plan.iter().any(|c| matches!(c.usage, Usage::Across));
+    if has_across {
+        return execute_across(ast, session, &ds, &plan, &decoded, n_obs, &display_name);
+    }
 
     // Determine whether this is a summary report.
     let group_positions: Vec<usize> = plan
@@ -485,6 +756,8 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
         .iter()
         .map(|c| match c.usage {
             Usage::Analysis(_) => Align::Right,
+            Usage::Computed => Align::Right,
+            _ if c.idx == usize::MAX => Align::Left,
             _ => match ds.vars[c.idx].ty {
                 VarType::Num => Align::Right,
                 VarType::Char => Align::Left,
@@ -492,22 +765,26 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
         })
         .collect();
 
-    let rows: Vec<Vec<String>> = if !is_summary {
-        // ── Detail report: one listing row per observation. ──
-        let mut rows = Vec::with_capacity(n_obs);
+    // Output value rows (typed) — used both for the listing and for OUT=.
+    // Each entry is (kind, values), where `kind` distinguishes detail/group
+    // rows from BREAK/RBREAK summary rows (RBREAK is not written to OUT=).
+    let mut value_rows: Vec<RowOut> = Vec::new();
+
+    if !is_summary {
+        // ── Detail report: one listing row per (surviving) observation. ──
         for r in 0..n_obs {
-            let row: Vec<String> = decoded.iter().map(|col| fmt_cell(&col[r])).collect();
-            rows.push(row);
+            let vals: Vec<Value> = (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect();
+            value_rows.push(RowOut {
+                kind: RowKind::Detail,
+                vals,
+            });
         }
-        rows
     } else {
         // ── Summary report: group by GROUP+ORDER key columns. ──
         let key_refs: Vec<&Vec<Value>> = group_positions.iter().map(|&p| &decoded[p]).collect();
         let mut groups = group_by_keys(&key_refs, n_obs);
 
-        // Apply DESCENDING direction lexicographically over the key tuple if
-        // any key column requests it. group_by_keys returns ascending order;
-        // we re-sort honoring each key column's direction.
+        // Apply DESCENDING direction lexicographically over the key tuple.
         let dirs: Vec<OrderDir> = group_positions.iter().map(|&p| plan[p].dir).collect();
         groups.sort_by(|(a, _), (b, _)| {
             for ((x, y), dir) in a.iter().zip(b).zip(&dirs) {
@@ -522,61 +799,643 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
             Ordering::Equal
         });
 
-        let mut rows = Vec::with_capacity(groups.len());
-        for (_key, grp_rows) in &groups {
-            let mut row: Vec<String> = Vec::with_capacity(plan.len());
-            for (ci, c) in plan.iter().enumerate() {
-                let cell = match &c.usage {
-                    Usage::Group | Usage::Order => {
-                        // Constant within the group by construction (key col).
-                        fmt_cell(&decoded[ci][grp_rows[0]])
-                    }
-                    Usage::Analysis(stat) => {
-                        let (xs, nmiss) = partition_numeric(&decoded[ci], grp_rows);
-                        // PROC REPORT has no CI statistics; pass the default
-                        // alpha (0.05) — unused unless a CLM/LCLM/UCLM stat is
-                        // requested, which REPORT does not support.
-                        let v = means::compute(stat, &xs, nmiss, 0.05);
-                        fmt_cell(&v)
-                    }
-                    Usage::Display => {
-                        // Print the value if constant within the group, else
-                        // blank (documented simplification).
-                        let first = &decoded[ci][grp_rows[0]];
-                        let constant = grp_rows
-                            .iter()
-                            .all(|&r| decoded[ci][r].sas_cmp(first) == Ordering::Equal);
-                        if constant {
-                            fmt_cell(first)
-                        } else {
-                            String::new()
-                        }
-                    }
-                };
-                row.push(cell);
-            }
-            rows.push(row);
-        }
-        rows
-    };
+        // Which group var(s) trigger a BREAK? Map a break's var to its position
+        // in `group_positions` (the deepest matching group level).
+        let break_after: Vec<(usize, &Break)> = ast
+            .breaks
+            .iter()
+            .filter_map(|b| {
+                let vn = b.var.as_ref()?;
+                group_positions
+                    .iter()
+                    .position(|&p| {
+                        plan[p].idx != usize::MAX
+                            && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
+                    })
+                    .map(|pos| (pos, b))
+            })
+            .collect();
 
-    // --- Write the listing. ---
+        for (gi, (key, grp_rows)) in groups.iter().enumerate() {
+            let vals = summary_row_values(&plan, &decoded, grp_rows);
+            value_rows.push(RowOut {
+                kind: RowKind::Group,
+                vals,
+            });
+
+            // BREAK AFTER <var>: emit a sub-total line when the key value for
+            // that level changes (or at the last group).
+            for &(level_pos, brk) in &break_after {
+                let is_last = gi + 1 == groups.len();
+                let changes = is_last
+                    || groups[gi + 1].0.get(level_pos).map(|nv| {
+                        key[level_pos].sas_cmp(nv) != Ordering::Equal
+                    }) != Some(false);
+                if changes && brk.summarize {
+                    // Range = all original rows whose key matches up to and
+                    // including `level_pos`. Collect across the contiguous run.
+                    let range = break_range_rows(&groups, gi, level_pos, key);
+                    let bvals = break_row_values(&plan, &decoded, &range, level_pos);
+                    value_rows.push(RowOut {
+                        kind: RowKind::Break,
+                        vals: bvals,
+                    });
+                }
+            }
+        }
+
+        // RBREAK AFTER / SUMMARIZE: grand-total line over all surviving rows.
+        if let Some(rb) = &ast.rbreak {
+            if rb.summarize {
+                let all: Vec<usize> = (0..n_obs).collect();
+                let rvals = break_row_values(&plan, &decoded, &all, usize::MAX);
+                value_rows.push(RowOut {
+                    kind: RowKind::Rbreak,
+                    vals: rvals,
+                });
+            }
+        }
+    }
+
+    // --- COMPUTE: apply simple `<col> = <expr>;` assignments per row. ---
+    apply_row_computes(ast, &plan, &mut value_rows);
+
+    // --- Render the listing. ---
+    let rows: Vec<Vec<String>> = value_rows
+        .iter()
+        .map(|ro| ro.vals.iter().map(fmt_cell).collect())
+        .collect();
+
     session.listing.page_header();
     if ast.noheader {
-        // Suppress the header row: pass empty header strings so write_table
-        // still column-aligns the data without printing a header line.
         write_table_noheader(session, &aligns, &rows);
     } else {
         session.listing.write_table(&headers, &aligns, &rows);
     }
 
-    // NOTE — observations read (plural invariable, as in PRINT).
+    // --- COMPUTE AFTER / LINE: free-text lines below the report. ---
+    render_after_lines(ast, session, &plan, &value_rows);
+
+    // --- OUT=: write the report rows (excluding RBREAK grand total) as data. ---
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(session, out_ref, &plan, &ds, &value_rows)?;
+    }
+
+    // NOTE — observations read (plural invariable, as in PRINT). After a WHERE,
+    // SAS reports the count actually read (the filtered count).
     session.log.note(&format!(
         "There were {} observations read from the data set {}.",
         n_obs, display_name
     ));
 
-    // PROC REPORT v1 has NO output dataset: do NOT set last_dataset.
+    Ok(())
+}
+
+/// A produced report row (typed values) and what kind of row it is.
+struct RowOut {
+    kind: RowKind,
+    vals: Vec<Value>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum RowKind {
+    Detail,
+    Group,
+    Break,
+    Rbreak,
+}
+
+/// Compute the typed cell values of a summary (group) row.
+fn summary_row_values(plan: &[ColPlan], decoded: &[Vec<Value>], grp_rows: &[usize]) -> Vec<Value> {
+    let mut vals = Vec::with_capacity(plan.len());
+    for (ci, c) in plan.iter().enumerate() {
+        let v = match &c.usage {
+            Usage::Group | Usage::Order => decoded[ci][grp_rows[0]].clone(),
+            Usage::Analysis(stat) => {
+                let (xs, nmiss) = partition_numeric(&decoded[ci], grp_rows);
+                means::compute(stat, &xs, nmiss, 0.05)
+            }
+            Usage::Display => {
+                let first = &decoded[ci][grp_rows[0]];
+                let constant = grp_rows
+                    .iter()
+                    .all(|&r| decoded[ci][r].sas_cmp(first) == Ordering::Equal);
+                if constant {
+                    first.clone()
+                } else {
+                    Value::Char(String::new())
+                }
+            }
+            // COMPUTED / ACROSS columns are filled later / handled elsewhere.
+            _ => Value::missing(),
+        };
+        vals.push(v);
+    }
+    vals
+}
+
+/// Compute the typed cell values of a BREAK/RBREAK summary row. The break key
+/// columns up to and including `level_pos` keep their value; deeper group
+/// columns are blanked; ANALYSIS columns are recomputed over `range`.
+fn break_row_values(
+    plan: &[ColPlan],
+    decoded: &[Vec<Value>],
+    range: &[usize],
+    level_pos_excl: usize,
+) -> Vec<Value> {
+    // Translate the group-level cutoff (an index into group_positions) into a
+    // plan-column comparison: we keep GROUP/ORDER cells whose own group level
+    // is <= level_pos_excl; here we simply keep the first matching value for
+    // key columns and blank the rest, marking the first key column with a tag.
+    let mut group_seen = 0usize;
+    let mut vals = Vec::with_capacity(plan.len());
+    let mut first_key_done = false;
+    for (ci, c) in plan.iter().enumerate() {
+        let v = match &c.usage {
+            Usage::Group | Usage::Order => {
+                let keep = group_seen <= level_pos_excl;
+                group_seen += 1;
+                if keep && !range.is_empty() {
+                    if !first_key_done && level_pos_excl == usize::MAX {
+                        // RBREAK: label the leading key column.
+                        first_key_done = true;
+                        Value::Char(String::new())
+                    } else {
+                        decoded[ci][range[0]].clone()
+                    }
+                } else {
+                    Value::Char(String::new())
+                }
+            }
+            Usage::Analysis(stat) => {
+                let (xs, nmiss) = partition_numeric(&decoded[ci], range);
+                means::compute(stat, &xs, nmiss, 0.05)
+            }
+            _ => Value::Char(String::new()),
+        };
+        vals.push(v);
+    }
+    vals
+}
+
+/// Collect the original (projected) row indices belonging to the contiguous run
+/// of groups that share the same key prefix up to `level_pos` ending at `gi`.
+fn break_range_rows(
+    groups: &[(Vec<Value>, Vec<usize>)],
+    gi: usize,
+    level_pos: usize,
+    key: &[Value],
+) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    // Walk backwards while the prefix matches, then forward — but since groups
+    // are sorted, the run sharing this prefix is contiguous and ends at gi.
+    let prefix_eq = |k: &[Value]| -> bool {
+        (0..=level_pos).all(|p| key[p].sas_cmp(&k[p]) == Ordering::Equal)
+    };
+    let mut start = gi;
+    while start > 0 && prefix_eq(&groups[start - 1].0) {
+        start -= 1;
+    }
+    for g in &groups[start..=gi] {
+        out.extend_from_slice(&g.1);
+    }
+    out
+}
+
+// ───────────────────────── WHERE evaluation ─────────────────────────
+
+/// Decode every dataset variable into a name→Values map (lowercased names) so a
+/// WHERE predicate can reference any variable. Returns a Vec of (name, column)
+/// to preserve simple lookup without pulling in a HashMap.
+fn decode_named_columns(ds: &crate::dataset::SasDataset) -> Result<Vec<(String, Vec<Value>)>> {
+    let mut out = Vec::with_capacity(ds.vars.len());
+    for (i, m) in ds.vars.iter().enumerate() {
+        out.push((m.name.to_ascii_lowercase(), decode_column(ds, i)?));
+    }
+    Ok(out)
+}
+
+/// Look up a column's value for row `r` by (case-insensitive) name.
+fn lookup_var<'a>(cols: &'a [(String, Vec<Value>)], name: &str, r: usize) -> Option<&'a Value> {
+    let lname = name.to_ascii_lowercase();
+    cols.iter()
+        .find(|(n, _)| *n == lname)
+        .map(|(_, col)| &col[r])
+}
+
+/// Self-contained, faithful-SAS evaluation of a WHERE/COMPUTE expression for a
+/// single row, over decoded columns. Comparisons go through `Value::sas_cmp`
+/// (so `. = .` is true and char compares ignore trailing blanks); logical ops
+/// use SAS truthiness (missing/0 = false). Unsupported constructs (function
+/// calls, arrays, hash methods) evaluate to a guard missing rather than panic.
+fn eval_row_expr(expr: &Expr, cols: &[(String, Vec<Value>)], r: usize) -> Value {
+    use crate::ast::UnaryOp;
+    match expr {
+        Expr::Num(n) => Value::Num(*n),
+        Expr::Str(s) => Value::Char(s.clone()),
+        Expr::Missing(k) => Value::Missing(*k),
+        Expr::Var(name) => lookup_var(cols, name, r).cloned().unwrap_or(Value::missing()),
+        Expr::Unary { op, expr } => {
+            let v = eval_row_expr(expr, cols, r);
+            match op {
+                UnaryOp::Not => Value::Num(if v.truthy() { 0.0 } else { 1.0 }),
+                UnaryOp::Plus => match value_to_num(&v) {
+                    Some(f) => Value::Num(f),
+                    None => Value::missing(),
+                },
+                UnaryOp::Minus => match value_to_num(&v) {
+                    Some(f) => Value::Num(-f),
+                    None => Value::missing(),
+                },
+            }
+        }
+        Expr::Binary { op, left, right } => {
+            let l = eval_row_expr(left, cols, r);
+            let rr = eval_row_expr(right, cols, r);
+            eval_row_binary(*op, &l, &rr)
+        }
+        Expr::In { expr, list } => {
+            let v = eval_row_expr(expr, cols, r);
+            let found = list.iter().any(|e| {
+                let item = eval_row_expr(e, cols, r);
+                v.sas_cmp(&item) == Ordering::Equal
+            });
+            Value::Num(if found { 1.0 } else { 0.0 })
+        }
+        // Unsupported in this lightweight evaluator (documented): guard missing.
+        _ => Value::missing(),
+    }
+}
+
+fn eval_row_binary(op: crate::ast::BinaryOp, l: &Value, r: &Value) -> Value {
+    use crate::ast::BinaryOp::*;
+    match op {
+        Lt | Le | Gt | Ge | Eq | Ne => {
+            let ord = l.sas_cmp(r);
+            let res = match op {
+                Eq => ord == Ordering::Equal,
+                Ne => ord != Ordering::Equal,
+                Lt => ord == Ordering::Less,
+                Le => ord != Ordering::Greater,
+                Gt => ord == Ordering::Greater,
+                Ge => ord != Ordering::Less,
+                _ => unreachable!(),
+            };
+            Value::Num(if res { 1.0 } else { 0.0 })
+        }
+        And => Value::Num(if l.truthy() && r.truthy() { 1.0 } else { 0.0 }),
+        Or => Value::Num(if l.truthy() || r.truthy() { 1.0 } else { 0.0 }),
+        Concat => {
+            let ls = value_to_disp(l);
+            let rs = value_to_disp(r);
+            Value::Char(format!("{ls}{rs}"))
+        }
+        Add | Sub | Mul | Div | Power => {
+            match (value_to_num(l), value_to_num(r)) {
+                (Some(a), Some(b)) => {
+                    let v = match op {
+                        Add => a + b,
+                        Sub => a - b,
+                        Mul => a * b,
+                        Div => {
+                            if b == 0.0 {
+                                return Value::missing();
+                            }
+                            a / b
+                        }
+                        Power => a.powf(b),
+                        _ => unreachable!(),
+                    };
+                    Value::Num(v)
+                }
+                _ => Value::missing(),
+            }
+        }
+    }
+}
+
+/// Plain string rendering of a Value for concatenation / LINE output.
+fn value_to_disp(v: &Value) -> String {
+    match v {
+        Value::Char(s) => s.trim_end().to_string(),
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(_) => String::new(),
+    }
+}
+
+// ───────────────────────── ACROSS report ─────────────────────────
+
+/// Render an ACROSS report: GROUP/ORDER vars in rows, the distinct values of
+/// the ACROSS var in columns, each cell = the statistic of the ANALYSIS var.
+/// v1 supports exactly one ACROSS var and one ANALYSIS var; the two-level
+/// header (across value over statistic) is flattened into a single header line
+/// "value stat" (documented simplification, since the listing has no spanner).
+fn execute_across(
+    ast: &ReportAst,
+    session: &mut Session,
+    ds: &crate::dataset::SasDataset,
+    plan: &[ColPlan],
+    decoded: &[Vec<Value>],
+    n_obs: usize,
+    display_name: &str,
+) -> Result<()> {
+    // Identify the across, group/order, and analysis columns.
+    let across_pos = plan
+        .iter()
+        .position(|c| matches!(c.usage, Usage::Across))
+        .expect("execute_across called without an ACROSS column");
+    let group_positions: Vec<usize> = plan
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.usage, Usage::Group | Usage::Order))
+        .map(|(i, _)| i)
+        .collect();
+    let analysis_pos = plan.iter().position(|c| matches!(c.usage, Usage::Analysis(_)));
+    let (apos, stat) = match analysis_pos {
+        Some(p) => match &plan[p].usage {
+            Usage::Analysis(s) => (p, s.clone()),
+            _ => unreachable!(),
+        },
+        None => {
+            return Err(SasError::runtime(
+                "PROC REPORT ACROSS in v1 requires exactly one ANALYSIS variable.",
+            ));
+        }
+    };
+
+    // Distinct across values (sorted via sas_cmp, honoring direction).
+    let across_dir = plan[across_pos].dir;
+    let mut across_vals: Vec<Value> = Vec::new();
+    for r in 0..n_obs {
+        let v = &decoded[across_pos][r];
+        if !across_vals.iter().any(|e| e.sas_cmp(v) == Ordering::Equal) {
+            across_vals.push(v.clone());
+        }
+    }
+    across_vals.sort_by(|a, b| {
+        let c = a.sas_cmp(b);
+        if across_dir == OrderDir::Descending {
+            c.reverse()
+        } else {
+            c
+        }
+    });
+
+    // Group the rows by the GROUP/ORDER key tuple.
+    let key_refs: Vec<&Vec<Value>> = group_positions.iter().map(|&p| &decoded[p]).collect();
+    let mut groups = group_by_keys(&key_refs, n_obs);
+    let dirs: Vec<OrderDir> = group_positions.iter().map(|&p| plan[p].dir).collect();
+    groups.sort_by(|(a, _), (b, _)| {
+        for ((x, y), dir) in a.iter().zip(b).zip(&dirs) {
+            let mut c = x.sas_cmp(y);
+            if *dir == OrderDir::Descending {
+                c = c.reverse();
+            }
+            if c != Ordering::Equal {
+                return c;
+            }
+        }
+        Ordering::Equal
+    });
+
+    // Headers: the GROUP/ORDER columns, then one column per across value.
+    let mut headers: Vec<String> = group_positions.iter().map(|&p| plan[p].header.clone()).collect();
+    let stat_label = stat.to_uppercase();
+    for av in &across_vals {
+        headers.push(format!("{} {}", value_to_disp(av), stat_label));
+    }
+
+    let mut aligns: Vec<Align> = group_positions
+        .iter()
+        .map(|&p| match ds.vars[plan[p].idx].ty {
+            VarType::Num => Align::Right,
+            VarType::Char => Align::Left,
+        })
+        .collect();
+    aligns.extend(std::iter::repeat(Align::Right).take(across_vals.len()));
+
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(groups.len());
+    for (_key, grp_rows) in &groups {
+        let mut row: Vec<String> = Vec::new();
+        for &gp in &group_positions {
+            row.push(fmt_cell(&decoded[gp][grp_rows[0]]));
+        }
+        for av in &across_vals {
+            // Sub-select the group rows whose across value equals `av`.
+            let sub: Vec<usize> = grp_rows
+                .iter()
+                .copied()
+                .filter(|&r| decoded[across_pos][r].sas_cmp(av) == Ordering::Equal)
+                .collect();
+            let (xs, nmiss) = partition_numeric(&decoded[apos], &sub);
+            let v = means::compute(&stat, &xs, nmiss, 0.05);
+            row.push(fmt_cell(&v));
+        }
+        rows.push(row);
+    }
+
+    session.listing.page_header();
+    if ast.noheader {
+        write_table_noheader(session, &aligns, &rows);
+    } else {
+        session.listing.write_table(&headers, &aligns, &rows);
+    }
+
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.",
+        n_obs, display_name
+    ));
+    // OUT= for ACROSS is deferred CLEANLY (no panic): note and skip.
+    if ast.out.is_some() {
+        session.log.note(
+            "PROC REPORT v1 does not write an OUT= data set for ACROSS reports; OUT= ignored.",
+        );
+    }
+    Ok(())
+}
+
+// ───────────────────────── COMPUTE / LINE ─────────────────────────
+
+/// Apply simple `compute <col>; <col> = <expr>; endcomp;` assignments to each
+/// produced row. The expression may reference any report column by name (its
+/// per-row value). Computes targeting `after`/`before` are handled separately
+/// (LINE rendering); non-column targets are skipped here.
+fn apply_row_computes(ast: &ReportAst, plan: &[ColPlan], rows: &mut [RowOut]) {
+    for comp in &ast.computes {
+        // Only column-targeted computes assign into a cell.
+        let target_ci = plan
+            .iter()
+            .position(|c| c.header.eq_ignore_ascii_case(&comp.target));
+        // Build the per-row column context lazily inside the loop.
+        for ro in rows.iter_mut() {
+            // Context: each plan column's header (and underlying name) → value.
+            let ctx: Vec<(String, Value)> = plan
+                .iter()
+                .enumerate()
+                .map(|(ci, c)| (c.header.to_ascii_lowercase(), ro.vals[ci].clone()))
+                .collect();
+            let cols: Vec<(String, Vec<Value>)> =
+                ctx.into_iter().map(|(n, v)| (n, vec![v])).collect();
+            for st in &comp.stmts {
+                if let ComputeStmt::Assign { col, expr } = st {
+                    let v = eval_row_expr(expr, &cols, 0);
+                    // Assign into the named column if it matches a plan column,
+                    // else into the compute target column.
+                    let dest = plan
+                        .iter()
+                        .position(|c| c.header.eq_ignore_ascii_case(col))
+                        .or(target_ci);
+                    if let Some(d) = dest {
+                        ro.vals[d] = v;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render `compute after; line ...; endcomp;` free-text lines below the report.
+/// LINE items are concatenated: string literals verbatim, expressions resolved
+/// over the grand-total (all-rows) context where possible.
+fn render_after_lines(ast: &ReportAst, session: &mut Session, plan: &[ColPlan], rows: &[RowOut]) {
+    for comp in &ast.computes {
+        if !comp.target.eq_ignore_ascii_case("after") {
+            continue;
+        }
+        // Context for LINE expressions: the grand-total (RBREAK) row if present,
+        // else the last row, else empty.
+        let ctx_row = rows
+            .iter()
+            .rev()
+            .find(|r| r.kind == RowKind::Rbreak)
+            .or_else(|| rows.last());
+        for st in &comp.stmts {
+            if let ComputeStmt::Line(items) = st {
+                let mut line = String::new();
+                for item in items {
+                    match item {
+                        LineItem::Literal(s) => line.push_str(s),
+                        LineItem::Expr(e) => {
+                            let v = if let Some(ro) = ctx_row {
+                                let cols: Vec<(String, Vec<Value>)> = plan
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(ci, c)| {
+                                        (c.header.to_ascii_lowercase(), vec![ro.vals[ci].clone()])
+                                    })
+                                    .collect();
+                                eval_row_expr(e, &cols, 0)
+                            } else {
+                                Value::missing()
+                            };
+                            line.push_str(&value_to_disp(&v));
+                        }
+                    }
+                }
+                session.listing.write_line(line.trim_end());
+            }
+        }
+    }
+}
+
+// ───────────────────────── OUT= dataset ─────────────────────────
+
+/// Render a Value as an optional char cell for OUT= (trailing blanks trimmed,
+/// blanks/missing → null).
+fn value_to_char_cell(v: &Value) -> Option<String> {
+    match v {
+        Value::Char(s) => {
+            let t = s.trim_end();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        Value::Num(f) => Some(format_best(*f, 12).trim().to_string()),
+        Value::Missing(_) => None,
+    }
+}
+
+/// Write the report's detail/group/break rows (excluding the RBREAK grand
+/// total) as an OUT= data set. One output column per COLUMN entry; the SAS type
+/// follows the input variable (ANALYSIS/GROUP/ORDER numeric vars stay numeric,
+/// char DISPLAY vars stay char). COMPUTED columns are numeric.
+fn write_out_dataset(
+    session: &mut Session,
+    out_ref: &DatasetRef,
+    plan: &[ColPlan],
+    ds: &crate::dataset::SasDataset,
+    rows: &[RowOut],
+) -> Result<()> {
+    use crate::dataset::{SasDataset, VarMeta};
+
+    // OUT= captures the report body rows (detail, group, and BREAK sub-totals);
+    // the RBREAK grand total is a presentation-only line and is excluded.
+    let body: Vec<&RowOut> = rows.iter().filter(|r| r.kind != RowKind::Rbreak).collect();
+
+    let mut columns: Vec<Column> = Vec::with_capacity(plan.len());
+    let mut vars: Vec<VarMeta> = Vec::with_capacity(plan.len());
+
+    for (ci, c) in plan.iter().enumerate() {
+        // Decide the output type for this column.
+        let is_char = match &c.usage {
+            Usage::Analysis(_) | Usage::Computed => false,
+            _ => c.idx != usize::MAX && ds.vars[c.idx].ty == VarType::Char,
+        };
+        let name = if c.idx == usize::MAX {
+            c.header.clone()
+        } else {
+            ds.vars[c.idx].name.clone()
+        };
+        if is_char {
+            let vals: Vec<Option<String>> =
+                body.iter().map(|r| value_to_char_cell(&r.vals[ci])).collect();
+            let len = vals
+                .iter()
+                .flatten()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(8)
+                .max(1);
+            columns.push(Series::new(name.as_str().into(), vals).into());
+            vars.push(VarMeta {
+                name,
+                ty: VarType::Char,
+                length: len,
+                format: None,
+                label: None,
+            });
+        } else {
+            let vals: Vec<Option<f64>> =
+                body.iter().map(|r| value_to_num(&r.vals[ci])).collect();
+            columns.push(Series::new(name.as_str().into(), vals).into());
+            vars.push(VarMeta {
+                name,
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            });
+        }
+    }
+
+    let df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df, vars };
+
+    let out_libref = out_ref.libref_or_work();
+    let out_table = out_ref.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars = out_ds.vars.len();
+
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars
+    ));
     Ok(())
 }
 
@@ -665,6 +1524,37 @@ mod tests {
         session.last_dataset = Some(format!("WORK.{}", table.to_uppercase()));
     }
 
+    /// Defaults for the advanced (M21.4) ReportAst fields, used with Rust's
+    /// struct-update syntax (`..report_defaults()`) in the execute tests.
+    fn report_defaults() -> ReportAst {
+        ReportAst {
+            data: None,
+            noheader: false,
+            columns: None,
+            defines: vec![],
+            where_: None,
+            out: None,
+            breaks: vec![],
+            rbreak: None,
+            computes: vec![],
+        }
+    }
+
+    fn work_ref(name: &str) -> DatasetRef {
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: name.into(),
+        }
+    }
+
+    /// Parse a standalone expression (e.g. a WHERE condition) for tests. The
+    /// SourceFile is owned within this scope; the returned Expr is owned.
+    fn parse_test_expr(src: &str) -> Expr {
+        let source = crate::source::SourceFile::new(src);
+        let mut ts = crate::parser::StatementStream::new(&source).unwrap();
+        crate::parser::expr::parse_expr(&mut ts).unwrap()
+    }
+
     // ───────────────────────── parse tests ─────────────────────────
 
     #[test]
@@ -729,24 +1619,63 @@ mod tests {
     }
 
     #[test]
-    fn parse_across_usage_errors_cleanly() {
-        let r = parse_report("proc report data=a; define x / across; run;");
-        let msg = r.err().unwrap().to_string();
-        assert!(msg.contains("ACROSS"), "msg: {msg}");
+    fn parse_across_usage_now_parses() {
+        let ast = parse_report("proc report data=a; define x / across; run;").unwrap();
+        assert_eq!(ast.defines[0].usage, Usage::Across);
     }
 
     #[test]
-    fn parse_compute_block_errors_cleanly() {
-        let r = parse_report("proc report data=a; compute after; endcomp; run;");
-        let msg = r.err().unwrap().to_string();
-        assert!(msg.contains("COMPUTE"), "msg: {msg}");
+    fn parse_compute_block_now_parses() {
+        let ast =
+            parse_report("proc report data=a; compute after; line 'hi'; endcomp; run;").unwrap();
+        assert_eq!(ast.computes.len(), 1);
+        assert_eq!(ast.computes[0].target, "after");
+        assert!(matches!(ast.computes[0].stmts[0], ComputeStmt::Line(_)));
     }
 
     #[test]
-    fn parse_break_errors_cleanly() {
-        let r = parse_report("proc report data=a; break after region / summarize; run;");
-        let msg = r.err().unwrap().to_string();
-        assert!(msg.contains("BREAK"), "msg: {msg}");
+    fn parse_compute_assignment() {
+        let ast =
+            parse_report("proc report data=a; compute pct; pct = sales * 2; endcomp; run;").unwrap();
+        match &ast.computes[0].stmts[0] {
+            ComputeStmt::Assign { col, .. } => assert_eq!(col, "pct"),
+            _ => panic!("expected assignment"),
+        }
+    }
+
+    #[test]
+    fn parse_break_now_parses() {
+        let ast =
+            parse_report("proc report data=a; break after region / summarize; run;").unwrap();
+        assert_eq!(ast.breaks.len(), 1);
+        assert_eq!(ast.breaks[0].var.as_deref(), Some("region"));
+        assert!(ast.breaks[0].summarize);
+    }
+
+    #[test]
+    fn parse_rbreak_now_parses() {
+        let ast = parse_report("proc report data=a; rbreak after / summarize; run;").unwrap();
+        assert!(ast.rbreak.is_some());
+        assert!(ast.rbreak.as_ref().unwrap().var.is_none());
+        assert!(ast.rbreak.as_ref().unwrap().summarize);
+    }
+
+    #[test]
+    fn parse_where_statement() {
+        let ast = parse_report("proc report data=a; where age > 12; run;").unwrap();
+        assert!(ast.where_.is_some());
+    }
+
+    #[test]
+    fn parse_out_option() {
+        let ast = parse_report("proc report data=a out=work.b nowd; run;").unwrap();
+        assert_eq!(ast.out.as_ref().unwrap().name, "b");
+    }
+
+    #[test]
+    fn parse_computed_define() {
+        let ast = parse_report("proc report data=a; define c / computed; run;").unwrap();
+        assert_eq!(ast.defines[0].usage, Usage::Computed);
     }
 
     #[test]
@@ -783,6 +1712,7 @@ mod tests {
             noheader: false,
             columns: Some(vec!["age".into(), "name".into()]),
             defines: vec![],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
 
@@ -835,6 +1765,7 @@ mod tests {
                     label: None,
                 },
             ],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
 
@@ -881,6 +1812,7 @@ mod tests {
                     label: None,
                 },
             ],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
 
@@ -927,6 +1859,7 @@ mod tests {
                     label: None,
                 },
             ],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
 
@@ -960,6 +1893,7 @@ mod tests {
                 order: OrderDir::Ascending,
                 label: Some("My X Label".into()),
             }],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -986,6 +1920,7 @@ mod tests {
                 order: OrderDir::Ascending,
                 label: Some("My X Label".into()),
             }],
+            ..report_defaults()
         };
         execute(&ast2, &mut session2).unwrap();
         let listing2 = session2.listing.into_string();
@@ -1021,6 +1956,7 @@ mod tests {
             noheader: false,
             columns: None,
             defines: vec![],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -1066,6 +2002,7 @@ mod tests {
                     label: None,
                 },
             ],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -1081,6 +2018,7 @@ mod tests {
             noheader: false,
             columns: None,
             defines: vec![],
+            ..report_defaults()
         };
         let r = execute(&ast, &mut session);
         assert!(r.is_err());
@@ -1104,6 +2042,7 @@ mod tests {
             noheader: false,
             columns: Some(vec!["nope".into()]),
             defines: vec![],
+            ..report_defaults()
         };
         let r = execute(&ast, &mut session);
         assert!(r.is_err());
@@ -1129,9 +2068,483 @@ mod tests {
             noheader: false,
             columns: None,
             defines: vec![],
+            ..report_defaults()
         };
         execute(&ast, &mut session).unwrap();
         // REPORT must not change last_dataset.
         assert_eq!(session.last_dataset, before);
+    }
+
+    // ─────────────────── M21.4 advanced feature tests ───────────────────
+
+    /// sashelp.class-like sex/age fixture: M/F with weights.
+    fn class_like(session: &mut Session) {
+        // 3 F (ages 11,12,13 → sum 36) and 2 M (ages 14,15 → sum 29).
+        let df = df![
+            "sex" => ["F", "F", "F", "M", "M"],
+            "age" => [11.0_f64, 12.0, 13.0, 14.0, 15.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("sex"), num_meta("age")],
+        };
+        write_dataset(session, "C", ds);
+    }
+
+    #[test]
+    fn where_filters_observations() {
+        let mut session = make_session();
+        class_like(&mut session);
+        // where age > 12 → keep ages 13,14,15. Group by sex: F sum=13, M sum=29.
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            where_: Some(parse_test_expr("age > 12;")),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // F filtered sum = 13, M = 29.
+        assert!(listing.contains("13"), "F sum 13: {listing}");
+        assert!(listing.contains("29"), "M sum 29: {listing}");
+        // The filtered-out values 11/12 must not appear as an F total of 36.
+        assert!(!listing.contains("36"), "36 should be filtered out: {listing}");
+    }
+
+    #[test]
+    fn where_char_equality_sas_cmp() {
+        let mut session = make_session();
+        class_like(&mut session);
+        // where sex = 'M' → only M rows; detail report shows 14 and 15, not 11.
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![Define {
+                var: "age".into(),
+                usage: Usage::Display,
+                order: OrderDir::Ascending,
+                label: None,
+            }],
+            where_: Some(
+                parse_test_expr("sex = 'M';"),
+            ),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("14"), "{listing}");
+        assert!(listing.contains("15"), "{listing}");
+        assert!(!listing.contains("11"), "11 filtered: {listing}");
+    }
+
+    #[test]
+    fn out_dataset_written_and_typed() {
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            out: Some(work_ref("R")),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        // OUT= sets last_dataset and writes 2 rows (F, M).
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.R"));
+        let (out, _) = session.libs.get("WORK").unwrap().read("R").unwrap();
+        assert_eq!(out.n_obs(), 2);
+        // sex stays char, age stays numeric.
+        assert_eq!(out.vars[0].name.to_lowercase(), "sex");
+        assert_eq!(out.vars[0].ty, VarType::Char);
+        assert_eq!(out.vars[1].ty, VarType::Num);
+        let age = decode_column(&out, 1).unwrap();
+        // F sum 36, M sum 29.
+        assert_eq!(age[0], Value::Num(36.0));
+        assert_eq!(age[1], Value::Num(29.0));
+    }
+
+    #[test]
+    fn across_makes_columns_from_distinct_values() {
+        let mut session = make_session();
+        // region × sex crosstab of sales sum.
+        let df = df![
+            "region" => ["E", "E", "W", "W"],
+            "sex" => ["F", "M", "F", "M"],
+            "sales" => [10.0_f64, 20.0, 30.0, 40.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("region"), char_meta("sex"), num_meta("sales")],
+        };
+        write_dataset(&mut session, "X", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("X")),
+            columns: Some(vec!["region".into(), "sex".into(), "sales".into()]),
+            defines: vec![
+                Define {
+                    var: "region".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Across,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "sales".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Two across columns "F Sum" and "M Sum"; E row → F 10, M 20; W → 30,40.
+        assert!(listing.contains("F SUM"), "across header F: {listing}");
+        assert!(listing.contains("M SUM"), "across header M: {listing}");
+        assert!(listing.contains("10"), "{listing}");
+        assert!(listing.contains("20"), "{listing}");
+        assert!(listing.contains("30"), "{listing}");
+        assert!(listing.contains("40"), "{listing}");
+    }
+
+    #[test]
+    fn break_after_group_summary_line() {
+        let mut session = make_session();
+        // Two-level group region/sub; break after region summarizes.
+        let df = df![
+            "region" => ["E", "E", "W"],
+            "sub" => ["a", "b", "c"],
+            "sales" => [10.0_f64, 30.0, 100.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("region"), char_meta("sub"), num_meta("sales")],
+        };
+        write_dataset(&mut session, "B", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("B")),
+            columns: Some(vec!["region".into(), "sub".into(), "sales".into()]),
+            defines: vec![
+                Define {
+                    var: "region".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "sub".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "sales".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            breaks: vec![Break {
+                var: Some("region".into()),
+                summarize: true,
+            }],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // E subtotal = 10+30 = 40 appears after the E rows.
+        assert!(listing.contains("40"), "E subtotal 40: {listing}");
+        // W subtotal = 100.
+        assert!(listing.contains("100"), "W subtotal 100: {listing}");
+    }
+
+    #[test]
+    fn rbreak_grand_total_line() {
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            rbreak: Some(Break {
+                var: None,
+                summarize: true,
+            }),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Grand total of ages = 11+12+13+14+15 = 65.
+        assert!(listing.contains("65"), "grand total 65: {listing}");
+    }
+
+    #[test]
+    fn rbreak_excluded_from_out_dataset() {
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            rbreak: Some(Break {
+                var: None,
+                summarize: true,
+            }),
+            out: Some(work_ref("RB")),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("RB").unwrap();
+        // Only the 2 group rows; the RBREAK grand total is not written.
+        assert_eq!(out.n_obs(), 2);
+    }
+
+    #[test]
+    fn compute_simple_assignment() {
+        let mut session = make_session();
+        class_like(&mut session);
+        // computed column `dbl` = age * 2 in a detail report.
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into(), "dbl".into()]),
+            defines: vec![
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Display,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "dbl".into(),
+                    usage: Usage::Computed,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            computes: vec![Compute {
+                target: "dbl".into(),
+                stmts: vec![ComputeStmt::Assign {
+                    col: "dbl".into(),
+                    expr: parse_test_expr("age * 2;"),
+                }],
+            }],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // First row age 11 → dbl 22; age 15 → dbl 30.
+        assert!(listing.contains("22"), "11*2=22: {listing}");
+        assert!(listing.contains("30"), "15*2=30: {listing}");
+    }
+
+    #[test]
+    fn compute_after_line_text() {
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            computes: vec![Compute {
+                target: "after".into(),
+                stmts: vec![ComputeStmt::Line(vec![LineItem::Literal(
+                    "End of report".into(),
+                )])],
+            }],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("End of report"), "line text: {listing}");
+    }
+
+    #[test]
+    fn where_missing_semantics_dot_equals_dot() {
+        let mut session = make_session();
+        let df = df![
+            "g" => ["a", "b", "c"],
+            "x" => [Some(1.0_f64), None, Some(3.0)]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("g"), num_meta("x")],
+        };
+        write_dataset(&mut session, "M", ds);
+        // where x = . → only the row with missing x survives (g='b').
+        let ast = ReportAst {
+            data: Some(work_ref("M")),
+            columns: Some(vec!["g".into(), "x".into()]),
+            defines: vec![Define {
+                var: "x".into(),
+                usage: Usage::Display,
+                order: OrderDir::Ascending,
+                label: None,
+            }],
+            where_: Some(
+                parse_test_expr("x = .;"),
+            ),
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains('b'), "missing row kept: {listing}");
+        assert!(!listing.contains('a'), "non-missing filtered: {listing}");
+    }
+
+    #[test]
+    fn across_with_descending_direction() {
+        let mut session = make_session();
+        let df = df![
+            "g" => ["x", "x"],
+            "k" => [1.0_f64, 2.0],
+            "v" => [5.0_f64, 7.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("g"), num_meta("k"), num_meta("v")],
+        };
+        write_dataset(&mut session, "AD", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("AD")),
+            columns: Some(vec!["g".into(), "k".into(), "v".into()]),
+            defines: vec![
+                Define {
+                    var: "g".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "k".into(),
+                    usage: Usage::Across,
+                    order: OrderDir::Descending,
+                    label: None,
+                },
+                Define {
+                    var: "v".into(),
+                    usage: Usage::Analysis("sum".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Descending across order → header for k=2 appears before k=1.
+        let i2 = listing.find("2 SUM").unwrap();
+        let i1 = listing.find("1 SUM").unwrap();
+        assert!(i2 < i1, "descending across: {listing}");
+    }
+
+    #[test]
+    fn break_without_summarize_emits_no_subtotal() {
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                Define {
+                    var: "sex".into(),
+                    usage: Usage::Group,
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+                Define {
+                    var: "age".into(),
+                    usage: Usage::Analysis("n".into()),
+                    order: OrderDir::Ascending,
+                    label: None,
+                },
+            ],
+            breaks: vec![Break {
+                var: Some("sex".into()),
+                summarize: false,
+            }],
+            ..report_defaults()
+        };
+        // Should not panic; n for F=3, M=2.
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains('3'), "F n=3: {listing}");
+        assert!(listing.contains('2'), "M n=2: {listing}");
     }
 }

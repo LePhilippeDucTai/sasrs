@@ -16,9 +16,10 @@
 //!   dont une variable CLASS impliquée est manquante est ignorée pour la
 //!   cellule). Documenté : SAS sans l'option MISSING fait de même.
 //! - `var <var list>;` — variables d'analyse numériques.
-//! - `table <dimexpr> [, <dimexpr>];` — UNE dimension (colonnes seules) ou
-//!   DEUX dimensions (`lignes , colonnes`). Une TROISIÈME dimension (page)
-//!   → erreur « PROC TABULATE: page (3rd) dimension not yet supported ».
+//! - `table <dimexpr> [, <dimexpr> [, <dimexpr>]];` — UNE dimension (colonnes
+//!   seules), DEUX dimensions (`lignes , colonnes`) ou TROIS dimensions
+//!   (`page , lignes , colonnes`). La dimension page produit un sous-tableau
+//!   row×col répété par catégorie de page, précédé d'un libellé de page.
 //! - `run;` / `quit;`.
 //!
 //! ### Grammaire d'expression de table (v1 — petite et précise)
@@ -39,6 +40,18 @@
 //! - Statistique par défaut quand une VAR apparaît sans stat explicite :
 //!   `SUM`.
 //! - Cellule CLASS seule (sans VAR ni stat) : défaut `N` (effectif).
+//! - `PCTN` / `PCTSUM` : pourcentages. `PCTN` = 100·n_cellule / N_dénominateur ;
+//!   `PCTSUM` = 100·sum_cellule / SUM_dénominateur. En v1 le dénominateur est
+//!   le TOTAL GÉNÉRAL (grand total : toutes les observations, resp. la somme de
+//!   la VAR sur toutes les observations). Les dénominateurs de groupe
+//!   (`PCTN<row>`) sont DIFFÉRÉS — atome de dénominateur parenthésé → erreur
+//!   propre. Dénominateur nul → cellule « . ».
+//!
+//! ### ALL — classe universelle (totaux marginaux)
+//! Le mot-clé `ALL` dans une dimension ajoute une catégorie « total marginal » :
+//! une ligne/colonne agrégée sur TOUTES les catégories de la dimension (aucune
+//! contrainte CLASS). `ALL` peut être croisé avec une VAR et/ou une stat
+//! (`ALL*MEAN`). Libellé affiché : « All ».
 //!
 //! ### Croisements supportés en v1
 //! `class`, `var`, `stat` (seuls), `class*class`, `class*stat`, `var*stat`,
@@ -51,11 +64,10 @@
 //! stats) → erreur « PROC TABULATE: <construct> not yet supported ».
 //!
 //! ### DÉFÉRÉ (documenté + erreur propre, jamais silencieux)
-//! - 3e dimension (page) : erreur ci-dessus.
 //! - Formats / labels dans les en-têtes (on affiche les noms et niveaux
-//!   bruts) ; `KEYLABEL`, `BOX=`, `*F=` (formats de cellule), `ALL`
-//!   (classe universelle), `RTS=`, pourcentages `PCTN`/`PCTSUM`, option
-//!   `MISSING`. Tout mot-clé/atome non reconnu dans `table` → erreur
+//!   bruts) ; `KEYLABEL`, `BOX=`, `*F=` (formats de cellule), `RTS=`,
+//!   dénominateurs de groupe `PCTN<...>`, option `MISSING`. Tout
+//!   mot-clé/atome non reconnu dans `table` → erreur
 //!   « PROC TABULATE: <construct> not yet supported ». Toute option de
 //!   statement inconnue (sur `proc tabulate` ou un sous-statement non géré)
 //!   → erreur de parse.
@@ -118,6 +130,8 @@ pub struct TabulateAst {
     pub data: Option<DatasetRef>,
     class: Vec<String>,
     var: Vec<String>,
+    /// Page dimension (None unless three comma-separated dimensions given).
+    page: Option<DimExpr>,
     /// Row dimension (None when only a column dimension was given).
     row: Option<DimExpr>,
     /// Column dimension (always present).
@@ -125,7 +139,8 @@ pub struct TabulateAst {
 }
 
 /// Statistic keywords recognized inside a TABLE expression.
-const STAT_KEYWORDS: &[&str] = &["n", "nmiss", "sum", "mean", "min", "max", "std"];
+const STAT_KEYWORDS: &[&str] =
+    &["n", "nmiss", "sum", "mean", "min", "max", "std", "pctn", "pctsum"];
 
 fn is_stat_keyword(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
@@ -174,6 +189,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
     // --- sub-statements until run;/quit; ---
     let mut class: Vec<String> = Vec::new();
     let mut var: Vec<String> = Vec::new();
+    let mut page: Option<DimExpr> = None;
     let mut row: Option<DimExpr> = None;
     let mut col: Option<DimExpr> = None;
 
@@ -202,7 +218,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
             ts.expect_semi()?;
         } else if ts.peek().is_kw("table") || ts.peek().is_kw("tables") {
             ts.next();
-            let (r, c) = parse_table_statement(ts)?;
+            let (p, r, c) = parse_table_statement(ts)?;
+            page = p;
             row = r;
             col = Some(c);
             ts.expect_semi()?;
@@ -220,14 +237,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         data,
         class,
         var,
+        page,
         row,
         col,
     })
 }
 
 /// Parse the body of a TABLE statement (after `table` consumed), up to the
-/// terminating `;` (NOT consumed). Returns (row dimension, column dimension).
-fn parse_table_statement(ts: &mut StatementStream) -> Result<(Option<DimExpr>, DimExpr)> {
+/// terminating `;` (NOT consumed). Returns (page, row, column) dimensions.
+/// One dimension → columns only; two → rows, columns; three → page, rows,
+/// columns. A fourth → clean error.
+type ParsedTable = (Option<DimExpr>, Option<DimExpr>, DimExpr);
+
+fn parse_table_statement(ts: &mut StatementStream) -> Result<ParsedTable> {
     // Parse comma-separated dimensions.
     let mut dims: Vec<DimExpr> = Vec::new();
     dims.push(parse_dimexpr(ts)?);
@@ -239,15 +261,21 @@ fn parse_table_statement(ts: &mut StatementStream) -> Result<(Option<DimExpr>, D
     match dims.len() {
         1 => {
             let col = dims.pop().unwrap();
-            Ok((None, col))
+            Ok((None, None, col))
         }
         2 => {
             let col = dims.pop().unwrap();
             let row = dims.pop().unwrap();
-            Ok((Some(row), col))
+            Ok((None, Some(row), col))
+        }
+        3 => {
+            let col = dims.pop().unwrap();
+            let row = dims.pop().unwrap();
+            let page = dims.pop().unwrap();
+            Ok((Some(page), Some(row), col))
         }
         _ => Err(SasError::runtime(
-            "PROC TABULATE: page (3rd) dimension not yet supported",
+            "PROC TABULATE: 4th dimension not yet supported",
         )),
     }
 }
@@ -331,6 +359,9 @@ enum Atom {
     Var(usize),
     /// A statistic keyword (lowercase).
     Stat(String),
+    /// The universal class (marginal total): no CLASS constraint, labelled
+    /// "All". Aggregates over every category of its dimension.
+    All,
 }
 
 /// A fully-expanded cell: an ordered crossing of atoms (used for the header
@@ -345,6 +376,7 @@ enum Ident3 {
     Class(usize),
     Var(usize),
     Stat(String),
+    All,
 }
 
 /// Resolve a name appearing in a TABLE expression to a CLASS col / VAR col /
@@ -354,6 +386,9 @@ fn classify(
     class_cols: &[(String, usize)],
     var_cols: &[(String, usize)],
 ) -> Result<Ident3> {
+    if name.eq_ignore_ascii_case("all") {
+        return Ok(Ident3::All);
+    }
     if is_stat_keyword(name) {
         return Ok(Ident3::Stat(name.to_ascii_lowercase()));
     }
@@ -427,6 +462,9 @@ fn expand_factor(
             expand_dim(inner, class_cols, var_cols, class_values, n_obs)
         }
         Factor::Name(name) => match classify(name, class_cols, var_cols)? {
+            Ident3::All => Ok(vec![Cell {
+                atoms: vec![Atom::All],
+            }]),
             Ident3::Stat(s) => Ok(vec![Cell {
                 atoms: vec![Atom::Stat(s)],
             }]),
@@ -557,38 +595,15 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         None => vec![Cell { atoms: Vec::new() }], // single anonymous row
     };
 
-    // Validate every (row × col) merged cell and compute its value.
-    // Build the listing table.
-    let mut headers: Vec<String> = Vec::with_capacity(col_cells.len() + 1);
-    let stub_title = match &ast.row {
-        Some(_) => String::new(),
-        None => "Table".to_string(),
+    // Expand the (optional) page dimension. Without a page dimension we render
+    // a single, page-less section (byte-identical to the pre-page behaviour).
+    let page_cells: Vec<Option<Cell>> = match &ast.page {
+        Some(p) => expand_dim(p, &class_cols, &var_cols, &class_values, n_obs)?
+            .into_iter()
+            .map(Some)
+            .collect(),
+        None => vec![None],
     };
-    headers.push(stub_title);
-    for cc in &col_cells {
-        headers.push(cell_label(cc, &ds));
-    }
-    let mut aligns: Vec<Align> = vec![Align::Left];
-    aligns.extend(std::iter::repeat_n(Align::Right, col_cells.len()));
-
-    let mut rows: Vec<Vec<String>> = Vec::with_capacity(row_cells.len());
-    for rc in &row_cells {
-        let stub = if rc.atoms.is_empty() {
-            // No row dimension: stub holds nothing meaningful.
-            String::new()
-        } else {
-            cell_label(rc, &ds)
-        };
-        let mut out_row: Vec<String> = vec![stub];
-        for cc in &col_cells {
-            // Merge the row cell and column cell atoms.
-            let merged: Vec<Atom> =
-                rc.atoms.iter().chain(cc.atoms.iter()).cloned().collect();
-            let value = compute_cell(&merged, &var_values, &class_values, n_obs)?;
-            out_row.push(value);
-        }
-        rows.push(out_row);
-    }
 
     // --- listing ---
     session.listing.page_header();
@@ -599,10 +614,94 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         .listing
         .write_line(&format!("{}{}", " ".repeat(pad), title));
     session.listing.blank();
-    session.listing.write_table(&headers, &aligns, &rows);
+
+    for page in &page_cells {
+        // Page label line (only when a page dimension is present).
+        if let Some(pc) = page {
+            session
+                .listing
+                .write_line(&format!("{}={}", page_dim_name(&ast, &ds), cell_label(pc, &ds)));
+            session.listing.blank();
+        }
+        let page_atoms: &[Atom] = match page {
+            Some(pc) => &pc.atoms,
+            None => &[],
+        };
+
+        // Build this section's listing table.
+        let mut headers: Vec<String> = Vec::with_capacity(col_cells.len() + 1);
+        let stub_title = match &ast.row {
+            Some(_) => String::new(),
+            None => "Table".to_string(),
+        };
+        headers.push(stub_title);
+        for cc in &col_cells {
+            headers.push(cell_label(cc, &ds));
+        }
+        let mut aligns: Vec<Align> = vec![Align::Left];
+        aligns.extend(std::iter::repeat_n(Align::Right, col_cells.len()));
+
+        let mut rows: Vec<Vec<String>> = Vec::with_capacity(row_cells.len());
+        for rc in &row_cells {
+            let stub = if rc.atoms.is_empty() {
+                String::new()
+            } else {
+                cell_label(rc, &ds)
+            };
+            let mut out_row: Vec<String> = vec![stub];
+            for cc in &col_cells {
+                // Merge page + row + column cell atoms.
+                let merged: Vec<Atom> = page_atoms
+                    .iter()
+                    .chain(rc.atoms.iter())
+                    .chain(cc.atoms.iter())
+                    .cloned()
+                    .collect();
+                let value = compute_cell(&merged, &var_values, &class_values, n_obs)?;
+                out_row.push(value);
+            }
+            rows.push(out_row);
+        }
+
+        session.listing.write_table(&headers, &aligns, &rows);
+        if page.is_some() {
+            session.listing.blank();
+        }
+    }
 
     // v1: no output dataset — do NOT touch session.last_dataset.
     Ok(())
+}
+
+/// Best-effort name of the page dimension for the page-label line: the first
+/// CLASS variable that appears in the page expression, else "Page".
+fn page_dim_name(ast: &TabulateAst, ds: &SasDataset) -> String {
+    if let Some(p) = &ast.page {
+        if let Some(name) = first_class_name(p, ds) {
+            return name;
+        }
+    }
+    "Page".to_string()
+}
+
+fn first_class_name(dim: &DimExpr, ds: &SasDataset) -> Option<String> {
+    for term in &dim.terms {
+        for factor in &term.factors {
+            match factor {
+                Factor::Name(n) => {
+                    if let Some(m) = ds.vars.iter().find(|m| m.name.eq_ignore_ascii_case(n)) {
+                        return Some(m.name.clone());
+                    }
+                }
+                Factor::Group(inner) => {
+                    if let Some(n) = first_class_name(inner, ds) {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Build the header/stub label for an expanded cell: components joined by "*".
@@ -616,10 +715,22 @@ fn cell_label(cell: &Cell, ds: &SasDataset) -> String {
         .map(|a| match a {
             Atom::ClassLevel { level, .. } => level_label(level),
             Atom::Var(ci) => ds.vars[*ci].name.clone(),
-            Atom::Stat(s) => stat_header(s).to_string(),
+            Atom::Stat(s) => tab_stat_header(s).to_string(),
+            Atom::All => "All".to_string(),
         })
         .collect();
     parts.join("*")
+}
+
+/// Header label for a stat keyword, extending `means::stat_header` with the
+/// TABULATE-specific percentage stats (kept local to avoid touching common
+/// code shared with the parallel REPORT work).
+fn tab_stat_header(stat: &str) -> &'static str {
+    match stat {
+        "pctn" => "PctN",
+        "pctsum" => "PctSum",
+        _ => stat_header(stat),
+    }
 }
 
 fn level_label(v: &Value) -> String {
@@ -665,6 +776,8 @@ fn compute_cell(
             Atom::ClassLevel { col, level } => {
                 class_constraints.push((*col, level));
             }
+            // Universal class: aggregate over every category — no constraint.
+            Atom::All => {}
         }
     }
 
@@ -691,6 +804,42 @@ fn compute_cell(
             "n".to_string()
         }
     });
+
+    // Percentage statistics: numerator over the selected rows, denominator
+    // over the grand total (all observations). v1 supports only the grand
+    // total denominator (group denominators PCTN<...> are deferred).
+    if stat == "pctn" {
+        let denom = n_obs as f64;
+        let value = if denom == 0.0 {
+            Value::Missing(crate::value::MissingKind::Dot)
+        } else {
+            Value::Num(100.0 * rows.len() as f64 / denom)
+        };
+        return Ok(fmt_cell(&stat, &value));
+    }
+    if stat == "pctsum" {
+        let ci = var_col.ok_or_else(|| {
+            SasError::runtime(
+                "PROC TABULATE: PCTSUM requires an analysis variable (not yet supported)",
+            )
+        })?;
+        let col = &var_values
+            .iter()
+            .find(|(c, _)| *c == ci)
+            .expect("var col decoded")
+            .1;
+        let (xs, _) = partition_numeric(col, &rows);
+        let all_rows: Vec<usize> = (0..n_obs).collect();
+        let (all_xs, _) = partition_numeric(col, &all_rows);
+        let denom: f64 = all_xs.iter().sum();
+        let numer: f64 = xs.iter().sum();
+        let value = if denom == 0.0 {
+            Value::Missing(crate::value::MissingKind::Dot)
+        } else {
+            Value::Num(100.0 * numer / denom)
+        };
+        return Ok(fmt_cell(&stat, &value));
+    }
 
     // Determine the analysis values. With no VAR, only N/NMISS are meaningful
     // (frequency counts over the selected rows).
@@ -964,12 +1113,12 @@ mod tests {
     }
 
     #[test]
-    fn third_dimension_clean_error() {
+    fn third_dimension_now_supported() {
         let mut session = make_session();
         let df = df![
-            "a" => ["x"],
-            "b" => ["p"],
-            "c" => ["m"]
+            "a" => ["x", "y"],
+            "b" => ["p", "p"],
+            "c" => ["m", "m"]
         ]
         .unwrap();
         let ds = SasDataset {
@@ -978,15 +1127,269 @@ mod tests {
         };
         write_dataset(&mut session, "T", ds);
 
-        let r = run(
+        // A 3rd (page) dimension is now rendered, not an error.
+        let listing = run(
             session,
             "proc tabulate data=work.t; class a b c; table a, b, c; run;",
+        )
+        .unwrap();
+        // Two page sections, labelled by the page CLASS value of `a`.
+        assert!(listing.contains("a=x"), "{listing}");
+        assert!(listing.contains("a=y"), "{listing}");
+    }
+
+    // ─────────────── M21.4: page dimension ───────────────
+
+    /// Build the classic sashelp.class-like fixture (subset of rows is fine).
+    fn class_fixture(session: &mut Session) {
+        let df = df![
+            "sex"    => ["M", "F", "M", "F", "M"],
+            "age"    => [14.0_f64, 13.0, 12.0, 13.0, 14.0],
+            "height" => [69.0_f64, 56.5, 57.3, 65.3, 62.5],
+            "weight" => [112.5_f64, 84.0, 83.0, 98.0, 84.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![
+                char_meta("sex"),
+                num_meta("age"),
+                num_meta("height"),
+                num_meta("weight"),
+            ],
+        };
+        write_dataset(session, "C", ds);
+    }
+
+    #[test]
+    fn page_dimension_renders_per_page_subtables() {
+        let mut session = make_session();
+        let df = df![
+            "grp"    => ["A", "A", "B", "B"],
+            "region" => ["E", "W", "E", "W"],
+            "sales"  => [10.0_f64, 20.0, 30.0, 40.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("grp"), char_meta("region"), num_meta("sales")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let listing = run(
+            session,
+            "proc tabulate data=work.t; class grp region; var sales; \
+             table grp, region, sales*sum; run;",
+        )
+        .unwrap();
+        // Two page sections, labelled by page CLASS value.
+        assert!(listing.contains("grp=A"), "{listing}");
+        assert!(listing.contains("grp=B"), "{listing}");
+        // Page A: E=10, W=20 ; page B: E=30, W=40.
+        assert!(listing.contains("10") && listing.contains("20"), "{listing}");
+        assert!(listing.contains("30") && listing.contains("40"), "{listing}");
+    }
+
+    #[test]
+    fn four_dimensions_clean_error() {
+        let mut session = make_session();
+        let df = df![
+            "a" => ["x"], "b" => ["p"], "c" => ["m"], "d" => ["q"]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("a"), char_meta("b"), char_meta("c"), char_meta("d")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let r = run(
+            session,
+            "proc tabulate data=work.t; class a b c d; table a, b, c, d; run;",
+        );
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("4th dimension"));
+    }
+
+    // ─────────────── M21.4: ALL (universal class) ───────────────
+
+    #[test]
+    fn all_marginal_row_total() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // ALL in the ROW dimension adds a grand-total row (no sex constraint),
+        // so the N column shows N over all 5 observations on that row.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; table sex all, n; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("All"), "{listing}");
+        // sex M=3, F=2; ALL row = 5 (grand total).
+        assert!(listing.contains("5"), "{listing}");
+    }
+
+    #[test]
+    fn all_with_stat_aggregates_over_all_rows() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // ALL row crossed with height*mean: mean over all 5 rows.
+        // (69 + 56.5 + 57.3 + 65.3 + 62.5) / 5 = 310.6/5 = 62.12.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; var height; \
+             table sex all, height*mean; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("All"), "{listing}");
+        assert!(listing.contains("62.12"), "{listing}");
+    }
+
+    // ─────────────── M21.4: PCTN / PCTSUM ───────────────
+
+    #[test]
+    fn pctn_grand_total_denominator() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // PCTN per sex: M=3/5=60%, F=2/5=40%.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; table sex, pctn; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("PctN"), "{listing}");
+        assert!(listing.contains("60"), "{listing}");
+        assert!(listing.contains("40"), "{listing}");
+    }
+
+    #[test]
+    fn pctsum_grand_total_denominator() {
+        let mut session = make_session();
+        let df = df![
+            "region" => ["E", "E", "W"],
+            "sales"  => [10.0_f64, 30.0, 60.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("region"), num_meta("sales")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        // PCTSUM of sales: E = (10+30)/100 = 40%, W = 60/100 = 60%.
+        let listing = run(
+            session,
+            "proc tabulate data=work.t; class region; var sales; \
+             table region, sales*pctsum; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("PctSum"), "{listing}");
+        assert!(listing.contains("40"), "{listing}");
+        assert!(listing.contains("60"), "{listing}");
+    }
+
+    #[test]
+    fn pctn_empty_cell_is_dot_not_panic() {
+        let mut session = make_session();
+        // No observations at all → grand total N = 0 → "." (no div-by-zero).
+        let df = df!["region" => [""; 0]].unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("region")] };
+        write_dataset(&mut session, "T", ds);
+        let listing = run(
+            session,
+            "proc tabulate data=work.t; class region; table region, pctn; run;",
+        );
+        // Either an empty table or a clean render — must not panic.
+        assert!(listing.is_ok(), "{:?}", listing.err());
+    }
+
+    #[test]
+    fn pctsum_requires_var_clean_error() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        let r = run(
+            session,
+            "proc tabulate data=work.c; class sex; table sex, pctsum; run;",
         );
         assert!(r.is_err());
         assert!(
-            r.err().unwrap().to_string().contains("page (3rd) dimension"),
-            "expected 3rd-dimension error"
+            r.err().unwrap().to_string().contains("not yet supported"),
+            "expected clean error for PCTSUM without VAR"
         );
+    }
+
+    #[test]
+    fn pctsum_zero_denominator_is_dot() {
+        let mut session = make_session();
+        let df = df![
+            "region" => ["E", "W"],
+            "sales"  => [0.0_f64, 0.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("region"), num_meta("sales")],
+        };
+        write_dataset(&mut session, "T", ds);
+        let listing = run(
+            session,
+            "proc tabulate data=work.t; class region; var sales; \
+             table region, sales*pctsum; run;",
+        )
+        .unwrap();
+        // Denominator 0 → cells are ".", no panic.
+        assert!(listing.contains('.'), "{listing}");
+    }
+
+    // ─────────────── M21.4: multi-VAR / multi-stat in columns ───────────────
+
+    #[test]
+    fn multi_var_separate_column_analyses() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // Two different VAR analyses side by side in the column dimension.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; var height weight; \
+             table sex, height*mean weight*sum; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("height") && listing.contains("Mean"), "{listing}");
+        assert!(listing.contains("weight") && listing.contains("Sum"), "{listing}");
+        // M weights sum = 112.5 + 83 + 84 = 279.5.
+        assert!(listing.contains("279.5"), "{listing}");
+    }
+
+    #[test]
+    fn distribute_stats_over_var_via_group() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // height*(N MEAN) distributes two stats over the single VAR.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; var height; \
+             table sex, height*(n mean); run;",
+        )
+        .unwrap();
+        assert!(listing.contains("height*N"), "{listing}");
+        assert!(listing.contains("height*Mean"), "{listing}");
+        // M: n=3, F: n=2.
+        assert!(listing.contains("3") && listing.contains("2"), "{listing}");
+    }
+
+    #[test]
+    fn all_and_pctn_combined() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // sex on rows with an ALL marginal row; PCTN columns.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; table sex all, pctn; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("All"), "{listing}");
+        // ALL row PCTN = 5/5 = 100%.
+        assert!(listing.contains("100"), "{listing}");
     }
 
     #[test]
