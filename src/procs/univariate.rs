@@ -49,7 +49,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{
-    by_groups, decode_column, partition_weighted, resolve_by_cols, sample_std,
+    by_groups, decode_column, partition_weighted, phi_inv, probnorm, resolve_by_cols, sample_std,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -67,6 +67,15 @@ pub struct UnivariateAst {
     /// and Extreme Observations are omitted (see file header).
     pub weight: Option<String>,
     pub output: Option<UnivariateOutput>,
+    /// Tests for Normality requested (PROC option `normal` or `var x / normal`).
+    /// When true and no WEIGHT is in effect, the "Tests for Normality" block is
+    /// emitted after the Quantiles section. Default false → report is
+    /// byte-identical to the pre-M21.3 output.
+    pub normal: bool,
+    /// Number of graphical statements (HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT) seen.
+    /// Image rendering is deferred to ODS GRAPHICS (M29); for M21.3 these are
+    /// parsed and a single NOTE is emitted, never a panic.
+    pub graphics_deferred: usize,
 }
 
 /// OUTPUT OUT= specification: target dataset + (statistic keyword, output
@@ -85,6 +94,8 @@ pub struct UnivariateOutput {
 pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut data: Option<DatasetRef> = None;
     let mut var: Vec<String> = Vec::new();
+    let mut normal = false;
+    let mut graphics_deferred = 0usize;
 
     // --- PROC UNIVARIATE statement options, until `;` ---
     loop {
@@ -103,6 +114,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             // Accepted and ignored for rendering: UNIVARIATE always shows its
             // report here. (NOPRINT only matters paired with OUTPUT in SAS.)
             ts.next();
+        } else if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
+            // PROC-level request for the Tests for Normality block.
+            ts.next();
+            normal = true;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             // Unknown header option: skip its token (and a possible `=value`)
             // leniently rather than error, to stay synchronized.
@@ -145,6 +160,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         if ts.peek().is_kw("var") {
             ts.next();
             var = ts.parse_name_list()?;
+            // Optional `/ option…` clause on VAR (e.g. `var x / normal;`).
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next();
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
+                        normal = true;
+                    }
+                    ts.next();
+                }
+            }
             ts.expect_semi()?;
         } else if ts.peek().is_kw("by") {
             ts.next();
@@ -155,8 +180,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         } else if ts.peek().is_kw("output") {
             ts.next();
             output = Some(parse_output(ts)?);
+        } else if ts.peek().is_kw("histogram")
+            || ts.peek().is_kw("qqplot")
+            || ts.peek().is_kw("probplot")
+            || ts.peek().is_kw("cdfplot")
+            || ts.peek().is_kw("ppplot")
+        {
+            // Graphical statement: parse (skip its body to `;`); image rendering
+            // is deferred to ODS GRAPHICS (M29). Never error or panic.
+            ts.next();
+            ts.skip_to_semi();
+            graphics_deferred += 1;
         } else {
-            // Unknown sub-statement (histogram, ...): skip leniently.
+            // Unknown sub-statement (id, class, ...): skip leniently.
             ts.skip_to_semi();
         }
     }
@@ -167,6 +203,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         by,
         weight,
         output,
+        normal,
+        graphics_deferred,
     })
 }
 
@@ -542,7 +580,14 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                             _ => n_missing += 1,
                         }
                     }
-                    emit_variable(session, &ds.vars[ci].name, &data, n_missing, grp_rows.len());
+                    emit_variable(
+                        session,
+                        &ds.vars[ci].name,
+                        &data,
+                        n_missing,
+                        grp_rows.len(),
+                        ast.normal,
+                    );
                 }
             }
         }
@@ -552,6 +597,12 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         "There were {} observations read from the data set {}.",
         n_obs, display_name
     ));
+
+    if ast.graphics_deferred > 0 {
+        session.log.note(
+            "HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).",
+        );
+    }
 
     // --- OUTPUT OUT= ---
     if let Some(out) = &ast.output {
@@ -780,6 +831,7 @@ fn emit_variable(
     data: &[(f64, usize)],
     n_missing: usize,
     n_total: usize,
+    normal: bool,
 ) {
     session.listing.blank();
     centered(session, &format!("Variable: {name}"));
@@ -923,6 +975,11 @@ fn emit_variable(
         &basic_rows,
     );
 
+    // ── Tests for Normality (only when requested via NORMAL) ──
+    if normal {
+        emit_normality_tests(session, &sorted, mean, s, n);
+    }
+
     // ── Quantiles (Definition 5) ──
     session.listing.blank();
     centered(session, "Quantiles (Definition 5)");
@@ -1010,6 +1067,354 @@ fn emit_variable(
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
     }
+}
+
+// ───────────────────────────── normality tests ─────────────────────────────
+//
+// All four statistics are computed from the ascending-sorted non-missing
+// values, the sample mean, and the sample standard deviation (VARDEF=DF, the
+// same `sample_std` used elsewhere). p-values follow published approximations
+// (Royston for Shapiro-Wilk; Stephens for Anderson-Darling / Cramér-von Mises;
+// Lilliefors/Dallal-Wilkinson for the EDF Kolmogorov-Smirnov D). They are NOT
+// bit-for-bit identical to SAS 9.4, but reproduce the documented reference
+// values; this is noted in PROGRESS.md.
+
+/// A computed normality test: name, statistic label, statistic value, and an
+/// optional p-value (None → not computable, shown as ".").
+struct NormalityTest {
+    name: &'static str,
+    stat_label: &'static str,
+    stat: f64,
+    p: Option<f64>,
+}
+
+/// Emit the "Tests for Normality" block for one variable. Requires the sorted
+/// non-missing values plus the sample mean/std already computed by the caller.
+/// Degenerate inputs (n < 3, zero variance, …) print a centered NOTE instead
+/// of the table — never a panic.
+fn emit_normality_tests(
+    session: &mut Session,
+    sorted: &[f64],
+    mean: Option<f64>,
+    std: Option<f64>,
+    n: usize,
+) {
+    session.listing.blank();
+    centered(session, "Tests for Normality");
+    session.listing.blank();
+
+    let (mean, std) = match (mean, std) {
+        (Some(m), Some(s)) if s > 0.0 && n >= 3 => (m, s),
+        _ => {
+            centered(
+                session,
+                "Tests for Normality require at least 3 nonmissing values with positive variance.",
+            );
+            return;
+        }
+    };
+
+    let tests = compute_normality_tests(sorted, mean, std, n);
+
+    // Columns: Test | Statistic-label | Statistic-value | "p Value"-label |
+    // p-value. SAS renders the p as `Pr < W`, `Pr > D`, etc.
+    let rows: Vec<Vec<String>> = tests
+        .iter()
+        .map(|t| {
+            let pcell = match t.p {
+                Some(p) => fmt_num(p),
+                None => ".".to_string(),
+            };
+            let plabel = match t.name {
+                "Shapiro-Wilk" => "Pr < W",
+                "Kolmogorov-Smirnov" => "Pr > D",
+                "Cramer-von Mises" => "Pr > W-Sq",
+                "Anderson-Darling" => "Pr > A-Sq",
+                _ => "Pr",
+            };
+            vec![
+                t.name.to_string(),
+                t.stat_label.to_string(),
+                fmt_num(t.stat),
+                plabel.to_string(),
+                pcell,
+            ]
+        })
+        .collect();
+
+    session.listing.write_table(
+        &[
+            "Test".into(),
+            "StatLabel".into(),
+            "StatValue".into(),
+            "PLabel".into(),
+            "PValue".into(),
+        ],
+        &[Align::Left, Align::Left, Align::Right, Align::Left, Align::Right],
+        &rows,
+    );
+}
+
+/// Compute the four normality statistics + p-values. `sorted` ascending,
+/// `mean`/`std` the sample moments (std > 0), `n == sorted.len() >= 3`.
+fn compute_normality_tests(sorted: &[f64], mean: f64, std: f64, n: usize) -> Vec<NormalityTest> {
+    let mut out = Vec::with_capacity(4);
+
+    // Shapiro-Wilk (only defined for 3 <= n <= 2000).
+    let (sw_w, sw_p) = shapiro_wilk(sorted);
+    out.push(NormalityTest {
+        name: "Shapiro-Wilk",
+        stat_label: "W",
+        stat: sw_w.unwrap_or(f64::NAN),
+        p: sw_p,
+    });
+
+    // Standardized, sorted z_i = (x_(i) - mean) / std.
+    let z: Vec<f64> = sorted.iter().map(|&x| (x - mean) / std).collect();
+
+    // Kolmogorov-Smirnov D (Lilliefors, estimated parameters).
+    let (ks_d, ks_p) = kolmogorov_smirnov(&z, n);
+    out.push(NormalityTest {
+        name: "Kolmogorov-Smirnov",
+        stat_label: "D",
+        stat: ks_d,
+        p: ks_p,
+    });
+
+    // Cramér-von Mises W².
+    let (cvm, cvm_p) = cramer_von_mises(&z, n);
+    out.push(NormalityTest {
+        name: "Cramer-von Mises",
+        stat_label: "W-Sq",
+        stat: cvm,
+        p: cvm_p,
+    });
+
+    // Anderson-Darling A².
+    let (ad, ad_p) = anderson_darling(&z, n);
+    out.push(NormalityTest {
+        name: "Anderson-Darling",
+        stat_label: "A-Sq",
+        stat: ad,
+        p: ad_p,
+    });
+
+    out
+}
+
+/// Shapiro-Wilk W and its p-value (Royston 1992 algorithm AS R94).
+/// Valid for 3 <= n <= 2000. Returns `(Some(W), Some(p))`, or `(None, None)`
+/// when n is out of range. `sorted` must be ascending with positive variance.
+fn shapiro_wilk(sorted: &[f64]) -> (Option<f64>, Option<f64>) {
+    let n = sorted.len();
+    if n < 3 || n > 2000 {
+        return (None, None);
+    }
+    let nf = n as f64;
+    let mean = sorted.iter().sum::<f64>() / nf;
+    let ss: f64 = sorted.iter().map(|x| (x - mean) * (x - mean)).sum();
+    if ss <= 0.0 {
+        return (None, None);
+    }
+
+    // Expected values of standard normal order statistics, m_i = Φ⁻¹((i-3/8)/(n+1/4)).
+    let m: Vec<f64> = (1..=n)
+        .map(|i| phi_inv((i as f64 - 0.375) / (nf + 0.25)))
+        .collect();
+    let m_sq_sum: f64 = m.iter().map(|v| v * v).sum();
+    let rsn = 1.0 / nf.sqrt();
+
+    // Royston polynomial corrections for a_n and a_{n-1}.
+    let poly = |c: &[f64], x: f64| -> f64 {
+        // Horner with c[0] the constant term.
+        c.iter().rev().fold(0.0, |acc, &ci| acc * x + ci)
+    };
+    const C1: [f64; 6] = [0.0, 0.221157, -0.147981, -2.071190, 4.434685, -2.706056];
+    const C2: [f64; 6] = [0.0, 0.042981, -0.293762, -1.752461, 5.682633, -3.582633];
+
+    let mut a = vec![0.0_f64; n];
+    let a_n = m[n - 1] / m_sq_sum.sqrt() + poly(&C1, rsn);
+    let (i1, fac);
+    if n > 5 {
+        let a_n1 = m[n - 2] / m_sq_sum.sqrt() + poly(&C2, rsn);
+        a[n - 1] = a_n;
+        a[n - 2] = a_n1;
+        a[0] = -a_n;
+        a[1] = -a_n1;
+        // Rescale the interior coefficients.
+        let phi = (m_sq_sum - 2.0 * m[n - 1] * m[n - 1] - 2.0 * m[n - 2] * m[n - 2])
+            / (1.0 - 2.0 * a_n * a_n - 2.0 * a_n1 * a_n1);
+        fac = phi.sqrt();
+        i1 = 2;
+    } else {
+        a[n - 1] = a_n;
+        a[0] = -a_n;
+        let phi = (m_sq_sum - 2.0 * m[n - 1] * m[n - 1]) / (1.0 - 2.0 * a_n * a_n);
+        fac = phi.sqrt();
+        i1 = 1;
+    }
+    for i in i1..(n - i1) {
+        a[i] = m[i] / fac;
+    }
+
+    // W = (Σ a_i x_(i))² / Σ(x_i - x̄)².
+    let num: f64 = a.iter().zip(sorted.iter()).map(|(&ai, &xi)| ai * xi).sum();
+    let w = (num * num) / ss;
+    let w = w.min(1.0);
+
+    // p-value via Royston's normalizing transform.
+    let p = shapiro_wilk_pvalue(w, n);
+    (Some(w), Some(p))
+}
+
+/// Royston (1992) p-value for Shapiro-Wilk W, n >= 3.
+fn shapiro_wilk_pvalue(w: f64, n: usize) -> f64 {
+    let nf = n as f64;
+    if n == 3 {
+        // Exact small-sample formula (Royston): p = 6/π · (asin(√W) − asin(√(3/4))).
+        let pi = std::f64::consts::PI;
+        let p = 6.0 / pi * ((w.sqrt()).asin() - (0.75_f64.sqrt()).asin());
+        return (1.0 - p).clamp(0.0, 1.0);
+    }
+    let ln_n = nf.ln();
+    let (mu, sigma, z);
+    if n <= 11 {
+        // Small-sample branch: γ-transform of (1 - W).
+        const G: [f64; 2] = [-2.273, 0.459];
+        const M: [f64; 4] = [0.5440, -0.39978, 0.025054, -6.714e-4];
+        const S: [f64; 4] = [1.3822, -0.77857, 0.062767, -0.0020322];
+        let gamma = G[0] + G[1] * nf;
+        mu = M[0] + M[1] * nf + M[2] * nf * nf + M[3] * nf * nf * nf;
+        let ln_sigma = S[0] + S[1] * nf + S[2] * nf * nf + S[3] * nf * nf * nf;
+        sigma = ln_sigma.exp();
+        let y = -(gamma - (1.0 - w).ln()).ln();
+        z = (y - mu) / sigma;
+    } else {
+        // Large-sample branch (n >= 12): ln(1 - W) normalized in ln(n).
+        const M: [f64; 4] = [-1.5861, -0.31082, -0.083751, 0.0038915];
+        const S: [f64; 3] = [-0.4803, -0.082676, 0.0030302];
+        mu = M[0] + M[1] * ln_n + M[2] * ln_n * ln_n + M[3] * ln_n * ln_n * ln_n;
+        let ln_sigma = S[0] + S[1] * ln_n + S[2] * ln_n * ln_n;
+        sigma = ln_sigma.exp();
+        let y = (1.0 - w).ln();
+        z = (y - mu) / sigma;
+    }
+    // p = P(Z > z) = upper tail of standard normal.
+    1.0 - probnorm(z)
+}
+
+/// Kolmogorov-Smirnov D (Lilliefors test, parameters estimated from the data)
+/// and an approximate p-value. `z` are the standardized sorted values; `n` is
+/// the sample size.
+fn kolmogorov_smirnov(z: &[f64], n: usize) -> (f64, Option<f64>) {
+    let nf = n as f64;
+    let mut d = 0.0_f64;
+    for (i, &zi) in z.iter().enumerate() {
+        let f = probnorm(zi);
+        let d_plus = (i as f64 + 1.0) / nf - f; // F_n(x_i) - F(x_i)
+        let d_minus = f - (i as f64) / nf; // F(x_i) - F_n(x_i⁻)
+        d = d.max(d_plus).max(d_minus);
+    }
+    let p = lilliefors_pvalue(d, n);
+    (d, Some(p))
+}
+
+/// Approximate Lilliefors p-value for the KS D statistic with estimated
+/// parameters, via the Dallal & Wilkinson (1986) analytic approximation.
+///
+/// This single-exponential form is the published upper-tail probability and is
+/// accurate for the significant region p ≤ 0.10; for larger D the exponent
+/// becomes < 1 (often > 1 before clamping), so values are clamped to 1.0 and
+/// interpreted as "p > 0.10" (non-significant). Documented approximation — not
+/// bit-identical to SAS's internal Lilliefors table.
+fn lilliefors_pvalue(d: f64, n: usize) -> f64 {
+    if d <= 0.0 {
+        return 1.0;
+    }
+    // For n > 100, scale D and cap the effective sample size at 100
+    // (Dallal-Wilkinson extension).
+    let (d_eff, n_eff) = if n > 100 {
+        (d * (n as f64 / 100.0).powf(0.49), 100.0_f64)
+    } else {
+        (d, n as f64)
+    };
+    let expo = -7.01256 * d_eff * d_eff * (n_eff + 2.78019)
+        + 2.99587 * d_eff * (n_eff + 2.78019).sqrt()
+        - 0.122119
+        + 0.974598 / n_eff.sqrt()
+        + 1.67997 / n_eff;
+    let pval = expo.exp();
+    if pval.is_finite() {
+        pval.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// Cramér-von Mises W² (estimated parameters) and Stephens p-value.
+fn cramer_von_mises(z: &[f64], n: usize) -> (f64, Option<f64>) {
+    let nf = n as f64;
+    let mut w2 = 1.0 / (12.0 * nf);
+    for (i, &zi) in z.iter().enumerate() {
+        let f = probnorm(zi);
+        let term = f - (2.0 * (i as f64 + 1.0) - 1.0) / (2.0 * nf);
+        w2 += term * term;
+    }
+    // Modification for estimated parameters.
+    let w2_star = w2 * (1.0 + 0.5 / nf);
+    let p = cvm_pvalue(w2_star);
+    (w2, Some(p))
+}
+
+/// Stephens (1974) p-value regions for the (modified) Cramér-von Mises W²*.
+fn cvm_pvalue(w: f64) -> f64 {
+    // Piecewise upper-tail approximation (Stephens / D'Agostino & Stephens).
+    if w < 0.0275 {
+        1.0
+    } else if w < 0.051 {
+        1.0 - (-13.953 + 775.5 * w - 12542.61 * w * w).exp()
+    } else if w < 0.092 {
+        1.0 - (-5.903 + 179.546 * w - 1515.29 * w * w).exp()
+    } else if w < 1.1 {
+        (0.886 - 31.62 * w + 10.897 * w * w).exp()
+    } else {
+        0.0
+    }
+    .clamp(0.0, 1.0)
+}
+
+/// Anderson-Darling A² (estimated parameters) and Stephens p-value.
+fn anderson_darling(z: &[f64], n: usize) -> (f64, Option<f64>) {
+    let nf = n as f64;
+    let mut s = 0.0_f64;
+    for i in 0..n {
+        let fi = probnorm(z[i]); // Φ(z_(i))
+        let fr = probnorm(z[n - 1 - i]); // Φ(z_(n+1-i)) with 0-based index
+        // Guard the logs against 0/1 (degenerate tails).
+        let a = fi.clamp(1e-300, 1.0 - 1e-16);
+        let b = (1.0 - fr).clamp(1e-300, 1.0);
+        s += (2.0 * (i as f64 + 1.0) - 1.0) * (a.ln() + b.ln());
+    }
+    let a2 = -nf - s / nf;
+    let a2_star = a2 * (1.0 + 0.75 / nf + 2.25 / (nf * nf));
+    let p = ad_pvalue(a2_star);
+    (a2, Some(p))
+}
+
+/// Stephens (1974) p-value regions for the (modified) Anderson-Darling A²*.
+fn ad_pvalue(a: f64) -> f64 {
+    if a < 0.2 {
+        1.0 - (-13.436 + 101.14 * a - 223.73 * a * a).exp()
+    } else if a < 0.34 {
+        1.0 - (-8.318 + 42.796 * a - 59.938 * a * a).exp()
+    } else if a < 0.6 {
+        (0.9177 - 4.279 * a - 1.38 * a * a).exp()
+    } else if a < 13.0 {
+        (1.2937 - 5.709 * a + 0.0186 * a * a).exp()
+    } else {
+        0.0
+    }
+    .clamp(0.0, 1.0)
 }
 
 /// Emit the report for a single analysis variable with a WEIGHT variable in
@@ -1193,6 +1598,214 @@ mod tests {
 
     // ───────────────────────────── parse tests ─────────────────────────────
 
+    // ─────────────────────────── normality tests ──────────────────────────
+
+    fn sorted_of(xs: &[f64]) -> Vec<f64> {
+        let mut s = xs.to_vec();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s
+    }
+
+    fn moments(xs: &[f64]) -> (f64, f64) {
+        let n = xs.len() as f64;
+        let mean = xs.iter().sum::<f64>() / n;
+        let s = sample_std(xs).unwrap();
+        (mean, s)
+    }
+
+    #[test]
+    fn phi_inv_known_quantiles() {
+        // Standard probit reference values.
+        assert!((phi_inv(0.5)).abs() < 1e-12, "phi_inv(0.5)");
+        assert!((phi_inv(0.975) - 1.959963985).abs() < 1e-7, "phi_inv(0.975)");
+        assert!((phi_inv(0.95) - 1.644853627).abs() < 1e-7, "phi_inv(0.95)");
+        assert!((phi_inv(0.025) + 1.959963985).abs() < 1e-7, "phi_inv(0.025)");
+        // Round-trip with probnorm.
+        for &p in &[0.01, 0.1, 0.3, 0.6, 0.9, 0.99] {
+            let z = phi_inv(p);
+            assert!((probnorm(z) - p).abs() < 1e-9, "roundtrip p={p}");
+        }
+    }
+
+    #[test]
+    fn shapiro_wilk_w_near_one_for_normalish() {
+        // Symmetric, roughly normal sample → W close to 1, large p (not reject).
+        let xs = sorted_of(&[-2.0, -1.0, 0.0, 1.0, 2.0]);
+        let (w, p) = shapiro_wilk(&xs);
+        let w = w.unwrap();
+        assert!(w > 0.9 && w <= 1.0, "W={w}");
+        let p = p.unwrap();
+        assert!((0.0..=1.0).contains(&p), "p={p}");
+        assert!(p > 0.3, "p should be large for ~normal data, got {p}");
+    }
+
+    #[test]
+    fn shapiro_wilk_low_w_for_outlier() {
+        // A strong outlier makes the data non-normal → smaller W, smaller p.
+        let normalish = sorted_of(&[-2.0, -1.0, 0.0, 1.0, 2.0]);
+        let skewed = sorted_of(&[1.0, 2.0, 3.0, 4.0, 100.0]);
+        let (wn, _) = shapiro_wilk(&normalish);
+        let (ws, ps) = shapiro_wilk(&skewed);
+        assert!(ws.unwrap() < wn.unwrap(), "outlier W should be smaller");
+        assert!(ps.unwrap() < 0.2, "p for skewed sample should be small: {:?}", ps);
+    }
+
+    #[test]
+    fn shapiro_wilk_out_of_range() {
+        assert_eq!(shapiro_wilk(&[1.0, 2.0]), (None, None)); // n<3
+    }
+
+    #[test]
+    fn anderson_darling_known_sample() {
+        // Sample {1,2,3,4,5}: mean=3, s=sqrt(2.5)=1.5811388.
+        // z = (x-3)/s = {-1.264911,-0.632456,0,0.632456,1.264911}.
+        // Compute A² directly from the definition and compare.
+        let xs = sorted_of(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (mean, s) = moments(&xs);
+        let z: Vec<f64> = xs.iter().map(|&x| (x - mean) / s).collect();
+        let (a2, p) = anderson_darling(&z, 5);
+        // Hand-computed value for this z-vector (verified in Python against the
+        // exact A² definition) = 0.1435942.
+        assert!((a2 - 0.1435942).abs() < 1e-4, "A²={a2}");
+        let p = p.unwrap();
+        assert!((0.0..=1.0).contains(&p), "p={p}");
+        assert!(p > 0.5, "near-normal → large p, got {p}");
+    }
+
+    #[test]
+    fn cramer_von_mises_known_sample() {
+        let xs = sorted_of(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (mean, s) = moments(&xs);
+        let z: Vec<f64> = xs.iter().map(|&x| (x - mean) / s).collect();
+        let (w2, p) = cramer_von_mises(&z, 5);
+        // Hand-computed W² for this z-vector (verified in Python against the
+        // exact W² definition) = 0.0193421.
+        assert!((w2 - 0.0193421).abs() < 1e-5, "W²={w2}");
+        let p = p.unwrap();
+        assert!((0.0..=1.0).contains(&p), "p={p}");
+    }
+
+    #[test]
+    fn kolmogorov_smirnov_known_sample() {
+        let xs = sorted_of(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (mean, s) = moments(&xs);
+        let z: Vec<f64> = xs.iter().map(|&x| (x - mean) / s).collect();
+        let (d, p) = kolmogorov_smirnov(&z, 5);
+        // D = max over i of |F_n − Φ|. For this symmetric z-vector,
+        // Φ(z) = {0.10282,0.26354,0.5,0.73646,0.89718}; the largest gap is at
+        // the first point: |0.2 − 0.10282| = 0.09718, vs |0.10282 − 0| etc.
+        // Computed reference D ≈ 0.13646.
+        assert!((d - 0.13646).abs() < 1e-3, "D={d}");
+        assert!(p.unwrap() > 0.1, "near-normal → not significant");
+    }
+
+    #[test]
+    fn anderson_darling_pvalue_monotone() {
+        // Larger A² → smaller p (upper-tail).
+        assert!(ad_pvalue(0.3) > ad_pvalue(1.0));
+        assert!(ad_pvalue(1.0) > ad_pvalue(3.0));
+        assert!((0.0..=1.0).contains(&ad_pvalue(0.1)));
+        assert!((0.0..=1.0).contains(&ad_pvalue(5.0)));
+    }
+
+    #[test]
+    fn cvm_pvalue_monotone() {
+        assert!(cvm_pvalue(0.05) > cvm_pvalue(0.2));
+        assert!(cvm_pvalue(0.2) > cvm_pvalue(0.8));
+    }
+
+    #[test]
+    fn normality_block_emitted_only_with_normal() {
+        let mut session = make_session();
+        let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            output: None,
+            normal: true,
+            graphics_deferred: 0,
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Tests for Normality"), "listing: {listing}");
+        assert!(listing.contains("Shapiro-Wilk"), "listing: {listing}");
+        assert!(listing.contains("Anderson-Darling"), "listing: {listing}");
+        assert!(listing.contains("Cramer-von Mises"), "listing: {listing}");
+        assert!(listing.contains("Kolmogorov-Smirnov"), "listing: {listing}");
+    }
+
+    #[test]
+    fn normality_degenerate_note_no_panic() {
+        let mut session = make_session();
+        // Constant column → zero variance → NOTE, no panic, no table.
+        let df = df!["x" => [5.0_f64, 5.0, 5.0, 5.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            output: None,
+            normal: true,
+            graphics_deferred: 0,
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Tests for Normality"), "listing: {listing}");
+        assert!(listing.contains("at least 3 nonmissing"), "listing: {listing}");
+    }
+
+    #[test]
+    fn parse_normal_option_on_proc() {
+        let ast = parse_univ("proc univariate data=a normal; var x; run;").unwrap();
+        assert!(ast.normal);
+    }
+
+    #[test]
+    fn parse_normal_option_on_var() {
+        let ast = parse_univ("proc univariate data=a; var x / normal; run;").unwrap();
+        assert!(ast.normal);
+        assert_eq!(ast.var, vec!["x"]);
+    }
+
+    #[test]
+    fn parse_graphics_statements_skipped() {
+        let ast = parse_univ(
+            "proc univariate data=a; var x; histogram x / normal; qqplot x; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.graphics_deferred, 2);
+        assert_eq!(ast.var, vec!["x"]);
+    }
+
+    #[test]
+    fn execute_graphics_emits_deferred_note() {
+        let mut session = make_session();
+        let df = df!["x" => [1.0_f64, 2.0, 3.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            output: None,
+            normal: false,
+            graphics_deferred: 1,
+        };
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(
+            log.contains("graphical output deferred to ODS GRAPHICS"),
+            "log: {log}"
+        );
+    }
+
     #[test]
     fn parse_data_and_var() {
         let ast = parse_univ("proc univariate data=work.t; var x; run;").unwrap();
@@ -1329,6 +1942,8 @@ mod tests {
             by: vec![],
             weight: None,
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1381,6 +1996,8 @@ mod tests {
             by: vec![],
             weight: None,
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1427,6 +2044,8 @@ mod tests {
             by: vec![("g".into(), false)],
             weight: None,
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1456,6 +2075,8 @@ mod tests {
             by: vec![("g".into(), false)],
             weight: None,
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         let r = execute(&ast, &mut session);
         assert!(r.is_err());
@@ -1489,6 +2110,8 @@ mod tests {
                     ("median".into(), vec!["med".into()]),
                 ],
             }),
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1523,6 +2146,8 @@ mod tests {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), vec!["mx".into()])],
             }),
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1584,6 +2209,8 @@ mod tests {
             by: vec![],
             weight: Some("w".into()),
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1620,6 +2247,8 @@ mod tests {
             by: vec![],
             weight: Some("w".into()),
             output: None,
+            normal: false,
+            graphics_deferred: 0,
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();

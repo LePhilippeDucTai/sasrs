@@ -1,0 +1,89 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m21/univariate_normal.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'Univariate normality tests on height';
+
+3     proc univariate data=d.class normal;
+4       var height;
+5       histogram height / normal;
+6       qqplot height;
+7     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                              Univariate normality tests on height
+
+                                    The UNIVARIATE Procedure
+
+                                        Variable: height
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                            19    Sum Weights                   19
+              Mean               62.336842105    Sum Observations          1184.4
+              Std Deviation      5.1270752466    Variance            26.286900585
+              Skewness           -0.259669589    Kurtosis            -0.138969241
+              Uncorrected SS         74304.92    Corrected SS        473.16421053
+              Coeff Variation    8.2247914291    Std Error Mean      1.1762317303
+
+                                   Basic Statistical Measures
+
+                LocLabel        LocValue    VarLabel                   VarValue
+
+                Mean        62.336842105    Std Deviation          5.1270752466
+                Median              62.8    Variance               26.286900585
+                Mode                62.5    Range                          20.7
+                                            Interquartile Range               9
+
+                                      Tests for Normality
+
+          Test                  StatLabel       StatValue    PLabel             PValue
+
+          Shapiro-Wilk          W            0.9790827559    Pr < W       0.9311831451
+          Kolmogorov-Smirnov    D            0.1442722657    Pr > D       0.3783003187
+          Cramer-von Mises      W-Sq         0.0405155345    Pr > W-Sq    0.9663938736
+          Anderson-Darling      A-Sq         0.2357783876    Pr > A-Sq    0.7558630309
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max            72
+                                     99%                 72
+                                     95%                 72
+                                     90%                 69
+                                     75% Q3            66.5
+                                     50% Median        62.8
+                                     25% Q1            57.5
+                                     10%               56.3
+                                     5%                51.3
+                                     1%                51.3
+                                     0% Min            51.3
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                           51.3            11             66.5             14
+                           56.3            13             66.5             19
+                           56.5             2               67             17
+                           57.3             6               69              1
+                           57.5            18               72             15
+
+==== EXIT 0 ====
