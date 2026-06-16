@@ -3,6 +3,10 @@
 //!   <tmp>/data/class.parquet   ← clone de sashelp.class
 //! puis exécute la fixture avec base_dir = <tmp> ; les scripts utilisent
 //! `libname d 'data';` (chemin relatif, donc snapshots stables).
+//!
+//! Module partagé entre plusieurs binaires de test (snapshot, ods_html, …) :
+//! chacun n'utilise qu'un sous-ensemble des helpers, d'où `allow(dead_code)`.
+#![allow(dead_code)]
 
 use polars::prelude::*;
 use std::fs::File;

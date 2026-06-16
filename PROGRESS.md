@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M22** (couche de routage ODS + capture). M1–M21 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M23** (ODS RTF / PDF / Excel). M1–M22 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -233,8 +233,17 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
   — **Capture branchée : PROC MEANS table "Summary"** (`means.rs`, `write_ods_summary`). Après le rapport, si `ods_output_target("Summary")` est `Some`, écrit un dataset = une obs par variable de VAR, colonne char `Variable` + une colonne numérique par stat du rapport (N/Mean/StdDev/Min/Max par défaut, libellés via `ods_summary_stat_colname`). Réutilise `compute`/`compute_weighted`/`partition_numeric`/`partition_weighted` existants. `last_dataset` mis à jour + NOTE de création. v1 : agrégation globale (CLASS/BY non partitionnés dans Summary — à brancher au cas par cas).
   — **DIFFÉRÉ / au cas par cas** : autres tables ODS (FREQ OneWayFreqs/CrossTabFreqs, UNIVARIATE Moments, etc.) non encore branchées — l'infra est en place, il suffit que chaque proc consulte `ods_output_target("<Table>")` ; partition CLASS/BY dans Summary ; ODS SELECT/EXCLUDE restent différés (parser les rejette proprement).
   — **Tests** : +5 parser (single/two/qualified mappings, CLOSE, erreur sans `=`), +4 exécution (capture Summary colonnes+valeurs, table case-insensitive, inactif→aucun dataset & listing inchangé, multi-VAR 1 obs/var). +9 total (1987 → 1996 lib). 0 warning `-D warnings`, 0 `.snap.new`, 0 `todo!()`.
-- [ ] M22.4 — destination HTML (tables CSS, fichier `.html`) (Sonnet, moyen)
-- [ ] Fixtures `m22/` + snapshots (texte inchangé ; HTML/dataset capturés vérifiés). DoD
+- [x] M22.4 — destination HTML (tables CSS, fichier `.html`) (Sonnet, moyen)
+  — **`HtmlDestination` réelle** (`src/output/mod.rs`, sortie de la macro `stub_destination!` ; RTF/PDF/Excel restent des stubs) : `new(ls)` / `with_file(ls, PathBuf)` ; `page_header`→`<h1 class="systitle">` ; `write_table`→`<table class="sas"><thead><tbody>` (cellules HTML-échappées, `Align::Right`→`style="text-align:right"`) ; `write_line`→`<p>` ; `blank` no-op ; `into_string`→document complet (DOCTYPE + CSS embarqué + body), drain idempotent ; helper `html_escape` (`&` en premier).
+  — **Trait** : méthode `finalize(&mut self) -> Option<(PathBuf, String)>` (défaut `None` ; HTML renvoie `Some((path, doc))` si FILE= configuré).
+  — **Flush** : `Session::close_destination` écrit le fichier HTML via `finalize()` + NOTE « Writing HTML Body file: <nom> » (file_name seul → snapshots déterministes). Filet de sécurité fin de programme dans `lib.rs::run` (FILE= sans CLOSE explicite).
+  — **Câblage** : `executor::exec_ods` branche `ODS HTML FILE=` via `with_file(resolve_path)` ; sans FILE= → NOTE informative, pas de fichier.
+  — **v1 documenté** : destinations EXCLUSIVES (ouvrir HTML remplace le listing courant ; pas de fan-out concurrent listing+HTML comme SAS). +8 tests unitaires.
+- [x] Fixtures `m22/` + snapshots (texte inchangé ; HTML/dataset capturés vérifiés). DoD
+  — **3 fixtures** `tests/fixtures/m22/` : `ods_output.sas` (capture MEANS Summary→dataset, **vérifié main** : height N19/mean62.336842/std5.127075, weight mean100.026316/std22.773933, valeurs identiques au listing) ; `ods_html.sas` (routage HTML→fichier, NOTE d'écriture, listing réactivé après CLOSE) ; `ods_options.sas` (NOCENTER/NODATE/NONUMBER acceptées **sans warning**). Snapshots vérifiés à la main.
+  — **Test d'intégration** `tests/ods_html.rs` (2 tests) : relit le `report.html` généré et asserte DOCTYPE/`<table class="sas">`/`<th>`/cellule `Alfred`/`text-align:right` ; et `ODS HTML` sans FILE= → aucun fichier.
+  — **Correctif orchestrateur** : titres de fixtures passés en ASCII (le lexer de littéraux chaîne double-encode l'UTF-8 non-ASCII dans le titre rendu — bug pré-existant hors périmètre M22, contourné). `tests/common/mod.rs` reçoit `#![allow(dead_code)]` (helpers partagés entre binaires de test).
+  — **Total** : 2004 lib + 2 intégration + snapshots m22, 0 warning `-D warnings`, 0 `.snap.new` (m1–m21 octet-identiques). **M22 TERMINÉ.**
 
 ## M23 — ODS RTF / PDF / Excel
 - [ ] ⫽ M23.1 — RTF (séquences de contrôle Word) (Opus, moyen)

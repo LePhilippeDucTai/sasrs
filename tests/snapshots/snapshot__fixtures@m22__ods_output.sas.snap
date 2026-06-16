@@ -1,0 +1,56 @@
+---
+source: sas_interpreter/tests/snapshot.rs
+assertion_line: 29
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: sas_interpreter/tests/fixtures/m22/ods_output.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     ods output Summary=means_out;
+
+3     title "MEANS height/weight (sortie listing + capture ODS OUTPUT)";
+
+4     proc means data=d.class;
+5         var height weight;
+6     run;
+NOTE: The data set WORK.MEANS_OUT has 2 observations and 6 variables.
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     ods output close;
+
+8     title "Dataset captured by ODS OUTPUT (means_out)";
+
+9     proc print data=means_out;
+10    run;
+NOTE: There were 2 observations read from the data set WORK.MEANS_OUT.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    title;
+
+==== LISTING ====
+                   MEANS height/weight (sortie listing + capture ODS OUTPUT)
+
+                                      The MEANS Procedure
+
+              Variable     N            Mean         Std Dev    Minimum    Maximum
+
+              height      19    62.336842105    5.1270752466       51.3         72
+              weight      19    100.02631579    22.773933494       50.5        150
+
+                           Dataset captured by ODS OUTPUT (means_out)
+
+              Obs    Variable     N            Mean          StdDev     Min    Max
+
+                1    height      19    62.336842105    5.1270752466    51.3     72
+                2    weight      19    100.02631579    22.773933494    50.5    150
+
+==== EXIT 0 ====
