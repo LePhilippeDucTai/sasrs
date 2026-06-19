@@ -88,6 +88,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `DISTANCE` | 🟡 | `DATA=`; `VAR var1 var2 …`; `OUT=ds` (distance matrix dataset); `METHOD=EUCLID/L2` (default), `CITYBLOCK/L1`, `LINF/CHEBYCHEV`, `COSINE`, `CORR`; Distance Matrix listing (Row/Col labeled); output `_TYPE_=DISTANCE` dataset | `SHAPE=`, `FREQ`, normalization options, `ID` variable for row labels |
 | `CLUSTER` | 🟡 | `DATA=`; `VAR var1 var2 …`; `METHOD=WARD` (default), `AVERAGE`, `SINGLE`, `COMPLETE`; `ID var`; Cluster History (NClusters, Clusters Joined, Freq, SPRSQ, RSQ); Lance-Williams update formula | `OUTTREE=` (parse accepted, not computed), `PSEUDO=`, `NOEIGEN`, graphical dendrogram |
 | `FASTCLUS` | 🟡 | `DATA=`; `VAR var1 var2 …`; `MAXCLUSTERS=k` (required); `OUT=ds` (with `_CLUSTER_` variable); `MAXITER=`; `CONVERGE=`; farthest-first seed selection; Cluster Summary (Freq/RMS Std/Max Distance/Nearest Cluster); Statistics for Variables (R-Square); `ID var` | `SEED=` (specific seed obs), `RADIUS=`, `DISTANCE`, fuzzy clustering, `MEAN` |
+| `DISCRIM` | 🟡 | `DATA=`; `CLASS var`; `VAR var1 var2 …`; `ID var`; `OUT=ds` (`_FROM_`, `_INTO_`, `_<k>` posteriors); `PRIORS EQUAL` (default) / `PROPORTIONAL`; `POOL=YES` (LDA); Class Level Information; Within-Class Covariance Matrices; Pooled Covariance; Pairwise D² (Mahalanobis²); Linear Discriminant Function Coefficients; Classification Results (obs-by-obs + posteriors); Error Count Estimates | `POOL=NO` (QDA), `CROSSVALIDATE`, `OUTSTAT=`, `METHOD=NPAR/KERNEL`, `THRESHOLD=`, `BY` groups |
 
 ### DATA step
 

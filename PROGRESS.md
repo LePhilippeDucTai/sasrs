@@ -290,7 +290,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] M27.1 — `PROC PRINCOMP` (ACP via valeurs propres covariance/corrélation) (Opus, élevé)
 - [x] M27.2 — `PROC FACTOR` (extraction, rotation VARIMAX) (Fable, élevé)
 - [x] M27.3 — `PROC CLUSTER` + `PROC FASTCLUS` (k-means), `PROC DISTANCE` (Opus, élevé)
-- [ ] M27.4 — `PROC DISCRIM` (analyse discriminante linéaire) (Opus, élevé)
+- [x] M27.4 — `PROC DISCRIM` (analyse discriminante linéaire) (Opus, élevé)
 - [ ] Fixtures `m27/` + snapshots. DoD
 
 ## M28 — modèles mixtes (le plus difficile, en dernier)
