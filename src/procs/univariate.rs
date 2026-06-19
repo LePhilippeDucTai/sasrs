@@ -72,10 +72,44 @@ pub struct UnivariateAst {
     /// emitted after the Quantiles section. Default false → report is
     /// byte-identical to the pre-M21.3 output.
     pub normal: bool,
-    /// Number of graphical statements (HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT) seen.
-    /// Image rendering is deferred to ODS GRAPHICS (M29); for M21.3 these are
-    /// parsed and a single NOTE is emitted, never a panic.
-    pub graphics_deferred: usize,
+    /// Graphical statements (HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT/PPPLOT) seen, in
+    /// source order with their target variable. When `ods_graphics.enabled` is
+    /// false the rendering stays deferred (a single NOTE, as before M29.3);
+    /// when enabled each plot is wired to the ODS GRAPHICS image infrastructure
+    /// (M29.3) — an image under `--features graphics`, a deferral NOTE otherwise.
+    pub plots: Vec<UnivariatePlot>,
+}
+
+/// A graphical statement requested in PROC UNIVARIATE (M29.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnivariatePlot {
+    pub kind: UnivariatePlotKind,
+    /// Target variable name (the first identifier after the keyword). `None`
+    /// when the statement carries no explicit variable (e.g. `histogram;`).
+    pub var: Option<String>,
+}
+
+/// Kind of UNIVARIATE graphical statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnivariatePlotKind {
+    Histogram,
+    QqPlot,
+    ProbPlot,
+    CdfPlot,
+    PpPlot,
+}
+
+impl UnivariatePlotKind {
+    /// Uppercase statement keyword (for NOTE messages).
+    pub fn keyword(self) -> &'static str {
+        match self {
+            UnivariatePlotKind::Histogram => "HISTOGRAM",
+            UnivariatePlotKind::QqPlot => "QQPLOT",
+            UnivariatePlotKind::ProbPlot => "PROBPLOT",
+            UnivariatePlotKind::CdfPlot => "CDFPLOT",
+            UnivariatePlotKind::PpPlot => "PPPLOT",
+        }
+    }
 }
 
 /// OUTPUT OUT= specification: target dataset + (statistic keyword, output
@@ -95,7 +129,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut data: Option<DatasetRef> = None;
     let mut var: Vec<String> = Vec::new();
     let mut normal = false;
-    let mut graphics_deferred = 0usize;
+    let mut plots: Vec<UnivariatePlot> = Vec::new();
 
     // --- PROC UNIVARIATE statement options, until `;` ---
     loop {
@@ -180,17 +214,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         } else if ts.peek().is_kw("output") {
             ts.next();
             output = Some(parse_output(ts)?);
-        } else if ts.peek().is_kw("histogram")
-            || ts.peek().is_kw("qqplot")
-            || ts.peek().is_kw("probplot")
-            || ts.peek().is_kw("cdfplot")
-            || ts.peek().is_kw("ppplot")
-        {
-            // Graphical statement: parse (skip its body to `;`); image rendering
-            // is deferred to ODS GRAPHICS (M29). Never error or panic.
-            ts.next();
+        } else if let Some(kind) = graphics_kind(ts.peek()) {
+            // Graphical statement (HISTOGRAM/QQPLOT/…): capture the kind and its
+            // target variable (the first identifier after the keyword), then
+            // skip the rest of the body to `;` (trailing `/ options` are
+            // tolerated but ignored). Rendering is wired to ODS GRAPHICS (M29.3).
+            ts.next(); // consume keyword
+            let var = ts.peek().ident().map(str::to_string);
+            if var.is_some() {
+                ts.next();
+            }
             ts.skip_to_semi();
-            graphics_deferred += 1;
+            plots.push(UnivariatePlot { kind, var });
         } else {
             // Unknown sub-statement (id, class, ...): skip leniently.
             ts.skip_to_semi();
@@ -204,8 +239,25 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         weight,
         output,
         normal,
-        graphics_deferred,
+        plots,
     })
+}
+
+/// Map a token to a graphical-statement kind, or `None` if it is not one.
+fn graphics_kind(tok: &crate::token::Token) -> Option<UnivariatePlotKind> {
+    if tok.is_kw("histogram") {
+        Some(UnivariatePlotKind::Histogram)
+    } else if tok.is_kw("qqplot") {
+        Some(UnivariatePlotKind::QqPlot)
+    } else if tok.is_kw("probplot") {
+        Some(UnivariatePlotKind::ProbPlot)
+    } else if tok.is_kw("cdfplot") {
+        Some(UnivariatePlotKind::CdfPlot)
+    } else if tok.is_kw("ppplot") {
+        Some(UnivariatePlotKind::PpPlot)
+    } else {
+        None
+    }
 }
 
 /// Recognized OUTPUT statistic keywords (paired positionally with VAR list).
@@ -598,10 +650,20 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         n_obs, display_name
     ));
 
-    if ast.graphics_deferred > 0 {
-        session.log.note(
-            "HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).",
-        );
+    // --- Graphical statements (M29.3) ---
+    if !ast.plots.is_empty() {
+        if !session.ods_graphics.enabled {
+            // ODS GRAPHICS off: rendering stays deferred (byte-identical to the
+            // pre-M29.3 behaviour — a single NOTE for the whole PROC step).
+            session.log.note(
+                "HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).",
+            );
+        } else {
+            // ODS GRAPHICS on: wire each plot to the image infrastructure.
+            for plot in &ast.plots {
+                render_plot(session, plot, &var_cols, &var_values, &ds);
+            }
+        }
     }
 
     // --- OUTPUT OUT= ---
@@ -618,6 +680,177 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render (or defer) a single UNIVARIATE graphical statement, when
+/// `ods_graphics.enabled` is true (the caller checks this). In the default
+/// build (no `graphics` feature) this only emits a deferral NOTE; under
+/// `--features graphics` it materializes a PNG/SVG via the M29.1 infrastructure.
+///
+/// PROBPLOT/CDFPLOT/PPPLOT are deferred with a dedicated NOTE (rendered as a
+/// QQ-style scatter would be a poor approximation of these — out of M29.3 v1).
+fn render_plot(
+    session: &mut Session,
+    plot: &UnivariatePlot,
+    var_cols: &[usize],
+    var_values: &[Vec<Value>],
+    ds: &SasDataset,
+) {
+    // PROBPLOT/CDFPLOT/PPPLOT: deferred with a dedicated NOTE (before the
+    // feature gate, so it is testable in the default build).
+    if matches!(
+        plot.kind,
+        UnivariatePlotKind::ProbPlot | UnivariatePlotKind::CdfPlot | UnivariatePlotKind::PpPlot
+    ) {
+        session.log.note(&format!(
+            "{}: plot deferred in PROC UNIVARIATE.",
+            plot.kind.keyword()
+        ));
+        return;
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    {
+        let _ = (plot, var_cols, var_values, ds);
+        session
+            .log
+            .note("ODS GRAPHICS: image deferred (compile with --features graphics).");
+    }
+
+    #[cfg(feature = "graphics")]
+    {
+        plot_graphics::render(session, plot, var_cols, var_values, ds);
+    }
+}
+
+/// Collect the non-missing numeric values of a plot's target variable, in the
+/// PROC's VAR-list order. When the plot has an explicit variable, only that
+/// variable's values are returned (empty if it is not part of the analysis
+/// list); when it has none, the FIRST analysis variable is used (SAS plots all
+/// analysis variables — v1 renders only the first, matching SGPLOT's "first
+/// plot" convention).
+#[cfg(feature = "graphics")]
+fn plot_values(
+    plot: &UnivariatePlot,
+    var_cols: &[usize],
+    var_values: &[Vec<Value>],
+    ds: &SasDataset,
+) -> (String, Vec<f64>) {
+    let vi = match &plot.var {
+        Some(name) => var_cols
+            .iter()
+            .position(|&ci| ds.vars[ci].name.eq_ignore_ascii_case(name)),
+        None => {
+            if var_cols.is_empty() {
+                None
+            } else {
+                Some(0)
+            }
+        }
+    };
+    match vi {
+        Some(i) => {
+            let label = ds.vars[var_cols[i]].name.clone();
+            let xs: Vec<f64> = var_values[i]
+                .iter()
+                .filter_map(|v| value_to_num(v))
+                .filter(|f| !f.is_nan())
+                .collect();
+            (label, xs)
+        }
+        None => (
+            plot.var.clone().unwrap_or_default(),
+            Vec::new(),
+        ),
+    }
+}
+
+#[cfg(feature = "graphics")]
+mod plot_graphics {
+    use super::*;
+    use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+
+    pub fn render(
+        session: &mut Session,
+        plot: &UnivariatePlot,
+        var_cols: &[usize],
+        var_values: &[Vec<Value>],
+        ds: &SasDataset,
+    ) {
+        let (label, xs) = plot_values(plot, var_cols, var_values, ds);
+
+        let spec = match plot.kind {
+            UnivariatePlotKind::Histogram => DrawingSpec {
+                title: "The UNIVARIATE Procedure".to_string(),
+                x_label: label,
+                y_label: "Percent".to_string(),
+                plot_type: PlotType::Histogram { bins: 10 },
+                data: xs.iter().map(|&v| (v, 0.0)).collect(),
+                x_categorical: vec![],
+            },
+            UnivariatePlotKind::QqPlot => {
+                // Empirical quantiles (sorted data) vs theoretical normal
+                // quantiles qnorm((i-0.375)/(n+0.25)) for i = 1..n.
+                let mut sorted = xs.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                let n = sorted.len();
+                let nf = n as f64;
+                let data: Vec<(f64, f64)> = sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &emp)| {
+                        let i = idx as f64 + 1.0;
+                        let theo = phi_inv((i - 0.375) / (nf + 0.25));
+                        (theo, emp)
+                    })
+                    .collect();
+                DrawingSpec {
+                    title: "The UNIVARIATE Procedure".to_string(),
+                    x_label: "Normal Quantiles".to_string(),
+                    y_label: label,
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                }
+            }
+            // PROBPLOT/CDFPLOT/PPPLOT handled by the caller (deferred).
+            _ => return,
+        };
+
+        session.graphics_image_count += 1;
+        let stem = session
+            .ods_graphics
+            .file_stem
+            .clone()
+            .unwrap_or_else(|| "univar".to_string());
+        let fmt = session.ods_graphics.image_format;
+        let name = format!(
+            "{}_{}.{}",
+            stem,
+            session.graphics_image_count,
+            fmt.extension()
+        );
+        let path = session.ods_graphics.output_dir.join(&name);
+
+        match draw_to_file(
+            &spec,
+            &path,
+            session.ods_graphics.width,
+            session.ods_graphics.height,
+            fmt,
+        ) {
+            Ok((w, h)) => {
+                session
+                    .log
+                    .note(&format!("Output '{}' ({}x{}) written.", name, w, h));
+            }
+            Err(e) => {
+                session
+                    .log
+                    .note(&format!("WARNING: could not write image {}: {}", name, e));
+            }
+        }
+    }
 }
 
 /// Emit the SAS BY heading line into the listing: `var1=val1 var2=val2`.
@@ -1727,7 +1960,7 @@ mod tests {
             weight: None,
             output: None,
             normal: true,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -1752,7 +1985,7 @@ mod tests {
             weight: None,
             output: None,
             normal: true,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -1779,7 +2012,11 @@ mod tests {
             "proc univariate data=a; var x; histogram x / normal; qqplot x; run;",
         )
         .unwrap();
-        assert_eq!(ast.graphics_deferred, 2);
+        assert_eq!(ast.plots.len(), 2);
+        assert_eq!(ast.plots[0].kind, UnivariatePlotKind::Histogram);
+        assert_eq!(ast.plots[0].var.as_deref(), Some("x"));
+        assert_eq!(ast.plots[1].kind, UnivariatePlotKind::QqPlot);
+        assert_eq!(ast.plots[1].var.as_deref(), Some("x"));
         assert_eq!(ast.var, vec!["x"]);
     }
 
@@ -1796,14 +2033,114 @@ mod tests {
             weight: None,
             output: None,
             normal: false,
-            graphics_deferred: 1,
+            plots: vec![UnivariatePlot {
+                kind: UnivariatePlotKind::Histogram,
+                var: Some("x".into()),
+            }],
         };
+        // ODS GRAPHICS off (default) → rendering stays deferred (one NOTE).
         execute(&ast, &mut session).unwrap();
         let log = session.log.into_string();
         assert!(
             log.contains("graphical output deferred to ODS GRAPHICS"),
             "log: {log}"
         );
+    }
+
+    // ───────────────────────── M29.3 plot tests ─────────────────────────
+
+    /// Helper: write a small numeric dataset and run UNIVARIATE with the given
+    /// plots and ODS GRAPHICS state, returning the log.
+    fn run_plots(
+        ods_on: bool,
+        plots: Vec<UnivariatePlot>,
+        output_dir: Option<std::path::PathBuf>,
+        file_stem: Option<String>,
+    ) -> String {
+        let mut session = make_session();
+        session.ods_graphics.enabled = ods_on;
+        if let Some(d) = output_dir {
+            session.ods_graphics.output_dir = d;
+        }
+        session.ods_graphics.file_stem = file_stem;
+        let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = UnivariateAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            output: None,
+            normal: false,
+            plots,
+        };
+        execute(&ast, &mut session).unwrap();
+        session.log.into_string()
+    }
+
+    fn hist() -> Vec<UnivariatePlot> {
+        vec![UnivariatePlot { kind: UnivariatePlotKind::Histogram, var: Some("x".into()) }]
+    }
+    fn qq() -> Vec<UnivariatePlot> {
+        vec![UnivariatePlot { kind: UnivariatePlotKind::QqPlot, var: Some("x".into()) }]
+    }
+
+    #[test]
+    fn histogram_without_ods_defers() {
+        let log = run_plots(false, hist(), None, None);
+        assert!(
+            log.contains("graphical output deferred to ODS GRAPHICS"),
+            "log: {log}"
+        );
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn histogram_with_ods_no_feature_defers_image() {
+        let log = run_plots(true, hist(), None, None);
+        assert!(log.contains("image deferred"), "log: {log}");
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn qqplot_with_ods_no_feature_defers_image() {
+        let log = run_plots(true, qq(), None, None);
+        assert!(log.contains("image deferred"), "log: {log}");
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn histogram_with_ods_and_feature_creates_image() {
+        let dir = std::env::temp_dir();
+        let log = run_plots(true, hist(), Some(dir.clone()), Some("univtest_hist".into()));
+        assert!(log.contains("written"), "log: {log}");
+        let p = dir.join("univtest_hist_1.png");
+        assert!(p.exists(), "image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn qqplot_with_ods_and_feature_creates_image() {
+        let dir = std::env::temp_dir();
+        let log = run_plots(true, qq(), Some(dir.clone()), Some("univtest_qq".into()));
+        assert!(log.contains("written"), "log: {log}");
+        let p = dir.join("univtest_qq_1.png");
+        assert!(p.exists(), "image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn probplot_with_ods_defers_with_note() {
+        let plots = vec![UnivariatePlot {
+            kind: UnivariatePlotKind::ProbPlot,
+            var: Some("x".into()),
+        }];
+        let log = run_plots(true, plots, None, None);
+        assert!(log.contains("PROBPLOT: plot deferred"), "log: {log}");
     }
 
     #[test]
@@ -1943,7 +2280,7 @@ mod tests {
             weight: None,
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1997,7 +2334,7 @@ mod tests {
             weight: None,
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -2045,7 +2382,7 @@ mod tests {
             weight: None,
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -2076,7 +2413,7 @@ mod tests {
             weight: None,
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         let r = execute(&ast, &mut session);
         assert!(r.is_err());
@@ -2111,7 +2448,7 @@ mod tests {
                 ],
             }),
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -2147,7 +2484,7 @@ mod tests {
                 specs: vec![("mean".into(), vec!["mx".into()])],
             }),
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -2210,7 +2547,7 @@ mod tests {
             weight: Some("w".into()),
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -2248,7 +2585,7 @@ mod tests {
             weight: Some("w".into()),
             output: None,
             normal: false,
-            graphics_deferred: 0,
+            plots: vec![],
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();

@@ -26,6 +26,10 @@ pub struct RegAst {
     pub data_options: RegDataOptions,
     pub model: Option<RegModel>,
     pub outputs: Vec<RegOutput>,
+    /// M29.3 — an explicit `PLOTS ...;` statement was seen. Its complex forms
+    /// are deferred (a NOTE); the simple residuals-vs-predicted diagnostic is
+    /// driven automatically from `ods_graphics.enabled`, not from this flag.
+    pub plots_requested: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +93,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     // Sub-statements until run;/quit;
     let mut model: Option<RegModel> = None;
     let mut outputs: Vec<RegOutput> = Vec::new();
+    let mut plots_requested = false;
 
     loop {
         while ts.peek().kind == TokenKind::Semi {
@@ -193,6 +198,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     residual,
                 });
             }
+        } else if ts.peek().is_kw("plots") {
+            // M29.3 — PLOTS statement: parsed but its options are deferred (a
+            // NOTE at execute time). Skip the whole statement (including a
+            // possible `(...)` option list and trailing `/ options`).
+            ts.next();
+            ts.skip_to_semi();
+            plots_requested = true;
         } else if ts.peek().is_kw("by") {
             ts.next();
             ts.skip_to_semi();
@@ -205,6 +217,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         data_options: RegDataOptions { input },
         model,
         outputs,
+        plots_requested,
     })
 }
 
@@ -664,7 +677,87 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         ));
     }
 
+    // --- 11. Diagnostics (M29.3) ---
+    // An explicit PLOTS statement: its options are deferred (NOTE).
+    if ast.plots_requested {
+        session
+            .log
+            .note("PLOTS options deferred in PROC REG.");
+    }
+
+    // Automatic residuals-vs-predicted diagnostic, driven by ODS GRAPHICS.
+    if session.ods_graphics.enabled {
+        reg_diagnostic_plot(session, &y_hat, &resid);
+    }
+
     Ok(())
+}
+
+/// Generate (or defer) the automatic residuals-vs-predicted diagnostic plot
+/// after a MODEL statement, when `ods_graphics.enabled` is true (the caller
+/// checks this). Default build: a deferral NOTE; `--features graphics`: a
+/// `reg_{N}` scatter image (x = predicted, y = residual).
+fn reg_diagnostic_plot(session: &mut Session, y_hat: &[f64], resid: &[f64]) {
+    #[cfg(not(feature = "graphics"))]
+    {
+        let _ = (y_hat, resid);
+        session
+            .log
+            .note("REG diagnostics: image deferred (compile with --features graphics).");
+    }
+
+    #[cfg(feature = "graphics")]
+    {
+        use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+
+        let data: Vec<(f64, f64)> = y_hat
+            .iter()
+            .zip(resid.iter())
+            .filter(|(p, r)| p.is_finite() && r.is_finite())
+            .map(|(p, r)| (*p, *r))
+            .collect();
+        let spec = DrawingSpec {
+            title: "The REG Procedure".to_string(),
+            x_label: "Predicted Value".to_string(),
+            y_label: "Residual".to_string(),
+            plot_type: PlotType::Scatter,
+            data,
+            x_categorical: vec![],
+        };
+
+        session.graphics_image_count += 1;
+        let stem = session
+            .ods_graphics
+            .file_stem
+            .clone()
+            .unwrap_or_else(|| "reg".to_string());
+        let fmt = session.ods_graphics.image_format;
+        let name = format!(
+            "{}_{}.{}",
+            stem,
+            session.graphics_image_count,
+            fmt.extension()
+        );
+        let path = session.ods_graphics.output_dir.join(&name);
+        match draw_to_file(
+            &spec,
+            &path,
+            session.ods_graphics.width,
+            session.ods_graphics.height,
+            fmt,
+        ) {
+            Ok((w, h)) => {
+                session
+                    .log
+                    .note(&format!("Output '{}' ({}x{}) written.", name, w, h));
+            }
+            Err(e) => {
+                session
+                    .log
+                    .note(&format!("WARNING: could not write image {}: {}", name, e));
+            }
+        }
+    }
 }
 
 // ───────────────────────── Tests ─────────────────────────
@@ -729,6 +822,7 @@ mod tests {
                 noprint: false,
             }),
             outputs: vec![],
+            plots_requested: false,
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -769,6 +863,7 @@ mod tests {
                 noprint: false,
             }),
             outputs: vec![],
+            plots_requested: false,
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -826,11 +921,89 @@ mod tests {
                 noprint: false,
             }),
             outputs: vec![],
+            plots_requested: false,
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
         assert!(listing.contains("The REG Procedure"), "{listing}");
         assert!(listing.contains("Analysis of Variance"), "{listing}");
         assert!(listing.contains("Parameter Estimates") || listing.contains("Parameter"), "{listing}");
+    }
+
+    // ───────────────────────── M29.3 diagnostics tests ─────────────────────────
+
+    /// Helper: run a simple OLS with the given ODS GRAPHICS state and image
+    /// settings, returning the log.
+    fn run_diag(
+        ods_on: bool,
+        output_dir: Option<PathBuf>,
+        file_stem: Option<String>,
+    ) -> String {
+        let mut session = make_session();
+        session.ods_graphics.enabled = ods_on;
+        if let Some(d) = output_dir {
+            session.ods_graphics.output_dir = d;
+        }
+        session.ods_graphics.file_stem = file_stem;
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = RegAst {
+            data_options: RegDataOptions {
+                input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            },
+            model: Some(RegModel {
+                dependent: "y".into(),
+                regressors: vec!["x".into()],
+                noint: false,
+                noprint: false,
+            }),
+            outputs: vec![],
+            plots_requested: false,
+        };
+        execute(&ast, &mut session).unwrap();
+        session.log.into_string()
+    }
+
+    #[test]
+    fn parse_plots_statement_flag() {
+        let ast = parse_reg("proc reg data=a; model y = x; plots / only; run;").unwrap();
+        assert!(ast.plots_requested);
+    }
+
+    #[test]
+    fn reg_without_ods_no_diagnostic() {
+        let log = run_diag(false, None, None);
+        assert!(!log.contains("image deferred"), "log: {log}");
+        assert!(!log.contains("REG diagnostics"), "log: {log}");
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn reg_with_ods_no_feature_defers() {
+        let log = run_diag(true, None, None);
+        assert!(
+            log.contains("REG diagnostics: image deferred"),
+            "log: {log}"
+        );
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn reg_with_ods_and_feature_creates_image() {
+        let dir = std::env::temp_dir();
+        let log = run_diag(true, Some(dir.clone()), Some("regtest_diag".into()));
+        assert!(log.contains("written"), "log: {log}");
+        let p = dir.join("regtest_diag_1.png");
+        assert!(p.exists(), "diagnostic image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
     }
 }
