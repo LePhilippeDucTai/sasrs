@@ -25,7 +25,7 @@
 //! ### Chi-squared distribution
 //! - `chisq_cdf(x: f64, df: f64) -> f64`
 //!   CDF of χ²(df). Implemented as:
-//!   ```
+//!   ```text
 //!   P(χ²(df) ≤ x) = gammq(df/2, x/2)  if x > 0 else 0.0
 //!   ```
 //!   Reuses existing `gammq`. Validation (SAS reference):
@@ -43,7 +43,7 @@
 //! ### F distribution (ratio of scaled chi-squared)
 //! - `f_cdf(x: f64, df1: f64, df2: f64) -> f64`
 //!   CDF of F(df1, df2). Relationship:
-//!   ```
+//!   ```text
 //!   P(F(d1,d2) ≤ x) = betai(d1/2, d2/2, d1*x / (d1*x + d2))
 //!   ```
 //!   Validation (SAS, df1=2, df2=10):
@@ -73,7 +73,7 @@
 //! ### Beta distribution
 //! - `beta_cdf(x: f64, alpha: f64, beta: f64) -> f64`
 //!   CDF of Beta(α, β) on [0, 1]. Directly:
-//!   ```
+//!   ```text
 //!   P(X ≤ x) = betai(α, β, x)
 //!   ```
 //!   Validation: Beta(2, 2) mode at 0.5, CDF(0.5) = 0.5.

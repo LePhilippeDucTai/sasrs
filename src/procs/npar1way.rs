@@ -467,7 +467,9 @@ fn analyze(groups: &[Vec<f64>]) -> NparResult {
         // Var(W) = n_A n_B (n+1) / 12, tie-corrected.
         let var_w = na * nb * (nf + 1.0) / 12.0 * tie_factor;
         let (z, p) = if var_w > 0.0 {
-            let z = (w - ew) / var_w.sqrt();
+            // SAS applies a 0.5 continuity correction by default (CORRECT=YES).
+            let diff = w - ew;
+            let z = (diff.abs() - 0.5) / var_w.sqrt() * diff.signum();
             let cdf = probnorm(z);
             let p = (2.0 * cdf.min(1.0 - cdf)).clamp(0.0, 1.0);
             (z, p)
@@ -727,7 +729,8 @@ mod tests {
     #[test]
     fn test_wilcoxon_basic() {
         // Group A = [1,2,3], Group B = [4,5,6]; no ties.
-        // Ranks of A = 1+2+3 = 6; E(W) = 10.5; Var(W) = 5.25; Z ≈ -1.9642.
+        // W=6, E(W)=10.5, Var(W)=5.25.
+        // With SAS continuity correction: Z = -(|6-10.5|-0.5)/sqrt(5.25) = -4.0/2.2913 ≈ -1.7458.
         let res = analyze(&[vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
         assert_eq!(res.n, 6);
         assert!((res.tie_factor - 1.0).abs() < 1e-12, "tie_factor={}", res.tie_factor);
@@ -735,8 +738,8 @@ mod tests {
         assert!((w.w - 6.0).abs() < 1e-12, "W={}", w.w);
         assert!((w.ew - 10.5).abs() < 1e-12, "E(W)={}", w.ew);
         assert!((w.var_w - 5.25).abs() < 1e-12, "Var(W)={}", w.var_w);
-        assert!((w.z - (-1.9642)).abs() < 1e-3, "Z={}", w.z);
-        assert!(w.p < 0.06, "p={}", w.p);
+        assert!((w.z - (-1.7458)).abs() < 1e-3, "Z={}", w.z);
+        assert!(w.p > 0.07 && w.p < 0.10, "p={}", w.p);
     }
 
     #[test]

@@ -34,7 +34,7 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               73.0000          90.0000             12.2367    -1.3893      0.1648
+               73.0000          90.0000             12.2367    -1.3484      0.1775
 
                                    One-Way Analysis of weight
 
@@ -42,7 +42,7 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               71.0000          90.0000             12.2259    -1.5541      0.1202
+               71.0000          90.0000             12.2259    -1.5132      0.1302
 
 
 ==== EXIT 0 ====
