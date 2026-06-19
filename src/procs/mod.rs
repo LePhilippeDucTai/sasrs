@@ -16,6 +16,7 @@
 
 pub mod append;
 pub mod anova;
+pub mod genmod;
 pub mod glm;
 pub mod logistic;
 pub mod catalog;
@@ -74,6 +75,7 @@ pub enum ProcAst {
     Reg(reg::RegAst),
     Anova(anova::AnovaAst),
     Glm(glm::GlmAst),
+    Genmod(genmod::GenmodAst),
     Logistic(logistic::LogisticAst),
 }
 
@@ -203,6 +205,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = glm::parse(ts)?;
             Ok(ProcAst::Glm(ast))
         }
+        "genmod" => {
+            let ast = genmod::parse(ts)?;
+            Ok(ProcAst::Genmod(ast))
+        }
         "logistic" => {
             let ast = logistic::parse(ts)?;
             Ok(ProcAst::Logistic(ast))
@@ -251,6 +257,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Reg(a) => reg::execute(a, session),
         ProcAst::Anova(a) => anova::execute(a, session),
         ProcAst::Glm(a) => glm::execute(a, session),
+        ProcAst::Genmod(a) => genmod::execute(a, session),
         ProcAst::Logistic(a) => logistic::execute(a, session),
     };
 
