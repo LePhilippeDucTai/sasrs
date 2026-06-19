@@ -1414,6 +1414,56 @@ mod tests {
     }
 
     #[test]
+    fn test_ar1_execute_errors() {
+        // TYPE=AR(1) must produce the mandated "not yet implemented" error at
+        // execute time (it parses fine).
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::session::Session;
+        use crate::value::VarType;
+        use polars::df;
+        use std::path::PathBuf;
+
+        let mut session = Session::new(None, PathBuf::from("."), true).unwrap();
+        let frame = df![
+            "subj" => ["A", "A", "B", "B"],
+            "y" => [1.0_f64, 3.0, 5.0, 7.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![
+                VarMeta {
+                    name: "subj".into(),
+                    ty: VarType::Char,
+                    length: 1,
+                    format: None,
+                    label: None,
+                },
+                VarMeta {
+                    name: "y".into(),
+                    ty: VarType::Num,
+                    length: 8,
+                    format: None,
+                    label: None,
+                },
+            ],
+        };
+        session.libs.get("WORK").unwrap().write("B", &ds).unwrap();
+        session.last_dataset = Some("WORK.B".to_string());
+
+        let ast = parse_mixed(
+            "proc mixed; class subj; model y = ; random intercept / subject=subj type=ar(1); run;",
+        )
+        .unwrap();
+        let err = execute(&ast, &mut session).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("TYPE=AR(1)/UN is not yet implemented for PROC MIXED."),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn test_profile_search_matches_closed_form() {
         // The general (golden-section) path should reproduce the closed form
         // on the balanced oracle.
