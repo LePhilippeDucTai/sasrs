@@ -1,0 +1,160 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m25/glm.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC GLM: height and weight by sex';
+
+3     proc glm data=d.class;
+4       class sex;
+5       model height weight = sex / solution;
+6       lsmeans sex / se;
+7       estimate 'F vs M' sex 1 -1;
+8       contrast 'F vs M' sex 1 -1;
+9     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE GLM used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title;
+
+==== LISTING ====
+                               PROC GLM: height and weight by sex
+
+                                       The GLM Procedure
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   sex           2    F M
+
+               Number of Observations Read     19
+
+
+                                   Dependent Variable: height
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               1          52.24632       52.24632       2.11    0.1645
+          Error              17         420.91789       24.75988
+          Corrected Total    18         473.16421
+
+
+                        R-Square    Coeff Var    Root MSE    height Mean
+
+                        0.110419     7.982326    4.975930      62.336842
+
+
+                 Source    DF    Type I SS    Mean Square    F Value    Pr > F
+
+                 sex        1     52.24632       52.24632       2.11    0.1645
+
+
+                Source    DF    Type III SS    Mean Square    F Value    Pr > F
+
+                sex        1       52.24632       52.24632       2.11    0.1645
+
+
+                                      Parameter Estimates
+
+                Parameter     Estimate    Standard Error    t Value    Pr > |t|
+
+                Intercept    63.910000          1.573527      40.62      <.0001
+                sex F        -3.321111          2.286282      -1.45      0.1645
+                sex M                0                 B
+
+
+                                      Least Squares Means
+
+                       sex    height LSMEAN    Standard Error    Pr > |t|
+
+                       F          60.588889          1.658643      <.0001
+                       M          63.910000          1.573527      <.0001
+
+
+                                           Contrasts
+
+               Contrast    DF    Contrast SS    Mean Square    F Value    Pr > F
+
+               F vs M       1       52.24632       52.24632       2.11    0.1645
+
+
+                                           Estimates
+
+                Parameter     Estimate    Standard Error    t Value    Pr > |t|
+
+                F vs M       -3.321111          2.286282      -1.45      0.1645
+
+
+                                   Dependent Variable: weight
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               1        1681.12295     1681.12295       3.73    0.0702
+          Error              17        7654.61389      450.27141
+          Corrected Total    18        9335.73684
+
+
+                       R-Square    Coeff Var     Root MSE    weight Mean
+
+                       0.180074    21.214017    21.219600     100.026316
+
+
+                 Source    DF     Type I SS    Mean Square    F Value    Pr > F
+
+                 sex        1    1681.12295     1681.12295       3.73    0.0702
+
+
+                Source    DF    Type III SS    Mean Square    F Value    Pr > F
+
+                sex        1     1681.12295     1681.12295       3.73    0.0702
+
+
+                                      Parameter Estimates
+
+                Parameter      Estimate    Standard Error    t Value    Pr > |t|
+
+                Intercept    108.950000          6.710227      16.24      <.0001
+                sex F        -18.838889          9.749733      -1.93      0.0702
+                sex M                 0                 B
+
+
+                                      Least Squares Means
+
+                       sex    weight LSMEAN    Standard Error    Pr > |t|
+
+                       F          90.111111          7.073200      <.0001
+                       M         108.950000          6.710227      <.0001
+
+
+                                           Contrasts
+
+               Contrast    DF    Contrast SS    Mean Square    F Value    Pr > F
+
+               F vs M       1     1681.12295     1681.12295       3.73    0.0702
+
+
+                                           Estimates
+
+                Parameter      Estimate    Standard Error    t Value    Pr > |t|
+
+                F vs M       -18.838889          9.749733      -1.93      0.0702
+
+
+
+==== EXIT 0 ====

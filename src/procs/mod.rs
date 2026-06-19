@@ -16,6 +16,7 @@
 
 pub mod append;
 pub mod anova;
+pub mod glm;
 pub mod catalog;
 pub mod common;
 pub mod compare;
@@ -71,6 +72,7 @@ pub enum ProcAst {
     Npar1way(npar1way::NparAst),
     Reg(reg::RegAst),
     Anova(anova::AnovaAst),
+    Glm(glm::GlmAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -195,6 +197,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = anova::parse(ts)?;
             Ok(ProcAst::Anova(ast))
         }
+        "glm" => {
+            let ast = glm::parse(ts)?;
+            Ok(ProcAst::Glm(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -238,6 +244,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Npar1way(a) => npar1way::execute(a, session),
         ProcAst::Reg(a) => reg::execute(a, session),
         ProcAst::Anova(a) => anova::execute(a, session),
+        ProcAst::Glm(a) => glm::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).
