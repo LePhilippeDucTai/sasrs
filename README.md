@@ -77,7 +77,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `PRINTTO` | 🟡 | `LOG=`, `PRINT=`, `NEW`, reset (options stored) | actual file routing (NOTE only; deferred) |
 | `OPTIONS` | 🟡 | `PROC OPTIONS` listing of system options | per-option detail |
 | `TTEST` | 🟡 | 1-sample (H0=, ALPHA=, SIDES=), 2-sample CLASS (Pooled + Satterthwaite + F equality test), PAIRED; VAR/CLASS/PAIRED statements; ODS OUTPUT TTest | BY groups, one-sided p wiring, CI columns |
-| `NPAR1WAY` | 🔴 | reserved name; parser & executor are `todo!()` | not implemented |
+| `NPAR1WAY` | 🟡 | CLASS (required), VAR (default all numeric), WILCOXON/KRUSKAL flags; Wilcoxon rank-sum (Z + 2-sided p, midranks, tie correction); Kruskal-Wallis (H/tie_factor, χ², df=k-1) | BY groups, OUT= dataset, exact Wilcoxon, score methods (Median/Savage/Normal) |
 
 ### DATA step
 
