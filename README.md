@@ -76,7 +76,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `CATALOG` | 🟡 | `CATALOG=libref.cat`; `CONTENTS` (in-memory formats), `DELETE`/`COPY` (no-op + NOTE) | real `.sas7bcat` catalogs, entry-type selection |
 | `PRINTTO` | 🟡 | `LOG=`, `PRINT=`, `NEW`, reset (options stored) | actual file routing (NOTE only; deferred) |
 | `OPTIONS` | 🟡 | `PROC OPTIONS` listing of system options | per-option detail |
-| `TTEST` | 🔴 | reserved name; parser & executor are `todo!()` | not implemented |
+| `TTEST` | 🟡 | 1-sample (H0=, ALPHA=, SIDES=), 2-sample CLASS (Pooled + Satterthwaite + F equality test), PAIRED; VAR/CLASS/PAIRED statements; ODS OUTPUT TTest | BY groups, one-sided p wiring, CI columns |
 | `NPAR1WAY` | 🔴 | reserved name; parser & executor are `todo!()` | not implemented |
 
 ### DATA step
