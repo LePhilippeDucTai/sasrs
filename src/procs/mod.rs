@@ -35,6 +35,7 @@ pub mod format;
 pub mod freq;
 pub mod import;
 pub mod means;
+pub mod mixed;
 pub mod npar1way;
 pub mod options;
 pub mod princomp;
@@ -89,6 +90,7 @@ pub enum ProcAst {
     Cluster(cluster::ClusterAst),
     Fastclus(fastclus::FastclusAst),
     Discrim(discrim::DiscrimAst),
+    Mixed(mixed::MixedAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -249,6 +251,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = discrim::parse(ts)?;
             Ok(ProcAst::Discrim(ast))
         }
+        "mixed" => {
+            let ast = mixed::parse(ts)?;
+            Ok(ProcAst::Mixed(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -301,6 +307,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Cluster(a) => cluster::execute(a, session),
         ProcAst::Fastclus(a) => fastclus::execute(a, session),
         ProcAst::Discrim(a) => discrim::execute(a, session),
+        ProcAst::Mixed(a) => mixed::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).
