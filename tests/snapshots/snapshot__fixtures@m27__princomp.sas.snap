@@ -1,0 +1,71 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m27/princomp.sas
+---
+==== LOG ====
+
+1     title 'PROC PRINCOMP: two-variable correlation PCA';
+
+2     data work.corr2;
+3       input x y;
+4     datalines;
+5     1 2
+6     2 3
+7     3 3
+8     4 5
+9     5 4
+10    ;
+NOTE: The data set WORK.CORR2 has 5 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    proc princomp data=work.corr2;
+12      var x y;
+13    run;
+NOTE: There were 5 observations read from the data set WORK.CORR2.
+NOTE: PROCEDURE PRINCOMP used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title;
+
+==== LISTING ====
+                          PROC PRINCOMP: two-variable correlation PCA
+
+                                     The PRINCOMP Procedure
+
+ Observations             5
+ Variables                2
+
+                                       Simple Statistics
+
+                                                  x         y
+
+                                   Mean      3.0000    3.4000
+                                   StdDev    1.5811    1.1402
+
+                                       Correlation Matrix
+
+                                               x         y
+
+                                     x    1.0000    0.8321
+                                     y    0.8321    1.0000
+
+                             Eigenvalues of the Correlation Matrix
+
+                          Eigenvalue    Difference    Proportion    Cumulative
+
+                 PRIN1        1.8321        1.6641        0.9160        0.9160
+                 PRIN2        0.1679             .        0.0840        1.0000
+
+                                          Eigenvectors
+
+                                           PRIN1        PRIN2
+
+                                   x    0.707107     0.707107
+                                   y    0.707107    -0.707107
+
+
+==== EXIT 0 ====
