@@ -258,7 +258,8 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] `lib.rs` : filet de sécurité en fin de programme pour les deux variantes.
 - [x] `executor.rs` : `exec_ods` câble FILE= pour RTF/PDF/Excel via `with_file(resolve_path)`.
   — **v1 documenté** : destinations EXCLUSIVES (listing texte inactif pendant HTML/RTF/PDF/Excel) ; pas de fan-out concurrent.
-- [ ] Fixtures `m23/` + snapshots (assertion structure/existence des fichiers). DoD
+- [x] Fixtures `m23/` + snapshots (assertion structure/existence des fichiers). DoD
+  — 3 snapshots `tests/snapshots/snapshot__fixtures@m23__ods_{rtf,pdf,excel}.sas.snap` **vérifiés à la main** : ODS RTF/PDF/Excel → NOTE "Writing {RTF Body|PDF|Excel} file: report.{rtf,pdf,xlsx}" ; listing texte reprend après CLOSE (3 obs Alfred/Alice/Barbara). m1–m22 octet-identiques. **M23 TERMINÉ.**
 
 ## PHASE C — modélisation statistique
 
