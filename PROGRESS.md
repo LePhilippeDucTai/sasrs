@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M25** (modèle linéaire). M1–M24 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M26** (modèles catégoriels). M1–M25 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -277,7 +277,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
   — `src/procs/anova.rs` (parser + executor) : DATA=, CLASS (liste de variables, distinct levels via sas_cmp), MODEL dependants = effets (liste de dépendants côté gauche, effets côté droit), MEANS (table des moyennes de cellules par niveau CLASS) ; listwise deletion (dep+class non-manquants) ; ANOVA table (Model/Error/Corrected Total, SSM=Σnᵢ(ȳᵢ−ȳ)², SSE=ΣΣ(yᵢⱼ−ȳᵢ)², F/Pr>F via f_cdf) ; fit statistics (R-Square, Coeff Var, Root MSE, dep Mean) ; Type I SS et Type III SS (identiques pour one-way) ; table MEANS (N/Mean/Std Dev par niveau). Validé oracle t²=F sur d.class : height F=2.11/p=0.1645, weight F=3.73/p=0.0702 (=(-1.4526)² et (-1.9322)² du PROC TTEST M24.2). Différés documentés : effets d'interaction (a*b), CLASS multiples en modèle multi-voies. +5 tests unitaires (2072 lib), fixture `tests/fixtures/m25/anova.sas` + snapshot.
 - [x] M25.3 — `PROC GLM` (codage CLASS, SC type I/III, LSMEANS, contrastes, ESTIMATE) (Fable, élevé)
   — `src/procs/glm.rs` (parser + executor) : DATA=, CLASS, MODEL dep1 dep2 = eff /SOLUTION /NOPRINT, LSMEANS eff /se, ESTIMATE 'label' eff c1 c2, CONTRAST 'label' eff c1 c2, MEANS ; codage reference-cell (dernier niveau = 0 / "B") pour Parameter Estimates ; LSMEANS = moyennes de cellules avec SE=√(MSE/nᵢ) et test H₀:μᵢ=0 ; ESTIMATE = combinaison linéaire Σcᵢȳᵢ / SE=√(MSE×Σcᵢ²/nᵢ) / t-test ; CONTRAST = F=Estimate²/(MSE×Σcᵢ²/nᵢ) / df=1. Validé oracle t²=F : height F=2.11/p=0.1645, ESTIMATE 'F vs M' t=−1.45/p=0.1645, weight F=3.73/p=0.0702, ESTIMATE t=−1.93/p=0.0702. Différés documentés : multi-facteurs Type III≠Type I, interactions, sweep g-inverse. +7 tests unitaires (2079 lib), fixture `tests/fixtures/m25/glm.sas` + snapshot.
-- [ ] Fixtures `m25/` + snapshots. DoD
+- [x] Fixtures `m25/` + snapshots. DoD — reg.sas/anova.sas/glm.sas + 3 snapshots vérifiés. **M25 TERMINÉ.**
 
 ## M26 — modèles catégoriels
 - [ ] M26.1 — `PROC LOGISTIC` (logistique binaire, Newton-Raphson/IRLS, odds ratios, CLASS, LINK=) (Fable, élevé)
