@@ -5,9 +5,13 @@
 //! `transpose` et `append`. Chaque fonction est extraite verbatim de son
 //! premier site d'apparition ; aucune logique n'est modifiée.
 
+use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::missing::{num_to_value, value_to_num};
+use crate::parser::StatementStream;
+use crate::session::Session;
+use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
 use std::cmp::Ordering;
 
@@ -593,4 +597,432 @@ pub fn group_by_keys(
         Ordering::Equal
     });
     groups
+}
+
+// ───────────────────── couche de parsing partagée (M31.1) ─────────────────────
+//
+// Combinateurs réutilisables pour le parsing des statements PROC. Ils
+// centralisent les boucles d'options / de sous-statements, la résolution
+// `expect_eq` / `OUT=` / `DATA=`, le message « Unexpected option » et la
+// résolution `_LAST_`, aujourd'hui dupliqués à l'identique dans la quarantaine
+// de fichiers `procs/<proc>.rs`. Reproduits VERBATIM depuis `print.rs`
+// (boucles) et `sort.rs`/`means.rs` (`expect_eq`, résolution `_LAST_`) afin de
+// garantir l'identité octet-à-octet lors de la future migration.
+//
+// `#[allow(dead_code)]` car AUCUN appelant n'existe encore (M31.1 est purement
+// additif) : ces fonctions seront câblées aux procs lors des incréments
+// suivants (M31.2+).
+
+/// Pilote la boucle d'options d'un statement PROC, jusqu'au `;` (consommé) ou
+/// `Eof`. Pour chaque token de tête, calcule le mot-clé minuscule via
+/// `peek().ident()` et délègue à `handle(ts, kw)`.
+///
+/// - `handle` renvoie `Ok(true)` → option reconnue ET consommée par le
+///   handler → on continue. Le pilote NE consomme JAMAIS le mot-clé lui-même.
+/// - `handle` renvoie `Ok(false)` (ou le token courant n'est pas un
+///   identifiant) → `unknown_option_error(ts, proc_name)`.
+///
+/// Reproduit EXACTEMENT la boucle d'en-tête de `print.rs` (même flux, même
+/// message+span d'erreur). Le handler garde la liberté d'implémenter des
+/// branches spécifiques (cf. la branche « stat keyword » de PROC MEANS).
+#[allow(dead_code)]
+pub fn parse_proc_options<F>(ts: &mut StatementStream, proc_name: &str, mut handle: F) -> Result<()>
+where
+    F: FnMut(&mut StatementStream, &str) -> Result<bool>,
+{
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next(); // consume `;`
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        // Le mot-clé de tête, minusculisé. Un token non-identifiant n'a pas de
+        // mot-clé → erreur « Unexpected option » (comme print.rs).
+        match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+            Some(kw) => {
+                if !handle(ts, &kw)? {
+                    return Err(unknown_option_error(ts, proc_name));
+                }
+            }
+            None => {
+                return Err(unknown_option_error(ts, proc_name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pilote la boucle de sous-statements d'un PROC, jusqu'à `run;`/`quit;`
+/// (consommés avec leur `;`) ou `Eof`. Saute les `;` parasites en tête.
+///
+/// Pour chaque sous-statement, calcule le mot-clé minuscule de tête et délègue
+/// à `handle(ts, kw)`. Un `Ok(true)` signifie « sous-statement reconnu et
+/// consommé ». Un `Ok(false)` (sous-statement inconnu) déclenche la même
+/// récupération que `print.rs` : `skip_to_semi()` puis on continue.
+///
+/// Reproduit EXACTEMENT la boucle de sous-statements de `print.rs` (y compris
+/// la gestion de `run`/`quit` et de leur `;` terminal).
+#[allow(dead_code)]
+pub fn parse_proc_body<F>(ts: &mut StatementStream, mut handle: F) -> Result<()>
+where
+    F: FnMut(&mut StatementStream, &str) -> Result<bool>,
+{
+    loop {
+        // Skip stray semicolons
+        while ts.peek().kind == TokenKind::Semi {
+            ts.next();
+        }
+
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+
+        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
+            ts.next(); // consume run/quit
+            // consume the `;`
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
+            break;
+        }
+
+        // Le mot-clé de tête minusculisé ; un token non-identifiant est traité
+        // comme un sous-statement inconnu (récupération `skip_to_semi`).
+        let kw = ts.peek().ident().map(|s| s.to_ascii_lowercase());
+        let recognized = match &kw {
+            Some(kw) => handle(ts, kw)?,
+            None => false,
+        };
+        if !recognized {
+            // Unknown sub-statement: skip it (recovery, comme print.rs).
+            ts.skip_to_semi();
+        }
+    }
+    Ok(())
+}
+
+/// Consomme le token courant (le nom d'option) puis exige `=`, avec le MÊME
+/// texte/span d'erreur que les procs aujourd'hui (`expected '=' after DATA`).
+/// Extrait verbatim de `sort.rs`/`means.rs`.
+///
+/// `opt` est l'étiquette affichée dans le message (par convention déjà en
+/// majuscules côté appelant, ex. « DATA », « OUT »).
+#[allow(dead_code)]
+pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
+    // Consomme le nom d'option (le mot-clé courant).
+    ts.next();
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!("expected '=' after {opt}"),
+            ts.peek().span,
+        ));
+    }
+    ts.next();
+    Ok(())
+}
+
+/// `option = <dataset-ref>` : `expect_eq` puis `parse_dataset_ref()`.
+/// Appelé avec le token courant positionné sur le nom d'option (`opt`).
+#[allow(dead_code)]
+pub fn parse_dataset_opt(ts: &mut StatementStream, opt: &str) -> Result<DatasetRef> {
+    expect_eq(ts, opt)?;
+    ts.parse_dataset_ref()
+}
+
+/// `out = <dataset-ref>` : raccourci de `parse_dataset_opt(ts, "OUT")`.
+#[allow(dead_code)]
+pub fn parse_out_opt(ts: &mut StatementStream) -> Result<DatasetRef> {
+    parse_dataset_opt(ts, "OUT")
+}
+
+/// Construit l'erreur « Unexpected option '{BAD}' on PROC {NAME} statement. »
+/// EXACTEMENT comme `print.rs`/`sort.rs` : `BAD` = identifiant courant en
+/// majuscules (`?` si non-identifiant), `NAME` = `proc_name` (déjà en
+/// majuscules par convention d'appel — `print.rs` passe le littéral « PRINT »),
+/// span = `ts.peek().span`.
+#[allow(dead_code)]
+pub fn unknown_option_error(ts: &StatementStream, proc_name: &str) -> SasError {
+    let span = ts.peek().span;
+    let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+    SasError::parse(
+        format!("Unexpected option '{bad}' on PROC {proc_name} statement."),
+        span,
+    )
+}
+
+/// Résout `data=` ou `_LAST_` en un `DatasetRef` concret. Bloc identique
+/// utilisé par `print.rs`, `sort.rs`, `means.rs` (`resolve_input`) : la chaîne
+/// `_LAST_` a la forme « LIBREF.NAME » et est décodée via `splitn(2, '.')`.
+/// Forme verbatim de la copie canonique (aucune divergence connue entre procs).
+#[allow(dead_code)]
+pub fn resolve_last_dataset(data: &Option<DatasetRef>, session: &Session) -> Result<DatasetRef> {
+    match data {
+        Some(r) => Ok(r.clone()),
+        None => {
+            let last = session.last_dataset.clone().ok_or_else(|| {
+                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
+            })?;
+            let parts: Vec<&str> = last.splitn(2, '.').collect();
+            if parts.len() == 2 {
+                Ok(DatasetRef {
+                    libref: Some(parts[0].to_string()),
+                    name: parts[1].to_string(),
+                })
+            } else {
+                Ok(DatasetRef {
+                    libref: None,
+                    name: last,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod parsing_tests {
+    use super::*;
+    use crate::session::Session;
+    use crate::source::SourceFile;
+    use std::path::PathBuf;
+
+    /// Construit un `StatementStream` positionné sur le premier token utile,
+    /// après avoir consommé `proc <name>` (même construction que les modules
+    /// `print`/`sort`/`means`). Le `Vec` de tokens appartient au `SourceFile`
+    /// que l'appelant doit garder vivant.
+    fn proc_stream<'a>(src: &'a SourceFile) -> StatementStream<'a> {
+        let mut ts = StatementStream::new(src).unwrap();
+        ts.next(); // "proc"
+        ts.next(); // <proc name>
+        ts
+    }
+
+    fn make_session() -> Session {
+        Session::new(None, PathBuf::from("."), true).unwrap()
+    }
+
+    // ── parse_proc_options ────────────────────────────────────────────────
+
+    #[test]
+    fn options_recognizes_and_stops_on_semi() {
+        // proc foo data=lib.x noobs ;
+        let src = SourceFile::new("proc foo data=lib.x noobs; run;");
+        let mut ts = proc_stream(&src);
+        let mut data: Option<DatasetRef> = None;
+        let mut noobs = false;
+        parse_proc_options(&mut ts, "FOO", |ts, kw| match kw {
+            "data" => {
+                data = Some(parse_dataset_opt(ts, "DATA")?);
+                Ok(true)
+            }
+            "noobs" => {
+                ts.next();
+                noobs = true;
+                Ok(true)
+            }
+            _ => Ok(false),
+        })
+        .unwrap();
+        assert_eq!(
+            data,
+            Some(DatasetRef {
+                libref: Some("lib".into()),
+                name: "x".into()
+            })
+        );
+        assert!(noobs);
+        // The `;` was consumed; the body starts at `run`.
+        assert!(ts.peek().is_kw("run"));
+    }
+
+    #[test]
+    fn options_unknown_returns_unknown_option_error() {
+        let src = SourceFile::new("proc foo bogus; run;");
+        let mut ts = proc_stream(&src);
+        // Capture the bad token's span before driving the loop.
+        let bad_span = ts.peek().span;
+        let err = parse_proc_options(&mut ts, "FOO", |_ts, _kw| Ok(false)).unwrap_err();
+        match err {
+            SasError::Parse { msg, span } => {
+                assert_eq!(msg, "Unexpected option 'BOGUS' on PROC FOO statement.");
+                assert_eq!(span, bad_span);
+            }
+            other => panic!("expected a parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn options_non_ident_token_is_unknown_option() {
+        // A non-identifier leading token (here `=`) → unknown option error.
+        let src = SourceFile::new("proc foo = bar; run;");
+        let mut ts = proc_stream(&src);
+        let err = parse_proc_options(&mut ts, "FOO", |_ts, _kw| Ok(true)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Unexpected option '?' on PROC FOO statement."), "msg: {msg}");
+    }
+
+    // ── parse_proc_body ───────────────────────────────────────────────────
+
+    #[test]
+    fn body_skips_stray_semis_and_stops_on_run() {
+        // Leading stray `;;`, one known sub-statement, then `run;`.
+        let src = SourceFile::new("proc foo;;; var a b; run; data after;");
+        let mut ts = proc_stream(&src);
+        // Consume the header `;` first so we are at the body.
+        ts.expect_semi().unwrap();
+        let mut vars: Option<Vec<String>> = None;
+        parse_proc_body(&mut ts, |ts, kw| match kw {
+            "var" => {
+                ts.next();
+                vars = Some(ts.parse_name_list()?);
+                ts.expect_semi()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        })
+        .unwrap();
+        assert_eq!(vars, Some(vec!["a".into(), "b".into()]));
+        // `run;` was consumed; next block head is `data`.
+        assert!(ts.peek().is_kw("data"));
+    }
+
+    #[test]
+    fn body_stops_on_quit() {
+        let src = SourceFile::new("proc foo; quit; data after;");
+        let mut ts = proc_stream(&src);
+        ts.expect_semi().unwrap();
+        parse_proc_body(&mut ts, |_ts, _kw| Ok(false)).unwrap();
+        assert!(ts.peek().is_kw("data"));
+    }
+
+    #[test]
+    fn body_recovers_unknown_substatement_via_skip_to_semi() {
+        // Unknown sub-statement `bogus x y;` must be skipped, then `var a;`
+        // is dispatched, then `run;` stops.
+        let src = SourceFile::new("proc foo; bogus x y; var a; run;");
+        let mut ts = proc_stream(&src);
+        ts.expect_semi().unwrap();
+        let mut seen: Vec<String> = Vec::new();
+        let mut vars: Option<Vec<String>> = None;
+        parse_proc_body(&mut ts, |ts, kw| {
+            seen.push(kw.to_string());
+            match kw {
+                "var" => {
+                    ts.next();
+                    vars = Some(ts.parse_name_list()?);
+                    ts.expect_semi()?;
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        })
+        .unwrap();
+        // `bogus` was dispatched (returned false → skip_to_semi), then `var`.
+        assert_eq!(seen, vec!["bogus".to_string(), "var".to_string()]);
+        assert_eq!(vars, Some(vec!["a".into()]));
+        assert!(ts.at_eof());
+    }
+
+    // ── expect_eq / parse_dataset_opt ─────────────────────────────────────
+
+    #[test]
+    fn expect_eq_happy_path_consumes_name_and_eq() {
+        let src = SourceFile::new("proc foo data= lib.x; run;");
+        let mut ts = proc_stream(&src);
+        // Positioned on `data`.
+        assert!(ts.peek().is_kw("data"));
+        expect_eq(&mut ts, "DATA").unwrap();
+        // Both `data` and `=` consumed; now on the dataset ref.
+        assert!(ts.peek().is_kw("lib"));
+    }
+
+    #[test]
+    fn expect_eq_missing_eq_errors() {
+        let src = SourceFile::new("proc foo data lib.x; run;");
+        let mut ts = proc_stream(&src);
+        let err = expect_eq(&mut ts, "DATA").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("expected '=' after DATA"), "msg: {msg}");
+    }
+
+    #[test]
+    fn parse_dataset_opt_happy_path() {
+        let src = SourceFile::new("proc foo data=lib.x; run;");
+        let mut ts = proc_stream(&src);
+        let r = parse_dataset_opt(&mut ts, "DATA").unwrap();
+        assert_eq!(
+            r,
+            DatasetRef {
+                libref: Some("lib".into()),
+                name: "x".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_out_opt_happy_path() {
+        let src = SourceFile::new("proc foo out=work.b; run;");
+        let mut ts = proc_stream(&src);
+        let r = parse_out_opt(&mut ts).unwrap();
+        assert_eq!(
+            r,
+            DatasetRef {
+                libref: Some("work".into()),
+                name: "b".into()
+            }
+        );
+    }
+
+    // ── unknown_option_error ──────────────────────────────────────────────
+
+    #[test]
+    fn unknown_option_error_exact_string_and_span() {
+        let src = SourceFile::new("proc foo bogus; run;");
+        let ts = proc_stream(&src);
+        let span = ts.peek().span;
+        let err = unknown_option_error(&ts, "PRINT");
+        match err {
+            SasError::Parse { msg, span: s } => {
+                assert_eq!(msg, "Unexpected option 'BOGUS' on PROC PRINT statement.");
+                assert_eq!(s, span);
+            }
+            other => panic!("expected a parse error, got {other:?}"),
+        }
+    }
+
+    // ── resolve_last_dataset ──────────────────────────────────────────────
+
+    #[test]
+    fn resolve_last_dataset_uses_explicit_data() {
+        let session = make_session();
+        let explicit = Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        });
+        let r = resolve_last_dataset(&explicit, &session).unwrap();
+        assert_eq!(r, explicit.unwrap());
+    }
+
+    #[test]
+    fn resolve_last_dataset_decodes_libref_dot_name() {
+        let mut session = make_session();
+        session.last_dataset = Some("WORK.MYDATA".to_string());
+        let r = resolve_last_dataset(&None, &session).unwrap();
+        assert_eq!(
+            r,
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "MYDATA".into()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_last_dataset_none_errors() {
+        let session = make_session();
+        let err = resolve_last_dataset(&None, &session).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("_LAST_") || msg.contains("undefined"), "msg: {msg}");
+    }
 }

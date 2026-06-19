@@ -342,11 +342,14 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
 (`"Unexpected option '{BAD}' on PROC {NAME} statement."`) ; les procs au message divergent
 (ex. `means` « Unexpected token… ») gardent leur branche inline dans la closure.
 
-- [ ] M31.1 — combinateurs additifs dans `src/procs/common.rs` (aucun appelant encore) :
+- [x] M31.1 — combinateurs additifs dans `src/procs/common.rs` (aucun appelant encore) :
   `parse_proc_options(ts, proc, FnMut(&mut StatementStream,&str)->Result<bool>)`,
   `parse_proc_body(ts, FnMut(...))` (skip semis, stop run/quit, recovery `skip_to_semi`),
   `expect_eq`, `parse_dataset_opt`/`parse_out_opt`, `unknown_option_error(ts, proc)`,
-  `resolve_last_dataset` (décodage `data=`/`_LAST_`). + tests unitaires des combinateurs (Opus, moyen)
+  `resolve_last_dataset` (décodage `data=`/`_LAST_`). + tests unitaires des combinateurs (Opus, moyen).
+  **FAIT** : 7 combinateurs `#[allow(dead_code)]` (additif pur, aucun appelant) reproduisant
+  verbatim les boucles de `print.rs` + `expect_eq`/`_LAST_` ; 14 tests (`parsing_tests`).
+  2276 lib passés, 0 `.snap.new` (octet-identique), 0 warning nouveau.
 - [ ] M31.2 — relocaliser dans `common.rs` : `parse_by` (ex-`means::parse_by_list`),
   `parse_single_var`/`parse_weight`/`parse_class`/`parse_var_list` ; re-export `pub(crate)`
   depuis `means` pour les appelants existants (Sonnet, faible)
