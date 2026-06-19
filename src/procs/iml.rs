@@ -24,8 +24,14 @@
 //! - M28a.2 : contrôle de flux (`IF/THEN/ELSE`, `DO i=a TO b [BY c]`,
 //!   `DO WHILE`, `DO UNTIL`) et fonctions statistiques élémentaires (`MEAN`,
 //!   `SUM`, `STD`, `MIN`, `MAX`, `ABS`, `SQRT`, `EXP`, `LOG`).
-//! - Différés v1 (erreur propre) : `SHAPE`, sous-matrices `a[1:2, 1:2]`, et les
-//!   statements I/O `CREATE`/`APPEND`/`CLOSE`/`READ`/`CALL` (M28a.3/.4).
+//! - M28a.3 : algèbre linéaire — `INV`, `SOLVE`, `EIGVAL` (symétrique),
+//!   `CHOL` (upper, convention SAS), `CALL QR(Q, R, A)`,
+//!   `CALL SVDCD(U, D, V, A)` (méthode ATA-Jacobi). Différés : `EIGVEC`,
+//!   `DET`, `CALL EIGEN`.
+//! - M28a.4 : I/O datasets — `CREATE ds FROM mat[COLNAME=cn]`, `APPEND FROM`,
+//!   `CLOSE`, `USE`, `READ ALL VAR {..} INTO mat`. Différés : `READ NEXT`,
+//!   `WHERE`, `LOAD`/`STORE`/`SHOW`.
+//! - Différés v1 (erreur propre) : `SHAPE`, sous-matrices `a[1:2, 1:2]`.
 
 use crate::error::{Result, SasError};
 use crate::session::Session;
@@ -46,8 +52,21 @@ pub enum ImlStmt {
     DoLoop { var: String, from: ImlExpr, to: ImlExpr, by: Option<ImlExpr>, body: Vec<ImlStmt> },
     DoWhile { cond: ImlExpr, body: Vec<ImlStmt> },
     DoUntil { cond: ImlExpr, body: Vec<ImlStmt> },
-    /// CALL / CREATE / APPEND / CLOSE / READ : parsés mais non exécutés en v1.
+    /// CALL routine(args). Les arguments de sortie (CALL QR/SVDCD/EIGEN) sont
+    /// des lvalues (noms de matrices à affecter) — résolus à l'exécution.
     Call { func: String, args: Vec<ImlExpr> },
+    /// `CREATE ds FROM mat [COLNAME=cn];`
+    Create { ds: String, from: String, colname: Option<ImlExpr> },
+    /// `APPEND FROM mat;`
+    Append { from: String },
+    /// `CLOSE ds;`
+    Close { ds: String },
+    /// `USE ds;`
+    Use { ds: String },
+    /// `READ ALL VAR {vars} INTO mat;`
+    ReadAll { vars: Vec<String>, into: String },
+    /// Statements I/O non encore implémentés (erreur propre à l'exécution).
+    UnsupportedIo { msg: String },
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +78,8 @@ pub enum ImlPrintItem {
 #[derive(Debug, Clone)]
 pub enum ImlExpr {
     Literal(Vec<Vec<f64>>),
+    /// Littéral de liste de chaînes : `{"x" "y"}`. Utilisé pour COLNAME=.
+    StrList(Vec<String>),
     Var(String),
     BinOp { op: ImlOp, left: Box<ImlExpr>, right: Box<ImlExpr> },
     Unary { op: UnaryOp, expr: Box<ImlExpr> },
@@ -94,7 +115,7 @@ enum Tok {
     Ident(String),
     Str(String),
     LBrace, RBrace, LBracket, RBracket, LParen, RParen,
-    Comma, Semi, Star, Slash, Plus, Minus, Hash, At, Quote, Colon,
+    Comma, Semi, Star, Slash, Plus, Minus, Hash, At, Quote, Colon, Dot,
     Eq, Ne, Lt, Le, Gt, Ge,
     Eof,
 }
@@ -206,6 +227,7 @@ fn lex(src: &str) -> Result<Vec<Tok>> {
             b'@' => { out.push(Tok::At); i += 1; }
             b'\'' => { out.push(Tok::Quote); i += 1; }
             b':' => { out.push(Tok::Colon); i += 1; }
+            b'.' => { out.push(Tok::Dot); i += 1; }
             b'=' => { out.push(Tok::Eq); i += 1; }
             b'<' => {
                 if i + 1 < n && b[i + 1] == b'=' { out.push(Tok::Le); i += 2; }
@@ -311,17 +333,38 @@ impl Parser {
                 self.expect(&Tok::Semi, "';' after CALL")?;
                 Ok(ImlStmt::Call { func: name, args })
             }
-            // CREATE/APPEND/CLOSE/READ/QUIT/RESET/FINISH/START/etc. : on les
-            // consume jusqu'au `;` et on les modélise comme Call non exécutés.
-            "create" | "append" | "close" | "read" | "edit" | "use"
-            | "show" | "reset" | "free" | "store" | "load" | "remove" => {
+            "create" => self.parse_create(),
+            "append" => self.parse_append(),
+            "close" => self.parse_close(),
+            "use" => self.parse_use(),
+            "read" => self.parse_read(),
+            // Statements I/O différés : erreur propre à l'exécution.
+            "store" | "load" | "show" => {
                 self.next();
-                // Consommer les arguments jusqu'au `;` (best-effort).
                 while self.peek() != &Tok::Semi && self.peek() != &Tok::Eof {
                     self.next();
                 }
                 self.expect(&Tok::Semi, "';'")?;
-                Ok(ImlStmt::Call { func: kw, args: Vec::new() })
+                Ok(ImlStmt::UnsupportedIo {
+                    msg: format!(
+                        "{} is not yet implemented in PROC IML",
+                        kw.to_uppercase()
+                    ),
+                })
+            }
+            // Autres statements de gestion : consommés sans effet (best-effort).
+            "edit" | "reset" | "free" | "remove" => {
+                self.next();
+                while self.peek() != &Tok::Semi && self.peek() != &Tok::Eof {
+                    self.next();
+                }
+                self.expect(&Tok::Semi, "';'")?;
+                Ok(ImlStmt::UnsupportedIo {
+                    msg: format!(
+                        "the {} statement is not yet implemented in PROC IML",
+                        kw.to_uppercase()
+                    ),
+                })
             }
             _ => {
                 // Assignation : ident [subscript] = expr ;
@@ -339,6 +382,144 @@ impl Parser {
             Tok::Ident(s) => Ok(s),
             other => Err(SasError::runtime(format!("IML: expected {what}, found {other:?}"))),
         }
+    }
+
+    /// Parse un nom de dataset possiblement qualifié : `name` ou `lib.name`.
+    /// Retourne la forme canonique en MAJUSCULES (`LIB.NAME` ou `NAME`).
+    fn parse_dataset_name(&mut self, what: &str) -> Result<String> {
+        let first = self.expect_ident(what)?;
+        if self.eat(&Tok::Dot) {
+            let second = self.expect_ident("a dataset name after '.'")?;
+            Ok(format!("{}.{}", first.to_uppercase(), second.to_uppercase()))
+        } else {
+            Ok(first.to_uppercase())
+        }
+    }
+
+    /// `CREATE ds FROM mat [COLNAME=cn];`
+    fn parse_create(&mut self) -> Result<ImlStmt> {
+        self.next(); // create
+        let ds = self.parse_dataset_name("a dataset name after CREATE")?;
+        let from_kw = self.expect_ident("FROM")?;
+        if !from_kw.eq_ignore_ascii_case("from") {
+            return Err(SasError::runtime("IML: expected FROM in a CREATE statement"));
+        }
+        let from = self.expect_ident("a matrix name after FROM")?.to_uppercase();
+        // Option [COLNAME=cn] ou [colname=cn].
+        let mut colname = None;
+        if self.eat(&Tok::LBracket) {
+            let opt = self.expect_ident("an option name (COLNAME)")?;
+            if !opt.eq_ignore_ascii_case("colname") {
+                return Err(SasError::runtime(format!(
+                    "IML: unsupported CREATE option '{opt}' (only COLNAME= is supported)"
+                )));
+            }
+            self.expect(&Tok::Eq, "'=' after COLNAME")?;
+            colname = Some(self.parse_primary()?);
+            self.expect(&Tok::RBracket, "']'")?;
+        }
+        self.expect(&Tok::Semi, "';' after CREATE")?;
+        Ok(ImlStmt::Create { ds, from, colname })
+    }
+
+    /// `APPEND FROM mat;`
+    fn parse_append(&mut self) -> Result<ImlStmt> {
+        self.next(); // append
+        let from_kw = self.expect_ident("FROM")?;
+        if !from_kw.eq_ignore_ascii_case("from") {
+            return Err(SasError::runtime("IML: expected FROM in an APPEND statement"));
+        }
+        let from = self.expect_ident("a matrix name after FROM")?.to_uppercase();
+        self.expect(&Tok::Semi, "';' after APPEND")?;
+        Ok(ImlStmt::Append { from })
+    }
+
+    /// `CLOSE ds;`
+    fn parse_close(&mut self) -> Result<ImlStmt> {
+        self.next(); // close
+        let ds = self.parse_dataset_name("a dataset name after CLOSE")?;
+        self.expect(&Tok::Semi, "';' after CLOSE")?;
+        Ok(ImlStmt::Close { ds })
+    }
+
+    /// `USE ds;`
+    fn parse_use(&mut self) -> Result<ImlStmt> {
+        self.next(); // use
+        let ds = self.parse_dataset_name("a dataset name after USE")?;
+        self.expect(&Tok::Semi, "';' after USE")?;
+        Ok(ImlStmt::Use { ds })
+    }
+
+    /// `READ ALL VAR {vars} INTO mat;` (autres formes → erreur propre).
+    fn parse_read(&mut self) -> Result<ImlStmt> {
+        self.next(); // read
+        let mode = self.expect_ident("ALL or NEXT after READ")?;
+        if mode.eq_ignore_ascii_case("next") {
+            while self.peek() != &Tok::Semi && self.peek() != &Tok::Eof {
+                self.next();
+            }
+            self.expect(&Tok::Semi, "';'")?;
+            return Ok(ImlStmt::UnsupportedIo {
+                msg: "READ NEXT not yet implemented; use READ ALL instead".to_string(),
+            });
+        }
+        if !mode.eq_ignore_ascii_case("all") {
+            return Err(SasError::runtime("IML: expected ALL or NEXT after READ"));
+        }
+        let var_kw = self.expect_ident("VAR after READ ALL")?;
+        if !var_kw.eq_ignore_ascii_case("var") {
+            return Err(SasError::runtime("IML: expected VAR after READ ALL"));
+        }
+        // Liste de variables : `{ "x" "y" }` ou `{ x y }`.
+        let vars = self.parse_var_list()?;
+        // INTO mat ou WHERE ... .
+        let kw = self.expect_ident("INTO or WHERE after the variable list")?;
+        if kw.eq_ignore_ascii_case("where") {
+            while self.peek() != &Tok::Semi && self.peek() != &Tok::Eof {
+                self.next();
+            }
+            self.expect(&Tok::Semi, "';'")?;
+            return Ok(ImlStmt::UnsupportedIo {
+                msg: "WHERE clause in READ not yet implemented".to_string(),
+            });
+        }
+        if !kw.eq_ignore_ascii_case("into") {
+            return Err(SasError::runtime("IML: expected INTO after the variable list"));
+        }
+        let into = self.expect_ident("a matrix name after INTO")?.to_uppercase();
+        self.expect(&Tok::Semi, "';' after READ")?;
+        Ok(ImlStmt::ReadAll { vars, into })
+    }
+
+    /// Liste de variables `{ "x" "y" }` ou `{ x y }` (noms en MAJUSCULES).
+    fn parse_var_list(&mut self) -> Result<Vec<String>> {
+        self.expect(&Tok::LBrace, "'{' to begin a variable list")?;
+        let mut out = Vec::new();
+        loop {
+            match self.peek().clone() {
+                Tok::Str(s) => {
+                    self.next();
+                    out.push(s.to_uppercase());
+                }
+                Tok::Ident(s) => {
+                    self.next();
+                    out.push(s.to_uppercase());
+                }
+                Tok::RBrace => {
+                    self.next();
+                    break;
+                }
+                other => {
+                    return Err(SasError::runtime(format!(
+                        "IML: unexpected token in a variable list: {other:?}"
+                    )));
+                }
+            }
+        }
+        if out.is_empty() {
+            return Err(SasError::runtime("IML: empty variable list in READ"));
+        }
+        Ok(out)
     }
 
     fn parse_print_items(&mut self) -> Result<Vec<ImlPrintItem>> {
@@ -656,8 +837,31 @@ impl Parser {
     }
 
     /// `{ a b , c d }` — espace = élément, virgule = nouvelle ligne.
+    /// `{ "x" "y" }` — liste de chaînes (pour COLNAME=, READ VAR, etc.).
     fn parse_matrix_literal(&mut self) -> Result<ImlExpr> {
         self.expect(&Tok::LBrace, "'{'")?;
+        // Liste de chaînes : `{ "x" "y" ... }`.
+        if matches!(self.peek(), Tok::Str(_)) {
+            let mut strs = Vec::new();
+            loop {
+                match self.peek().clone() {
+                    Tok::Str(s) => {
+                        self.next();
+                        strs.push(s);
+                    }
+                    Tok::RBrace => {
+                        self.next();
+                        break;
+                    }
+                    other => {
+                        return Err(SasError::runtime(format!(
+                            "IML: a string literal list may only contain strings, found {other:?}"
+                        )));
+                    }
+                }
+            }
+            return Ok(ImlExpr::StrList(strs));
+        }
         let mut rows: Vec<Vec<f64>> = Vec::new();
         let mut cur: Vec<f64> = Vec::new();
         loop {
@@ -745,8 +949,32 @@ pub fn parse(ts: &mut crate::parser::StatementStream) -> Result<ImlProgram> {
 
 type Matrix = Vec<Vec<f64>>;
 
+/// Tampon d'un dataset ouvert en écriture par CREATE/APPEND/CLOSE.
+struct OpenWrite {
+    colnames: Vec<String>,
+    rows: Vec<Vec<f64>>,
+}
+
 struct Env {
     vars: HashMap<String, Matrix>,
+    /// Matrices de chaînes (listes de noms), p.ex. `cn = {"x" "y"}`. Stockées à
+    /// part car la valeur IML numérique est `Vec<Vec<f64>>`.
+    str_vars: HashMap<String, Vec<String>>,
+    /// Datasets ouverts en écriture (CREATE … APPEND … CLOSE), clé = nom canonique.
+    open_writes: HashMap<String, OpenWrite>,
+    /// Datasets ouverts en lecture (USE … READ … CLOSE), clé = nom canonique.
+    open_reads: std::collections::HashSet<String>,
+}
+
+impl Env {
+    fn new() -> Self {
+        Env {
+            vars: HashMap::new(),
+            str_vars: HashMap::new(),
+            open_writes: HashMap::new(),
+            open_reads: std::collections::HashSet::new(),
+        }
+    }
 }
 
 fn scalar(v: f64) -> Matrix {
@@ -768,6 +996,9 @@ fn dims(m: &Matrix) -> (usize, usize) {
 fn eval_expr(e: &ImlExpr, env: &Env) -> Result<Matrix> {
     match e {
         ImlExpr::Literal(m) => Ok(m.clone()),
+        ImlExpr::StrList(_) => Err(SasError::runtime(
+            "IML: a character matrix cannot be used in a numeric expression.",
+        )),
         ImlExpr::Var(name) => env
             .vars
             .get(&name.to_ascii_uppercase())
@@ -1011,6 +1242,15 @@ fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix> {
         "sqrt" => Ok(map_elems(&arg(0)?, f64::sqrt)),
         "exp" => Ok(map_elems(&arg(0)?, f64::exp)),
         "log" => Ok(map_elems(&arg(0)?, f64::ln)),
+        // ── M28a.3 : algèbre linéaire ──
+        "inv" => iml_inv(&arg(0)?),
+        "solve" => iml_solve(&arg(0)?, &arg(1)?),
+        "eigval" => iml_eigval(&arg(0)?),
+        "chol" => iml_chol(&arg(0)?),
+        "eigvec" => Err(SasError::runtime(
+            "EIGVEC: use `CALL EIGEN` for eigenvectors (not yet implemented)",
+        )),
+        "det" => Err(SasError::runtime("DET not yet implemented in PROC IML")),
         _ => Err(SasError::runtime(format!(
             "IML: the function {} is not yet implemented.",
             name.to_uppercase()
@@ -1026,11 +1266,124 @@ fn map_elems(m: &Matrix, f: impl Fn(f64) -> f64) -> Matrix {
     m.iter().map(|r| r.iter().map(|v| f(*v)).collect()).collect()
 }
 
+// ───────────────────────── M28a.3 : algèbre linéaire ─────────────────────────
+
+/// Vérifie qu'une matrice est carrée ; renvoie sa dimension.
+fn require_square(m: &Matrix, fname: &str) -> Result<usize> {
+    let (nr, nc) = dims(m);
+    if nr == 0 || nr != nc {
+        return Err(SasError::runtime(format!(
+            "IML: {fname} requires a square matrix (got {nr}x{nc})."
+        )));
+    }
+    Ok(nr)
+}
+
+/// `INV(A)` → A⁻¹ via `invert_matrix`.
+fn iml_inv(a: &Matrix) -> Result<Matrix> {
+    require_square(a, "INV")?;
+    crate::stat::linalg::invert_matrix(a)
+}
+
+/// `SOLVE(A, b)` → x tel que A*x = b, colonne par colonne via `least_squares`.
+fn iml_solve(a: &Matrix, b: &Matrix) -> Result<Matrix> {
+    let (an, _) = dims(a);
+    let (bn, bc) = dims(b);
+    if an != bn {
+        return Err(SasError::runtime(format!(
+            "IML: SOLVE dimensions do not conform (A has {an} rows, b has {bn} rows)."
+        )));
+    }
+    let ncols_x = a[0].len();
+    // Résoudre chaque colonne de b ; assembler la solution (n×bc).
+    let mut sols: Vec<Vec<f64>> = Vec::with_capacity(bc);
+    for j in 0..bc {
+        let col: Vec<f64> = (0..bn).map(|i| b[i][j]).collect();
+        sols.push(crate::stat::linalg::least_squares(a, &col)?);
+    }
+    let mut out = vec![vec![0.0; bc]; ncols_x];
+    for (j, sol) in sols.iter().enumerate() {
+        for (i, &v) in sol.iter().enumerate() {
+            out[i][j] = v;
+        }
+    }
+    Ok(out)
+}
+
+/// `EIGVAL(A)` → vecteur colonne des valeurs propres (ordre décroissant).
+/// SAS n'accepte que les matrices symétriques.
+fn iml_eigval(a: &Matrix) -> Result<Matrix> {
+    let n = require_square(a, "EIGVAL")?;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if (a[i][j] - a[j][i]).abs() > 1e-10 {
+                return Err(SasError::runtime(
+                    "ERROR: The argument to the EIGVAL function must be a symmetric matrix.",
+                ));
+            }
+        }
+    }
+    let vals = crate::stat::linalg::eigenvalues_jacobi(a)?;
+    Ok(vals.into_iter().map(|v| vec![v]).collect())
+}
+
+/// `CHOL(A)` → U upper triangular telle que U'*U = A (SAS convention).
+/// `cholesky` renvoie L (lower) avec L*L'=A ; on transpose.
+fn iml_chol(a: &Matrix) -> Result<Matrix> {
+    require_square(a, "CHOL")?;
+    let l = crate::stat::linalg::cholesky(a)?;
+    Ok(transpose(&l))
+}
+
+/// `CALL SVDCD(U, D, V, A)` : A = U*diag(D)*V', via la méthode ATA-Jacobi.
+/// Renvoie (U, D, V) où D est un vecteur colonne des valeurs singulières.
+fn iml_svdcd(a: &Matrix) -> Result<(Matrix, Matrix, Matrix)> {
+    let (m, n) = dims(a);
+    if m == 0 || n == 0 {
+        return Err(SasError::runtime("IML: SVDCD requires a non-empty matrix."));
+    }
+    if m < n {
+        return Err(SasError::runtime(
+            "IML: SVDCD currently requires rows >= columns (m >= n).",
+        ));
+    }
+    // S = A'*A (n×n, symétrique).
+    let at = transpose(a);
+    let s = crate::stat::linalg::matrix_mult(&at, a);
+    // Eigendécomposition : S = V diag(λ) V', λ décroissants.
+    let (v, lambda) = crate::stat::linalg::eigenvectors_jacobi(&s)?;
+    // σᵢ = sqrt(max(λᵢ, 0)).
+    let sigma: Vec<f64> = lambda.iter().map(|&l| l.max(0.0).sqrt()).collect();
+    // U[:,i] = A * V[:,i] / σᵢ.
+    let mut u = vec![vec![0.0; n]; m];
+    for i in 0..n {
+        if sigma[i] > 1e-12 {
+            // colonne i de V.
+            let vi: Vec<f64> = (0..n).map(|r| v[r][i]).collect();
+            let avi = crate::stat::linalg::matrix_vec_mult(a, &vi);
+            for r in 0..m {
+                u[r][i] = avi[r] / sigma[i];
+            }
+        } else {
+            return Err(SasError::runtime(
+                "IML: SVDCD: rank-deficient matrix; orthonormal completion not yet implemented.",
+            ));
+        }
+    }
+    let d: Matrix = sigma.into_iter().map(|s| vec![s]).collect();
+    Ok((u, d, v))
+}
+
 // ───────────────────────── Exécution + listing ─────────────────────────
 
-fn exec_stmts(stmts: &[ImlStmt], env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
+fn exec_stmts(
+    stmts: &[ImlStmt],
+    env: &mut Env,
+    out: &mut Vec<PrintOp>,
+    session: &mut Session,
+) -> Result<()> {
     for s in stmts {
-        exec_stmt(s, env, out)?;
+        exec_stmt(s, env, out, session)?;
     }
     Ok(())
 }
@@ -1042,10 +1395,23 @@ enum PrintOp {
     Text(String),
 }
 
-fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
+fn exec_stmt(
+    s: &ImlStmt,
+    env: &mut Env,
+    out: &mut Vec<PrintOp>,
+    session: &mut Session,
+) -> Result<()> {
     match s {
         ImlStmt::Assign { var, expr } => {
+            // Une liste de chaînes est stockée dans str_vars, pas dans vars.
+            if let ImlExpr::StrList(strs) = expr {
+                env.str_vars
+                    .insert(var.to_ascii_uppercase(), strs.clone());
+                env.vars.remove(&var.to_ascii_uppercase());
+                return Ok(());
+            }
             let m = eval_expr(expr, env)?;
+            env.str_vars.remove(&var.to_ascii_uppercase());
             env.vars.insert(var.to_ascii_uppercase(), m);
             Ok(())
         }
@@ -1071,9 +1437,9 @@ fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
         ImlStmt::If { cond, then_body, else_body } => {
             let c = eval_expr(cond, env)?;
             if matrix_truthy(&c) {
-                exec_stmts(then_body, env, out)
+                exec_stmts(then_body, env, out, session)
             } else {
-                exec_stmts(else_body, env, out)
+                exec_stmts(else_body, env, out, session)
             }
         }
         ImlStmt::DoLoop { var, from, to, by, body } => {
@@ -1096,7 +1462,7 @@ fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
                     break;
                 }
                 env.vars.insert(var.to_ascii_uppercase(), scalar(i));
-                exec_stmts(body, env, out)?;
+                exec_stmts(body, env, out, session)?;
                 i += step;
                 guard += 1;
                 if guard > 10_000_000 {
@@ -1108,7 +1474,7 @@ fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
         ImlStmt::DoWhile { cond, body } => {
             let mut guard = 0u64;
             while matrix_truthy(&eval_expr(cond, env)?) {
-                exec_stmts(body, env, out)?;
+                exec_stmts(body, env, out, session)?;
                 guard += 1;
                 if guard > 10_000_000 {
                     return Err(SasError::runtime("IML: DO WHILE loop exceeded the iteration guard."));
@@ -1119,7 +1485,7 @@ fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
         ImlStmt::DoUntil { cond, body } => {
             let mut guard = 0u64;
             loop {
-                exec_stmts(body, env, out)?;
+                exec_stmts(body, env, out, session)?;
                 if matrix_truthy(&eval_expr(cond, env)?) {
                     break;
                 }
@@ -1130,11 +1496,277 @@ fn exec_stmt(s: &ImlStmt, env: &mut Env, out: &mut Vec<PrintOp>) -> Result<()> {
             }
             Ok(())
         }
-        ImlStmt::Call { func, .. } => Err(SasError::runtime(format!(
-            "IML: the {} statement is not yet implemented.",
-            func.to_uppercase()
+        ImlStmt::Call { func, args } => exec_call(func, args, env),
+        ImlStmt::Create { ds, from, colname } => exec_create(ds, from, colname.as_ref(), env),
+        ImlStmt::Append { from } => exec_append(from, env),
+        ImlStmt::Close { ds } => exec_close(ds, env, session),
+        ImlStmt::Use { ds } => exec_use(ds, env, session),
+        ImlStmt::ReadAll { vars, into } => exec_read_all(vars, into, env, session),
+        ImlStmt::UnsupportedIo { msg } => Err(SasError::runtime(msg.clone())),
+    }
+}
+
+/// Exécute un `CALL routine(...)`. Les routines `QR`/`SVDCD` ont des arguments
+/// de sortie (lvalues) suivis d'arguments d'entrée.
+fn exec_call(func: &str, args: &[ImlExpr], env: &mut Env) -> Result<()> {
+    let lname = func.to_ascii_lowercase();
+    // Extrait le nom (lvalue) d'un argument de sortie.
+    let out_name = |e: &ImlExpr| -> Result<String> {
+        match e {
+            ImlExpr::Var(n) => Ok(n.to_ascii_uppercase()),
+            _ => Err(SasError::runtime(format!(
+                "IML: CALL {} output arguments must be variable names.",
+                func.to_uppercase()
+            ))),
+        }
+    };
+    match lname.as_str() {
+        "qr" => {
+            if args.len() != 3 {
+                return Err(SasError::runtime(
+                    "IML: CALL QR requires 3 arguments: CALL QR(Q, R, A).",
+                ));
+            }
+            let q_name = out_name(&args[0])?;
+            let r_name = out_name(&args[1])?;
+            let a = eval_expr(&args[2], env)?;
+            let (q, r) = crate::stat::linalg::qr_decomposition(&a)?;
+            env.vars.insert(q_name, q);
+            env.vars.insert(r_name, r);
+            Ok(())
+        }
+        "svdcd" => {
+            if args.len() != 4 {
+                return Err(SasError::runtime(
+                    "IML: CALL SVDCD requires 4 arguments: CALL SVDCD(U, D, V, A).",
+                ));
+            }
+            let u_name = out_name(&args[0])?;
+            let d_name = out_name(&args[1])?;
+            let v_name = out_name(&args[2])?;
+            let a = eval_expr(&args[3], env)?;
+            let (u, d, v) = iml_svdcd(&a)?;
+            env.vars.insert(u_name, u);
+            env.vars.insert(d_name, d);
+            env.vars.insert(v_name, v);
+            Ok(())
+        }
+        "eigen" => Err(SasError::runtime(
+            "CALL EIGEN not yet implemented in PROC IML",
+        )),
+        other => Err(SasError::runtime(format!(
+            "IML: the {} subroutine is not yet implemented.",
+            other.to_uppercase()
         ))),
     }
+}
+
+/// Sépare un nom canonique `LIB.NAME` (ou `NAME`) en (libref, table) MAJUSCULES.
+/// Défaut WORK si non qualifié.
+fn split_ds_name(name: &str) -> (String, String) {
+    match name.split_once('.') {
+        Some((lib, tbl)) => (lib.to_uppercase(), tbl.to_uppercase()),
+        None => ("WORK".to_string(), name.to_uppercase()),
+    }
+}
+
+/// `CREATE ds FROM mat [COLNAME=cn];` — prépare le tampon (colonnes seulement).
+fn exec_create(
+    ds: &str,
+    from: &str,
+    colname: Option<&ImlExpr>,
+    env: &mut Env,
+) -> Result<()> {
+    let mat = env
+        .vars
+        .get(&from.to_ascii_uppercase())
+        .cloned()
+        .ok_or_else(|| SasError::runtime(format!(
+            "IML: matrix {} has not been set to a value.",
+            from.to_uppercase()
+        )))?;
+    let ncol = dims(&mat).1;
+    let colnames: Vec<String> = match colname {
+        Some(ImlExpr::StrList(s)) => s.iter().map(|x| x.to_string()).collect(),
+        Some(ImlExpr::Var(v)) => env
+            .str_vars
+            .get(&v.to_ascii_uppercase())
+            .cloned()
+            .ok_or_else(|| SasError::runtime(format!(
+                "IML: COLNAME= must reference a string list; '{}' is not a character matrix.",
+                v.to_uppercase()
+            )))?,
+        Some(_) => {
+            return Err(SasError::runtime(
+                "IML: COLNAME= must be a string literal list, e.g. {\"x\" \"y\"}.",
+            ));
+        }
+        None => (1..=ncol).map(|j| format!("COL{j}")).collect(),
+    };
+    if colnames.len() != ncol {
+        return Err(SasError::runtime(format!(
+            "IML: COLNAME= has {} names but the matrix has {} columns.",
+            colnames.len(),
+            ncol
+        )));
+    }
+    env.open_writes.insert(
+        ds.to_uppercase(),
+        OpenWrite { colnames, rows: Vec::new() },
+    );
+    Ok(())
+}
+
+/// `APPEND FROM mat;` — ajoute les lignes de `mat` au (seul) dataset ouvert.
+fn exec_append(from: &str, env: &mut Env) -> Result<()> {
+    let mat = env
+        .vars
+        .get(&from.to_ascii_uppercase())
+        .cloned()
+        .ok_or_else(|| SasError::runtime(format!(
+            "IML: matrix {} has not been set to a value.",
+            from.to_uppercase()
+        )))?;
+    // SAS APPEND s'applique au dataset courant en écriture. Ici on exige qu'il
+    // y en ait exactement un d'ouvert.
+    if env.open_writes.len() != 1 {
+        return Err(SasError::runtime(
+            "IML: APPEND requires exactly one open output data set (use CREATE first).",
+        ));
+    }
+    let key = env.open_writes.keys().next().cloned().unwrap();
+    let buf = env.open_writes.get_mut(&key).unwrap();
+    let ncol = buf.colnames.len();
+    for row in &mat {
+        if row.len() != ncol {
+            return Err(SasError::runtime(format!(
+                "IML: APPEND row has {} columns but the data set expects {}.",
+                row.len(),
+                ncol
+            )));
+        }
+        buf.rows.push(row.clone());
+    }
+    Ok(())
+}
+
+/// `CLOSE ds;` — écrit le dataset accumulé dans la bibliothèque cible.
+fn exec_close(ds: &str, env: &mut Env, session: &mut Session) -> Result<()> {
+    let key = ds.to_uppercase();
+    if let Some(buf) = env.open_writes.remove(&key) {
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::value::VarType;
+        use polars::prelude::*;
+        let (libref, table) = split_ds_name(&key);
+        let ncol = buf.colnames.len();
+        let nrow = buf.rows.len();
+        // Construire une colonne f64 par variable.
+        let mut columns: Vec<Column> = Vec::with_capacity(ncol);
+        let mut vars: Vec<VarMeta> = Vec::with_capacity(ncol);
+        for j in 0..ncol {
+            let col: Vec<f64> = (0..nrow).map(|i| buf.rows[i][j]).collect();
+            columns.push(Series::new(buf.colnames[j].as_str().into(), col).into());
+            vars.push(VarMeta {
+                name: buf.colnames[j].clone(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            });
+        }
+        let df = DataFrame::new(columns)?;
+        let out_ds = SasDataset { df, vars };
+        let display = format!("{libref}.{table}");
+        session.libs.get(&libref)?.write(&table, &out_ds)?;
+        session.last_dataset = Some(display.clone());
+        session.log.note(&format!(
+            "The data set {display} has {nrow} observations and {ncol} variables."
+        ));
+        return Ok(());
+    }
+    // Fermeture d'un dataset ouvert en lecture : best-effort.
+    env.open_reads.remove(&key);
+    Ok(())
+}
+
+/// `USE ds;` — ouvre un dataset en lecture (marque l'ouverture).
+fn exec_use(ds: &str, env: &mut Env, session: &mut Session) -> Result<()> {
+    let key = ds.to_uppercase();
+    let (libref, table) = split_ds_name(&key);
+    let provider = session.libs.get(&libref)?;
+    if !provider.exists(&table) {
+        return Err(SasError::runtime(format!(
+            "IML: data set {libref}.{table} does not exist."
+        )));
+    }
+    env.open_reads.insert(key);
+    Ok(())
+}
+
+/// `READ ALL VAR {vars} INTO mat;` — lit les colonnes demandées dans une matrice.
+fn exec_read_all(
+    vars: &[String],
+    into: &str,
+    env: &mut Env,
+    session: &mut Session,
+) -> Result<()> {
+    use crate::procs::common::decode_column;
+    use crate::value::Value;
+    // Choisir le dataset ouvert en lecture (exactement un attendu).
+    if env.open_reads.len() != 1 {
+        return Err(SasError::runtime(
+            "IML: READ requires exactly one open input data set (use USE first).",
+        ));
+    }
+    let key = env.open_reads.iter().next().cloned().unwrap();
+    let (libref, table) = split_ds_name(&key);
+    let (ds, notes) = session.libs.get(&libref)?.read(&table)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+    // Indices des colonnes demandées.
+    let mut col_idx = Vec::with_capacity(vars.len());
+    for vname in vars {
+        let idx = ds
+            .vars
+            .iter()
+            .position(|v| v.name.eq_ignore_ascii_case(vname))
+            .ok_or_else(|| SasError::runtime(format!(
+                "IML: variable {} not found in data set {libref}.{table}.",
+                vname
+            )))?;
+        col_idx.push(idx);
+    }
+    let nrow = ds.n_obs();
+    // Décoder chaque colonne demandée en f64.
+    let mut cols: Vec<Vec<f64>> = Vec::with_capacity(col_idx.len());
+    for &ci in &col_idx {
+        let decoded = decode_column(&ds, ci)?;
+        let mut c = Vec::with_capacity(nrow);
+        for v in decoded {
+            let x = match v {
+                Value::Num(x) => x,
+                Value::Missing(_) => f64::NAN,
+                Value::Char(_) => {
+                    return Err(SasError::runtime(format!(
+                        "IML: variable {} is character; READ INTO requires numeric variables.",
+                        ds.vars[ci].name
+                    )));
+                }
+            };
+            c.push(x);
+        }
+        cols.push(c);
+    }
+    // Assembler la matrice nrow × ncol.
+    let mut mat = vec![vec![0.0; col_idx.len()]; nrow];
+    for (j, c) in cols.iter().enumerate() {
+        for (i, &x) in c.iter().enumerate() {
+            mat[i][j] = x;
+        }
+    }
+    env.vars.insert(into.to_ascii_uppercase(), mat);
+    Ok(())
 }
 
 /// Une matrice est « vraie » si elle est 1×1 et non nulle (sémantique SAS IML
@@ -1227,9 +1859,9 @@ fn render_matrix(name: &str, m: &Matrix, session: &mut Session) {
 
 /// Exécute un programme IML.
 pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
-    let mut env = Env { vars: HashMap::new() };
+    let mut env = Env::new();
     let mut ops: Vec<PrintOp> = Vec::new();
-    exec_stmts(&prog.stmts, &mut env, &mut ops)?;
+    exec_stmts(&prog.stmts, &mut env, &mut ops, session)?;
 
     session.listing.page_header();
     let ls = session.listing.ls();
@@ -1256,20 +1888,36 @@ pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn test_session() -> Session {
+        use std::path::PathBuf;
+        Session::new(None, PathBuf::from("."), true).unwrap()
+    }
+
     fn eval_one(src: &str) -> Matrix {
         // Enveloppe : assigne à `r` et renvoie sa valeur.
         let prog = parse_body(&format!("r = {src};")).unwrap();
-        let mut env = Env { vars: HashMap::new() };
+        let mut env = Env::new();
         let mut ops = Vec::new();
-        exec_stmts(&prog.stmts, &mut env, &mut ops).unwrap();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
         env.vars.get("R").unwrap().clone()
+    }
+
+    fn eval_try(src: &str) -> Result<Matrix> {
+        let prog = parse_body(&format!("r = {src};"))?;
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session)?;
+        Ok(env.vars.get("R").unwrap().clone())
     }
 
     fn run_get(src: &str, var: &str) -> Matrix {
         let prog = parse_body(src).unwrap();
-        let mut env = Env { vars: HashMap::new() };
+        let mut env = Env::new();
         let mut ops = Vec::new();
-        exec_stmts(&prog.stmts, &mut env, &mut ops).unwrap();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
         env.vars.get(&var.to_ascii_uppercase()).unwrap().clone()
     }
 
@@ -1391,5 +2039,171 @@ mod tests {
     #[test]
     fn negative_and_decimal_literals() {
         assert_eq!(eval_one("{1.5 -2, 0 3.7}"), vec![vec![1.5, -2.0], vec![0.0, 3.7]]);
+    }
+
+    // ───────────────────── M28a.3 : algèbre linéaire ─────────────────────
+
+    fn approx(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn inv_2x2() {
+        let m = eval_one("inv({4 7, 2 6})");
+        // inv = {0.6 -0.7, -0.2 0.4}
+        assert!(approx(m[0][0], 0.6, 1e-3), "m={m:?}");
+        assert!(approx(m[0][1], -0.7, 1e-3), "m={m:?}");
+        assert!(approx(m[1][0], -0.2, 1e-3), "m={m:?}");
+        assert!(approx(m[1][1], 0.4, 1e-3), "m={m:?}");
+    }
+
+    #[test]
+    fn solve_diagonal() {
+        let m = eval_one("solve({2 0, 0 3}, {6, 9})");
+        // x = {3, 3} (column vector)
+        assert_eq!(dims(&m), (2, 1));
+        assert!(approx(m[0][0], 3.0, 1e-3), "m={m:?}");
+        assert!(approx(m[1][0], 3.0, 1e-3), "m={m:?}");
+    }
+
+    #[test]
+    fn eigval_symmetric() {
+        let m = eval_one("eigval({4 2, 2 1})");
+        // {5, 0} descending, column vector
+        assert_eq!(dims(&m), (2, 1));
+        assert!(approx(m[0][0], 5.0, 1e-3), "m={m:?}");
+        assert!(approx(m[1][0], 0.0, 1e-3), "m={m:?}");
+    }
+
+    #[test]
+    fn eigval_nonsymmetric_errors() {
+        let e = eval_try("eigval({1 2, 3 4})");
+        assert!(e.is_err());
+        let msg = e.err().unwrap().to_string();
+        assert!(msg.contains("symmetric"), "msg={msg}");
+    }
+
+    #[test]
+    fn chol_upper() {
+        let m = eval_one("chol({4 2, 2 3})");
+        // U = {2 1, 0 1.4142}
+        assert!(approx(m[0][0], 2.0, 1e-3), "m={m:?}");
+        assert!(approx(m[0][1], 1.0, 1e-3), "m={m:?}");
+        assert!(approx(m[1][0], 0.0, 1e-3), "m={m:?}");
+        assert!(approx(m[1][1], std::f64::consts::SQRT_2, 1e-3), "m={m:?}");
+    }
+
+    #[test]
+    fn chol_not_spd_errors() {
+        // {1 2, 2 1} is indefinite (det = 1 - 4 = -3 < 0).
+        let e = eval_try("chol({1 2, 2 1})");
+        assert!(e.is_err(), "expected error for non-SPD matrix");
+    }
+
+    #[test]
+    fn call_qr_dimensions() {
+        let prog = parse_body("call qr(q, r, {1 2, 3 4, 5 6});").unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
+        let q = env.vars.get("Q").unwrap();
+        let r = env.vars.get("R").unwrap();
+        assert_eq!(dims(q), (3, 2), "Q dims");
+        assert_eq!(dims(r), (2, 2), "R dims");
+        // Q*R ≈ original.
+        let qr = eval_binop(ImlOp::Mul, q, r).unwrap();
+        assert!(approx(qr[0][0], 1.0, 1e-6) && approx(qr[2][1], 6.0, 1e-6), "qr={qr:?}");
+    }
+
+    #[test]
+    fn call_svdcd_singular_values() {
+        let prog = parse_body("call svdcd(u, d, v, {1 2, 3 4});").unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
+        let d = env.vars.get("D").unwrap();
+        assert_eq!(dims(d), (2, 1), "D should be a column vector");
+        assert!(approx(d[0][0], 5.4651, 1e-2), "σ1={}", d[0][0]);
+        assert!(approx(d[1][0], 0.3660, 1e-2), "σ2={}", d[1][0]);
+        // Reconstruction: A = U diag(D) V'.
+        let u = env.vars.get("U").unwrap().clone();
+        let vmat = env.vars.get("V").unwrap().clone();
+        let ud: Matrix = u
+            .iter()
+            .map(|row| row.iter().enumerate().map(|(j, &x)| x * d[j][0]).collect())
+            .collect();
+        let recon = eval_binop(ImlOp::Mul, &ud, &transpose(&vmat)).unwrap();
+        assert!(approx(recon[0][0], 1.0, 1e-4) && approx(recon[1][1], 4.0, 1e-4), "recon={recon:?}");
+    }
+
+    #[test]
+    fn deferred_eigvec_and_det_errors() {
+        assert!(eval_try("eigvec({1 0, 0 1})").is_err());
+        assert!(eval_try("det({1 0, 0 1})").is_err());
+    }
+
+    // ───────────────────── M28a.4 : I/O datasets ─────────────────────
+
+    #[test]
+    fn create_append_close_writes_dataset() {
+        let src = r#"
+            mat_out = {1 10, 2 20, 3 30};
+            cn = {"id" "val"};
+            create work.iml_out from mat_out[colname=cn];
+            append from mat_out;
+            close work.iml_out;
+        "#;
+        let prog = parse_body(src).unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
+
+        let (ds, _) = session.libs.get("WORK").unwrap().read("IML_OUT").unwrap();
+        assert_eq!(ds.n_obs(), 3, "expected 3 rows");
+        let names: Vec<String> = ds.vars.iter().map(|v| v.name.to_lowercase()).collect();
+        assert_eq!(names, vec!["id".to_string(), "val".to_string()]);
+    }
+
+    #[test]
+    fn use_read_all_close_reads_dataset() {
+        // First write a dataset, then USE/READ it back.
+        let mut session = test_session();
+        {
+            use crate::dataset::{SasDataset, VarMeta};
+            use crate::value::VarType;
+            use polars::prelude::*;
+            let df = df!["x" => [1.0_f64, 2.0, 3.0], "y" => [10.0_f64, 20.0, 30.0]].unwrap();
+            let vars = vec![
+                VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
+                VarMeta { name: "y".into(), ty: VarType::Num, length: 8, format: None, label: None },
+            ];
+            session.libs.get("WORK").unwrap().write("IML_IN", &SasDataset { df, vars }).unwrap();
+        }
+        let src = r#"
+            use work.iml_in;
+            read all var {"x" "y"} into m;
+            close work.iml_in;
+        "#;
+        let prog = parse_body(src).unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
+        let m = env.vars.get("M").unwrap();
+        assert_eq!(dims(m), (3, 2), "m={m:?}");
+        assert!(approx(m[0][0], 1.0, 1e-9) && approx(m[2][1], 30.0, 1e-9), "m={m:?}");
+    }
+
+    #[test]
+    fn read_next_deferred_error() {
+        let prog = parse_body("read next into m;").unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        let e = exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session);
+        assert!(e.is_err());
+        assert!(e.err().unwrap().to_string().contains("READ NEXT"));
     }
 }

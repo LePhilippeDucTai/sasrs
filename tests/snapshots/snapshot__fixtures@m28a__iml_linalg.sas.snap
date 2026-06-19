@@ -1,0 +1,107 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m28a/iml_linalg.sas
+---
+==== LOG ====
+
+1     title 'PROC IML: linear algebra and I/O';
+
+2     proc iml;
+3       /* INV */
+4       a = {4 7, 2 6};
+5       ai = inv(a);    /* det=10 -> {0.6 -0.7, -0.2 0.4} */
+6       print ai;
+7     
+8       /* SOLVE : {2 0, 0 3} * x = {6, 9} -> x = {3, 3} */
+9       b_mat = {2 0, 0 3};
+10      rhs = {6, 9};
+11      x = solve(b_mat, rhs);    /* {3, 3} */
+12      print x;
+13    
+14      /* EIGVAL (symmetric) */
+15      s = {4 2, 2 1};
+16      ev = eigval(s);   /* lambda1=5, lambda2=0 descending */
+17      print ev;
+18    
+19      /* CHOL */
+20      c_mat = {4 2, 2 3};
+21      u = chol(c_mat);  /* upper U : {2 1, 0 1.4142} */
+22      print u;
+23    
+24      /* CALL QR */
+25      q_in = {1 2, 3 4, 5 6};
+26      call qr(q_out, r_out, q_in);
+27      print q_out r_out;
+28    
+29      /* CALL SVDCD */
+30      sv_in = {1 2, 3 4};
+31      call svdcd(u_out, d_out, v_out, sv_in);
+32      print d_out;   /* singular values descending */
+33    
+34      /* I/O: create a dataset and write it */
+35      mat_out = {1 10, 2 20, 3 30};
+36      cn = {"id" "val"};
+37      create work.iml_out from mat_out[colname=cn];
+38      append from mat_out;
+39      close work.iml_out;
+40    
+41    quit;
+NOTE: The data set WORK.IML_OUT has 3 observations and 2 variables.
+NOTE: PROCEDURE IML used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+42    title;
+
+==== LISTING ====
+                                PROC IML: linear algebra and I/O
+
+                                       The IML Procedure
+
+AI
+
+      COL1  COL2
+
+ROW1   0.6  -0.7
+ROW2  -0.2   0.4
+
+X
+
+ROW1     3
+ROW2     3
+
+EV
+
+ROW1     5
+ROW2     0
+
+U
+
+      COL1    COL2
+
+ROW1     2       1
+ROW2     0  1.4142
+
+Q_OUT
+
+         COL1    COL2
+
+ROW1   -0.169  0.8971
+ROW2  -0.5071   0.276
+ROW3  -0.8452  -0.345
+
+R_OUT
+
+         COL1     COL2
+
+ROW1  -5.9161  -7.4374
+ROW2        0   0.8281
+
+D_OUT
+
+ROW1  5.465
+ROW2  0.366
+
+
+==== EXIT 0 ====

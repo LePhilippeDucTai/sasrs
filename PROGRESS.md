@@ -303,11 +303,11 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 ## M28a — PROC IML (Interactive Matrix Language)
 Langage matriciel pour calcul scientifique et développement d'algorithmes personnalisés. Exécution d'énoncés matriciels dans un environnement interactif, sortie vers datasets (OUTMATRIX).
 
-- [ ] M28a.1 — création/indexation/opérations matricielles : `X = {...}` (création littérale), `A[i,j]` (indexation), `A + B`, `A * B`, `A @ B` (multiplication matricielle), `A'` (transpose), `DIM(A)` (dimensions), `NROW`/`NCOL` (Opus, moyen)
-- [ ] M28a.2 — structures de contrôle + fonctions statistiques : `IF cond THEN ... ; ELSE ... ;`, `DO i = ... TO ...; ... END;`, `DO WHILE/UNTIL (cond); ... END;`, `PRINT`, `MEAN`, `SUM`, `STD`, `MIN`, `MAX` (Opus, moyen)
-- [ ] M28a.3 — algèbre linéaire et décompositions : `SOLVE(A, b)` (système linéaire), `INV(A)` (inversion), `EIGVAL(A)` (valeurs propres), `CHOL(A)` (Cholesky), `QR(A)` (factorisation QR), `SVDCD(A)` (SVD) (Fable, élevé)
-- [ ] M28a.4 — I/O et persistance : `CREATE outds FROM X[...]` (écriture matrice → dataset), `APPEND FROM Y` (ajout), `CLOSE outds`, `READ NEXT INTO` (lecture) (Sonnet, moyen)
-- [ ] Fixtures `m28a/` + snapshots. DoD
+- [x] M28a.1 — création/indexation/opérations matricielles : `X = {...}` (création littérale), `A[i,j]` (indexation), `A + B`, `A * B`, `A @ B` (multiplication matricielle), `A'` (transpose), `DIM(A)` (dimensions), `NROW`/`NCOL` (Opus, moyen)
+- [x] M28a.2 — structures de contrôle + fonctions statistiques : `IF cond THEN ... ; ELSE ... ;`, `DO i = ... TO ...; ... END;`, `DO WHILE/UNTIL (cond); ... END;`, `PRINT`, `MEAN`, `SUM`, `STD`, `MIN`, `MAX` (Opus, moyen)
+- [x] M28a.3 — algèbre linéaire et décompositions : `SOLVE(A, b)` (système linéaire), `INV(A)` (inversion), `EIGVAL(A)` (valeurs propres, symétrique), `CHOL(A)` (Cholesky, retourne U upper), `CALL QR(Q, R, A)` (factorisation QR), `CALL SVDCD(U, D, V, A)` (SVD via ATA-Jacobi). Différés : `EIGVEC`, `DET`, `CALL EIGEN` (Fable, élevé)
+- [x] M28a.4 — I/O et persistance : `CREATE outds FROM X[COLNAME=]` (écriture matrice → dataset), `APPEND FROM Y` (ajout), `CLOSE outds`, `USE` + `READ ALL VAR {..} INTO mat` (lecture). Différés : `READ NEXT`, `WHERE`, `LOAD`/`STORE`/`SHOW` (Sonnet, moyen)
+- [x] Fixtures `m28a/` + snapshots. DoD
 
 ## PHASE D — graphiques (images via `plotters`, dépend de M22)
 
