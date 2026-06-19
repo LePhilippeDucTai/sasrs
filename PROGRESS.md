@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M28** (modèles mixtes). M1–M27 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M28a** (PROC IML). M1–M28 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -296,8 +296,9 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 ## M28 — modèles mixtes (le plus difficile, en dernier)
 - [x] M28.1 — `PROC MIXED` (effets fixes + aléatoires, REML/ML itératif, structures VC/CS/AR(1)/UN, SOLUTION, LSMEANS) (Fable, très élevé)
   — `src/procs/mixed.rs` (parser + executor) : DATA=, METHOD=REML (défaut)/ML, CLASS, MODEL dep = / SOLUTION, RANDOM INTERCEPT / SUBJECT= TYPE=VC/CS ; algorithme EM/closed-form REML et ML pour random intercept model ; design balancé → solution fermée (méthode des moments) ; déséquilibré → recherche golden-section sur λ=σ²_u/σ²_e ; effets fixes β̂ et SE via (X'V⁻¹X)⁻¹ ; ddfm=Contain (df = nb sujets − nb params fixes) ; 8 sections listing (Model Info, Class Level Info, Dimensions, Nobs, Iteration History, Covariance Parameter Estimates, Fit Statistics, Solution for Fixed Effects) ; TYPE=AR(1)/UN → erreur propre ; LSMEANS/ESTIMATE/CONTRAST/REPEATED/COVTEST → NOTE non implémenté. **Oracles validés** : design balancé 2 sujets×2 obs (y=1,3,5,7) : σ²_u_REML=7.0000 ✓, σ²_e=2.0000 ✓, μ̂=4.0000 ✓, SE=2.0000 ✓, df=1 ✓, p=0.2952 ✓ ; ML : σ²_u_ML=3.0000 ✓ (≠ REML → preuve restriction REML). Fixture `tests/fixtures/m28/mixed.sas` + snapshot.
-- [ ] M28.2 — `PROC GLIMMIX` (modèles mixtes généralisés, pseudo-vraisemblance) (Fable, très élevé)
-- [ ] Fixtures `m28/` + snapshots. DoD
+- [x] M28.2 — `PROC GLIMMIX` (modèles mixtes généralisés, pseudo-vraisemblance) (Fable, très élevé)
+  — `src/procs/glimmix.rs` : RSPL (Residual Pseudo-Likelihood = PQL de Breslow-Clayton 1993) ; DIST=NORMAL/POISSON/BINARY (BINOMIAL) + LINK=IDENTITY/LOG/LOGIT ; RANDOM INTERCEPT / SUBJECT=var TYPE=VC ; FREQ statement ; 3-way dispatch : NORMAL/IDENTITY+random → solveur MIXED (RSPL=REML, solution exacte) ; POISSON+LOG → IRLS pondéré (poids=μ, réponse de travail z=η+(y-μ)/μ) ; BINARY+LOGIT → IRLS logistique (poids=μ(1-μ), z=η+(y-μ)/(μ(1-μ))) ; METHOD=RSPL (défaut) ; METHOD=LAPLACE/QUAD → erreur propre ; DIST=GAMMA → erreur propre ; TYPE=AR(1)/UN → erreur propre ; ESTIMATE/CONTRAST/LSMEANS/WEIGHT → NOTE non implémenté. **Oracles cross-validés** : Poisson β₀=0.6931 SE=0.4082 ✓, β₁=0.9163 SE=0.4830 ✓ (= GENMOD) ; Binary+FREQ β₀=-0.9163 SE=0.3742 ✓, β₁=2.3026 SE=0.6245 ✓, DF=58 ✓ (= LOGISTIC) ; Normal+random σ²_u=7.0000 ✓, σ²_e=2.0000 ✓, μ̂=4.0000 SE=2.0000 ✓, -2RLPL=14.0588 ✓ (= MIXED). Fixture `tests/fixtures/m28/glimmix.sas` + snapshot. 11 tests unitaires.
+- [x] Fixtures `m28/` + snapshots. DoD : `tests/fixtures/m28/mixed.sas` + `tests/fixtures/m28/glimmix.sas` + 2 snapshots vérifiés à la main (oracle REML σ²_u=7, ML σ²_u=3 ; GLIMMIX 3-way cross-check). `cargo test -p sasrs` : 2169 tests, 0 échec.
 
 ## M28a — PROC IML (Interactive Matrix Language)
 Langage matriciel pour calcul scientifique et développement d'algorithmes personnalisés. Exécution d'énoncés matriciels dans un environnement interactif, sortie vers datasets (OUTMATRIX).
