@@ -1,0 +1,265 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m28/glimmix.sas
+---
+==== LOG ====
+
+1     title 'PROC GLIMMIX: Poisson, Binary, Normal+random (cross-checks)';
+
+2     data work.pois;
+3       input y x;
+4     datalines;
+5     1 0
+6     2 0
+7     3 0
+8     4 1
+9     5 1
+10    6 1
+11    ;
+NOTE: The data set WORK.POIS has 6 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    data work.counts;
+13      input y x count;
+14    datalines;
+15    1 1 20
+16    1 0 10
+17    0 1  5
+18    0 0 25
+19    ;
+NOTE: The data set WORK.COUNTS has 4 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+20    data work.balanced;
+21      input subj $ y;
+22    datalines;
+23    A 1
+24    A 3
+25    B 5
+26    B 7
+27    ;
+NOTE: The data set WORK.BALANCED has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    proc glimmix data=work.pois;
+29      model y = x / dist=poisson link=log solution;
+30    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+31    proc glimmix data=work.counts;
+32      model y(event='1') = x / dist=binary link=logit solution;
+33      freq count;
+34    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+35    proc glimmix data=work.balanced;
+36      class subj;
+37      model y = / dist=normal link=identity solution;
+38      random intercept / subject=subj type=vc;
+39    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+40    title;
+
+==== LISTING ====
+                  PROC GLIMMIX: Poisson, Binary, Normal+random (cross-checks)
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                            Data Set                     WORK.POIS
+                            Response Variable            y
+                            Response Distribution        Poisson
+                            Link Function                Log
+                            Variance Function            Default
+                            Estimation Technique         Residual PL
+                            Degrees of Freedom Method    Contain
+
+                                     Number of Observations
+
+
+
+                              Number of Observations Read        6
+                              Number of Observations Used        6
+                              Number of Observations Not Used    0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1       1.4000
+                        1           0              2       1.4000    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                         Fit Statistics
+
+
+
+                                Generalized Chi-Square    1.4000
+                                Gener. Chi-Square / DF    0.3500
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1         4       2.88    0.1648
+                       x                 1         4       3.60    0.1307
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept      0.6931            0.4082     4       1.70      0.1648
+              x              0.9163            0.4830     4       1.90      0.1307
+
+
+                  PROC GLIMMIX: Poisson, Binary, Normal+random (cross-checks)
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                            Data Set                     WORK.COUNTS
+                            Response Variable            y
+                            Response Distribution        Binary
+                            Link Function                Logit
+                            Variance Function            Default
+                            Estimation Technique         Residual PL
+                            Degrees of Freedom Method    Contain
+
+                                     Number of Observations
+
+
+
+                             Number of Observations Read         4
+                             Number of Observations Used        60
+                             Number of Observations Not Used     0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1      60.0000
+                        1           0              2      60.0000    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                         Fit Statistics
+
+
+
+                               Generalized Chi-Square    60.0000
+                               Gener. Chi-Square / DF     1.0345
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1        58       6.00    0.0174
+                       x                 1        58      13.59    0.0005
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept     -0.9163            0.3742    58      -2.45      0.0174
+              x              2.3026            0.6245    58       3.69      0.0005
+
+
+                  PROC GLIMMIX: Poisson, Binary, Normal+random (cross-checks)
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                           Data Set                     WORK.BALANCED
+                           Response Variable            y
+                           Response Distribution        Normal
+                           Link Function                Identity
+                           Variance Function            Default
+                           Estimation Technique         Residual PL
+                           Degrees of Freedom Method    Contain
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   subj          2    A B
+
+                                           Dimensions
+
+
+
+                                 Covariance Parameters       2
+                                 Columns in X                1
+                                 Columns in Z Per Subject    1
+                                 Subjects                    2
+                                 Max Obs Per Subject         2
+
+                                     Number of Observations
+
+
+
+                              Number of Observations Read        4
+                              Number of Observations Used        4
+                              Number of Observations Not Used    0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1      14.0588
+                        1           0              2      14.0588    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                 Covariance Parameter Estimates
+
+                                Cov Parm     Subject    Estimate
+
+                                Intercept    subj         7.0000
+                                Residual                  2.0000
+
+                                         Fit Statistics
+
+
+
+                            -2 Res Log Pseudo-Likelihood    14.0588
+                            Generalized Chi-Square          20.0000
+                            Gener. Chi-Square / DF           6.6667
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1         1       4.00    0.2952
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept      4.0000            2.0000     1       2.00      0.2952
+
+
+==== EXIT 0 ====

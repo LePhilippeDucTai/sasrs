@@ -18,6 +18,7 @@ pub mod append;
 pub mod anova;
 pub mod factor;
 pub mod genmod;
+pub mod glimmix;
 pub mod glm;
 pub mod logistic;
 pub mod catalog;
@@ -91,6 +92,7 @@ pub enum ProcAst {
     Fastclus(fastclus::FastclusAst),
     Discrim(discrim::DiscrimAst),
     Mixed(mixed::MixedAst),
+    Glimmix(glimmix::GlimmixAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -255,6 +257,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = mixed::parse(ts)?;
             Ok(ProcAst::Mixed(ast))
         }
+        "glimmix" => {
+            let ast = glimmix::parse(ts)?;
+            Ok(ProcAst::Glimmix(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -308,6 +314,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Fastclus(a) => fastclus::execute(a, session),
         ProcAst::Discrim(a) => discrim::execute(a, session),
         ProcAst::Mixed(a) => mixed::execute(a, session),
+        ProcAst::Glimmix(a) => glimmix::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).
