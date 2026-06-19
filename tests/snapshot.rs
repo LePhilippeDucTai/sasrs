@@ -24,7 +24,12 @@ fn fixtures() {
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("sgplot") || n.starts_with("proc_plot"))
+            .is_some_and(|n| {
+                n.starts_with("sgplot")
+                    || n.starts_with("proc_plot")
+                    || n.starts_with("gplot")
+                    || n.starts_with("gchart")
+            })
         {
             return;
         }
