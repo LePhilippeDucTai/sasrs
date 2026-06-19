@@ -34,12 +34,15 @@ pub mod export;
 pub mod fastclus;
 pub mod format;
 pub mod freq;
+pub mod gchart;
+pub mod gplot;
 pub mod iml;
 pub mod import;
 pub mod means;
 pub mod mixed;
 pub mod npar1way;
 pub mod options;
+pub mod plot;
 pub mod princomp;
 pub mod print;
 pub mod printto;
@@ -97,6 +100,9 @@ pub enum ProcAst {
     Glimmix(glimmix::GlimmixAst),
     Iml(iml::ImlProgram),
     Sgplot(sgplot::SgplotAst),
+    Plot(plot::PlotAst),
+    Gplot(gplot::GplotAst),
+    Gchart(gchart::GchartAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -273,6 +279,18 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = sgplot::parse(ts)?;
             Ok(ProcAst::Sgplot(ast))
         }
+        "plot" => {
+            let ast = plot::parse(ts)?;
+            Ok(ProcAst::Plot(ast))
+        }
+        "gplot" => {
+            let ast = gplot::parse(ts)?;
+            Ok(ProcAst::Gplot(ast))
+        }
+        "gchart" => {
+            let ast = gchart::parse(ts)?;
+            Ok(ProcAst::Gchart(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -329,6 +347,9 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Glimmix(a) => glimmix::execute(a, session),
         ProcAst::Iml(a) => iml::execute(a, session),
         ProcAst::Sgplot(a) => sgplot::execute(a, session),
+        ProcAst::Plot(a) => plot::execute(a, session),
+        ProcAst::Gplot(a) => gplot::execute(a, session),
+        ProcAst::Gchart(a) => gchart::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

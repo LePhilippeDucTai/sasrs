@@ -1,0 +1,74 @@
+---
+source: tests/snapshot.rs
+assertion_line: 50
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m30/gplot_gchart.sas
+---
+==== LOG ====
+
+1     title 'M30.1: PROC GPLOT + PROC GCHART (legacy graphics)';
+
+2     data work.xy;
+3       input x y;
+4     datalines;
+5     1 2
+6     2 4
+7     3 3
+8     4 5
+9     5 6
+10    ;
+NOTE: The data set WORK.XY has 5 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    data work.cats;
+12      input category $ count;
+13    datalines;
+14    A 10
+15    B 25
+16    C 15
+17    D 30
+18    ;
+NOTE: The data set WORK.CATS has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    proc gplot data=work.xy;
+20      plot y*x;
+21    run;
+NOTE: ODS GRAPHICS is not enabled. Use "ods graphics on;" before PROC GPLOT to generate images.
+NOTE: PROCEDURE GPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+22    ods graphics on;
+NOTE: ODS GRAPHICS ON.
+
+23    proc gplot data=work.xy;
+24      plot y*x;
+25    run;
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: PROCEDURE GPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+26    proc gchart data=work.cats;
+27      vbar category / sumvar=count;
+28      pie category;
+29    run;
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: PIE chart deferred in PROC GCHART.
+NOTE: PROCEDURE GCHART used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+30    ods graphics off;
+NOTE: ODS GRAPHICS OFF.
+
+31    title;
+
+==== LISTING ====
+
+==== EXIT 0 ====
