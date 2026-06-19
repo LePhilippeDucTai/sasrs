@@ -357,7 +357,7 @@ pub fn eigenvectors_jacobi(a: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>)> 
 // ───────────────────────── Helper functions ───────────────────────────
 
 /// Transpose a matrix.
-fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+pub(crate) fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     if a.is_empty() {
         return vec![];
     }
@@ -372,7 +372,7 @@ fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
 }
 
 /// Matrix-vector multiplication: y = A @ x.
-fn matrix_vec_mult(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
+pub(crate) fn matrix_vec_mult(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
     let mut y = vec![0.0; a.len()];
     for (i, row) in a.iter().enumerate() {
         for (j, &val) in row.iter().enumerate() {
@@ -383,7 +383,7 @@ fn matrix_vec_mult(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
 }
 
 /// Matrix-matrix multiplication: C = A @ B.
-fn matrix_mult(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+pub(crate) fn matrix_mult(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let m = a.len();
     let n = b[0].len();
     let k = b.len();

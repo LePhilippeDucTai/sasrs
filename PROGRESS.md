@@ -271,7 +271,8 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
   — `ttest.sas` (1-sample height H0=60 : t=1.9867/df=18/p=0.0624 ; 2-sample height+weight by sex Pooled+Satterthwaite+F-equality) ; `npar1way.sas` (Wilcoxon height W=73/E=90/σ=12.24/Z=−1.389/p=0.165, weight W=71/Z=−1.554/p=0.120 — vérifiés à la main rangs midrank et tie_factor). m1–m23 octet-identiques. **M24 TERMINÉ.**
 
 ## M25 — modèle linéaire
-- [ ] M25.1 — `PROC REG` (OLS via QR, MODEL, R²/F/t, OUTPUT OUT= résidus/prédits, TEST, intervalles) (Fable, élevé)
+- [x] M25.1 — `PROC REG` (OLS via QR, MODEL, R²/F/t, OUTPUT OUT= résidus/prédits, TEST, intervalles) (Fable, élevé)
+  — `src/procs/reg.rs` (parser + executor) : DATA=, MODEL dep = x1 x2 .../NOINT(déf.)/NOPRINT, OUTPUT OUT= PREDICTED= RESIDUAL= ; listwise deletion des missings ; ANOVA table (Model/Error/Corrected Total, SSM/SSE/SST, MSM/MSE, F, Pr>F via `f_cdf`) ; fit statistics (Root MSE, R², Adj R², C.V., Dep Mean) ; Parameter Estimates (Intercept + régresseurs, β̂, SE via (X'X)⁻¹ diagonal × MSE, t, Pr>|t|) ; OUTPUT dataset complete-cases + colonnes PREDICTED/RESIDUAL. `src/stat/linalg.rs` : `transpose`/`matrix_mult`/`matrix_vec_mult` rendus `pub(crate)` (résout les warnings dead-code de M24.1). Validé sur d.class `model weight=height` : R²=0.7705 (=0.87779²), β₁=3.89903, t=7.55, p<.0001. Différés documentés : NOINT (error propre), TEST statement, CLI/CLM intervalles, BY. +9 tests unitaires (2062→2071 lib), fixture `tests/fixtures/m25/reg.sas` + snapshot.
 - [ ] M25.2 — `PROC ANOVA` (plans équilibrés, CLASS, MEANS, types de SC) (Opus, élevé)
 - [ ] M25.3 — `PROC GLM` (codage CLASS, SC type I/III, LSMEANS, contrastes, ESTIMATE) (Fable, élevé)
 - [ ] Fixtures `m25/` + snapshots. DoD

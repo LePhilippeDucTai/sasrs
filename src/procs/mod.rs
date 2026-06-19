@@ -35,6 +35,7 @@ pub mod report;
 pub mod sort;
 pub mod tabulate;
 pub mod transpose;
+pub mod reg;
 pub mod ttest;
 pub mod univariate;
 
@@ -67,6 +68,7 @@ pub enum ProcAst {
     Catalog(catalog::CatalogAst),
     TTest(ttest::TTestAst),
     Npar1way(npar1way::NparAst),
+    Reg(reg::RegAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -183,6 +185,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = npar1way::parse(ts)?;
             Ok(ProcAst::Npar1way(ast))
         }
+        "reg" => {
+            let ast = reg::parse(ts)?;
+            Ok(ProcAst::Reg(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -224,6 +230,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Catalog(a) => catalog::execute(a, session),
         ProcAst::TTest(a) => ttest::execute(a, session),
         ProcAst::Npar1way(a) => npar1way::execute(a, session),
+        ProcAst::Reg(a) => reg::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

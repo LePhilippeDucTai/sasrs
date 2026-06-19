@@ -78,6 +78,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `OPTIONS` | 🟡 | `PROC OPTIONS` listing of system options | per-option detail |
 | `TTEST` | 🟡 | 1-sample (H0=, ALPHA=, SIDES=), 2-sample CLASS (Pooled + Satterthwaite + F equality test), PAIRED; VAR/CLASS/PAIRED statements; ODS OUTPUT TTest | BY groups, one-sided p wiring, CI columns |
 | `NPAR1WAY` | 🟡 | CLASS (required), VAR (default all numeric), WILCOXON/KRUSKAL flags; Wilcoxon rank-sum (Z + 2-sided p, midranks, tie correction); Kruskal-Wallis (H/tie_factor, χ², df=k-1) | BY groups, OUT= dataset, exact Wilcoxon, score methods (Median/Savage/Normal) |
+| `REG` | 🟡 | `DATA=`; `MODEL dep = x1 x2 … / NOPRINT`; `OUTPUT OUT= PREDICTED= RESIDUAL=`; OLS via QR (intercept only), ANOVA table, R²/Adj R²/F/t-tests, parameter estimates with SE, listwise missing deletion | `NOINT`, `TEST` statement, CLM/CLI prediction intervals, `BY`, multiple MODEL statements per run |
 
 ### DATA step
 
