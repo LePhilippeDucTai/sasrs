@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M30** (graphiques legacy). M1–M29 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **TERMINÉ**. M1–M30 terminés. Couverture cible atteinte. Roadmap M14–M30 complète
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -318,6 +318,6 @@ Langage matriciel pour calcul scientifique et développement d'algorithmes perso
 - [x] Fixtures `m29/` + snapshots. DoD : fixture `m29/sgplot_univar_reg.sas` (UNIVARIATE HISTOGRAM sans ODS, puis HISTOGRAM+QQPLOT sous ODS, puis PROC REG intercept-only `model x =` sous ODS) + snapshot build par défaut (log : 1 déférence sans ODS, 2 "image deferred" UNIVARIATE, 1 "REG diagnostics: image deferred", EXIT 0 ; listing : rapports UNIVARIATE complets car NOPRINT est ignoré, ANOVA REG intercept-only avec F/Pr>F = NaN attendu pour model_df=0). Préfixe `sgplot*` → harnais snapshot saute la fixture sous `--features graphics` (image réelle → log divergent). 2241 tests build par défaut + 2246 sous `--features graphics`, 0 warning nouveau. **M29 TERMINÉ.**
 
 ## M30 — graphiques legacy
-- [ ] ⫽ M30.1 — `PROC GPLOT` (+ SYMBOL/AXIS), `PROC GCHART` (VBAR/HBAR/PIE) (Opus, moyen-élevé)
-- [ ] ⫽ M30.2 — `PROC PLOT` (rendu image cohérent avec ODS GRAPHICS) (Sonnet, moyen)
-- [ ] Fixtures `m30/` + snapshots. DoD → **couverture cible atteinte**
+- [x] ⫽ M30.1 — `PROC GPLOT` (`src/procs/gplot.rs`) : statement `PLOT y*x;` / `PLOT y*x=group;` / `PLOT (y1 y2)*x;` ; exécution gradée ODS (not-enabled→NOTE / default→NOTE "image deferred" / --features graphics→`gplot_{N}.png` via Scatter). `PROC GCHART` (`src/procs/gchart.rs`) : `VBAR`/`HBAR` (FREQ/SUM/MEAN via SUMVAR= / TYPE=) → VBar render ; `PIE` → NOTE "PIE chart deferred". SYMBOL/AXIS statements parsés + NOTE. 14 tests unitaires. (Opus, moyen-élevé). **M30.1 TERMINÉ.**
+- [x] ⫽ M30.2 — `PROC PLOT` (`src/procs/plot.rs`) : rendu ASCII scatter dans le listing (grille 20×60, symboles A/B/C pour superpositions, axes étiquetés min/max) quand ODS GRAPHICS OFF ; délègue à image (`plot_{N}.png` via Scatter) quand ODS GRAPHICS ON. Parser : `plot y*x;` / `plot y*x='sym';` / `plot (y1 y2)*x;` / `plot y*x=group;`. 7 tests unitaires. (Sonnet, moyen). **M30.2 TERMINÉ.**
+- [x] Fixtures `m30/` + snapshots. DoD : `m30/gplot_gchart.sas` (GPLOT not-enabled + ODS ON deferred ; GCHART VBar deferred + PIE deferred, EXIT 0) ; `m30/proc_plot.sas` (PLOT ASCII listing rendu 6 points + ODS ON deferred, EXIT 0). 2262 tests build par défaut + --features graphics verts. **M30 TERMINÉ. Couverture cible atteinte.**
