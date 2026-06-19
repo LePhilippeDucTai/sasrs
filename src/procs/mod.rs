@@ -21,12 +21,15 @@ pub mod genmod;
 pub mod glm;
 pub mod logistic;
 pub mod catalog;
+pub mod cluster;
 pub mod common;
 pub mod compare;
 pub mod contents;
 pub mod corr;
 pub mod datasets;
+pub mod distance;
 pub mod export;
+pub mod fastclus;
 pub mod format;
 pub mod freq;
 pub mod import;
@@ -81,6 +84,9 @@ pub enum ProcAst {
     Logistic(logistic::LogisticAst),
     Princomp(princomp::PrincompAst),
     Factor(factor::FactorAst),
+    Distance(distance::DistanceAst),
+    Cluster(cluster::ClusterAst),
+    Fastclus(fastclus::FastclusAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -225,6 +231,18 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = factor::parse(ts)?;
             Ok(ProcAst::Factor(ast))
         }
+        "distance" => {
+            let ast = distance::parse(ts)?;
+            Ok(ProcAst::Distance(ast))
+        }
+        "cluster" => {
+            let ast = cluster::parse(ts)?;
+            Ok(ProcAst::Cluster(ast))
+        }
+        "fastclus" => {
+            let ast = fastclus::parse(ts)?;
+            Ok(ProcAst::Fastclus(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -273,6 +291,9 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Logistic(a) => logistic::execute(a, session),
         ProcAst::Princomp(a) => princomp::execute(a, session),
         ProcAst::Factor(a) => factor::execute(a, session),
+        ProcAst::Distance(a) => distance::execute(a, session),
+        ProcAst::Cluster(a) => cluster::execute(a, session),
+        ProcAst::Fastclus(a) => fastclus::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

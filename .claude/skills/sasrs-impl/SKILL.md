@@ -45,8 +45,14 @@ développement : la branche courante du repo, normalement
    - rejeter/faire corriger ce qui ne passe pas la revue.
 5. **Commit + push IMMÉDIATEMENT après validation** (protection contre la perte de
    session et mise à jour du PR GitHub) : cocher les cases dans PROGRESS.md (+ passer
-   les fichiers à ✅ dans la table de PLAN.md quand un fichier est terminé), inclure
-   PROGRESS.md/PLAN.md dans le MÊME commit que le code, message clair (`sasrs M1:
+   les fichiers à ✅ dans la table de PLAN.md quand un fichier est terminé) ET, si
+   l'incrément ajoute/modifie/retire une fonctionnalité visible de l'utilisateur (PROC,
+   statement DATA step, fonction, option/argument, format, destination ODS, capacité
+   macro/SQL…), **mettre à jour les tableaux de couverture de `README.md`** (section
+   "Feature coverage" : ajuster l'état ✅/🟡/🔴, la liste des options couvertes et celle
+   des éléments non couverts/différés — la couverture annoncée doit refléter exactement
+   l'état du code après l'incrément). Inclure PROGRESS.md/PLAN.md/README.md dans le MÊME
+   commit que le code, message clair (`sasrs M1:
    implement parser/expr (Pratt SAS precedence)`), puis `git push -u origin <branche>`
    (échec réseau : réessayer 4 fois, backoff 2/4/8/16 s). Un commit par fichier validé
    ou par groupe ⫽ cohérent — jamais de gros commit fourre-tout, jamais de code non
@@ -64,7 +70,9 @@ développement : la branche courante du repo, normalement
 6. **Fin de jalon** : quand toutes les cases du jalon sont cochées, dérouler sa ligne
    "DoD"/fixtures (snapshots insta : générer, VÉRIFIER À LA MAIN la plausibilité SAS de
    chaque snapshot avant `cargo insta accept`, committer les .snap), mettre à jour
-   "Jalon courant : **Mn+1**" en tête de PROGRESS.md, committer, pousser.
+   "Jalon courant : **Mn+1**" en tête de PROGRESS.md, **vérifier que les tableaux de
+   couverture de `README.md` sont à jour pour tout ce que le jalon a livré** (relire la
+   section "Feature coverage" et corriger les écarts éventuels), committer, pousser.
 7. **Rapport de fin d'invocation** : 2–5 lignes — ce qui a été livré/committé (hashes),
    où en est le jalon, ce que la PROCHAINE invocation prendra. Si un blocage nécessite
    une décision utilisateur, le dire explicitement.
@@ -74,6 +82,11 @@ développement : la branche courante du repo, normalement
 - Périmètre : uniquement `sas_interpreter/` (+ `Cargo.lock`). Ne pas toucher aux autres
   crates du workspace.
 - Ne jamais cocher une case pour du code contenant encore `todo!()`/`unimplemented!()`.
+- Impératif de synchronisation de la doc : aucun incrément touchant une fonctionnalité
+  visible (PROC, statement, fonction, option/argument, format, ODS, macro, SQL) ne doit
+  être committé sans la mise à jour correspondante des tableaux de couverture de
+  `README.md`. PROGRESS.md (curseur interne) ET README.md (couverture publique) avancent
+  ensemble — ne jamais les laisser diverger.
 - Ne pas rediscuter les décisions actées de PLAN.md (types SAS stricts, parser SQL
   dédié, etc.).
 - Snapshots insta : un snapshot n'est PAS un oracle — le relire et le confronter au
