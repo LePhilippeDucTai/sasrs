@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M27** (multivarié). M1–M26 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M28** (modèles mixtes). M1–M27 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -291,7 +291,7 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] M27.2 — `PROC FACTOR` (extraction, rotation VARIMAX) (Fable, élevé)
 - [x] M27.3 — `PROC CLUSTER` + `PROC FASTCLUS` (k-means), `PROC DISTANCE` (Opus, élevé)
 - [x] M27.4 — `PROC DISCRIM` (analyse discriminante linéaire) (Opus, élevé)
-- [ ] Fixtures `m27/` + snapshots. DoD
+- [x] Fixtures `m27/` + snapshots. DoD
 
 ## M28 — modèles mixtes (le plus difficile, en dernier)
 - [ ] M28.1 — `PROC MIXED` (effets fixes + aléatoires, REML/ML itératif, structures VC/CS/AR(1)/UN, SOLUTION, LSMEANS) (Fable, très élevé)
