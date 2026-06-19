@@ -280,7 +280,8 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] Fixtures `m25/` + snapshots. DoD — reg.sas/anova.sas/glm.sas + 3 snapshots vérifiés. **M25 TERMINÉ.**
 
 ## M26 — modèles catégoriels
-- [ ] M26.1 — `PROC LOGISTIC` (logistique binaire, Newton-Raphson/IRLS, odds ratios, CLASS, LINK=) (Fable, élevé)
+- [x] M26.1 — `PROC LOGISTIC` (logistique binaire, Newton-Raphson/IRLS, odds ratios, CLASS, LINK=) (Fable, élevé)
+  — `src/procs/logistic.rs` (parser + executor) : DATA=, FREQ statement, MODEL y(descending event='val') = x1 x2 / noprint ; NR/IRLS convergence GCONV=1e-8 (max 50 iter) ; 7 sections listing (Model Information, Response Profile, Model Convergence Status, Model Fit Statistics, Testing Global Null Hypothesis BETA=0, Analysis of ML Estimates, Odds Ratio Estimates) ; DESCENDING/EVENT= pour sélection de l'événement ; pondération par FREQ ; CLASS variables détectées → erreur propre "not yet implemented" ; sas_cmp pour tri des niveaux. **Oracle validé sur 2×2 FREQ table (n=60 pondéré)** : β₁=2.3026 ✓, SE(β₁)=0.6245 ✓, OR=10.0000 ✓, CI=[2.9405,34.0083] ✓, -2LogL=66.8990 ✓, LR χ²=16.2787 ✓, Wald χ²(β₁)=13.5946 (analytiquement exact). AIC/SC null utilise n_total pondéré = 60. +10 tests unitaires (2079→2089 lib). Fixture `tests/fixtures/m26/logistic.sas` + snapshot. 0 warning nouvelles, 0 `.snap.new` (m1–m25 octet-identiques).
 - [ ] M26.2 — `PROC GENMOD` (GLM exponentiels : Poisson, binomial, gamma ; fonctions de lien ; DIST=) (Fable, élevé)
 - [ ] Fixtures `m26/` + snapshots. DoD
 
