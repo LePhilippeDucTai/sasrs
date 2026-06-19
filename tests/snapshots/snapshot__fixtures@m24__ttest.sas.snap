@@ -1,0 +1,67 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m24/ttest.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC TTEST 1-sample: height vs H0=60';
+
+3     proc ttest data=d.class h0=60;
+4       var height;
+5     run;
+NOTE: PROCEDURE TTEST used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title 'PROC TTEST 2-sample: height and weight by sex';
+
+7     proc ttest data=d.class;
+8       class sex;
+9       var height weight;
+10    run;
+NOTE: PROCEDURE TTEST used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    title;
+
+==== LISTING ====
+                              PROC TTEST 1-sample: height vs H0=60
+
+                                      The TTEST Procedure
+
+                                       One-Sample t Tests
+
+  Variable     N       Mean    Std Dev    Std Err    Minimum    Maximum    t Value    Pr > |t|
+
+  height      19    62.3368     5.1271     1.1762    51.3000    72.0000     1.9867      0.0624
+
+
+                         PROC TTEST 2-sample: height and weight by sex
+
+                                      The TTEST Procedure
+
+                                       Two-Sample t Tests
+
+                  Variable    Method                DF    t Value    Pr > |t|
+
+                  height      Pooled           17.0000    -1.4526      0.1645
+                  height      Satterthwaite    16.7269    -1.4513      0.1652
+                  weight      Pooled           17.0000    -1.9322      0.0702
+                  weight      Satterthwaite    16.9621    -1.9493      0.0680
+
+                                     Equality of Variances
+
+                       Variable    Num DF    Den DF    F Value    Pr > F
+
+                       height           8         9     1.0328    0.9527
+                       weight           9         8     1.3747    0.6645
+
+
+==== EXIT 0 ====

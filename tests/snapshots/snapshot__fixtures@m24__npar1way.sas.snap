@@ -1,0 +1,48 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m24/npar1way.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC NPAR1WAY: height and weight by sex';
+
+3     proc npar1way data=d.class wilcoxon;
+4       class sex;
+5       var height weight;
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: PROCEDURE NPAR1WAY used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title;
+
+==== LISTING ====
+                            PROC NPAR1WAY: height and weight by sex
+
+                                     The NPAR1WAY Procedure
+
+                                   One-Way Analysis of height
+
+                                    Wilcoxon Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               73.0000          90.0000             12.2367    -1.3893      0.1648
+
+                                   One-Way Analysis of weight
+
+                                    Wilcoxon Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               71.0000          90.0000             12.2259    -1.5541      0.1202
+
+
+==== EXIT 0 ====

@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sas_interpreter` vert.
 
-Jalon courant : **M24** (fondation numérique stat + TTEST/NPAR1WAY). M1–M23 terminés. Roadmap M14–M30 ouverte
+Jalon courant : **M25** (modèle linéaire). M1–M24 terminés. Roadmap M14–M30 ouverte
 (couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
 compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
 graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
@@ -267,7 +267,8 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] M24.1 — module `src/stat/` (maison) : promotion des helpers `common.rs` (Beta/Gamma/t/χ²) + normale (CDF/quantile), F, gamma, bêta ; `linalg.rs` (Cholesky, QR/Householder, moindres carrés, inversion, valeurs/vecteurs propres symétriques par Jacobi), tout testé contre valeurs documentées (Opus, élevé). **M24.1 TERMINÉ** : `src/stat/dists.rs` 11 fonctions promues de common.rs + 8 distributions nouvelles (chisq/F/gamma/beta CDFs/quantiles via Newton-Raphson avec bisection fallback) ; `src/stat/linalg.rs` 6 fonctions (Cholesky, QR Householder, least_squares, invert, Jacobi eigenvalues/eigenvectors) ; 35 unit tests (21 dists + 14 linalg), 2051 tests total verts, 0 warning.
 - [x] M24.2 — `PROC TTEST` (1 échantillon, 2 échantillons groupés/appariés, Satterthwaite, CLASS, PAIRED) (Opus, élevé) : parser (DATA=, H0=, ALPHA=, CI=, EQUAL=YES|NO, SIDES=2|U|L, sub-statements VAR/CLASS/PAIRED/BY/OUTPUT) + executor (3 modes — 1-sample, 2-sample CLASS avec Pooled ET Satterthwaite + F-test égalité variances, Paired) ; sas_cmp pour niveaux CLASS ; p bilatérale via `student_t_cdf` ; ODS OUTPUT TTest → dataset. +8 tests (2051→2059 total, 0 warning nouveau, 0 `.snap.new`).
 - [x] M24.3 — `PROC NPAR1WAY` (Wilcoxon, Kruskal-Wallis, scores) (Opus, moyen-élevé) : parser (DATA=, OUT=, ALPHA=, WILCOXON/KRUSKAL flags, sub-statements CLASS requis/VAR/OUTPUT ; BY → erreur propre) + executor (midranks pour ex æquo, tie_factor = 1 − Σ(t³−t)/(n³−n) ; Wilcoxon rank-sum k=2 : Z+p via probnorm ; Kruskal-Wallis k≥2 : H/tie_factor+df+p via chisq_cdf ; listing "One-Way Analysis of <var>" ; sas_cmp pour niveaux CLASS) ; OUT= parsé mais dataset non émis (différé). +3 tests (2059→2062 total, 0 warning nouveau, 0 `.snap.new`).
-- [ ] Fixtures `m24/` + snapshots vérifiés contre SAS. DoD
+- [x] Fixtures `m24/` + snapshots vérifiés contre SAS. DoD
+  — `ttest.sas` (1-sample height H0=60 : t=1.9867/df=18/p=0.0624 ; 2-sample height+weight by sex Pooled+Satterthwaite+F-equality) ; `npar1way.sas` (Wilcoxon height W=73/E=90/σ=12.24/Z=−1.389/p=0.165, weight W=71/Z=−1.554/p=0.120 — vérifiés à la main rangs midrank et tie_factor). m1–m23 octet-identiques. **M24 TERMINÉ.**
 
 ## M25 — modèle linéaire
 - [ ] M25.1 — `PROC REG` (OLS via QR, MODEL, R²/F/t, OUTPUT OUT= résidus/prédits, TEST, intervalles) (Fable, élevé)
