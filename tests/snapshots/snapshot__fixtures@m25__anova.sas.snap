@@ -1,0 +1,112 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m25/anova.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC ANOVA: height and weight by sex';
+
+3     proc anova data=d.class;
+4       class sex;
+5       model height weight = sex;
+6       means sex;
+7     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE ANOVA used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+8     title;
+
+==== LISTING ====
+                              PROC ANOVA: height and weight by sex
+
+                                      The ANOVA Procedure
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   sex           2    F M
+
+               Number of Observations Read     19
+
+
+                                   Dependent Variable: height
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               1          52.24632       52.24632       2.11    0.1645
+          Error              17         420.91789       24.75988
+          Corrected Total    18         473.16421
+
+
+                        R-Square    Coeff Var    Root MSE    height Mean
+
+                        0.110419     7.982326    4.975930      62.336842
+
+
+                 Source    DF    Type I SS    Mean Square    F Value    Pr > F
+
+                 sex        1     52.24632       52.24632       2.11    0.1645
+
+
+                Source    DF    Type III SS    Mean Square    F Value    Pr > F
+
+                sex        1       52.24632       52.24632       2.11    0.1645
+
+
+                                          Level of sex
+
+                               sex     N         Mean     Std Dev
+
+                               F       9    60.588889    5.018328
+                               M      10    63.910000    4.937937
+
+
+                                   Dependent Variable: weight
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               1        1681.12295     1681.12295       3.73    0.0702
+          Error              17        7654.61389      450.27141
+          Corrected Total    18        9335.73684
+
+
+                       R-Square    Coeff Var     Root MSE    weight Mean
+
+                       0.180074    21.214017    21.219600     100.026316
+
+
+                 Source    DF     Type I SS    Mean Square    F Value    Pr > F
+
+                 sex        1    1681.12295     1681.12295       3.73    0.0702
+
+
+                Source    DF    Type III SS    Mean Square    F Value    Pr > F
+
+                sex        1     1681.12295     1681.12295       3.73    0.0702
+
+
+                                          Level of sex
+
+                              sex     N          Mean      Std Dev
+
+                              F       9     90.111111    19.383914
+                              M      10    108.950000    22.727186
+
+
+
+==== EXIT 0 ====

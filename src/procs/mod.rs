@@ -15,6 +15,7 @@
 //! aucun dataset créé dans la session → ERROR (comme SAS _LAST_ vide).
 
 pub mod append;
+pub mod anova;
 pub mod catalog;
 pub mod common;
 pub mod compare;
@@ -31,11 +32,11 @@ pub mod options;
 pub mod print;
 pub mod printto;
 pub mod rank;
+pub mod reg;
 pub mod report;
 pub mod sort;
 pub mod tabulate;
 pub mod transpose;
-pub mod reg;
 pub mod ttest;
 pub mod univariate;
 
@@ -69,6 +70,7 @@ pub enum ProcAst {
     TTest(ttest::TTestAst),
     Npar1way(npar1way::NparAst),
     Reg(reg::RegAst),
+    Anova(anova::AnovaAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -189,6 +191,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = reg::parse(ts)?;
             Ok(ProcAst::Reg(ast))
         }
+        "anova" => {
+            let ast = anova::parse(ts)?;
+            Ok(ProcAst::Anova(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -231,6 +237,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::TTest(a) => ttest::execute(a, session),
         ProcAst::Npar1way(a) => npar1way::execute(a, session),
         ProcAst::Reg(a) => reg::execute(a, session),
+        ProcAst::Anova(a) => anova::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

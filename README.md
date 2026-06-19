@@ -79,6 +79,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `TTEST` | 🟡 | 1-sample (H0=, ALPHA=, SIDES=), 2-sample CLASS (Pooled + Satterthwaite + F equality test), PAIRED; VAR/CLASS/PAIRED statements; ODS OUTPUT TTest | BY groups, one-sided p wiring, CI columns |
 | `NPAR1WAY` | 🟡 | CLASS (required), VAR (default all numeric), WILCOXON/KRUSKAL flags; Wilcoxon rank-sum (Z + 2-sided p, midranks, tie correction); Kruskal-Wallis (H/tie_factor, χ², df=k-1) | BY groups, OUT= dataset, exact Wilcoxon, score methods (Median/Savage/Normal) |
 | `REG` | 🟡 | `DATA=`; `MODEL dep = x1 x2 … / NOPRINT`; `OUTPUT OUT= PREDICTED= RESIDUAL=`; OLS via QR (intercept only), ANOVA table, R²/Adj R²/F/t-tests, parameter estimates with SE, listwise missing deletion | `NOINT`, `TEST` statement, CLM/CLI prediction intervals, `BY`, multiple MODEL statements per run |
+| `ANOVA` | 🟡 | `DATA=`; `CLASS` (one variable, distinct levels via `sas_cmp`); `MODEL y1 y2 = effect / NOPRINT` (multiple dependents, one CLASS effect); `MEANS effect`; one-way ANOVA table (Model/Error/Corrected Total, F/Pr>F), fit statistics (R², C.V., Root MSE, dep Mean), Type I SS + Type III SS (identical for one-way), cell means table with Std Dev | Interaction effects (`a*b`), multi-way ANOVA, multiple CLASS variables in MODEL, `MEANS` comparison tests (Tukey/Duncan/Scheffé), `BY` groups |
 
 ### DATA step
 
