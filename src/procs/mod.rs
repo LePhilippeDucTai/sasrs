@@ -16,6 +16,7 @@
 
 pub mod append;
 pub mod anova;
+pub mod factor;
 pub mod genmod;
 pub mod glm;
 pub mod logistic;
@@ -79,6 +80,7 @@ pub enum ProcAst {
     Genmod(genmod::GenmodAst),
     Logistic(logistic::LogisticAst),
     Princomp(princomp::PrincompAst),
+    Factor(factor::FactorAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -219,6 +221,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let ast = princomp::parse(ts)?;
             Ok(ProcAst::Princomp(ast))
         }
+        "factor" => {
+            let ast = factor::parse(ts)?;
+            Ok(ProcAst::Factor(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -266,6 +272,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Genmod(a) => genmod::execute(a, session),
         ProcAst::Logistic(a) => logistic::execute(a, session),
         ProcAst::Princomp(a) => princomp::execute(a, session),
+        ProcAst::Factor(a) => factor::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

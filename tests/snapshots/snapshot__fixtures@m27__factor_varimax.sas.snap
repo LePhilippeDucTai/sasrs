@@ -1,0 +1,99 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m27/factor_varimax.sas
+---
+==== LOG ====
+
+1     title 'PROC FACTOR: principal components, 2 factors, varimax rotation';
+
+2     data work.three_vars;
+3       input x y z;
+4     datalines;
+5     1 2 5
+6     2 4 4
+7     3 3 3
+8     4 5 2
+9     5 1 1
+10    6 6 6
+11    ;
+NOTE: The data set WORK.THREE_VARS has 6 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    proc factor data=work.three_vars nfactors=2 rotate=varimax;
+13      var x y z;
+14    run;
+NOTE: There were 6 observations read from the data set WORK.THREE_VARS.
+NOTE: PROCEDURE FACTOR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+15    title;
+
+==== LISTING ====
+                 PROC FACTOR: principal components, 2 factors, varimax rotation
+
+                                      The FACTOR Procedure
+
+                          Initial Factor Method: Principal Components
+
+                                Prior Communality Estimates: ONE
+
+                             Eigenvalues of the Correlation Matrix
+                                    Total = 3   Average = 1
+
+                        Eigenvalue    Difference    Proportion    Cumulative
+
+                   1        1.5479        0.4106        0.5160        0.5160
+                   2        1.1373        0.8225        0.3791        0.8951
+                   3        0.3148             .        0.1049        1.0000
+
+                     2 factors will be retained by the NFACTORS criterion.
+
+                                         Factor Pattern
+
+                                         Factor1    Factor2
+
+                                    x     0.4433     0.8550
+                                    y     0.9249     0.0724
+                                    z     0.7043    -0.6333
+
+                               Variance Explained by Each Factor
+
+                                              Factor1    Factor2
+
+                                Weighted       1.5479     1.1373
+                                Unweighted     1.5479     1.1373
+
+                          Final Communality Estimates: Total = 2.6852
+
+                                          x         y         z
+
+                                     0.9275    0.8606    0.8971
+
+                                    Rotation Method: Varimax
+
+                                     Rotated Factor Pattern
+
+                                         Factor1    Factor2
+
+                                    x    -0.0365     0.9624
+                                    y     0.7686     0.5195
+                                    z     0.9251    -0.2031
+
+                           Variance Explained by Each Rotated Factor
+
+                                         Factor1    Factor2
+
+                                          1.4479     1.2374
+
+                          Final Communality Estimates: Total = 2.6852
+
+                                          x         y         z
+
+                                     0.9275    0.8606    0.8971
+
+
+==== EXIT 0 ====

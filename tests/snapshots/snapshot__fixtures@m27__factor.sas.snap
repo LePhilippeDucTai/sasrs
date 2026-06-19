@@ -1,0 +1,74 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m27/factor.sas
+---
+==== LOG ====
+
+1     title 'PROC FACTOR: principal components, one factor retained';
+
+2     data work.corr2;
+3       input x y;
+4     datalines;
+5     1 2
+6     2 3
+7     3 3
+8     4 5
+9     5 4
+10    ;
+NOTE: The data set WORK.CORR2 has 5 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    proc factor data=work.corr2;
+12      var x y;
+13    run;
+NOTE: There were 5 observations read from the data set WORK.CORR2.
+NOTE: PROCEDURE FACTOR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title;
+
+==== LISTING ====
+                     PROC FACTOR: principal components, one factor retained
+
+                                      The FACTOR Procedure
+
+                          Initial Factor Method: Principal Components
+
+                                Prior Communality Estimates: ONE
+
+                             Eigenvalues of the Correlation Matrix
+                                    Total = 2   Average = 1
+
+                        Eigenvalue    Difference    Proportion    Cumulative
+
+                   1        1.8321        1.6641        0.9160        0.9160
+                   2        0.1679             .        0.0840        1.0000
+
+                      1 factor will be retained by the MINEIGEN criterion.
+
+                                         Factor Pattern
+
+                                               Factor1
+
+                                          x     0.9571
+                                          y     0.9571
+
+                               Variance Explained by Each Factor
+
+                                                   Factor1
+
+                                     Weighted       1.8321
+                                     Unweighted     1.8321
+
+                          Final Communality Estimates: Total = 1.8321
+
+                                               x         y
+
+                                          0.9160    0.9160
+
+
+==== EXIT 0 ====
