@@ -1,17 +1,26 @@
-# Avancement `sas_interpreter` — curseur de la skill sasrs-impl
+# Avancement `sasrs` — curseur de la skill sasrs-impl
 
 Ce fichier est l'état d'avancement machine-lisible du projet. La skill
 `sasrs-impl` le lit pour savoir où reprendre, et le met à jour DANS LE MÊME
 COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
-`cargo test -p sas_interpreter` vert.
+`cargo test -p sasrs` vert.
 
-Jalon courant : **TERMINÉ**. M1–M30 terminés. Couverture cible atteinte. Roadmap M14–M30 complète
-(couverture SAS quasi-intégrale : I/O fichiers plats, bibliothèque de fonctions, hash,
-compléments SQL/macro/formats, complétion des procs, ODS, modélisation statistique,
-graphiques). Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ;
-dépendances mixtes (crates pour l'I/O lourd, numérique stat **fait maison** dans `src/stat/`) ;
-ODS HTML/RTF/PDF/Excel + ODS OUTPUT→datasets.
+Jalon courant : **M31**. M1–M30 terminés (roadmap d'origine : couverture SAS
+quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
+SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
+Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
+(crates pour l'I/O lourd, numérique stat **fait maison** dans `src/stat/`) ; ODS
+HTML/RTF/PDF/Excel + ODS OUTPUT→datasets.
+
+**Phase E (M31–M35)** — qualité & complétion (demandée après M30) : refactorisation en
+style fonctionnel + généralisation/réduction de complexité (M31 couche de parsing PROC
+partagée, M32 scission `preprocess.rs`→`src/macros/`), puis complétion maximale des options
+des procs partiellement supportées (M33 Base/descriptifs, M34 stat/modélisation) et support
+total des macros (M35). **Invariant porté par les jalons de refactor (M31/M32) : sortie
+octet-identique → zéro `.snap.new` ; commits d'extraction « move-only ».** Les jalons de
+complétion (M33–M35) n'activent du comportement que sur des options jusque-là refusées et
+font rétrécir la colonne « non couvert » de README en miroir.
 
 ## M1 — pipeline exécutable de bout en bout
 Ordre strict (dépendances), sauf ⫽ parallélisables :
@@ -321,3 +330,129 @@ Langage matriciel pour calcul scientifique et développement d'algorithmes perso
 - [x] ⫽ M30.1 — `PROC GPLOT` (`src/procs/gplot.rs`) : statement `PLOT y*x;` / `PLOT y*x=group;` / `PLOT (y1 y2)*x;` ; exécution gradée ODS (not-enabled→NOTE / default→NOTE "image deferred" / --features graphics→`gplot_{N}.png` via Scatter). `PROC GCHART` (`src/procs/gchart.rs`) : `VBAR`/`HBAR` (FREQ/SUM/MEAN via SUMVAR= / TYPE=) → VBar render ; `PIE` → NOTE "PIE chart deferred". SYMBOL/AXIS statements parsés + NOTE. 14 tests unitaires. (Opus, moyen-élevé). **M30.1 TERMINÉ.**
 - [x] ⫽ M30.2 — `PROC PLOT` (`src/procs/plot.rs`) : rendu ASCII scatter dans le listing (grille 20×60, symboles A/B/C pour superpositions, axes étiquetés min/max) quand ODS GRAPHICS OFF ; délègue à image (`plot_{N}.png` via Scatter) quand ODS GRAPHICS ON. Parser : `plot y*x;` / `plot y*x='sym';` / `plot (y1 y2)*x;` / `plot y*x=group;`. 7 tests unitaires. (Sonnet, moyen). **M30.2 TERMINÉ.**
 - [x] Fixtures `m30/` + snapshots. DoD : `m30/gplot_gchart.sas` (GPLOT not-enabled + ODS ON deferred ; GCHART VBar deferred + PIE deferred, EXIT 0) ; `m30/proc_plot.sas` (PLOT ASCII listing rendu 6 points + ODS ON deferred, EXIT 0). 2262 tests build par défaut + --features graphics verts. **M30 TERMINÉ. Couverture cible atteinte.**
+
+
+## M31 — refactor #1 : couche de parsing PROC partagée (pur, octet-identique)
+Phase E. Refactorisation fonctionnelle : extraire des combinateurs de parsing réutilisables
+dans `src/procs/common.rs` et y migrer les ~40 procs. **Pur — aucune sortie ne change :
+zéro `.snap.new` à CHAQUE commit, `cargo test -p sasrs` vert, 0 warning.** Commits d'extraction
+« move-only ». Design détaillé : voir PLAN.md §Phase E / M31.
+
+Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le message+span actuels
+(`"Unexpected option '{BAD}' on PROC {NAME} statement."`) ; les procs au message divergent
+(ex. `means` « Unexpected token… ») gardent leur branche inline dans la closure.
+
+- [ ] M31.1 — combinateurs additifs dans `src/procs/common.rs` (aucun appelant encore) :
+  `parse_proc_options(ts, proc, FnMut(&mut StatementStream,&str)->Result<bool>)`,
+  `parse_proc_body(ts, FnMut(...))` (skip semis, stop run/quit, recovery `skip_to_semi`),
+  `expect_eq`, `parse_dataset_opt`/`parse_out_opt`, `unknown_option_error(ts, proc)`,
+  `resolve_last_dataset` (décodage `data=`/`_LAST_`). + tests unitaires des combinateurs (Opus, moyen)
+- [ ] M31.2 — relocaliser dans `common.rs` : `parse_by` (ex-`means::parse_by_list`),
+  `parse_single_var`/`parse_weight`/`parse_class`/`parse_var_list` ; re-export `pub(crate)`
+  depuis `means` pour les appelants existants (Sonnet, faible)
+- [ ] ⫽ M31.3 — migrer `src/procs/print.rs` (canari) sur les combinateurs (Sonnet, faible)
+- [ ] ⫽ M31.4 — migrer `src/procs/sort.rs` (Sonnet, faible)
+- [ ] ⫽ M31.5 — migrer Tier B : `contents`, `transpose`, `append`, `rank`, `printto`,
+  `options`, `catalog` — un proc par commit (Sonnet, faible)
+- [ ] M31.6 — migrer Tier C : `means`, `freq`, `univariate`, `corr`, `ttest`, `npar1way` —
+  un proc par commit, branches d'erreur bespoke gardées inline (Opus, moyen)
+- [ ] M31.7 — migrer Tier D : `reg`, `glm`, `anova`, `genmod`, `logistic`, `mixed`, `glimmix`,
+  `factor`, `princomp`, `discrim`, `cluster`, `fastclus`, `distance`, `report`, `tabulate`,
+  `sgplot`, `iml` — boucle d'options + `DATA=`/`OUT=` + erreur seulement, un proc par commit (Opus, moyen)
+- [ ] ⫽ M31.8 — balayage : remplacer les copies privées `expect_eq`/`resolve_input` par
+  `common::*`, supprimer les doublons morts ; un proc par commit (Sonnet, faible)
+- [ ] DoD M31 : `cargo test -p sasrs` vert, **zéro `.snap.new`** (fixtures m1–m30 octet-identiques),
+  `cargo build` 0 warning ; mettre les fichiers refactorés à jour dans la table PLAN.md ;
+  passer « Jalon courant : **M32** ».
+
+## M32 — refactor #2 : scission `preprocess.rs` → `src/macros/` (pur, octet-identique)
+Phase E. Scinder le monolithe `src/preprocess.rs` (~4757 lignes) en module `src/macros/`.
+Façade publique conservée (`preprocess` reste un re-export → 3 sites d'import inchangés :
+`lib.rs`, `sql::dictionary`, `session`). Surface stable : `MacroEngine::new`, `expand_open_code`
+(fast-path identité **laissé intact dans `mod.rs`**), accesseurs `set_/get_/take_*`, trait
+`TextStage`. Déplacements verbatim (seul `Self::foo`→`module::foo` change), **zéro `.snap.new`
+à chaque commit**. Design : voir PLAN.md §Phase E / M32.
+
+- [ ] M32.1 — créer `src/macros/mod.rs` (struct `MacroEngine` + façade publique + `expand_open_code`
+  + impl `TextStage`) ; `src/preprocess.rs` devient le shim de re-export. Build inchangé (Opus, moyen)
+- [ ] ⫽ M32.2 — extraire `src/macros/error.rs` (`MacroError`, `emit_error`) (Sonnet, faible)
+- [ ] ⫽ M32.3 — extraire `src/macros/scan.rs` (helpers char libres : `read_name`,
+  `read_balanced_parens`, `find_kw`, `split_top_level_commas`, …) ; sites `Self::`→`scan::` (Sonnet, moyen)
+- [ ] ⫽ M32.4 — extraire `src/macros/symbols.rs` (`lookup`/`assign`/`resolve_value`/
+  `resolve_refs_once`/pile de portées/auto-vars) (Sonnet, moyen)
+- [ ] M32.5 — extraire `src/macros/quoting.rs` (sentinelles + `mask_char`/`unmask`) PUIS introduire
+  `apply_quoting(text, mask_set, reevaluate)` et y router `%str/%nrstr/%bquote/%nrbquote/%superq`
+  + variantes `%q*` (commit de fusion dédié, validé par les tests quoting/superq/bquote) (Opus, élevé)
+- [ ] M32.6 — extraire `src/macros/eval.rs` ; **unifier `tokenize_eval`** (un tokenizer → évaluateurs
+  entier `%eval` ET flottant `%sysevalf` séparés). Garde : test division int vs float (Opus, élevé)
+- [ ] M32.7 — extraire `src/macros/functions.rs` + registre `functions::lookup` (string-fns +
+  `%sysfunc`/whitelist) ; remplacer le `match` géant et la table inline de `process_impl`
+  (même ordre de sondage `%q*` avant nu) (Opus, élevé)
+- [ ] ⫽ M32.8 — extraire `src/macros/control.rs` (`consume_if`/`consume_do`/itératif/conditionnel),
+  `src/macros/define.rs` (`consume_macro_def`/invocation/params) et `src/macros/include.rs`
+  (`%include`/autocall/`%put`/CALL EXECUTE) — déplacements verbatim, un fichier par commit (Sonnet, moyen)
+- [ ] M32.9 — extraire `src/macros/expand.rs` (boucle `process_impl`) en dernier ;
+  état final : `mod.rs` = façade seule (Opus, moyen)
+- [ ] DoD M32 : `cargo test -p sasrs` vert, **zéro `.snap.new`**, 0 warning ; PLAN.md §Macro pointant
+  sur `src/macros/` ; passer « Jalon courant : **M33** ».
+
+## M33 — complétion options : PROCs Base & descriptifs
+Phase E. Vider au maximum la colonne droite « non couvert » des tableaux README des procs
+descriptifs/gestion. Une case = un proc / un lot d'options cohérent ; fixtures
+`tests/fixtures/m33/` + snapshot vérifié à la main ; mise à jour README (🟡→✅ quand complété).
+Pattern : nouvelle branche dans la closure `parse_proc_options`/`parse_proc_body` (combinateurs M31),
+exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
+
+- [ ] M33.1 — `PROC FREQ` : `BY`, `WEIGHT`, `/LIST`, tables ≥3 voies, Fisher r×c (n×m), CHISQ 1 voie (Opus, élevé)
+- [ ] M33.2 — `PROC UNIVARIATE` : rendu `PROBPLOT`/`CDFPLOT`/`PPPLOT`, quantiles & extrêmes pondérés (Opus, moyen)
+- [ ] M33.3 — `PROC MEANS`/`SUMMARY` : `WAYS`, `TYPES`, `PRINTALLTYPES`, mots-clés percentiles (P1..P99/QRANGE) (Opus, moyen)
+- [ ] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable, élevé)
+- [ ] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable, élevé)
+- [ ] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen)
+- [ ] ⫽ M33.7 — `PROC CONTENTS` : `OUT=`, `DETAILS`, `SHORT` (Sonnet, moyen)
+- [ ] ⫽ M33.8 — `PROC DATASETS` : `COPY`, `MODIFY`/`RENAME` var, `EXCHANGE`, `SAVE`, `CONTENTS` (Sonnet, moyen)
+- [ ] M33.9 — `PROC SORT` compléments (`TAGSORT`, `SORTSEQ=`, `KEY=`) ; `PROC APPEND` (`NOWARN`/`APPENDVER=`) (Sonnet, faible)
+- [ ] DoD M33 : fixtures `m33/` + snapshots vérifiés ; README à jour (colonnes « non couvert » rétrécies) ;
+  passer « Jalon courant : **M34** ».
+
+## M34 — complétion options : PROCs statistiques & modélisation
+Phase E. Compléter les options différées des procs stat/modélisation (colonnes README).
+Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`). Fixtures
+`tests/fixtures/m34/` + snapshots. Une case = un proc / un lot cohérent.
+
+- [ ] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé)
+- [ ] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen)
+- [ ] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen)
+- [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)
+- [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)
+- [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
+  logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
+- [ ] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé)
+- [ ] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
+  `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Fable, très élevé)
+- [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
+  `FACTOR` rotations obliques (Opus, élevé)
+- [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
+  sous-scripts intervalle `a:b` (Opus, élevé)
+- [ ] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
+  `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen)
+- [ ] DoD M34 : fixtures `m34/` + snapshots vérifiés (oracles) ; README à jour ;
+  passer « Jalon courant : **M35** ».
+
+## M35 — macro : complétion totale
+Phase E. Combler les derniers écarts macro pour un support intégral. Processeur toujours actif ;
+invariant : snapshots m1–m34 octet-identiques (nouveau comportement seulement sur nouvelles
+directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language » du README → ✅.
+
+- [ ] M35.1 — `%SYSFUNC`/`%QSYSFUNC` : remplacer la liste blanche (~18 fns) par une délégation à
+  TOUTE la bibliothèque `datastep::functions::call` (typage args num/char, support `fmt.`),
+  erreurs propres pour les fonctions réellement absentes (Opus, élevé)
+- [ ] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
+  résolution via `FILENAME` (Opus, moyen)
+- [ ] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
+  restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen)
+- [ ] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
+  (`%ABORT`, `%RETURN`, `%GOTO`/`%label`, `%SYSCALL`, `%SYSEXEC`, `%WINDOW`/`%DISPLAY`…) —
+  implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé)
+- [ ] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
+  passer « Jalon courant : **TERMINÉ (Phase E)** ».
