@@ -72,6 +72,12 @@ pub enum TokenKind {
     /// `datalines`/`cards`/`datalines4`/`cards4` et émet ce token portant les
     /// lignes brutes (terminateur exclu).
     DataLines(Vec<String>),
+    /// Corps verbatim d'un bloc `PROC IML ... QUIT;` (M28a). PROC IML est un
+    /// sous-langage à part (apostrophe = transposée, `#` = Hadamard) qui
+    /// casserait le lexer SAS standard. Le lexer détecte `proc iml`, capture le
+    /// texte brut entre le `;` du statement PROC et le `quit;` terminal, et
+    /// l'émet ici. Le module `procs::iml` le re-lexe avec sa propre grammaire.
+    ImlBody(String),
     /// `=` (assignment or comparison depending on context)
     Eq,
     /// `^=`, `~=`, `ne`

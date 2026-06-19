@@ -23,6 +23,17 @@ pub struct Lexer<'a> {
     /// `;` d'un `datalines;`/`cards;`, émises au token suivant sous forme de
     /// `TokenKind::DataLines`.
     pending_datalines: Option<Vec<String>>,
+    /// Vrai quand le dernier Ident émis en tête de statement était `proc`
+    /// (M28a) : sert à reconnaître la séquence `proc iml` sur deux tokens.
+    prev_ident_was_proc: bool,
+    /// Mode PROC IML armé (M28a) : déclenché quand l'Ident `iml` suit `proc`.
+    /// La capture verbatim du corps IML est lancée au `;` qui termine le
+    /// statement `proc iml`.
+    iml_armed: bool,
+    /// Corps IML verbatim en attente d'émission (M28a) : capturé juste après le
+    /// `;` du statement `proc iml`, émis au token suivant sous forme de
+    /// `TokenKind::ImlBody`.
+    pending_iml_body: Option<String>,
 }
 
 impl<'a> Lexer<'a> {
@@ -34,6 +45,9 @@ impl<'a> Lexer<'a> {
             at_stmt_start: true,
             datalines_armed: None,
             pending_datalines: None,
+            prev_ident_was_proc: false,
+            iml_armed: false,
+            pending_iml_body: None,
         }
     }
 
@@ -107,6 +121,16 @@ impl<'a> Lexer<'a> {
                 span,
             });
         }
+        // Corps IML verbatim en attente (capturé juste après le `;` du
+        // statement `proc iml`) : l'émettre AVANT de relexer normalement.
+        if let Some(body) = self.pending_iml_body.take() {
+            let span = Span::new(self.pos, self.pos);
+            self.at_stmt_start = true;
+            return Ok(Token {
+                kind: TokenKind::ImlBody(body),
+                span,
+            });
+        }
         let tok = self.next_token_inner()?;
         // Un `*` en tête du PROCHAIN statement ouvrira un commentaire.
         self.at_stmt_start = tok.kind == TokenKind::Semi;
@@ -117,6 +141,11 @@ impl<'a> Lexer<'a> {
             if let Some(four) = self.datalines_armed.take() {
                 let lines = self.capture_datalines(four);
                 self.pending_datalines = Some(lines);
+            }
+            if self.iml_armed {
+                self.iml_armed = false;
+                let body = self.capture_iml_body();
+                self.pending_iml_body = Some(body);
             }
         }
         Ok(tok)
@@ -169,6 +198,64 @@ impl<'a> Lexer<'a> {
             }
             lines.push(line.to_string());
         }
+    }
+
+    /// Capture le corps verbatim d'un bloc `PROC IML ... QUIT;` (M28a). À
+    /// l'entrée, `self.pos` est juste APRÈS le `;` qui a terminé le statement
+    /// `proc iml`. On scanne le texte BRUT (sans le lexer SAS — l'apostrophe
+    /// `'` y est une transposée, `#` un produit de Hadamard) jusqu'au mot-clé
+    /// `quit` de niveau supérieur suivi (espaces tolérés) d'un `;`. Le `quit;`
+    /// est consommé mais N'EST PAS inclus dans le corps. Si aucun `quit;` n'est
+    /// trouvé (EOF), on prend tout le reste — le parser IML signalera l'erreur.
+    ///
+    /// Frontières de mot pour `quit` : précédé d'un non-identifiant (ou début)
+    /// et suivi d'un non-identifiant. Les commentaires `/* */` et les chaînes
+    /// `'...'`/`"..."` ne sont PAS interprétés ici : un `quit` à l'intérieur
+    /// d'une chaîne IML est improbable et hors périmètre v1 (documenté).
+    fn capture_iml_body(&mut self) -> String {
+        let body_start = self.pos;
+        let n = self.bytes.len();
+        while self.pos < n {
+            // Frontière gauche : début ou caractère non-identifiant.
+            let left_ok = self.pos == 0 || {
+                let p = self.bytes[self.pos - 1];
+                !(p.is_ascii_alphanumeric() || p == b'_')
+            };
+            if left_ok && self.matches_kw_ci("quit") {
+                let after = self.pos + 4;
+                let right_ok = match self.bytes.get(after) {
+                    Some(c) => !(c.is_ascii_alphanumeric() || *c == b'_'),
+                    None => true,
+                };
+                if right_ok {
+                    let body_end = self.pos;
+                    // Avancer après `quit` puis jusqu'au `;` inclus.
+                    self.pos = after;
+                    while self.pos < n && self.bytes[self.pos] != b';' {
+                        self.pos += 1;
+                    }
+                    if self.pos < n {
+                        self.pos += 1; // le `;`
+                    }
+                    return self.src[body_start..body_end].to_string();
+                }
+            }
+            self.pos += 1;
+        }
+        // Pas de `quit;` : tout le reste forme le corps.
+        self.src[body_start..n].to_string()
+    }
+
+    /// Vrai si `self.bytes[self.pos..]` commence par `kw` (insensible casse).
+    fn matches_kw_ci(&self, kw: &str) -> bool {
+        let kb = kw.as_bytes();
+        if self.pos + kb.len() > self.bytes.len() {
+            return false;
+        }
+        self.bytes[self.pos..self.pos + kb.len()]
+            .iter()
+            .zip(kb)
+            .all(|(a, b)| a.to_ascii_lowercase() == *b)
     }
 
     fn next_token_inner(&mut self) -> Result<Token> {
@@ -372,6 +459,14 @@ impl<'a> Lexer<'a> {
                 "datalines4" | "cards4" => self.datalines_armed = Some(true),
                 _ => {}
             }
+        }
+        // Reconnaissance de `proc iml` sur deux Idents (M28a). `proc` n'est pas
+        // un mot-clé réservé ici : on n'arme que si `proc` apparaît en tête de
+        // statement, puis `iml` immédiatement après.
+        let was_proc = self.prev_ident_was_proc;
+        self.prev_ident_was_proc = self.at_stmt_start && lower == "proc";
+        if was_proc && lower == "iml" {
+            self.iml_armed = true;
         }
         let kind = match lower.as_str() {
             "eq" => TokenKind::Eq,

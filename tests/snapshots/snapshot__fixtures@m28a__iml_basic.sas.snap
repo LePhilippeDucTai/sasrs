@@ -1,0 +1,117 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m28a/iml_basic.sas
+---
+==== LOG ====
+
+1     title 'PROC IML: basic matrix operations and control flow';
+
+2     proc iml;
+3       /* Creation and basic operations */
+4       a = {1 2, 3 4};
+5       b = {5 6, 7 8};
+6       c = a * b;
+7       at = a';
+8       h = a # b;
+9       nr = nrow(a);
+10      nc = ncol(a);
+11      print a b c at h nr nc;
+12    
+13      /* Statistical functions */
+14      x = {2 4 6 8 10};
+15      s = sum(x);
+16      m = mean(x);
+17      st = std(x);
+18      print x s m st;
+19    
+20      /* Control flow */
+21      total = {0};
+22      do i = 1 to 5;
+23        total = total + i;
+24      end;
+25      if total > {10} then big = {1}; else big = {0};
+26      print total big;
+27    quit;
+NOTE: PROCEDURE IML used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    title;
+
+==== LISTING ====
+                       PROC IML: basic matrix operations and control flow
+
+                                       The IML Procedure
+
+A
+
+      COL1  COL2
+
+ROW1     1     2
+ROW2     3     4
+
+B
+
+      COL1  COL2
+
+ROW1     5     6
+ROW2     7     8
+
+C
+
+      COL1  COL2
+
+ROW1    19    22
+ROW2    43    50
+
+AT
+
+      COL1  COL2
+
+ROW1     1     3
+ROW2     2     4
+
+H
+
+      COL1  COL2
+
+ROW1     5    12
+ROW2    21    32
+
+NR
+
+     2
+
+NC
+
+     2
+
+X
+
+  COL1  COL2  COL3  COL4  COL5
+
+     2     4     6     8    10
+
+S
+
+    30
+
+M
+
+     6
+
+ST
+
+  3.1623
+
+TOTAL
+
+    15
+
+BIG
+
+     1
+
+
+==== EXIT 0 ====
