@@ -1,0 +1,65 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m29/sgplot_basic.sas
+---
+==== LOG ====
+
+1     title 'PROC SGPLOT: basic scatter and histogram';
+
+2     data work.heights;
+3       input age height;
+4     datalines;
+5     10 140
+6     12 150
+7     14 158
+8     16 165
+9     18 170
+10    20 172
+11    25 175
+12    30 176
+13    35 175
+14    40 174
+15    ;
+NOTE: The data set WORK.HEIGHTS has 10 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    proc sgplot data=work.heights;
+17      scatter x=age y=height;
+18    run;
+NOTE: ODS GRAPHICS is not enabled. Use "ods graphics on;" before PROC SGPLOT to generate images.
+NOTE: PROCEDURE SGPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    ods graphics on;
+NOTE: ODS GRAPHICS ON.
+
+20    proc sgplot data=work.heights;
+21      scatter x=age y=height;
+22      xaxis label='Age (years)';
+23      yaxis label='Height (cm)';
+24    run;
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: PROCEDURE SGPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    proc sgplot data=work.heights;
+26      histogram height / binwidth=10;
+27    run;
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: PROCEDURE SGPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    ods graphics off;
+NOTE: ODS GRAPHICS OFF.
+
+29    title;
+
+==== LISTING ====
+
+==== EXIT 0 ====

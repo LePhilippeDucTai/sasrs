@@ -46,6 +46,7 @@ pub mod printto;
 pub mod rank;
 pub mod reg;
 pub mod report;
+pub mod sgplot;
 pub mod sort;
 pub mod tabulate;
 pub mod transpose;
@@ -95,6 +96,7 @@ pub enum ProcAst {
     Mixed(mixed::MixedAst),
     Glimmix(glimmix::GlimmixAst),
     Iml(iml::ImlProgram),
+    Sgplot(sgplot::SgplotAst),
 }
 
 /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
@@ -267,6 +269,10 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             let prog = iml::parse(ts)?;
             Ok(ProcAst::Iml(prog))
         }
+        "sgplot" => {
+            let ast = sgplot::parse(ts)?;
+            Ok(ProcAst::Sgplot(ast))
+        }
         _ => {
             // Proc inconnue : finir le statement courant ; le caller
             // (parser::parse_block) saute ensuite jusqu'à la frontière.
@@ -322,6 +328,7 @@ pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<
         ProcAst::Mixed(a) => mixed::execute(a, session),
         ProcAst::Glimmix(a) => glimmix::execute(a, session),
         ProcAst::Iml(a) => iml::execute(a, session),
+        ProcAst::Sgplot(a) => sgplot::execute(a, session),
     };
 
     // Write timing NOTE even on success (SAS always prints this).

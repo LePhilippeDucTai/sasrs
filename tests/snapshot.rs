@@ -12,6 +12,22 @@ use sasrs::{RunOptions, run};
 #[test]
 fn fixtures() {
     insta::glob!("fixtures/**/*.sas", |path| {
+        // Les fixtures PROC SGPLOT (M29.2) matérialisent de vraies images sous
+        // `--features graphics` : leur log diverge alors du snapshot capturé
+        // pour le build PAR DÉFAUT (NOTE « image deferred »). Le snapshot .snap
+        // verrouille le build par défaut ; la génération réelle d'image est
+        // couverte par les tests unitaires de `src/procs/sgplot.rs`. On saute
+        // donc ces fixtures UNIQUEMENT quand la feature graphics est active —
+        // les autres fixtures continuent de tourner pour vérifier l'invariant
+        // byte-identique du build graphics.
+        #[cfg(feature = "graphics")]
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("sgplot"))
+        {
+            return;
+        }
         let source = std::fs::read_to_string(path).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         common::write_class_parquet(&tmp.path().join("data"));

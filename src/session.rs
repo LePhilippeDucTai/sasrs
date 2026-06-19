@@ -103,6 +103,13 @@ pub struct Session {
     /// par défaut : tant que `ODS GRAPHICS ON` n'a pas été émis, aucun PROC
     /// graphique ne produit d'image. État GLOBAL persistant (survit aux RUN;).
     pub ods_graphics: crate::ods_graphics::OdsGraphics,
+    /// M29.2 — compteur d'images produites par les PROC graphiques (PROC SGPLOT).
+    /// Incrémenté à CHAQUE image générée pour le nommage séquentiel
+    /// (`sgplot_1.png`, `sgplot_2.png`, …). État de session persistant. Lu
+    /// uniquement sous `--features graphics` ; d'où le `allow(dead_code)` ciblé
+    /// pour le build par défaut.
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub graphics_image_count: u32,
     /// Directory against which relative LIBNAME paths resolve.
     pub base_dir: PathBuf,
     /// _LAST_: most recently created dataset, e.g. "WORK.A" — the default
@@ -169,6 +176,7 @@ impl Session {
             ods_output_map: HashMap::new(),
             options,
             ods_graphics: crate::ods_graphics::OdsGraphics::new(base_dir.clone()),
+            graphics_image_count: 0,
             base_dir,
             last_dataset: None,
             views: std::collections::HashMap::new(),
