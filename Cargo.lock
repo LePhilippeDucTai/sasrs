@@ -2483,7 +2483,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sas_interpreter"
+name = "sasrs"
 version = "0.1.0"
 dependencies = [
  "chrono",

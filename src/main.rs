@@ -4,7 +4,7 @@
 //! écrirait .log/.lst ; les fichiers via --log/--print).
 
 use clap::Parser;
-use sas_interpreter::{RunOptions, run};
+use sasrs::{RunOptions, run};
 use std::path::PathBuf;
 use std::process::ExitCode;
 

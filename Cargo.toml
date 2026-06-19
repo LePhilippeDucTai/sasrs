@@ -1,7 +1,13 @@
 [package]
-name = "sas_interpreter"
+name = "sasrs"
 version = "0.1.0"
 edition = "2024"
+description = "A SAS 9.4 language interpreter built on Polars"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/LePhilippeDucTai/sasrs"
+readme = "README.md"
+keywords = ["sas", "interpreter", "polars", "data", "statistics"]
+categories = ["command-line-utilities", "science"]
 
 [[bin]]
 name = "sasrs"

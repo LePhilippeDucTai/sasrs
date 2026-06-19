@@ -7,7 +7,7 @@
 
 mod common;
 
-use sas_interpreter::{RunOptions, run};
+use sasrs::{RunOptions, run};
 
 #[test]
 fn fixtures() {

@@ -8,7 +8,7 @@
 
 mod common;
 
-use sas_interpreter::{run, RunOptions};
+use sasrs::{run, RunOptions};
 
 /// Exécute un programme SAS en mode déterministe avec `base_dir` = tempdir
 /// peuplé de `data/class.parquet`, puis renvoie le contenu du fichier HTML
