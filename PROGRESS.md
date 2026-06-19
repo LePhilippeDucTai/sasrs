@@ -294,7 +294,8 @@ Table-driven (`DISPATCH` dans `functions.rs`), numérique maison. Un lot ⫽ par
 - [x] Fixtures `m27/` + snapshots. DoD
 
 ## M28 — modèles mixtes (le plus difficile, en dernier)
-- [ ] M28.1 — `PROC MIXED` (effets fixes + aléatoires, REML/ML itératif, structures VC/CS/AR(1)/UN, SOLUTION, LSMEANS) (Fable, très élevé)
+- [x] M28.1 — `PROC MIXED` (effets fixes + aléatoires, REML/ML itératif, structures VC/CS/AR(1)/UN, SOLUTION, LSMEANS) (Fable, très élevé)
+  — `src/procs/mixed.rs` (parser + executor) : DATA=, METHOD=REML (défaut)/ML, CLASS, MODEL dep = / SOLUTION, RANDOM INTERCEPT / SUBJECT= TYPE=VC/CS ; algorithme EM/closed-form REML et ML pour random intercept model ; design balancé → solution fermée (méthode des moments) ; déséquilibré → recherche golden-section sur λ=σ²_u/σ²_e ; effets fixes β̂ et SE via (X'V⁻¹X)⁻¹ ; ddfm=Contain (df = nb sujets − nb params fixes) ; 8 sections listing (Model Info, Class Level Info, Dimensions, Nobs, Iteration History, Covariance Parameter Estimates, Fit Statistics, Solution for Fixed Effects) ; TYPE=AR(1)/UN → erreur propre ; LSMEANS/ESTIMATE/CONTRAST/REPEATED/COVTEST → NOTE non implémenté. **Oracles validés** : design balancé 2 sujets×2 obs (y=1,3,5,7) : σ²_u_REML=7.0000 ✓, σ²_e=2.0000 ✓, μ̂=4.0000 ✓, SE=2.0000 ✓, df=1 ✓, p=0.2952 ✓ ; ML : σ²_u_ML=3.0000 ✓ (≠ REML → preuve restriction REML). Fixture `tests/fixtures/m28/mixed.sas` + snapshot.
 - [ ] M28.2 — `PROC GLIMMIX` (modèles mixtes généralisés, pseudo-vraisemblance) (Fable, très élevé)
 - [ ] Fixtures `m28/` + snapshots. DoD
 
