@@ -99,6 +99,10 @@ pub struct Session {
     /// résultat tabulaire comme dataset (en plus du listing).
     pub ods_output_map: HashMap<String, DatasetRef>,
     pub options: SasOptions,
+    /// M29.1 — état ODS GRAPHICS (génération d'images PNG/SVG). `enabled=false`
+    /// par défaut : tant que `ODS GRAPHICS ON` n'a pas été émis, aucun PROC
+    /// graphique ne produit d'image. État GLOBAL persistant (survit aux RUN;).
+    pub ods_graphics: crate::ods_graphics::OdsGraphics,
     /// Directory against which relative LIBNAME paths resolve.
     pub base_dir: PathBuf,
     /// _LAST_: most recently created dataset, e.g. "WORK.A" — the default
@@ -164,6 +168,7 @@ impl Session {
             current_destination: "LISTING".to_string(),
             ods_output_map: HashMap::new(),
             options,
+            ods_graphics: crate::ods_graphics::OdsGraphics::new(base_dir.clone()),
             base_dir,
             last_dataset: None,
             views: std::collections::HashMap::new(),

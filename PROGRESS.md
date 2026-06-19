@@ -312,7 +312,7 @@ Langage matriciel pour calcul scientifique et développement d'algorithmes perso
 ## PHASE D — graphiques (images via `plotters`, dépend de M22)
 
 ## M29 — ODS GRAPHICS + PROC SGPLOT
-- [ ] M29.1 — infra ODS GRAPHICS : destination image vers `plotters` (PNG + SVG), nommage/dimensions/DPI ; snapshots = log/listing + assertion existence + (format, largeur×hauteur), feature `graphics` (Fable, élevé)
+- [x] M29.1 — infra ODS GRAPHICS : struct `OdsGraphics` (enabled/width/height/imagefmt/output_dir/file_stem) sur la Session ; statement `ODS GRAPHICS [ON|OFF] [/ WIDTH= HEIGHT= IMAGEFMT=(PNG|SVG) IMAGENAME= RESET=]` parsé et exécuté (NOTE par-statement : les dimensions ne s'affichent que si fournies dans CE statement). Moteur de rendu `graphics::render::draw_to_file` (plotters, PNG+SVG, backend ttf) sous `#[cfg(feature = "graphics")]` — SCATTER/SERIES/VBAR/HISTOGRAM minimalistes, ne panique jamais (données vides OK). **Feature `graphics` OFF par défaut : build par défaut byte-identique** (aucune image, juste les NOTE). Snapshot `m29/ods_graphics_basic` = log/listing (PAS d'octets image) ; assertion existence + taille>0 dans les tests de rendu. **Différé M29.2** : les NOTE au moment du RENDU ("image output deferred" sans feature / "Output 'file.png' (WxH) written to ..." avec feature) seront câblées au site d'appel de PROC SGPLOT — `draw_to_file` renvoie déjà `(w,h)` comme point d'ancrage. (Fable, élevé). **M29.1 TERMINÉ.**
 - [ ] M29.2 — `PROC SGPLOT` : SCATTER, SERIES, VBAR/HBAR, HISTOGRAM, DENSITY, VBOX, REG/LOESS, XAXIS/YAXIS, BY (Opus, élevé)
 - [ ] M29.3 — branchement des plots UNIVARIATE (HISTOGRAM/QQPLOT) et REG (diagnostics) sur l'infra image (Opus, moyen)
 - [ ] Fixtures `m29/` + snapshots. DoD

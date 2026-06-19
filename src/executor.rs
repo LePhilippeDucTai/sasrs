@@ -325,6 +325,62 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 session.set_ods_output(mappings);
             }
         }
+        GlobalStmt::OdsGraphics(stmt) => {
+            exec_ods_graphics(session, stmt);
+        }
+    }
+}
+
+/// M29.1 — exécute un statement `ODS GRAPHICS`.
+///
+/// Met à jour l'état GLOBAL `session.ods_graphics` à partir des options
+/// PAR-STATEMENT, puis émet la NOTE de log. La NOTE reflète UNIQUEMENT ce que
+/// CE statement a porté : les dimensions ne sont affichées que si WIDTH=/HEIGHT=
+/// ont été fournis dans ce statement précis (même si la session conserve des
+/// valeurs antérieures). C'est pourquoi on construit la NOTE AVANT/à partir du
+/// statement, pas en relisant `session.ods_graphics`.
+fn exec_ods_graphics(session: &mut Session, stmt: &crate::ast::OdsGraphicsStmt) {
+    use crate::ast::OdsGraphicsToggle;
+
+    // 1) Appliquer les options de config à l'état de session (persistantes).
+    if let Some(w) = stmt.width {
+        session.ods_graphics.width = w;
+    }
+    if let Some(h) = stmt.height {
+        session.ods_graphics.height = h;
+    }
+    if let Some(fmt) = stmt.imagefmt {
+        session.ods_graphics.image_format = fmt;
+    }
+    if let Some(ref name) = stmt.imagename {
+        session.ods_graphics.file_stem = Some(name.clone());
+    }
+
+    // 2) Appliquer la bascule ON/OFF (persistante).
+    match stmt.toggle {
+        OdsGraphicsToggle::On => session.ods_graphics.enabled = true,
+        OdsGraphicsToggle::Off => session.ods_graphics.enabled = false,
+        OdsGraphicsToggle::None => {}
+    }
+
+    // 3) Émettre la NOTE — pilotée par CE statement seulement.
+    //    Les dimensions n'apparaissent que si elles ont été fournies ici.
+    let dims_suffix = match (stmt.width, stmt.height) {
+        (Some(w), Some(h)) => Some(format!("(width={}, height={})", w, h)),
+        (Some(w), None) => Some(format!("(width={})", w)),
+        (None, Some(h)) => Some(format!("(height={})", h)),
+        (None, None) => None,
+    };
+    match stmt.toggle {
+        OdsGraphicsToggle::On => match dims_suffix {
+            Some(d) => session.log.note(&format!("ODS GRAPHICS ON {}.", d)),
+            None => session.log.note("ODS GRAPHICS ON."),
+        },
+        OdsGraphicsToggle::Off => session.log.note("ODS GRAPHICS OFF."),
+        OdsGraphicsToggle::None => match dims_suffix {
+            Some(d) => session.log.note(&format!("ODS GRAPHICS {}.", d)),
+            None => session.log.note("ODS GRAPHICS."),
+        },
     }
 }
 
@@ -549,6 +605,106 @@ mod tests {
             "{}",
             out.log
         );
+    }
+
+    // ── ODS GRAPHICS (M29.1) ─────────────────────────────────────────────────
+
+    /// Construit une Session déterministe et exécute UN statement `ODS GRAPHICS`
+    /// dessus, en renvoyant la Session pour inspection de `session.ods_graphics`.
+    fn run_graphics_stmt(src: &str) -> crate::session::Session {
+        use crate::parser::global::parse_global;
+        use crate::parser::StatementStream;
+        use crate::source::SourceFile;
+        let mut session =
+            crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+        let sf = SourceFile::new(src);
+        let mut ts = StatementStream::new(&sf).unwrap();
+        let stmt = parse_global(&mut ts).unwrap();
+        super::exec_global(&stmt, &mut session);
+        session
+    }
+
+    #[test]
+    fn ods_graphics_on_sets_enabled() {
+        let s = run_graphics_stmt("ods graphics on;");
+        assert!(s.ods_graphics.enabled);
+    }
+
+    #[test]
+    fn ods_graphics_off_clears_enabled() {
+        // ON puis OFF sur la même session : l'état doit finir à false.
+        use crate::parser::global::parse_global;
+        use crate::parser::StatementStream;
+        use crate::source::SourceFile;
+        let mut session =
+            crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+        for src in ["ods graphics on;", "ods graphics off;"] {
+            let sf = SourceFile::new(src);
+            let mut ts = StatementStream::new(&sf).unwrap();
+            let stmt = parse_global(&mut ts).unwrap();
+            super::exec_global(&stmt, &mut session);
+        }
+        assert!(!session.ods_graphics.enabled);
+    }
+
+    #[test]
+    fn ods_graphics_width_height_update_fields() {
+        let s = run_graphics_stmt("ods graphics on / width=1000 height=700;");
+        assert!(s.ods_graphics.enabled);
+        assert_eq!(s.ods_graphics.width, 1000);
+        assert_eq!(s.ods_graphics.height, 700);
+    }
+
+    #[test]
+    fn ods_graphics_imagefmt_svg_updates_field() {
+        let s = run_graphics_stmt("ods graphics on / imagefmt=svg;");
+        assert_eq!(
+            s.ods_graphics.image_format,
+            crate::ods_graphics::ImageFmt::Svg
+        );
+    }
+
+    #[test]
+    fn ods_graphics_imagefmt_png_updates_field() {
+        let s = run_graphics_stmt("ods graphics on / imagefmt=png;");
+        assert_eq!(
+            s.ods_graphics.image_format,
+            crate::ods_graphics::ImageFmt::Png
+        );
+    }
+
+    #[test]
+    fn ods_graphics_default_state() {
+        let session =
+            crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+        assert!(!session.ods_graphics.enabled);
+        assert_eq!(session.ods_graphics.width, 800);
+        assert_eq!(session.ods_graphics.height, 600);
+        assert_eq!(
+            session.ods_graphics.image_format,
+            crate::ods_graphics::ImageFmt::Png
+        );
+    }
+
+    #[test]
+    fn ods_graphics_note_dims_only_when_specified() {
+        // 4e ON est nu (sans dims) même si une session a déjà width=1000 :
+        // la NOTE ne montre les dims que pour le statement qui les porte.
+        let out = run_det(
+            "ods graphics on;\n\
+             ods graphics on / width=1000 height=700;\n\
+             ods graphics off;\n\
+             ods graphics on;\n\
+             ods graphics off;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        assert!(out.log.contains("NOTE: ODS GRAPHICS ON."), "{}", out.log);
+        assert!(
+            out.log.contains("NOTE: ODS GRAPHICS ON (width=1000, height=700)."),
+            "{}",
+            out.log
+        );
+        assert!(out.log.contains("NOTE: ODS GRAPHICS OFF."), "{}", out.log);
     }
 
     #[test]

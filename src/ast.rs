@@ -687,6 +687,49 @@ pub enum GlobalStmt {
         /// `true` pour `ODS OUTPUT CLOSE ;` (purge des mappings).
         close: bool,
     },
+    /// M29.1 — statement `ODS GRAPHICS` : active/désactive la génération d'images
+    /// et configure les paramètres de rendu.
+    ///
+    /// Formes reconnues :
+    /// - `ODS GRAPHICS ON ;`
+    /// - `ODS GRAPHICS OFF ;`
+    /// - `ODS GRAPHICS ON / WIDTH=nnn HEIGHT=nnn IMAGEFMT=(PNG|SVG) ;`
+    /// - `ODS GRAPHICS / IMAGENAME="fig" RESET=index ;` (sans ON/OFF : MAJ config)
+    ///
+    /// IMPORTANT : ces options sont PAR-STATEMENT. La NOTE de log émise à
+    /// l'exécution reflète UNIQUEMENT ce que CE statement a porté (les
+    /// dimensions ne sont affichées que si elles ont été fournies ici), même si
+    /// la session conserve des valeurs antérieures. Voir `executor::exec_ods_graphics`.
+    OdsGraphics(OdsGraphicsStmt),
+}
+
+/// M29.1 — bascule ON/OFF d'un statement `ODS GRAPHICS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OdsGraphicsToggle {
+    /// `ODS GRAPHICS ON`.
+    On,
+    /// `ODS GRAPHICS OFF`.
+    Off,
+    /// `ODS GRAPHICS / ...` sans ON/OFF : met seulement à jour la config.
+    None,
+}
+
+/// M29.1 — options portées par UN statement `ODS GRAPHICS` (per-statement).
+///
+/// Tous les champs `Option<…>` sont `None` si l'option n'a pas été fournie
+/// dans CE statement. C'est cette absence/présence qui pilote la NOTE de log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OdsGraphicsStmt {
+    /// ON / OFF / (aucun).
+    pub toggle: OdsGraphicsToggle,
+    /// `WIDTH=` fourni dans ce statement (pixels).
+    pub width: Option<u32>,
+    /// `HEIGHT=` fourni dans ce statement (pixels).
+    pub height: Option<u32>,
+    /// `IMAGEFMT=` fourni dans ce statement.
+    pub imagefmt: Option<crate::ods_graphics::ImageFmt>,
+    /// `IMAGENAME=` fourni dans ce statement (préfixe de nommage).
+    pub imagename: Option<String>,
 }
 
 /// M22.2 — action d'un statement `ODS` sur une destination.

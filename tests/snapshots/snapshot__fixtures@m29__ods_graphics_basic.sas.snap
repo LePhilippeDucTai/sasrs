@@ -1,0 +1,29 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m29/ods_graphics_basic.sas
+---
+==== LOG ====
+
+1     title 'ODS GRAPHICS: activation et configuration';
+
+2     ods graphics on;
+NOTE: ODS GRAPHICS ON.
+
+3     ods graphics on / width=1000 height=700;
+NOTE: ODS GRAPHICS ON (width=1000, height=700).
+
+4     ods graphics off;
+NOTE: ODS GRAPHICS OFF.
+
+5     ods graphics on;
+NOTE: ODS GRAPHICS ON.
+
+6     ods graphics off;
+NOTE: ODS GRAPHICS OFF.
+
+7     title;
+
+==== LISTING ====
+
+==== EXIT 0 ====

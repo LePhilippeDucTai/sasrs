@@ -109,6 +109,12 @@ pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
         return parse_ods_output(ts);
     }
 
+    // `ODS GRAPHICS ...` — infra de génération d'images (M29.1).
+    if first == "graphics" {
+        ts.next(); // consume `graphics`
+        return parse_ods_graphics(ts);
+    }
+
     // `ODS CLOSE [name] ;` — verbe en tête, destination optionnelle après.
     if first == "close" {
         ts.next(); // consume `close`
@@ -230,6 +236,179 @@ fn parse_ods_output(ts: &mut StatementStream) -> Result<GlobalStmt> {
         mappings,
         close: false,
     })
+}
+
+/// Parse `ODS GRAPHICS ...` (le mot-clé `GRAPHICS` a déjà été consommé) — M29.1.
+///
+/// Grammaire : `ODS GRAPHICS [ON|OFF] [ / opt=val ... ] ;`
+///
+/// Options après le `/` :
+/// - `WIDTH=nnn` / `HEIGHT=nnn` (pixels)
+/// - `IMAGEFMT=PNG|SVG` (ou forme parenthésée `IMAGEFMT=(PNG)`)
+/// - `IMAGENAME="fig"` (préfixe de nommage)
+/// - `RESET[=index|all]` — parsée puis ignorée (v1)
+///
+/// Les options sont conservées PAR-STATEMENT (champs `Option`) : c'est leur
+/// présence/absence qui pilote la NOTE de log à l'exécution.
+fn parse_ods_graphics(ts: &mut StatementStream) -> Result<GlobalStmt> {
+    use crate::ast::{OdsGraphicsStmt, OdsGraphicsToggle};
+    use crate::ods_graphics::ImageFmt;
+
+    // ON / OFF optionnel en tête (avant un éventuel `/`).
+    let toggle = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+        Some(ref a) if a == "on" => {
+            ts.next();
+            OdsGraphicsToggle::On
+        }
+        Some(ref a) if a == "off" => {
+            ts.next();
+            OdsGraphicsToggle::Off
+        }
+        _ => OdsGraphicsToggle::None,
+    };
+
+    let mut width: Option<u32> = None;
+    let mut height: Option<u32> = None;
+    let mut imagefmt: Option<ImageFmt> = None;
+    let mut imagename: Option<String> = None;
+
+    // Options optionnelles après un `/`.
+    if ts.peek().kind == TokenKind::Slash {
+        ts.next(); // consume `/`
+        loop {
+            if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+                break;
+            }
+            let name_tok = ts.peek().clone();
+            let name = match name_tok.ident() {
+                Some(s) => s.to_ascii_lowercase(),
+                None => {
+                    return Err(SasError::parse(
+                        "Expected an ODS GRAPHICS option (WIDTH=, HEIGHT=, IMAGEFMT=, IMAGENAME=, RESET) or ';'",
+                        name_tok.span,
+                    ));
+                }
+            };
+            ts.next(); // consume option name
+
+            match name.as_str() {
+                "width" | "height" => {
+                    expect_eq(ts, &name)?;
+                    let v = parse_dim(ts, &name)?;
+                    if name == "width" {
+                        width = Some(v);
+                    } else {
+                        height = Some(v);
+                    }
+                }
+                "imagefmt" | "outputfmt" => {
+                    expect_eq(ts, &name)?;
+                    imagefmt = Some(parse_imagefmt(ts)?);
+                }
+                "imagename" => {
+                    expect_eq(ts, &name)?;
+                    let val_tok = ts.peek().clone();
+                    let value = parse_option_value(ts, &val_tok.span)?;
+                    imagename = Some(value);
+                }
+                "reset" => {
+                    // `RESET` ou `RESET=index|all` — parsée puis ignorée (v1).
+                    if ts.peek().kind == TokenKind::Eq {
+                        ts.next(); // consume `=`
+                        let val_tok = ts.peek().clone();
+                        let _ = parse_option_value(ts, &val_tok.span)?;
+                    }
+                }
+                other => {
+                    return Err(SasError::parse(
+                        format!(
+                            "ODS GRAPHICS option '{}' is not supported in this build.",
+                            other.to_uppercase()
+                        ),
+                        name_tok.span,
+                    ));
+                }
+            }
+        }
+    }
+
+    ts.expect_semi()?;
+    Ok(GlobalStmt::OdsGraphics(OdsGraphicsStmt {
+        toggle,
+        width,
+        height,
+        imagefmt,
+        imagename,
+    }))
+}
+
+/// Helper M29.1 : exige un `=` après un nom d'option ODS GRAPHICS.
+fn expect_eq(ts: &mut StatementStream, name: &str) -> Result<()> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!("ODS GRAPHICS option {} requires a value (e.g. {}=...)", name.to_uppercase(), name.to_uppercase()),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // consume `=`
+    Ok(())
+}
+
+/// Helper M29.1 : parse une dimension entière positive (WIDTH=/HEIGHT=).
+fn parse_dim(ts: &mut StatementStream, name: &str) -> Result<u32> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Num(f) if *f >= 0.0 && f.fract() == 0.0 => {
+            let v = *f as u32;
+            ts.next();
+            Ok(v)
+        }
+        _ => Err(SasError::parse(
+            format!("ODS GRAPHICS {} requires a positive integer", name.to_uppercase()),
+            tok.span,
+        )),
+    }
+}
+
+/// Helper M29.1 : parse un format d'image (PNG|SVG), avec forme parenthésée
+/// optionnelle `IMAGEFMT=(PNG)`.
+fn parse_imagefmt(ts: &mut StatementStream) -> Result<crate::ods_graphics::ImageFmt> {
+    use crate::ods_graphics::ImageFmt;
+    let parenthesized = ts.peek().kind == TokenKind::LParen;
+    if parenthesized {
+        ts.next(); // consume `(`
+    }
+    let tok = ts.peek().clone();
+    let name = match tok.ident() {
+        Some(s) => s.to_ascii_lowercase(),
+        None => {
+            return Err(SasError::parse(
+                "IMAGEFMT= requires PNG or SVG",
+                tok.span,
+            ));
+        }
+    };
+    let fmt = match name.as_str() {
+        "png" => ImageFmt::Png,
+        "svg" => ImageFmt::Svg,
+        other => {
+            return Err(SasError::parse(
+                format!("IMAGEFMT={} is not supported (use PNG or SVG)", other.to_uppercase()),
+                tok.span,
+            ));
+        }
+    };
+    ts.next(); // consume format ident
+    if parenthesized {
+        if ts.peek().kind != TokenKind::RParen {
+            return Err(SasError::parse(
+                "expected ')' after IMAGEFMT=(...)",
+                ts.peek().span,
+            ));
+        }
+        ts.next(); // consume `)`
+    }
+    Ok(fmt)
 }
 
 /// Parse les options d'un statement `ODS` jusqu'au `;` : `FILE=`, `STYLE=`,
@@ -994,5 +1173,66 @@ mod tests {
     fn parse_ods_output_requires_equals() {
         let err = parse("ods output Summary;").unwrap_err();
         assert!(!err.to_string().is_empty());
+    }
+
+    // ── ODS GRAPHICS (M29.1) ─────────────────────────────────────────────────
+
+    use crate::ast::{OdsGraphicsStmt, OdsGraphicsToggle};
+    use crate::ods_graphics::ImageFmt;
+
+    fn graphics_stmt(src: &str) -> OdsGraphicsStmt {
+        match parse(src).unwrap() {
+            GlobalStmt::OdsGraphics(s) => s,
+            other => panic!("expected OdsGraphics, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ods_graphics_on() {
+        let s = graphics_stmt("ods graphics on;");
+        assert_eq!(s.toggle, OdsGraphicsToggle::On);
+        assert_eq!(s.width, None);
+        assert_eq!(s.height, None);
+        assert_eq!(s.imagefmt, None);
+    }
+
+    #[test]
+    fn parse_ods_graphics_off() {
+        let s = graphics_stmt("ODS GRAPHICS OFF;");
+        assert_eq!(s.toggle, OdsGraphicsToggle::Off);
+    }
+
+    #[test]
+    fn parse_ods_graphics_on_with_dims() {
+        let s = graphics_stmt("ods graphics on / width=1000 height=700;");
+        assert_eq!(s.toggle, OdsGraphicsToggle::On);
+        assert_eq!(s.width, Some(1000));
+        assert_eq!(s.height, Some(700));
+    }
+
+    #[test]
+    fn parse_ods_graphics_imagefmt_svg() {
+        let s = graphics_stmt("ods graphics on / imagefmt=svg;");
+        assert_eq!(s.imagefmt, Some(ImageFmt::Svg));
+    }
+
+    #[test]
+    fn parse_ods_graphics_imagefmt_png_parenthesized() {
+        let s = graphics_stmt("ods graphics on / imagefmt=(png);");
+        assert_eq!(s.imagefmt, Some(ImageFmt::Png));
+    }
+
+    #[test]
+    fn parse_ods_graphics_imagename_and_reset() {
+        let s = graphics_stmt("ods graphics / imagename=\"myfig\" reset=index;");
+        assert_eq!(s.toggle, OdsGraphicsToggle::None);
+        assert_eq!(s.imagename.as_deref(), Some("myfig"));
+    }
+
+    #[test]
+    fn parse_ods_graphics_reset_bare() {
+        let s = graphics_stmt("ods graphics on / reset width=640;");
+        assert_eq!(s.toggle, OdsGraphicsToggle::On);
+        assert_eq!(s.width, Some(640));
     }
 }

@@ -56,7 +56,7 @@ tempfile = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
-plotters = { version = "0.3.7", default-features = false, features = ["bitmap_backend", "svg_backend"], optional = true }
+plotters = { version = "0.3.7", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "svg_backend", "line_series", "point_series", "ttf"], optional = true }
 
 [dev-dependencies]
 insta = { version = "1", features = ["glob"] }
