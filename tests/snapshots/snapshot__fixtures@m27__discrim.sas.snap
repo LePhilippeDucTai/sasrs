@@ -1,0 +1,110 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m27/discrim.sas
+---
+==== LOG ====
+
+1     title 'PROC DISCRIM: linear discriminant analysis';
+
+2     data work.lda;
+3       input class $ x;
+4     datalines;
+5     A 1
+6     A 2
+7     A 3
+8     B 5
+9     B 6
+10    B 7
+11    ;
+NOTE: The data set WORK.LDA has 6 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    proc discrim data=work.lda;
+13      class class;
+14      var x;
+15    run;
+NOTE: There were 6 observations read from the data set WORK.LDA.
+NOTE: There were 6 observations used.
+NOTE: PROCEDURE DISCRIM used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    title;
+
+==== LISTING ====
+                           PROC DISCRIM: linear discriminant analysis
+
+                                   The DISCRIMINANT Procedure
+
+
+
+                       Observations         6    Variables             1
+                       DF Total             5    Classes               2
+                       DF Within Classes    4    DF Between Classes    1
+
+                                    Class Level Information
+
+                     class    Variable    Frequency    Weight    Proportion
+
+                     A        A                   3    3.0000      0.500000
+                     B        B                   3    3.0000      0.500000
+
+                                 Within-Class Covariance Matrix
+
+A    DF = 2
+
+                                                    x
+
+                                          x    1.0000
+
+B    DF = 2
+
+                                                    x
+
+                                          x    1.0000
+
+                             Pooled Within-Class Covariance Matrix
+
+DF = 4
+
+                                                    x
+
+                                          x    1.0000
+
+                           Pairwise Squared Distances Between Groups
+
+                                               A          B
+
+                                    A     0.0000    16.0000
+                                    B    16.0000     0.0000
+
+                           Linear Discriminant Function Coefficients
+
+                                Variable          A           B
+
+                                Constant    -2.6931    -18.6931
+                                x            2.0000      6.0000
+
+                            Classification Results for Training Data
+
+                 Obs    From CLASS    Classified Into CLASS         A         B
+
+                   1    A             A                        1.0000    0.0000
+                   2    A             A                        0.9997    0.0003
+                   3    A             A                        0.9820    0.0180
+                   4    B             B                        0.0180    0.9820
+                   5    B             B                        0.0003    0.9997
+                   6    B             B                        0.0000    1.0000
+
+                            Error Count Estimates for Training Data
+
+                                             A         B     Total
+
+                              Rate      0.0000    0.0000    0.0000
+                              Priors    0.5000    0.5000
+
+
+==== EXIT 0 ====
