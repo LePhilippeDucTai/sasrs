@@ -358,7 +358,10 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   `parse_name_list()`+`expect_semi()` comme `print.rs`) ; `means.rs` ré-exporte
   `parse_by as parse_by_list` + `parse_single_var` (`univariate`/`rank` inchangés).
   2276 lib verts, 0 `.snap.new`, 0 warning nouveau.
-- [ ] ⫽ M31.3 — migrer `src/procs/print.rs` (canari) sur les combinateurs (Sonnet, faible)
+- [x] ⫽ M31.3 — migrer `src/procs/print.rs` (canari) sur les combinateurs (Sonnet, faible).
+  **FAIT** : boucles d'options/corps → `parse_proc_options`/`parse_proc_body` (closures),
+  `data=`→`parse_dataset_opt`, `var`→`parse_var_list`, résolution `_LAST_`→`resolve_last_dataset` ;
+  import `TokenKind` retiré (inutile). −59 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] ⫽ M31.4 — migrer `src/procs/sort.rs` (Sonnet, faible)
 - [ ] ⫽ M31.5 — migrer Tier B : `contents`, `transpose`, `append`, `rank`, `printto`,
   `options`, `catalog` — un proc par commit (Sonnet, faible)

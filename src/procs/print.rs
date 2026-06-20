@@ -24,8 +24,8 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::num_to_value;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::{format_best, Value};
 
 pub struct PrintAst {
@@ -45,103 +45,47 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
     let mut label = false;
     let mut vars: Option<Vec<String>> = None;
 
-    // Parse PROC PRINT header options until `;`
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next(); // consume "data"
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after DATA",
-                    ts.peek().span,
-                ));
+    // En-tête PROC PRINT : options jusqu'au `;` (combinateur partagé M31).
+    common::parse_proc_options(ts, "PRINT", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
             }
-            ts.next(); // consume `=`
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("noobs") {
-            ts.next();
-            noobs = true;
-        } else if ts.peek().is_kw("label") {
-            // LABEL option: utilise les libellés comme en-têtes (M4).
-            ts.next();
-            label = true;
-        } else {
-            // Unknown option on PROC PRINT statement — skip to end of statement
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC PRINT statement."),
-                span,
-            ));
-        }
-    }
-
-    // Parse sub-statements until `run;` or `quit;` or step boundary
-    loop {
-        // Skip stray semicolons
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next(); // consume run/quit
-            // consume the `;`
-            if ts.peek().kind == TokenKind::Semi {
+            "noobs" => {
                 ts.next();
+                noobs = true;
+                true
             }
-            break;
-        }
+            "label" => {
+                // LABEL option: utilise les libellés comme en-têtes (M4).
+                ts.next();
+                label = true;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
-        if ts.peek().is_kw("var") {
-            ts.next(); // consume "var"
-            vars = Some(ts.parse_name_list()?);
-            ts.expect_semi()?;
-        } else {
-            // Unknown sub-statement: skip it
-            ts.skip_to_semi();
-        }
-    }
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
+                ts.next(); // consume "var"
+                vars = Some(common::parse_var_list(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(PrintAst { data, vars, noobs, label })
 }
 
 /// Execute PROC PRINT. Called by `procs::execute_proc` which wraps with timing.
 pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
-    // Resolve dataset reference: data= or _LAST_
-    let ds_ref: DatasetRef = match &ast.data {
-        Some(r) => r.clone(),
-        None => {
-            // Use _LAST_
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime(
-                    "There is no default input data set (_LAST_ is undefined).",
-                )
-            })?;
-            // last_dataset is "LIBREF.NAME"
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                }
-            } else {
-                DatasetRef {
-                    libref: None,
-                    name: last,
-                }
-            }
-        }
-    };
+    // Resolve dataset reference: data= or _LAST_ (combinateur partagé M31).
+    let ds_ref: DatasetRef = common::resolve_last_dataset(&ast.data, session)?;
 
     let libref = ds_ref.libref_or_work();
     let table_name = ds_ref.name.to_uppercase();
