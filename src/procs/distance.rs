@@ -21,6 +21,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -59,17 +60,6 @@ pub struct DistanceAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 fn parse_method(ts: &mut StatementStream) -> Result<DistMethod> {
     let span = ts.peek().span;
     let name = ts
@@ -107,16 +97,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
+            out = Some(common::parse_out_opt(ts)?);
         } else if ts.peek().is_kw("method") {
-            ts.next();
-            expect_eq(ts, "METHOD")?;
+            common::expect_eq(ts, "METHOD")?;
             method = parse_method(ts)?;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
@@ -137,28 +122,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
     }
 
     let mut var: Vec<String> = Vec::new();
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else {
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     Ok(DistanceAst {
         data,
@@ -166,29 +140,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
         method,
         var,
     })
-}
-
-fn resolve_input(data: &Option<DatasetRef>, session: &Session) -> Result<DatasetRef> {
-    match data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 /// Distance between two coordinate vectors under the given method.
@@ -249,7 +200,7 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
         return Err(SasError::runtime("PROC DISTANCE requires a VAR statement."));
     }
 
-    let in_ref = resolve_input(&ast.data, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display = format!("{in_libref}.{in_table}");

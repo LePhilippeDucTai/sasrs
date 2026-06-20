@@ -83,7 +83,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, group_by_keys, partition_numeric};
+use crate::procs::common::{self, decode_column, group_by_keys, partition_numeric};
 use crate::procs::means;
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -201,47 +201,35 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
     let mut rbreak: Option<Break> = None;
     let mut computes: Vec<Compute> = Vec::new();
 
-    // --- PROC REPORT statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next();
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse("expected '=' after DATA", ts.peek().span));
+    // --- PROC REPORT statement options, until `;` (combinateur partagé M31) ---
+    common::parse_proc_options(ts, "REPORT", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
             }
-            ts.next();
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("out") {
-            ts.next();
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse("expected '=' after OUT", ts.peek().span));
+            "out" => {
+                out = Some(common::parse_out_opt(ts)?);
+                true
             }
-            ts.next();
-            out = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("nowd") || ts.peek().is_kw("nowindow") {
-            // No-op: we never open an interactive window.
-            ts.next();
-        } else if ts.peek().is_kw("noheader") {
-            ts.next();
-            noheader = true;
-        } else if ts.peek().is_kw("headline") || ts.peek().is_kw("headskip") {
-            // No-op cosmetic options (rule line / skip line under headers).
-            ts.next();
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC REPORT statement."),
-                span,
-            ));
-        }
-    }
+            "nowd" | "nowindow" => {
+                // No-op: we never open an interactive window.
+                ts.next();
+                true
+            }
+            "noheader" => {
+                ts.next();
+                noheader = true;
+                true
+            }
+            "headline" | "headskip" => {
+                // No-op cosmetic options (rule line / skip line under headers).
+                ts.next();
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     // --- sub-statements until run;/quit; ---
     loop {
@@ -606,30 +594,6 @@ fn parse_order_dir(ts: &mut StatementStream) -> Result<OrderDir> {
     }
 }
 
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &ReportAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Resolved per-column plan entry: index into the dataset, effective usage,
 /// order direction, and the header text to display.
 struct ColPlan {
@@ -650,7 +614,7 @@ fn fmt_cell(v: &Value) -> String {
 
 /// Execute PROC REPORT. Called by `procs::execute_proc`.
 pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display_name = in_ref.display();

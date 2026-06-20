@@ -33,7 +33,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::VarType;
@@ -119,17 +119,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("method") {
             ts.next();
             expect_eq(ts, "METHOD")?;
             method = parse_method(ts)?;
         } else if ts.peek().is_kw("outtree") {
-            ts.next();
-            expect_eq(ts, "OUTTREE")?;
-            outtree = Some(ts.parse_dataset_ref()?);
+            outtree = Some(common::parse_dataset_opt(ts, "OUTTREE")?);
         } else if ts.peek().is_kw("print") {
             ts.next();
             expect_eq(ts, "PRINT")?;
@@ -163,33 +159,25 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
 
     let mut var: Vec<String> = Vec::new();
     let mut id: Option<String> = None;
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("id") {
-            ts.next();
-            let names = ts.parse_name_list()?;
-            id = names.into_iter().next();
-            ts.expect_semi()?;
-        } else {
-            ts.skip_to_semi();
-        }
-    }
+            "id" => {
+                ts.next();
+                let names = ts.parse_name_list()?;
+                id = names.into_iter().next();
+                ts.expect_semi()?;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(ClusterAst {
         data,
@@ -200,29 +188,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
         var,
         id,
     })
-}
-
-fn resolve_input(data: &Option<DatasetRef>, session: &Session) -> Result<DatasetRef> {
-    match data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── clustering core ─────────────────────────
@@ -447,7 +412,7 @@ pub fn execute(ast: &ClusterAst, session: &mut Session) -> Result<()> {
         return Err(SasError::runtime("PROC CLUSTER requires a VAR statement."));
     }
 
-    let in_ref = resolve_input(&ast.data, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display = format!("{in_libref}.{in_table}");

@@ -20,7 +20,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;
@@ -95,17 +95,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
             break;
         }
         if tk.is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
+            out = Some(common::parse_out_opt(ts)?);
         } else if tk.is_kw("outstat") {
-            ts.next();
-            expect_eq(ts, "OUTSTAT")?;
-            outstat = Some(ts.parse_dataset_ref()?);
+            outstat = Some(common::parse_dataset_opt(ts, "OUTSTAT")?);
         } else if tk.is_kw("method") {
             ts.next();
             expect_eq(ts, "METHOD")?;
@@ -141,58 +135,53 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
     let mut var_vars: Vec<String> = Vec::new();
     let mut id_var: Option<String> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "class" => {
                 ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
-            ts.next();
-            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                class_var = Some(name);
-                ts.next();
-            }
-            ts.skip_to_semi();
-        } else if ts.peek().is_kw("var") {
-            ts.next();
-            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    var_vars.push(name);
-                    ts.next();
-                } else {
+                    class_var = Some(name);
                     ts.next();
                 }
+                ts.skip_to_semi();
+                true
             }
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("id") {
-            ts.next();
-            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                id_var = Some(name);
+            "var" => {
                 ts.next();
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if let Some(name) = ts.peek().ident().map(str::to_string) {
+                        var_vars.push(name);
+                        ts.next();
+                    } else {
+                        ts.next();
+                    }
+                }
+                ts.expect_semi()?;
+                true
             }
-            ts.skip_to_semi();
-        } else if ts.peek().is_kw("priors") {
-            ts.next();
-            let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
-            priors = match v.as_deref() {
-                Some("proportional") | Some("prop") => Priors::Proportional,
-                _ => Priors::Equal,
-            };
-            ts.skip_to_semi();
-        } else {
-            ts.skip_to_semi();
-        }
-    }
+            "id" => {
+                ts.next();
+                if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    id_var = Some(name);
+                    ts.next();
+                }
+                ts.skip_to_semi();
+                true
+            }
+            "priors" => {
+                ts.next();
+                let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
+                priors = match v.as_deref() {
+                    Some("proportional") | Some("prop") => Priors::Proportional,
+                    _ => Priors::Equal,
+                };
+                ts.skip_to_semi();
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(DiscrimAst {
         data,
@@ -234,31 +223,6 @@ fn value_label(v: &Value) -> String {
         Value::Num(f) => format_best(*f, 12),
         Value::Missing(k) => k.display(),
         Value::Char(s) => s.trim_end().to_string(),
-    }
-}
-
-// ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &DiscrimAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
     }
 }
 
@@ -507,7 +471,7 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

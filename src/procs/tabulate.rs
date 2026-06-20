@@ -96,7 +96,7 @@ use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, partition_numeric};
+use crate::procs::common::{self, decode_column, partition_numeric};
 use crate::procs::means::{compute, stat_header};
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -165,9 +165,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -193,41 +191,33 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
     let mut row: Option<DimExpr> = None;
     let mut col: Option<DimExpr> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "class" => {
                 ts.next();
+                class.extend(ts.parse_name_list()?);
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
-            ts.next();
-            class.extend(ts.parse_name_list()?);
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("var") {
-            ts.next();
-            var.extend(ts.parse_name_list()?);
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("table") || ts.peek().is_kw("tables") {
-            ts.next();
-            let (p, r, c) = parse_table_statement(ts)?;
-            page = p;
-            row = r;
-            col = Some(c);
-            ts.expect_semi()?;
-        } else {
-            // Unknown sub-statement: recover by skipping to `;`.
-            ts.skip_to_semi();
-        }
-    }
+            "var" => {
+                ts.next();
+                var.extend(ts.parse_name_list()?);
+                ts.expect_semi()?;
+                true
+            }
+            "table" | "tables" => {
+                ts.next();
+                let (p, r, c) = parse_table_statement(ts)?;
+                page = p;
+                row = r;
+                col = Some(c);
+                ts.expect_semi()?;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     let col = col.ok_or_else(|| {
         SasError::runtime("PROC TABULATE requires a TABLE statement.")
@@ -335,17 +325,6 @@ fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
         "PROC TABULATE: expected a variable name, statistic, or '(' in TABLE expression",
         ts.peek().span,
     ))
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 // ───────────────────────── expansion ─────────────────────────
@@ -508,32 +487,8 @@ fn observed_levels(vals: &[Value], n_obs: usize) -> Vec<Value> {
 
 // ───────────────────────── execute ─────────────────────────
 
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &TabulateAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

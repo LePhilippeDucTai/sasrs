@@ -9,6 +9,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::{decode_column, sample_std};
 use crate::session::Session;
 use crate::stat::f_cdf;
@@ -39,17 +40,6 @@ pub struct AnovaModel {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse PROC ANOVA. Called AFTER `proc anova` has been consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
     let mut input: Option<DatasetRef> = None;
@@ -64,9 +54,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            input = Some(ts.parse_dataset_ref()?);
+            input = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else {
             // Skip unknown proc-level options
             ts.next();
@@ -78,26 +66,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
     let mut model: Option<AnovaModel> = None;
     let mut means_vars: Vec<String> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
+    common::parse_proc_body(ts, |ts, kw| {
+        if kw == "class" {
             ts.next();
             class_vars = ts.parse_name_list()?;
             ts.expect_semi()?;
-        } else if ts.peek().is_kw("model") {
+            Ok(true)
+        } else if kw == "model" {
             ts.next();
             // Read dependents: idents before `=`
             let mut dependents: Vec<String> = Vec::new();
@@ -152,17 +127,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
                 effects,
                 noprint,
             });
-        } else if ts.peek().is_kw("means") {
+            Ok(true)
+        } else if kw == "means" {
             ts.next();
             means_vars = ts.parse_name_list()?;
             ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            ts.skip_to_semi();
+            Ok(true)
         } else {
-            ts.skip_to_semi();
+            Ok(false)
         }
-    }
+    })?;
 
     Ok(AnovaAst {
         data_options: AnovaDataOptions { input },
@@ -204,31 +178,6 @@ fn centered(session: &mut Session, text: &str) {
         .write_line(&format!("{}{}", " ".repeat(pad), text));
 }
 
-// ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &AnovaAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_options.input {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 // ───────────────────────── Execute ─────────────────────────
 
 pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
@@ -258,7 +207,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
     }
 
     // --- 1. Resolve dataset ---
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

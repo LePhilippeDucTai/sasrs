@@ -27,6 +27,7 @@ use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::stat::{invert_matrix, student_t_cdf};
@@ -161,9 +162,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
             break;
         }
         if tk.is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("method") {
             ts.next();
             expect_eq(ts, "METHOD")?;
@@ -195,22 +194,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
     let mut estimate_labels: Vec<String> = Vec::new();
     let mut contrast_labels: Vec<String> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
+    common::parse_proc_body(ts, |ts, kw| {
+        if kw == "class" {
             ts.next();
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
@@ -219,36 +204,43 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
                 ts.next();
             }
             ts.expect_semi()?;
-        } else if ts.peek().is_kw("model") {
+            Ok(true)
+        } else if kw == "model" {
             ts.next();
             model = Some(parse_model(ts)?);
-        } else if ts.peek().is_kw("random") {
+            Ok(true)
+        } else if kw == "random" {
             ts.next();
             random = Some(parse_random(ts));
-        } else if ts.peek().is_kw("repeated") {
+            Ok(true)
+        } else if kw == "repeated" {
             ts.next();
             repeated = Some(parse_repeated(ts));
-        } else if ts.peek().is_kw("lsmeans") {
+            Ok(true)
+        } else if kw == "lsmeans" {
             ts.next();
             if let Some(spec) = parse_lsmeans(ts) {
                 lsmeans.push(spec);
             }
-        } else if ts.peek().is_kw("estimate") {
+            Ok(true)
+        } else if kw == "estimate" {
             ts.next();
             if let TokenKind::Str { value, .. } = &ts.peek().kind {
                 estimate_labels.push(value.clone());
             }
             ts.skip_to_semi();
-        } else if ts.peek().is_kw("contrast") {
+            Ok(true)
+        } else if kw == "contrast" {
             ts.next();
             if let TokenKind::Str { value, .. } = &ts.peek().kind {
                 contrast_labels.push(value.clone());
             }
             ts.skip_to_semi();
+            Ok(true)
         } else {
-            ts.skip_to_semi();
+            Ok(false)
         }
-    }
+    })?;
 
     Ok(MixedAst {
         data,
@@ -489,31 +481,6 @@ fn value_label(v: &Value) -> String {
         Value::Num(f) => format_best(*f, 12),
         Value::Missing(k) => k.display(),
         Value::Char(s) => s.trim_end().to_string(),
-    }
-}
-
-// ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &MixedAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
     }
 }
 
@@ -969,7 +936,7 @@ pub fn execute(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 2. Read dataset ─────────────────────────────────────────────────────
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

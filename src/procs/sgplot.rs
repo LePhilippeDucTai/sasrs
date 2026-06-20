@@ -25,6 +25,7 @@
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
 use crate::token::TokenKind;
 
@@ -571,9 +572,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data_ref = Some(ts.parse_dataset_ref()?);
+            data_ref = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else {
             ts.next(); // ignorer les options PROC inconnues
         }
@@ -584,128 +583,139 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
     let mut yaxis: Option<AxisOpts> = None;
     let mut by_var: Option<String> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "scatter" => {
                 ts.next();
+                let (x, y, group, markerattrs, _, _) = parse_xy_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Scatter {
+                    x,
+                    y,
+                    group,
+                    markerattrs,
+                });
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("scatter") {
-            ts.next();
-            let (x, y, group, markerattrs, _, _) = parse_xy_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::Scatter {
-                x,
-                y,
-                group,
-                markerattrs,
-            });
-        } else if ts.peek().is_kw("series") {
-            ts.next();
-            let (x, y, group, _, _, _) = parse_xy_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::Series { x, y, group });
-        } else if ts.peek().is_kw("reg") {
-            ts.next();
-            let (x, y, _, _, degree, _) = parse_xy_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::Reg {
-                x,
-                y,
-                degree: degree.unwrap_or(1),
-            });
-        } else if ts.peek().is_kw("loess") {
-            ts.next();
-            let (x, y, _, _, _, smooth) = parse_xy_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::Loess {
-                x,
-                y,
-                smooth: smooth.unwrap_or(0.5),
-            });
-        } else if ts.peek().is_kw("vbar") {
-            ts.next();
-            let (category, response, stat) = parse_bar_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::VBar {
-                category,
-                response,
-                stat,
-            });
-        } else if ts.peek().is_kw("hbar") {
-            ts.next();
-            let (category, response, stat) = parse_bar_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::HBar {
-                category,
-                response,
-                stat,
-            });
-        } else if ts.peek().is_kw("histogram") {
-            ts.next();
-            let (var, binwidth, scale) = parse_histogram_stmt(ts)?;
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::Histogram {
-                var,
-                binwidth,
-                scale,
-            });
-        } else if ts.peek().is_kw("density") {
-            ts.next();
-            let var = expect_ident(ts, "after DENSITY")?;
-            ts.skip_to_semi();
-            plot_stmts.push(SgplotStmt::Density { var });
-        } else if ts.peek().is_kw("vbox") {
-            ts.next();
-            let response = expect_ident(ts, "after VBOX")?;
-            let mut category: Option<String> = None;
-            if ts.peek().kind == TokenKind::Slash {
+            "series" => {
                 ts.next();
-                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                    let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
-                        Some(n) => n,
-                        None => {
-                            ts.next();
-                            continue;
-                        }
-                    };
+                let (x, y, group, _, _, _) = parse_xy_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Series { x, y, group });
+                true
+            }
+            "reg" => {
+                ts.next();
+                let (x, y, _, _, degree, _) = parse_xy_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Reg {
+                    x,
+                    y,
+                    degree: degree.unwrap_or(1),
+                });
+                true
+            }
+            "loess" => {
+                ts.next();
+                let (x, y, _, _, _, smooth) = parse_xy_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Loess {
+                    x,
+                    y,
+                    smooth: smooth.unwrap_or(0.5),
+                });
+                true
+            }
+            "vbar" => {
+                ts.next();
+                let (category, response, stat) = parse_bar_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::VBar {
+                    category,
+                    response,
+                    stat,
+                });
+                true
+            }
+            "hbar" => {
+                ts.next();
+                let (category, response, stat) = parse_bar_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::HBar {
+                    category,
+                    response,
+                    stat,
+                });
+                true
+            }
+            "histogram" => {
+                ts.next();
+                let (var, binwidth, scale) = parse_histogram_stmt(ts)?;
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Histogram {
+                    var,
+                    binwidth,
+                    scale,
+                });
+                true
+            }
+            "density" => {
+                ts.next();
+                let var = expect_ident(ts, "after DENSITY")?;
+                ts.skip_to_semi();
+                plot_stmts.push(SgplotStmt::Density { var });
+                true
+            }
+            "vbox" => {
+                ts.next();
+                let response = expect_ident(ts, "after VBOX")?;
+                let mut category: Option<String> = None;
+                if ts.peek().kind == TokenKind::Slash {
                     ts.next();
-                    if name == "category" {
-                        expect_eq(ts, "CATEGORY")?;
-                        category = Some(expect_ident(ts, "after CATEGORY=")?);
-                    } else if ts.peek().kind == TokenKind::Eq {
+                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+                            Some(n) => n,
+                            None => {
+                                ts.next();
+                                continue;
+                            }
+                        };
                         ts.next();
-                        let _ = read_value(ts);
+                        if name == "category" {
+                            expect_eq(ts, "CATEGORY")?;
+                            category = Some(expect_ident(ts, "after CATEGORY=")?);
+                        } else if ts.peek().kind == TokenKind::Eq {
+                            ts.next();
+                            let _ = read_value(ts);
+                        }
                     }
                 }
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::VBox { category, response });
+                true
             }
-            ts.expect_semi()?;
-            plot_stmts.push(SgplotStmt::VBox { category, response });
-        } else if ts.peek().is_kw("xaxis") {
-            ts.next();
-            xaxis = Some(parse_axis_stmt(ts)?);
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("yaxis") {
-            ts.next();
-            yaxis = Some(parse_axis_stmt(ts)?);
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by_var = ts.peek().ident().map(str::to_string);
-            ts.skip_to_semi();
-        } else {
-            ts.skip_to_semi();
-        }
-    }
+            "xaxis" => {
+                ts.next();
+                xaxis = Some(parse_axis_stmt(ts)?);
+                ts.expect_semi()?;
+                true
+            }
+            "yaxis" => {
+                ts.next();
+                yaxis = Some(parse_axis_stmt(ts)?);
+                ts.expect_semi()?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by_var = ts.peek().ident().map(str::to_string);
+                ts.skip_to_semi();
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(SgplotAst {
         data_ref,
@@ -814,30 +824,6 @@ mod graphics_impl {
     use crate::ods_graphics::ImageFmt;
     use crate::procs::common::decode_column;
     use crate::value::VarType;
-
-    /// Résout DATA= ou _LAST_ (calqué sur reg.rs).
-    fn resolve_input(ast: &SgplotAst, session: &Session) -> Result<DatasetRef> {
-        match &ast.data_ref {
-            Some(r) => Ok(r.clone()),
-            None => {
-                let last = session.last_dataset.clone().ok_or_else(|| {
-                    SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-                })?;
-                let parts: Vec<&str> = last.splitn(2, '.').collect();
-                if parts.len() == 2 {
-                    Ok(DatasetRef {
-                        libref: Some(parts[0].to_string()),
-                        name: parts[1].to_string(),
-                    })
-                } else {
-                    Ok(DatasetRef {
-                        libref: None,
-                        name: last,
-                    })
-                }
-            }
-        }
-    }
 
     /// Extrait une colonne numérique par nom (erreur propre si absente / non num).
     fn numeric_column(
@@ -974,7 +960,7 @@ mod graphics_impl {
         }
 
         // Lire les données.
-        let in_ref = resolve_input(ast, session)?;
+        let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
         let in_libref = in_ref.libref_or_work();
         let in_table = in_ref.name.to_uppercase();
         let provider = session.libs.get(&in_libref)?;

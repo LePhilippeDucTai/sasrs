@@ -379,9 +379,16 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   gardés inline dans la closure) ; `resolve_input`→`resolve_last_dataset`. **Boucles d'options
   gardées inline** pour les 6 (messages bespoke « Unexpected token… »/« Unknown PROC … option »
   ou skip indulgent d'univariate). −184 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
-- [ ] M31.7 — migrer Tier D : `reg`, `glm`, `anova`, `genmod`, `logistic`, `mixed`, `glimmix`,
+- [x] M31.7 — migrer Tier D : `reg`, `glm`, `anova`, `genmod`, `logistic`, `mixed`, `glimmix`,
   `factor`, `princomp`, `discrim`, `cluster`, `fastclus`, `distance`, `report`, `tabulate`,
-  `sgplot`, `iml` — boucle d'options + `DATA=`/`OUT=` + erreur seulement, un proc par commit (Opus, moyen)
+  `sgplot`, `iml` — boucle d'options + `DATA=`/`OUT=` + erreur seulement, un proc par commit (Opus, moyen).
+  **FAIT (16/17)** : `resolve_input`→`resolve_last_dataset`, `DATA=`/`OUT=`→`parse_dataset_opt`/`parse_out_opt`,
+  boucles de **corps**→`parse_proc_body` (statements MODEL/CLASS/RANDOM/COLUMN/DEFINE/TABLE/SCATTER…
+  gardés inline dans la closure). `report` : boucle d'options **complète**→`parse_proc_options`
+  (message canonique) ; les 15 autres gardent leur boucle d'options inline (skip indulgent ou
+  « Unexpected token… ») mais migrent `DATA=`/`OUT=`. `report` body gardé inline (statement inconnu =
+  ERREUR, pas `skip_to_semi`). **`iml` exclu** (sous-langage matriciel autonome : pas de `data=`/loops
+  standard). −656 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
 - [ ] ⫽ M31.8 — balayage : remplacer les copies privées `expect_eq`/`resolve_input` par
   `common::*`, supprimer les doublons morts ; un proc par commit (Sonnet, faible)
 - [ ] DoD M31 : `cargo test -p sasrs` vert, **zéro `.snap.new`** (fixtures m1–m30 octet-identiques),
