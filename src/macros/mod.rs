@@ -8,8 +8,11 @@
 //! (`%let` evaluated mid-program, `CALL SYMPUT`).
 
 mod error;
+mod quoting;
 mod scan;
 mod symbols;
+
+use quoting::MaskSet;
 
 pub use error::MacroError;
 
@@ -1519,60 +1522,10 @@ impl MacroEngine {
     }
 
     // ── M11.6 : %str / %nrstr (quoting par sentinelles) ─────────────────────
-
-    /// Sentinelle de base (zone privée Unicode). Chaque caractère spécial masqué
-    /// est remplacé par `MASK_BASE + offset`, où `offset` est un petit index
-    /// stable. La passe `unmask` finale rétablit les littéraux. Ces points de
-    /// code n'apparaissent jamais dans un source SAS normal.
-    const MASK_BASE: u32 = 0xE000;
-
-    /// Caractères masqués par `%str` (et `%nrstr`), dans l'ordre des offsets.
-    /// `%str` masque la ponctuation/opérateurs pour qu'un `;` ou `,` interne
-    /// soit littéral ; `&` et `%` ne sont masqués QUE par `%nrstr`.
-    const STR_MASKED: &'static [char] = &[
-        ';', '+', '-', '*', '/', '<', '>', '=', '|', '~', ',', '(', ')', '\'', '"',
-    ];
-    /// Caractères additionnels masqués UNIQUEMENT par `%nrstr` (déclencheurs).
-    const NRSTR_EXTRA: &'static [char] = &['&', '%'];
-
-    /// Masque un caractère vers sa sentinelle si présent dans la table donnée.
-    /// Rend `Some(sentinelle)` ou `None` si le caractère n'est pas masqué.
-    fn mask_char(c: char) -> Option<char> {
-        // Index global stable sur la concaténation STR_MASKED ++ NRSTR_EXTRA.
-        if let Some(idx) = Self::STR_MASKED.iter().position(|&m| m == c) {
-            return char::from_u32(Self::MASK_BASE + idx as u32);
-        }
-        if let Some(idx) = Self::NRSTR_EXTRA.iter().position(|&m| m == c) {
-            return char::from_u32(Self::MASK_BASE + Self::STR_MASKED.len() as u32 + idx as u32);
-        }
-        None
-    }
-
-    /// Passe finale d'« unmask » : rétablit chaque sentinelle en son littéral.
-    fn unmask(s: &str) -> String {
-        if !s.chars().any(|c| {
-            let v = c as u32;
-            (Self::MASK_BASE..Self::MASK_BASE + 0x100).contains(&v)
-        }) {
-            return s.to_string();
-        }
-        let total = Self::STR_MASKED.len() + Self::NRSTR_EXTRA.len();
-        s.chars()
-            .map(|c| {
-                let v = c as u32;
-                if v >= Self::MASK_BASE && v < Self::MASK_BASE + total as u32 {
-                    let idx = (v - Self::MASK_BASE) as usize;
-                    if idx < Self::STR_MASKED.len() {
-                        Self::STR_MASKED[idx]
-                    } else {
-                        Self::NRSTR_EXTRA[idx - Self::STR_MASKED.len()]
-                    }
-                } else {
-                    c
-                }
-            })
-            .collect()
-    }
+    //
+    // Les primitives de masquage (constantes `MASK_BASE`/`STR_MASKED`/
+    // `NRSTR_EXTRA` et helpers `mask_char`/`unmask`/`mask_special`) vivent dans
+    // le sous-module `quoting`.
 
     /// Consomme `%str ( ... )` (si `!nrstr`) ou `%nrstr ( ... )`. Masque les
     /// caractères spéciaux du contenu (pour `%str`, `&`/`%` restent ACTIFS et
@@ -1596,24 +1549,11 @@ impl MacroEngine {
             return None;
         }
         let (inner, after) = Self::read_balanced_parens(chars, j)?;
-        let masked: String = inner
-            .chars()
-            .map(|c| {
-                // `&` et `%` ne sont masqués que par `%nrstr`.
-                if (c == '&' || c == '%') && !nrstr {
-                    return c;
-                }
-                Self::mask_char(c).unwrap_or(c)
-            })
-            .collect();
-        if nrstr {
-            // Contenu inerte : émis tel quel (déclencheurs masqués).
-            out.push_str(&masked);
-        } else {
-            // `%str` : `&`/`%` restent actifs → ré-expansion.
-            let expanded = self.process_impl(&masked);
-            out.push_str(&expanded);
-        }
+        // `%nrstr` masque AUSSI `&`/`%` (contenu inerte, émis tel quel) ; `%str`
+        // ne masque que la ponctuation et ré-expanse pour résoudre les `&x`/`%m`
+        // résiduels (déclencheurs restés actifs).
+        let mask = if nrstr { MaskSet::All } else { MaskSet::Punct };
+        out.push_str(&Self::apply_quoting(self, &inner, mask, !nrstr));
         Some(after)
     }
 
@@ -1680,7 +1620,7 @@ impl MacroEngine {
         let resolved = self.resolve_value(&inner);
         let compressed = Self::compress_blanks(&resolved);
         if masked {
-            out.push_str(&Self::mask_special(&compressed, true));
+            out.push_str(&Self::apply_quoting(self, &compressed, MaskSet::All, false));
         } else {
             out.push_str(&compressed);
         }
@@ -1837,21 +1777,6 @@ impl MacroEngine {
 
     // ── M12.2 : quoting étendu (%superq, %bquote, %nrbquote) ─────────────────
 
-    /// Masque TOUS les caractères « spéciaux » d'une chaîne via le schéma de
-    /// sentinelles partagé avec `%str`/`%nrstr`. Si `triggers` est vrai, masque
-    /// aussi `&` et `%` (déclencheurs) — sinon ils restent actifs en aval. Les
-    /// caractères non listés (lettres, chiffres, blancs, `.`) passent inchangés.
-    fn mask_special(s: &str, triggers: bool) -> String {
-        s.chars()
-            .map(|c| {
-                if (c == '&' || c == '%') && !triggers {
-                    return c;
-                }
-                Self::mask_char(c).unwrap_or(c)
-            })
-            .collect()
-    }
-
     /// Consomme `%superq ( name )`. Prend un NOM de variable (pas `&name`),
     /// lit sa valeur SANS résoudre aucun `&`/`%` qu'elle contient, et masque
     /// TOUT (y compris `&`/`%`) afin que le résultat soit littéral et inerte en
@@ -1874,7 +1799,7 @@ impl MacroEngine {
         let name_arg = self.resolve_value(&inner);
         let name = name_arg.trim().trim_start_matches('&').trim();
         match self.lookup(name) {
-            Some(v) => out.push_str(&Self::mask_special(&v, true)),
+            Some(v) => out.push_str(&Self::apply_quoting(self, &v, MaskSet::All, false)),
             None => { /* indéfini → vide (SAS warne) */ }
         }
         Some(after)
@@ -1911,7 +1836,8 @@ impl MacroEngine {
         // Expansion normale du texte (résout `&x`/`%m`), puis masquage du
         // résultat. `%nrbquote` masque aussi `&`/`%`.
         let expanded = self.process_impl(&inner);
-        out.push_str(&Self::mask_special(&expanded, nr));
+        let mask = if nr { MaskSet::All } else { MaskSet::Punct };
+        out.push_str(&Self::apply_quoting(self, &expanded, mask, false));
         Some(after)
     }
 
@@ -1951,7 +1877,7 @@ impl MacroEngine {
             // Variantes `%q*` : masque la ponctuation ET les déclencheurs
             // résiduels (`&`/`%`) du résultat, afin qu'il soit totalement inerte
             // en aval (cf. `%qupcase(a&x)` qui masque le `&`).
-            out.push_str(&Self::mask_special(&result, true));
+            out.push_str(&Self::apply_quoting(self, &result, MaskSet::All, false));
         } else {
             out.push_str(&result);
         }

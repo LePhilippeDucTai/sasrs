@@ -429,9 +429,14 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   **FAIT** : `set_symbol_global`/`get_symbol`/`global_symbols`/`symbols_snapshot` (pub) +
   `lookup`/`assign`/`resolve_value`/`symbolgen_trace`/`resolve_refs_once`/`seed_automatic_vars`
   (`pub(super)`) déplacés. **Lot ⫽ M32.2-4** : `mod.rs` 4757→4227 (−530). 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] M32.5 — extraire `src/macros/quoting.rs` (sentinelles + `mask_char`/`unmask`) PUIS introduire
+- [x] M32.5 — extraire `src/macros/quoting.rs` (sentinelles + `mask_char`/`unmask`) PUIS introduire
   `apply_quoting(text, mask_set, reevaluate)` et y router `%str/%nrstr/%bquote/%nrbquote/%superq`
-  + variantes `%q*` (commit de fusion dédié, validé par les tests quoting/superq/bquote) (Opus, élevé)
+  + variantes `%q*` (commit de fusion dédié, validé par les tests quoting/superq/bquote) (Opus, élevé).
+  **FAIT** : PART 1 move (`MASK_BASE`/`STR_MASKED`/`NRSTR_EXTRA` + `mask_char`/`mask_special`/`unmask`)
+  byte-identique ; PART 2 fusion `apply_quoting(eng, text, MaskSet, reevaluate)` = `mask_special` (réutilise
+  `mask_char` → sentinelles bit-identiques) + `process_impl` si reevaluate. 7 points d'entrée routés
+  (%str/%nrstr/%bquote/%nrbquote/%superq/%q*/%qcmpres) ; ordre de sondage intact. 32 tests quoting +
+  snapshots m11/m12 octet-identiques. `mod.rs` 4227→4153. 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] M32.6 — extraire `src/macros/eval.rs` ; **unifier `tokenize_eval`** (un tokenizer → évaluateurs
   entier `%eval` ET flottant `%sysevalf` séparés). Garde : test division int vs float (Opus, élevé)
 - [ ] M32.7 — extraire `src/macros/functions.rs` + registre `functions::lookup` (string-fns +
