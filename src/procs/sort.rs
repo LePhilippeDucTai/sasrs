@@ -35,9 +35,8 @@ use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::Value;
 use polars::prelude::*;
 use std::cmp::Ordering;
@@ -59,94 +58,46 @@ pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     let mut nodupkey = false;
     let mut noduprecs = false;
 
-    // --- PROC SORT statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("nodupkey") {
-            ts.next();
-            nodupkey = true;
-        } else if ts.peek().is_kw("noduprecs") || ts.peek().is_kw("nodup") {
-            ts.next();
-            noduprecs = true;
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC SORT statement."),
-                span,
-            ));
-        }
-    }
+    // --- PROC SORT statement options, until `;` (combinateur partagé M31) ---
+    common::parse_proc_options(ts, "SORT", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
+            }
+            "out" => {
+                out = Some(common::parse_dataset_opt(ts, "OUT")?);
+                true
+            }
+            "nodupkey" => {
+                ts.next();
+                nodupkey = true;
+                true
+            }
+            "noduprecs" | "nodup" => {
+                ts.next();
+                noduprecs = true;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
-    // --- sub-statements : BY (mandatory) until run;/quit; ---
+    // --- sub-statements : BY (mandatory) until run;/quit; (combinateur M31) ---
     let mut by: Vec<(String, bool)> = Vec::new();
     let mut saw_by = false;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "by" => {
+                ts.next(); // consume "by"
+                saw_by = true;
+                by.extend(common::parse_by(ts)?);
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("by") {
-            ts.next(); // consume "by"
-            saw_by = true;
-            // Parse [descending] var pairs until `;`.
-            loop {
-                if ts.peek().kind == TokenKind::Semi {
-                    ts.next();
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                let descending = if ts.peek().is_kw("descending") {
-                    ts.next();
-                    true
-                } else {
-                    false
-                };
-                let tok = ts.peek().clone();
-                match tok.ident() {
-                    Some(name) => {
-                        ts.next();
-                        by.push((name.to_string(), descending));
-                    }
-                    None => {
-                        return Err(SasError::parse(
-                            "expected a variable name in the BY statement",
-                            tok.span,
-                        ));
-                    }
-                }
-            }
-        } else {
-            // Unknown sub-statement: skip it (recovery).
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     if !saw_by {
         return Err(SasError::runtime(
@@ -168,44 +119,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     })
 }
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &SortAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Execute PROC SORT. Called by `procs::execute_proc` which wraps with timing.
 pub fn execute(ast: &SortAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 
