@@ -569,7 +569,19 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   (chemin défaut byte-identique) — CL Mean (t) + CL Std (χ², `chisq_quantile` via `common::chisq_sf`),
   2-sample → Mean Diff + CL Diff. Fixture + snapshot vérifié vs sashelp.class (BY sex F t=0.352/M t=2.504 ;
   SIDES=U t=1.9867/Pr>t=0.0312 ; CI=95 Mean [59.866,64.808], Std [3.874,7.582]). +6 tests (2356 lib). README TTEST → ✅.
-- [ ] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen)
+- [x] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen).
+  **FAIT (→ ✅)** : (a) `BY` (partition `common::by_groups`, en-têtes `name=value`, niveaux CLASS
+  recalculés par groupe) ; (b) cadre générique de scores rang-linéaires (`raw_score`/`tie_averaged_scores`/
+  `score_analysis`/`score_two_sample`/`score_one_way`) couvrant `MEDIAN`, `SAVAGE`, `NORMAL`/`VW` —
+  table 2-échantillons (Statistic/Mean/Std/Z continuité-corrigé/Pr>|Z|) + analyse à un facteur χ²
+  (df=k−1) ; Wilcoxon reste le cas rang (closed-form `analyze`, inchangé) ; (c) Wilcoxon `EXACT`
+  (k=2) — distribution de permutation exacte par DP `dp[count][sum2]` sur rangs ×2, `Pr<=S` /
+  `Pr>=|S−Mean|`, plafond `EXACT_N_CAP=30` (NOTE au-delà) ; (d) `OUTPUT OUT=` — 1 obs/VAR/groupe BY,
+  colonnes `_WIL_/Z_WIL/P2_WIL/P1_WIL`, `XP1_WIL/XP2_WIL` (exact), `_KW_/DF_KW/P_KW`, et par score
+  `_MED_/_SAV_/_VW_` (+`Z_*`/`P2_*`/`P_*`/`DF_*`). Oracles vérifiés (Wilcoxon ≡ m24 73/90/12.2367/−1.3484 ;
+  χ² à un facteur ≡ Z₀² non corrigé ; exact 0.1754 = 2×0.0877). 2 fixtures m34 (scores + by_out) +
+  snapshots. **Différés (README non-couvert) : exact pour Median/Savage/Normal (rang seul), colonnes BY
+  OUT= stockées en chaîne formatée.** +9 tests (2376 lib), 0 warning, chemin défaut octet-identique.
 - [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)
 - [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)
 - [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
