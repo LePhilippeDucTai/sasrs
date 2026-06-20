@@ -58,7 +58,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`; `VAR` | `WHERE`, `BY`, `ID`, `SUM`, style options |
 | `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`; `BY [DESCENDING]` | `TAGSORT`, `SORTSEQ=`, `KEY=` |
 | `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_` | `DETAILS`, `OUT=`, ODS output object |
-| `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM`); `CLASS`, `VAR`, `BY`, `WEIGHT`, `OUTPUT OUT= stat(var)=name` | `WAYS`, `TYPES`, `PRINTALLTYPES`, percentile keywords |
+| `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` | `MAXDEC=`, `NWAY`, `MISSING`, `ORDER=`, `ID`, multi-label formats |
 | `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID`, `VAR` | `IDLABEL`, `COPY`, `LET`, `SUFFIX=` |
 | `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE` | `APPENDVER=` |
 | `RANK` | ✅ | `DATA=`, `OUT=`, `DESCENDING`, `TIES=(MEAN\|LOW\|HIGH\|DENSE)`, `GROUPS=`, methods `FRACTION`/`NPLUS1`/`PERCENT`/`NORMAL=(BLOM\|TUKEY\|VW)`/`SAVAGE`; `VAR`, `RANKS`, `BY` | — |

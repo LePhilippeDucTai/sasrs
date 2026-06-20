@@ -500,7 +500,14 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   unique inchangée ; build défaut → « image deferred » par plot ; `--features graphics` → `univar_{N}`).
   Fixture `tests/fixtures/m33/univariate_weighted.sas` + snapshot vérifié (x=1..4,w=1..4 : Méd 3, Q1 2, Q3 4,
   10%=1.5). +3 tests (2288 lib). README UNIVARIATE : reste 🟡 (skew/kurt pondérés omis). Aucun snapshot existant déplacé.
-- [ ] M33.3 — `PROC MEANS`/`SUMMARY` : `WAYS`, `TYPES`, `PRINTALLTYPES`, mots-clés percentiles (P1..P99/QRANGE) (Opus, moyen)
+- [x] M33.3 — `PROC MEANS`/`SUMMARY` : `WAYS`, `TYPES`, `PRINTALLTYPES`, mots-clés percentiles (P1..P99/QRANGE) (Opus, moyen).
+  **FAIT** : percentiles `P1..P99`/`Q1`/`Q3`/`QRANGE` via `quantile_def5` de UNIVARIATE (passé `pub(crate)`,
+  réutilisé sans copie) — table imprimée + OUTPUT OUT= + ODS ; `WAYS n`/`TYPES (..)` → masques `_TYPE_`
+  autorisés (`allowed_types`, pilote table ET OUT=) ; `PRINTALLTYPES` imprime chaque `_TYPE_` sélectionné
+  (`emit_report_type`), défaut = highest `_TYPE_` seul (inchangé). Percentiles pondérés = non pondérés
+  (simplif. documentée, cohérent MEDIAN existant). Fixture `tests/fixtures/m33/means_options.sas` + snapshot
+  vérifié vs sashelp.class (height P25=57.5/Méd=62.8/P75=66.5/P95=72/QRANGE=9). +11 tests (2299 lib).
+  README MEANS : reste 🟡 (MAXDEC=/NWAY/MISSING/ORDER=/ID).
 - [ ] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable, élevé)
 - [ ] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable, élevé)
 - [ ] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen)

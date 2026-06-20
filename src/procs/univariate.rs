@@ -404,7 +404,10 @@ fn kurtosis(xs: &[f64]) -> Option<f64> {
 /// else:       Q = x[j+1]
 /// ```
 /// with clamping for the edges (p=1 → max, p=0 → min) and index guards.
-fn quantile_def5(sorted: &[f64], p: f64) -> Option<f64> {
+///
+/// `pub(crate)` so PROC MEANS / SUMMARY can reuse the IDENTICAL Definition-5
+/// percentile computation (M33.3) instead of re-implementing it.
+pub(crate) fn quantile_def5(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
     if n == 0 {
         return None;
