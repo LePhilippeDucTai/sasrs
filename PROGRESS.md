@@ -492,7 +492,14 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   Fréquences en f64 → chemin non pondéré byte-identique (m5/m10 inchangés). Fixture
   `tests/fixtures/m33/freq_options.sas` + snapshot vérifié vs sashelp.class (pondéré 18/20, BY F 4/5 M 5/5,
   LIST cum 4/9/14/19, 3-voies). +9 tests (2285 lib). README FREQ : 🟡 (reste Fisher >2×2).
-- [ ] M33.2 — `PROC UNIVARIATE` : rendu `PROBPLOT`/`CDFPLOT`/`PPPLOT`, quantiles & extrêmes pondérés (Opus, moyen)
+- [x] M33.2 — `PROC UNIVARIATE` : rendu `PROBPLOT`/`CDFPLOT`/`PPPLOT`, quantiles & extrêmes pondérés (Opus, moyen).
+  **FAIT** : quantiles pondérés `weighted_quantile_def5` (analogue pondéré de la déf. 5 : W=Σwᵢ, cible
+  t=p·W, 1er i avec Wᵢ≥t ; Wᵢ==t → moyenne x(i),x(i+1) ; se réduit exactement à la déf. 5 si poids=1) →
+  table Quantiles + Median/Q1/Q3/Range/IQR pondérés (note « non calculé » retirée) ; extrêmes affichés sous
+  WEIGHT (valeurs brutes). `PROBPLOT`/`CDFPLOT`/`PPPLOT` câblés sur l'infra image M29.3 (ODS off → note
+  unique inchangée ; build défaut → « image deferred » par plot ; `--features graphics` → `univar_{N}`).
+  Fixture `tests/fixtures/m33/univariate_weighted.sas` + snapshot vérifié (x=1..4,w=1..4 : Méd 3, Q1 2, Q3 4,
+  10%=1.5). +3 tests (2288 lib). README UNIVARIATE : reste 🟡 (skew/kurt pondérés omis). Aucun snapshot existant déplacé.
 - [ ] M33.3 — `PROC MEANS`/`SUMMARY` : `WAYS`, `TYPES`, `PRINTALLTYPES`, mots-clés percentiles (P1..P99/QRANGE) (Opus, moyen)
 - [ ] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable, élevé)
 - [ ] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable, élevé)
