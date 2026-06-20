@@ -437,8 +437,15 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   `mask_char` → sentinelles bit-identiques) + `process_impl` si reevaluate. 7 points d'entrée routés
   (%str/%nrstr/%bquote/%nrbquote/%superq/%q*/%qcmpres) ; ordre de sondage intact. 32 tests quoting +
   snapshots m11/m12 octet-identiques. `mod.rs` 4227→4153. 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] M32.6 — extraire `src/macros/eval.rs` ; **unifier `tokenize_eval`** (un tokenizer → évaluateurs
-  entier `%eval` ET flottant `%sysevalf` séparés). Garde : test division int vs float (Opus, élevé)
+- [x] M32.6 — extraire `src/macros/eval.rs` ; **unifier `tokenize_eval`** (un tokenizer → évaluateurs
+  entier `%eval` ET flottant `%sysevalf` séparés). Garde : test division int vs float (Opus, élevé).
+  **FAIT** : `tokenize_eval` était **déjà partagé** (`macro_eval`/EvalParser ET `eval_float`/FloatParser
+  l'appellent) → unification déjà acquise, M32.6 = **move pur**. Déplacés dans `eval.rs` : `EvalTok`,
+  `EvalParser`+`impl` (`ipow`), `FloatParser`+`impl`, et `impl MacroEngine` { `tokenize_eval`, `macro_eval`,
+  `eval_float`, `eval_condition`, `eval_condition_int`, `format_float`, `format_sysevalf` }. Consumers
+  `consume_eval`/`consume_sysevalf` laissés en `mod.rs`. 0 changement d'appel. Garde
+  `sysevalf_vs_eval_integer_division` verte (%eval(7/2)=3, %sysevalf(7/2)=3.5). `mod.rs` 4153→3458.
+  2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] M32.7 — extraire `src/macros/functions.rs` + registre `functions::lookup` (string-fns +
   `%sysfunc`/whitelist) ; remplacer le `match` géant et la table inline de `process_impl`
   (même ordre de sondage `%q*` avant nu) (Opus, élevé)
