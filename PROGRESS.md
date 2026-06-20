@@ -446,9 +446,16 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   `consume_eval`/`consume_sysevalf` laissés en `mod.rs`. 0 changement d'appel. Garde
   `sysevalf_vs_eval_integer_division` verte (%eval(7/2)=3, %sysevalf(7/2)=3.5). `mod.rs` 4153→3458.
   2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] M32.7 — extraire `src/macros/functions.rs` + registre `functions::lookup` (string-fns +
+- [x] M32.7 — extraire `src/macros/functions.rs` + registre `functions::lookup` (string-fns +
   `%sysfunc`/whitelist) ; remplacer le `match` géant et la table inline de `process_impl`
-  (même ordre de sondage `%q*` avant nu) (Opus, élevé)
+  (même ordre de sondage `%q*` avant nu) (Opus, élevé).
+  **FAIT** : move de `consume_sysfunc`/`SYSFUNC_WHITELIST`/`value_to_text`/`consume_cmpres`/
+  `compress_blanks`/`read_name_arg`/`consume_symexist`/`sysmexist`/`sysget`/`consume_macro_fn`/
+  `eval_macro_fn` vers `functions.rs`. Registre `STRING_FNS: &[MacroFn{name, eval: fn(&[String])->Option<String>}]`
+  + `lookup(name)` remplace le `match` géant (entrées par nom logique q-strippé : upcase/lowcase/substr/
+  scan/index/length, logique d'arm reproduite à l'octet, quirk `%length("")`→0 préservé). Masquage `%q*`
+  reste piloté par le bool par-appel du dispatcher (pas de champ `masked` → zéro dead-code). Ordre de
+  sondage intact. `mod.rs` 3458→3159. 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] ⫽ M32.8 — extraire `src/macros/control.rs` (`consume_if`/`consume_do`/itératif/conditionnel),
   `src/macros/define.rs` (`consume_macro_def`/invocation/params) et `src/macros/include.rs`
   (`%include`/autocall/`%put`/CALL EXECUTE) — déplacements verbatim, un fichier par commit (Sonnet, moyen)
