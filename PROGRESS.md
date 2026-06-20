@@ -363,8 +363,15 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   `data=`→`parse_dataset_opt`, `var`→`parse_var_list`, résolution `_LAST_`→`resolve_last_dataset` ;
   import `TokenKind` retiré (inutile). −59 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning.
 - [x] ⫽ M31.4 — migrer `src/procs/sort.rs` (Sonnet, faible). **FAIT** : options→`parse_proc_options` (data/out/nodupkey/noduprecs|nodup), BY→`parse_by`, `resolve_input`→`resolve_last_dataset` ; `expect_eq`/`resolve_input` locaux + import `TokenKind` supprimés (−~120 lignes). 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] ⫽ M31.5 — migrer Tier B : `contents`, `transpose`, `append`, `rank`, `printto`,
-  `options`, `catalog` — un proc par commit (Sonnet, faible)
+- [x] ⫽ M31.5 — migrer Tier B : `contents`, `transpose`, `append`, `rank`, `printto`,
+  `options`, `catalog` — un proc par commit (Sonnet, faible).
+  **FAIT (6/7)** : `contents`/`transpose`/`append` migrés (options + corps + `resolve_last_dataset`,
+  `expect_eq`/`resolve_input`/`TokenKind` locaux supprimés) ; `rank`/`printto`/`options` migrés
+  **corps seulement** (leurs boucles d'options divergent : message « Unexpected token… » pour rank,
+  reset bare-`;`/skip pour printto, collecte d'idents pour options → gardées inline, byte-identité).
+  **`catalog` exclu (par conception)** : `run;` y est un *no-op continue* (pas un stop) et les deux
+  boucles sautent les tokens inconnus → aucune cible byte-identique via les combinateurs ; laissé tel quel.
+  −212 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
 - [ ] M31.6 — migrer Tier C : `means`, `freq`, `univariate`, `corr`, `ttest`, `npar1way` —
   un proc par commit, branches d'erreur bespoke gardées inline (Opus, moyen)
 - [ ] M31.7 — migrer Tier D : `reg`, `glm`, `anova`, `genmod`, `logistic`, `mixed`, `glimmix`,

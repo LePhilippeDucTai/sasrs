@@ -24,6 +24,7 @@
 
 use crate::error::Result;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
 use crate::token::TokenKind;
 
@@ -67,23 +68,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<OptionsAst> {
         }
     }
 
-    // Parse sub-statements until `run;` or `quit;`
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-        ts.skip_to_semi();
-    }
+    // Parse sub-statements until `run;` or `quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
     Ok(OptionsAst { option_names, short, long })
 }

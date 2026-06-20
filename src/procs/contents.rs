@@ -24,11 +24,11 @@
 //! `#` and `Len` are right-aligned; all others left-aligned.
 
 use crate::ast::DatasetRef;
-use crate::error::{Result, SasError};
+use crate::error::Result;
 use crate::listing::Align;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::VarType;
 
 pub struct ContentsAst {
@@ -45,66 +45,29 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
     let mut varnum = false;
     let mut all = false;
 
-    // Parse PROC CONTENTS header options until `;`
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next(); // consume "data"
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after DATA",
-                    ts.peek().span,
-                ));
+    // Parse PROC CONTENTS header options until `;` (combinateur partagé M31).
+    common::parse_proc_options(ts, "CONTENTS", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                let ds_ref = common::parse_dataset_opt(ts, "DATA")?;
+                // Detect data=lib._all_ or data=_all_
+                if ds_ref.name.to_uppercase() == "_ALL_" {
+                    all = true;
+                }
+                data = Some(ds_ref);
+                true
             }
-            ts.next(); // consume `=`
-            let ds_ref = ts.parse_dataset_ref()?;
-            // Detect data=lib._all_ or data=_all_
-            if ds_ref.name.to_uppercase() == "_ALL_" {
-                all = true;
-            }
-            data = Some(ds_ref);
-        } else if ts.peek().is_kw("varnum") {
-            ts.next();
-            varnum = true;
-        } else {
-            // Unknown option on PROC CONTENTS statement
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC CONTENTS statement."),
-                span,
-            ));
-        }
-    }
-
-    // Parse sub-statements until `run;` or `quit;` or step boundary
-    loop {
-        // Skip stray semicolons
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next(); // consume run/quit
-            if ts.peek().kind == TokenKind::Semi {
+            "varnum" => {
                 ts.next();
+                varnum = true;
+                true
             }
-            break;
-        }
+            _ => false,
+        })
+    })?;
 
-        // Unknown sub-statement: skip it
-        ts.skip_to_semi();
-    }
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
     Ok(ContentsAst { data, varnum, all })
 }
@@ -133,29 +96,8 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
         return Ok(());
     }
 
-    // Resolve the dataset reference (data= or _LAST_)
-    let ds_ref: DatasetRef = match &ast.data {
-        Some(r) => r.clone(),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime(
-                    "There is no default input data set (_LAST_ is undefined).",
-                )
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                }
-            } else {
-                DatasetRef {
-                    libref: None,
-                    name: last,
-                }
-            }
-        }
-    };
+    // Resolve the dataset reference (data= or _LAST_) (combinateur partagé M31).
+    let ds_ref: DatasetRef = common::resolve_last_dataset(&ast.data, session)?;
 
     let libref = ds_ref.libref_or_work();
     let table_name = ds_ref.name.to_uppercase();

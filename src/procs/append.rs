@@ -19,9 +19,8 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 use polars::prelude::*;
 
@@ -39,35 +38,25 @@ pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
     let mut data: Option<DatasetRef> = None;
     let mut force = false;
 
-    // --- PROC APPEND statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("base") {
-            ts.next();
-            expect_eq(ts, "BASE")?;
-            base = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("force") {
-            ts.next();
-            force = true;
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC APPEND statement."),
-                span,
-            ));
-        }
-    }
+    // --- PROC APPEND statement options, until `;` (combinateur M31) ---
+    common::parse_proc_options(ts, "APPEND", |ts, kw| {
+        Ok(match kw {
+            "base" => {
+                base = Some(common::parse_dataset_opt(ts, "BASE")?);
+                true
+            }
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
+            }
+            "force" => {
+                ts.next();
+                force = true;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     let base = base.ok_or_else(|| {
         SasError::runtime(
@@ -80,37 +69,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
         )
     })?;
 
-    // Consume through run;/quit; (sub-statements loop).
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-        // Skip any unexpected sub-statement tokens.
-        ts.skip_to_semi();
-    }
+    // Consume through run;/quit; (sub-statements loop) (combinateur M31).
+    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
     Ok(AppendAst { base, data, force })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 /// Truncate a string to at most `max_chars` Unicode characters.
