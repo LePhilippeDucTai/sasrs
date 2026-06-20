@@ -554,14 +554,15 @@ Phase E. Compléter les options différées des procs stat/modélisation (colonn
 Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`). Fixtures
 `tests/fixtures/m34/` + snapshots. Une case = un proc / un lot cohérent.
 
-- [ ] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé).
-  **EN COURS** : `PARTIAL` livré (statement `partial v…;` ; résidualisation par moindres carrés
-  `stat::linalg::least_squares` sur `[1, vars partielles]`, observations listwise-complètes, Pearson sur
-  résidus, df = n−k−2 ; bloc « Pearson Partial Correlation Coefficients, Controlled for: … »). Fixture
-  `tests/fixtures/m34/corr_options.sas` + snapshot vérifié (r(height,weight|age)=0.70467 = valeur SAS
-  sashelp.class, p=0.0011) + 2 tests unitaires (oracle = identité partielle à 1 contrôle). **Restants
-  (différés, toujours README non-couvert) : HOEFFDING (D + Prob>D), Spearman/Kendall pondérés, partial
-  Spearman/Kendall.** (Implémenté en direct — outil Agent indisponible.) +2 tests (2350 lib), 0 warning.
+- [x] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé).
+  **FAIT** : (a) `PARTIAL` — résidualisation moindres carrés `stat::linalg::least_squares` sur `[1, vars
+  partielles]`, listwise-complete, Pearson sur résidus, df = n−k−2 (r(height,weight|age)=0.70467 = SAS,
+  p=0.0011) ; (b) `HOEFFDING` — D exact (≡ SAS sashelp.class : height×weight 0.31609, height×age 0.18856,
+  weight×age 0.20579) + `Prob > D` (approximation asymptotique Blum-Kiefer-Rosenblatt/Imhof, n≥5) ;
+  (c) WEIGHT étendu à Spearman (rangs moyens pondérés) & Kendall (paires pondérées wᵢ·wⱼ) — ≡ méthode
+  ordinaire sur données répliquées (tests). 2 fixtures m34 (corr_options + corr_hoeffding) + snapshots
+  vérifiés. **Différés (README non-couvert) : partial Spearman/Kendall, Prob>D tabulée exacte petit n.**
+  +13 tests (2367 lib), 0 warning. (PARTIAL implémenté en direct pendant la panne de l'outil Agent.)
 - [x] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen).
   **FAIT (→ ✅)** : `BY` (analyse par groupe via `common::by_groups`/`resolve_by_cols`, 1-sample/2-sample
   CLASS/PAIRED) ; `SIDES=U|L|2` câblé (en-tête `Pr > t`/`Pr < t`, `sided_p`) ; colonnes CI gated par `CI=`

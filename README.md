@@ -62,7 +62,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID`, `VAR` | `IDLABEL`, `COPY`, `LET`, `SUFFIX=` |
 | `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE`, `NOWARN` (suppresses FORCE structural-diff warnings), `APPENDVER=Vn` (no-op hint) | — |
 | `RANK` | ✅ | `DATA=`, `OUT=`, `DESCENDING`, `TIES=(MEAN\|LOW\|HIGH\|DENSE)`, `GROUPS=`, methods `FRACTION`/`NPLUS1`/`PERCENT`/`NORMAL=(BLOM\|TUKEY\|VW)`/`SAVAGE`; `VAR`, `RANKS`, `BY` | — |
-| `CORR` | ✅ | `DATA=`, `NOSIMPLE`, `NOPROB`, `NOCORR`, `PEARSON`, `SPEARMAN`, `KENDALL`, `OUT=`/`OUTP=`/`OUTS=`/`OUTK=`; `VAR`, `WITH`, `WEIGHT` (Pearson only), `PARTIAL` (Pearson partial correlation, df = n−k−2, residual/least-squares method) | `HOEFFDING`, weighted Spearman/Kendall, partial Spearman/Kendall |
+| `CORR` | ✅ | `DATA=`, `NOSIMPLE`, `NOPROB`, `NOCORR`, `PEARSON`, `SPEARMAN`, `KENDALL`, `HOEFFDING` (D exact ≡ SAS ; `Prob > D` = approximation asymptotique Blum-Kiefer-Rosenblatt/Imhof, n≥5), `OUT=`/`OUTP=`/`OUTS=`/`OUTK=`; `VAR`, `WITH`, `WEIGHT` (Pearson, Spearman & Kendall — rangs moyens pondérés ; paires Kendall pondérées par wᵢ·wⱼ ; ≡ méthode ordinaire sur données répliquées), `PARTIAL` (Pearson partial correlation, df = n−k−2, residual/least-squares method) | partial Spearman/Kendall ; `Prob > D` tabulée exacte pour petit n |
 | `COMPARE` | ✅ | `BASE=`, `COMPARE=`, `OUT=`, `NOVALUES`, `BRIEFSUMMARY` | `CRITERION=`, `ID`, `VAR`/`WITH` |
 | `IMPORT` | ✅ | `DATAFILE=`/`FILENAME=`, `OUT=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `GETNAMES=`, `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL`, `GUESSINGROWS=` (parsed, ignored) |
 | `EXPORT` | ✅ | `DATA=`, `OUTFILE=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL` |

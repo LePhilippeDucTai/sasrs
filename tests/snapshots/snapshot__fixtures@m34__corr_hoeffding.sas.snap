@@ -1,0 +1,69 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/corr_hoeffding.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'CORR Hoeffding D on sashelp.class';
+
+3     proc corr data=d.class hoeffding nosimple;
+4       var height weight age;
+5     run;
+NOTE: PROCEDURE CORR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title 'CORR weighted Spearman (weight = age) on sashelp.class';
+
+7     proc corr data=d.class spearman nosimple;
+8       var height weight;
+9       weight age;
+10    run;
+NOTE: PROCEDURE CORR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                               CORR Hoeffding D on sashelp.class
+
+                                       The CORR Procedure
+
+3 Variables:  height weight age
+
+                               Hoeffding Dependence Coefficients
+                                     Prob > D under H0: D=0
+
+                                       height     weight        age
+
+                            height    0.96172    0.31609    0.18856
+                                       0.0022     0.0008     0.0028
+                            weight    0.31609    0.92646    0.20579
+                                       0.0008     0.0021     0.0016
+                            age       0.18856    0.20579    0.60218
+                                       0.0028     0.0016     0.0013
+
+
+                     CORR weighted Spearman (weight = age) on sashelp.class
+
+                                       The CORR Procedure
+
+2 Variables:  height weight
+
+                               Spearman Correlation Coefficients
+                                   Prob > |r| under H0: Rho=0
+
+                                             height     weight
+
+                                  height    1.00000    0.84704
+                                                        <.0001
+                                  weight    0.84704    1.00000
+                                             <.0001
+
+
+==== EXIT 0 ====
