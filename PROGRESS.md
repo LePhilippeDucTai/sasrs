@@ -562,7 +562,12 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   sashelp.class, p=0.0011) + 2 tests unitaires (oracle = identité partielle à 1 contrôle). **Restants
   (différés, toujours README non-couvert) : HOEFFDING (D + Prob>D), Spearman/Kendall pondérés, partial
   Spearman/Kendall.** (Implémenté en direct — outil Agent indisponible.) +2 tests (2350 lib), 0 warning.
-- [ ] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen)
+- [x] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen).
+  **FAIT (→ ✅)** : `BY` (analyse par groupe via `common::by_groups`/`resolve_by_cols`, 1-sample/2-sample
+  CLASS/PAIRED) ; `SIDES=U|L|2` câblé (en-tête `Pr > t`/`Pr < t`, `sided_p`) ; colonnes CI gated par `CI=`
+  (chemin défaut byte-identique) — CL Mean (t) + CL Std (χ², `chisq_quantile` via `common::chisq_sf`),
+  2-sample → Mean Diff + CL Diff. Fixture + snapshot vérifié vs sashelp.class (BY sex F t=0.352/M t=2.504 ;
+  SIDES=U t=1.9867/Pr>t=0.0312 ; CI=95 Mean [59.866,64.808], Std [3.874,7.582]). +6 tests (2356 lib). README TTEST → ✅.
 - [ ] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen)
 - [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)
 - [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)

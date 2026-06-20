@@ -133,6 +133,8 @@ pub struct TTestAst {
     pub var_vars: Vec<String>,
     pub class_var: Option<String>,
     pub paired_vars: Vec<(String, String)>,
+    /// BY variables `(name, descending)`; empty → no BY processing.
+    pub by: Vec<(String, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +150,9 @@ pub struct TTestProcOptions {
     pub ci: f64,
     pub equal: bool,
     pub sides: TTestSides,
+    /// True when `CI=` was given explicitly on the PROC statement; gates the
+    /// confidence-limit columns so the default listing stays byte-identical.
+    pub ci_explicit: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -165,6 +170,7 @@ impl Default for TTestProcOptions {
             ci: 95.0,
             equal: true,
             sides: TTestSides::TwoTailed,
+            ci_explicit: false,
         }
     }
 }
@@ -225,6 +231,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
         } else if ts.peek().is_kw("ci") {
             common::expect_eq(ts, "CI")?;
             proc_options.ci = parse_num_value(ts, "CI")?;
+            proc_options.ci_explicit = true;
         } else if ts.peek().is_kw("equal") {
             common::expect_eq(ts, "EQUAL")?;
             let v = ts
@@ -263,6 +270,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
     let mut var_vars: Vec<String> = Vec::new();
     let mut class_var: Option<String> = None;
     let mut paired_vars: Vec<(String, String)> = Vec::new();
+    let mut by: Vec<(String, bool)> = Vec::new();
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
     common::parse_proc_body(ts, |ts, kw| {
@@ -317,8 +325,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             }
             "by" => {
                 ts.next();
-                ts.skip_to_semi();
-                // BY processing is recognized but deferred.
+                by = common::parse_by(ts)?;
                 true
             }
             "output" => {
@@ -341,6 +348,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
         var_vars,
         class_var,
         paired_vars,
+        by,
     })
 }
 
@@ -359,10 +367,18 @@ struct OneSampleResult {
     df: f64,
     t: Option<f64>,
     p: Option<f64>,
+    /// Two-sided 100(1-alpha)% confidence limits for the mean.
+    mean_lcl: Option<f64>,
+    mean_ucl: Option<f64>,
+    /// Two-sided 100(1-alpha)% confidence limits for the standard deviation
+    /// (chi-square based). None when the test is undefined.
+    std_lcl: Option<f64>,
+    std_ucl: Option<f64>,
 }
 
-/// One-sample t-test of `values` against `h0` at significance `alpha`.
-fn one_sample(values: &[f64], h0: f64, alpha: f64) -> OneSampleResult {
+/// One-sample t-test of `values` against `h0` at significance `alpha`,
+/// reporting the `sides`-appropriate probability and ALPHA-level CLs.
+fn one_sample(values: &[f64], h0: f64, alpha: f64, sides: TTestSides) -> OneSampleResult {
     let n = values.len();
     let mean = if n > 0 {
         values.iter().sum::<f64>() / n as f64
@@ -374,21 +390,41 @@ fn one_sample(values: &[f64], h0: f64, alpha: f64) -> OneSampleResult {
     let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
     let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
-    // alpha drives the (currently unreported) confidence interval; reserved for
-    // a future CL column. Kept in the signature for API stability.
-    let _ = alpha;
-    let (se, t, p) = match std {
+    let (se, t, p, mean_lcl, mean_ucl, std_lcl, std_ucl) = match std {
         Some(s) if n >= 2 && s > 0.0 => {
             let se = s / (n as f64).sqrt();
             let t = (mean - h0) / se;
-            let p = two_sided_p(t, df);
-            (Some(se), Some(t), Some(p))
+            let p = sided_p(t, df, sides);
+            // Two-sided 100(1-alpha)% CL for the mean: mean ± t_{1-alpha/2} · se.
+            let tcrit = common::t_quantile(1.0 - alpha / 2.0, df);
+            let half = tcrit * se;
+            // Two-sided CL for the standard deviation via chi-square:
+            // [ s·√((n-1)/χ²_{1-α/2}), s·√((n-1)/χ²_{α/2}) ].
+            let chi_hi = chisq_quantile(1.0 - alpha / 2.0, df);
+            let chi_lo = chisq_quantile(alpha / 2.0, df);
+            let (slcl, sucl) = if chi_hi > 0.0 && chi_lo > 0.0 {
+                (
+                    Some(s * (df / chi_hi).sqrt()),
+                    Some(s * (df / chi_lo).sqrt()),
+                )
+            } else {
+                (None, None)
+            };
+            (
+                Some(se),
+                Some(t),
+                Some(p),
+                Some(mean - half),
+                Some(mean + half),
+                slcl,
+                sucl,
+            )
         }
         Some(_) if n >= 2 => {
             // Constant sample (zero std): test undefined.
-            (Some(0.0), None, None)
+            (Some(0.0), None, None, None, None, None, None)
         }
-        _ => (None, None, None),
+        _ => (None, None, None, None, None, None, None),
     };
 
     OneSampleResult {
@@ -401,6 +437,10 @@ fn one_sample(values: &[f64], h0: f64, alpha: f64) -> OneSampleResult {
         df,
         t,
         p,
+        mean_lcl,
+        mean_ucl,
+        std_lcl,
+        std_ucl,
     }
 }
 
@@ -411,15 +451,21 @@ fn one_sample(values: &[f64], h0: f64, alpha: f64) -> OneSampleResult {
 struct TwoSampleResult {
     n_a: usize,
     n_b: usize,
+    /// Difference of means (mean_a - mean_b); NaN when undefined.
+    diff: f64,
     /// Pooled: (t, df, p)
     pooled: Option<(f64, f64, f64)>,
     /// Satterthwaite: (t, df, p)
     satterthwaite: Option<(f64, f64, f64)>,
     /// Folded F test for equal variances: (F, df1, df2, p)
     f_test: Option<(f64, f64, f64, f64)>,
+    /// Pooled mean-difference CL: (lower, upper) at the ALPHA level.
+    pooled_cl: Option<(f64, f64)>,
+    /// Satterthwaite mean-difference CL: (lower, upper) at the ALPHA level.
+    satt_cl: Option<(f64, f64)>,
 }
 
-fn two_sample(a: &[f64], b: &[f64]) -> TwoSampleResult {
+fn two_sample(a: &[f64], b: &[f64], alpha: f64, sides: TTestSides) -> TwoSampleResult {
     let n_a = a.len();
     let n_b = b.len();
     let naf = n_a as f64;
@@ -429,34 +475,43 @@ fn two_sample(a: &[f64], b: &[f64]) -> TwoSampleResult {
     let std_a = sample_std(a);
     let std_b = sample_std(b);
 
-    let (pooled, satterthwaite) = match (std_a, std_b) {
+    let diff = mean_a - mean_b;
+    let (pooled, satterthwaite, pooled_cl, satt_cl) = match (std_a, std_b) {
         (Some(sa), Some(sb)) if n_a >= 2 && n_b >= 2 => {
             let va = sa * sa;
             let vb = sb * sb;
             // Pooled.
             let sp2 = ((naf - 1.0) * va + (nbf - 1.0) * vb) / (naf + nbf - 2.0);
             let se_pool = (sp2 * (1.0 / naf + 1.0 / nbf)).sqrt();
-            let pooled = if se_pool > 0.0 {
+            let (pooled, pooled_cl) = if se_pool > 0.0 {
                 let df = naf + nbf - 2.0;
-                let t = (mean_a - mean_b) / se_pool;
-                Some((t, df, two_sided_p(t, df)))
+                let t = diff / se_pool;
+                let half = common::t_quantile(1.0 - alpha / 2.0, df) * se_pool;
+                (
+                    Some((t, df, sided_p(t, df, sides))),
+                    Some((diff - half, diff + half)),
+                )
             } else {
-                None
+                (None, None)
             };
             // Satterthwaite.
             let se_satt = (va / naf + vb / nbf).sqrt();
-            let satt = if se_satt > 0.0 {
+            let (satt, satt_cl) = if se_satt > 0.0 {
                 let num = (va / naf + vb / nbf).powi(2);
                 let den = (va / naf).powi(2) / (naf - 1.0) + (vb / nbf).powi(2) / (nbf - 1.0);
                 let df = num / den;
-                let t = (mean_a - mean_b) / se_satt;
-                Some((t, df, two_sided_p(t, df)))
+                let t = diff / se_satt;
+                let half = common::t_quantile(1.0 - alpha / 2.0, df) * se_satt;
+                (
+                    Some((t, df, sided_p(t, df, sides))),
+                    Some((diff - half, diff + half)),
+                )
             } else {
-                None
+                (None, None)
             };
-            (pooled, satt)
+            (pooled, satt, pooled_cl, satt_cl)
         }
-        _ => (None, None),
+        _ => (None, None, None, None),
     };
 
     let f_test = match (std_a, std_b) {
@@ -479,9 +534,12 @@ fn two_sample(a: &[f64], b: &[f64]) -> TwoSampleResult {
     TwoSampleResult {
         n_a,
         n_b,
+        diff,
         pooled,
         satterthwaite,
         f_test,
+        pooled_cl,
+        satt_cl,
     }
 }
 
@@ -490,7 +548,68 @@ fn two_sided_p(t: f64, df: f64) -> f64 {
     (2.0 * (1.0 - student_t_cdf(t.abs(), df))).clamp(0.0, 1.0)
 }
 
+/// p-value for a t statistic honoring the requested test `sides`:
+/// - TwoTailed → Pr > |t|
+/// - Upper (H1: μ > H0) → Pr > t = 1 - CDF(t)
+/// - Lower (H1: μ < H0) → Pr < t = CDF(t)
+fn sided_p(t: f64, df: f64, sides: TTestSides) -> f64 {
+    match sides {
+        TTestSides::TwoTailed => two_sided_p(t, df),
+        TTestSides::Upper => (1.0 - student_t_cdf(t, df)).clamp(0.0, 1.0),
+        TTestSides::Lower => student_t_cdf(t, df).clamp(0.0, 1.0),
+    }
+}
+
+/// Chi-square quantile: value `x` with P(χ²_df ≤ x) = `p`, via bisection on the
+/// monotone CDF `1 - chisq_sf`. Used for the std-dev confidence limits. Robust
+/// over the useful range; accuracy ~1e-8 on the probability.
+fn chisq_quantile(p: f64, df: f64) -> f64 {
+    if !(0.0..=1.0).contains(&p) || df <= 0.0 {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        return 0.0;
+    }
+    let cdf = |x: f64| 1.0 - common::chisq_sf(x, df);
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    while cdf(hi) < p && hi < 1e12 {
+        hi *= 2.0;
+    }
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if cdf(mid) < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo) <= 1e-12 * (1.0 + hi.abs()) {
+            break;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 // ───────────────────────── formatting ─────────────────────────
+
+/// Column header for the probability, per the test sides.
+fn p_header(sides: TTestSides) -> &'static str {
+    match sides {
+        TTestSides::TwoTailed => "Pr > |t|",
+        TTestSides::Upper => "Pr > t",
+        TTestSides::Lower => "Pr < t",
+    }
+}
+
+/// Confidence-level percentage label, e.g. "95%" for alpha=0.05.
+fn cl_pct(alpha: f64) -> String {
+    let pct = 100.0 * (1.0 - alpha);
+    if (pct - pct.round()).abs() < 1e-9 {
+        format!("{}%", pct.round() as i64)
+    } else {
+        format!("{pct}%")
+    }
+}
 
 /// Format a t-statistic / mean / CI value to 4 decimals; None → ".".
 fn fmt4(v: Option<f64>) -> String {
@@ -539,7 +658,22 @@ pub fn execute(ast: &TTestAst, session: &mut Session) -> Result<()> {
     }
 
     let n_obs = ds.n_obs();
-    let all_rows: Vec<usize> = (0..n_obs).collect();
+
+    // --- BY processing: resolve, verify sortedness, partition into groups. ---
+    // No BY → a single group spanning all rows (output byte-identical).
+    let by_cols = common::resolve_by_cols(&ds, &ast.by)?;
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
+    } else {
+        let by_values: Vec<Vec<Value>> = by_cols
+            .iter()
+            .map(|c| decode_column(&ds, c.col_idx))
+            .collect::<Result<_>>()?;
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
+    };
 
     // Helper: resolve a variable name to a column index (any type).
     let find_col = |nm: &str| -> Result<usize> {
@@ -569,22 +703,48 @@ pub fn execute(ast: &TTestAst, session: &mut Session) -> Result<()> {
             .collect()
     };
 
-    // Listing header.
+    // Listing header (printed once per proc invocation).
     session.listing.page_header();
     centered(session, "The TTEST Procedure");
     session.listing.blank();
 
     let alpha = ast.proc_options.alpha;
 
-    if let Some(class_name) = &ast.class_var {
-        execute_two_sample(ast, session, &ds, &var_cols, class_name, &all_rows, alpha)?;
-    } else if !ast.paired_vars.is_empty() {
-        execute_paired(ast, session, &ds, &all_rows, alpha, &find_col)?;
-    } else {
-        execute_one_sample(ast, session, &ds, &var_cols, &all_rows, alpha)?;
+    // Run the full analysis independently per BY group; without BY this is a
+    // single group spanning every row (byte-identical default path).
+    for (by_key, grp_rows) in &by_groups_list {
+        if !by_names.is_empty() {
+            emit_by_heading(session, &by_names, by_key);
+        }
+        if let Some(class_name) = &ast.class_var {
+            execute_two_sample(ast, session, &ds, &var_cols, class_name, grp_rows, alpha)?;
+        } else if !ast.paired_vars.is_empty() {
+            execute_paired(ast, session, &ds, grp_rows, alpha, &find_col)?;
+        } else {
+            execute_one_sample(ast, session, &ds, &var_cols, grp_rows, alpha)?;
+        }
     }
 
     Ok(())
+}
+
+/// Emit the standard BY-group heading line (`name=value name2=value2`), matching
+/// the format used by PROC MEANS / UNIVARIATE / FREQ.
+fn emit_by_heading(session: &mut Session, by_names: &[String], by_key: &[Value]) {
+    let by_cell = |v: &Value| -> String {
+        match v {
+            Value::Num(f) => crate::value::format_best(*f, 12),
+            Value::Missing(k) => k.display(),
+            Value::Char(s) => s.trim_end().to_string(),
+        }
+    };
+    let parts: Vec<String> = by_names
+        .iter()
+        .zip(by_key)
+        .map(|(name, v)| format!("{}={}", name, by_cell(v)))
+        .collect();
+    session.listing.write_line(&parts.join(" "));
+    session.listing.blank();
 }
 
 /// Mode 1 — one-sample t tests on every VAR variable.
@@ -597,10 +757,13 @@ fn execute_one_sample(
     alpha: f64,
 ) -> Result<()> {
     let h0 = ast.proc_options.h0;
+    let sides = ast.proc_options.sides;
+    let show_ci = ast.proc_options.ci_explicit;
     centered(session, "One-Sample t Tests");
     session.listing.blank();
 
-    let headers: Vec<String> = vec![
+    let cl = cl_pct(alpha);
+    let mut headers: Vec<String> = vec![
         "Variable".into(),
         "N".into(),
         "Mean".into(),
@@ -608,18 +771,29 @@ fn execute_one_sample(
         "Std Err".into(),
         "Minimum".into(),
         "Maximum".into(),
-        "t Value".into(),
-        "Pr > |t|".into(),
     ];
-    let aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right];
+    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right];
+    if show_ci {
+        // Confidence-limit columns, gated by an explicit CI= request so the
+        // default listing stays byte-identical.
+        headers.push(format!("{cl} CL Mean L"));
+        headers.push(format!("{cl} CL Mean U"));
+        headers.push(format!("{cl} CL Std L"));
+        headers.push(format!("{cl} CL Std U"));
+        aligns.extend([Align::Right, Align::Right, Align::Right, Align::Right]);
+    }
+    headers.push("t Value".into());
+    headers.push(p_header(sides).into());
+    aligns.push(Align::Right);
+    aligns.push(Align::Right);
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(var_cols.len());
     let mut ods_rows: Vec<(String, OneSampleResult)> = Vec::new();
     for &c in var_cols {
         let col = decode_column(ds, c)?;
         let (xs, _nmiss) = partition_numeric(&col, all_rows);
-        let r = one_sample(&xs, h0, alpha);
-        rows.push(vec![
+        let r = one_sample(&xs, h0, alpha, sides);
+        let mut row = vec![
             ds.vars[c].name.clone(),
             format!("{}", r.n),
             fmt4(if r.n > 0 { Some(r.mean) } else { None }),
@@ -627,9 +801,16 @@ fn execute_one_sample(
             fmt4(r.se),
             fmt4(if r.n > 0 { Some(r.min) } else { None }),
             fmt4(if r.n > 0 { Some(r.max) } else { None }),
-            fmt4(r.t),
-            fmt_p(r.p),
-        ]);
+        ];
+        if show_ci {
+            row.push(fmt4(r.mean_lcl));
+            row.push(fmt4(r.mean_ucl));
+            row.push(fmt4(r.std_lcl));
+            row.push(fmt4(r.std_ucl));
+        }
+        row.push(fmt4(r.t));
+        row.push(fmt_p(r.p));
+        rows.push(row);
         ods_rows.push((ds.vars[c].name.clone(), r));
     }
     session.listing.write_table(&headers, &aligns, &rows);
@@ -648,8 +829,10 @@ fn execute_two_sample(
     var_cols: &[usize],
     class_name: &str,
     all_rows: &[usize],
-    _alpha: f64,
+    alpha: f64,
 ) -> Result<()> {
+    let sides = ast.proc_options.sides;
+    let show_ci = ast.proc_options.ci_explicit;
     let class_idx = ds
         .vars
         .iter()
@@ -689,14 +872,22 @@ fn execute_two_sample(
     centered(session, "Two-Sample t Tests");
     session.listing.blank();
 
-    let headers: Vec<String> = vec![
+    let cl = cl_pct(alpha);
+    let mut headers: Vec<String> = vec![
         "Variable".into(),
         "Method".into(),
-        "DF".into(),
-        "t Value".into(),
-        "Pr > |t|".into(),
     ];
-    let aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right, Align::Right];
+    let mut aligns = vec![Align::Left, Align::Left];
+    if show_ci {
+        headers.push("Mean Diff".into());
+        headers.push(format!("{cl} CL Diff L"));
+        headers.push(format!("{cl} CL Diff U"));
+        aligns.extend([Align::Right, Align::Right, Align::Right]);
+    }
+    headers.push("DF".into());
+    headers.push("t Value".into());
+    headers.push(p_header(sides).into());
+    aligns.extend([Align::Right, Align::Right, Align::Right]);
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut feq_rows: Vec<Vec<String>> = Vec::new();
@@ -726,31 +917,39 @@ fn execute_two_sample(
                 }
             }
         }
-        let res = two_sample(&a, &b);
+        let res = two_sample(&a, &b, alpha, sides);
         let vname = ds.vars[c].name.clone();
 
+        let diff = if res.diff.is_nan() { None } else { Some(res.diff) };
         let (pt, pdf, pp) = match res.pooled {
             Some((t, df, p)) => (Some(t), Some(df), Some(p)),
             None => (None, None, None),
         };
-        rows.push(vec![
-            vname.clone(),
-            "Pooled".into(),
-            fmt4(pdf),
-            fmt4(pt),
-            fmt_p(pp),
-        ]);
+        let mut pooled_row = vec![vname.clone(), "Pooled".into()];
+        if show_ci {
+            pooled_row.push(fmt4(diff));
+            pooled_row.push(fmt4(res.pooled_cl.map(|(l, _)| l)));
+            pooled_row.push(fmt4(res.pooled_cl.map(|(_, u)| u)));
+        }
+        pooled_row.push(fmt4(pdf));
+        pooled_row.push(fmt4(pt));
+        pooled_row.push(fmt_p(pp));
+        rows.push(pooled_row);
+
         let (st, sdf, sp) = match res.satterthwaite {
             Some((t, df, p)) => (Some(t), Some(df), Some(p)),
             None => (None, None, None),
         };
-        rows.push(vec![
-            vname.clone(),
-            "Satterthwaite".into(),
-            fmt4(sdf),
-            fmt4(st),
-            fmt_p(sp),
-        ]);
+        let mut satt_row = vec![vname.clone(), "Satterthwaite".into()];
+        if show_ci {
+            satt_row.push(fmt4(diff));
+            satt_row.push(fmt4(res.satt_cl.map(|(l, _)| l)));
+            satt_row.push(fmt4(res.satt_cl.map(|(_, u)| u)));
+        }
+        satt_row.push(fmt4(sdf));
+        satt_row.push(fmt4(st));
+        satt_row.push(fmt_p(sp));
+        rows.push(satt_row);
 
         if let Some((f, df1, df2, p)) = res.f_test {
             feq_rows.push(vec![
@@ -796,20 +995,29 @@ fn execute_paired(
     alpha: f64,
     find_col: &dyn Fn(&str) -> Result<usize>,
 ) -> Result<()> {
+    let sides = ast.proc_options.sides;
+    let show_ci = ast.proc_options.ci_explicit;
     centered(session, "Paired t Tests");
     session.listing.blank();
 
-    let headers: Vec<String> = vec![
+    let cl = cl_pct(alpha);
+    let mut headers: Vec<String> = vec![
         "Variable".into(),
         "N Pairs".into(),
         "Mean".into(),
         "Std Dev".into(),
         "Std Err".into(),
-        "DF".into(),
-        "t Value".into(),
-        "Pr > |t|".into(),
     ];
-    let aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right];
+    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right];
+    if show_ci {
+        headers.push(format!("{cl} CL Mean L"));
+        headers.push(format!("{cl} CL Mean U"));
+        aligns.extend([Align::Right, Align::Right]);
+    }
+    headers.push("DF".into());
+    headers.push("t Value".into());
+    headers.push(p_header(sides).into());
+    aligns.extend([Align::Right, Align::Right, Align::Right]);
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut ods: Vec<(String, OneSampleResult)> = Vec::new();
@@ -836,18 +1044,23 @@ fn execute_paired(
                 _ => {}
             }
         }
-        let res = one_sample(&diffs, 0.0, alpha);
+        let res = one_sample(&diffs, 0.0, alpha, sides);
         let label = format!("{}-{}", ds.vars[xi].name, ds.vars[yi].name);
-        rows.push(vec![
+        let mut row = vec![
             label.clone(),
             format!("{}", res.n),
             fmt4(if res.n > 0 { Some(res.mean) } else { None }),
             fmt4(res.std),
             fmt4(res.se),
-            fmt4(if res.n >= 1 { Some(res.df) } else { None }),
-            fmt4(res.t),
-            fmt_p(res.p),
-        ]);
+        ];
+        if show_ci {
+            row.push(fmt4(res.mean_lcl));
+            row.push(fmt4(res.mean_ucl));
+        }
+        row.push(fmt4(if res.n >= 1 { Some(res.df) } else { None }));
+        row.push(fmt4(res.t));
+        row.push(fmt_p(res.p));
+        rows.push(row);
         ods.push((label, res));
     }
 
@@ -1021,7 +1234,7 @@ mod tests {
     fn test_one_sample_basic() {
         // [1,2,3,4,5] vs H0=0: n=5, mean=3, s≈1.5811, se≈0.7071, t≈4.2426, df=4.
         let values = [1.0, 2.0, 3.0, 4.0, 5.0];
-        let r = one_sample(&values, 0.0, 0.05);
+        let r = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed);
         assert_eq!(r.n, 5);
         assert!((r.mean - 3.0).abs() < 1e-12);
         assert!((r.std.unwrap() - 2.5_f64.sqrt()).abs() < 1e-9, "std={:?}", r.std);
@@ -1034,11 +1247,44 @@ mod tests {
     }
 
     #[test]
+    fn test_one_sided_p() {
+        // t = 4.2426 with df=4. Two-sided p = 0.013263 (R: 2*pt(-4.2426,4)).
+        // Upper one-sided p = Pr(T>t) = p2/2 ≈ 0.0066314.
+        // Lower one-sided p = Pr(T<t) = 1 - upper ≈ 0.9933686.
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let two = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed).p.unwrap();
+        let up = one_sample(&values, 0.0, 0.05, TTestSides::Upper).p.unwrap();
+        let lo = one_sample(&values, 0.0, 0.05, TTestSides::Lower).p.unwrap();
+        assert!((two - 0.013263).abs() < 1e-4, "two={two}");
+        assert!((up - 0.0066314).abs() < 1e-4, "up={up}");
+        assert!((lo - 0.9933686).abs() < 1e-4, "lo={lo}");
+        // Consistency: upper + lower = 1, two = 2*upper.
+        assert!((up + lo - 1.0).abs() < 1e-9);
+        assert!((two - 2.0 * up).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_mean_ci() {
+        // [1,2,3,4,5]: mean=3, se=sqrt(0.5)=0.707107, df=4.
+        // t_{0.975,4}=2.776445; half=2.776445*0.707107=1.963243.
+        // 95% CL Mean = [1.036757, 4.963243].
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let r = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed);
+        assert!((r.mean_lcl.unwrap() - 1.036757).abs() < 1e-4, "lcl={:?}", r.mean_lcl);
+        assert!((r.mean_ucl.unwrap() - 4.963243).abs() < 1e-4, "ucl={:?}", r.mean_ucl);
+        // Std CL (chi-square) for s=1.581139, df=4:
+        // chi2_{0.975,4}=11.143287, chi2_{0.025,4}=0.484419.
+        // std L = s*sqrt(4/11.143287)=0.947247; std U = s*sqrt(4/0.484419)=4.543297.
+        assert!((r.std_lcl.unwrap() - 0.947247).abs() < 1e-3, "stdL={:?}", r.std_lcl);
+        assert!((r.std_ucl.unwrap() - 4.543297).abs() < 1e-3, "stdU={:?}", r.std_ucl);
+    }
+
+    #[test]
     fn test_two_sample_pooled() {
         // A=[1,2,3] (mean 2, s 1), B=[5,6,7] (mean 6, s 1).
         let a = [1.0, 2.0, 3.0];
         let b = [5.0, 6.0, 7.0];
-        let r = two_sample(&a, &b);
+        let r = two_sample(&a, &b, 0.05, TTestSides::TwoTailed);
         assert_eq!(r.n_a, 3);
         assert_eq!(r.n_b, 3);
         let (tp, dfp, _pp) = r.pooled.unwrap();
@@ -1055,7 +1301,7 @@ mod tests {
     fn test_paired_simple() {
         // x=[2,4,6], y=[1,2,3]: diffs=[1,2,3], mean=2, s=1, se≈0.5774, t≈3.4641, df=2.
         let diffs = [1.0, 2.0, 3.0];
-        let r = one_sample(&diffs, 0.0, 0.05);
+        let r = one_sample(&diffs, 0.0, 0.05, TTestSides::TwoTailed);
         assert_eq!(r.n, 3);
         assert!((r.mean - 2.0).abs() < 1e-12);
         assert!((r.std.unwrap() - 1.0).abs() < 1e-12);
@@ -1142,6 +1388,7 @@ mod tests {
             var_vars: vec!["x".into()],
             class_var: Some("g".into()),
             paired_vars: vec![],
+            by: vec![],
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -1173,6 +1420,7 @@ mod tests {
             var_vars: vec![],
             class_var: None,
             paired_vars: vec![],
+            by: vec![],
         };
         execute(&ast1, &mut session).unwrap();
         let l1 = session.listing.into_string();
@@ -1196,6 +1444,7 @@ mod tests {
             var_vars: vec![],
             class_var: None,
             paired_vars: vec![("x".into(), "y".into())],
+            by: vec![],
         };
         execute(&ast2, &mut session2).unwrap();
         let l2 = session2.listing.into_string();
@@ -1204,5 +1453,108 @@ mod tests {
         let (out, _) = session2.libs.get("WORK").unwrap().read("OUT").unwrap();
         assert_eq!(out.n_obs(), 1);
         assert_eq!(session2.last_dataset.as_deref(), Some("WORK.OUT"));
+    }
+
+    #[test]
+    fn parse_by_statement() {
+        let ast = parse_ttest("proc ttest data=a ci=90; var x; by g; run;").unwrap();
+        assert_eq!(ast.by, vec![("g".to_string(), false)]);
+        assert!(ast.proc_options.ci_explicit);
+        assert!((ast.proc_options.ci - 90.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn execute_one_sample_by_groups() {
+        // Two BY groups; each is an independent one-sample t test. Sorted by g.
+        // g=1: x=[1,2,3,4,5] → mean 3, t=4.2426; g=2: x=[10,20,30] → mean 20.
+        let mut session = make_session();
+        let df = df![
+            "g" => [1.0_f64, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("g"), num_meta("x")] };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let ast = TTestAst {
+            data_options: TTestDataOptions {
+                input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+                output: None,
+            },
+            proc_options: TTestProcOptions::default(),
+            var_vars: vec!["x".into()],
+            class_var: None,
+            paired_vars: vec![],
+            by: vec![("g".into(), false)],
+        };
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        // BY headings for both groups, two distinct One-Sample sections.
+        assert!(l.contains("g=1"), "{l}");
+        assert!(l.contains("g=2"), "{l}");
+        assert_eq!(l.matches("One-Sample t Tests").count(), 2, "{l}");
+        // Group 1 mean and t printed; group 2 mean 20.
+        assert!(l.contains(" 3.0000"), "{l}");
+        assert!(l.contains(" 4.2426"), "{l}");
+        assert!(l.contains("20.0000"), "{l}");
+    }
+
+    #[test]
+    fn execute_by_unsorted_errors() {
+        let mut session = make_session();
+        let df = df![
+            "g" => [2.0_f64, 1.0],
+            "x" => [10.0_f64, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("g"), num_meta("x")] };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = TTestAst {
+            data_options: TTestDataOptions {
+                input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+                output: None,
+            },
+            proc_options: TTestProcOptions::default(),
+            var_vars: vec!["x".into()],
+            class_var: None,
+            paired_vars: vec![],
+            by: vec![("g".into(), false)],
+        };
+        let err = execute(&ast, &mut session).unwrap_err();
+        assert!(
+            err.to_string().contains("not sorted in ascending sequence"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn execute_ci_and_sides_columns() {
+        // CI= triggers CL columns; SIDES=U triggers the one-sided p header.
+        let mut session = make_session();
+        let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x")] };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut po = TTestProcOptions::default();
+        po.ci_explicit = true;
+        po.sides = TTestSides::Upper;
+        let ast = TTestAst {
+            data_options: TTestDataOptions {
+                input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+                output: None,
+            },
+            proc_options: po,
+            var_vars: vec!["x".into()],
+            class_var: None,
+            paired_vars: vec![],
+            by: vec![],
+        };
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        assert!(l.contains("95% CL Mean L"), "{l}");
+        assert!(l.contains("95% CL Std L"), "{l}");
+        assert!(l.contains("Pr > t"), "{l}");
+        // 95% CL Mean bounds [1.0368, 4.9632].
+        assert!(l.contains("1.0368"), "{l}");
+        assert!(l.contains("4.9632"), "{l}");
     }
 }
