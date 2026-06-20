@@ -411,8 +411,12 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
 `TextStage`. Déplacements verbatim (seul `Self::foo`→`module::foo` change), **zéro `.snap.new`
 à chaque commit**. Design : voir PLAN.md §Phase E / M32.
 
-- [ ] M32.1 — créer `src/macros/mod.rs` (struct `MacroEngine` + façade publique + `expand_open_code`
-  + impl `TextStage`) ; `src/preprocess.rs` devient le shim de re-export. Build inchangé (Opus, moyen)
+- [x] M32.1 — créer `src/macros/mod.rs` (struct `MacroEngine` + façade publique + `expand_open_code`
+  + impl `TextStage`) ; `src/preprocess.rs` devient le shim de re-export. Build inchangé (Opus, moyen).
+  **FAIT** : `git mv src/preprocess.rs src/macros/mod.rs` (contenu verbatim), `pub mod macros;` dans
+  lib.rs, nouveau `src/preprocess.rs` = `pub use crate::macros::{TextStage, MacroEngine, MacroDef,
+  MacroParam, MacroError, MacroStage, RawSegmenter};`. Sites d'import (`session`/`executor`) inchangés.
+  2276 lib, 0 `.snap.new`, 0 warning. (`mod.rs` reste monolithique ; découpage en M32.2+.)
 - [ ] ⫽ M32.2 — extraire `src/macros/error.rs` (`MacroError`, `emit_error`) (Sonnet, faible)
 - [ ] ⫽ M32.3 — extraire `src/macros/scan.rs` (helpers char libres : `read_name`,
   `read_balanced_parens`, `find_kw`, `split_top_level_commas`, …) ; sites `Self::`→`scan::` (Sonnet, moyen)

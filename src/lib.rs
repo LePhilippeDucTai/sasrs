@@ -15,6 +15,7 @@ pub mod lexer;
 pub mod library;
 pub mod listing;
 pub mod log;
+pub mod macros;
 pub mod missing;
 pub mod ods_graphics;
 pub mod output;
