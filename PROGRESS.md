@@ -456,9 +456,14 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   scan/index/length, logique d'arm reproduite à l'octet, quirk `%length("")`→0 préservé). Masquage `%q*`
   reste piloté par le bool par-appel du dispatcher (pas de champ `masked` → zéro dead-code). Ordre de
   sondage intact. `mod.rs` 3458→3159. 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] ⫽ M32.8 — extraire `src/macros/control.rs` (`consume_if`/`consume_do`/itératif/conditionnel),
+- [x] ⫽ M32.8 — extraire `src/macros/control.rs` (`consume_if`/`consume_do`/itératif/conditionnel),
   `src/macros/define.rs` (`consume_macro_def`/invocation/params) et `src/macros/include.rs`
-  (`%include`/autocall/`%put`/CALL EXECUTE) — déplacements verbatim, un fichier par commit (Sonnet, moyen)
+  (`%include`/autocall/`%put`/CALL EXECUTE) — déplacements verbatim, un fichier par commit (Sonnet, moyen).
+  **FAIT (lot ⫽)** : control.rs (`consume_if`/`consume_do`/`consume_iterative_do`/`consume_conditional_do`/
+  `set_loop_var` + `MAX_LOOP_ITERS`) ; define.rs (`MacroDef`/`MacroParam` **publics → `pub use define::{…}`**,
+  `consume_macro_def`/`parse_param_list`/`consume_scope_decl`/`expand_invocation`/`parse_arg_list`/
+  `bind_params`/`consume_macro_call` + `MAX_MACRO_DEPTH`) ; include.rs (`consume_include`/`try_autocall`/
+  `consume_put` + `MAX_INCLUDE_DEPTH`). 0 changement d'appel. `mod.rs` 3159→2130. 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] M32.9 — extraire `src/macros/expand.rs` (boucle `process_impl`) en dernier ;
   état final : `mod.rs` = façade seule (Opus, moyen)
 - [ ] DoD M32 : `cargo test -p sasrs` vert, **zéro `.snap.new`**, 0 warning ; PLAN.md §Macro pointant
