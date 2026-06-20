@@ -554,7 +554,14 @@ Phase E. Compléter les options différées des procs stat/modélisation (colonn
 Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`). Fixtures
 `tests/fixtures/m34/` + snapshots. Une case = un proc / un lot cohérent.
 
-- [ ] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé)
+- [ ] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé).
+  **EN COURS** : `PARTIAL` livré (statement `partial v…;` ; résidualisation par moindres carrés
+  `stat::linalg::least_squares` sur `[1, vars partielles]`, observations listwise-complètes, Pearson sur
+  résidus, df = n−k−2 ; bloc « Pearson Partial Correlation Coefficients, Controlled for: … »). Fixture
+  `tests/fixtures/m34/corr_options.sas` + snapshot vérifié (r(height,weight|age)=0.70467 = valeur SAS
+  sashelp.class, p=0.0011) + 2 tests unitaires (oracle = identité partielle à 1 contrôle). **Restants
+  (différés, toujours README non-couvert) : HOEFFDING (D + Prob>D), Spearman/Kendall pondérés, partial
+  Spearman/Kendall.** (Implémenté en direct — outil Agent indisponible.) +2 tests (2350 lib), 0 warning.
 - [ ] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen)
 - [ ] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen)
 - [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)

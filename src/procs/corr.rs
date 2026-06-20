@@ -91,6 +91,9 @@ pub struct CorrAst {
     pub var: Vec<String>,
     /// Optional WITH list (empty = none).
     pub with: Vec<String>,
+    /// Optional PARTIAL list (empty = none) — variables partialled out
+    /// (controlled for) before computing the (Pearson) correlations.
+    pub partial: Vec<String>,
     /// Optional WEIGHT variable (Pearson only). None = unweighted.
     pub weight: Option<String>,
     /// OUTP= / OUT= : Pearson output dataset (TYPE=CORR).
@@ -184,6 +187,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     // --- sub-statements until run;/quit; ---
     let mut var: Vec<String> = Vec::new();
     let mut with: Vec<String> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
     let mut weight: Option<String> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
@@ -197,6 +201,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             "with" => {
                 ts.next();
                 with = common::parse_var_list(ts)?;
+                true
+            }
+            "partial" => {
+                ts.next();
+                partial = common::parse_var_list(ts)?;
                 true
             }
             "weight" => {
@@ -226,6 +235,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         kendall,
         var,
         with,
+        partial,
         weight,
         outp,
         outs,
@@ -679,6 +689,13 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         Vec::new()
     };
 
+    // Resolve the PARTIAL variables (controlled-for set). Numeric only.
+    let partial_cols: Vec<usize> = if !ast.partial.is_empty() {
+        resolve_names(&ast.partial)?
+    } else {
+        Vec::new()
+    };
+
     // Resolve the WEIGHT variable (single numeric column). Applies to Pearson.
     let weight_col: Option<usize> = match &ast.weight {
         Some(nm) => Some(resolve_names(std::slice::from_ref(nm))?[0]),
@@ -707,6 +724,11 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         std::collections::HashMap::new();
     for &c in &analysis_cols {
         decoded.insert(c, decode_column(&ds, c)?);
+    }
+    for &c in &partial_cols {
+        decoded
+            .entry(c)
+            .or_insert_with(|| decode_column(&ds, c).unwrap_or_default());
     }
     if let Some(wc) = weight_col {
         decoded
@@ -766,9 +788,53 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
 
     // --- Correlation Coefficients (one block per requested method) ---
     if !ast.nocorr {
-        for &method in &methods {
-            let cells = compute_matrix(method, &row_cols, &col_cols, &decoded, weight_vals);
-            emit_correlations(session, &ds, &row_cols, &col_cols, method, &cells, ast.noprob);
+        if !partial_cols.is_empty() {
+            // PARTIAL correlation: Pearson only in this build. If the user also
+            // asked for Spearman/Kendall, note that those are not partialled.
+            if ast.spearman || ast.kendall {
+                session.log.note(
+                    "PROC CORR: partial Spearman/Kendall correlations are not yet \
+                     implemented; only Pearson partial correlations are produced.",
+                );
+            }
+            let cells = partial_pearson_matrix(&row_cols, &col_cols, &partial_cols, &decoded);
+            let k = partial_cols.len();
+            let controlling: Vec<String> =
+                partial_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            let heading = format!(
+                "Pearson Partial Correlation Coefficients, Controlled for: {}",
+                controlling.join(" ")
+            );
+            let _ = k; // df = n − k − 2 is applied inside partial_pvalue
+            let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
+            emit_correlations(
+                session,
+                &ds,
+                &row_cols,
+                &col_cols,
+                &heading,
+                &prob_line,
+                &cells,
+                ast.noprob,
+            );
+        } else {
+            for &method in &methods {
+                let cells = compute_matrix(method, &row_cols, &col_cols, &decoded, weight_vals);
+                let prob_line = match method {
+                    Method::Kendall => "Prob > |tau| under H0: Tau=0",
+                    _ => "Prob > |r| under H0: Rho=0",
+                };
+                emit_correlations(
+                    session,
+                    &ds,
+                    &row_cols,
+                    &col_cols,
+                    method.heading(),
+                    prob_line,
+                    &cells,
+                    ast.noprob,
+                );
+            }
         }
     }
 
@@ -892,6 +958,116 @@ fn compute_cell(
     }
 }
 
+/// Two-sided p-value for a PARTIAL Pearson correlation with `k` partialled
+/// variables: df = n − k − 2 (vs n − 2 for an ordinary correlation).
+fn partial_pvalue(r: f64, n: usize, k: usize) -> Option<f64> {
+    let df = (n as i64) - (k as i64) - 2;
+    if df < 1 {
+        return None;
+    }
+    let df = df as f64;
+    if r.abs() >= 1.0 {
+        return Some(0.0);
+    }
+    let t = r * (df / (1.0 - r * r)).sqrt();
+    Some(student_t_sf_two_sided(t.abs(), df))
+}
+
+/// Partial Pearson correlation matrix (rows × cols), controlling for
+/// `partial_cols`. Observations are **listwise-complete** across the union of
+/// all row, column and partial variables. Each analysis variable is regressed
+/// on `[1, partial vars]` (ordinary least squares via `stat::linalg`) and the
+/// residuals are Pearson-correlated. The p-value uses df = n − k − 2.
+fn partial_pearson_matrix(
+    row_cols: &[usize],
+    col_cols: &[usize],
+    partial_cols: &[usize],
+    decoded: &std::collections::HashMap<usize, Vec<Value>>,
+) -> Vec<Vec<Cell>> {
+    let k = partial_cols.len();
+    let mut involved: Vec<usize> = Vec::new();
+    for &c in row_cols.iter().chain(col_cols).chain(partial_cols) {
+        if !involved.contains(&c) {
+            involved.push(c);
+        }
+    }
+    let n_obs = involved
+        .first()
+        .and_then(|c| decoded.get(c))
+        .map(|v| v.len())
+        .unwrap_or(0);
+
+    // Listwise-complete rows: every involved variable non-missing numeric.
+    let mut rows_idx: Vec<usize> = Vec::new();
+    'row: for i in 0..n_obs {
+        for &c in &involved {
+            match value_to_num(&decoded[&c][i]) {
+                Some(f) if !f.is_nan() => {}
+                _ => continue 'row,
+            }
+        }
+        rows_idx.push(i);
+    }
+    let n = rows_idx.len();
+
+    // Design matrix P = [1, partial vars] over the complete rows.
+    let design: Vec<Vec<f64>> = rows_idx
+        .iter()
+        .map(|&i| {
+            let mut row = Vec::with_capacity(k + 1);
+            row.push(1.0);
+            for &c in partial_cols {
+                row.push(value_to_num(&decoded[&c][i]).unwrap());
+            }
+            row
+        })
+        .collect();
+
+    // Residualise one involved variable on the partial set (None if rank-deficient).
+    let residual = |c: usize| -> Option<Vec<f64>> {
+        if n < k + 2 {
+            return None;
+        }
+        let y: Vec<f64> = rows_idx
+            .iter()
+            .map(|&i| value_to_num(&decoded[&c][i]).unwrap())
+            .collect();
+        let beta = crate::stat::linalg::least_squares(&design, &y).ok()?;
+        Some(
+            y.iter()
+                .zip(&design)
+                .map(|(yi, xr)| yi - xr.iter().zip(&beta).map(|(a, b)| a * b).sum::<f64>())
+                .collect(),
+        )
+    };
+    let mut resid: std::collections::HashMap<usize, Option<Vec<f64>>> =
+        std::collections::HashMap::new();
+    for &c in &involved {
+        resid.insert(c, residual(c));
+    }
+
+    let mut out = vec![vec![Cell { r: None, p: None, n }; col_cols.len()]; row_cols.len()];
+    for (i, &rc) in row_cols.iter().enumerate() {
+        for (j, &cc) in col_cols.iter().enumerate() {
+            if rc == cc {
+                out[i][j] = Cell { r: Some(1.0), p: None, n };
+                continue;
+            }
+            let rx = resid.get(&rc).and_then(|o| o.as_ref());
+            let ry = resid.get(&cc).and_then(|o| o.as_ref());
+            out[i][j] = match (rx, ry) {
+                (Some(rx), Some(ry)) => {
+                    let r = pearson_xy(rx, ry);
+                    let p = r.and_then(|rv| partial_pvalue(rv, n, k));
+                    Cell { r, p, n }
+                }
+                _ => Cell { r: None, p: None, n },
+            };
+        }
+    }
+    out
+}
+
 /// Write a centered line within LINESIZE.
 fn centered(session: &mut Session, text: &str) {
     let ls = session.listing.ls();
@@ -973,18 +1149,13 @@ fn emit_correlations(
     ds: &crate::dataset::SasDataset,
     row_cols: &[usize],
     col_cols: &[usize],
-    method: Method,
+    heading: &str,
+    prob_line: &str,
     cells: &[Vec<Cell>],
     noprob: bool,
 ) {
-    centered(session, method.heading());
+    centered(session, heading);
     if !noprob {
-        // Symbol matches the coefficient: r for Pearson/Spearman, tau for
-        // Kendall.
-        let prob_line = match method {
-            Method::Kendall => "Prob > |tau| under H0: Tau=0",
-            _ => "Prob > |r| under H0: Rho=0",
-        };
         centered(session, prob_line);
     }
     session.listing.blank();
@@ -1315,6 +1486,54 @@ mod tests {
     }
 
     #[test]
+    fn partial_pearson_matches_single_control_formula() {
+        // Oracle: for ONE control variable z, the partial correlation
+        //   r_xy.z = (r_xy − r_xz·r_yz) / sqrt((1−r_xz²)(1−r_yz²))
+        // must equal the residual-method result computed by
+        // `partial_pearson_matrix`. Two independent derivations agreeing.
+        let xf = [2.0, 4.0, 5.0, 4.0, 7.0, 8.0];
+        let yf = [1.0, 3.0, 4.0, 6.0, 7.0, 9.0];
+        let zf = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let r_xy = pearson_xy(&xf, &yf).unwrap();
+        let r_xz = pearson_xy(&xf, &zf).unwrap();
+        let r_yz = pearson_xy(&yf, &zf).unwrap();
+        let expected =
+            (r_xy - r_xz * r_yz) / ((1.0 - r_xz * r_xz) * (1.0 - r_yz * r_yz)).sqrt();
+
+        let to_col = |v: &[f64]| -> Vec<Value> { v.iter().map(|f| Value::Num(*f)).collect() };
+        let mut decoded: std::collections::HashMap<usize, Vec<Value>> =
+            std::collections::HashMap::new();
+        decoded.insert(0, to_col(&xf)); // X
+        decoded.insert(1, to_col(&yf)); // Y
+        decoded.insert(2, to_col(&zf)); // Z (control)
+
+        let cells = partial_pearson_matrix(&[0], &[1], &[2], &decoded);
+        let got = cells[0][0].r.unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "partial r mismatch: got {got}, expected {expected}"
+        );
+        assert_eq!(cells[0][0].n, 6); // listwise-complete count
+        // df = n − k − 2 = 6 − 1 − 2 = 3 → p-value present and in (0,1].
+        let p = cells[0][0].p.unwrap();
+        assert!(p > 0.0 && p <= 1.0, "p out of range: {p}");
+    }
+
+    #[test]
+    fn partial_pearson_diagonal_is_one() {
+        let xf = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let zf = [2.0, 1.0, 4.0, 3.0, 6.0];
+        let to_col = |v: &[f64]| -> Vec<Value> { v.iter().map(|f| Value::Num(*f)).collect() };
+        let mut decoded: std::collections::HashMap<usize, Vec<Value>> =
+            std::collections::HashMap::new();
+        decoded.insert(0, to_col(&xf));
+        decoded.insert(1, to_col(&zf));
+        let cells = partial_pearson_matrix(&[0], &[0], &[1], &decoded);
+        assert_eq!(cells[0][0].r, Some(1.0));
+        assert!(cells[0][0].p.is_none());
+    }
+
+    #[test]
     fn pearson_pairwise_complete_n() {
         // Drop rows where either is missing.
         let x = vec![
@@ -1387,6 +1606,7 @@ mod tests {
             nocorr: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1428,6 +1648,7 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1468,6 +1689,7 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into(), "z".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1505,6 +1727,7 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1542,6 +1765,7 @@ mod tests {
             nocorr: false,
             var: vec!["a".into(), "b".into()],
             with: vec!["w".into()],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1582,6 +1806,7 @@ mod tests {
             nocorr: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
@@ -1611,6 +1836,7 @@ mod tests {
             kendall: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             weight: None,
             outp: None,
             outs: None,
