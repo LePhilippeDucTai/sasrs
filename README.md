@@ -55,9 +55,9 @@ individual options of each procedure and DATA step statement. Legend:
 
 | PROC | State | Covered statements & options | Not covered / deferred |
 | --- | :---: | --- | --- |
-| `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`; `VAR` | `WHERE`, `BY`, `ID`, `SUM`, style options |
+| `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`, `DOUBLE`, `N`; `VAR`, `BY` (per-group sections, sorted input), `ID` (replaces `Obs`), `SUM` (per-`BY`-group subtotals + grand total) | `WHERE`, `SUMBY`, `PAGEBY`, style options |
 | `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`; `BY [DESCENDING]` | `TAGSORT`, `SORTSEQ=`, `KEY=` |
-| `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_` | `DETAILS`, `OUT=`, ODS output object |
+| `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_`, `OUT=` (one row/variable: `NAME`/`TYPE` 1=num 2=char/`LENGTH`/`VARNUM`/`LABEL`/`FORMAT`), `SHORT` (flat name list), `DETAILS`/`NODETAILS` (obs/var header lines) | physical file-size/page details, ODS output object |
 | `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` | `MAXDEC=`, `NWAY`, `MISSING`, `ORDER=`, `ID`, multi-label formats |
 | `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID`, `VAR` | `IDLABEL`, `COPY`, `LET`, `SUFFIX=` |
 | `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE` | `APPENDVER=` |
@@ -72,7 +72,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `UNIVARIATE` | 🟡 | `DATA=`, `NOPRINT`, `NORMAL`/`NORMALTEST`; `VAR` (`/ normal`), `WEIGHT`, `BY` (parsed), `OUTPUT` (parsed). Report: Moments, Basic Measures, Quantiles, Extreme Obs, Tests for Normality. With `WEIGHT`: weighted Quantiles (weighted Definition 5 — cumulative-weight position) and weighted `Median`/`Q1`/`Q3`/`Range`/`IQR`, plus Extreme Obs (raw extreme values). Plots wired to ODS GRAPHICS: `HISTOGRAM`/`QQPLOT`/`PROBPLOT`/`CDFPLOT`/`PPPLOT` → PNG/SVG under `--features graphics` (`univar_{N}`; histogram, normal-QQ/normal-probability scatter, empirical CDF, P-P scatter), else the shared "image deferred" NOTE; nothing emitted when ODS GRAPHICS off | weighted skewness/kurtosis (computed unweighted); plot-statement options (`/ NORMAL`, annotation) |
 | `TABULATE` | 🟡 | `DATA=`; `CLASS`, `VAR`, `TABLE` (1/2/3 dims), stats `N NMISS SUM MEAN MIN MAX STD PCTN PCTSUM`, `ALL`, `*` crossings, `OUT=` cell dataset, `FORMAT=`/`*f=` cell formats, `='label'` + stored LABEL in headers | group denominators `PCTN<...>` |
 | `REPORT` | 🟡 | `DATA=`, `NOWD`/`NOWINDOW`, `NOHEADER`, `HEADLINE`, `HEADSKIP`, `OUT=`; `COLUMN`, `DEFINE` (`DISPLAY`/`ORDER`/`GROUP`/`ANALYSIS`, `ORDER=`, label, `FORMAT=`, `WIDTH=`, `SPACING=`), `WHERE`, `BREAK AFTER /SUMMARIZE`, `RBREAK`, `COMPUTE` (assignment + `_Cn_`/named column refs) + `COMPUTE AFTER`/`LINE` (with `@col` pointer and trailing format) | `DEFINE` `FLOW`; richer `COMPUTE` (assignment back into computed columns with the full function library) |
-| `DATASETS` | 🟡 | `LIB=`/`LIBRARY=`, `NOLIST`; `DELETE`, `CHANGE old=new`, run-group `RUN`/`QUIT` | `COPY`, `APPEND`, `MODIFY`, `REPAIR`, `EXCHANGE`, `SAVE`, `CONTENTS` |
+| `DATASETS` | 🟡 | `LIB=`/`LIBRARY=`, `NOLIST`; `DELETE`, `CHANGE old=new`, `COPY OUT= [IN=] [;SELECT ...]`, `EXCHANGE a=b`, `SAVE m1 m2`, `MODIFY m; RENAME old=new; LABEL v='..'`, run-group `RUN`/`QUIT` | `APPEND`, `REPAIR`, `CONTENTS` (inside DATASETS), `MODIFY` dataset-level attrs |
 | `CATALOG` | 🟡 | `CATALOG=libref.cat`; `CONTENTS` (in-memory formats), `DELETE`/`COPY` (no-op + NOTE) | real `.sas7bcat` catalogs, entry-type selection |
 | `PRINTTO` | 🟡 | `LOG=`, `PRINT=`, `NEW`, reset (options stored) | actual file routing (NOTE only; deferred) |
 | `OPTIONS` | 🟡 | `PROC OPTIONS` listing of system options | per-option detail |

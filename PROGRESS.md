@@ -524,9 +524,17 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   wrap/hauteur de ligne, erreur propre) ; COMPUTE « riche » (réassignation via toute la lib de fonctions)
   partiel. Fixture + snapshot vérifié vs sashelp.class (height 60.59/63.91, weight WIDTH=10/SPACING=5,
   ratio `_c3_/_c2_`=1.487/1.705). +8 tests (2314 lib). README REPORT : reste 🟡 (FLOW, COMPUTE riche).
-- [ ] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen)
-- [ ] ⫽ M33.7 — `PROC CONTENTS` : `OUT=`, `DETAILS`, `SHORT` (Sonnet, moyen)
-- [ ] ⫽ M33.8 — `PROC DATASETS` : `COPY`, `MODIFY`/`RENAME` var, `EXCHANGE`, `SAVE`, `CONTENTS` (Sonnet, moyen)
+- [x] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen).
+  **FAIT (→ ✅)** : `BY` (sections par groupe, `common::by_groups`), `ID` (remplace `Obs`), `SUM`
+  (sous-totaux par groupe BY + grand total), `DOUBLE`, `N`. `write_table_ext` ajouté (chemin sans option
+  byte-identique). Oracles vérifiés (totaux 1184.4/1900.5 ; F 545.3/811, M 639.1/1089.5).
+- [x] ⫽ M33.7 — `PROC CONTENTS` : `OUT=`, `DETAILS`, `SHORT` (Sonnet, moyen).
+  **FAIT (→ ✅)** : `OUT=` (1 ligne/var : NAME/TYPE 1=num·2=char/LENGTH/VARNUM/LABEL/FORMAT), `SHORT`
+  (liste plate), `DETAILS`/`NODETAILS` (lignes # obs/var). OUT= n'éteint pas le rapport (= SAS). META 5 obs×6 vars.
+- [x] ⫽ M33.8 — `PROC DATASETS` : `COPY`, `MODIFY`/`RENAME` var, `EXCHANGE`, `SAVE`, `CONTENTS` (Sonnet, moyen).
+  **FAIT** : `COPY OUT= [IN=] [;SELECT]`, `EXCHANGE a=b`, `SAVE m…`, `MODIFY m; RENAME old=new; LABEL`
+  (réutilise les ops `LibraryProvider`). `APPEND`/`REPAIR`/`CONTENTS`-interne différés. Reste 🟡.
+  **Lot ⫽ M33.6-8** : fixtures + 3 snapshots vérifiés vs sashelp.class. +17 tests (2331 lib), 0 warning.
 - [ ] M33.9 — `PROC SORT` compléments (`TAGSORT`, `SORTSEQ=`, `KEY=`) ; `PROC APPEND` (`NOWARN`/`APPENDVER=`) (Sonnet, faible)
 - [ ] DoD M33 : fixtures `m33/` + snapshots vérifiés ; README à jour (colonnes « non couvert » rétrécies) ;
   passer « Jalon courant : **M34** ».

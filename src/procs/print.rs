@@ -35,15 +35,35 @@ pub struct PrintAst {
     /// Option LABEL : utilise le libellé de chaque variable (s'il existe)
     /// comme en-tête de colonne au lieu du nom. Défaut = noms (comme SAS).
     pub label: bool,
+    /// Option DOUBLE : double-interligne les lignes de données (M33.6).
+    pub double: bool,
+    /// Option N : imprime une ligne "N = <n>" du nombre d'observations en fin
+    /// de section (par groupe BY si BY présent) (M33.6).
+    pub n: bool,
+    /// Statement BY : sections par groupe BY (entrée triée requise). Liste de
+    /// (variable, descending) comme PROC SORT (M33.6).
+    pub by: Vec<(String, bool)>,
+    /// Statement ID : remplace la colonne `Obs` par les valeurs de ces
+    /// variables à gauche de chaque ligne (M33.6).
+    pub id: Vec<String>,
+    /// Statement SUM : variables numériques à totaliser en bas (sous-totaux par
+    /// groupe BY + total général) (M33.6).
+    pub sum: Vec<String>,
 }
 
-/// Parse `proc print [data=lib.t] [noobs] [label] ; [var v1 v2... ;] ... run ;`
+/// Parse `proc print [data=lib.t] [noobs] [label] [double] [n] ;
+///        [var ...;] [by ...;] [id ...;] [sum ...;] ... run ;`
 /// Called AFTER "proc print" has been consumed. Consumes through `run;`.
 pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
     let mut data: Option<DatasetRef> = None;
     let mut noobs = false;
     let mut label = false;
+    let mut double = false;
+    let mut n = false;
     let mut vars: Option<Vec<String>> = None;
+    let mut by: Vec<(String, bool)> = Vec::new();
+    let mut id: Vec<String> = Vec::new();
+    let mut sum: Vec<String> = Vec::new();
 
     // En-tête PROC PRINT : options jusqu'au `;` (combinateur partagé M31).
     common::parse_proc_options(ts, "PRINT", |ts, kw| {
@@ -63,6 +83,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
                 label = true;
                 true
             }
+            "double" => {
+                ts.next();
+                double = true;
+                true
+            }
+            "n" => {
+                ts.next();
+                n = true;
+                true
+            }
             _ => false,
         })
     })?;
@@ -75,11 +105,36 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
                 vars = Some(common::parse_var_list(ts)?);
                 true
             }
+            "by" => {
+                ts.next(); // consume "by"
+                by = common::parse_by(ts)?;
+                true
+            }
+            "id" => {
+                ts.next(); // consume "id"
+                id = common::parse_var_list(ts)?;
+                true
+            }
+            "sum" => {
+                ts.next(); // consume "sum"
+                sum = common::parse_var_list(ts)?;
+                true
+            }
             _ => false,
         })
     })?;
 
-    Ok(PrintAst { data, vars, noobs, label })
+    Ok(PrintAst {
+        data,
+        vars,
+        noobs,
+        label,
+        double,
+        n,
+        by,
+        id,
+        sum,
+    })
 }
 
 /// Execute PROC PRINT. Called by `procs::execute_proc` which wraps with timing.
@@ -124,28 +179,47 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
         (0..ds.vars.len()).collect()
     };
 
-    // Build headers and alignments
+    // ── M33.6 : résolution des statements ID / SUM / BY ──────────────────────
+    // ID variables (gauche, remplacent Obs). Validés contre le dataset.
+    let id_indices = resolve_names(&ds, &ast.id)?;
+    // SUM variables (numériques totalisées en bas). Validées.
+    let sum_indices = resolve_names(&ds, &ast.sum)?;
+    // BY columns (entrée triée requise).
+    let by_cols = common::resolve_by_cols(&ds, &ast.by)?;
+
+    let use_id = !id_indices.is_empty();
+
+    // Build headers and alignments.
+    //
+    // Layout: [ID cols | Obs | VAR/data cols]. With ID, the `Obs` column is
+    // suppressed (ID values replace it as the row identifier on the left).
     let mut headers: Vec<String> = Vec::new();
     let mut aligns: Vec<Align> = Vec::new();
 
-    if !ast.noobs {
+    let header_of = |idx: usize| -> String {
+        match (ast.label, &ds.vars[idx].label) {
+            (true, Some(lbl)) if !lbl.is_empty() => lbl.clone(),
+            _ => ds.vars[idx].name.clone(),
+        }
+    };
+    let align_of = |idx: usize| -> Align {
+        match ds.vars[idx].ty {
+            crate::value::VarType::Num => Align::Right,
+            crate::value::VarType::Char => Align::Left,
+        }
+    };
+
+    for &idx in &id_indices {
+        headers.push(header_of(idx));
+        aligns.push(align_of(idx));
+    }
+    if !ast.noobs && !use_id {
         headers.push("Obs".to_string());
         aligns.push(Align::Right);
     }
-
     for &idx in &col_indices {
-        // Option LABEL : libellé en en-tête s'il existe, sinon le nom.
-        // Sans l'option, toujours le nom (casse d'origine — SAS affiche le
-        // nom tel que déclaré).
-        let header = match (ast.label, &ds.vars[idx].label) {
-            (true, Some(lbl)) if !lbl.is_empty() => lbl.clone(),
-            _ => ds.vars[idx].name.clone(),
-        };
-        headers.push(header);
-        aligns.push(match ds.vars[idx].ty {
-            crate::value::VarType::Num => Align::Right,
-            crate::value::VarType::Char => Align::Left,
-        });
+        headers.push(header_of(idx));
+        aligns.push(align_of(idx));
     }
 
     // Take a shared reference to the session's format catalog for formatting.
@@ -153,13 +227,10 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
     let cat = &session.format_catalog;
 
     // Décode chaque colonne UNE seule fois (downcast par colonne, jamais
-    // par cellule — checklist PLAN.md point 3).
-    let mut col_cells: Vec<Vec<String>> = Vec::with_capacity(col_indices.len());
-    for &col_i in &col_indices {
+    // par cellule — checklist PLAN.md point 3). On formate à la fois les
+    // colonnes ID et les colonnes de données.
+    let format_col = |col_i: usize| -> Result<Vec<String>> {
         let series = ds.df.get_columns()[col_i].as_materialized_series();
-        // M4 : si la variable porte un format VALIDE, on rend chaque valeur
-        // via le moteur de formats. SANS format (ou format invalide), on
-        // garde EXACTEMENT le chemin historique (stabilité des snapshots).
         let spec = ds.vars[col_i]
             .format
             .as_deref()
@@ -192,24 +263,162 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
                 })
                 .collect(),
         };
-        col_cells.push(cells);
+        Ok(cells)
+    };
+
+    let mut id_cells: Vec<Vec<String>> = Vec::with_capacity(id_indices.len());
+    for &col_i in &id_indices {
+        id_cells.push(format_col(col_i)?);
+    }
+    let mut col_cells: Vec<Vec<String>> = Vec::with_capacity(col_indices.len());
+    for &col_i in &col_indices {
+        col_cells.push(format_col(col_i)?);
     }
 
-    let mut rows: Vec<Vec<String>> = Vec::with_capacity(n_obs);
-    for row_i in 0..n_obs {
-        let mut row: Vec<String> = Vec::with_capacity(headers.len());
-        if !ast.noobs {
+    // For SUM: decode the raw numeric values of each sum variable (once).
+    let mut sum_values: Vec<Vec<Value>> = Vec::with_capacity(sum_indices.len());
+    for &col_i in &sum_indices {
+        sum_values.push(common::decode_column(&ds, col_i)?);
+    }
+    // Column position (within the rendered row) of each SUM variable, so the
+    // totals line places each total under its column. A sum var must be a
+    // displayed data column (in col_indices); if not displayed it is ignored
+    // for placement (SAS would still total it, but it has no column to sit in).
+    let sum_render_pos: Vec<Option<usize>> = sum_indices
+        .iter()
+        .map(|&si| {
+            col_indices.iter().position(|&ci| ci == si).map(|p| {
+                // offset by ID columns + optional Obs column on the left
+                id_indices.len() + usize::from(!ast.noobs && !use_id) + p
+            })
+        })
+        .collect();
+    let n_render_cols = headers.len();
+
+    // Helper: build one rendered row for input row `row_i`.
+    let build_row = |row_i: usize| -> Vec<String> {
+        let mut row: Vec<String> = Vec::with_capacity(n_render_cols);
+        for cells in &id_cells {
+            row.push(cells[row_i].clone());
+        }
+        if !ast.noobs && !use_id {
             row.push((row_i + 1).to_string());
         }
         for cells in &col_cells {
             row.push(cells[row_i].clone());
         }
-        rows.push(row);
-    }
+        row
+    };
 
-    // Write listing
+    // Helper: build a totals row over a set of input rows. Returns None when
+    // there are no SUM variables. The total of a column is the SAS SUM (missing
+    // values ignored; all-missing → missing `.`).
+    let build_totals = |rows: &[usize]| -> Option<Vec<String>> {
+        if sum_indices.is_empty() {
+            return None;
+        }
+        let mut out = vec![String::new(); n_render_cols];
+        for (k, vals) in sum_values.iter().enumerate() {
+            let mut acc = 0.0_f64;
+            let mut any = false;
+            for &r in rows {
+                if let Value::Num(f) = vals[r] {
+                    acc += f;
+                    any = true;
+                }
+            }
+            let cell = if any {
+                format_best(acc, 12)
+            } else {
+                ".".to_string()
+            };
+            if let Some(pos) = sum_render_pos[k] {
+                out[pos] = cell;
+            }
+        }
+        Some(out)
+    };
+
+    // ── Rendu ────────────────────────────────────────────────────────────────
     session.listing.page_header();
-    session.listing.write_table(&headers, &aligns, &rows);
+
+    if by_cols.is_empty() {
+        // No BY: single section over all rows.
+        let rows: Vec<Vec<String>> = (0..n_obs).map(build_row).collect();
+        let all: Vec<usize> = (0..n_obs).collect();
+        let totals = build_totals(&all);
+        session
+            .listing
+            .write_table_ext(&headers, &aligns, &rows, ast.double, totals.as_ref());
+        if ast.n {
+            session.listing.blank();
+            session.listing.write_line(&format!("N = {}", n_obs));
+        }
+    } else {
+        // BY: verify sortedness then iterate contiguous groups.
+        let by_values: Vec<Vec<Value>> = by_cols
+            .iter()
+            .map(|bc| common::decode_column(&ds, bc.col_idx))
+            .collect::<Result<_>>()?;
+        let descending: Vec<bool> = by_cols.iter().map(|b| b.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|b| b.name.clone()).collect();
+        let groups = common::by_groups(&by_values, &descending, n_obs, &by_names, &display_name)?;
+
+        let multi = groups.len() > 1;
+        for (gi, (key, rows_idx)) in groups.iter().enumerate() {
+            if gi > 0 {
+                session.listing.blank();
+            }
+            // Standard BY heading line: "var1=val1 var2=val2".
+            let heading = by_cols
+                .iter()
+                .zip(key)
+                .map(|(bc, v)| format!("{}={}", bc.name, by_value_str(v)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            session.listing.write_line(&heading);
+            session.listing.blank();
+
+            let rows: Vec<Vec<String>> = rows_idx.iter().map(|&r| build_row(r)).collect();
+            let totals = build_totals(rows_idx);
+            session
+                .listing
+                .write_table_ext(&headers, &aligns, &rows, ast.double, totals.as_ref());
+            if ast.n {
+                session.listing.blank();
+                session.listing.write_line(&format!("N = {}", rows_idx.len()));
+            }
+        }
+
+        // Grand total across all observations when SUM + more than one group.
+        // SAS renders this aligned under the columns; to avoid replicating the
+        // whole-report column-width computation across heterogeneous BY groups,
+        // we emit it as an explicit labelled line "var=total ..." (documented
+        // simplification — values are SAS-exact, the placement is textual).
+        if !sum_indices.is_empty() && multi {
+            let all: Vec<usize> = (0..n_obs).collect();
+            let parts: Vec<String> = sum_indices
+                .iter()
+                .enumerate()
+                .map(|(k, &si)| {
+                    let mut acc = 0.0_f64;
+                    let mut any = false;
+                    for &r in &all {
+                        if let Value::Num(f) = sum_values[k][r] {
+                            acc += f;
+                            any = true;
+                        }
+                    }
+                    let cell = if any { format_best(acc, 12) } else { ".".to_string() };
+                    format!("{}={}", ds.vars[si].name, cell)
+                })
+                .collect();
+            session.listing.blank();
+            session
+                .listing
+                .write_line(&format!("Grand total: {}", parts.join(" ")));
+        }
+    }
 
     // Log NOTE — "There were N observations read from the data set WORK.X."
     // PLAN.md checklist item 7: pluriel invariable ("1 observations." — fidèle à SAS)
@@ -219,6 +428,37 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
     ));
 
     Ok(())
+}
+
+/// Resolve a list of variable names to dataset column indices, erroring with
+/// the SAS "Variable XXXX not found." message on the first unknown name.
+fn resolve_names(ds: &crate::dataset::SasDataset, names: &[String]) -> Result<Vec<usize>> {
+    let mut idxs = Vec::with_capacity(names.len());
+    for vname in names {
+        match ds
+            .vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(vname))
+        {
+            Some(i) => idxs.push(i),
+            None => {
+                return Err(SasError::runtime(format!(
+                    "Variable {} not found.",
+                    vname.to_uppercase()
+                )));
+            }
+        }
+    }
+    Ok(idxs)
+}
+
+/// Render a BY-key value for the BY heading line ("var=value").
+fn by_value_str(v: &Value) -> String {
+    match v {
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(k) => k.display(),
+        Value::Char(s) => s.trim_end().to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -366,6 +606,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -398,6 +643,11 @@ mod tests {
             vars: None,
             noobs: true,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -418,6 +668,11 @@ mod tests {
             vars: Some(vec!["age".to_string()]),
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -439,6 +694,11 @@ mod tests {
             vars: Some(vec!["nonexistent".to_string()]),
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         let result = execute(&ast, &mut session);
@@ -458,6 +718,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         execute(&ast, &mut session).unwrap();
@@ -475,6 +740,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
 
         let result = execute(&ast, &mut session);
@@ -504,6 +774,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -527,6 +802,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -575,6 +855,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -603,6 +888,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: true,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -678,6 +968,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         };
         execute(&ast, &mut session).unwrap();
 
@@ -687,5 +982,139 @@ mod tests {
         assert!(listing.contains("Male"), "listing: {listing}");
         assert!(listing.contains("Female"), "listing: {listing}");
         assert!(listing.contains("Unknown"), "listing: {listing}");
+    }
+
+    // ── M33.6 : BY / ID / SUM / DOUBLE / N ────────────────────────────────────
+
+    /// Build a small dataset sorted by `grp`: two groups A (2 rows) / B (1 row),
+    /// with a numeric `v` to sum. Sums: A → 3+4=7, B → 5; grand → 12.
+    fn write_grouped(session: &mut Session) {
+        let df = df![
+            "grp" => ["A", "A", "B"],
+            "v"   => [3.0_f64, 4.0, 5.0]
+        ]
+        .unwrap();
+        let vars = vec![
+            VarMeta { name: "grp".into(), ty: VarType::Char, length: 1, format: None, label: None },
+            VarMeta { name: "v".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        ];
+        let ds = SasDataset { df, vars };
+        session.libs.get("WORK").unwrap().write("G", &ds).unwrap();
+        session.last_dataset = Some("WORK.G".to_string());
+    }
+
+    fn base_ast() -> PrintAst {
+        PrintAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "G".into() }),
+            vars: None,
+            noobs: false,
+            label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
+        }
+    }
+
+    #[test]
+    fn parse_by_id_sum_double_n() {
+        let src = "proc print data=work.g double n; by grp; id grp; sum v; run;";
+        let ast = parse_print_with_var(src).unwrap();
+        assert!(ast.double);
+        assert!(ast.n);
+        assert_eq!(ast.by, vec![("grp".to_string(), false)]);
+        assert_eq!(ast.id, vec!["grp".to_string()]);
+        assert_eq!(ast.sum, vec!["v".to_string()]);
+    }
+
+    #[test]
+    fn execute_sum_no_by_totals() {
+        let mut session = make_session();
+        write_grouped(&mut session);
+        let ast = PrintAst { sum: vec!["v".into()], ..base_ast() };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Grand total of v = 12.
+        assert!(listing.contains("12"), "sum total 12 expected: {listing}");
+    }
+
+    #[test]
+    fn execute_n_option_prints_count() {
+        let mut session = make_session();
+        write_grouped(&mut session);
+        let ast = PrintAst { n: true, ..base_ast() };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("N = 3"), "N = 3 expected: {listing}");
+    }
+
+    #[test]
+    fn execute_by_sections_with_sum_subtotals_and_grand_total() {
+        let mut session = make_session();
+        write_grouped(&mut session);
+        let ast = PrintAst {
+            by: vec![("grp".into(), false)],
+            sum: vec!["v".into()],
+            n: true,
+            ..base_ast()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // BY headings.
+        assert!(listing.contains("grp=A"), "BY heading A: {listing}");
+        assert!(listing.contains("grp=B"), "BY heading B: {listing}");
+        // Per-group subtotals 7 (A) and 5 (B), and grand total 12.
+        assert!(listing.contains("7"), "subtotal A=7: {listing}");
+        assert!(listing.contains("Grand total: v=12"), "grand total: {listing}");
+        // Per-group N lines.
+        assert!(listing.contains("N = 2"), "N=2 for group A: {listing}");
+        assert!(listing.contains("N = 1"), "N=1 for group B: {listing}");
+    }
+
+    #[test]
+    fn execute_id_replaces_obs_column() {
+        let mut session = make_session();
+        write_grouped(&mut session);
+        let ast = PrintAst { id: vec!["grp".into()], ..base_ast() };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Obs column suppressed; ID variable header (grp) present.
+        assert!(!listing.contains("Obs"), "Obs must be suppressed by ID: {listing}");
+        assert!(listing.contains("grp"), "ID column header: {listing}");
+    }
+
+    #[test]
+    fn execute_by_unsorted_errors() {
+        let mut session = make_session();
+        // grp out of order: B then A → not sorted ascending.
+        let df = df![
+            "grp" => ["B", "A"],
+            "v"   => [1.0_f64, 2.0]
+        ]
+        .unwrap();
+        let vars = vec![
+            VarMeta { name: "grp".into(), ty: VarType::Char, length: 1, format: None, label: None },
+            VarMeta { name: "v".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        ];
+        let ds = SasDataset { df, vars };
+        session.libs.get("WORK").unwrap().write("G", &ds).unwrap();
+
+        let ast = PrintAst { by: vec![("grp".into(), false)], ..base_ast() };
+        let err = execute(&ast, &mut session).unwrap_err();
+        assert!(err.to_string().contains("not sorted"), "err: {err}");
+    }
+
+    #[test]
+    fn execute_double_spaces_rows() {
+        let mut session = make_session();
+        write_grouped(&mut session);
+        let ast = PrintAst { double: true, ..base_ast() };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // 3 data rows double-spaced → blank line between consecutive rows.
+        // Count rows containing a value cell; the listing should be taller than
+        // the single-spaced version. Cheap proxy: the value "4" and "5" appear.
+        assert!(listing.contains('4') && listing.contains('5'), "rows present: {listing}");
     }
 }

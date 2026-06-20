@@ -548,6 +548,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         });
 
         execute_proc("print", &ast, &mut session).unwrap();
@@ -574,6 +579,11 @@ mod tests {
             vars: None,
             noobs: false,
             label: false,
+            double: false,
+            n: false,
+            by: vec![],
+            id: vec![],
+            sum: vec![],
         });
 
         execute_proc("print", &ast, &mut session).unwrap();
