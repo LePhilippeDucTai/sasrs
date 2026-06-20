@@ -508,7 +508,14 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   (simplif. documentée, cohérent MEDIAN existant). Fixture `tests/fixtures/m33/means_options.sas` + snapshot
   vérifié vs sashelp.class (height P25=57.5/Méd=62.8/P75=66.5/P95=72/QRANGE=9). +11 tests (2299 lib).
   README MEANS : reste 🟡 (MAXDEC=/NWAY/MISSING/ORDER=/ID).
-- [ ] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable, élevé)
+- [x] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable/Opus, élevé).
+  **FAIT** : labels d'en-tête (`name='label'`/`stat='label'` + LABEL stocké via VarMeta), `format=`
+  (niveau table) + `*f=<fmt>` (par cellule) via `src/formats`, `OUT=lib.ds` (1 obs/cellule :
+  `<class…> _TYPE_ _PAGE_ _TABLE_ <var>_<Stat>`, réutilise le pattern `means.rs`). **`PCTN<...>`/`PCTSUM<...>`
+  différés** (note propre, reste README non-couvert). **4ᵉ dim** : SAS plafonne à 3 dims → l'erreur est le
+  comportement SAS correct (retirée du non-couvert, message reformulé). Fixture + snapshot vérifié vs
+  sashelp.class (mean F=60.59/M=63.91, weight sum F=811.0/M=1089.5, OUT= 2 obs). +7 tests (2306 lib).
+  README TABULATE : reste 🟡 (PCTN<...>).
 - [ ] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable, élevé)
 - [ ] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen)
 - [ ] ⫽ M33.7 — `PROC CONTENTS` : `OUT=`, `DETAILS`, `SHORT` (Sonnet, moyen)

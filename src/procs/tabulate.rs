@@ -26,8 +26,18 @@
 //! ```text
 //! dimexpr := term { term }            (* concaténation par blancs = empilage *)
 //! term    := factor { '*' factor }    (* croisement *)
-//! factor  := NAME | STATKW | '(' dimexpr ')'
+//! factor  := atom | '(' dimexpr ')'
+//! atom    := NAME | STATKW
+//!            { '=' STRLIT }           (* libellé d'en-tête, M33.4 *)
+//!            { '*' 'F' '=' FORMAT }   (* format de cellule, M33.4 *)
 //! ```
+//! - `='label'` après un NAME/STATKW remplace le texte rendu dans l'en-tête
+//!   (`sex='Gender'`, `mean='Average'`). Sans libellé explicite, le LABEL
+//!   stocké de la variable (VarMeta) sert de défaut. Sans ni l'un ni l'autre,
+//!   le rendu reste byte-identique (nom/mot-clé brut).
+//! - `*F=<fmt>` (collé sur un atome, p. ex. `mean*f=8.2`) fixe le format de la
+//!   cellule numérique. Combiné à l'option `format=<fmt>` du statement PROC
+//!   (défaut de table), via le moteur `src/formats`.
 //! - Un NAME qui est une variable CLASS s'étend en ses niveaux observés.
 //! - Un NAME qui est une variable VAR est une variable d'analyse.
 //! - Un STATKW est un mot-clé statistique (voir plus bas).
@@ -63,10 +73,15 @@
 //! Une cellule qui viole ces règles (p. ex. deux VAR croisées, ou deux
 //! stats) → erreur « PROC TABULATE: <construct> not yet supported ».
 //!
+//! ### COUVERT en M33.4
+//! - Libellés d'en-tête `='texte'` + LABEL stocké des variables (défaut).
+//! - `format=<fmt>` (statement PROC) et `*F=<fmt>` (par cellule) via
+//!   `src/formats`.
+//! - `out=lib.ds` : dataset de cellules style SAS (voir plus bas).
+//!
 //! ### DÉFÉRÉ (documenté + erreur propre, jamais silencieux)
-//! - Formats / labels dans les en-têtes (on affiche les noms et niveaux
-//!   bruts) ; `KEYLABEL`, `BOX=`, `*F=` (formats de cellule), `RTS=`,
-//!   dénominateurs de groupe `PCTN<...>`, option `MISSING`. Tout
+//! - `KEYLABEL`, `BOX=`, `RTS=`, dénominateurs de groupe `PCTN<...>`,
+//!   option `MISSING`. Tout
 //!   mot-clé/atome non reconnu dans `table` → erreur
 //!   « PROC TABULATE: <construct> not yet supported ». Toute option de
 //!   statement inconnue (sur `proc tabulate` ou un sous-statement non géré)
@@ -86,21 +101,42 @@
 //! dimension ligne), puis une colonne par cellule de la dimension colonne.
 //! L'en-tête de colonne concatène les composantes (niveaux CLASS, nom de VAR,
 //! libellé de stat) séparées par « * ». C'est volontairement plus plat que
-//! l'en-tête « boîte » multi-niveaux de SAS — documenté. PROC TABULATE en v1
-//! ne produit AUCUN dataset de sortie (pas de `last_dataset`).
+//! l'en-tête « boîte » multi-niveaux de SAS — documenté.
+//!
+//! ### OUT= dataset (M33.4) — convention de nommage choisie
+//! `proc tabulate data=… out=lib.ds;` produit un dataset de cellules : UNE
+//! observation par cellule (combinaison ligne×colonne, et page si présente).
+//! Colonnes, dans l'ordre :
+//!   - chaque variable CLASS impliquée dans la table (valeur du niveau de la
+//!     cellule, ou MANQUANTE/blanc quand cette CLASS n'est pas active pour la
+//!     cellule courante — comme MEANS) ;
+//!   - `_TYPE_` (char) : motif `0`/`1` sur les variables CLASS (1 = active) ;
+//!   - `_PAGE_` (num) : numéro de page (1 sans dimension page) ;
+//!   - `_TABLE_` (num) : numéro de table (toujours 1 en v1) ;
+//!   - une colonne numérique PAR STAT calculée : nom `<var>_<STAT>` quand une
+//!     VAR d'analyse est présente (p. ex. `height_Mean`), sinon `<STAT>` seul
+//!     pour les cellules de pure fréquence (p. ex. `N`, `PctN`). `<STAT>` est
+//!     le libellé renvoyé par `tab_stat_header` (Mean, Sum, N, …).
+//! Simplification documentée vs SAS : SAS génère un dataset très large avec
+//! des colonnes `_TYPE_`/`_PAGE_`/`_TABLE_` et un nommage de stat parfois
+//! différent ; ici on fixe une forme faithful et hand-verifiable — une ligne
+//! par cellule rendue, les clés CLASS, et une colonne par stat de la table.
 
 #![allow(dead_code)]
 
 use crate::ast::DatasetRef;
-use crate::dataset::SasDataset;
+use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
+use crate::formats::FormatSpec;
 use crate::listing::Align;
+use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column, partition_numeric};
 use crate::procs::means::{compute, stat_header};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
+use polars::prelude::*;
 use std::cmp::Ordering;
 
 // ───────────────────────────── AST ─────────────────────────────
@@ -120,8 +156,14 @@ struct Term {
 
 #[derive(Debug, Clone)]
 enum Factor {
-    /// An identifier (resolved to CLASS / VAR / stat at execute time).
-    Name(String),
+    /// An identifier (resolved to CLASS / VAR / stat at execute time), with an
+    /// optional `='label'` header override and an optional `*f=<fmt>` cell
+    /// format (both M33.4). Both are `None` on the default byte-identical path.
+    Name {
+        name: String,
+        label: Option<String>,
+        format: Option<String>,
+    },
     /// A parenthesized sub-expression (distributes over crossings).
     Group(DimExpr),
 }
@@ -136,6 +178,11 @@ pub struct TabulateAst {
     row: Option<DimExpr>,
     /// Column dimension (always present).
     col: DimExpr,
+    /// Table-level default cell format from `format=<fmt>` (M33.4). `None`
+    /// keeps the byte-identical default rendering.
+    format: Option<String>,
+    /// `out=lib.ds` cell dataset target (M33.4). `None` → no output dataset.
+    out: Option<DatasetRef>,
 }
 
 /// Statistic keywords recognized inside a TABLE expression.
@@ -154,6 +201,8 @@ fn is_stat_keyword(s: &str) -> bool {
 /// `run;` / `quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
     let mut data: Option<DatasetRef> = None;
+    let mut format: Option<String> = None;
+    let mut out: Option<DatasetRef> = None;
 
     // --- PROC TABULATE statement options, until `;` ---
     loop {
@@ -166,6 +215,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         }
         if ts.peek().is_kw("data") {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
+        } else if ts.peek().is_kw("out") {
+            out = Some(common::parse_dataset_opt(ts, "OUT")?);
+        } else if ts.peek().is_kw("format") {
+            // `format=<fmt>` — table-level default cell format (M33.4).
+            common::expect_eq(ts, "FORMAT")?;
+            format = Some(crate::parser::expr::read_format_token(ts)?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -230,6 +285,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         page,
         row,
         col,
+        format,
+        out,
     })
 }
 
@@ -265,7 +322,7 @@ fn parse_table_statement(ts: &mut StatementStream) -> Result<ParsedTable> {
             Ok((Some(page), Some(row), col))
         }
         _ => Err(SasError::runtime(
-            "PROC TABULATE: 4th dimension not yet supported",
+            "PROC TABULATE: a TABLE statement supports at most 3 dimensions",
         )),
     }
 }
@@ -293,17 +350,30 @@ fn parse_dimexpr(ts: &mut StatementStream) -> Result<DimExpr> {
     Ok(DimExpr { terms })
 }
 
-/// `term := factor { '*' factor }`.
+/// `term := factor { '*' factor }`. A `*` that introduces an `f=` cell-format
+/// suffix on the PRECEDING factor is consumed by `parse_factor`, not here, so
+/// it is never mistaken for a crossing.
 fn parse_term(ts: &mut StatementStream) -> Result<Term> {
     let mut factors = vec![parse_factor(ts)?];
-    while ts.peek().kind == TokenKind::Star {
+    while ts.peek().kind == TokenKind::Star && !next_is_format_suffix(ts) {
         ts.next();
         factors.push(parse_factor(ts)?);
     }
     Ok(Term { factors })
 }
 
-/// `factor := NAME | STATKW | '(' dimexpr ')'`.
+/// True when the current `*` introduces an `f=` cell-format suffix
+/// (`* f =`), i.e. the token after `*` is the identifier `f` (or `format`)
+/// and the one after that is `=`. Such a `*` belongs to the preceding factor.
+fn next_is_format_suffix(ts: &StatementStream) -> bool {
+    // peek() is `*`; peek2() is the next token. We only have two-token
+    // lookahead, so confirm peek2 is `f`/`format`; the `=` is re-checked when
+    // the factor parser actually consumes it.
+    matches!(ts.peek2().ident(), Some(id) if id.eq_ignore_ascii_case("f") || id.eq_ignore_ascii_case("format"))
+}
+
+/// `factor := atom | '(' dimexpr ')'` where
+/// `atom := (NAME | STATKW) [ '=' STRLIT ] [ '*' 'F' '=' FORMAT ]`.
 fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
     if ts.peek().kind == TokenKind::LParen {
         ts.next();
@@ -319,7 +389,43 @@ fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
     }
     if let Some(name) = ts.peek().ident().map(str::to_string) {
         ts.next();
-        return Ok(Factor::Name(name));
+        // Optional `='label'` header override (M33.4).
+        let mut label: Option<String> = None;
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+            match &ts.peek().kind {
+                TokenKind::Str { value, .. } => {
+                    label = Some(value.clone());
+                    ts.next();
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        "PROC TABULATE: expected a quoted label after '=' in TABLE expression",
+                        ts.peek().span,
+                    ));
+                }
+            }
+        }
+        // Optional `*f=<fmt>` cell format (M33.4). Only consume the `*` when it
+        // truly introduces an `f=` suffix (checked via two-token lookahead).
+        let mut format: Option<String> = None;
+        if ts.peek().kind == TokenKind::Star && next_is_format_suffix(ts) {
+            ts.next(); // '*'
+            ts.next(); // 'f' / 'format'
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "PROC TABULATE: expected '=' after '*F' in TABLE expression",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // '='
+            format = Some(crate::parser::expr::read_format_token(ts)?);
+        }
+        return Ok(Factor::Name {
+            name,
+            label,
+            format,
+        });
     }
     Err(SasError::parse(
         "PROC TABULATE: expected a variable name, statistic, or '(' in TABLE expression",
@@ -329,18 +435,48 @@ fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
 
 // ───────────────────────── expansion ─────────────────────────
 
-/// A single atom of an expanded cell.
+/// A single atom of an expanded cell. `label`/`format` carry the optional
+/// M33.4 `='label'` header override and `*f=<fmt>` cell format from the
+/// originating factor. Both are `None` on the default byte-identical path.
 #[derive(Debug, Clone)]
 enum Atom {
     /// A CLASS variable binding: (class column index, observed level value).
-    ClassLevel { col: usize, level: Value },
+    ClassLevel {
+        col: usize,
+        level: Value,
+        label: Option<String>,
+        format: Option<String>,
+    },
     /// The analysis VAR column index.
-    Var(usize),
+    Var {
+        col: usize,
+        label: Option<String>,
+        format: Option<String>,
+    },
     /// A statistic keyword (lowercase).
-    Stat(String),
+    Stat {
+        stat: String,
+        label: Option<String>,
+        format: Option<String>,
+    },
     /// The universal class (marginal total): no CLASS constraint, labelled
     /// "All". Aggregates over every category of its dimension.
-    All,
+    All {
+        label: Option<String>,
+        format: Option<String>,
+    },
+}
+
+impl Atom {
+    /// The per-cell format override carried by this atom, if any.
+    fn format(&self) -> Option<&str> {
+        match self {
+            Atom::ClassLevel { format, .. }
+            | Atom::Var { format, .. }
+            | Atom::Stat { format, .. }
+            | Atom::All { format, .. } => format.as_deref(),
+        }
+    }
 }
 
 /// A fully-expanded cell: an ordered crossing of atoms (used for the header
@@ -440,33 +576,54 @@ fn expand_factor(
         Factor::Group(inner) => {
             expand_dim(inner, class_cols, var_cols, class_values, n_obs)
         }
-        Factor::Name(name) => match classify(name, class_cols, var_cols)? {
-            Ident3::All => Ok(vec![Cell {
-                atoms: vec![Atom::All],
-            }]),
-            Ident3::Stat(s) => Ok(vec![Cell {
-                atoms: vec![Atom::Stat(s)],
-            }]),
-            Ident3::Var(ci) => Ok(vec![Cell {
-                atoms: vec![Atom::Var(ci)],
-            }]),
-            Ident3::Class(ci) => {
-                // Expand to one cell per observed (non-missing) level, in
-                // sas_cmp order.
-                let vals = &class_values
-                    .iter()
-                    .find(|(c, _)| *c == ci)
-                    .expect("class col decoded")
-                    .1;
-                let levels = observed_levels(vals, n_obs);
-                Ok(levels
-                    .into_iter()
-                    .map(|lv| Cell {
-                        atoms: vec![Atom::ClassLevel { col: ci, level: lv }],
-                    })
-                    .collect())
+        Factor::Name {
+            name,
+            label,
+            format,
+        } => {
+            let label = label.clone();
+            let format = format.clone();
+            match classify(name, class_cols, var_cols)? {
+                Ident3::All => Ok(vec![Cell {
+                    atoms: vec![Atom::All { label, format }],
+                }]),
+                Ident3::Stat(s) => Ok(vec![Cell {
+                    atoms: vec![Atom::Stat {
+                        stat: s,
+                        label,
+                        format,
+                    }],
+                }]),
+                Ident3::Var(ci) => Ok(vec![Cell {
+                    atoms: vec![Atom::Var {
+                        col: ci,
+                        label,
+                        format,
+                    }],
+                }]),
+                Ident3::Class(ci) => {
+                    // Expand to one cell per observed (non-missing) level, in
+                    // sas_cmp order. A CLASS label overrides every level header.
+                    let vals = &class_values
+                        .iter()
+                        .find(|(c, _)| *c == ci)
+                        .expect("class col decoded")
+                        .1;
+                    let levels = observed_levels(vals, n_obs);
+                    Ok(levels
+                        .into_iter()
+                        .map(|lv| Cell {
+                            atoms: vec![Atom::ClassLevel {
+                                col: ci,
+                                level: lv,
+                                label: label.clone(),
+                                format: format.clone(),
+                            }],
+                        })
+                        .collect())
+                }
             }
-        },
+        }
     }
 }
 
@@ -560,6 +717,12 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         None => vec![None],
     };
 
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
+    let table_format = ast.format.as_deref();
+
     // --- listing ---
     session.listing.page_header();
     let title = "The TABULATE Procedure";
@@ -612,7 +775,14 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                     .chain(cc.atoms.iter())
                     .cloned()
                     .collect();
-                let value = compute_cell(&merged, &var_values, &class_values, n_obs)?;
+                let value = compute_cell(
+                    &merged,
+                    &var_values,
+                    &class_values,
+                    n_obs,
+                    table_format,
+                    &catalog,
+                )?;
                 out_row.push(value);
             }
             rows.push(out_row);
@@ -624,8 +794,216 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // v1: no output dataset — do NOT touch session.last_dataset.
+    // --- OUT= cell dataset (M33.4) ---
+    if let Some(out) = &ast.out {
+        write_out_dataset(
+            session,
+            &ds,
+            &class_cols,
+            &var_values,
+            &class_values,
+            &page_cells,
+            &row_cells,
+            &col_cells,
+            n_obs,
+            out,
+        )?;
+    } else {
+        // No OUT= → do NOT touch session.last_dataset (byte-identical default).
+    }
     Ok(())
+}
+
+/// One row of the OUT= cell dataset.
+struct OutCell {
+    /// Per-CLASS-variable cell value (level value when active, else missing).
+    class_cells: Vec<Value>,
+    /// `_TYPE_` 0/1 pattern over the CLASS variables (1 = active in this cell).
+    type_pattern: String,
+    page_no: f64,
+    /// (stat-column name, value) for each computed statistic in the cell.
+    stats: Vec<(String, Value)>,
+}
+
+/// Build and write the OUT= cell dataset (M33.4). See the file header for the
+/// chosen naming convention. One observation per rendered cell.
+#[allow(clippy::too_many_arguments)]
+fn write_out_dataset(
+    session: &mut Session,
+    ds: &SasDataset,
+    class_cols: &[(String, usize)],
+    var_values: &[(usize, Vec<Value>)],
+    class_values: &[(usize, Vec<Value>)],
+    page_cells: &[Option<Cell>],
+    row_cells: &[Cell],
+    col_cells: &[Cell],
+    n_obs: usize,
+    out: &DatasetRef,
+) -> Result<()> {
+    let mut out_rows: Vec<OutCell> = Vec::new();
+
+    for (page_idx, page) in page_cells.iter().enumerate() {
+        let page_atoms: &[Atom] = match page {
+            Some(pc) => &pc.atoms,
+            None => &[],
+        };
+        for rc in row_cells {
+            for cc in col_cells {
+                let merged: Vec<Atom> = page_atoms
+                    .iter()
+                    .chain(rc.atoms.iter())
+                    .chain(cc.atoms.iter())
+                    .cloned()
+                    .collect();
+                let res = compute_cell_value(&merged, var_values, class_values, n_obs)?;
+
+                // CLASS cell values + _TYPE_ pattern: a CLASS var is "active"
+                // when a ClassLevel atom binds it in this cell.
+                let mut class_cells: Vec<Value> = Vec::with_capacity(class_cols.len());
+                let mut pattern = String::with_capacity(class_cols.len());
+                for (_, ci) in class_cols {
+                    let bound = merged.iter().find_map(|a| match a {
+                        Atom::ClassLevel { col, level, .. } if col == ci => Some(level.clone()),
+                        _ => None,
+                    });
+                    match bound {
+                        Some(level) => {
+                            class_cells.push(level);
+                            pattern.push('1');
+                        }
+                        None => {
+                            let missing = match ds.vars[*ci].ty {
+                                VarType::Num => Value::missing(),
+                                VarType::Char => Value::Char(String::new()),
+                            };
+                            class_cells.push(missing);
+                            pattern.push('0');
+                        }
+                    }
+                }
+
+                // The cell's analysis VAR (if any) for stat-column naming.
+                let var_name = merged.iter().find_map(|a| match a {
+                    Atom::Var { col, .. } => Some(ds.vars[*col].name.clone()),
+                    _ => None,
+                });
+                let stat_label = tab_stat_header(&res.stat);
+                let colname = match &var_name {
+                    Some(v) => format!("{v}_{stat_label}"),
+                    None => stat_label.to_string(),
+                };
+
+                out_rows.push(OutCell {
+                    class_cells,
+                    type_pattern: pattern,
+                    page_no: (page_idx + 1) as f64,
+                    stats: vec![(colname, res.value)],
+                });
+            }
+        }
+    }
+
+    // Build the DataFrame column-by-column.
+    let n_rows = out_rows.len();
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+
+    // CLASS columns (copy input VarMeta; encode per-row values).
+    for (ci, (_, col_idx)) in class_cols.iter().enumerate() {
+        let meta = &ds.vars[*col_idx];
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> =
+                    out_rows.iter().map(|r| value_to_num(&r.class_cells[ci])).collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<Option<String>> = out_rows
+                    .iter()
+                    .map(|r| match &r.class_cells[ci] {
+                        Value::Char(s) if s.is_empty() => None,
+                        Value::Char(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+        vars.push(meta.clone());
+    }
+
+    // _TYPE_ (char 0/1 pattern).
+    let type_len = class_cols.len().max(1);
+    let type_vals: Vec<Option<String>> =
+        out_rows.iter().map(|r| Some(r.type_pattern.clone())).collect();
+    columns.push(Series::new("_TYPE_".into(), type_vals).into());
+    vars.push(VarMeta {
+        name: "_TYPE_".to_string(),
+        ty: VarType::Char,
+        length: type_len,
+        format: None,
+        label: None,
+    });
+
+    // _PAGE_ and _TABLE_.
+    let page_vals: Vec<Option<f64>> = out_rows.iter().map(|r| Some(r.page_no)).collect();
+    columns.push(Series::new("_PAGE_".into(), page_vals).into());
+    vars.push(out_num_meta("_PAGE_"));
+    let table_vals: Vec<Option<f64>> = out_rows.iter().map(|_| Some(1.0)).collect();
+    columns.push(Series::new("_TABLE_".into(), table_vals).into());
+    vars.push(out_num_meta("_TABLE_"));
+
+    // One column per distinct stat-column name, in first-seen order. A row that
+    // does not produce a given stat column gets a missing value there.
+    let mut stat_names: Vec<String> = Vec::new();
+    for r in &out_rows {
+        for (name, _) in &r.stats {
+            if !stat_names.iter().any(|n| n == name) {
+                stat_names.push(name.clone());
+            }
+        }
+    }
+    for name in &stat_names {
+        let vals: Vec<Option<f64>> = out_rows
+            .iter()
+            .map(|r| {
+                r.stats
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, v)| value_to_num(v))
+                    .unwrap_or(None)
+            })
+            .collect();
+        columns.push(Series::new(name.as_str().into(), vals).into());
+        vars.push(out_num_meta(name));
+    }
+
+    let df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df, vars };
+
+    let out_libref = out.libref_or_work();
+    let out_table = out.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_vars = out_ds.vars.len();
+
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars
+    ));
+    Ok(())
+}
+
+fn out_num_meta(name: &str) -> VarMeta {
+    VarMeta {
+        name: name.to_string(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }
 }
 
 /// Best-effort name of the page dimension for the page-label line: the first
@@ -643,8 +1021,8 @@ fn first_class_name(dim: &DimExpr, ds: &SasDataset) -> Option<String> {
     for term in &dim.terms {
         for factor in &term.factors {
             match factor {
-                Factor::Name(n) => {
-                    if let Some(m) = ds.vars.iter().find(|m| m.name.eq_ignore_ascii_case(n)) {
+                Factor::Name { name, .. } => {
+                    if let Some(m) = ds.vars.iter().find(|m| m.name.eq_ignore_ascii_case(name)) {
                         return Some(m.name.clone());
                     }
                 }
@@ -660,6 +1038,14 @@ fn first_class_name(dim: &DimExpr, ds: &SasDataset) -> Option<String> {
 }
 
 /// Build the header/stub label for an expanded cell: components joined by "*".
+///
+/// Header-text precedence per component (M33.4): explicit `='label'` overrides
+/// everything; otherwise a VAR atom falls back to its stored VarMeta LABEL,
+/// then to the raw name. A STAT atom falls back to its stat header. A CLASS
+/// level always renders the level value (the flat model has no variable-name
+/// slot for class levels), so its label/stored-label are accepted but do not
+/// change the level text — documented simplification. Default (no label, no
+/// stored label) stays byte-identical.
 fn cell_label(cell: &Cell, ds: &SasDataset) -> String {
     if cell.atoms.is_empty() {
         return String::new();
@@ -669,9 +1055,21 @@ fn cell_label(cell: &Cell, ds: &SasDataset) -> String {
         .iter()
         .map(|a| match a {
             Atom::ClassLevel { level, .. } => level_label(level),
-            Atom::Var(ci) => ds.vars[*ci].name.clone(),
-            Atom::Stat(s) => tab_stat_header(s).to_string(),
-            Atom::All => "All".to_string(),
+            Atom::Var { col, label, .. } => match label {
+                Some(l) => l.clone(),
+                None => match &ds.vars[*col].label {
+                    Some(l) if !l.is_empty() => l.clone(),
+                    _ => ds.vars[*col].name.clone(),
+                },
+            },
+            Atom::Stat { stat, label, .. } => match label {
+                Some(l) => l.clone(),
+                None => tab_stat_header(stat).to_string(),
+            },
+            Atom::All { label, .. } => match label {
+                Some(l) => l.clone(),
+                None => "All".to_string(),
+            },
         })
         .collect();
     parts.join("*")
@@ -696,31 +1094,47 @@ fn level_label(v: &Value) -> String {
     }
 }
 
-/// Validate the merged cell's atoms and compute its numeric value, formatted.
-/// Returns "." when the cell is undefined (no qualifying rows / undefined
-/// statistic). Errors cleanly for unsupported constructs (>1 VAR, >1 stat).
-fn compute_cell(
+/// The computed result of one cell: the resolved statistic keyword, the raw
+/// numeric `Value`, and the optional per-cell `*f=<fmt>` format.
+struct CellResult {
+    stat: String,
+    value: Value,
+    format: Option<String>,
+}
+
+/// Validate the merged cell's atoms and compute its raw numeric value.
+/// Returns a missing `Value` when the cell is undefined (no qualifying rows /
+/// undefined statistic). Errors cleanly for unsupported constructs (>1 VAR,
+/// >1 stat). Formatting is applied separately by the caller.
+fn compute_cell_value(
     atoms: &[Atom],
     var_values: &[(usize, Vec<Value>)],
     class_values: &[(usize, Vec<Value>)],
     n_obs: usize,
-) -> Result<String> {
+) -> Result<CellResult> {
     let mut var_col: Option<usize> = None;
     let mut stat: Option<String> = None;
     // (class col, required level) constraints.
     let mut class_constraints: Vec<(usize, &Value)> = Vec::new();
+    // Per-cell format: the first `*f=` carried by any atom of the cell.
+    let mut cell_format: Option<String> = None;
 
     for a in atoms {
+        if cell_format.is_none() {
+            if let Some(f) = a.format() {
+                cell_format = Some(f.to_string());
+            }
+        }
         match a {
-            Atom::Var(ci) => {
+            Atom::Var { col, .. } => {
                 if var_col.is_some() {
                     return Err(SasError::runtime(
                         "PROC TABULATE: crossing two analysis variables not yet supported",
                     ));
                 }
-                var_col = Some(*ci);
+                var_col = Some(*col);
             }
-            Atom::Stat(s) => {
+            Atom::Stat { stat: s, .. } => {
                 if stat.is_some() {
                     return Err(SasError::runtime(
                         "PROC TABULATE: crossing two statistics not yet supported",
@@ -728,11 +1142,11 @@ fn compute_cell(
                 }
                 stat = Some(s.clone());
             }
-            Atom::ClassLevel { col, level } => {
+            Atom::ClassLevel { col, level, .. } => {
                 class_constraints.push((*col, level));
             }
             // Universal class: aggregate over every category — no constraint.
-            Atom::All => {}
+            Atom::All { .. } => {}
         }
     }
 
@@ -760,6 +1174,12 @@ fn compute_cell(
         }
     });
 
+    let mk = |value: Value| CellResult {
+        stat: stat.clone(),
+        value,
+        format: cell_format.clone(),
+    };
+
     // Percentage statistics: numerator over the selected rows, denominator
     // over the grand total (all observations). v1 supports only the grand
     // total denominator (group denominators PCTN<...> are deferred).
@@ -770,7 +1190,7 @@ fn compute_cell(
         } else {
             Value::Num(100.0 * rows.len() as f64 / denom)
         };
-        return Ok(fmt_cell(&stat, &value));
+        return Ok(mk(value));
     }
     if stat == "pctsum" {
         let ci = var_col.ok_or_else(|| {
@@ -793,7 +1213,7 @@ fn compute_cell(
         } else {
             Value::Num(100.0 * numer / denom)
         };
-        return Ok(fmt_cell(&stat, &value));
+        return Ok(mk(value));
     }
 
     // Determine the analysis values. With no VAR, only N/NMISS are meaningful
@@ -824,11 +1244,40 @@ fn compute_cell(
         }
     };
 
-    Ok(fmt_cell(&stat, &value))
+    Ok(mk(value))
 }
 
-/// Format a computed cell value for the listing. Missing → ".".
-fn fmt_cell(stat: &str, v: &Value) -> String {
+/// Compute a cell and render it to a listing string. The effective format is
+/// the per-cell `*f=` (if any) else the table-level `format=` default; with
+/// neither, the rendering is byte-identical to the historical path.
+fn compute_cell(
+    atoms: &[Atom],
+    var_values: &[(usize, Vec<Value>)],
+    class_values: &[(usize, Vec<Value>)],
+    n_obs: usize,
+    table_format: Option<&str>,
+    catalog: &crate::formats::FormatCatalog,
+) -> Result<String> {
+    let res = compute_cell_value(atoms, var_values, class_values, n_obs)?;
+    let fmt = res.format.as_deref().or(table_format);
+    Ok(fmt_cell(&res.stat, &res.value, fmt, catalog))
+}
+
+/// Format a computed cell value for the listing. With no format spec, keeps the
+/// historical rendering (integers for N/NMISS, BESTw. otherwise, "." for
+/// missing). With a format, routes through the SAS format engine.
+fn fmt_cell(
+    stat: &str,
+    v: &Value,
+    format: Option<&str>,
+    catalog: &crate::formats::FormatCatalog,
+) -> String {
+    if let Some(f) = format.and_then(FormatSpec::parse) {
+        // SAS format engine; missings render via the engine too. Trim leading
+        // pad so the listing column aligner controls width (matches the
+        // unformatted path, which emits unpadded tokens).
+        return catalog.format(v, &f).trim_start().to_string();
+    }
     match v {
         Value::Num(f) => {
             if stat == "n" || stat == "nmiss" {
@@ -1163,7 +1612,7 @@ mod tests {
             "proc tabulate data=work.t; class a b c d; table a, b, c, d; run;",
         );
         assert!(r.is_err());
-        assert!(r.err().unwrap().to_string().contains("4th dimension"));
+        assert!(r.err().unwrap().to_string().contains("at most 3 dimensions"));
     }
 
     // ─────────────── M21.4: ALL (universal class) ───────────────
@@ -1357,7 +1806,162 @@ mod tests {
 
         let ast = parse_src("proc tabulate data=work.t; class region; table region; run;").unwrap();
         execute(&ast, &mut session).unwrap();
-        // last_dataset unchanged (v1 produces no output dataset).
+        // last_dataset unchanged when no OUT= is requested.
         assert_eq!(session.last_dataset, before);
+    }
+
+    // ─────────────── M33.4: labels in headers ───────────────
+
+    #[test]
+    fn explicit_label_overrides_stat_header() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // mean='Average' replaces the "Mean" header text; sex levels unchanged.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; var height; \
+             table sex, height*mean='Average'; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("Average"), "{listing}");
+        assert!(!listing.contains("Mean"), "{listing}");
+    }
+
+    #[test]
+    fn stored_varmeta_label_is_default_header() {
+        let mut session = make_session();
+        let df = df![
+            "sex"    => ["M", "F", "M"],
+            "height" => [69.0_f64, 56.5, 57.3]
+        ]
+        .unwrap();
+        let mut hmeta = num_meta("height");
+        hmeta.label = Some("Height (in)".to_string());
+        let ds = SasDataset { df, vars: vec![char_meta("sex"), hmeta] };
+        write_dataset(&mut session, "T", ds);
+        // No explicit label on `height`, but its stored LABEL is the default.
+        let listing = run(
+            session,
+            "proc tabulate data=work.t; class sex; var height; \
+             table sex, height*sum; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("Height (in)*Sum"), "{listing}");
+    }
+
+    // ─────────────── M33.4: FORMAT= cell formatting ───────────────
+
+    #[test]
+    fn per_cell_format_8_2() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // height means: M=(69+57.3+62.5)/3=62.933.., F=(56.5+65.3)/2=60.9.
+        // *f=8.2 → "62.93" and "60.90".
+        let listing = run(
+            session,
+            "proc tabulate data=work.c; class sex; var height; \
+             table sex, height*mean*f=8.2; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("62.93"), "{listing}");
+        assert!(listing.contains("60.90"), "{listing}");
+    }
+
+    #[test]
+    fn table_level_format_default() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // format=8.1 default applies to every cell. M mean=62.933->62.9,
+        // F mean=60.9->60.9.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c format=8.1; class sex; var height; \
+             table sex, height*mean; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("62.9"), "{listing}");
+        assert!(listing.contains("60.9"), "{listing}");
+    }
+
+    #[test]
+    fn per_cell_format_overrides_table_format() {
+        let mut session = make_session();
+        class_fixture(&mut session);
+        // table default 8.0, but the cell asks for 8.2 → 62.93 wins.
+        let listing = run(
+            session,
+            "proc tabulate data=work.c format=8.0; class sex; var height; \
+             table sex, height*mean*f=8.2; run;",
+        )
+        .unwrap();
+        assert!(listing.contains("62.93"), "{listing}");
+    }
+
+    // ─────────────── M33.4: OUT= dataset ───────────────
+
+    #[test]
+    fn out_dataset_shape_and_values() {
+        let mut session = make_session();
+        let df = df![
+            "region" => ["E", "E", "W"],
+            "sales"  => [10.0_f64, 20.0, 8.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("region"), num_meta("sales")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = parse_src(
+            "proc tabulate data=work.t out=work.o; class region; var sales; \
+             table region, sales*mean; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.O"));
+
+        let (out, _notes) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        // Columns: region, _TYPE_, _PAGE_, _TABLE_, sales_Mean.
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        assert_eq!(
+            names,
+            vec!["region", "_TYPE_", "_PAGE_", "_TABLE_", "sales_Mean"],
+            "OUT= column shape"
+        );
+        // One row per column cell (region E, region W) = 2 rows.
+        assert_eq!(out.n_obs(), 2);
+
+        // Decode and check values: both rows _TYPE_="1", _PAGE_=1, _TABLE_=1.
+        let region = decode_column(&out, 0).unwrap();
+        let ty = out.df.column("_TYPE_").unwrap().str().unwrap();
+        let mean = decode_column(&out, 4).unwrap();
+        // Rows ordered by column-cell expansion: E then W (sas_cmp).
+        assert_eq!(region[0], Value::Char("E".into()));
+        assert_eq!(region[1], Value::Char("W".into()));
+        assert_eq!(ty.get(0), Some("1"));
+        assert_eq!(ty.get(1), Some("1"));
+        // E mean = 15, W mean = 8.
+        assert_eq!(mean[0], Value::Num(15.0));
+        assert_eq!(mean[1], Value::Num(8.0));
+    }
+
+    #[test]
+    fn out_dataset_frequency_stat_name() {
+        let mut session = make_session();
+        let df = df!["region" => ["E", "E", "W"]].unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("region")] };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = parse_src(
+            "proc tabulate data=work.t out=work.o; class region; table region; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _n) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        // Pure-frequency cell → stat column named "N" (no analysis VAR).
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        assert_eq!(names, vec!["region", "_TYPE_", "_PAGE_", "_TABLE_", "N"]);
+        let n = decode_column(&out, 4).unwrap();
+        // E freq = 2, W freq = 1.
+        assert_eq!(n[0], Value::Num(2.0));
+        assert_eq!(n[1], Value::Num(1.0));
     }
 }
