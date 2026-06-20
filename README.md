@@ -56,11 +56,11 @@ individual options of each procedure and DATA step statement. Legend:
 | PROC | State | Covered statements & options | Not covered / deferred |
 | --- | :---: | --- | --- |
 | `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`, `DOUBLE`, `N`; `VAR`, `BY` (per-group sections, sorted input), `ID` (replaces `Obs`), `SUM` (per-`BY`-group subtotals + grand total) | `WHERE`, `SUMBY`, `PAGEBY`, style options |
-| `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`; `BY [DESCENDING]` | `TAGSORT`, `SORTSEQ=`, `KEY=` |
+| `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`, `TAGSORT` (no-op hint), `SORTSEQ=ASCII\|LINGUISTIC` (LINGUISTIC falls back to `sas_cmp` binary order); `BY [DESCENDING]`, `KEY=var [/ DESCENDING]` | — |
 | `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_`, `OUT=` (one row/variable: `NAME`/`TYPE` 1=num 2=char/`LENGTH`/`VARNUM`/`LABEL`/`FORMAT`), `SHORT` (flat name list), `DETAILS`/`NODETAILS` (obs/var header lines) | physical file-size/page details, ODS output object |
 | `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` | `MAXDEC=`, `NWAY`, `MISSING`, `ORDER=`, `ID`, multi-label formats |
 | `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID`, `VAR` | `IDLABEL`, `COPY`, `LET`, `SUFFIX=` |
-| `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE` | `APPENDVER=` |
+| `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE`, `NOWARN` (suppresses FORCE structural-diff warnings), `APPENDVER=Vn` (no-op hint) | — |
 | `RANK` | ✅ | `DATA=`, `OUT=`, `DESCENDING`, `TIES=(MEAN\|LOW\|HIGH\|DENSE)`, `GROUPS=`, methods `FRACTION`/`NPLUS1`/`PERCENT`/`NORMAL=(BLOM\|TUKEY\|VW)`/`SAVAGE`; `VAR`, `RANKS`, `BY` | — |
 | `CORR` | ✅ | `DATA=`, `NOSIMPLE`, `NOPROB`, `NOCORR`, `PEARSON`, `SPEARMAN`, `KENDALL`, `OUT=`/`OUTP=`/`OUTS=`/`OUTK=`; `VAR`, `WITH`, `WEIGHT` (Pearson only) | `HOEFFDING`, partial correlation, weighted Spearman/Kendall |
 | `COMPARE` | ✅ | `BASE=`, `COMPARE=`, `OUT=`, `NOVALUES`, `BRIEFSUMMARY` | `CRITERION=`, `ID`, `VAR`/`WITH` |

@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M33**. M1–M30 terminés (roadmap d'origine : couverture SAS
+Jalon courant : **M34**. M1–M33 terminés (roadmap d'origine : couverture SAS
 quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
 SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
 Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
@@ -535,9 +535,19 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   **FAIT** : `COPY OUT= [IN=] [;SELECT]`, `EXCHANGE a=b`, `SAVE m…`, `MODIFY m; RENAME old=new; LABEL`
   (réutilise les ops `LibraryProvider`). `APPEND`/`REPAIR`/`CONTENTS`-interne différés. Reste 🟡.
   **Lot ⫽ M33.6-8** : fixtures + 3 snapshots vérifiés vs sashelp.class. +17 tests (2331 lib), 0 warning.
-- [ ] M33.9 — `PROC SORT` compléments (`TAGSORT`, `SORTSEQ=`, `KEY=`) ; `PROC APPEND` (`NOWARN`/`APPENDVER=`) (Sonnet, faible)
-- [ ] DoD M33 : fixtures `m33/` + snapshots vérifiés ; README à jour (colonnes « non couvert » rétrécies) ;
+- [x] M33.9 — `PROC SORT` compléments (`TAGSORT`, `SORTSEQ=`, `KEY=`) ; `PROC APPEND` (`NOWARN`/`APPENDVER=`) (Sonnet, faible)
+  **FAIT** : TAGSORT (no-op hint, accepté, ignoré), SORTSEQ=ASCII (no-op) / SORTSEQ=LINGUISTIC (fallback sas_cmp + NOTE),
+  KEY=var [/ DESCENDING] (remplace BY si présent) ; NOWARN (supprime WARNING FORCE), APPENDVER=Vn (no-op).
+  Fixture `tests/fixtures/m33/sort_append_options.sas` + snapshot vérifié à la main.
+  +17 tests (2348 lib), 0 warning. README SORT/APPEND fully covered, colonnes « non couvert » vides.
+- [x] DoD M33 : fixtures `m33/` + snapshots vérifiés ; README à jour (colonnes « non couvert » rétrécies) ;
   passer « Jalon courant : **M34** ».
+  **M33 TERMINÉ** : 9 incréments de complétion sur les procs Base/descriptifs. FREQ (WEIGHT/BY//LIST/n-voies),
+  UNIVARIATE (quantiles/extrêmes pondérés + plots), MEANS (percentiles/WAYS/TYPES/PRINTALLTYPES), TABULATE
+  (labels/FORMAT=/OUT=), REPORT (FORMAT=/WIDTH=/SPACING=/_Cn_), PRINT (BY/ID/SUM/DOUBLE/N → ✅), CONTENTS
+  (OUT=/SHORT/DETAILS → ✅), DATASETS (COPY/EXCHANGE/SAVE/MODIFY), SORT (TAGSORT/SORTSEQ=/KEY= → ✅), APPEND
+  (NOWARN/APPENDVER= → ✅). 8 fixtures `m33/` + snapshots vérifiés à la main. 2276 → 2348 tests (+72), chemins
+  par défaut byte-identiques, 0 warning nouveau. Différés documentés : Fisher r×c, PCTN<...>, REPORT FLOW.
 
 ## M34 — complétion options : PROCs statistiques & modélisation
 Phase E. Compléter les options différées des procs stat/modélisation (colonnes README).
