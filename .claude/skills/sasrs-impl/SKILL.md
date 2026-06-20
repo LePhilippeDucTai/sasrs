@@ -1,18 +1,18 @@
 ---
 name: sasrs-impl
-description: Avance le projet sas_interpreter (interpréteur SAS en Rust/Polars) jusqu'à la fin du jalon courant — itère sur TOUTES les cases non cochées du jalon, une par une (ou un groupe ⫽ à la fois), committe ET pousse après chaque validation avant de passer à la suivante. S'arrête en fin de jalon ou si les limites de contexte approchent.
+description: Avance le projet sasrs (interpréteur SAS en Rust/Polars) jusqu'à la fin du jalon courant — itère sur TOUTES les cases non cochées du jalon, une par une (ou un groupe ⫽ à la fois), committe ET pousse après chaque validation avant de passer à la suivante. S'arrête en fin de jalon ou si les limites de contexte approchent.
 ---
 
 # sasrs-impl — exécuter le prochain incrément du jalon courant
 
-Tu es l'ORCHESTRATEUR du projet `sas_interpreter` (crate du workspace, branche de
-développement : la branche courante du repo, normalement
-`claude/sas-rust-interpreter-hlzxlc` — ne JAMAIS pousser ailleurs).
+Tu es l'ORCHESTRATEUR du projet `sasrs` (crate unique à la racine du dépôt, binaire
+`sasrs`). Branche de développement : la branche de développement courante du dépôt
+(ne JAMAIS pousser ailleurs). `git branch --show-current` donne la branche active.
 
 ## Sources de vérité (à lire dans cet ordre, toujours)
 
-1. `sas_interpreter/PROGRESS.md` — le curseur : jalon courant + cases cochées.
-2. `sas_interpreter/PLAN.md` — architecture, décisions actées, table modèle/effort,
+1. `PROGRESS.md` (racine du dépôt) — le curseur : jalon courant + cases cochées.
+2. `PLAN.md` (racine du dépôt) — architecture, décisions actées, table modèle/effort,
    checklist des pièges (§Checklist — relire avant toute revue).
 3. L'en-tête de chaque fichier squelette à implémenter — il contient SON plan détaillé
    (sémantique SAS, algorithmes, pièges, tests à écrire). C'est le cahier des charges.
@@ -21,7 +21,7 @@ développement : la branche courante du repo, normalement
 
 1. **État des lieux** : `git status` (l'arbre doit être propre — sinon examiner, terminer
    ou committer l'en-cours avant tout), `git pull origin <branche>`, puis
-   `cargo test -p sas_interpreter` pour vérifier que la base est verte. Base rouge =
+   `cargo test -p sasrs` pour vérifier que la base est verte. Base rouge =
    la réparer D'ABORD (c'est l'incrément du jour).
 2. **Sélection** : identifier la PROCHAINE case non cochée du jalon courant dans
    PROGRESS.md, dans l'ordre du fichier (il encode les dépendances). Si plusieurs cases
@@ -35,13 +35,13 @@ développement : la branche courante du repo, normalement
    l'orchestrateur). Donner au sous-agent : le chemin du fichier, l'instruction de lire
    son en-tête + PLAN.md §Checklist, d'implémenter TOUT le fichier (zéro `todo!()`
    restant) ET ses tests unitaires, et de faire passer
-   `cargo test -p sas_interpreter`. Les fichiers indépendants (⫽) peuvent être délégués
+   `cargo test -p sasrs`. Les fichiers indépendants (⫽) peuvent être délégués
    en parallèle.
 4. **Validation orchestrateur** (obligatoire avant commit — c'est le contrat) :
    - relire le diff de chaque fichier livré : conformité au plan d'en-tête, respect de
      la checklist des pièges (sas_cmp partout, nullify_specials, pas de get_row,
      troncature char, NOTEs au pluriel invariable...) ;
-   - `cargo test -p sas_interpreter` complet, zéro warning nouveau ;
+   - `cargo test -p sasrs` complet, zéro warning nouveau ;
    - rejeter/faire corriger ce qui ne passe pas la revue.
 5. **Commit + push IMMÉDIATEMENT après validation** (protection contre la perte de
    session et mise à jour du PR GitHub) : cocher les cases dans PROGRESS.md (+ passer
@@ -79,9 +79,20 @@ développement : la branche courante du repo, normalement
 
 ## Garde-fous
 
-- Périmètre : uniquement `sas_interpreter/` (+ `Cargo.lock`). Ne pas toucher aux autres
-  crates du workspace.
+- Périmètre : uniquement le crate `sasrs` (`src/`, `tests/`, `Cargo.toml`/`Cargo.lock`).
+  Ne pas toucher aux fichiers hors de ce crate.
 - Ne jamais cocher une case pour du code contenant encore `todo!()`/`unimplemented!()`.
+- **Type de jalon — critère de validation adapté** :
+  - Jalon de **refactorisation** (sortie inchangée, ex. M31/M32) : en plus de
+    `cargo test -p sasrs` vert, la suite snapshot doit produire **zéro `.snap.new`**
+    (log + listing octet-identiques). Les commits d'extraction sont « move-only » (seul
+    changement textuel admis : `Self::foo`→`module::foo` / relocalisation verbatim) ; toute
+    fusion comportementale (unification de logique) fait l'objet d'un commit dédié validé
+    par ses tests unitaires ciblés. Ne PAS générer de nouveaux snapshots pour ces jalons.
+  - Jalon de **complétion d'options** (ex. M33–M35) : chaque case qui livre une option
+    auparavant refusée doit faire **rétrécir d'autant la colonne droite « non couvert »**
+    du tableau README correspondant (et faire passer un proc 🟡→✅ quand il est complété),
+    avec fixture(s) `tests/fixtures/<jalon>/` + snapshot(s) vérifié(s) à la main.
 - Impératif de synchronisation de la doc : aucun incrément touchant une fonctionnalité
   visible (PROC, statement, fonction, option/argument, format, ODS, macro, SQL) ne doit
   être committé sans la mise à jour correspondante des tableaux de couverture de

@@ -101,6 +101,63 @@ impl ListingWriter {
             self.raw(&format!("{left_pad}{}", fmt_row(row, &widths)));
         }
     }
+
+    /// Render a table with PROC PRINT extensions (M33.6): optional double
+    /// spacing between body rows and an optional trailing totals row.
+    ///
+    /// Geometry (column widths, two-space-block gap, centering) is computed
+    /// identically to [`write_table`], but the totals row is included in the
+    /// width fit so a wide sum does not overflow its column. The totals row is
+    /// preceded by a blank line and rendered with the same alignment as the
+    /// body. When `double` is true, body rows are separated by a blank line
+    /// (SAS DOUBLE option).
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_table_ext(
+        &mut self,
+        headers: &[String],
+        aligns: &[Align],
+        rows: &[Vec<String>],
+        double: bool,
+        totals: Option<&Vec<String>>,
+    ) {
+        let ncol = headers.len();
+        let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+        let extra_rows = totals.into_iter();
+        for row in rows.iter().chain(extra_rows) {
+            for (i, cell) in row.iter().enumerate().take(ncol) {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+        let gap = "    ";
+        let total: usize = widths.iter().sum::<usize>() + gap.len() * ncol.saturating_sub(1);
+        let left_pad = " ".repeat(self.ls.saturating_sub(total) / 2);
+
+        let fmt_row = |cells: &[String], widths: &[usize]| -> String {
+            let mut parts = Vec::with_capacity(ncol);
+            for i in 0..ncol {
+                let cell = cells.get(i).map(String::as_str).unwrap_or("");
+                let w = widths[i];
+                match aligns.get(i).copied().unwrap_or(Align::Left) {
+                    Align::Left => parts.push(format!("{cell:<w$}")),
+                    Align::Right => parts.push(format!("{cell:>w$}")),
+                }
+            }
+            parts.join(gap)
+        };
+
+        self.raw(&format!("{left_pad}{}", fmt_row(headers, &widths)));
+        self.raw("");
+        for (i, row) in rows.iter().enumerate() {
+            if double && i > 0 {
+                self.raw("");
+            }
+            self.raw(&format!("{left_pad}{}", fmt_row(row, &widths)));
+        }
+        if let Some(t) = totals {
+            self.raw("");
+            self.raw(&format!("{left_pad}{}", fmt_row(t, &widths)));
+        }
+    }
 }
 
 #[cfg(test)]

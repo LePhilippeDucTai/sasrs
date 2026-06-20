@@ -13,6 +13,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::{chisq_sf, decode_column};
 use crate::session::Session;
 use crate::stat::invert_matrix;
@@ -43,19 +44,6 @@ pub struct LogisticModel {
     pub noprint: bool,
 }
 
-// ───────────────────────── Parser helpers ─────────────────────────
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 // ───────────────────────── Parser ─────────────────────────
 
 /// Parse PROC LOGISTIC. Called AFTER `proc logistic` has been consumed.
@@ -72,9 +60,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            input = Some(ts.parse_dataset_ref()?);
+            input = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else {
             // Skip unknown proc-level options (DESCENDING as proc option: ignored)
             ts.next();
@@ -86,22 +72,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     let mut model: Option<LogisticModel> = None;
     let mut freq_var: Option<String> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
+    common::parse_proc_body(ts, |ts, kw| {
+        if kw == "class" {
             ts.next(); // consume "class"
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
@@ -112,7 +84,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
                 }
             }
             ts.expect_semi()?;
-        } else if ts.peek().is_kw("model") {
+            Ok(true)
+        } else if kw == "model" {
             ts.next(); // consume "model"
             // Parse response variable name
             let response = ts
@@ -202,20 +175,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
                 predictors,
                 noprint,
             });
-        } else if ts.peek().is_kw("freq") {
+            Ok(true)
+        } else if kw == "freq" {
             ts.next(); // consume "freq"
             if let Some(name) = ts.peek().ident().map(str::to_string) {
                 freq_var = Some(name);
                 ts.next();
             }
             ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            ts.skip_to_semi();
+            Ok(true)
         } else {
-            ts.skip_to_semi();
+            Ok(false)
         }
-    }
+    })?;
 
     Ok(LogisticAst {
         data_options: LogisticDataOptions { input },
@@ -245,31 +217,6 @@ fn centered(session: &mut Session, text: &str) {
     session
         .listing
         .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
-
-// ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &LogisticAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_options.input {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── Value → display string ─────────────────────────
@@ -338,7 +285,7 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

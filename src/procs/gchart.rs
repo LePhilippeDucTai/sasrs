@@ -287,33 +287,9 @@ mod graphics_impl {
     use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
     use crate::missing::value_to_num;
     use crate::ods_graphics::ImageFmt;
-    use crate::procs::common::decode_column;
+    use crate::procs::common::{self, decode_column};
     use crate::value::{Value, VarType};
     use std::collections::BTreeMap;
-
-    /// Résout DATA= ou _LAST_.
-    fn resolve_input(ast: &GchartAst, session: &Session) -> Result<DatasetRef> {
-        match &ast.data_ref {
-            Some(r) => Ok(r.clone()),
-            None => {
-                let last = session.last_dataset.clone().ok_or_else(|| {
-                    SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-                })?;
-                let parts: Vec<&str> = last.splitn(2, '.').collect();
-                if parts.len() == 2 {
-                    Ok(DatasetRef {
-                        libref: Some(parts[0].to_string()),
-                        name: parts[1].to_string(),
-                    })
-                } else {
-                    Ok(DatasetRef {
-                        libref: None,
-                        name: last,
-                    })
-                }
-            }
-        }
-    }
 
     fn category_key(v: &Value) -> String {
         match v {
@@ -408,7 +384,7 @@ mod graphics_impl {
             GchartStmt::Pie { .. } => return Ok(()),
         };
 
-        let in_ref = resolve_input(ast, session)?;
+        let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
         let in_libref = in_ref.libref_or_work();
         let in_table = in_ref.name.to_uppercase();
         let provider = session.libs.get(&in_libref)?;

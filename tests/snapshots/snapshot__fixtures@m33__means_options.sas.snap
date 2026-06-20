@@ -1,0 +1,124 @@
+---
+source: tests/snapshot.rs
+assertion_line: 50
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m33/means_options.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data class;
+3       set d.class;
+4     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.CLASS has 19 observations and 5 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'Percentiles via Definition 5 (height, weight)';
+
+6     proc means data=class p25 median p75 p95 qrange;
+7       var height weight;
+8     run;
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+9     title 'PRINTALLTYPES prints every _TYPE_ (default prints only the top type)';
+
+10    proc means data=class n mean printalltypes;
+11      class sex;
+12      var height;
+13    run;
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title 'WAYS 1 keeps only single-CLASS _TYPE_ rows in OUTPUT';
+
+15    proc means data=class noprint;
+16      class sex age;
+17      var height;
+18      ways 1;
+19      output out=ways1 mean(height)=mh;
+20    run;
+NOTE: The data set WORK.WAYS1 has 8 observations and 5 variables.
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+21    proc print data=ways1;
+22    run;
+NOTE: There were 8 observations read from the data set WORK.WAYS1.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+23    title 'TYPES (sex) targets a specific crossing in OUTPUT';
+
+24    proc means data=class noprint;
+25      class sex age;
+26      var height;
+27      types (sex);
+28      output out=types1 mean(height)=mh;
+29    run;
+NOTE: The data set WORK.TYPES1 has 2 observations and 5 variables.
+NOTE: PROCEDURE MEANS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+30    proc print data=types1;
+31    run;
+NOTE: There were 2 observations read from the data set WORK.TYPES1.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                         Percentiles via Definition 5 (height, weight)
+
+                                      The MEANS Procedure
+
+          Variable    25th Pctl    Median    75th Pctl    95th Pctl    Quartile Range
+
+          height           57.5      62.8         66.5           72                 9
+          weight             84      99.5        112.5          150              28.5
+
+              PRINTALLTYPES prints every _TYPE_ (default prints only the top type)
+
+                                      The MEANS Procedure
+
+                                 Variable     N            Mean
+
+                                 height      19    62.336842105
+                             sex    Variable     N            Mean
+
+                             F      height       9    60.588888889
+                             M      height      10           63.91
+
+                      WAYS 1 keeps only single-CLASS _TYPE_ rows in OUTPUT
+
+                     Obs    sex    age    _TYPE_    _FREQ_              mh
+
+                       1            11         1         2            54.4
+                       2            12         1         5           59.44
+                       3            13         1         3    61.433333333
+                       4            14         1         4            64.9
+                       5            15         1         4          65.625
+                       6            16         1         1              72
+                       7    F        .         2         9    60.588888889
+                       8    M        .         2        10           63.91
+
+                       TYPES (sex) targets a specific crossing in OUTPUT
+
+                     Obs    sex    age    _TYPE_    _FREQ_              mh
+
+                       1    F        .         2         9    60.588888889
+                       2    M        .         2        10           63.91
+
+==== EXIT 0 ====

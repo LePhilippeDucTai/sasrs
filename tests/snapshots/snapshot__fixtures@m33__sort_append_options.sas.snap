@@ -1,0 +1,184 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m33/sort_append_options.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'SORT with TAGSORT and SORTSEQ=ASCII (age ascending)';
+
+3     proc sort data=d.class out=class_sorted tagsort sortseq=ascii;
+4       by age;
+5     run;
+NOTE: PROCEDURE SORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     proc print data=class_sorted noobs;
+7       var name age;
+8     run;
+NOTE: There were 19 observations read from the data set WORK.CLASS_SORTED.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+9     title 'SORT with KEY=age / descending';
+
+10    proc sort data=d.class out=class_keydesc;
+11      key=age / descending;
+12    run;
+NOTE: PROCEDURE SORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    proc print data=class_keydesc noobs;
+14      var name age;
+15    run;
+NOTE: There were 19 observations read from the data set WORK.CLASS_KEYDESC.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    data base_ds;
+17      x = 1; output;
+18      x = 2; output;
+19    run;
+NOTE: The data set WORK.BASE_DS has 2 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+20    data data_ds;
+21      x = 3; z = 99; output;
+22      x = 4; z = 88; output;
+23    run;
+NOTE: The data set WORK.DATA_DS has 2 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+24    title 'APPEND FORCE NOWARN (no warning expected)';
+
+25    proc append base=base_ds data=data_ds force nowarn;
+26    run;
+NOTE: Appending WORK.DATA_DS to WORK.BASE_DS.
+NOTE: There were 2 observations read from the data set WORK.DATA_DS.
+NOTE: 2 observations added.
+NOTE: The data set WORK.BASE_DS has 4 observations and 1 variables.
+NOTE: PROCEDURE APPEND used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    proc print data=base_ds noobs;
+28    run;
+NOTE: There were 4 observations read from the data set WORK.BASE_DS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+29    data base2;
+30      x = 10; output;
+31    run;
+NOTE: The data set WORK.BASE2 has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+32    data data2;
+33      x = 20; output;
+34    run;
+NOTE: The data set WORK.DATA2 has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+35    title 'APPEND with APPENDVER=V6 (no-op hint)';
+
+36    proc append base=base2 data=data2 appendver=v6;
+37    run;
+NOTE: Appending WORK.DATA2 to WORK.BASE2.
+NOTE: There were 1 observations read from the data set WORK.DATA2.
+NOTE: 1 observations added.
+NOTE: The data set WORK.BASE2 has 2 observations and 1 variables.
+NOTE: PROCEDURE APPEND used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+38    proc print data=base2 noobs;
+39    run;
+NOTE: There were 2 observations read from the data set WORK.BASE2.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                      SORT with TAGSORT and SORTSEQ=ASCII (age ascending)
+
+                                         name       age
+
+                                         Joyce       11
+                                         Thomas      11
+                                         James       12
+                                         Jane        12
+                                         John        12
+                                         Louise      12
+                                         Robert      12
+                                         Alice       13
+                                         Barbara     13
+                                         Jeffrey     13
+                                         Alfred      14
+                                         Carol       14
+                                         Henry       14
+                                         Judy        14
+                                         Janet       15
+                                         Mary        15
+                                         Ronald      15
+                                         William     15
+                                         Philip      16
+
+                                 SORT with KEY=age / descending
+
+                                         name       age
+
+                                         Philip      16
+                                         Janet       15
+                                         Mary        15
+                                         Ronald      15
+                                         William     15
+                                         Alfred      14
+                                         Carol       14
+                                         Henry       14
+                                         Judy        14
+                                         Alice       13
+                                         Barbara     13
+                                         Jeffrey     13
+                                         James       12
+                                         Jane        12
+                                         John        12
+                                         Louise      12
+                                         Robert      12
+                                         Joyce       11
+                                         Thomas      11
+
+                           APPEND FORCE NOWARN (no warning expected)
+
+                                               x
+
+                                               1
+                                               2
+                                               3
+                                               4
+
+                             APPEND with APPENDVER=V6 (no-op hint)
+
+                                                x
+
+                                               10
+                                               20
+
+==== EXIT 0 ====

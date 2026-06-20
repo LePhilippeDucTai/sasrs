@@ -1,4 +1,4 @@
-# `sas_interpreter` — Plan d'implémentation
+# `sasrs` — Plan d'implémentation
 
 Interpréteur du langage **SAS** (référence : SAS 9.4 classique, pré-Viya) écrit en **Rust**,
 moteur de données **Polars**, tables au format **Parquet**. Pas d'UI : un binaire batch
@@ -86,7 +86,7 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 | `src/procs/print.rs` | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
 | `tests/snapshot.rs` | ✅ | **Sonnet** | faible | actif — les 3 fixtures m1/ sont verrouillées (log + listing + exit), vérifiées à la main |
 
-**Definition of done M1** : `cargo test -p sas_interpreter` vert avec les snapshots activés ;
+**Definition of done M1** : `cargo test -p sasrs` vert avec les snapshots activés ;
 `sasrs tests/fixtures/m1/set_filter.sas` affiche les ados de CLASS avec une log plausible.
 
 ### Jalons M2+ (squelettes prêts, à étendre)
@@ -128,6 +128,12 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 
 ### Macro M11 — architecture (décision actée)
 
+> **MAJ M32** : le processeur macro vit désormais dans le module `src/macros/`
+> (`mod.rs` façade + `error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/
+> `define`/`include`/`expand`). `src/preprocess.rs` n'est plus qu'un shim de re-export
+> (`pub use crate::macros::*`) ; les références historiques à `preprocess.rs` ci-dessous
+> désignent ce module.
+
 Modèle choisi : **expansion texte→texte PRE-lexer, interfoliée** avec la boucle de
 `executor::run_program`, état dans `Session` (pas de transformeur de tokens : les corps
 de `%macro` contiennent du texte SAS arbitraire, et `%str`/`%nrstr` masquent des caractères
@@ -151,6 +157,23 @@ au scanner — naturellement un travail au niveau texte ; c'est aussi le modèle
 - **Invariant de bascule (M11.7)** : `expand_open_code` est l'IDENTITÉ pour tout segment sans
   déclencheur macro résolu → les 789 tests + snapshots restent octet-identiques sans `--features`.
 - Découpage en 7 unités commit+push : voir PROGRESS.md (M11.1 … M11.7).
+
+### Phase E (M31–M35) — qualité & complétion (roadmap dans PROGRESS.md)
+
+Chantier demandé après la complétion de M30. Trois axes : (1) **refactorisation en style
+fonctionnel** + généralisation/réduction de complexité (M31, M32) ; (2) **complétion maximale
+des options** des procs partiellement supportés (M33, M34) ; (3) **support total des macros**
+(M35). Invariant sur les jalons de refactor : sortie **octet-identique** (zéro `.snap.new`),
+commits d'extraction « move-only ». Les jalons de complétion font rétrécir en miroir la colonne
+« non couvert » des tableaux de couverture de `README.md`.
+
+| Tâche | Jalon | Modèle | Effort | Notes |
+|---|---|---|---|---|
+| ✅ Couche de parsing PROC partagée (`src/procs/common.rs` : `parse_proc_options`/`parse_proc_body`/`expect_eq`/`parse_dataset_opt`/`unknown_option_error`/`resolve_last_dataset` + `parse_by`/`parse_var_list`/`parse_class`/`parse_weight`) puis migration des ~40 procs | M31 | **Opus** | élevé | **FAIT** : combinateurs purs pilotés par closure `FnMut(&mut StatementStream,&str)->Result<bool>` ; migration par tiers (canaris `print`/`sort` → Tier B 6/7 → Tier C 6/6 → Tier D 16/17) ; `unknown_option_error` reproduit message+span à l'octet ; messages divergents (`means`/`freq`/…), `iml`, `catalog`, `report` body gardés inline. ~−1500 lignes, 0 `.snap.new` |
+| ✅ Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | **Opus** | élevé | **FAIT** : `preprocess.rs` (4757 l.) → 12 fichiers `src/macros/` (façade `mod.rs` 1497 l. : struct + `new`/`expand_open_code`/`TextStage`/`RawSegmenter`) ; façade `preprocess` re-export (imports inchangés) ; déplacements verbatim via blocs `impl MacroEngine` en sous-module (0 changement d'appel) ; généralisations livrées : `apply_quoting` unifié (5 fns quoting + `%q*`), registre `functions::lookup` (string-fns) ; `tokenize_eval` déjà partagé. Octet-identique |
+| Complétion options procs Base/descriptifs : FREQ (BY/WEIGHT/LIST/≥3 voies/Fisher r×c), UNIVARIATE (probplot/cdfplot/pondéré), MEANS (WAYS/TYPES/percentiles), TABULATE (OUT=/4ᵉ dim/PCTN<>), REPORT (FORMAT=/COMPUTE complexe), PRINT/CONTENTS/DATASETS/SORT/APPEND | M33 | **Opus/Fable** | élevé | une case = un proc/lot ; fixtures `tests/fixtures/m33/` + snapshots vérifiés ; README 🟡→✅ |
+| Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | **Opus/Fable** | très élevé | oracles vérifiés vs SAS 9.4 ; numérique maison `src/stat/` ; fixtures `tests/fixtures/m34/` |
+| Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | **Opus** | élevé | processeur toujours actif ; nouveau comportement seulement sur nouvelles directives → snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
 
 ### Conseils d'orchestration
 
@@ -176,7 +199,7 @@ au scanner — naturellement un travail au niveau texte ; c'est aussi le modèle
 
 ## Vérification
 
-- `cargo test -p sas_interpreter` : tests unitaires des fondations (lexer, sas_cmp,
+- `cargo test -p sasrs` : tests unitaires des fondations (lexer, sas_cmp,
   NaN-payload, log, listing) — déjà verts ; snapshots insta dès la fin de M1.
 - Snapshots : `tests/snapshot.rs` exécute chaque `tests/fixtures/**/*.sas` en
   `--deterministic` et verrouille `log + listing + code retour`. Les parquets d'entrée
@@ -184,5 +207,5 @@ au scanner — naturellement un travail au niveau texte ; c'est aussi le modèle
 - Oracle : pour les nouvelles fixtures, comparer à une sortie SAS 9.4 réelle (ou WPS /
   documentation SAS) avant d'accepter le snapshot — verrouiller la fidélité, pas
   l'auto-cohérence.
-- Manuel : `cargo run -p sas_interpreter --bin sasrs -- tests/fixtures/m1/set_filter.sas`
+- Manuel : `cargo run -p sasrs --bin sasrs -- tests/fixtures/m1/set_filter.sas`
   (depuis un répertoire contenant `data/class.parquet`).

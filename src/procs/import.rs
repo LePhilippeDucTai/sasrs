@@ -40,6 +40,7 @@ use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
 use crate::token::TokenKind;
 use polars::prelude::*;
@@ -99,16 +100,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
             break;
         }
         if ts.peek().is_kw("datafile") || ts.peek().is_kw("filename") {
-            ts.next();
-            expect_eq(ts, "DATAFILE")?;
+            common::expect_eq(ts, "DATAFILE")?;
             datafile = Some(parse_string_or_ident(ts, "DATAFILE")?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("dbms") {
-            ts.next();
-            expect_eq(ts, "DBMS")?;
+            common::expect_eq(ts, "DBMS")?;
             let tok = ts.peek().clone();
             let name = tok
                 .ident()

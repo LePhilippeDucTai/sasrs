@@ -15,7 +15,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::eigenvectors_jacobi;
 use crate::token::TokenKind;
@@ -41,17 +41,6 @@ pub struct FactorAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse `proc factor [options]; [var ...;] run;`.
 /// Called AFTER "proc factor" has been consumed. Consumes through run;/quit;.
 pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
@@ -72,15 +61,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("cov") || ts.peek().is_kw("covariance") {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("nfactors") {
-            ts.next();
-            expect_eq(ts, "NFACTORS")?;
+            common::expect_eq(ts, "NFACTORS")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,
@@ -89,8 +75,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             ts.next();
             nfactors = Some(k as usize);
         } else if ts.peek().is_kw("method") {
-            ts.next();
-            expect_eq(ts, "METHOD")?;
+            common::expect_eq(ts, "METHOD")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(m) => {
@@ -100,8 +85,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                 None => return Err(SasError::parse("expected a method name after METHOD=", span)),
             }
         } else if ts.peek().is_kw("rotate") {
-            ts.next();
-            expect_eq(ts, "ROTATE")?;
+            common::expect_eq(ts, "ROTATE")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(r) => {
@@ -111,9 +95,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                 None => return Err(SasError::parse("expected a rotation name after ROTATE=", span)),
             }
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
+            out = Some(common::parse_out_opt(ts)?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -132,30 +114,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
         }
     }
 
-    // --- sub-statements until run;/quit; ---
+    // --- sub-statements until run;/quit; (combinateur partagé M31) ---
     let mut var: Vec<String> = Vec::new();
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else {
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     Ok(FactorAst {
         data,
@@ -166,30 +137,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
         out,
         var,
     })
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &FactorAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── VARIMAX rotation ─────────────────────────
@@ -323,7 +270,7 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         ));
     }
 
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display = format!("{in_libref}.{in_table}");

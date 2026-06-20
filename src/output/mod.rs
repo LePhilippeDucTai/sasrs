@@ -45,6 +45,27 @@ pub trait OutputDestination {
     /// de cellules (toutes pré-formatées en chaînes par l'appelant).
     fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]);
 
+    /// Variante PROC PRINT (M33.6) : double-interligne optionnel et ligne de
+    /// totaux optionnelle. L'implémentation par défaut (destinations ODS et
+    /// stubs) ignore ces extensions et rend la table normalement, suivie de la
+    /// ligne de totaux si présente (sans alignement colonne). Seule la
+    /// destination texte ([`TextListing`]) surcharge cette méthode pour aligner
+    /// les totaux sous leurs colonnes — l'invariant byte-identique du listing
+    /// par défaut est ainsi préservé.
+    fn write_table_ext(
+        &mut self,
+        headers: &[String],
+        aligns: &[Align],
+        rows: &[Vec<String>],
+        _double: bool,
+        totals: Option<&Vec<String>>,
+    ) {
+        self.write_table(headers, aligns, rows);
+        if let Some(t) = totals {
+            self.write_line(&t.join("  "));
+        }
+    }
+
     /// Écrit une ligne de texte libre (justifiée à gauche, colonne 0).
     fn write_line(&mut self, line: &str);
 
@@ -114,6 +135,17 @@ impl OutputDestination for TextListing {
 
     fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
         self.inner.write_table(headers, aligns, rows);
+    }
+
+    fn write_table_ext(
+        &mut self,
+        headers: &[String],
+        aligns: &[Align],
+        rows: &[Vec<String>],
+        double: bool,
+        totals: Option<&Vec<String>>,
+    ) {
+        self.inner.write_table_ext(headers, aligns, rows, double, totals);
     }
 
     fn write_line(&mut self, line: &str) {

@@ -1,0 +1,157 @@
+---
+source: tests/snapshot.rs
+assertion_line: 50
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m33/univariate_weighted.sas
+---
+==== LOG ====
+
+1     data wq;
+2       x = 1; w = 1; output;
+3       x = 2; w = 2; output;
+4       x = 3; w = 3; output;
+5       x = 4; w = 4; output;
+6     run;
+NOTE: The data set WORK.WQ has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Weighted quantiles and extremes (weight w)';
+
+8     proc univariate data=wq;
+9       var x;
+10      weight w;
+11    run;
+NOTE: There were 4 observations read from the data set WORK.WQ.
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    ods graphics on;
+NOTE: ODS GRAPHICS ON.
+
+13    title 'Weighted univariate with a probability plot';
+
+14    proc univariate data=wq;
+15      var x;
+16      weight w;
+17      probplot x;
+18    run;
+NOTE: There were 4 observations read from the data set WORK.WQ.
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    ods graphics off;
+NOTE: ODS GRAPHICS OFF.
+
+20    title;
+
+==== LISTING ====
+                           Weighted quantiles and extremes (weight w)
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                             4    Sum Weights                   10
+              Mean                          3    Sum Observations              30
+              Std Deviation      1.8257418584    Variance            3.3333333333
+              Skewness                      0    Kurtosis                    -1.2
+              Uncorrected SS              100    Corrected SS                  10
+              Coeff Variation    60.858061945    Std Error Mean      0.5773502692
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean               3    Std Deviation          1.8257418584
+                  Median             3    Variance               3.3333333333
+                  Mode               .    Range                             3
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             4
+                                     99%                  4
+                                     95%                  4
+                                     90%                  4
+                                     75% Q3               4
+                                     50% Median           3
+                                     25% Q1               2
+                                     10%                1.5
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+                              4             4                4              4
+
+
+                          Weighted univariate with a probability plot
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                             4    Sum Weights                   10
+              Mean                          3    Sum Observations              30
+              Std Deviation      1.8257418584    Variance            3.3333333333
+              Skewness                      0    Kurtosis                    -1.2
+              Uncorrected SS              100    Corrected SS                  10
+              Coeff Variation    60.858061945    Std Error Mean      0.5773502692
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean               3    Std Deviation          1.8257418584
+                  Median             3    Variance               3.3333333333
+                  Mode               .    Range                             3
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             4
+                                     99%                  4
+                                     95%                  4
+                                     90%                  4
+                                     75% Q3               4
+                                     50% Median           3
+                                     25% Q1               2
+                                     10%                1.5
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+                              4             4                4              4
+
+
+==== EXIT 0 ====

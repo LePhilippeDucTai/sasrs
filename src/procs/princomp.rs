@@ -35,7 +35,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::eigenvectors_jacobi;
 use crate::token::TokenKind;
@@ -57,17 +57,6 @@ pub struct PrincompAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse `proc princomp [data=a] [cov] [n=k] [out=b]; [var ...;] run;`.
 /// Called AFTER "proc princomp" has been consumed. Consumes through run;/quit;.
 pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
@@ -86,15 +75,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
+            data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("cov") || ts.peek().is_kw("covariance") {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("n") {
-            ts.next();
-            expect_eq(ts, "N")?;
+            common::expect_eq(ts, "N")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,
@@ -103,9 +89,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
             ts.next();
             n = Some(k as usize);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
+            out = Some(common::parse_out_opt(ts)?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -124,31 +108,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
         }
     }
 
-    // --- sub-statements until run;/quit; ---
+    // --- sub-statements until run;/quit; (combinateur partagé M31) ---
     let mut var: Vec<String> = Vec::new();
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else {
-            // Unknown sub-statement: skip it (recovery, like corr/means).
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     Ok(PrincompAst {
         data,
@@ -157,30 +129,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
         out,
         var,
     })
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &PrincompAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── execute ─────────────────────────
@@ -193,7 +141,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
         ));
     }
 
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display = format!("{in_libref}.{in_table}");

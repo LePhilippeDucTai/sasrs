@@ -68,7 +68,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, partition_numeric, partition_weighted, sample_std};
+use crate::procs::common::{self, decode_column, partition_numeric, partition_weighted, sample_std};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -134,8 +134,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("nosimple") {
             ts.next();
@@ -156,16 +155,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             ts.next();
             kendall = true;
         } else if ts.peek().is_kw("out") || ts.peek().is_kw("outp") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             outp = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outs") {
-            ts.next();
-            expect_eq(ts, "OUTS")?;
+            common::expect_eq(ts, "OUTS")?;
             outs = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outk") {
-            ts.next();
-            expect_eq(ts, "OUTK")?;
+            common::expect_eq(ts, "OUTK")?;
             outk = Some(ts.parse_dataset_ref()?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
@@ -190,45 +186,35 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     let mut with: Vec<String> = Vec::new();
     let mut weight: Option<String> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = common::parse_var_list(ts)?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("with") {
-            ts.next();
-            with = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("weight") {
-            ts.next();
-            let names = ts.parse_name_list()?;
-            ts.expect_semi()?;
-            // SAS allows a single weight variable.
-            if names.len() != 1 {
-                return Err(SasError::runtime(
-                    "The WEIGHT statement of PROC CORR accepts exactly one variable.",
-                ));
+            "with" => {
+                ts.next();
+                with = common::parse_var_list(ts)?;
+                true
             }
-            weight = Some(names.into_iter().next().unwrap());
-        } else {
-            // Unknown sub-statement: skip it (recovery, like means/print).
-            ts.skip_to_semi();
-        }
-    }
+            "weight" => {
+                ts.next();
+                let names = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                // SAS allows a single weight variable.
+                if names.len() != 1 {
+                    return Err(SasError::runtime(
+                        "The WEIGHT statement of PROC CORR accepts exactly one variable.",
+                    ));
+                }
+                weight = Some(names.into_iter().next().unwrap());
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(CorrAst {
         data,
@@ -245,41 +231,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         outs,
         outk,
     })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &CorrAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── numeric core ─────────────────────────
@@ -671,7 +622,7 @@ fn fmt_p(p: Option<f64>) -> String {
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

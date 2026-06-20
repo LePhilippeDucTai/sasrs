@@ -107,7 +107,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::{chisq_cdf, probnorm};
 use crate::token::TokenKind;
@@ -151,17 +151,6 @@ impl Default for NparProcOptions {
     fn default() -> Self {
         NparProcOptions { alpha: 0.05 }
     }
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 /// Parse a numeric option value (`=<num>`); the `=` must already be consumed.
@@ -211,16 +200,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             input = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             output = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("alpha") {
-            ts.next();
-            expect_eq(ts, "ALPHA")?;
+            common::expect_eq(ts, "ALPHA")?;
             proc_options.alpha = parse_num_value(ts, "ALPHA")?;
         } else if ts.peek().is_kw("wilcoxon") {
             ts.next();
@@ -247,53 +233,44 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
     let mut var_vars: Vec<String> = Vec::new();
     let mut class_var: Option<String> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var_vars = common::parse_var_list(ts)?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var_vars = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("class") {
-            ts.next();
-            let names = ts.parse_name_list()?;
-            ts.expect_semi()?;
-            if names.len() != 1 {
+            "class" => {
+                ts.next();
+                let names = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                if names.len() != 1 {
+                    return Err(SasError::runtime(
+                        "The CLASS statement of PROC NPAR1WAY accepts exactly one variable.",
+                    ));
+                }
+                class_var = Some(names.into_iter().next().unwrap());
+                true
+            }
+            "by" => {
                 return Err(SasError::runtime(
-                    "The CLASS statement of PROC NPAR1WAY accepts exactly one variable.",
+                    "BY processing is not yet implemented in PROC NPAR1WAY.",
                 ));
             }
-            class_var = Some(names.into_iter().next().unwrap());
-        } else if ts.peek().is_kw("by") {
-            return Err(SasError::runtime(
-                "BY processing is not yet implemented in PROC NPAR1WAY.",
-            ));
-        } else if ts.peek().is_kw("output") {
-            // `output out=<ref>;`
-            ts.next();
-            if ts.peek().is_kw("out") {
+            "output" => {
+                // `output out=<ref>;`
                 ts.next();
-                expect_eq(ts, "OUT")?;
-                output = Some(ts.parse_dataset_ref()?);
+                if ts.peek().is_kw("out") {
+                    common::expect_eq(ts, "OUT")?;
+                    output = Some(ts.parse_dataset_ref()?);
+                }
+                ts.skip_to_semi();
+                true
             }
-            ts.skip_to_semi();
-        } else {
-            // Unknown sub-statement: skip it (recovery).
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     let class_var = class_var.ok_or_else(|| {
         SasError::runtime("PROC NPAR1WAY requires a CLASS statement.")
@@ -514,29 +491,6 @@ fn fmt_p(p: f64) -> String {
 // ───────────────────────── execute ─────────────────────────
 
 /// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &NparAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_options.input {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Write a centered line within LINESIZE.
 fn centered(session: &mut Session, text: &str) {
     let ls = session.listing.ls();
@@ -548,7 +502,7 @@ fn centered(session: &mut Session, text: &str) {
 
 /// Execute PROC NPAR1WAY and produce the listing.
 pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

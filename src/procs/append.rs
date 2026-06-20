@@ -1,8 +1,8 @@
-//! PROC APPEND (jalon M7).
+//! PROC APPEND (jalon M7 + options M33.9).
 //!
 //! # Plan du fichier — voir PLAN.md
 //!
-//! `proc append base=a data=b [force] ; run ;`
+//! `proc append base=a data=b [force] [nowarn] [appendver=Vn] ; run ;`
 //!
 //! - base inexistante → créée comme copie de data (NOTE SAS).
 //! - Sans FORCE : toute variable de DATA absente de BASE, ou type
@@ -13,15 +13,23 @@
 //! - Alignement par NOM (pas par position) ; décoder en Vec<Value> et
 //!   reconstruire le DataFrame.
 //! - NOTEs : "Appending WORK.B to WORK.A." + obs lues / obs ajoutées.
+//!
+//! ## Options M33.9
+//! - NOWARN : avec FORCE, supprime le WARNING sur les différences
+//!   structurelles forcées. Sans FORCE, la présence de NOWARN est sans
+//!   effet (aucun WARNING n'est émis dans ce chemin). L'append est
+//!   toujours réalisé normalement — NOWARN ne change pas le résultat,
+//!   seulement la verbosité du log.
+//! - APPENDVER=Vn (ex. APPENDVER=V6) : hint de version SAS des métadonnées
+//!   d'en-tête. Aucun effet sémantique sur la sortie. Accepté et ignoré.
 
 use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 use polars::prelude::*;
 
@@ -29,45 +37,73 @@ pub struct AppendAst {
     pub base: DatasetRef,
     pub data: DatasetRef,
     pub force: bool,
+    /// NOWARN : supprime le WARNING FORCE sur les différences structurelles.
+    pub nowarn: bool,
+    /// APPENDVER : hint de version (no-op), ex. "V6". None = non spécifié.
+    pub appendver: Option<String>,
 }
 
-/// Parse `proc append base=<ref> data=<ref> [force] ; run ;`.
+/// Parse `proc append base=<ref> data=<ref> [force] [nowarn] [appendver=Vn] ; run ;`.
 /// Called AFTER `proc append` has been consumed. Consumes through
 /// `run;` / `quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
+    use crate::token::TokenKind;
+
     let mut base: Option<DatasetRef> = None;
     let mut data: Option<DatasetRef> = None;
     let mut force = false;
+    let mut nowarn = false;
+    let mut appendver: Option<String> = None;
 
-    // --- PROC APPEND statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("base") {
-            ts.next();
-            expect_eq(ts, "BASE")?;
-            base = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("force") {
-            ts.next();
-            force = true;
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC APPEND statement."),
-                span,
-            ));
-        }
-    }
+    // --- PROC APPEND statement options, until `;` (combinateur M31) ---
+    common::parse_proc_options(ts, "APPEND", |ts, kw| {
+        Ok(match kw {
+            "base" => {
+                base = Some(common::parse_dataset_opt(ts, "BASE")?);
+                true
+            }
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
+            }
+            "force" => {
+                ts.next();
+                force = true;
+                true
+            }
+            "nowarn" => {
+                // NOWARN : supprime le WARNING de FORCE sur différences structurelles.
+                ts.next();
+                nowarn = true;
+                true
+            }
+            "appendver" => {
+                // APPENDVER=Vn : hint de version, aucun effet sémantique.
+                ts.next(); // consume "appendver"
+                if ts.peek().kind != TokenKind::Eq {
+                    return Err(SasError::parse(
+                        "expected '=' after APPENDVER".to_string(),
+                        ts.peek().span,
+                    ));
+                }
+                ts.next(); // consume '='
+                let ver_tok = ts.peek().clone();
+                let ver_name = ver_tok
+                    .ident()
+                    .ok_or_else(|| {
+                        SasError::parse(
+                            "expected a version string after APPENDVER=".to_string(),
+                            ver_tok.span,
+                        )
+                    })?
+                    .to_uppercase();
+                ts.next();
+                appendver = Some(ver_name);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     let base = base.ok_or_else(|| {
         SasError::runtime(
@@ -80,37 +116,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
         )
     })?;
 
-    // Consume through run;/quit; (sub-statements loop).
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-        // Skip any unexpected sub-statement tokens.
-        ts.skip_to_semi();
-    }
+    // Consume through run;/quit; (sub-statements loop) (combinateur M31).
+    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
-    Ok(AppendAst { base, data, force })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
+    Ok(AppendAst { base, data, force, nowarn, appendver })
 }
 
 /// Truncate a string to at most `max_chars` Unicode characters.
@@ -224,7 +233,8 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     }
 
     // --- With FORCE: warn about DATA variables not in BASE (they'll be dropped). ---
-    if ast.force {
+    // NOWARN suppresses these warnings when FORCE is active.
+    if ast.force && !ast.nowarn {
         for dv in &data_ds.vars {
             let key = dv.name.to_uppercase();
             if !base_idx.contains_key(&key) {
@@ -457,6 +467,8 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE_DS".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA_DS".into() },
             force: false,
+            nowarn: false,
+            appendver: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -490,6 +502,8 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
             force: false,
+            nowarn: false,
+            appendver: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -533,6 +547,8 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
             force: false,
+            nowarn: false,
+            appendver: None,
         };
         let result = execute(&ast, &mut session);
         assert!(result.is_err(), "expected anomaly error");
@@ -567,6 +583,8 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
             force: true,
+            nowarn: false,
+            appendver: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -615,6 +633,8 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
             force: true,
+            nowarn: false,
+            appendver: None,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -649,10 +669,153 @@ mod tests {
             base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
             data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
             force: false,
+            nowarn: false,
+            appendver: None,
         };
         let result = execute(&ast, &mut session);
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("anomalies"), "msg: {msg}");
+    }
+
+    // --- M33.9 new option tests ---
+
+    #[test]
+    fn parse_nowarn_accepted() {
+        let ast = parse_append("proc append base=a data=b force nowarn; run;").unwrap();
+        assert!(ast.force);
+        assert!(ast.nowarn);
+        assert!(ast.appendver.is_none());
+    }
+
+    #[test]
+    fn parse_appendver_accepted() {
+        let ast = parse_append("proc append base=a data=b appendver=v6; run;").unwrap();
+        assert_eq!(ast.appendver.as_deref(), Some("V6"));
+        assert!(!ast.nowarn);
+    }
+
+    #[test]
+    fn parse_appendver_v9_accepted() {
+        let ast = parse_append("proc append base=a data=b appendver=v9; run;").unwrap();
+        assert_eq!(ast.appendver.as_deref(), Some("V9"));
+    }
+
+    #[test]
+    fn execute_nowarn_suppresses_force_warning() {
+        // With FORCE + NOWARN, the "Variable ... not found on BASE file" WARNING
+        // should NOT appear in the log.
+        let mut session = make_session();
+
+        // BASE has x only; DATA has x and y (y is extra).
+        let base_df = df!["x" => [1.0_f64]].unwrap();
+        let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "BASE", base_ds);
+
+        let data_df = df!["x" => [2.0_f64], "y" => [99.0_f64]].unwrap();
+        let data_ds = SasDataset {
+            df: data_df,
+            vars: vec![num_meta("x"), num_meta("y")],
+        };
+        write_dataset(&mut session, "DATA", data_ds);
+
+        let ast = AppendAst {
+            base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
+            data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+            force: true,
+            nowarn: true,
+            appendver: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        // Append must have succeeded.
+        let result = read_dataset(&session, "BASE");
+        assert_eq!(result.n_obs(), 2, "NOWARN still appends");
+
+        // No WARNING in log.
+        let log = session.log.into_string();
+        assert!(
+            !log.to_uppercase().contains("WARNING"),
+            "NOWARN should suppress FORCE warnings, log: {log}"
+        );
+    }
+
+    #[test]
+    fn execute_force_without_nowarn_emits_warning() {
+        // Sanity: without NOWARN, the warning IS present.
+        let mut session = make_session();
+
+        let base_df = df!["x" => [1.0_f64]].unwrap();
+        let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+        write_dataset(&mut session, "BASE", base_ds);
+
+        let data_df = df!["x" => [2.0_f64], "y" => [99.0_f64]].unwrap();
+        let data_ds = SasDataset {
+            df: data_df,
+            vars: vec![num_meta("x"), num_meta("y")],
+        };
+        write_dataset(&mut session, "DATA", data_ds);
+
+        let ast = AppendAst {
+            base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
+            data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+            force: true,
+            nowarn: false,
+            appendver: None,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        let log = session.log.into_string();
+        assert!(
+            log.contains("not found on BASE"),
+            "Without NOWARN, warning must appear, log: {log}"
+        );
+    }
+
+    #[test]
+    fn execute_appendver_no_effect_on_output() {
+        // APPENDVER= is a no-op; result identical to without it.
+        let mut s1 = make_session();
+        let mut s2 = make_session();
+
+        for s in [&mut s1, &mut s2] {
+            let base_df = df!["x" => [1.0_f64]].unwrap();
+            let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+            write_dataset(s, "BASE", base_ds);
+
+            let data_df = df!["x" => [2.0_f64]].unwrap();
+            let data_ds = SasDataset { df: data_df, vars: vec![num_meta("x")] };
+            write_dataset(s, "DATA", data_ds);
+        }
+
+        // Without APPENDVER.
+        let ast_plain = AppendAst {
+            base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
+            data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+            force: false,
+            nowarn: false,
+            appendver: None,
+        };
+        execute(&ast_plain, &mut s1).unwrap();
+
+        // With APPENDVER=V6.
+        let ast_ver = AppendAst {
+            base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
+            data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+            force: false,
+            nowarn: false,
+            appendver: Some("V6".to_string()),
+        };
+        execute(&ast_ver, &mut s2).unwrap();
+
+        // Both outputs must be identical (2 rows, x=[1.0, 2.0]).
+        let r1 = read_dataset(&s1, "BASE");
+        let r2 = read_dataset(&s2, "BASE");
+        assert_eq!(r1.n_obs(), r2.n_obs());
+        assert_eq!(
+            decode_column(&r1, 0).unwrap(),
+            decode_column(&r2, 0).unwrap(),
+            "APPENDVER= must not affect output"
+        );
     }
 }

@@ -11,6 +11,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::stat::linalg;
@@ -52,19 +53,6 @@ pub struct RegOutput {
     pub residual: Option<String>,
 }
 
-// ───────────────────────── Parser helpers ─────────────────────────
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 // ───────────────────────── Parser ─────────────────────────
 
 /// Parse PROC REG. Called AFTER `proc reg` has been consumed.
@@ -81,9 +69,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            input = Some(ts.parse_dataset_ref()?);
+            input = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else {
             // Skip unknown proc-level options
             ts.next();
@@ -95,22 +81,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut outputs: Vec<RegOutput> = Vec::new();
     let mut plots_requested = false;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("model") {
+    common::parse_proc_body(ts, |ts, kw| {
+        if kw == "model" {
             ts.next(); // consume "model"
             let dep = ts
                 .peek()
@@ -162,26 +134,23 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 noint,
                 noprint,
             });
-        } else if ts.peek().is_kw("output") {
+            Ok(true)
+        } else if kw == "output" {
             ts.next();
             let mut out: Option<DatasetRef> = None;
             let mut predicted: Option<String> = None;
             let mut residual: Option<String> = None;
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                 if ts.peek().is_kw("out") {
-                    ts.next();
-                    expect_eq(ts, "OUT")?;
-                    out = Some(ts.parse_dataset_ref()?);
+                    out = Some(common::parse_out_opt(ts)?);
                 } else if ts.peek().is_kw("predicted") || ts.peek().is_kw("p") {
-                    ts.next();
-                    expect_eq(ts, "PREDICTED")?;
+                    common::expect_eq(ts, "PREDICTED")?;
                     predicted = ts.peek().ident().map(str::to_string);
                     if predicted.is_some() {
                         ts.next();
                     }
                 } else if ts.peek().is_kw("residual") || ts.peek().is_kw("r") {
-                    ts.next();
-                    expect_eq(ts, "RESIDUAL")?;
+                    common::expect_eq(ts, "RESIDUAL")?;
                     residual = ts.peek().ident().map(str::to_string);
                     if residual.is_some() {
                         ts.next();
@@ -198,20 +167,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     residual,
                 });
             }
-        } else if ts.peek().is_kw("plots") {
+            Ok(true)
+        } else if kw == "plots" {
             // M29.3 — PLOTS statement: parsed but its options are deferred (a
             // NOTE at execute time). Skip the whole statement (including a
             // possible `(...)` option list and trailing `/ options`).
             ts.next();
             ts.skip_to_semi();
             plots_requested = true;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            ts.skip_to_semi();
+            Ok(true)
         } else {
-            ts.skip_to_semi();
+            Ok(false)
         }
-    }
+    })?;
 
     Ok(RegAst {
         data_options: RegDataOptions { input },
@@ -259,31 +227,6 @@ fn centered(session: &mut Session, text: &str) {
         .write_line(&format!("{}{}", " ".repeat(pad), text));
 }
 
-// ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &RegAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_options.input {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 // ───────────────────────── VarMeta helper ─────────────────────────
 
 fn num_var_meta(name: &str) -> VarMeta {
@@ -314,7 +257,7 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
     }
 
     // --- 1. Resolve dataset ---
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

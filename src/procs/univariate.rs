@@ -34,11 +34,13 @@
 //! ## Simplifications SAS documentées (WEIGHT)
 //! - Skewness / Kurtosis pondérés : DIFFÉRÉ. Affichés à partir des valeurs
 //!   NON pondérées (formules g1/g2 existantes) — divergence documentée.
-//! - Quantiles / Extreme Observations pondérés : DIFFÉRÉ — choix (a) : ces
-//!   sections sont OMISES lorsque WEIGHT est présent (une note centrée
-//!   "Quantiles and Extreme Observations are not computed with a WEIGHT
-//!   variable." est affichée à la place). On ne présente JAMAIS des
-//!   quantiles non pondérés comme s'ils étaient pondérés.
+//! - Quantiles pondérés (M33.2) : calculés via `weighted_quantile_def5`
+//!   (analogue pondéré de la Définition 5 — position par poids cumulés). La
+//!   section Quantiles (et Median/Q1/Q3/Range/IQR de Basic Measures) est donc
+//!   désormais affichée avec les valeurs pondérées.
+//! - Extreme Observations (M33.2) : affichées aussi sous WEIGHT. Les extrêmes
+//!   listent les VALEURS brutes (non pondérées) avec leur n° d'obs, sur les
+//!   observations utilisables (mêmes exclusions que `partition_weighted`).
 
 #![allow(unused_variables, dead_code)]
 
@@ -49,7 +51,8 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{
-    by_groups, decode_column, partition_weighted, phi_inv, probnorm, resolve_by_cols, sample_std,
+    self, by_groups, decode_column, partition_weighted, phi_inv, probnorm, resolve_by_cols,
+    sample_std,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -63,8 +66,9 @@ pub struct UnivariateAst {
     /// BY variables (var, descending). Input must be sorted by the BY key.
     pub by: Vec<(String, bool)>,
     /// WEIGHT variable (single numeric var). When `Some`, the Moments and
-    /// Basic Measures mean/std/variance use the weighted formulas; Quantiles
-    /// and Extreme Observations are omitted (see file header).
+    /// Basic Measures use the weighted formulas, and Quantiles use the weighted
+    /// Definition 5 (`weighted_quantile_def5`); Extreme Observations list the
+    /// raw extreme values (see file header).
     pub weight: Option<String>,
     pub output: Option<UnivariateOutput>,
     /// Tests for Normality requested (PROC option `normal` or `var x / normal`).
@@ -141,8 +145,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
             // Accepted and ignored for rendering: UNIVARIATE always shows its
@@ -176,49 +179,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut weight: Option<String> = None;
     let mut output: Option<UnivariateOutput> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            // Optional `/ option…` clause on VAR (e.g. `var x / normal;`).
-            if ts.peek().kind == TokenKind::Slash {
-                ts.next();
-                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                    if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
-                        normal = true;
-                    }
-                    ts.next();
-                }
-            }
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by = crate::procs::means::parse_by_list(ts)?;
-        } else if ts.peek().is_kw("weight") {
-            ts.next();
-            weight = Some(crate::procs::means::parse_single_var(ts, "WEIGHT")?);
-        } else if ts.peek().is_kw("output") {
-            ts.next();
-            output = Some(parse_output(ts)?);
-        } else if let Some(kind) = graphics_kind(ts.peek()) {
-            // Graphical statement (HISTOGRAM/QQPLOT/…): capture the kind and its
-            // target variable (the first identifier after the keyword), then
-            // skip the rest of the body to `;` (trailing `/ options` are
-            // tolerated but ignored). Rendering is wired to ODS GRAPHICS (M29.3).
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        // Graphical statement (HISTOGRAM/QQPLOT/…) — keyword-driven via a token
+        // probe rather than the lowercase `kw`, so handle it before the match.
+        if let Some(kind) = graphics_kind(ts.peek()) {
+            // Capture the kind and its target variable (the first identifier
+            // after the keyword), then skip the rest of the body to `;`
+            // (trailing `/ options` are tolerated but ignored). Rendering is
+            // wired to ODS GRAPHICS (M29.3).
             ts.next(); // consume keyword
             let var = ts.peek().ident().map(str::to_string);
             if var.is_some() {
@@ -226,11 +195,43 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             }
             ts.skip_to_semi();
             plots.push(UnivariatePlot { kind, var });
-        } else {
-            // Unknown sub-statement (id, class, ...): skip leniently.
-            ts.skip_to_semi();
+            return Ok(true);
         }
-    }
+        Ok(match kw {
+            "var" => {
+                ts.next();
+                var = ts.parse_name_list()?;
+                // Optional `/ option…` clause on VAR (e.g. `var x / normal;`).
+                if ts.peek().kind == TokenKind::Slash {
+                    ts.next();
+                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                        if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
+                            normal = true;
+                        }
+                        ts.next();
+                    }
+                }
+                ts.expect_semi()?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by = crate::procs::means::parse_by_list(ts)?;
+                true
+            }
+            "weight" => {
+                ts.next();
+                weight = Some(crate::procs::means::parse_single_var(ts, "WEIGHT")?);
+                true
+            }
+            "output" => {
+                ts.next();
+                output = Some(parse_output(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(UnivariateAst {
         data,
@@ -307,8 +308,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
             break;
         }
         if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(kw) = ts.peek().ident().map(str::to_string) {
             let stat = kw.to_ascii_lowercase();
@@ -318,8 +318,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
                     ts.peek().span,
                 ));
             }
-            ts.next(); // stat keyword
-            expect_eq(ts, "OUTPUT statistic")?;
+            common::expect_eq(ts, "OUTPUT statistic")?;
             // Collect one or more output names until the next stat keyword,
             // `out`, or `;`.
             let mut names: Vec<String> = Vec::new();
@@ -352,41 +351,6 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
         SasError::runtime("The OUTPUT statement requires the OUT= option in PROC UNIVARIATE.")
     })?;
     Ok(UnivariateOutput { out, specs })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &UnivariateAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ─────────────────────────── statistics helpers ───────────────────────────
@@ -440,7 +404,10 @@ fn kurtosis(xs: &[f64]) -> Option<f64> {
 /// else:       Q = x[j+1]
 /// ```
 /// with clamping for the edges (p=1 → max, p=0 → min) and index guards.
-fn quantile_def5(sorted: &[f64], p: f64) -> Option<f64> {
+///
+/// `pub(crate)` so PROC MEANS / SUMMARY can reuse the IDENTICAL Definition-5
+/// percentile computation (M33.3) instead of re-implementing it.
+pub(crate) fn quantile_def5(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
     if n == 0 {
         return None;
@@ -474,6 +441,63 @@ fn quantile_def5(sorted: &[f64], p: f64) -> Option<f64> {
     } else {
         Some(x(j + 1))
     }
+}
+
+/// SAS WEIGHTED quantile (default QNTLDEF=5 analog) of fraction `p` over the
+/// already-sorted (ascending by value) `(value, weight)` pairs. All weights are
+/// strictly positive (the caller has dropped weights ≤ 0 via
+/// `partition_weighted`). Empty → None.
+///
+/// Rule (the weighted analog of the unweighted Definition 5 above): let
+/// `W = Σ w_i` be the total weight and `W_i = Σ_{j≤i} w_j` the cumulative weight
+/// through the i-th smallest value (1-indexed, `W_0 = 0`). For a target
+/// `t = p·W`:
+///
+/// ```text
+/// p == 0 → x(1) (min);  p == 1 → x(n) (max)
+/// find the smallest i with W_i ≥ t:
+///   if W_i == t exactly:  Q = (x(i) + x(i+1)) / 2   // average at the
+///                                                     // discontinuity
+///   else:                 Q = x(i)
+/// ```
+///
+/// This reduces to the unweighted Definition 5 when every weight is 1: then
+/// `W = n`, `t = n·p`, and `W_i == t` exactly iff `n·p` is an integer (the
+/// averaging case), matching `quantile_def5`.
+fn weighted_quantile_def5(sorted_pairs: &[(f64, f64)], p: f64) -> Option<f64> {
+    let n = sorted_pairs.len();
+    if n == 0 {
+        return None;
+    }
+    let x = |i: usize| sorted_pairs[i - 1].0; // 1-indexed value accessor
+
+    if p <= 0.0 {
+        return Some(x(1));
+    }
+    if p >= 1.0 {
+        return Some(x(n));
+    }
+
+    let total_w: f64 = sorted_pairs.iter().map(|(_, w)| *w).sum();
+    let t = p * total_w;
+
+    let mut cum = 0.0_f64;
+    for i in 1..=n {
+        cum += sorted_pairs[i - 1].1;
+        // Use a relative tolerance so integer weights hit the exact-average
+        // branch deterministically (mirrors the `g == 0.0` test unweighted).
+        if (cum - t).abs() <= 1e-9 * total_w.max(1.0) {
+            return if i < n {
+                Some((x(i) + x(i + 1)) / 2.0)
+            } else {
+                Some(x(n))
+            };
+        }
+        if cum > t {
+            return Some(x(i));
+        }
+    }
+    Some(x(n))
 }
 
 /// Mode: smallest most-frequent value, but only if some value repeats
@@ -526,7 +550,7 @@ fn fmt_opt(v: Option<f64>) -> String {
 // ─────────────────────────────── execute ──────────────────────────────────
 
 pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display_name = format!("{in_libref}.{in_table}");
@@ -613,10 +637,25 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                 Some(wv) => {
                     // Weighted path: usable (value, weight) pairs + excluded count.
                     let (pairs, n_missing) = partition_weighted(&var_values[vi], wv, grp_rows);
+                    // Also collect the usable values with their 1-based obs
+                    // numbers (in row order) for the Extreme Observations
+                    // section — extremes report the raw VALUES, not weighted,
+                    // so we mirror the exclusion rule of `partition_weighted`.
+                    let mut obs_pairs: Vec<(f64, usize)> = Vec::with_capacity(grp_rows.len());
+                    for &row in grp_rows {
+                        let v = value_to_num(&var_values[vi][row]);
+                        let w = value_to_num(&wv[row]);
+                        if let (Some(vf), Some(wf)) = (v, w) {
+                            if !vf.is_nan() && !wf.is_nan() && wf > 0.0 {
+                                obs_pairs.push((vf, row + 1));
+                            }
+                        }
+                    }
                     emit_variable_weighted(
                         session,
                         &ds.vars[ci].name,
                         &pairs,
+                        &obs_pairs,
                         n_missing,
                         grp_rows.len(),
                     );
@@ -687,8 +726,10 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
 /// build (no `graphics` feature) this only emits a deferral NOTE; under
 /// `--features graphics` it materializes a PNG/SVG via the M29.1 infrastructure.
 ///
-/// PROBPLOT/CDFPLOT/PPPLOT are deferred with a dedicated NOTE (rendered as a
-/// QQ-style scatter would be a poor approximation of these — out of M29.3 v1).
+/// All five plot kinds (HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT/PPPLOT) are wired to
+/// the image infrastructure identically (M33.2): in the default build this
+/// emits the shared "image deferred" NOTE; under `--features graphics` each
+/// renders an image.
 fn render_plot(
     session: &mut Session,
     plot: &UnivariatePlot,
@@ -696,19 +737,6 @@ fn render_plot(
     var_values: &[Vec<Value>],
     ds: &SasDataset,
 ) {
-    // PROBPLOT/CDFPLOT/PPPLOT: deferred with a dedicated NOTE (before the
-    // feature gate, so it is testable in the default build).
-    if matches!(
-        plot.kind,
-        UnivariatePlotKind::ProbPlot | UnivariatePlotKind::CdfPlot | UnivariatePlotKind::PpPlot
-    ) {
-        session.log.note(&format!(
-            "{}: plot deferred in PROC UNIVARIATE.",
-            plot.kind.keyword()
-        ));
-        return;
-    }
-
     #[cfg(not(feature = "graphics"))]
     {
         let _ = (plot, var_cols, var_values, ds);
@@ -813,8 +841,80 @@ mod plot_graphics {
                     x_categorical: vec![],
                 }
             }
-            // PROBPLOT/CDFPLOT/PPPLOT handled by the caller (deferred).
-            _ => return,
+            UnivariatePlotKind::ProbPlot => {
+                // Normal probability plot: sorted data (y) vs theoretical
+                // normal quantiles phi_inv((i-0.375)/(n+0.25)) (x), a QQ-style
+                // scatter on a probability x-axis.
+                let mut sorted = xs.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                let n = sorted.len();
+                let nf = n as f64;
+                let data: Vec<(f64, f64)> = sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &emp)| {
+                        let i = idx as f64 + 1.0;
+                        let theo = phi_inv((i - 0.375) / (nf + 0.25));
+                        (theo, emp)
+                    })
+                    .collect();
+                DrawingSpec {
+                    title: "The UNIVARIATE Procedure".to_string(),
+                    x_label: "Normal Percentiles".to_string(),
+                    y_label: label,
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                }
+            }
+            UnivariatePlotKind::CdfPlot => {
+                // Empirical CDF: sorted data (x) vs F_n(x) = i/n (y).
+                let mut sorted = xs.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                let n = sorted.len();
+                let nf = n as f64;
+                let data: Vec<(f64, f64)> = sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &v)| (v, (idx as f64 + 1.0) / nf * 100.0))
+                    .collect();
+                DrawingSpec {
+                    title: "The UNIVARIATE Procedure".to_string(),
+                    x_label: label,
+                    y_label: "Cumulative Percent".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                }
+            }
+            UnivariatePlotKind::PpPlot => {
+                // Probability-probability plot: empirical CDF (i-0.5)/n (x) vs
+                // theoretical normal CDF Phi((x_(i)-mean)/std) (y).
+                let mut sorted = xs.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                let n = sorted.len();
+                let nf = n as f64;
+                let mean = if n > 0 { sorted.iter().sum::<f64>() / nf } else { 0.0 };
+                let std = sample_std(&sorted).unwrap_or(1.0);
+                let std = if std > 0.0 { std } else { 1.0 };
+                let data: Vec<(f64, f64)> = sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &v)| {
+                        let emp = (idx as f64 + 0.5) / nf;
+                        let theo = probnorm((v - mean) / std);
+                        (emp, theo)
+                    })
+                    .collect();
+                DrawingSpec {
+                    title: "The UNIVARIATE Procedure".to_string(),
+                    x_label: "Empirical Cumulative Probability".to_string(),
+                    y_label: "Normal Cumulative Probability".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                }
+            }
         };
 
         session.graphics_image_count += 1;
@@ -1657,11 +1757,15 @@ fn ad_pvalue(a: f64) -> f64 {
 ///
 /// Moments and Basic Measures mean/std/variance use the weighted formulas
 /// (see file header). Skewness/Kurtosis are computed on the UNWEIGHTED values
-/// (documented divergence). Quantiles and Extreme Observations are OMITTED.
+/// (documented divergence). Quantiles use the SAS WEIGHTED Definition 5
+/// (`weighted_quantile_def5`); the Extreme Observations section lists the raw
+/// extreme VALUES with their obs numbers (extremes are not weighted in SAS).
+/// `obs_pairs` are the usable `(value, obs_number)` pairs in row order.
 fn emit_variable_weighted(
     session: &mut Session,
     name: &str,
     pairs: &[(f64, f64)],
+    obs_pairs: &[(f64, usize)],
     n_missing: usize,
     n_total: usize,
 ) {
@@ -1672,6 +1776,11 @@ fn emit_variable_weighted(
     let n = pairs.len();
     let nf = n as f64;
     let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
+
+    // Pairs sorted ascending by value, for the weighted quantiles / median /
+    // mode / range (weights stay attached to their value).
+    let mut sorted_pairs: Vec<(f64, f64)> = pairs.to_vec();
+    sorted_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
     let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
     let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
@@ -1731,11 +1840,26 @@ fn emit_variable_weighted(
         &m_rows,
     );
 
-    // ── Basic Statistical Measures ── (weighted mean/std/variance; mode,
-    // median, range, IQR depend on quantiles → deferred, shown as missing).
+    // ── Basic Statistical Measures ── (weighted mean/std/variance; weighted
+    // median/Q1/Q3/range via the weighted Definition-5 quantiles; mode is the
+    // most frequent VALUE, as in the unweighted path).
     session.listing.blank();
     centered(session, "Basic Statistical Measures");
     session.listing.blank();
+    let median = weighted_quantile_def5(&sorted_pairs, 0.50);
+    let q1 = weighted_quantile_def5(&sorted_pairs, 0.25);
+    let q3 = weighted_quantile_def5(&sorted_pairs, 0.75);
+    let iqr = match (q3, q1) {
+        (Some(a), Some(b)) => Some(a - b),
+        _ => None,
+    };
+    let sorted_vals: Vec<f64> = sorted_pairs.iter().map(|(x, _)| *x).collect();
+    let mode_v = mode(&sorted_vals);
+    let range = if n > 0 {
+        Some(sorted_vals[n - 1] - sorted_vals[0])
+    } else {
+        None
+    };
     let basic_rows: Vec<Vec<String>> = vec![
         vec![
             "Mean".into(),
@@ -1745,16 +1869,21 @@ fn emit_variable_weighted(
         ],
         vec![
             "Median".into(),
-            ".".into(),
+            fmt_opt(median),
             "Variance".into(),
             fmt_opt(variance),
         ],
-        vec!["Mode".into(), ".".into(), "Range".into(), ".".into()],
+        vec![
+            "Mode".into(),
+            fmt_opt(mode_v),
+            "Range".into(),
+            fmt_opt(range),
+        ],
         vec![
             "".into(),
             "".into(),
             "Interquartile Range".into(),
-            ".".into(),
+            fmt_opt(iqr),
         ],
     ];
     session.listing.write_table(
@@ -1768,11 +1897,73 @@ fn emit_variable_weighted(
         &basic_rows,
     );
 
-    // ── Quantiles / Extreme Observations: deferred with WEIGHT (choice (a)). ──
+    // ── Quantiles (Definition 5, weighted) ──
     session.listing.blank();
-    centered(
-        session,
-        "Quantiles and Extreme Observations are not computed with a WEIGHT variable.",
+    centered(session, "Quantiles (Definition 5)");
+    session.listing.blank();
+    let levels: &[(&str, f64)] = &[
+        ("100% Max", 1.0),
+        ("99%", 0.99),
+        ("95%", 0.95),
+        ("90%", 0.90),
+        ("75% Q3", 0.75),
+        ("50% Median", 0.50),
+        ("25% Q1", 0.25),
+        ("10%", 0.10),
+        ("5%", 0.05),
+        ("1%", 0.01),
+        ("0% Min", 0.0),
+    ];
+    let q_rows: Vec<Vec<String>> = levels
+        .iter()
+        .map(|(label, p)| {
+            vec![
+                label.to_string(),
+                fmt_opt(weighted_quantile_def5(&sorted_pairs, *p)),
+            ]
+        })
+        .collect();
+    session.listing.write_table(
+        &["Quantile".into(), "Estimate".into()],
+        &[Align::Left, Align::Right],
+        &q_rows,
+    );
+
+    // ── Extreme Observations ── (raw extreme VALUES + obs numbers; extremes
+    // are not weighted, matching SAS).
+    session.listing.blank();
+    centered(session, "Extreme Observations");
+    session.listing.blank();
+    let mut by_val: Vec<(f64, usize)> = obs_pairs.to_vec();
+    by_val.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
+    let k = by_val.len().min(5);
+    let lowest = &by_val[..k];
+    let highest = &by_val[by_val.len().saturating_sub(5)..];
+    let mut ext_rows: Vec<Vec<String>> = Vec::new();
+    for i in 0..5 {
+        let (lv, lo) = match lowest.get(i) {
+            Some((v, o)) => (fmt_num(*v), format!("{o}")),
+            None => (String::new(), String::new()),
+        };
+        let (hv, ho) = match highest.get(i) {
+            Some((v, o)) => (fmt_num(*v), format!("{o}")),
+            None => (String::new(), String::new()),
+        };
+        ext_rows.push(vec![lv, lo, hv, ho]);
+    }
+    session.listing.write_table(
+        &[
+            "Lowest Value".into(),
+            "Lowest Obs".into(),
+            "Highest Value".into(),
+            "Highest Obs".into(),
+        ],
+        &[Align::Right, Align::Right, Align::Right, Align::Right],
+        &ext_rows,
     );
 
     // ── Missing Values ──
@@ -2133,14 +2324,45 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    #[cfg(not(feature = "graphics"))]
     #[test]
-    fn probplot_with_ods_defers_with_note() {
+    fn probplot_with_ods_no_feature_defers_image() {
         let plots = vec![UnivariatePlot {
             kind: UnivariatePlotKind::ProbPlot,
             var: Some("x".into()),
         }];
         let log = run_plots(true, plots, None, None);
-        assert!(log.contains("PROBPLOT: plot deferred"), "log: {log}");
+        // M33.2: PROBPLOT now shares the standard "image deferred" NOTE.
+        assert!(log.contains("image deferred"), "log: {log}");
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn cdfplot_ppplot_with_ods_no_feature_defer_image() {
+        for kind in [UnivariatePlotKind::CdfPlot, UnivariatePlotKind::PpPlot] {
+            let plots = vec![UnivariatePlot { kind, var: Some("x".into()) }];
+            let log = run_plots(true, plots, None, None);
+            assert!(log.contains("image deferred"), "{:?} log: {log}", kind);
+        }
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn probplot_cdfplot_ppplot_with_feature_create_images() {
+        for (kind, stem) in [
+            (UnivariatePlotKind::ProbPlot, "univtest_prob"),
+            (UnivariatePlotKind::CdfPlot, "univtest_cdf"),
+            (UnivariatePlotKind::PpPlot, "univtest_pp"),
+        ] {
+            let dir = std::env::temp_dir();
+            let plots = vec![UnivariatePlot { kind, var: Some("x".into()) }];
+            let log = run_plots(true, plots, Some(dir.clone()), Some(stem.into()));
+            assert!(log.contains("written"), "{:?} log: {log}", kind);
+            let p = dir.join(format!("{stem}_1.png"));
+            assert!(p.exists(), "image not created: {p:?}");
+            assert!(p.metadata().unwrap().len() > 0);
+            let _ = std::fs::remove_file(&p);
+        }
     }
 
     #[test]
@@ -2557,12 +2779,13 @@ mod tests {
         assert!(listing.contains("Moments"), "listing: {listing}");
         // Weighted: Sum Weights = 6, Sum Observations = 14.
         assert!(listing.contains("Sum Weights"), "listing: {listing}");
-        // Quantiles section omitted; replacement note shown instead.
+        // M33.2: weighted Quantiles + Extreme Observations are now emitted.
+        assert!(listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
+        assert!(listing.contains("Extreme Observations"), "listing: {listing}");
         assert!(
-            listing.contains("not computed with a WEIGHT variable"),
+            !listing.contains("not computed with a WEIGHT variable"),
             "listing: {listing}"
         );
-        assert!(!listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
         // The excluded (w<=0) row counts as a missing value.
         assert!(listing.contains("Missing Values"), "listing: {listing}");
     }
@@ -2591,10 +2814,59 @@ mod tests {
         let listing = session.listing.into_string();
         // With equal weights the weighted mean equals the plain mean (20).
         assert!(listing.contains("Mean"), "listing: {listing}");
-        // The Quantiles (Definition 5) table is not emitted.
-        assert!(!listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
-        // The Extreme Observations table header is not emitted (only the
-        // replacement note mentions the phrase).
-        assert!(!listing.contains("Lowest Value"), "listing: {listing}");
+        // M33.2: the weighted Quantiles + Extremes tables are now emitted.
+        // With unit weights the weighted quantiles reduce to Definition 5:
+        // median of [10,20,30] = 20.
+        assert!(listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
+        assert!(listing.contains("Lowest Value"), "listing: {listing}");
+    }
+
+    // ──────────────────── weighted quantile (M33.2) tests ───────────────────
+
+    fn wq(pairs: &[(f64, f64)], p: f64) -> f64 {
+        let mut s = pairs.to_vec();
+        s.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        weighted_quantile_def5(&s, p).unwrap()
+    }
+
+    #[test]
+    fn weighted_quantile_def5_oracle() {
+        // Fixture data: x=[1,2,3,4], w=[1,2,3,4].
+        //   Total weight W = 1+2+3+4 = 10.
+        //   Cumulative weights W_i: 1, 3, 6, 10.
+        // For p: target t = p*W; first i with W_i >= t; if W_i==t exactly →
+        // average x(i),x(i+1), else x(i).
+        let pairs = [(1.0, 1.0), (2.0, 2.0), (3.0, 3.0), (4.0, 4.0)];
+        // Q1 p=0.25: t=2.5 → W_2=3 is first ≥ → x(2)=2.
+        assert_eq!(wq(&pairs, 0.25), 2.0);
+        // Median p=0.5: t=5.0 → W_3=6 first ≥, 6≠5 → x(3)=3.
+        assert_eq!(wq(&pairs, 0.50), 3.0);
+        // Q3 p=0.75: t=7.5 → W_4=10 first ≥ → x(4)=4.
+        assert_eq!(wq(&pairs, 0.75), 4.0);
+        // p=0.10: t=1.0 == W_1 exactly → (x(1)+x(2))/2 = (1+2)/2 = 1.5.
+        assert_eq!(wq(&pairs, 0.10), 1.5);
+        // p=0.05: t=0.5 → W_1=1 first ≥ → x(1)=1.
+        assert_eq!(wq(&pairs, 0.05), 1.0);
+        // Edges.
+        assert_eq!(wq(&pairs, 1.0), 4.0); // 100% Max
+        assert_eq!(wq(&pairs, 0.0), 1.0); // 0% Min
+    }
+
+    #[test]
+    fn weighted_quantile_reduces_to_def5_when_unit_weights() {
+        // Unit weights → must equal the unweighted Definition 5 results.
+        let xs = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let pairs: Vec<(f64, f64)> = xs.iter().map(|&x| (x, 1.0)).collect();
+        for &p in &[0.0, 0.25, 0.5, 0.75, 1.0, 0.1, 0.9] {
+            let mut sp = pairs.clone();
+            sp.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let mut s = xs.to_vec();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(
+                weighted_quantile_def5(&sp, p),
+                quantile_def5(&s, p),
+                "mismatch at p={p}"
+            );
+        }
     }
 }

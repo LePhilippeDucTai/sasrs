@@ -1,0 +1,133 @@
+---
+source: tests/snapshot.rs
+assertion_line: 50
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m33/print_options.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sort data=d.class out=class;
+3       by sex;
+4     run;
+NOTE: PROCEDURE SORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'PRINT with SUM + DOUBLE + N (no BY)';
+
+6     proc print data=class double n;
+7       var name sex height weight;
+8       sum height weight;
+9     run;
+NOTE: There were 19 observations read from the data set WORK.CLASS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title 'PRINT with BY sex, ID name, SUM per group + grand total, N per group';
+
+11    proc print data=class n;
+12      by sex;
+13      id name;
+14      var age height weight;
+15      sum height weight;
+16    run;
+NOTE: There were 19 observations read from the data set WORK.CLASS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                              PRINT with SUM + DOUBLE + N (no BY)
+
+                           Obs    name       sex    height    weight
+
+                             1    Alice      F        56.5        84
+
+                             2    Barbara    F        65.3        98
+
+                             3    Carol      F        62.8     102.5
+
+                             4    Jane       F        59.8      84.5
+
+                             5    Janet      F        62.5     112.5
+
+                             6    Joyce      F        51.3      50.5
+
+                             7    Judy       F        64.3        90
+
+                             8    Louise     F        56.3        77
+
+                             9    Mary       F        66.5       112
+
+                            10    Alfred     M          69     112.5
+
+                            11    Henry      M        63.5     102.5
+
+                            12    James      M        57.3        83
+
+                            13    Jeffrey    M        62.5        84
+
+                            14    John       M          59      99.5
+
+                            15    Philip     M          72       150
+
+                            16    Robert     M        64.8       128
+
+                            17    Ronald     M          67       133
+
+                            18    Thomas     M        57.5        85
+
+                            19    William    M        66.5       112
+
+                                                    1184.4    1900.5
+
+N = 19
+
+              PRINT with BY sex, ID name, SUM per group + grand total, N per group
+
+sex=F
+
+                               name       age    height    weight
+
+                               Alice       13      56.5        84
+                               Barbara     13      65.3        98
+                               Carol       14      62.8     102.5
+                               Jane        12      59.8      84.5
+                               Janet       15      62.5     112.5
+                               Joyce       11      51.3      50.5
+                               Judy        14      64.3        90
+                               Louise      12      56.3        77
+                               Mary        15      66.5       112
+
+                                                  545.3       811
+
+N = 9
+
+sex=M
+
+                               name       age    height    weight
+
+                               Alfred      14        69     112.5
+                               Henry       14      63.5     102.5
+                               James       12      57.3        83
+                               Jeffrey     13      62.5        84
+                               John        12        59      99.5
+                               Philip      16        72       150
+                               Robert      12      64.8       128
+                               Ronald      15        67       133
+                               Thomas      11      57.5        85
+                               William     15      66.5       112
+
+                                                  639.1    1089.5
+
+N = 10
+
+Grand total: height=1184.4 weight=1900.5
+
+==== EXIT 0 ====

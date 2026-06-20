@@ -85,6 +85,16 @@ pub struct MeansAst {
     /// Confidence level alpha for CLM/LCLM/UCLM (SAS default 0.05). Only the
     /// CI statistics consult it; it never affects the default output.
     pub alpha: f64,
+    /// PRINTALLTYPES PROC option (M33.3). When false (default), the printed
+    /// table shows only the all-CLASS-combined `_TYPE_`; when true, every
+    /// generated `_TYPE_` subtable is printed.
+    pub printalltypes: bool,
+    /// WAYS values (M33.3): each requests the `_TYPE_` rows whose number of
+    /// active CLASS variables equals the value. Empty → no WAYS restriction.
+    pub ways: Vec<usize>,
+    /// TYPES specifications (M33.3): each entry is a set of CLASS variable
+    /// names (a specific crossing, e.g. `(a*b)`). Empty → no TYPES restriction.
+    pub types: Vec<Vec<String>>,
     pub output: Option<MeansOutput>,
 }
 
@@ -98,11 +108,38 @@ pub struct MeansOutput {
 const STAT_KEYWORDS: &[&str] = &[
     "n", "nmiss", "mean", "std", "stddev", "min", "max", "sum", "range", "stderr", "cv", "median",
     "clm", "lclm", "uclm",
+    // Percentile keywords (M33.3) — Definition 5, shared with PROC UNIVARIATE.
+    "p1", "p5", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80", "p90", "p95",
+    "p99", "q1", "q3", "qrange",
 ];
 
 fn is_stat_keyword(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
     STAT_KEYWORDS.iter().any(|k| *k == l)
+}
+
+/// Map a percentile keyword to its target fraction `p` (None if not a single
+/// percentile keyword). `Q1`=`P25`, `Q3`=`P75`, `P50`=`MEDIAN`. `QRANGE` is
+/// handled separately (it is a difference of two percentiles).
+fn percentile_fraction(stat: &str) -> Option<f64> {
+    Some(match stat {
+        "p1" => 0.01,
+        "p5" => 0.05,
+        "p10" => 0.10,
+        "p20" => 0.20,
+        "p25" | "q1" => 0.25,
+        "p30" => 0.30,
+        "p40" => 0.40,
+        "p50" => 0.50,
+        "p60" => 0.60,
+        "p70" => 0.70,
+        "p75" | "q3" => 0.75,
+        "p80" => 0.80,
+        "p90" => 0.90,
+        "p95" => 0.95,
+        "p99" => 0.99,
+        _ => return None,
+    })
 }
 
 /// Parse `proc means [data=a] [noprint] [stat...] ; [class ...;] [var ...;]
@@ -111,6 +148,7 @@ fn is_stat_keyword(s: &str) -> bool {
 pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut data: Option<DatasetRef> = None;
     let mut noprint = false;
+    let mut printalltypes = false;
     let mut stats: Vec<String> = Vec::new();
     // SAS default confidence level. Stays 0.05 unless ALPHA= is given; only
     // the CI statistics read it, so the default path is unaffected.
@@ -126,8 +164,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            crate::procs::common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
             ts.next();
@@ -136,9 +173,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             // explicit PRINT — undo a noprint default (e.g. PROC SUMMARY).
             ts.next();
             noprint = false;
-        } else if ts.peek().is_kw("alpha") {
+        } else if ts.peek().is_kw("printalltypes") {
+            // PRINTALLTYPES (M33.3): print every generated _TYPE_ subtable.
             ts.next();
-            expect_eq(ts, "ALPHA")?;
+            printalltypes = true;
+        } else if ts.peek().is_kw("alpha") {
+            crate::procs::common::expect_eq(ts, "ALPHA")?;
             let tok = ts.peek().clone();
             let val = match tok.kind {
                 TokenKind::Num(f) => f,
@@ -184,45 +224,51 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut var: Vec<String> = Vec::new();
     let mut by: Vec<(String, bool)> = Vec::new();
     let mut weight: Option<String> = None;
+    let mut ways: Vec<usize> = Vec::new();
+    let mut types: Vec<Vec<String>> = Vec::new();
     let mut output: Option<MeansOutput> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    crate::procs::common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "class" => {
                 ts.next();
+                class = crate::procs::common::parse_class(ts)?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
-            ts.next();
-            class = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by = parse_by_list(ts)?;
-        } else if ts.peek().is_kw("weight") {
-            ts.next();
-            weight = Some(parse_single_var(ts, "WEIGHT")?);
-        } else if ts.peek().is_kw("output") {
-            ts.next();
-            output = Some(parse_output(ts)?);
-        } else {
-            // Unknown sub-statement: skip it (recovery, like sort/print).
-            ts.skip_to_semi();
-        }
-    }
+            "ways" => {
+                ts.next();
+                ways = parse_ways(ts)?;
+                true
+            }
+            "types" => {
+                ts.next();
+                types = parse_types(ts)?;
+                true
+            }
+            "var" => {
+                ts.next();
+                var = crate::procs::common::parse_var_list(ts)?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by = parse_by_list(ts)?;
+                true
+            }
+            "weight" => {
+                ts.next();
+                weight = Some(crate::procs::common::parse_weight(ts)?);
+                true
+            }
+            "output" => {
+                ts.next();
+                output = Some(parse_output(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(MeansAst {
         data,
@@ -234,69 +280,102 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
         by,
         weight,
         alpha,
+        printalltypes,
+        ways,
+        types,
         output,
     })
 }
 
-/// Parse a single-variable statement body (after the keyword was consumed),
-/// e.g. `weight <var> ;`. Errors if no variable or extra tokens before `;`.
-pub(crate) fn parse_single_var(ts: &mut StatementStream, kw: &str) -> Result<String> {
-    let tok = ts.peek().clone();
-    let name = match tok.ident() {
-        Some(n) => {
-            ts.next();
-            n.to_string()
-        }
-        None => {
-            return Err(SasError::parse(
-                format!("expected a variable name in the {kw} statement"),
-                tok.span,
-            ));
-        }
-    };
-    // Consume the terminating `;` (tolerate trailing tokens by skipping).
-    if ts.peek().kind == TokenKind::Semi {
-        ts.next();
-    } else {
-        ts.skip_to_semi();
-    }
-    Ok(name)
-}
-
-/// Parse a BY statement body (after "by" consumed), through its `;`.
-/// `by [descending] v1 [descending] v2 ... ;` — mirrors PROC SORT.
-pub(crate) fn parse_by_list(ts: &mut StatementStream) -> Result<Vec<(String, bool)>> {
-    let mut by: Vec<(String, bool)> = Vec::new();
+/// Parse a WAYS statement body (after `ways` was consumed), through its `;`.
+/// `ways 0 1 2;` — a list of non-negative integers (the desired numbers of
+/// active CLASS variables). Errors on a non-integer token.
+fn parse_ways(ts: &mut StatementStream) -> Result<Vec<usize>> {
+    let mut out: Vec<usize> = Vec::new();
     loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        let descending = if ts.peek().is_kw("descending") {
-            ts.next();
-            true
-        } else {
-            false
-        };
-        let tok = ts.peek().clone();
-        match tok.ident() {
-            Some(name) => {
+        match ts.peek().kind {
+            TokenKind::Semi => {
                 ts.next();
-                by.push((name.to_string(), descending));
+                break;
             }
-            None => {
+            TokenKind::Eof => break,
+            TokenKind::Num(f) if f >= 0.0 && f.fract() == 0.0 => {
+                ts.next();
+                out.push(f as usize);
+            }
+            _ => {
                 return Err(SasError::parse(
-                    "expected a variable name in the BY statement",
-                    tok.span,
+                    "expected a non-negative integer in the WAYS statement",
+                    ts.peek().span,
                 ));
             }
         }
     }
-    Ok(by)
+    Ok(out)
 }
+
+/// Parse a TYPES statement body (after `types` was consumed), through its `;`.
+/// `types () (a) (a*b) a*b;` — a space-separated list of CLASS crossings; each
+/// crossing is a `*`-joined set of CLASS names, optionally parenthesized. `()`
+/// denotes the empty crossing (overall, `_TYPE_`=0). Returns one `Vec<String>`
+/// per crossing (the empty crossing → an empty inner vector).
+fn parse_types(ts: &mut StatementStream) -> Result<Vec<Vec<String>>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    loop {
+        match ts.peek().kind {
+            TokenKind::Semi => {
+                ts.next();
+                break;
+            }
+            TokenKind::Eof => break,
+            TokenKind::LParen => {
+                ts.next(); // '('
+                let mut crossing: Vec<String> = Vec::new();
+                loop {
+                    if ts.peek().kind == TokenKind::RParen {
+                        ts.next();
+                        break;
+                    }
+                    let name = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                        SasError::parse("expected a CLASS name in TYPES", ts.peek().span)
+                    })?;
+                    ts.next();
+                    crossing.push(name);
+                    if ts.peek().kind == TokenKind::Star {
+                        ts.next();
+                    }
+                }
+                out.push(crossing);
+            }
+            _ => {
+                // Un-parenthesized crossing: name [* name]*.
+                let mut crossing: Vec<String> = Vec::new();
+                let name = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                    SasError::parse("expected a CLASS name in TYPES", ts.peek().span)
+                })?;
+                ts.next();
+                crossing.push(name);
+                while ts.peek().kind == TokenKind::Star {
+                    ts.next();
+                    let name = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                        SasError::parse("expected a CLASS name after '*' in TYPES", ts.peek().span)
+                    })?;
+                    ts.next();
+                    crossing.push(name);
+                }
+                out.push(crossing);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a single-variable statement body (after the keyword was consumed),
+/// e.g. `weight <var> ;`. Errors if no variable or extra tokens before `;`.
+// `parse_single_var` et `parse_by_list` ont été déplacés vers `procs::common`
+// (M31.2). Ré-export `pub(crate)` pour les appelants existants
+// (`means.rs` lui-même, `univariate.rs`, `rank.rs` via `means::parse_by_list`).
+pub(crate) use crate::procs::common::{parse_by as parse_by_list, parse_single_var};
 
 /// Parse the OUTPUT statement body (after "output" was consumed), through
 /// its terminating `;`. `output out=lib.t [stat(var)=name ...] ;`
@@ -313,8 +392,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<MeansOutput> {
             break;
         }
         if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            crate::procs::common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(stat) = ts.peek().ident().map(str::to_string) {
             // Expect `stat(var)=name`.
@@ -384,30 +462,6 @@ fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &MeansAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Compute one statistic over the NON-MISSING numeric values `xs` of a
 /// group. `n`/`nmiss` are passed the group's non-missing/missing counts
 /// separately because they depend on the missing tally, not on `xs`.
@@ -428,6 +482,30 @@ pub fn compute(stat: &str, xs: &[f64], n_missing: usize, alpha: f64) -> Value {
         };
         return clm_value(stat, mean, stderr, n, alpha);
     }
+    // Percentile keywords (M33.3): Definition 5 via UNIVARIATE's shared
+    // `quantile_def5`. `qrange` = P75 − P25. Sort the non-missing values once.
+    if percentile_fraction(stat).is_some() || stat == "qrange" {
+        if n == 0 {
+            return Value::missing();
+        }
+        let mut sorted: Vec<f64> = xs.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        if stat == "qrange" {
+            return match (
+                crate::procs::univariate::quantile_def5(&sorted, 0.75),
+                crate::procs::univariate::quantile_def5(&sorted, 0.25),
+            ) {
+                (Some(q3), Some(q1)) => Value::Num(q3 - q1),
+                _ => Value::missing(),
+            };
+        }
+        let p = percentile_fraction(stat).unwrap();
+        return match crate::procs::univariate::quantile_def5(&sorted, p) {
+            Some(q) => Value::Num(q),
+            None => Value::missing(),
+        };
+    }
+
     match stat {
         "n" => Value::Num(n as f64),
         "nmiss" => Value::Num(n_missing as f64),
@@ -591,6 +669,12 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alp
                 None => Value::missing(),
             }
         }
+        // Weighted percentiles deferred (like MEDIAN): computed UNWEIGHTED on
+        // the usable values via Definition 5. Documented divergence.
+        other if percentile_fraction(other).is_some() || other == "qrange" => {
+            let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
+            compute(other, &xs, n_excluded, alpha)
+        }
         _ => Value::missing(),
     }
 }
@@ -668,9 +752,63 @@ fn fmt_stat_cell(stat: &str, v: &Value) -> String {
     }
 }
 
+/// `_TYPE_` bitmask for a set of ACTIVE class positions `active` (indices into
+/// the CLASS list, 0-based, left→right) given `k` CLASS variables. The LSB
+/// corresponds to the LAST class variable — identical convention to the OUTPUT
+/// path. Empty `active` → 0 (the overall row).
+fn type_mask(active: &[usize], k: usize) -> u64 {
+    let mut ty: u64 = 0;
+    for &i in active {
+        ty |= 1u64 << (k - 1 - i);
+    }
+    ty
+}
+
+/// Resolve the WAYS/TYPES restrictions (M33.3) into the SET of `_TYPE_` values
+/// to keep. Returns `None` when neither WAYS nor TYPES is given (no
+/// restriction — every `_TYPE_` is kept, preserving the default path). `k` is
+/// the number of CLASS variables; `class` the CLASS names (for TYPES lookups).
+fn allowed_types(ast: &MeansAst, class: &[String], k: usize) -> Result<Option<std::collections::BTreeSet<u64>>> {
+    if ast.ways.is_empty() && ast.types.is_empty() {
+        return Ok(None);
+    }
+    let mut set: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+
+    // WAYS n: keep every _TYPE_ whose number of active CLASS vars == n. Enumerate
+    // all 2^k subsets and select those whose popcount matches a requested way.
+    for &w in &ast.ways {
+        for mask in 0u32..(1u32 << k) {
+            let active: Vec<usize> = (0..k).filter(|&i| (mask >> i) & 1 == 1).collect();
+            if active.len() == w {
+                set.insert(type_mask(&active, k));
+            }
+        }
+    }
+
+    // TYPES (crossing ...): keep the specific _TYPE_ for each named crossing.
+    for crossing in &ast.types {
+        let mut active: Vec<usize> = Vec::with_capacity(crossing.len());
+        for name in crossing {
+            let pos = class
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    SasError::runtime(format!(
+                        "The variable {} in the TYPES statement is not a CLASS variable.",
+                        name.to_uppercase()
+                    ))
+                })?;
+            active.push(pos);
+        }
+        set.insert(type_mask(&active, k));
+    }
+
+    Ok(Some(set))
+}
+
 /// Execute PROC MEANS / SUMMARY. Called by `procs::execute_proc`.
 pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = crate::procs::common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 
@@ -782,6 +920,37 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
     };
     let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
 
+    // --- WAYS / TYPES restriction (M33.3): the set of _TYPE_ values to keep,
+    // or None for "no restriction" (default path). ---
+    let k = class_cols.len();
+    let allowed = allowed_types(ast, &ast.class, k)?;
+
+    // Which _TYPE_ subtables the listing prints. SAS default: ONLY the highest
+    // _TYPE_ (all CLASS crossed). PRINTALLTYPES (or any WAYS/TYPES request)
+    // prints each selected _TYPE_ as its own subtable. Without CLASS there is a
+    // single _TYPE_=0 table either way (byte-identical default).
+    let print_types: Vec<u64> = if k == 0 {
+        vec![0]
+    } else if ast.printalltypes || allowed.is_some() {
+        // Every selected _TYPE_, ascending. With no WAYS/TYPES but
+        // PRINTALLTYPES → all 2^k types.
+        let mut v: Vec<u64> = match &allowed {
+            Some(set) => set.iter().copied().collect(),
+            None => (0u32..(1u32 << k))
+                .map(|mask| {
+                    let active: Vec<usize> = (0..k).filter(|&i| (mask >> i) & 1 == 1).collect();
+                    type_mask(&active, k)
+                })
+                .collect(),
+        };
+        v.sort_unstable();
+        v.dedup();
+        v
+    } else {
+        // Default: only the highest _TYPE_ (all CLASS active) → byte-identical.
+        vec![type_mask(&(0..k).collect::<Vec<_>>(), k)]
+    };
+
     // --- Report ---
     if !ast.noprint {
         // Title printed once per proc invocation.
@@ -798,18 +967,43 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             if !by_names.is_empty() {
                 emit_by_heading(session, &by_names, by_key);
             }
-            emit_report_group(
-                session,
-                &ds,
-                &class_cols,
-                &class_values,
-                &var_cols,
-                &var_values,
-                weight_values.as_deref(),
-                &report_stats,
-                ast.alpha,
-                grp_rows,
-            );
+            // Default single-type path stays byte-identical: when k==0 or the
+            // only printed type is the full crossing AND neither PRINTALLTYPES
+            // nor WAYS/TYPES is active, use the original combined-table emitter.
+            let full_type = type_mask(&(0..k).collect::<Vec<_>>(), k);
+            if !ast.printalltypes
+                && allowed.is_none()
+                && print_types == [full_type]
+            {
+                emit_report_group(
+                    session,
+                    &ds,
+                    &class_cols,
+                    &class_values,
+                    &var_cols,
+                    &var_values,
+                    weight_values.as_deref(),
+                    &report_stats,
+                    ast.alpha,
+                    grp_rows,
+                );
+            } else {
+                for &ty in &print_types {
+                    emit_report_type(
+                        session,
+                        &ds,
+                        &class_cols,
+                        &class_values,
+                        &var_cols,
+                        &var_values,
+                        weight_values.as_deref(),
+                        &report_stats,
+                        ast.alpha,
+                        grp_rows,
+                        ty,
+                    );
+                }
+            }
         }
     }
 
@@ -827,6 +1021,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             &by_cols,
             &by_groups_list,
             ast.alpha,
+            allowed.as_ref(),
         )?;
     }
 
@@ -956,6 +1151,12 @@ fn ods_summary_stat_colname(stat: &str) -> String {
         "clm" => "CLM".to_string(),
         "lclm" => "LowerCLMean".to_string(),
         "uclm" => "UpperCLMean".to_string(),
+        // Percentile keywords (M33.3): canonical PNN / QRANGE column names.
+        p @ ("p1" | "p5" | "p10" | "p20" | "p25" | "p30" | "p40" | "p50" | "p60" | "p70" | "p75"
+        | "p80" | "p90" | "p95" | "p99") => p.to_uppercase(),
+        "q1" => "P25".to_string(),
+        "q3" => "P75".to_string(),
+        "qrange" => "QRange".to_string(),
         other => {
             let mut c = other.chars();
             match c.next() {
@@ -1065,6 +1266,95 @@ fn emit_report_group(
     session.listing.write_table(&headers, &aligns, &rows);
 }
 
+/// Emit one MEANS report subtable for a single `_TYPE_` mask `ty` (M33.3,
+/// PRINTALLTYPES / WAYS / TYPES). Only the CLASS variables ACTIVE in `ty` head
+/// the table; rows are grouped by those active variables within `group_rows`.
+/// `ty`=0 → no CLASS columns (the overall section). The combined default-path
+/// table is still produced by `emit_report_group`; this is the per-type path.
+#[allow(clippy::too_many_arguments)]
+fn emit_report_type(
+    session: &mut Session,
+    ds: &SasDataset,
+    class_cols: &[usize],
+    class_values: &[Vec<Value>],
+    var_cols: &[usize],
+    var_values: &[Vec<Value>],
+    weight_values: Option<&[Value]>,
+    report_stats: &[String],
+    alpha: f64,
+    group_rows: &[usize],
+    ty: u64,
+) {
+    let k = class_cols.len();
+    // Active CLASS positions for this _TYPE_: bit (k-1-i) set ⇔ class i active.
+    let active: Vec<usize> = (0..k).filter(|&i| (ty >> (k - 1 - i)) & 1 == 1).collect();
+
+    let mut headers: Vec<String> = Vec::new();
+    let mut aligns: Vec<Align> = Vec::new();
+    for &i in &active {
+        let ci = class_cols[i];
+        headers.push(ds.vars[ci].name.clone());
+        aligns.push(match ds.vars[ci].ty {
+            VarType::Num => Align::Right,
+            VarType::Char => Align::Left,
+        });
+    }
+    headers.push("Variable".to_string());
+    aligns.push(Align::Left);
+    for s in report_stats {
+        for h in stat_report_headers(s, alpha) {
+            headers.push(h);
+            aligns.push(Align::Right);
+        }
+    }
+
+    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
+        Some(wv) => {
+            let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
+            for s in report_stats {
+                for cell in stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, alpha)) {
+                    row.push(cell);
+                }
+            }
+        }
+        None => {
+            let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
+            for s in report_stats {
+                for cell in stat_report_cells(s, &|st| compute(st, &xs, nmiss, alpha)) {
+                    row.push(cell);
+                }
+            }
+        }
+    };
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    if active.is_empty() {
+        // Overall (_TYPE_=0): one row per analysis variable over all group rows.
+        for (vi, vname_idx) in var_cols.iter().enumerate() {
+            let mut row = vec![ds.vars[*vname_idx].name.clone()];
+            push_cells(&mut row, vi, group_rows);
+            rows.push(row);
+        }
+    } else {
+        let active_refs: Vec<&Vec<Value>> =
+            active.iter().map(|&i| &class_values[i]).collect();
+        let groups = group_by_keys_subset(&active_refs, group_rows);
+        for (key, grp_rows) in &groups {
+            for (vi, vname_idx) in var_cols.iter().enumerate() {
+                let mut row: Vec<String> = Vec::new();
+                for kv in key {
+                    row.push(class_cell(kv));
+                }
+                row.push(ds.vars[*vname_idx].name.clone());
+                push_cells(&mut row, vi, grp_rows);
+                rows.push(row);
+            }
+        }
+    }
+
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
 /// Report column header(s) for a stat. Most stats map to one header; the
 /// confidence-limit stats produce alpha-dependent labels and CLM produces two.
 fn stat_report_headers(stat: &str, alpha: f64) -> Vec<String> {
@@ -1076,7 +1366,32 @@ fn stat_report_headers(stat: &str, alpha: f64) -> Vec<String> {
             format!("Lower {pct}% CL for Mean"),
             format!("Upper {pct}% CL for Mean"),
         ],
-        _ => vec![stat_header(stat).to_string()],
+        _ => match percentile_header(stat) {
+            Some(h) => vec![h],
+            None => vec![stat_header(stat).to_string()],
+        },
+    }
+}
+
+/// SAS report header for a percentile keyword (None for non-percentile stats).
+/// SAS prints percentiles as "Nth Pctl" (e.g. "25th Pctl"), `MEDIAN`/`P50` as
+/// "Median", and `QRANGE` as "Quartile Range". `Q1`/`Q3` alias `P25`/`P75`.
+fn percentile_header(stat: &str) -> Option<String> {
+    match stat {
+        "qrange" => Some("Quartile Range".to_string()),
+        "median" | "p50" => Some("Median".to_string()),
+        _ => {
+            let p = percentile_fraction(stat)?;
+            // Whole-number percentile, e.g. 0.25 → 25.
+            let pct = (p * 100.0).round() as i64;
+            let suffix = match (pct % 10, pct % 100) {
+                (1, n) if n != 11 => "st",
+                (2, n) if n != 12 => "nd",
+                (3, n) if n != 13 => "rd",
+                _ => "th",
+            };
+            Some(format!("{pct}{suffix} Pctl"))
+        }
     }
 }
 
@@ -1161,6 +1476,7 @@ fn write_output(
     by_cols: &[crate::procs::common::ByCol],
     by_groups_list: &[(Vec<Value>, Vec<usize>)],
     alpha: f64,
+    allowed_types: Option<&std::collections::BTreeSet<u64>>,
 ) -> Result<()> {
     let k = class_cols.len();
 
@@ -1223,6 +1539,14 @@ fn write_output(
             let mut ty: u64 = 0;
             for &i in &active {
                 ty |= 1u64 << (k - 1 - i);
+            }
+
+            // WAYS / TYPES restriction (M33.3): skip _TYPE_ rows not requested.
+            // None → no restriction (default path, every _TYPE_ emitted).
+            if let Some(set) = allowed_types {
+                if !set.contains(&ty) {
+                    continue;
+                }
             }
 
             // Group this BY group's rows by the active class variables.
@@ -1490,6 +1814,205 @@ mod tests {
         assert_eq!(compute("std", &xs, 1, 0.05), Value::Num(2.0));
     }
 
+    // ─────────────────────── percentile keyword tests (M33.3) ───────────────
+
+    #[test]
+    fn compute_percentiles_def5_hand_oracle() {
+        // sashelp.class heights (n=19) sorted ascending:
+        //  51.3 56.3 56.5 57.3 57.5 59.0 59.8 62.5 62.5 62.8
+        //  63.5 64.3 64.8 65.3 66.5 66.5 67.0 69.0 72.0
+        // Definition 5: np=19*p, j=floor(np), g=np-j;
+        //   g==0 → (x[j]+x[j+1])/2 ; else → x[j+1]  (1-indexed)
+        let xs = vec![
+            69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5,
+            72.0, 64.8, 67.0, 57.5, 66.5,
+        ];
+        // P25: np=4.75, j=4, g=.75 → x[5]=57.5
+        assert_eq!(compute("p25", &xs, 0, 0.05), Value::Num(57.5));
+        assert_eq!(compute("q1", &xs, 0, 0.05), Value::Num(57.5));
+        // P50/median: np=9.5, j=9, g=.5 → x[10]=62.8
+        assert_eq!(compute("p50", &xs, 0, 0.05), Value::Num(62.8));
+        assert_eq!(compute("median", &xs, 0, 0.05), Value::Num(62.8));
+        // P75: np=14.25, j=14, g=.25 → x[15]=66.5
+        assert_eq!(compute("p75", &xs, 0, 0.05), Value::Num(66.5));
+        assert_eq!(compute("q3", &xs, 0, 0.05), Value::Num(66.5));
+        // P95: np=18.05, j=18, g=.05 → x[19]=72.0
+        assert_eq!(compute("p95", &xs, 0, 0.05), Value::Num(72.0));
+        // QRANGE = P75 − P25 = 66.5 − 57.5 = 9.0
+        assert_eq!(compute("qrange", &xs, 0, 0.05), Value::Num(9.0));
+        // empty → missing for all percentile keywords
+        let empty: Vec<f64> = vec![];
+        assert!(compute("p25", &empty, 0, 0.05).is_missing());
+        assert!(compute("qrange", &empty, 0, 0.05).is_missing());
+    }
+
+    #[test]
+    fn compute_percentile_discontinuity_average() {
+        // [1,2,3,4]: P50 np=2, g=0 → (x[2]+x[3])/2 = 2.5 (matches median).
+        let xs = vec![1.0, 2.0, 3.0, 4.0];
+        assert_eq!(compute("p50", &xs, 0, 0.05), Value::Num(2.5));
+        // P25 np=1, g=0 → (x[1]+x[2])/2 = 1.5
+        assert_eq!(compute("p25", &xs, 0, 0.05), Value::Num(1.5));
+    }
+
+    #[test]
+    fn percentile_keywords_recognized() {
+        for k in [
+            "p1", "p5", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80",
+            "p90", "p95", "p99", "q1", "q3", "qrange",
+        ] {
+            assert!(is_stat_keyword(k), "{k} should be a stat keyword");
+        }
+        let ast = parse_means("proc means data=a p25 median p75 p95 qrange; run;").unwrap();
+        assert_eq!(
+            ast.stats,
+            vec!["p25", "median", "p75", "p95", "qrange"]
+        );
+    }
+
+    #[test]
+    fn percentile_report_headers() {
+        assert_eq!(percentile_header("p25").as_deref(), Some("25th Pctl"));
+        assert_eq!(percentile_header("p1").as_deref(), Some("1st Pctl"));
+        assert_eq!(percentile_header("p5").as_deref(), Some("5th Pctl"));
+        assert_eq!(percentile_header("q3").as_deref(), Some("75th Pctl"));
+        assert_eq!(percentile_header("p50").as_deref(), Some("Median"));
+        assert_eq!(percentile_header("median").as_deref(), Some("Median"));
+        assert_eq!(percentile_header("qrange").as_deref(), Some("Quartile Range"));
+        assert_eq!(percentile_header("mean"), None);
+    }
+
+    // ───────────────────────── WAYS / TYPES tests (M33.3) ────────────────────
+
+    #[test]
+    fn parse_ways_and_types() {
+        let ast = parse_means(
+            "proc means data=a; class g h; ways 0 1 2; types (g) (g*h) h; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.ways, vec![0, 1, 2]);
+        assert_eq!(
+            ast.types,
+            vec![
+                vec!["g".to_string()],
+                vec!["g".to_string(), "h".to_string()],
+                vec!["h".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_printalltypes_option() {
+        let ast = parse_means("proc means data=a printalltypes; class g; run;").unwrap();
+        assert!(ast.printalltypes);
+        let ast2 = parse_means("proc means data=a; class g; run;").unwrap();
+        assert!(!ast2.printalltypes);
+    }
+
+    #[test]
+    fn type_mask_convention() {
+        // k=2: class order [g, h]. LSB ⇔ LAST class (h).
+        //   {} → 0 ; {h}(i=1) → 1 ; {g}(i=0) → 2 ; {g,h} → 3
+        assert_eq!(type_mask(&[], 2), 0);
+        assert_eq!(type_mask(&[1], 2), 1);
+        assert_eq!(type_mask(&[0], 2), 2);
+        assert_eq!(type_mask(&[0, 1], 2), 3);
+    }
+
+    #[test]
+    fn allowed_types_ways_selects_by_popcount() {
+        // k=2; WAYS 1 → the two single-class types {1,2}.
+        let mut ast = means_ast_var_x();
+        ast.class = vec!["g".into(), "h".into()];
+        ast.ways = vec![1];
+        let set = allowed_types(&ast, &ast.class, 2).unwrap().unwrap();
+        assert_eq!(set, [1u64, 2].iter().copied().collect());
+
+        // WAYS 0 2 → overall (0) + full crossing (3).
+        ast.ways = vec![0, 2];
+        let set = allowed_types(&ast, &ast.class, 2).unwrap().unwrap();
+        assert_eq!(set, [0u64, 3].iter().copied().collect());
+    }
+
+    #[test]
+    fn allowed_types_types_selects_specific_crossings() {
+        // class [g,h]; TYPES (g) (g*h) → masks 2 and 3.
+        let mut ast = means_ast_var_x();
+        ast.class = vec!["g".into(), "h".into()];
+        ast.types = vec![vec!["g".into()], vec!["g".into(), "h".into()]];
+        let set = allowed_types(&ast, &ast.class, 2).unwrap().unwrap();
+        assert_eq!(set, [2u64, 3].iter().copied().collect());
+
+        // unknown class name in TYPES → error.
+        ast.types = vec![vec!["zzz".into()]];
+        assert!(allowed_types(&ast, &ast.class, 2).is_err());
+    }
+
+    #[test]
+    fn allowed_types_none_when_unrestricted() {
+        let ast = means_ast_var_x();
+        assert!(allowed_types(&ast, &ast.class, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn execute_ways_restricts_output_rows() {
+        let mut session = make_session();
+        // class g {a,b}, h {1,2}; combos (a,1)(a,2)(b,1).
+        let df = df![
+            "g" => ["a", "a", "b"],
+            "h" => [1.0_f64, 2.0, 1.0],
+            "x" => [5.0_f64, 7.0, 9.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("g"), num_meta("h"), num_meta("x")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = MeansAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            summary: false,
+            noprint: true,
+            stats: vec![],
+            class: vec!["g".into(), "h".into()],
+            var: vec!["x".into()],
+            by: vec![],
+            weight: None,
+            alpha: 0.05,
+            printalltypes: false,
+            ways: vec![1],
+            types: vec![],
+            output: Some(MeansOutput {
+                out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+                specs: vec![("sum".into(), "x".into(), "sx".into())],
+            }),
+        };
+        execute(&ast, &mut session).unwrap();
+        // WAYS 1 → only _TYPE_=1 (h levels {1,2}: 2 rows) and _TYPE_=2 (g
+        // levels {a,b}: 2 rows). Total 4 rows; no _TYPE_=0 or 3.
+        let ty = read_num_col(&session, "O", "_TYPE_");
+        let set: std::collections::BTreeSet<i64> = ty
+            .iter()
+            .map(|v| match v {
+                Value::Num(f) => *f as i64,
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(set, [1i64, 2].iter().copied().collect());
+        assert_eq!(ty.len(), 4);
+
+        // TYPES (g) → only _TYPE_=2 (2 rows).
+        ast.ways = vec![];
+        ast.types = vec![vec!["g".into()]];
+        execute(&ast, &mut session).unwrap();
+        let ty = read_num_col(&session, "O", "_TYPE_");
+        assert_eq!(ty.len(), 2);
+        for v in &ty {
+            assert_eq!(*v, Value::Num(2.0));
+        }
+    }
+
     #[test]
     fn compute_median_even() {
         let xs = vec![1.0, 2.0, 3.0, 4.0];
@@ -1670,6 +2193,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1717,6 +2243,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1780,6 +2309,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("sum".into(), "x".into(), "sx".into())],
@@ -1840,6 +2372,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1869,6 +2404,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1899,6 +2437,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -1936,6 +2477,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -1975,6 +2519,9 @@ mod tests {
             by: vec![("sex".into(), false)],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         };
         execute(&ast, &mut session).unwrap();
@@ -2010,6 +2557,9 @@ mod tests {
             by: vec![("sex".into(), false)],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         };
         let r = execute(&ast, &mut session);
@@ -2045,6 +2595,9 @@ mod tests {
             by: vec![("sex".into(), false)],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -2147,6 +2700,9 @@ mod tests {
             by: vec![],
             weight: Some("w".into()),
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![
@@ -2196,6 +2752,9 @@ mod tests {
             by: vec![("g".into(), false)],
             weight: Some("w".into()),
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -2238,6 +2797,9 @@ mod tests {
             by: vec![],
             weight: Some("w".into()),
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: Some(MeansOutput {
                 out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
                 specs: vec![("mean".into(), "x".into(), "mx".into())],
@@ -2286,6 +2848,9 @@ mod tests {
             by: vec![],
             weight: None,
             alpha: 0.05,
+            printalltypes: false,
+            ways: vec![],
+            types: vec![],
             output: None,
         }
     }

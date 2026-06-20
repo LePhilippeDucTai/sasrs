@@ -29,7 +29,7 @@ use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::VarType;
@@ -59,17 +59,6 @@ pub enum PlotStmt {
 }
 
 // ───────────────────────── Parser helpers ─────────────────────────
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
 
 fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
     match ts.peek().ident().map(str::to_string) {
@@ -185,8 +174,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PlotAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data_ref = Some(ts.parse_dataset_ref()?);
         } else {
             ts.next(); // ignore unknown PROC-level options
@@ -224,29 +212,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<PlotAst> {
 }
 
 // ───────────────────────── Resolve DATA= ─────────────────────────
-
-fn resolve_input(ast: &PlotAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_ref {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
 
 /// Extract a numeric column by name (proper error if absent / non-numeric).
 fn numeric_column(ds: &crate::dataset::SasDataset, name: &str) -> Result<Vec<f64>> {
@@ -417,7 +382,7 @@ pub fn execute(ast: &PlotAst, session: &mut Session) -> Result<()> {
     }
 
     // Read the input dataset once.
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let provider = session.libs.get(&in_libref)?;

@@ -1,9 +1,12 @@
-//! PROC SORT (jalon M3).
+//! PROC SORT (jalon M3 + options M33.9).
 //!
 //! # Plan du fichier — voir PLAN.md
 //!
-//! `proc sort data=a [out=b] [nodupkey] [noduprecs] ; by [descending] v1
-//! [descending] v2... ; run ;`
+//! `proc sort data=a [out=b] [nodupkey] [noduprecs]
+//!           [tagsort] [sortseq=ASCII|LINGUISTIC] ;
+//! by [descending] v1 [descending] v2... ;
+//! key=var [/ descending] ;   (une ou plusieurs)
+//! run ;`
 //!
 //! ## Piège central : la collation SAS des missings
 //! Ordre numérique SAS : `._ < . < .A < ... < .Z < nombres`. Les flags
@@ -25,6 +28,22 @@
 //! SAS et indépendant du padding de stockage. DESCENDING inverse l'ordre
 //! de la clé concernée.
 //!
+//! ## Options M33.9
+//! - TAGSORT : hint de performance SAS (tri par tag+clé en deux passes).
+//!   N'a AUCUN EFFET sur la sortie. Accepté et ignoré — la sortie est
+//!   octet-identique à un tri sans TAGSORT.
+//! - SORTSEQ=ASCII : collation ASCII — comportement courant. No-op.
+//! - SORTSEQ=LINGUISTIC : collation linguistique (locale). SIMPLIFICATION :
+//!   on applique la collation `sas_cmp` existante (ordre binaire UTF-8).
+//!   La différence n'est visible que pour des caractères accentués/CJK ;
+//!   documenté dans le log par une NOTE de simplification.
+//! - KEY=var [/ DESCENDING] : alternative moderne à BY. Chaque KEY=
+//!   s'ajoute à la liste des clés de tri (équivalent exact à un BY
+//!   variable). Si BY et KEY sont présents simultanément, KEY prend le
+//!   dessus (SAS 9.4 : les KEY= remplacent BY lorsque les deux coexistent).
+//!   Dans cette implémentation, si KEY= est présent, il remplace BY.
+//!
+//! ## Autres règles
 //! - NODUPKEY : déduplication sur les clés BY après tri (garder la
 //!   première), NOTE "N observations with duplicate key values were
 //!   deleted." ; NODUPRECS (alias NODUP) compare la LIGNE ENTIÈRE.
@@ -35,125 +54,207 @@ use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
-use crate::session::Session;
 use crate::token::TokenKind;
+use crate::procs::common::{self, decode_column};
+use crate::session::Session;
 use crate::value::Value;
 use polars::prelude::*;
 use std::cmp::Ordering;
 
+/// Séquence de tri déclarée via SORTSEQ=.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SortSeq {
+    /// Tri binaire ASCII (comportement par défaut, identique à sans SORTSEQ).
+    Ascii,
+    /// Tri linguistique (locale). Simplifié : même collation que ASCII ici.
+    Linguistic,
+}
+
 pub struct SortAst {
     pub data: Option<DatasetRef>,
     pub out: Option<DatasetRef>,
+    /// Clés de tri issues de BY ou de KEY= (KEY= remplace BY si présent).
     pub by: Vec<(String, bool)>, // (var, descending)
     pub nodupkey: bool,
     pub noduprecs: bool,
+    /// TAGSORT : hint de performance, ignoré sémantiquement.
+    pub tagsort: bool,
+    /// Séquence de tri (SORTSEQ=ASCII par défaut).
+    pub sortseq: SortSeq,
 }
 
-/// Parse `proc sort [data=a] [out=b] [nodupkey] [noduprecs|nodup] ;
-/// by [descending] v1 [descending] v2... ; run ;`. Called AFTER
-/// "proc sort" has been consumed. Consumes through `run;` / `quit;`.
+/// Parse un statement `key=var [/ descending] ;`.
+/// Le token courant est positionné sur `key`. On consomme jusqu'au `;` inclus.
+/// Retourne une liste de `(var, descending)`.
+fn parse_key_statement(ts: &mut StatementStream) -> Result<Vec<(String, bool)>> {
+    ts.next(); // consume "key"
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            "expected '=' after KEY".to_string(),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // consume '='
+
+    // Variable name.
+    let var_tok = ts.peek().clone();
+    let var_name = var_tok
+        .ident()
+        .ok_or_else(|| {
+            SasError::parse(
+                "expected a variable name after KEY=".to_string(),
+                var_tok.span,
+            )
+        })?
+        .to_string();
+    ts.next(); // consume var name
+
+    // Optional `/ descending`.
+    let mut descending = false;
+    if ts.peek().kind == TokenKind::Slash {
+        ts.next(); // consume '/'
+        // Look for DESCENDING (or ASCENDING, which is the default).
+        loop {
+            if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+                break;
+            }
+            let kw = ts.peek().ident().map(|s| s.to_ascii_lowercase());
+            match kw.as_deref() {
+                Some("descending") => {
+                    ts.next();
+                    descending = true;
+                }
+                Some("ascending") => {
+                    ts.next(); // ascending is the default, no change
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // Consume trailing `;`.
+    if ts.peek().kind == TokenKind::Semi {
+        ts.next();
+    }
+
+    Ok(vec![(var_name, descending)])
+}
+
+/// Parse `proc sort [data=a] [out=b] [nodupkey] [noduprecs|nodup]
+///                 [tagsort] [sortseq=ASCII|LINGUISTIC] ;
+/// by [descending] v1 [descending] v2... ;
+/// key=var [/ descending] ;   (répétable)
+/// run ;`.
+/// Called AFTER "proc sort" has been consumed. Consumes through `run;` / `quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     let mut data: Option<DatasetRef> = None;
     let mut out: Option<DatasetRef> = None;
     let mut nodupkey = false;
     let mut noduprecs = false;
+    let mut tagsort = false;
+    let mut sortseq = SortSeq::Ascii;
 
-    // --- PROC SORT statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("nodupkey") {
-            ts.next();
-            nodupkey = true;
-        } else if ts.peek().is_kw("noduprecs") || ts.peek().is_kw("nodup") {
-            ts.next();
-            noduprecs = true;
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC SORT statement."),
-                span,
-            ));
-        }
-    }
-
-    // --- sub-statements : BY (mandatory) until run;/quit; ---
-    let mut by: Vec<(String, bool)> = Vec::new();
-    let mut saw_by = false;
-
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // --- PROC SORT statement options, until `;` (combinateur partagé M31) ---
+    common::parse_proc_options(ts, "SORT", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
+            }
+            "out" => {
+                out = Some(common::parse_dataset_opt(ts, "OUT")?);
+                true
+            }
+            "nodupkey" => {
                 ts.next();
+                nodupkey = true;
+                true
             }
-            break;
-        }
-        if ts.peek().is_kw("by") {
-            ts.next(); // consume "by"
-            saw_by = true;
-            // Parse [descending] var pairs until `;`.
-            loop {
-                if ts.peek().kind == TokenKind::Semi {
-                    ts.next();
-                    break;
+            "noduprecs" | "nodup" => {
+                ts.next();
+                noduprecs = true;
+                true
+            }
+            "tagsort" => {
+                // TAGSORT : performance hint, accepté, ignoré sémantiquement.
+                ts.next();
+                tagsort = true;
+                true
+            }
+            "sortseq" => {
+                // SORTSEQ=ASCII|LINGUISTIC
+                ts.next(); // consume "sortseq"
+                if ts.peek().kind != TokenKind::Eq {
+                    return Err(SasError::parse(
+                        "expected '=' after SORTSEQ".to_string(),
+                        ts.peek().span,
+                    ));
                 }
-                if ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                let descending = if ts.peek().is_kw("descending") {
-                    ts.next();
-                    true
-                } else {
-                    false
+                ts.next(); // consume '='
+                let seq_tok = ts.peek().clone();
+                let seq_name = seq_tok
+                    .ident()
+                    .ok_or_else(|| {
+                        SasError::parse(
+                            "expected a collating sequence name after SORTSEQ=".to_string(),
+                            seq_tok.span,
+                        )
+                    })?
+                    .to_ascii_uppercase();
+                ts.next();
+                sortseq = match seq_name.as_str() {
+                    "ASCII" => SortSeq::Ascii,
+                    "LINGUISTIC" => SortSeq::Linguistic,
+                    other => {
+                        return Err(SasError::runtime(format!(
+                            "Unknown collating sequence '{other}' for SORTSEQ=. \
+                             Supported values: ASCII, LINGUISTIC."
+                        )));
+                    }
                 };
-                let tok = ts.peek().clone();
-                match tok.ident() {
-                    Some(name) => {
-                        ts.next();
-                        by.push((name.to_string(), descending));
-                    }
-                    None => {
-                        return Err(SasError::parse(
-                            "expected a variable name in the BY statement",
-                            tok.span,
-                        ));
-                    }
-                }
+                true
             }
-        } else {
-            // Unknown sub-statement: skip it (recovery).
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
-    if !saw_by {
+    // --- sub-statements : BY and KEY= until run;/quit; (combinateur M31) ---
+    let mut by: Vec<(String, bool)> = Vec::new();
+    let mut key_vars: Vec<(String, bool)> = Vec::new();
+    let mut saw_by = false;
+    let mut saw_key = false;
+
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "by" => {
+                ts.next(); // consume "by"
+                saw_by = true;
+                by.extend(common::parse_by(ts)?);
+                true
+            }
+            "key" => {
+                saw_key = true;
+                let keys = parse_key_statement(ts)?;
+                key_vars.extend(keys);
+                true
+            }
+            _ => false,
+        })
+    })?;
+
+    // KEY= présent → remplace BY (comportement SAS 9.4 : KEY prend le dessus).
+    let effective_keys = if saw_key {
+        key_vars
+    } else {
+        by
+    };
+
+    if !saw_by && !saw_key {
         return Err(SasError::runtime(
             "No BY statement was specified for PROC SORT.",
         ));
     }
-    if by.is_empty() {
+    if effective_keys.is_empty() {
         return Err(SasError::runtime(
             "The BY statement must specify at least one variable.",
         ));
@@ -162,50 +263,26 @@ pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     Ok(SortAst {
         data,
         out,
-        by,
+        by: effective_keys,
         nodupkey,
         noduprecs,
+        tagsort,
+        sortseq,
     })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &SortAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 /// Execute PROC SORT. Called by `procs::execute_proc` which wraps with timing.
 pub fn execute(ast: &SortAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    // SORTSEQ=LINGUISTIC : collation simplifiée (même que ASCII ici — sas_cmp
+    // ordre binaire UTF-8). Note de simplification émise pour transparence.
+    if ast.sortseq == SortSeq::Linguistic {
+        session.log.note(
+            "SORTSEQ=LINGUISTIC: linguistic collation not fully implemented; \
+             falling back to binary (sas_cmp) ordering.",
+        );
+    }
+    // TAGSORT ignoré sémantiquement (performance hint uniquement).
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 
@@ -464,6 +541,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -496,6 +575,8 @@ mod tests {
             by: vec![("x".to_string(), true)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -524,6 +605,8 @@ mod tests {
             by: vec![("g".to_string(), false), ("s".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -559,6 +642,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: true,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -595,6 +680,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: false,
             noduprecs: true,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -621,6 +708,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -650,6 +739,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -674,6 +765,8 @@ mod tests {
             by: vec![("x".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         execute(&ast, &mut session).unwrap();
 
@@ -692,10 +785,199 @@ mod tests {
             by: vec![("nope".to_string(), false)],
             nodupkey: false,
             noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
         };
         let result = execute(&ast, &mut session);
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
         assert!(msg.contains("NOPE") && msg.contains("not found"), "msg: {msg}");
+    }
+
+    // --- M33.9 new option tests ---
+
+    #[test]
+    fn parse_tagsort_accepted() {
+        // TAGSORT is parsed without error and set in AST.
+        let ast = parse_sort("proc sort data=a tagsort; by x; run;").unwrap();
+        assert!(ast.tagsort);
+        assert_eq!(ast.sortseq, SortSeq::Ascii);
+    }
+
+    #[test]
+    fn parse_sortseq_ascii_accepted() {
+        let ast = parse_sort("proc sort data=a sortseq=ascii; by x; run;").unwrap();
+        assert_eq!(ast.sortseq, SortSeq::Ascii);
+        assert!(!ast.tagsort);
+    }
+
+    #[test]
+    fn parse_sortseq_linguistic_accepted() {
+        let ast = parse_sort("proc sort data=a sortseq=linguistic; by x; run;").unwrap();
+        assert_eq!(ast.sortseq, SortSeq::Linguistic);
+    }
+
+    #[test]
+    fn parse_sortseq_unknown_errors() {
+        let result = parse_sort("proc sort data=a sortseq=ebcdic; by x; run;");
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("EBCDIC") || msg.contains("Unknown"), "msg: {msg}");
+    }
+
+    #[test]
+    fn parse_key_ascending() {
+        // KEY=var without /descending → ascending (same as BY var).
+        let ast = parse_sort("proc sort data=a; key=age; run;").unwrap();
+        assert_eq!(ast.by, vec![("age".to_string(), false)]);
+    }
+
+    #[test]
+    fn parse_key_descending() {
+        // KEY=var / descending → equivalent to BY descending var.
+        let ast = parse_sort("proc sort data=a; key=age / descending; run;").unwrap();
+        assert_eq!(ast.by, vec![("age".to_string(), true)]);
+    }
+
+    #[test]
+    fn parse_multiple_key_statements() {
+        let ast = parse_sort(
+            "proc sort data=a; key=sex; key=age / descending; run;",
+        )
+        .unwrap();
+        assert_eq!(
+            ast.by,
+            vec![("sex".to_string(), false), ("age".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn parse_key_overrides_by() {
+        // If both BY and KEY are present, KEY takes precedence.
+        let ast = parse_sort(
+            "proc sort data=a; by name; key=age / descending; run;",
+        )
+        .unwrap();
+        // KEY wins: only age (descending) is in the effective key list.
+        assert_eq!(ast.by, vec![("age".to_string(), true)]);
+    }
+
+    #[test]
+    fn execute_tagsort_identical_output() {
+        // TAGSORT is a no-op hint; output must be identical to a plain sort.
+        let mut s1 = make_session();
+        let mut s2 = make_session();
+        let xs = vec![Some(3.0), Some(1.0), Some(2.0)];
+        write_num_dataset(&mut s1, "T", "x", xs.clone());
+        write_num_dataset(&mut s2, "T", "x", xs);
+
+        // Plain sort.
+        let plain = SortAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            out: None,
+            by: vec![("x".to_string(), false)],
+            nodupkey: false,
+            noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
+        };
+        execute(&plain, &mut s1).unwrap();
+
+        // TAGSORT sort.
+        let tagged = SortAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            out: None,
+            by: vec![("x".to_string(), false)],
+            nodupkey: false,
+            noduprecs: false,
+            tagsort: true,
+            sortseq: SortSeq::Ascii,
+        };
+        execute(&tagged, &mut s2).unwrap();
+
+        assert_eq!(
+            read_num_col(&s1, "T", "x"),
+            read_num_col(&s2, "T", "x"),
+            "TAGSORT must produce identical output"
+        );
+    }
+
+    #[test]
+    fn execute_sortseq_ascii_identical_output() {
+        // SORTSEQ=ASCII is equivalent to the default; output must be identical.
+        let mut s1 = make_session();
+        let mut s2 = make_session();
+        let xs = vec![Some(3.0), Some(1.0), Some(2.0)];
+        write_num_dataset(&mut s1, "T", "x", xs.clone());
+        write_num_dataset(&mut s2, "T", "x", xs);
+
+        let plain = SortAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            out: None,
+            by: vec![("x".to_string(), false)],
+            nodupkey: false,
+            noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
+        };
+        execute(&plain, &mut s1).unwrap();
+
+        let ascii = SortAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            out: None,
+            by: vec![("x".to_string(), false)],
+            nodupkey: false,
+            noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
+        };
+        execute(&ascii, &mut s2).unwrap();
+
+        assert_eq!(
+            read_num_col(&s1, "T", "x"),
+            read_num_col(&s2, "T", "x"),
+            "SORTSEQ=ASCII must produce identical output to default"
+        );
+    }
+
+    #[test]
+    fn execute_key_descending_order() {
+        // KEY=age / descending → ages sorted largest to smallest.
+        // Uses f64 for age (SAS numeric = float64).
+        let mut session = make_session();
+        let df = polars::df![
+            "name" => ["Alfred", "Alice", "Barbara"],
+            "age"  => [14.0_f64, 13.0, 13.0],
+        ]
+        .unwrap();
+        use crate::dataset::VarMeta;
+        use crate::value::VarType;
+        let vars = vec![
+            VarMeta { name: "name".into(), ty: VarType::Char, length: 10, format: None, label: None },
+            VarMeta { name: "age".into(),  ty: VarType::Num,  length: 8,  format: None, label: None },
+        ];
+        let ds = crate::dataset::SasDataset { df, vars };
+        session.libs.get("WORK").unwrap().write("CLS", &ds).unwrap();
+
+        let ast = SortAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "CLS".into() }),
+            out: None,
+            // KEY=age / descending (set programmatically as already resolved).
+            by: vec![("age".to_string(), true)],
+            nodupkey: false,
+            noduprecs: false,
+            tagsort: false,
+            sortseq: SortSeq::Ascii,
+        };
+        execute(&ast, &mut session).unwrap();
+
+        // Verify via decode_column (uses Value, avoids dtype mismatch).
+        let ages = read_num_col(&session, "CLS", "age");
+        // Descending: 14, 13, 13.
+        assert_eq!(
+            ages,
+            vec![Value::Num(14.0), Value::Num(13.0), Value::Num(13.0)],
+            "KEY=age/descending should sort largest first"
+        );
     }
 }

@@ -49,9 +49,8 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::decode_column;
+use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
 use polars::prelude::*;
 use std::cmp::Ordering;
@@ -76,80 +75,61 @@ pub fn parse(ts: &mut StatementStream) -> Result<TransposeAst> {
     let mut prefix: Option<String> = None;
     let mut name: Option<String> = None;
 
-    // --- PROC TRANSPOSE statement options, until `;` ---
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next(); // consume `;`
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
-            data = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
-            out = Some(ts.parse_dataset_ref()?);
-        } else if ts.peek().is_kw("prefix") {
-            ts.next();
-            expect_eq(ts, "PREFIX")?;
-            prefix = Some(expect_ident(ts, "PREFIX")?);
-        } else if ts.peek().is_kw("name") {
-            ts.next();
-            expect_eq(ts, "NAME")?;
-            name = Some(expect_ident(ts, "NAME")?);
-        } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected option '{bad}' on PROC TRANSPOSE statement."),
-                span,
-            ));
-        }
-    }
+    // --- PROC TRANSPOSE statement options, until `;` (combinateur M31) ---
+    common::parse_proc_options(ts, "TRANSPOSE", |ts, kw| {
+        Ok(match kw {
+            "data" => {
+                data = Some(common::parse_dataset_opt(ts, "DATA")?);
+                true
+            }
+            "out" => {
+                out = Some(common::parse_dataset_opt(ts, "OUT")?);
+                true
+            }
+            "prefix" => {
+                common::expect_eq(ts, "PREFIX")?;
+                prefix = Some(expect_ident(ts, "PREFIX")?);
+                true
+            }
+            "name" => {
+                common::expect_eq(ts, "NAME")?;
+                name = Some(expect_ident(ts, "NAME")?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
-    // --- sub-statements until run;/quit; ---
+    // --- sub-statements until run;/quit; (combinateur M31) ---
     let mut by: Vec<String> = Vec::new();
     let mut id: Option<String> = None;
     let mut var: Vec<String> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "by" => {
                 ts.next();
+                by = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("by") {
-            ts.next();
-            by = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("id") {
-            ts.next();
-            // Single ID variable for M7: take the first name, skip the rest.
-            let names = ts.parse_name_list()?;
-            id = names.into_iter().next();
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else {
-            // Unknown sub-statement: skip it (recovery, like sort/means).
-            ts.skip_to_semi();
-        }
-    }
+            "id" => {
+                ts.next();
+                // Single ID variable for M7: take the first name, skip the rest.
+                let names = ts.parse_name_list()?;
+                id = names.into_iter().next();
+                ts.expect_semi()?;
+                true
+            }
+            "var" => {
+                ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(TransposeAst {
         data,
@@ -162,17 +142,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<TransposeAst> {
     })
 }
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 fn expect_ident(ts: &mut StatementStream, opt: &str) -> Result<String> {
     match ts.peek().ident().map(str::to_string) {
         Some(s) => {
@@ -183,30 +152,6 @@ fn expect_ident(ts: &mut StatementStream, opt: &str) -> Result<String> {
             format!("expected an identifier after {opt}="),
             ts.peek().span,
         )),
-    }
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &TransposeAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
     }
 }
 
@@ -300,7 +245,7 @@ fn group_by_tuple(
 
 /// Execute PROC TRANSPOSE. Called by `procs::execute_proc` (timing wrapper).
 pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

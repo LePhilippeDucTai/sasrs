@@ -89,7 +89,7 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{by_groups, decode_column, phi_inv, resolve_by_cols};
+use crate::procs::common::{self, by_groups, decode_column, phi_inv, resolve_by_cols};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType};
@@ -179,19 +179,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("descending") {
             ts.next();
             descending = true;
         } else if ts.peek().is_kw("ties") {
-            ts.next();
-            expect_eq(ts, "TIES")?;
+            common::expect_eq(ts, "TIES")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a TIES= method (MEAN|LOW|HIGH|DENSE)", tok.span)
@@ -213,8 +210,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             };
             ts.next();
         } else if ts.peek().is_kw("groups") {
-            ts.next();
-            expect_eq(ts, "GROUPS")?;
+            common::expect_eq(ts, "GROUPS")?;
             let tok = ts.peek().clone();
             let n = match &tok.kind {
                 TokenKind::Num(v) => *v,
@@ -245,8 +241,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             ts.next();
             set_method(Method::Savage, &mut method)?;
         } else if ts.peek().is_kw("normal") {
-            ts.next();
-            expect_eq(ts, "NORMAL")?;
+            common::expect_eq(ts, "NORMAL")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a NORMAL= method (BLOM|TUKEY|VW)", tok.span)
@@ -290,37 +285,28 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
     let mut ranks: Vec<String> = Vec::new();
     let mut by: Vec<(String, bool)> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("ranks") {
-            ts.next();
-            ranks = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by = crate::procs::means::parse_by_list(ts)?;
-        } else {
-            // Unknown sub-statement: skip it (recovery, like corr/means).
-            ts.skip_to_semi();
-        }
-    }
+            "ranks" => {
+                ts.next();
+                ranks = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by = crate::procs::means::parse_by_list(ts)?;
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(RankAst {
         data,
@@ -333,41 +319,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
         var,
         ranks,
     })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &RankAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ───────────────────────── ranking core ─────────────────────────
@@ -513,7 +464,7 @@ fn transform_rank(r: f64, k: usize, method: Method) -> f64 {
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &RankAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 
