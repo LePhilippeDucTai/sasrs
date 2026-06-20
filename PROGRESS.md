@@ -350,9 +350,14 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   **FAIT** : 7 combinateurs `#[allow(dead_code)]` (additif pur, aucun appelant) reproduisant
   verbatim les boucles de `print.rs` + `expect_eq`/`_LAST_` ; 14 tests (`parsing_tests`).
   2276 lib passés, 0 `.snap.new` (octet-identique), 0 warning nouveau.
-- [ ] M31.2 — relocaliser dans `common.rs` : `parse_by` (ex-`means::parse_by_list`),
+- [x] M31.2 — relocaliser dans `common.rs` : `parse_by` (ex-`means::parse_by_list`),
   `parse_single_var`/`parse_weight`/`parse_class`/`parse_var_list` ; re-export `pub(crate)`
-  depuis `means` pour les appelants existants (Sonnet, faible)
+  depuis `means` pour les appelants existants (Sonnet, faible).
+  **FAIT** : `parse_single_var` + `parse_by` déplacés VERBATIM dans `common.rs` ;
+  `parse_weight`/`parse_var_list`/`parse_class` ajoutés (génériques, `parse_var_list` =
+  `parse_name_list()`+`expect_semi()` comme `print.rs`) ; `means.rs` ré-exporte
+  `parse_by as parse_by_list` + `parse_single_var` (`univariate`/`rank` inchangés).
+  2276 lib verts, 0 `.snap.new`, 0 warning nouveau.
 - [ ] ⫽ M31.3 — migrer `src/procs/print.rs` (canari) sur les combinateurs (Sonnet, faible)
 - [ ] ⫽ M31.4 — migrer `src/procs/sort.rs` (Sonnet, faible)
 - [ ] ⫽ M31.5 — migrer Tier B : `contents`, `transpose`, `append`, `rank`, `printto`,

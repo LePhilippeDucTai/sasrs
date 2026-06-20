@@ -240,63 +240,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
 
 /// Parse a single-variable statement body (after the keyword was consumed),
 /// e.g. `weight <var> ;`. Errors if no variable or extra tokens before `;`.
-pub(crate) fn parse_single_var(ts: &mut StatementStream, kw: &str) -> Result<String> {
-    let tok = ts.peek().clone();
-    let name = match tok.ident() {
-        Some(n) => {
-            ts.next();
-            n.to_string()
-        }
-        None => {
-            return Err(SasError::parse(
-                format!("expected a variable name in the {kw} statement"),
-                tok.span,
-            ));
-        }
-    };
-    // Consume the terminating `;` (tolerate trailing tokens by skipping).
-    if ts.peek().kind == TokenKind::Semi {
-        ts.next();
-    } else {
-        ts.skip_to_semi();
-    }
-    Ok(name)
-}
-
-/// Parse a BY statement body (after "by" consumed), through its `;`.
-/// `by [descending] v1 [descending] v2 ... ;` — mirrors PROC SORT.
-pub(crate) fn parse_by_list(ts: &mut StatementStream) -> Result<Vec<(String, bool)>> {
-    let mut by: Vec<(String, bool)> = Vec::new();
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        let descending = if ts.peek().is_kw("descending") {
-            ts.next();
-            true
-        } else {
-            false
-        };
-        let tok = ts.peek().clone();
-        match tok.ident() {
-            Some(name) => {
-                ts.next();
-                by.push((name.to_string(), descending));
-            }
-            None => {
-                return Err(SasError::parse(
-                    "expected a variable name in the BY statement",
-                    tok.span,
-                ));
-            }
-        }
-    }
-    Ok(by)
-}
+// `parse_single_var` et `parse_by_list` ont été déplacés vers `procs::common`
+// (M31.2). Ré-export `pub(crate)` pour les appelants existants
+// (`means.rs` lui-même, `univariate.rs`, `rank.rs` via `means::parse_by_list`).
+pub(crate) use crate::procs::common::{parse_by as parse_by_list, parse_single_var};
 
 /// Parse the OUTPUT statement body (after "output" was consumed), through
 /// its terminating `;`. `output out=lib.t [stat(var)=name ...] ;`
