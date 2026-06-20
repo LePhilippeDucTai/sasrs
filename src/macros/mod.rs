@@ -7,6 +7,12 @@
 //! block by block, because macro execution can affect downstream source
 //! (`%let` evaluated mid-program, `CALL SYMPUT`).
 
+mod error;
+mod scan;
+mod symbols;
+
+pub use error::MacroError;
+
 pub trait TextStage {
     /// Transform submitted source text before lexing.
     fn process(&mut self, source: &str) -> String;
@@ -152,28 +158,6 @@ pub enum MacroParam {
     Keyword { name: String, default: String },
 }
 
-/// Erreur d'évaluation d'une expression macro (`%eval`, conditions `%if`,
-/// bornes `%to`/`%by`). Portée par la feature `macros`. On ne `panic` jamais
-/// sur une entrée macro invalide : l'expanseur transforme cette erreur en une
-/// note SAS-like émise dans le flux de sortie et poursuit le scan.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MacroError {
-    /// Message lisible (proche du libellé SAS quand pertinent).
-    pub message: String,
-}
-
-impl MacroError {
-    fn new(msg: impl Into<String>) -> Self {
-        MacroError { message: msg.into() }
-    }
-}
-
-impl std::fmt::Display for MacroError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
 impl MacroEngine {
     /// Construit l'engine de session.
     ///
@@ -282,42 +266,6 @@ impl MacroEngine {
         // sont retransformées en leurs caractères littéraux d'origine.
         Self::unmask(&expanded)
     }
-
-    /// Pose un symbole macro GLOBAL (sémantique `CALL SYMPUT` — M11.5) : le
-    /// symbole est créé/écrasé dans la table globale, insensible casse.
-    pub fn set_symbol_global(&mut self, name: &str, value: String) {
-        self.table.insert(name.to_uppercase(), value);
-    }
-
-    /// Lit la valeur d'un symbole macro (pile de portées puis table globale,
-    /// comme `&var`). `None` si indéfini.
-    pub fn get_symbol(&self, name: &str) -> Option<String> {
-        self.lookup(name)
-    }
-
-    /// Instantané (clés MAJUSCULES → valeur) de la table macro VISIBLE en
-    /// open code, pour alimenter `SYMGET` (M11.5). On aplatit la pile de
-    /// portées (plus interne d'abord) puis la table globale ; en open code la
-    /// pile est vide, donc seule `table` contribue.
-    /// Variables macro GLOBALES (table globale uniquement, hors portées
-    /// locales), pour `DICTIONARY.MACROS` / `sashelp.vmacro` (M20.3). Clés en
-    /// MAJUSCULES → valeur. Le classement scope GLOBAL/AUTOMATIC est laissé à
-    /// l'appelant (cf. `sql::dictionary`).
-    pub fn global_symbols(&self) -> std::collections::HashMap<String, String> {
-        self.table.clone()
-    }
-
-    pub fn symbols_snapshot(&self) -> std::collections::HashMap<String, String> {
-        let mut snap = self.table.clone();
-        // La table globale est la base ; les portées locales (s'il y en a)
-        // l'emportent. En open code, `scopes` est vide.
-        for scope in &self.scopes {
-            for (k, v) in scope {
-                snap.insert(k.clone(), v.clone());
-            }
-        }
-        snap
-    }
 }
 
 /// SPIKE M8 (feature `macros`) : processeur macro minimal `%let` / `&var`.
@@ -363,24 +311,6 @@ impl MacroEngine {
     /// elle-même des `&refs` (garde contre les cycles).
     const MAX_RESOLVE_ITERS: usize = 10;
 
-    /// Lit un nom SAS (lettre/`_` puis alnum/`_`) à partir de `chars[i]`.
-    /// Rend `(nom, index après le nom)`, ou `None` si pas un nom valide.
-    fn read_name(chars: &[char], i: usize) -> Option<(String, usize)> {
-        let first = *chars.get(i)?;
-        if !(first.is_ascii_alphabetic() || first == '_') {
-            return None;
-        }
-        let mut j = i + 1;
-        while let Some(&c) = chars.get(j) {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                j += 1;
-            } else {
-                break;
-            }
-        }
-        Some((chars[i..j].iter().collect(), j))
-    }
-
     /// Profondeur maximale d'invocation de macro (garde anti-récursion).
     const MAX_MACRO_DEPTH: usize = 100;
 
@@ -388,131 +318,6 @@ impl MacroEngine {
     /// les inclusions cycliques : un fichier qui s'inclut lui-même, ou un cycle
     /// A→B→A). Au-delà, l'inclusion est refusée avec une note SAS-like.
     const MAX_INCLUDE_DEPTH: usize = 50;
-
-    /// Cherche un symbole macro par nom (insensible casse) : pile de portées du
-    /// plus interne au plus externe, puis table globale. Rend la valeur si
-    /// trouvée.
-    fn lookup(&self, name: &str) -> Option<String> {
-        let key = name.to_uppercase();
-        for scope in self.scopes.iter().rev() {
-            if let Some(v) = scope.get(&key) {
-                return Some(v.clone());
-            }
-        }
-        self.table.get(&key).cloned()
-    }
-
-    /// Affecte une valeur à un symbole (sémantique `%let`) : met à jour la
-    /// variable là où elle est DÉJÀ définie (pile du plus interne au plus
-    /// externe, puis table) ; sinon la crée en global (`table`). Cf. la règle
-    /// documentée dans l'en-tête de `MacroEngine`.
-    fn assign(&mut self, name: &str, value: String) {
-        let key = name.to_uppercase();
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(&key) {
-                scope.insert(key, value);
-                return;
-            }
-        }
-        self.table.insert(key, value);
-    }
-
-    /// Résout récursivement (itérativement) les `&ref` d'une valeur en
-    /// utilisant la table courante. Garde de récursion `MAX_RESOLVE_ITERS`.
-    fn resolve_value(&self, value: &str) -> String {
-        let mut current = value.to_string();
-        for _ in 0..Self::MAX_RESOLVE_ITERS {
-            if !current.contains('&') {
-                break;
-            }
-            let next = self.resolve_refs_once(&current);
-            if next == current {
-                break;
-            }
-            current = next;
-        }
-        current
-    }
-
-    /// M19.3 — produit les lignes SYMBOLGEN pour un token `&...` (potentiellement
-    /// indirect `&&v&i`). On résout l'indirection jusqu'à obtenir un (ou
-    /// plusieurs) `&name` direct(s), puis on émet une ligne par variable
-    /// effectivement consultée, façon SAS :
-    /// `SYMBOLGEN:  Macro variable NAME resolves to VALUE`.
-    /// Les variables indéfinies ne produisent pas de ligne (SAS warne ailleurs).
-    fn symbolgen_trace(&mut self, run: &str) {
-        // Réduit l'indirection : tant qu'il reste des `&&`, on résout une passe
-        // (qui transforme `&&`→`&` et substitue les `&name` directs internes).
-        let mut current = run.to_string();
-        for _ in 0..Self::MAX_RESOLVE_ITERS {
-            if !current.contains("&&") {
-                break;
-            }
-            let next = self.resolve_refs_once(&current);
-            if next == current {
-                break;
-            }
-            current = next;
-        }
-        // À ce stade `current` ne contient plus que des `&name` directs.
-        let chars: Vec<char> = current.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i] == '&' {
-                if let Some((name, after)) = Self::read_name(&chars, i + 1) {
-                    if let Some(v) = self.lookup(&name) {
-                        self.log_line(format!(
-                            "SYMBOLGEN:  Macro variable {} resolves to {}",
-                            name.to_uppercase(),
-                            v
-                        ));
-                    }
-                    i = after;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-    }
-
-    /// Une passe de résolution des `&ref` sur une chaîne, sans réinjection.
-    fn resolve_refs_once(&self, text: &str) -> String {
-        let chars: Vec<char> = text.chars().collect();
-        let mut out = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < chars.len() {
-            let c = chars[i];
-            if c == '&' {
-                // `&&` -> un seul `&`.
-                if chars.get(i + 1) == Some(&'&') {
-                    out.push('&');
-                    i += 2;
-                    continue;
-                }
-                if let Some((name, after)) = Self::read_name(&chars, i + 1) {
-                    let mut next = after;
-                    // Terminateur point : consommé qu'on résolve ou non.
-                    if chars.get(next) == Some(&'.') {
-                        next += 1;
-                    }
-                    match self.lookup(&name) {
-                        Some(v) => out.push_str(&v),
-                        None => {
-                            // Non défini : on laisse `&name` verbatim. Le
-                            // point terminateur a déjà été consommé.
-                            out.push('&');
-                            out.push_str(&name);
-                        }
-                    }
-                    i = next;
-                    continue;
-                }
-            }
-            out.push(c);
-            i += 1;
-        }
-        out
-    }
 }
 
 impl MacroEngine {
@@ -821,19 +626,6 @@ impl MacroEngine {
 }
 
 impl MacroEngine {
-    /// Vrai si `chars[i..]` commence par `%let` (insensible casse) suivi d'un
-    /// blanc (pour ne pas matcher `%letx`).
-    fn matches_let(chars: &[char], i: usize) -> bool {
-        let kw = ['%', 'l', 'e', 't'];
-        for (k, &kc) in kw.iter().enumerate() {
-            match chars.get(i + k) {
-                Some(c) if c.to_ascii_lowercase() == kc => {}
-                _ => return false,
-            }
-        }
-        matches!(chars.get(i + 4), Some(c) if c.is_whitespace())
-    }
-
     /// Consomme un `%let name = value ;` complet à partir de `i` et met la
     /// table à jour. Rend l'index après le `;` (et préserve un `\n` final).
     /// Rend `None` si la syntaxe ne tient pas (on laisse alors le `%` brut).
@@ -1107,20 +899,6 @@ impl MacroEngine {
         Some(Self::skip_trailing_newline(chars, j, out))
     }
 
-    /// Préserve un éventuel `\n` immédiatement après l'index `j` (poussé dans
-    /// `out`) afin de conserver la numérotation des lignes, comme le font les
-    /// autres `consume_*`. Rend l'index après ce `\n` (ou `j` inchangé).
-    fn skip_trailing_newline(chars: &[char], mut j: usize, out: &mut String) -> usize {
-        while matches!(chars.get(j), Some(c) if *c == ' ' || *c == '\t') {
-            j += 1;
-        }
-        if chars.get(j) == Some(&'\n') {
-            out.push('\n');
-            j += 1;
-        }
-        j
-    }
-
     /// M19.2 — chargement paresseux d'une macro autocall (`SASAUTOS`).
     ///
     /// Appelé à l'expansion de `%nom(...)` lorsque `nom` n'est PAS encore défini
@@ -1161,26 +939,6 @@ impl MacroEngine {
 }
 
 impl MacroEngine {
-    /// Vrai si `chars[i..]` commence par `%<kw>` (insensible casse) suivi d'un
-    /// non-identifiant (blanc, `(`, `;` ...). Évite de matcher `%macrox`.
-    fn matches_kw(chars: &[char], i: usize, kw: &str) -> bool {
-        if chars.get(i) != Some(&'%') {
-            return false;
-        }
-        let kwc: Vec<char> = kw.chars().collect();
-        for (k, &kc) in kwc.iter().enumerate() {
-            match chars.get(i + 1 + k) {
-                Some(c) if c.to_ascii_lowercase() == kc => {}
-                _ => return false,
-            }
-        }
-        // Le caractère suivant ne doit pas continuer un identifiant.
-        match chars.get(i + 1 + kwc.len()) {
-            Some(c) if c.is_ascii_alphanumeric() || *c == '_' => false,
-            _ => true,
-        }
-    }
-
     /// Consomme une définition `%macro name[(params)] ; <body> %mend [name];`.
     /// Enregistre la définition et n'émet RIEN. Rend l'index après le `;` du
     /// `%mend` (un `\n` final juste après est préservé pour la numérotation),
@@ -1624,37 +1382,6 @@ impl MacroEngine {
     /// Garde anti-boucle-folle pour les `%do` itératifs.
     const MAX_LOOP_ITERS: i64 = 1_000_000;
 
-    /// Vrai si `chars[i..]` commence par `%<kw>` (insensible casse) suivi
-    /// éventuellement de blancs puis d'une `(` — pour les fonctions macro comme
-    /// `%eval(...)`. Évite de matcher un identifiant plus long (`%evalx`).
-    fn matches_kw_paren(chars: &[char], i: usize, kw: &str) -> bool {
-        if chars.get(i) != Some(&'%') {
-            return false;
-        }
-        let kwc: Vec<char> = kw.chars().collect();
-        for (k, &kc) in kwc.iter().enumerate() {
-            match chars.get(i + 1 + k) {
-                Some(c) if c.to_ascii_lowercase() == kc => {}
-                _ => return false,
-            }
-        }
-        let mut j = i + 1 + kwc.len();
-        // Le caractère juste après le mot-clé ne doit pas continuer un identifiant.
-        if matches!(chars.get(j), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
-            return false;
-        }
-        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
-            j += 1;
-        }
-        chars.get(j) == Some(&'(')
-    }
-
-    /// Émet une note d'erreur macro SAS-like dans le flux et poursuit. Jamais
-    /// de `panic` sur entrée invalide.
-    fn emit_error(out: &mut String, err: &MacroError) {
-        out.push_str(&format!("/* {} */", err.message));
-    }
-
     /// Consomme `%eval ( expr )` : résout les `&refs` de `expr`, évalue, et
     /// splice le résultat entier. Rend l'index après la `)`, ou `None` si la
     /// parenthèse n'est pas trouvée (laisse alors le `%` brut).
@@ -1676,75 +1403,6 @@ impl MacroEngine {
             Err(e) => Self::emit_error(out, &e),
         }
         Some(after)
-    }
-
-    /// Lit le contenu entre `(` (à l'index `lparen`) et sa `)` équilibrée.
-    /// Rend `(contenu_sans_parenthèses, index_après_la_parenthèse_fermante)`.
-    fn read_balanced_parens(chars: &[char], lparen: usize) -> Option<(String, usize)> {
-        let mut depth = 0i32;
-        let mut j = lparen;
-        let start = lparen + 1;
-        while j < chars.len() {
-            match chars[j] {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let inner: String = chars[start..j].iter().collect();
-                        return Some((inner, j + 1));
-                    }
-                }
-                _ => {}
-            }
-            j += 1;
-        }
-        None
-    }
-
-    // ── M11.6 : variables automatiques ──────────────────────────────────────
-
-    /// Amorce un sous-ensemble des variables automatiques SAS dans `table`.
-    /// Sous `deterministic`, valeurs FIGÉES (snapshots stables) ; sinon dérivées
-    /// de l'horloge réelle. Cf. la doc de [`MacroEngine::new`].
-    fn seed_automatic_vars(&mut self, deterministic: bool) {
-        let vars: [(&str, String); 6] = if deterministic {
-            [
-                ("SYSDATE9", "01JAN1960".to_string()),
-                ("SYSDATE", "01JAN60".to_string()),
-                ("SYSTIME", "00:00".to_string()),
-                ("SYSDAY", "Friday".to_string()),
-                ("SYSVER", "9.4".to_string()),
-                ("SYSSCP", "LIN X64".to_string()),
-            ]
-        } else {
-            use chrono::{Datelike, Local, Timelike};
-            let now = Local::now();
-            const MONTHS: [&str; 12] = [
-                "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
-            ];
-            const DAYS: [&str; 7] = [
-                "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-            ];
-            let mon = MONTHS[(now.month0()) as usize];
-            let day = now.day();
-            let year4 = now.year();
-            let year2 = (year4 % 100).abs();
-            let sysdate9 = format!("{day:02}{mon}{year4:04}");
-            let sysdate = format!("{day:02}{mon}{year2:02}");
-            let systime = format!("{:02}:{:02}", now.hour(), now.minute());
-            let sysday = DAYS[now.weekday().num_days_from_monday() as usize].to_string();
-            [
-                ("SYSDATE9", sysdate9),
-                ("SYSDATE", sysdate),
-                ("SYSTIME", systime),
-                ("SYSDAY", sysday),
-                ("SYSVER", "9.4".to_string()),
-                ("SYSSCP", "LIN X64".to_string()),
-            ]
-        };
-        for (k, v) in vars {
-            self.table.insert(k.to_string(), v);
-        }
     }
 
     // ── M11.6 : %sysfunc ─────────────────────────────────────────────────────
@@ -1858,33 +1516,6 @@ impl MacroEngine {
             crate::value::Value::Num(n) => crate::value::format_best(*n, 12),
             crate::value::Value::Missing(_) => String::new(),
         }
-    }
-
-    /// Découpe une chaîne d'arguments sur les `,` de niveau supérieur (les
-    /// parenthèses imbriquées sont équilibrées). Chaîne vide → aucun argument.
-    fn split_top_level_commas(s: &str) -> Vec<String> {
-        let chars: Vec<char> = s.chars().collect();
-        let mut parts = Vec::new();
-        let mut depth = 0i32;
-        let mut start = 0usize;
-        let mut any = false;
-        for (k, &c) in chars.iter().enumerate() {
-            match c {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                ',' if depth == 0 => {
-                    parts.push(chars[start..k].iter().collect());
-                    start = k + 1;
-                    any = true;
-                }
-                _ => {}
-            }
-        }
-        let last: String = chars[start..].iter().collect();
-        if any || !last.trim().is_empty() {
-            parts.push(last);
-        }
-        parts
     }
 
     // ── M11.6 : %str / %nrstr (quoting par sentinelles) ─────────────────────
@@ -2504,77 +2135,6 @@ impl MacroEngine {
         Some(after_else)
     }
 
-    /// Scanne une "action" de `%if`/`%then`/`%else` à partir de `start` :
-    /// soit un groupe `%do; ... %end;` (le texte retourné est le corps interne
-    /// du `%do`, sans le `%do;`/`%end;`), soit un fragment de texte jusqu'au
-    /// `;` terminal inclus. Rend `(texte_action, index_après)`.
-    fn scan_action(chars: &[char], start: usize) -> Option<(String, usize)> {
-        let mut k = start;
-        while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
-            k += 1;
-        }
-        if Self::matches_kw(chars, k, "do") {
-            // Réutiliser le scan de `%do` complet : on renvoie le texte
-            // `%do ... %end;` tel quel pour le laisser ré-expanser (gère donc
-            // `%do;`, itératif, imbriqué). Le `process_impl` rappellera
-            // `consume_do` dessus.
-            let (text, after) = Self::scan_do_block(chars, k)?;
-            Some((text, after))
-        } else {
-            // Fragment jusqu'au `;` terminal (inclus). On respecte les `%do`
-            // imbriqués éventuels au cas où, mais le cas nominal est un texte
-            // simple. On s'arrête au premier `;` de niveau 0.
-            let frag_start = k;
-            while k < chars.len() && chars[k] != ';' {
-                k += 1;
-            }
-            if chars.get(k) != Some(&';') {
-                // Pas de `;` : prendre jusqu'à la fin.
-                let frag: String = chars[frag_start..k].iter().collect();
-                return Some((frag, k));
-            }
-            k += 1; // inclure le `;`
-            let frag: String = chars[frag_start..k].iter().collect();
-            Some((frag, k))
-        }
-    }
-
-    /// Scanne un bloc `%do ... %end;` complet à partir de `start` (qui pointe
-    /// sur `%do`). Rend `(texte_complet_incluant_%do_et_%end;, index_après)`.
-    /// Équilibre les `%do`/`%end` imbriqués.
-    fn scan_do_block(chars: &[char], start: usize) -> Option<(String, usize)> {
-        let mut j = start + 1 + "do".len();
-        let mut depth = 1usize;
-        while j < chars.len() && depth > 0 {
-            if chars[j] == '%' {
-                if Self::matches_kw(chars, j, "do") {
-                    depth += 1;
-                    j += 1 + "do".len();
-                    continue;
-                }
-                if Self::matches_kw(chars, j, "end") {
-                    depth -= 1;
-                    j += 1 + "end".len();
-                    if depth == 0 {
-                        // Avaler un `;` terminal optionnel après `%end`.
-                        let mut k = j;
-                        while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
-                            k += 1;
-                        }
-                        if chars.get(k) == Some(&';') {
-                            j = k + 1;
-                        }
-                        let text: String = chars[start..j].iter().collect();
-                        return Some((text, j));
-                    }
-                    continue;
-                }
-            }
-            j += 1;
-        }
-        None
-    }
-
     /// Consomme un `%do` : soit `%do; ... %end;` (groupe), soit
     /// `%do i=a %to b [%by c]; ... %end;` (itératif). Émet le contenu expansé.
     fn consume_do(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
@@ -2832,96 +2392,6 @@ impl MacroEngine {
         self.macro_eval(expanded.trim())
     }
 
-    /// Trouve le mot-clé `%<kw>` (insensible casse) à partir de `from`, au
-    /// niveau de `%do` 0 (ne descend pas dans un `%do ... %end` imbriqué). Rend
-    /// l'index du `%` du mot-clé. Utilisé pour `%then`.
-    fn find_kw(chars: &[char], from: usize, kw: &str) -> Option<usize> {
-        let mut j = from;
-        let mut do_depth = 0usize;
-        while j < chars.len() {
-            if chars[j] == '%' {
-                if Self::matches_kw(chars, j, "do") {
-                    do_depth += 1;
-                    j += 1 + "do".len();
-                    continue;
-                }
-                if Self::matches_kw(chars, j, "end") {
-                    do_depth = do_depth.saturating_sub(1);
-                    j += 1 + "end".len();
-                    continue;
-                }
-                if do_depth == 0 && Self::matches_kw(chars, j, kw) {
-                    return Some(j);
-                }
-            }
-            j += 1;
-        }
-        None
-    }
-
-    /// Trouve `%<kw>` à partir de `from` mais s'arrête au premier `;` de niveau
-    /// 0 (utilisé pour `%by`, qui doit précéder le `;` de l'en-tête de boucle).
-    fn find_kw_before_semicolon(chars: &[char], from: usize, kw: &str) -> Option<usize> {
-        let mut j = from;
-        while j < chars.len() {
-            if chars[j] == ';' {
-                return None;
-            }
-            if chars[j] == '%' && Self::matches_kw(chars, j, kw) {
-                return Some(j);
-            }
-            j += 1;
-        }
-        None
-    }
-
-    /// Trouve le prochain `;` de niveau 0 à partir de `from`.
-    fn find_semicolon(chars: &[char], from: usize) -> Option<usize> {
-        let mut j = from;
-        while j < chars.len() {
-            if chars[j] == ';' {
-                return Some(j);
-            }
-            j += 1;
-        }
-        None
-    }
-
-    /// À partir de `body_start` (juste après le `;` de l'en-tête du `%do`),
-    /// trouve le `%end` équilibré. Rend `(index_du_%end, index_après_%end;)`.
-    fn find_matching_end(chars: &[char], body_start: usize) -> Option<(usize, usize)> {
-        let mut j = body_start;
-        let mut depth = 1usize;
-        while j < chars.len() {
-            if chars[j] == '%' {
-                if Self::matches_kw(chars, j, "do") {
-                    depth += 1;
-                    j += 1 + "do".len();
-                    continue;
-                }
-                if Self::matches_kw(chars, j, "end") {
-                    depth -= 1;
-                    if depth == 0 {
-                        let end_at = j;
-                        let mut k = j + 1 + "end".len();
-                        // Avaler un `;` terminal optionnel après `%end`.
-                        let mut m = k;
-                        while matches!(chars.get(m), Some(c) if *c == ' ' || *c == '\t') {
-                            m += 1;
-                        }
-                        if chars.get(m) == Some(&';') {
-                            k = m + 1;
-                        }
-                        return Some((end_at, k));
-                    }
-                    j += 1 + "end".len();
-                    continue;
-                }
-            }
-            j += 1;
-        }
-        None
-    }
 }
 
 /// Jeton de l'expression macro pour `%eval`.

@@ -417,11 +417,18 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   lib.rs, nouveau `src/preprocess.rs` = `pub use crate::macros::{TextStage, MacroEngine, MacroDef,
   MacroParam, MacroError, MacroStage, RawSegmenter};`. Sites d'import (`session`/`executor`) inchangés.
   2276 lib, 0 `.snap.new`, 0 warning. (`mod.rs` reste monolithique ; découpage en M32.2+.)
-- [ ] ⫽ M32.2 — extraire `src/macros/error.rs` (`MacroError`, `emit_error`) (Sonnet, faible)
-- [ ] ⫽ M32.3 — extraire `src/macros/scan.rs` (helpers char libres : `read_name`,
-  `read_balanced_parens`, `find_kw`, `split_top_level_commas`, …) ; sites `Self::`→`scan::` (Sonnet, moyen)
-- [ ] ⫽ M32.4 — extraire `src/macros/symbols.rs` (`lookup`/`assign`/`resolve_value`/
-  `resolve_refs_once`/pile de portées/auto-vars) (Sonnet, moyen)
+- [x] ⫽ M32.2 — extraire `src/macros/error.rs` (`MacroError`, `emit_error`) (Sonnet, faible).
+  **FAIT** : `MacroError` + `impl`/`Display` + `emit_error` déplacés ; `pub use error::MacroError;`
+  dans mod.rs (shim préservé). Technique blocs `impl MacroEngine` en sous-module → 0 changement d'appel.
+- [x] ⫽ M32.3 — extraire `src/macros/scan.rs` (helpers char libres : `read_name`,
+  `read_balanced_parens`, `find_kw`, `split_top_level_commas`, …) (Sonnet, moyen).
+  **FAIT** : 13 scanners purs `&[char]`/index déplacés (verbatim, `pub(super)`) ; sites `Self::` inchangés.
+  Laissés inline : `read_name_arg` + tous les `consume_*` (stateful `&mut self`).
+- [x] ⫽ M32.4 — extraire `src/macros/symbols.rs` (`lookup`/`assign`/`resolve_value`/
+  `resolve_refs_once`/pile de portées/auto-vars) (Sonnet, moyen).
+  **FAIT** : `set_symbol_global`/`get_symbol`/`global_symbols`/`symbols_snapshot` (pub) +
+  `lookup`/`assign`/`resolve_value`/`symbolgen_trace`/`resolve_refs_once`/`seed_automatic_vars`
+  (`pub(super)`) déplacés. **Lot ⫽ M32.2-4** : `mod.rs` 4757→4227 (−530). 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] M32.5 — extraire `src/macros/quoting.rs` (sentinelles + `mask_char`/`unmask`) PUIS introduire
   `apply_quoting(text, mask_set, reevaluate)` et y router `%str/%nrstr/%bquote/%nrbquote/%superq`
   + variantes `%q*` (commit de fusion dédié, validé par les tests quoting/superq/bquote) (Opus, élevé)
