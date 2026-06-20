@@ -68,6 +68,10 @@ use std::cmp::Ordering;
 pub struct FreqAst {
     pub data: Option<DatasetRef>,
     pub tables: Vec<TableRequest>,
+    /// WEIGHT statement variable (cell frequencies become the sum of weights).
+    pub weight: Option<String>,
+    /// BY statement variables (one independent analysis per BY group).
+    pub by: Vec<(String, bool)>,
 }
 
 pub struct TableRequest {
@@ -91,6 +95,8 @@ pub struct TableRequest {
     pub measures: bool,
     /// TREND (Cochran-Armitage trend test, 2xc or rx2).
     pub trend: bool,
+    /// LIST layout (one row per non-empty cell instead of the grid).
+    pub list: bool,
 }
 
 /// Parse `proc freq [data=a] ; [tables ...;]... run;`. Called AFTER
@@ -130,6 +136,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
 
     // --- sub-statements until run;/quit; ---
     let mut tables: Vec<TableRequest> = Vec::new();
+    let mut weight: Option<String> = None;
+    let mut by: Vec<(String, bool)> = Vec::new();
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
     common::parse_proc_body(ts, |ts, kw| {
@@ -140,11 +148,26 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
                 tables.extend(reqs);
                 true
             }
+            "weight" => {
+                ts.next();
+                weight = Some(common::parse_weight(ts)?);
+                true
+            }
+            "by" => {
+                ts.next();
+                by = common::parse_by(ts)?;
+                true
+            }
             _ => false,
         })
     })?;
 
-    Ok(FreqAst { data, tables })
+    Ok(FreqAst {
+        data,
+        tables,
+        weight,
+        by,
+    })
 }
 
 /// Parse one TABLES statement body (after "tables" consumed), through its
@@ -168,7 +191,8 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
         };
         ts.next();
         let mut vars = vec![first];
-        if ts.peek().kind == TokenKind::Star {
+        // Allow an arbitrary chain v1*v2*v3*… (n-way crosstab).
+        while ts.peek().kind == TokenKind::Star {
             ts.next();
             let snd_tok = ts.peek().clone();
             let Some(snd) = snd_tok.ident().map(str::to_string) else {
@@ -196,6 +220,7 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
     let mut agree = false;
     let mut measures = false;
     let mut trend = false;
+    let mut list = false;
     if ts.peek().kind == TokenKind::Slash {
         ts.next();
         loop {
@@ -239,6 +264,9 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
             } else if ts.peek().is_kw("trend") {
                 ts.next();
                 trend = true;
+            } else if ts.peek().is_kw("list") {
+                ts.next();
+                list = true;
             } else if let Some(name) = ts.peek().ident().map(str::to_string) {
                 // Unknown option: ignore leniently (skip the token, and any
                 // `=value` that follows).
@@ -286,6 +314,7 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
             agree,
             measures,
             trend,
+            list,
         })
         .collect())
 }
@@ -313,21 +342,59 @@ fn fmt_pct(p: f64) -> String {
     format!("{p:.2}")
 }
 
-/// A distinct category with its observed frequency, in sas_cmp order.
-struct Category {
-    value: Value,
-    freq: usize,
+/// Format a (possibly weighted) frequency. Integral values print as plain
+/// integers (so the unweighted default path stays byte-identical and integer
+/// weights still look like counts); fractional weighted frequencies print with
+/// the SAS default of two decimals.
+fn fmt_freq(f: f64) -> String {
+    if (f - f.round()).abs() < 1e-9 {
+        format!("{}", f.round() as i64)
+    } else {
+        format!("{f:.2}")
+    }
 }
 
-/// Tally the distinct values of `col` into categories ordered by sas_cmp.
-/// When `include_missing` is false, missing values are excluded (their count
-/// is returned separately as `n_missing`).
-fn tally(col: &[Value], include_missing: bool) -> (Vec<Category>, usize) {
+/// A distinct category with its observed (possibly weighted) frequency, in
+/// sas_cmp order. With no WEIGHT the frequency is an integer count stored as
+/// f64; with WEIGHT it is the sum of the category's weights.
+struct Category {
+    value: Value,
+    freq: f64,
+}
+
+/// Tally the distinct values of `col` (restricted to `rows`) into categories
+/// ordered by sas_cmp. When `include_missing` is false, missing values are
+/// excluded (their frequency is returned separately as `n_missing`).
+///
+/// When `weights` is `Some`, each observation contributes its weight instead
+/// of 1, applying SAS WEIGHT exclusion rules (an observation with a missing or
+/// non-positive weight is dropped and counted in `n_weight_excluded`). The
+/// "Frequency Missing" tally (`n_missing`) accumulates the WEIGHT of the
+/// excluded observations so the weighted accounting stays consistent.
+fn tally(
+    col: &[Value],
+    rows: &[usize],
+    include_missing: bool,
+    weights: Option<&[Value]>,
+) -> (Vec<Category>, f64) {
     let mut cats: Vec<Category> = Vec::new();
-    let mut n_missing = 0usize;
-    for v in col {
+    let mut n_missing = 0.0_f64;
+    for &i in rows {
+        let v = &col[i];
+        // Resolve this observation's weight (1.0 when no WEIGHT statement).
+        let w = match weights {
+            None => 1.0,
+            Some(wc) => match value_to_num(&wc[i]) {
+                Some(wf) if !wf.is_nan() && wf > 0.0 => wf,
+                // Missing or non-positive weight: SAS drops the observation
+                // entirely (it contributes neither to a cell nor to the
+                // frequency-missing tally for the analysis variable here — but
+                // a missing analysis value is still counted below).
+                _ => continue,
+            },
+        };
         if v.is_missing() {
-            n_missing += 1;
+            n_missing += w;
             if !include_missing {
                 continue;
             }
@@ -336,10 +403,10 @@ fn tally(col: &[Value], include_missing: bool) -> (Vec<Category>, usize) {
             .iter_mut()
             .find(|c| c.value.sas_cmp(v) == Ordering::Equal)
         {
-            Some(c) => c.freq += 1,
+            Some(c) => c.freq += w,
             None => cats.push(Category {
                 value: v.clone(),
-                freq: 1,
+                freq: w,
             }),
         }
     }
@@ -361,6 +428,31 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
 
     let n_obs = ds.n_obs();
 
+    // --- WEIGHT statement: decode the weight column once (or None). ---
+    let weight_values: Option<Vec<Value>> = match &ast.weight {
+        Some(wname) => {
+            let widx = find_var(&ds, wname)?;
+            Some(decode_column(&ds, widx)?)
+        }
+        None => None,
+    };
+
+    // --- BY processing: resolve, verify sortedness, partition into groups. ---
+    // No BY → a single group spanning all rows (output byte-identical).
+    let by_cols = common::resolve_by_cols(&ds, &ast.by)?;
+    let by_values: Vec<Vec<Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
+    } else {
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
+    };
+
     session.listing.page_header();
     // Centered procedure title line.
     let title = "The FREQ Procedure";
@@ -371,14 +463,15 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
         .write_line(&format!("{}{}", " ".repeat(pad), title));
     session.listing.blank();
 
-    for req in &ast.tables {
-        match req.vars.len() {
-            1 => one_way(session, &ds, req, n_obs)?,
-            2 => two_way(session, &ds, req, n_obs)?,
-            _ => {
-                return Err(SasError::runtime(
-                    "A TABLES request must name one or two variables.",
-                ));
+    for (by_key, grp_rows) in &by_groups_list {
+        if !by_names.is_empty() {
+            emit_by_heading(session, &by_names, by_key);
+        }
+        for req in &ast.tables {
+            match req.vars.len() {
+                1 => one_way(session, &ds, req, grp_rows, weight_values.as_deref())?,
+                2 => two_way(session, &ds, req, grp_rows, weight_values.as_deref())?,
+                _ => n_way(session, &ds, req, grp_rows, weight_values.as_deref())?,
             }
         }
     }
@@ -386,23 +479,37 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
-/// One-way frequency table for a single variable.
+/// Emit the standard BY-group heading line (`var=val var2=val2`), matching the
+/// MEANS/UNIVARIATE rendering.
+fn emit_by_heading(session: &mut Session, by_names: &[String], by_key: &[Value]) {
+    let parts: Vec<String> = by_names
+        .iter()
+        .zip(by_key)
+        .map(|(name, v)| format!("{}={}", name, category_label(v)))
+        .collect();
+    session.listing.write_line(&parts.join(" "));
+    session.listing.blank();
+}
+
+/// One-way frequency table for a single variable, over `rows` (one BY group
+/// or all rows). `weights` carries the WEIGHT column when present.
 fn one_way(
     session: &mut Session,
     ds: &SasDataset,
     req: &TableRequest,
-    n_obs: usize,
+    rows: &[usize],
+    weights: Option<&[Value]>,
 ) -> Result<()> {
     let col_idx = find_var(ds, &req.vars[0])?;
     let col = decode_column(ds, col_idx)?;
     let var_name = ds.vars[col_idx].name.clone();
 
-    let (cats, n_missing) = tally(&col, req.missing);
+    let (cats, n_missing) = tally(&col, rows, req.missing, weights);
 
     // Denominator: the sum of the category frequencies already gives the
     // right value — with MISSING the missing categories are included in
     // `cats`, otherwise they are excluded (so denom = non-missing count).
-    let denom: usize = cats.iter().map(|c| c.freq).sum();
+    let denom: f64 = cats.iter().map(|c| c.freq).sum();
 
     // Listing table. Display options suppress whole columns:
     //   NOFREQ    -> drop Frequency
@@ -437,44 +544,44 @@ fn one_way(
         aligns.push(Align::Right);
     }
 
-    let mut rows: Vec<Vec<String>> = Vec::with_capacity(cats.len());
-    let mut cum_freq = 0usize;
+    let mut out_rows: Vec<Vec<String>> = Vec::with_capacity(cats.len());
+    let mut cum_freq = 0.0_f64;
     for c in &cats {
         cum_freq += c.freq;
-        let pct = if denom > 0 {
-            100.0 * c.freq as f64 / denom as f64
+        let pct = if denom > 0.0 {
+            100.0 * c.freq / denom
         } else {
             0.0
         };
-        let cum_pct = if denom > 0 {
-            100.0 * cum_freq as f64 / denom as f64
+        let cum_pct = if denom > 0.0 {
+            100.0 * cum_freq / denom
         } else {
             0.0
         };
         let mut row = vec![category_label(&c.value)];
         if show_freq {
-            row.push(format!("{}", c.freq));
+            row.push(fmt_freq(c.freq));
         }
         if show_pct {
             row.push(fmt_pct(pct));
         }
         if show_cum_freq {
-            row.push(format!("{cum_freq}"));
+            row.push(fmt_freq(cum_freq));
         }
         if show_cum_pct {
             row.push(fmt_pct(cum_pct));
         }
-        rows.push(row);
+        out_rows.push(row);
     }
 
-    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.write_table(&headers, &aligns, &out_rows);
 
     // Frequency Missing line (only when missings are excluded).
-    if !req.missing && n_missing > 0 {
+    if !req.missing && n_missing > 0.0 {
         session.listing.blank();
         session
             .listing
-            .write_line(&format!("Frequency Missing = {n_missing}"));
+            .write_line(&format!("Frequency Missing = {}", fmt_freq(n_missing)));
     }
 
     // CHISQ one-way: goodness-of-fit against equal proportions.
@@ -496,20 +603,20 @@ fn one_way(
 /// graceful note.
 fn chisq_one_way_block(session: &mut Session, cats: &[Category]) {
     let k = cats.len();
-    let n: usize = cats.iter().map(|c| c.freq).sum();
+    let n: f64 = cats.iter().map(|c| c.freq).sum();
 
     session.listing.blank();
-    if k < 2 || n == 0 {
+    if k < 2 || n <= 0.0 {
         session
             .listing
             .write_line("Chi-Square Test for Equal Proportions is not computable for this table.");
         return;
     }
 
-    let exp = n as f64 / k as f64;
+    let exp = n / k as f64;
     let mut chisq = 0.0_f64;
     for c in cats {
-        let d = c.freq as f64 - exp;
+        let d = c.freq - exp;
         chisq += d * d / exp;
     }
     let df = (k - 1) as f64;
@@ -536,7 +643,7 @@ fn write_one_way_out(
     ds: &SasDataset,
     col_idx: usize,
     cats: &[Category],
-    denom: usize,
+    denom: f64,
     out: &DatasetRef,
 ) -> Result<()> {
     let meta = &ds.vars[col_idx];
@@ -566,7 +673,7 @@ fn write_one_way_out(
     vars.push(meta.clone());
 
     // COUNT.
-    let count_vals: Vec<Option<f64>> = cats.iter().map(|c| Some(c.freq as f64)).collect();
+    let count_vals: Vec<Option<f64>> = cats.iter().map(|c| Some(c.freq)).collect();
     columns.push(Series::new("COUNT".into(), count_vals).into());
     vars.push(num_var_meta("COUNT"));
 
@@ -574,8 +681,8 @@ fn write_one_way_out(
     let pct_vals: Vec<Option<f64>> = cats
         .iter()
         .map(|c| {
-            Some(if denom > 0 {
-                100.0 * c.freq as f64 / denom as f64
+            Some(if denom > 0.0 {
+                100.0 * c.freq / denom
             } else {
                 0.0
             })
@@ -604,12 +711,61 @@ fn write_one_way_out(
     Ok(())
 }
 
-/// Two-way crosstab for v1*v2.
+/// Resolve this observation's weight (1.0 when no WEIGHT), applying the SAS
+/// exclusion rules (missing/non-positive → None, i.e. drop the observation).
+fn obs_weight(weights: Option<&[Value]>, i: usize) -> Option<f64> {
+    match weights {
+        None => Some(1.0),
+        Some(wc) => match value_to_num(&wc[i]) {
+            Some(wf) if !wf.is_nan() && wf > 0.0 => Some(wf),
+            _ => None,
+        },
+    }
+}
+
+/// Distinct sas_cmp-ordered values of `col` over `rows`, keeping missings only
+/// when `include_missing` is set, and only for observations with a usable
+/// weight.
+fn distinct_axis(
+    col: &[Value],
+    rows: &[usize],
+    include_missing: bool,
+    weights: Option<&[Value]>,
+) -> Vec<Value> {
+    let mut vals: Vec<Value> = Vec::new();
+    for &i in rows {
+        if obs_weight(weights, i).is_none() {
+            continue;
+        }
+        let v = &col[i];
+        if (include_missing || !v.is_missing())
+            && !vals.iter().any(|x| x.sas_cmp(v) == Ordering::Equal)
+        {
+            vals.push(v.clone());
+        }
+    }
+    vals.sort_by(|a, b| a.sas_cmp(b));
+    vals
+}
+
+/// Round a weighted frequency matrix to integer counts for the integer-only
+/// statistics blocks (Fisher/MEASURES/AGREE/TREND). These tests are defined on
+/// counts; with integer weights the rounding is exact, with fractional weights
+/// it is a documented approximation (SAS itself only supports these on
+/// frequency counts). CHISQ uses the exact weighted values directly.
+fn round_matrix(freq: &[Vec<f64>]) -> Vec<Vec<usize>> {
+    freq.iter()
+        .map(|row| row.iter().map(|&f| f.round().max(0.0) as usize).collect())
+        .collect()
+}
+
+/// Two-way crosstab for v1*v2, over `rows` with optional weights.
 fn two_way(
     session: &mut Session,
     ds: &SasDataset,
     req: &TableRequest,
-    n_obs: usize,
+    rows: &[usize],
+    weights: Option<&[Value]>,
 ) -> Result<()> {
     let row_idx = find_var(ds, &req.vars[0])?;
     let col_idx = find_var(ds, &req.vars[1])?;
@@ -618,32 +774,19 @@ fn two_way(
     let row_name = ds.vars[row_idx].name.clone();
     let col_name = ds.vars[col_idx].name.clone();
 
-    // Distinct row and column values (ordered by sas_cmp), filtering missings
-    // unless MISSING is set. A cell counts an obs only when BOTH its row and
-    // column values are kept.
     let keep = |v: &Value| req.missing || !v.is_missing();
-
-    let mut row_vals: Vec<Value> = Vec::new();
-    let mut col_vals: Vec<Value> = Vec::new();
-    for v in &row_col {
-        if keep(v) && !row_vals.iter().any(|x| x.sas_cmp(v) == Ordering::Equal) {
-            row_vals.push(v.clone());
-        }
-    }
-    for v in &col_col {
-        if keep(v) && !col_vals.iter().any(|x| x.sas_cmp(v) == Ordering::Equal) {
-            col_vals.push(v.clone());
-        }
-    }
-    row_vals.sort_by(|a, b| a.sas_cmp(b));
-    col_vals.sort_by(|a, b| a.sas_cmp(b));
+    let row_vals = distinct_axis(&row_col, rows, req.missing, weights);
+    let col_vals = distinct_axis(&col_col, rows, req.missing, weights);
 
     let nr = row_vals.len();
     let nc = col_vals.len();
 
-    // freq[r][c]
-    let mut freq = vec![vec![0usize; nc]; nr];
-    for i in 0..n_obs {
+    // freq[r][c] = sum of weights (or counts) for the cell.
+    let mut freq = vec![vec![0.0_f64; nc]; nr];
+    for &i in rows {
+        let Some(w) = obs_weight(weights, i) else {
+            continue;
+        };
         let rv = &row_col[i];
         let cv = &col_col[i];
         if !keep(rv) || !keep(cv) {
@@ -652,15 +795,42 @@ fn two_way(
         let r = row_vals.iter().position(|x| x.sas_cmp(rv) == Ordering::Equal);
         let c = col_vals.iter().position(|x| x.sas_cmp(cv) == Ordering::Equal);
         if let (Some(r), Some(c)) = (r, c) {
-            freq[r][c] += 1;
+            freq[r][c] += w;
         }
     }
 
-    let row_tot: Vec<usize> = (0..nr).map(|r| freq[r].iter().sum()).collect();
-    let col_tot: Vec<usize> = (0..nc)
-        .map(|c| (0..nr).map(|r| freq[r][c]).sum())
-        .collect();
-    let grand: usize = row_tot.iter().sum();
+    render_two_way(session, req, &row_name, &col_name, &row_vals, &col_vals, &freq);
+    Ok(())
+}
+
+/// Render a two-way crosstab from a computed weighted frequency matrix:
+/// grid layout (default) or LIST layout (`/LIST`), followed by any requested
+/// statistic blocks. Shared by `two_way` and the n-way stratified renderer.
+fn render_two_way(
+    session: &mut Session,
+    req: &TableRequest,
+    row_name: &str,
+    col_name: &str,
+    row_vals: &[Value],
+    col_vals: &[Value],
+    freq: &[Vec<f64>],
+) {
+    let nr = row_vals.len();
+    let nc = col_vals.len();
+
+    let row_tot: Vec<f64> = (0..nr).map(|r| freq[r].iter().sum()).collect();
+    let col_tot: Vec<f64> = (0..nc).map(|c| (0..nr).map(|r| freq[r][c]).sum()).collect();
+    let grand: f64 = row_tot.iter().sum();
+
+    // LIST layout: one row per non-empty cell, suppressing the grid and the
+    // row/col percentages (SAS LIST shows Frequency / Percent / Cumulative).
+    if req.list {
+        render_two_way_list(
+            session, req, row_name, col_name, row_vals, col_vals, freq, grand,
+        );
+        emit_two_way_stats(session, req, row_name, col_name, freq, &row_tot, &col_tot, grand);
+        return;
+    }
 
     // Which stacked per-cell lines to show. Display options drop a line:
     //   NOFREQ    -> Frequency, NOPERCENT -> Percent,
@@ -698,8 +868,8 @@ fn two_way(
     }
 
     // Header: row-var name, one column per col value, then Total.
-    let mut headers = vec![row_name.clone()];
-    for cv in &col_vals {
+    let mut headers = vec![row_name.to_string()];
+    for cv in col_vals {
         headers.push(category_label(cv));
     }
     headers.push("Total".to_string());
@@ -712,9 +882,9 @@ fn two_way(
     // Each logical row -> 4 physical rows (Frequency, Percent, Row Pct,
     // Col Pct). The first physical row carries the row-value label.
     let mut rows: Vec<Vec<String>> = Vec::new();
-    let pct_of = |num: usize, den: usize| -> String {
-        if den > 0 {
-            fmt_pct(100.0 * num as f64 / den as f64)
+    let pct_of = |num: f64, den: f64| -> String {
+        if den > 0.0 {
+            fmt_pct(100.0 * num / den)
         } else {
             fmt_pct(0.0)
         }
@@ -749,13 +919,13 @@ fn two_way(
         }];
         for c in 0..nc {
             let f = freq[r][c];
-            line_freq.push(format!("{f}"));
+            line_freq.push(fmt_freq(f));
             line_pct.push(pct_of(f, grand));
             line_rowp.push(pct_of(f, row_tot[r]));
             line_colp.push(pct_of(f, col_tot[c]));
         }
         // Row total margin: Frequency + Percent only.
-        line_freq.push(format!("{}", row_tot[r]));
+        line_freq.push(fmt_freq(row_tot[r]));
         line_pct.push(pct_of(row_tot[r], grand));
         line_rowp.push(String::new());
         line_colp.push(String::new());
@@ -777,10 +947,10 @@ fn two_way(
     let mut tot_freq = vec!["Total".to_string()];
     let mut tot_pct = vec![String::new()];
     for c in 0..nc {
-        tot_freq.push(format!("{}", col_tot[c]));
+        tot_freq.push(fmt_freq(col_tot[c]));
         tot_pct.push(pct_of(col_tot[c], grand));
     }
-    tot_freq.push(format!("{grand}"));
+    tot_freq.push(fmt_freq(grand));
     tot_pct.push(pct_of(grand, grand));
     if show_freq {
         rows.push(tot_freq);
@@ -796,21 +966,207 @@ fn two_way(
 
     session.listing.write_table(&headers, &aligns, &rows);
 
-    // CHISQ statistics (two-way only), printed after the crosstab.
+    emit_two_way_stats(session, req, row_name, col_name, freq, &row_tot, &col_tot, grand);
+}
+
+/// Print all requested statistic blocks for a two-way table. CHISQ uses the
+/// exact (possibly weighted) frequencies; the integer-count tests
+/// (Fisher/MEASURES/AGREE/TREND) operate on a rounded copy.
+#[allow(clippy::too_many_arguments)]
+fn emit_two_way_stats(
+    session: &mut Session,
+    req: &TableRequest,
+    row_name: &str,
+    col_name: &str,
+    freq: &[Vec<f64>],
+    row_tot: &[f64],
+    col_tot: &[f64],
+    grand: f64,
+) {
     if req.chisq {
-        chisq_block(session, &row_name, &col_name, &freq, &row_tot, &col_tot, grand);
+        chisq_block(session, row_name, col_name, freq, row_tot, col_tot, grand);
     }
-    if req.fisher {
-        fisher_block(session, &freq, &row_tot, &col_tot, grand);
+    if req.fisher || req.trend || req.measures || req.agree {
+        let ifreq = round_matrix(freq);
+        let irow: Vec<usize> = ifreq.iter().map(|r| r.iter().sum()).collect();
+        let icol: Vec<usize> = (0..col_tot.len())
+            .map(|c| (0..ifreq.len()).map(|r| ifreq[r][c]).sum())
+            .collect();
+        let igrand: usize = irow.iter().sum();
+        if req.fisher {
+            fisher_block(session, &ifreq, &irow, &icol, igrand);
+        }
+        if req.trend {
+            trend_block(session, &ifreq, &irow, &icol, igrand);
+        }
+        if req.measures {
+            measures_block(session, &ifreq);
+        }
+        if req.agree {
+            agree_block(session, &ifreq, &irow, &icol, igrand);
+        }
     }
-    if req.trend {
-        trend_block(session, &freq, &row_tot, &col_tot, grand);
+}
+
+/// Render a two-way table in LIST layout: one row per non-empty cell, with
+/// columns (row var, col var, Frequency, Percent, Cumulative Frequency,
+/// Cumulative Percent). Cells are walked in sas_cmp order (row-major). LIST
+/// suppresses the grid and the Row/Col percentages.
+#[allow(clippy::too_many_arguments)]
+fn render_two_way_list(
+    session: &mut Session,
+    req: &TableRequest,
+    row_name: &str,
+    col_name: &str,
+    row_vals: &[Value],
+    col_vals: &[Value],
+    freq: &[Vec<f64>],
+    grand: f64,
+) {
+    session
+        .listing
+        .write_line(&format!("Table of {row_name} by {col_name}"));
+    session.listing.blank();
+
+    let headers = vec![
+        row_name.to_string(),
+        col_name.to_string(),
+        "Frequency".to_string(),
+        "Percent".to_string(),
+        "Cumulative Frequency".to_string(),
+        "Cumulative Percent".to_string(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut cum = 0.0_f64;
+    for r in 0..row_vals.len() {
+        for c in 0..col_vals.len() {
+            let f = freq[r][c];
+            if f == 0.0 {
+                continue; // LIST prints only non-empty cells.
+            }
+            cum += f;
+            let pct = if grand > 0.0 { 100.0 * f / grand } else { 0.0 };
+            let cum_pct = if grand > 0.0 { 100.0 * cum / grand } else { 0.0 };
+            rows.push(vec![
+                category_label(&row_vals[r]),
+                category_label(&col_vals[c]),
+                fmt_freq(f),
+                fmt_pct(pct),
+                fmt_freq(cum),
+                fmt_pct(cum_pct),
+            ]);
+        }
     }
-    if req.measures {
-        measures_block(session, &freq);
+
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// n-way (≥3 variables) crosstab. SAS prints this as a series of two-way
+/// tables of the LAST two variables, stratified by the distinct combinations
+/// of the leading variable(s). Each stratum is preceded by a header line
+/// naming the controlling values, then rendered with the existing two-way
+/// layout (grid or LIST) and statistics.
+fn n_way(
+    session: &mut Session,
+    ds: &SasDataset,
+    req: &TableRequest,
+    rows: &[usize],
+    weights: Option<&[Value]>,
+) -> Result<()> {
+    let k = req.vars.len();
+    // Resolve all columns once.
+    let cols: Vec<Vec<Value>> = req
+        .vars
+        .iter()
+        .map(|v| find_var(ds, v).and_then(|i| decode_column(ds, i)))
+        .collect::<Result<_>>()?;
+    let names: Vec<String> = req
+        .vars
+        .iter()
+        .map(|v| {
+            find_var(ds, v)
+                .map(|i| ds.vars[i].name.clone())
+                .unwrap_or_else(|_| v.clone())
+        })
+        .collect();
+
+    // The leading vars (all but the last two) define the strata.
+    let lead = k - 2;
+    let row_col = &cols[k - 2];
+    let col_col = &cols[k - 1];
+    let row_name = &names[k - 2];
+    let col_name = &names[k - 1];
+
+    let keep = |v: &Value| req.missing || !v.is_missing();
+
+    // Distinct stratum keys (tuple of leading values) in sas_cmp order, only
+    // over rows that pass the keep filter on the stratum vars and have a usable
+    // weight.
+    let lead_cols: Vec<&Vec<Value>> = (0..lead).map(|j| &cols[j]).collect();
+    let mut stratum_rows: Vec<usize> = Vec::new();
+    for &i in rows {
+        if obs_weight(weights, i).is_none() {
+            continue;
+        }
+        if (0..lead).all(|j| keep(&cols[j][i])) {
+            stratum_rows.push(i);
+        }
     }
-    if req.agree {
-        agree_block(session, &freq, &row_tot, &col_tot, grand);
+    let strata = common::group_by_keys(&lead_cols, ds.n_obs());
+    // group_by_keys walks all rows; restrict each stratum to our `rows` subset.
+    let row_set: std::collections::HashSet<usize> = stratum_rows.iter().copied().collect();
+
+    for (key, all_grp_rows) in &strata {
+        let grp_rows: Vec<usize> = all_grp_rows
+            .iter()
+            .copied()
+            .filter(|i| row_set.contains(i))
+            .collect();
+        if grp_rows.is_empty() {
+            continue;
+        }
+        // Stratum header: lead1=val1 lead2=val2 ...
+        let header: Vec<String> = (0..lead)
+            .map(|j| format!("{}={}", names[j], category_label(&key[j])))
+            .collect();
+        session
+            .listing
+            .write_line(&format!("Controlling for {}", header.join(" ")));
+        session.listing.blank();
+
+        // Build the two-way frequency matrix for this stratum.
+        let row_vals = distinct_axis(row_col, &grp_rows, req.missing, weights);
+        let col_vals = distinct_axis(col_col, &grp_rows, req.missing, weights);
+        let nr = row_vals.len();
+        let nc = col_vals.len();
+        let mut freq = vec![vec![0.0_f64; nc]; nr];
+        for &i in &grp_rows {
+            let Some(w) = obs_weight(weights, i) else {
+                continue;
+            };
+            let rv = &row_col[i];
+            let cv = &col_col[i];
+            if !keep(rv) || !keep(cv) {
+                continue;
+            }
+            let r = row_vals.iter().position(|x| x.sas_cmp(rv) == Ordering::Equal);
+            let c = col_vals.iter().position(|x| x.sas_cmp(cv) == Ordering::Equal);
+            if let (Some(r), Some(c)) = (r, c) {
+                freq[r][c] += w;
+            }
+        }
+
+        render_two_way(session, req, row_name, col_name, &row_vals, &col_vals, &freq);
+        session.listing.blank();
     }
 
     Ok(())
@@ -1187,10 +1543,10 @@ fn chisq_block(
     session: &mut Session,
     row_name: &str,
     col_name: &str,
-    freq: &[Vec<usize>],
-    row_tot: &[usize],
-    col_tot: &[usize],
-    grand: usize,
+    freq: &[Vec<f64>],
+    row_tot: &[f64],
+    col_tot: &[f64],
+    grand: f64,
 ) {
     session.listing.blank();
     session
@@ -1203,10 +1559,10 @@ fn chisq_block(
     let df = (nr.saturating_sub(1)) * (nc.saturating_sub(1));
 
     // Guard against degenerate tables: no expected counts are defined.
-    if grand == 0
+    if grand <= 0.0
         || df == 0
-        || row_tot.contains(&0)
-        || col_tot.contains(&0)
+        || row_tot.iter().any(|&t| t <= 0.0)
+        || col_tot.iter().any(|&t| t <= 0.0)
     {
         session
             .listing
@@ -1214,13 +1570,13 @@ fn chisq_block(
         return;
     }
 
-    let g = grand as f64;
+    let g = grand;
     let mut pearson = 0.0_f64;
     let mut lratio = 0.0_f64;
     for r in 0..nr {
         for c in 0..nc {
-            let e = (row_tot[r] as f64) * (col_tot[c] as f64) / g;
-            let n = freq[r][c] as f64;
+            let e = row_tot[r] * col_tot[c] / g;
+            let n = freq[r][c];
             if e > 0.0 {
                 let d = n - e;
                 pearson += d * d / e;
@@ -1328,6 +1684,17 @@ mod tests {
             agree: false,
             measures: false,
             trend: false,
+            list: false,
+        }
+    }
+
+    /// Build a FreqAst with no WEIGHT/BY (test convenience).
+    fn fast(data: DatasetRef, tables: Vec<TableRequest>) -> FreqAst {
+        FreqAst {
+            data: Some(data),
+            tables,
+            weight: None,
+            by: Vec::new(),
         }
     }
 
@@ -1415,27 +1782,29 @@ mod tests {
             Value::Num(2.0),
             Value::missing(),
         ];
-        let (cats, nm) = tally(&col, false);
-        assert_eq!(nm, 1);
+        let rows: Vec<usize> = (0..col.len()).collect();
+        let (cats, nm) = tally(&col, &rows, false, None);
+        assert_eq!(nm, 1.0);
         // sas_cmp order: 1 then 2.
         assert_eq!(cats.len(), 2);
         assert_eq!(cats[0].value, Value::Num(1.0));
-        assert_eq!(cats[0].freq, 1);
+        assert_eq!(cats[0].freq, 1.0);
         assert_eq!(cats[1].value, Value::Num(2.0));
-        assert_eq!(cats[1].freq, 2);
+        assert_eq!(cats[1].freq, 2.0);
     }
 
     #[test]
     fn tally_includes_missing_when_requested() {
         let col = vec![Value::Num(2.0), Value::missing(), Value::Num(2.0)];
-        let (cats, nm) = tally(&col, true);
-        assert_eq!(nm, 1);
+        let rows: Vec<usize> = (0..col.len()).collect();
+        let (cats, nm) = tally(&col, &rows, true, None);
+        assert_eq!(nm, 1.0);
         // Missing sorts before numbers.
         assert_eq!(cats.len(), 2);
         assert!(cats[0].value.is_missing());
-        assert_eq!(cats[0].freq, 1);
+        assert_eq!(cats[0].freq, 1.0);
         assert_eq!(cats[1].value, Value::Num(2.0));
-        assert_eq!(cats[1].freq, 2);
+        assert_eq!(cats[1].freq, 2.0);
     }
 
     // ───────────────────────────── execute tests ───────────────────────────
@@ -1451,6 +1820,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![tr(&["x"], false, None)],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1475,6 +1846,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![tr(&["x"], true, None)],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1501,6 +1874,8 @@ mod tests {
                 false,
                 Some(DatasetRef { libref: Some("WORK".into()), name: "O".into() }),
             )],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1542,6 +1917,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![tr(&["r", "c"], false, None)],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1579,6 +1956,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![req],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
         session.listing.into_string()
@@ -1626,6 +2005,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![req],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
         session.listing.into_string()
@@ -1687,6 +2068,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![req],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
 
@@ -1749,10 +2132,10 @@ mod tests {
         // chisq = (15²+5²+5²+15²)/25 = (225+25+25+225)/25 = 500/25 = 20.
         // DF=3, p = chisq_sf(20,3) ~ 0.00017.
         let cats = vec![
-            Category { value: Value::Num(1.0), freq: 10 },
-            Category { value: Value::Num(2.0), freq: 20 },
-            Category { value: Value::Num(3.0), freq: 30 },
-            Category { value: Value::Num(4.0), freq: 40 },
+            Category { value: Value::Num(1.0), freq: 10.0 },
+            Category { value: Value::Num(2.0), freq: 20.0 },
+            Category { value: Value::Num(3.0), freq: 30.0 },
+            Category { value: Value::Num(4.0), freq: 40.0 },
         ];
         let out = run_block(|s| chisq_one_way_block(s, &cats));
         assert!(out.contains("Chi-Square Test for Equal Proportions"), "{out}");
@@ -1764,10 +2147,10 @@ mod tests {
     #[test]
     fn chisq_one_way_uniform_is_zero() {
         let cats = vec![
-            Category { value: Value::Num(1.0), freq: 25 },
-            Category { value: Value::Num(2.0), freq: 25 },
-            Category { value: Value::Num(3.0), freq: 25 },
-            Category { value: Value::Num(4.0), freq: 25 },
+            Category { value: Value::Num(1.0), freq: 25.0 },
+            Category { value: Value::Num(2.0), freq: 25.0 },
+            Category { value: Value::Num(3.0), freq: 25.0 },
+            Category { value: Value::Num(4.0), freq: 25.0 },
         ];
         let out = run_block(|s| chisq_one_way_block(s, &cats));
         assert!(out.contains("0.0000"), "{out}");
@@ -1775,7 +2158,7 @@ mod tests {
 
     #[test]
     fn chisq_one_way_degenerate_note() {
-        let cats = vec![Category { value: Value::Num(1.0), freq: 5 }];
+        let cats = vec![Category { value: Value::Num(1.0), freq: 5.0 }];
         let out = run_block(|s| chisq_one_way_block(s, &cats));
         assert!(out.contains("not computable"), "{out}");
     }
@@ -2001,6 +2384,8 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![req],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
@@ -2027,10 +2412,236 @@ mod tests {
         let ast = FreqAst {
             data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
             tables: vec![req],
+            weight: None,
+            by: Vec::new(),
         };
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
         assert!(listing.contains("Chi-Square Test for Equal Proportions"), "{listing}");
         assert!(listing.contains("20.0000"), "{listing}");
+    }
+
+    // ───────────────────── M33.1 WEIGHT / BY / LIST / n-way ─────────────────────
+
+    /// WEIGHT one-way: the cell frequency is the SUM OF WEIGHTS, not the count.
+    /// x = [1, 1, 2]; w = [2, 3, 5].
+    ///   cat 1 -> weight 2+3 = 5 ; cat 2 -> weight 5. denom = 10.
+    ///   percent 1 -> 50.00 ; percent 2 -> 50.00. cumulative 5 then 10.
+    #[test]
+    fn weighted_one_way_sum_of_weights() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 1.0, 2.0],
+            "w" => [2.0_f64, 3.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![tr(&["x"], false, None)],
+        );
+        ast.weight = Some("w".to_string());
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        // Frequencies 5 and 5 (sum of weights), each 50.00%, cum 5 then 10.
+        assert!(l.contains("50.00"), "{l}");
+        // Integer-valued weighted freqs print as integers (no decimals).
+        assert!(l.contains(" 5 ") || l.contains(" 5\n") || l.contains("5  "), "{l}");
+        assert!(l.contains("100.00"), "{l}");
+    }
+
+    /// WEIGHT excludes observations whose weight is missing or non-positive.
+    /// x = [1, 1, 2, 2]; w = [4, ., -1, 6].
+    ///   obs2 (w missing) dropped, obs3 (w=-1) dropped.
+    ///   cat 1 -> 4 ; cat 2 -> 6. denom = 10. percents 40.00 / 60.00.
+    #[test]
+    fn weighted_excludes_missing_and_nonpositive() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 1.0, 2.0, 2.0],
+            "w" => [Some(4.0_f64), None, Some(-1.0), Some(6.0)]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![tr(&["x"], false, None)],
+        );
+        ast.weight = Some("w".to_string());
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        assert!(l.contains("40.00"), "cat1 = 4/10 = 40.00:\n{l}");
+        assert!(l.contains("60.00"), "cat2 = 6/10 = 60.00:\n{l}");
+    }
+
+    /// WEIGHT feeds CHISQ. 2x2 with weighted counts == the classic
+    /// [[10,20],[30,40]] table built from unit cells with those weights.
+    /// Pearson chi-square = 0.7937 (DF=1), as in `crosstab_chisq_2x2_hand_computed`.
+    #[test]
+    fn weighted_two_way_chisq() {
+        let mut session = make_session();
+        // One observation per cell, weight = the desired count.
+        let df = df![
+            "r" => ["a", "a", "b", "b"],
+            "c" => [1.0_f64, 2.0, 1.0, 2.0],
+            "w" => [10.0_f64, 20.0, 30.0, 40.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("r"), num_meta("c"), num_meta("w")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let mut req = tr(&["r", "c"], false, None);
+        req.chisq = true;
+        let mut ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![req],
+        );
+        ast.weight = Some("w".to_string());
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        // Weighted grand total = 100 ; Pearson = 0.7937.
+        assert!(l.contains("0.7937"), "weighted Pearson 0.7937:\n{l}");
+        // Weighted cell freq for (a,1) is 10 (integer-printed).
+        assert!(l.contains("10"), "{l}");
+    }
+
+    /// BY splits the analysis into one section per group. class-like toy:
+    /// g = [A,A,A,B,B] (sorted); x = [1,2,2,1,1].
+    ///   Group A: x=1 freq 1 (33.33%), x=2 freq 2 (66.67%).
+    ///   Group B: x=1 freq 2 (100.00%).
+    #[test]
+    fn by_groups_split_one_way() {
+        let mut session = make_session();
+        let df = df![
+            "g" => ["A", "A", "A", "B", "B"],
+            "x" => [1.0_f64, 2.0, 2.0, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![tr(&["x"], false, None)],
+        );
+        ast.by = vec![("g".to_string(), false)];
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        assert!(l.contains("g=A"), "BY header for A:\n{l}");
+        assert!(l.contains("g=B"), "BY header for B:\n{l}");
+        // Group A percents 33.33 / 66.67 ; Group B 100.00.
+        assert!(l.contains("33.33"), "{l}");
+        assert!(l.contains("66.67"), "{l}");
+        assert!(l.contains("100.00"), "{l}");
+    }
+
+    /// BY requires the input sorted by the BY var; otherwise the SAS error.
+    #[test]
+    fn by_unsorted_errors() {
+        let mut session = make_session();
+        let df = df![
+            "g" => ["B", "A"],
+            "x" => [1.0_f64, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+        write_dataset(&mut session, "T", ds);
+        let mut ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![tr(&["x"], false, None)],
+        );
+        ast.by = vec![("g".to_string(), false)];
+        let err = execute(&ast, &mut session).unwrap_err();
+        assert!(
+            err.to_string().contains("not sorted in ascending sequence"),
+            "{err}"
+        );
+    }
+
+    /// /LIST layout: one row per non-empty cell with Frequency / Percent /
+    /// Cumulative columns; no grid Row/Col Pct.
+    /// Cells (a,1)=1, (a,2)=1, (b,1)=2 ; grand=4.
+    ///   (a,1): 1 / 25.00 / cum 1 / 25.00
+    ///   (a,2): 1 / 25.00 / cum 2 / 50.00
+    ///   (b,1): 2 / 50.00 / cum 4 / 100.00
+    #[test]
+    fn list_layout_rows() {
+        let mut session = make_session();
+        let df = df![
+            "r" => ["a", "a", "b", "b"],
+            "c" => [1.0_f64, 2.0, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut req = tr(&["r", "c"], false, None);
+        req.list = true;
+        let ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![req],
+        );
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        // LIST: header columns, no "Row Pct"/"Col Pct".
+        assert!(l.contains("Cumulative Frequency"), "{l}");
+        assert!(!l.contains("Row Pct"), "LIST suppresses Row Pct:\n{l}");
+        assert!(!l.contains("Col Pct"), "LIST suppresses Col Pct:\n{l}");
+        // Cumulative percent reaches 100.00.
+        assert!(l.contains("100.00"), "{l}");
+        assert!(l.contains("50.00"), "{l}");
+    }
+
+    /// n-way (3-way) stratified rendering: one two-way table per leading value.
+    /// s = [A,A,B,B]; r = [x,x,y,y]; c = [1,2,1,2]. Each stratum has 2 cells.
+    #[test]
+    fn n_way_stratified() {
+        let mut session = make_session();
+        let df = df![
+            "s" => ["A", "A", "B", "B"],
+            "r" => ["x", "x", "y", "y"],
+            "c" => [1.0_f64, 2.0, 1.0, 2.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![char_meta("s"), char_meta("r"), num_meta("c")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = fast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            vec![tr(&["s", "r", "c"], false, None)],
+        );
+        execute(&ast, &mut session).unwrap();
+        let l = session.listing.into_string();
+        assert!(l.contains("Controlling for s=A"), "stratum A header:\n{l}");
+        assert!(l.contains("Controlling for s=B"), "stratum B header:\n{l}");
+        assert!(l.contains("Table of r by c"), "{l}");
+    }
+
+    #[test]
+    fn parse_weight_by_list() {
+        let ast = parse_freq(
+            "proc freq data=a; weight wt; by g; tables x*y / list; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.weight.as_deref(), Some("wt"));
+        assert_eq!(ast.by, vec![("g".to_string(), false)]);
+        assert!(ast.tables[0].list);
+        assert_eq!(ast.tables[0].vars, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn parse_three_way_spec() {
+        let ast = parse_freq("proc freq data=a; tables a*b*c; run;").unwrap();
+        assert_eq!(ast.tables[0].vars, vec!["a", "b", "c"]);
     }
 }

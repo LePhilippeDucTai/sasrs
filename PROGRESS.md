@@ -484,7 +484,14 @@ descriptifs/gestion. Une case = un proc / un lot d'options cohérent ; fixtures
 Pattern : nouvelle branche dans la closure `parse_proc_options`/`parse_proc_body` (combinateurs M31),
 exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
 
-- [ ] M33.1 — `PROC FREQ` : `BY`, `WEIGHT`, `/LIST`, tables ≥3 voies, Fisher r×c (n×m), CHISQ 1 voie (Opus, élevé)
+- [x] M33.1 — `PROC FREQ` : `BY`, `WEIGHT`, `/LIST`, tables ≥3 voies, Fisher r×c (n×m), CHISQ 1 voie (Opus, élevé).
+  **FAIT (4/5 + CHISQ 1-voie déjà existant)** : `WEIGHT` (fréq = somme des poids, propagé dans Percent/
+  Row/Col Pct + CHISQ Pearson/LR + chi² 1-voie ; exclusion missing/≤0), `BY` (`common::by_groups`/
+  `resolve_by_cols`), `/LIST` (1 ligne/cellule + cumulés), **n-voies** `a*b*c` (two-way stratifié,
+  « Controlling for … »). **Fisher r×c (>2×2) différé** (note propre, reste en README non-couvert).
+  Fréquences en f64 → chemin non pondéré byte-identique (m5/m10 inchangés). Fixture
+  `tests/fixtures/m33/freq_options.sas` + snapshot vérifié vs sashelp.class (pondéré 18/20, BY F 4/5 M 5/5,
+  LIST cum 4/9/14/19, 3-voies). +9 tests (2285 lib). README FREQ : 🟡 (reste Fisher >2×2).
 - [ ] M33.2 — `PROC UNIVARIATE` : rendu `PROBPLOT`/`CDFPLOT`/`PPPLOT`, quantiles & extrêmes pondérés (Opus, moyen)
 - [ ] M33.3 — `PROC MEANS`/`SUMMARY` : `WAYS`, `TYPES`, `PRINTALLTYPES`, mots-clés percentiles (P1..P99/QRANGE) (Opus, moyen)
 - [ ] M33.4 — `PROC TABULATE` : `OUT=`, `FORMAT=`/labels d'en-tête, dénominateurs `PCTN<...>`, 4ᵉ dimension (Fable, élevé)
