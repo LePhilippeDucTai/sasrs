@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M31**. M1–M30 terminés (roadmap d'origine : couverture SAS
+Jalon courant : **M32**. M1–M30 terminés (roadmap d'origine : couverture SAS
 quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
 SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
 Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
@@ -395,9 +395,13 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   14 `expect_eq` locaux entièrement retirés (sites `ts.next(); expect_eq` → `common::expect_eq`) ;
   4 partiels (export/import/means/sgplot : `expect_eq` gardé pour des sites à `ts.next()` partagé
   hors `match`, sites canoniques convertis). 20 fichiers, −313 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] DoD M31 : `cargo test -p sasrs` vert, **zéro `.snap.new`** (fixtures m1–m30 octet-identiques),
+- [x] DoD M31 : `cargo test -p sasrs` vert, **zéro `.snap.new`** (fixtures m1–m30 octet-identiques),
   `cargo build` 0 warning ; mettre les fichiers refactorés à jour dans la table PLAN.md ;
   passer « Jalon courant : **M32** ».
+  **M31 TERMINÉ** : couche de parsing PROC partagée (`common.rs`) + migration de ~30 procs
+  (Tier B/C/D) + balayage. Bilan : ~−1500 lignes de boilerplate dupliqué supprimées, 2276 tests
+  verts, sortie octet-identique (0 `.snap.new`) du début à la fin. Restent inline par conception :
+  boucles d'options à message bespoke, `iml` (sous-langage), `catalog` (`run;` no-op), `report` body.
 
 ## M32 — refactor #2 : scission `preprocess.rs` → `src/macros/` (pur, octet-identique)
 Phase E. Scinder le monolithe `src/preprocess.rs` (~4757 lignes) en module `src/macros/`.
