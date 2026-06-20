@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M32**. M1–M30 terminés (roadmap d'origine : couverture SAS
+Jalon courant : **M33**. M1–M30 terminés (roadmap d'origine : couverture SAS
 quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
 SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
 Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
@@ -464,10 +464,18 @@ Façade publique conservée (`preprocess` reste un re-export → 3 sites d'impor
   `consume_macro_def`/`parse_param_list`/`consume_scope_decl`/`expand_invocation`/`parse_arg_list`/
   `bind_params`/`consume_macro_call` + `MAX_MACRO_DEPTH`) ; include.rs (`consume_include`/`try_autocall`/
   `consume_put` + `MAX_INCLUDE_DEPTH`). 0 changement d'appel. `mod.rs` 3159→2130. 2276 lib, 0 `.snap.new`, 0 warning.
-- [ ] M32.9 — extraire `src/macros/expand.rs` (boucle `process_impl`) en dernier ;
-  état final : `mod.rs` = façade seule (Opus, moyen)
-- [ ] DoD M32 : `cargo test -p sasrs` vert, **zéro `.snap.new`**, 0 warning ; PLAN.md §Macro pointant
+- [x] M32.9 — extraire `src/macros/expand.rs` (boucle `process_impl`) en dernier ;
+  état final : `mod.rs` = façade seule (Opus, moyen).
+  **FAIT** : `process_impl` (+ indirection `&`/`&&var`) + `consume_let`/`consume_eval`/`eval_sysfunc`/
+  `consume_quote`/`consume_unquote`/`consume_sysevalf`/`consume_superq`/`consume_bquote` déplacés dans
+  `expand.rs` (`pub(super)`, 0 changement d'appel). `mod.rs` (1497) = façade : `TextStage`+impl, struct
+  `MacroEngine`, `new`/`log_line`/`expand_open_code`, `RawSegmenter`, tests. 2276 lib, 0 `.snap.new`, 0 warning.
+- [x] DoD M32 : `cargo test -p sasrs` vert, **zéro `.snap.new`**, 0 warning ; PLAN.md §Macro pointant
   sur `src/macros/` ; passer « Jalon courant : **M33** ».
+  **M32 TERMINÉ** : `preprocess.rs` (4757 l.) → module `src/macros/` de 12 fichiers (mod façade 1497 +
+  error/scan/symbols/quoting/eval/functions/control/define/include/expand) + shim `preprocess`.
+  2 fusions de généralisation (apply_quoting, registre lookup) ; tokenize_eval déjà partagé. Sortie
+  octet-identique de bout en bout.
 
 ## M33 — complétion options : PROCs Base & descriptifs
 Phase E. Vider au maximum la colonne droite « non couvert » des tableaux README des procs

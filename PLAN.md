@@ -128,6 +128,12 @@ l'inverse est déconseillé pour les fichiers marqués Fable.
 
 ### Macro M11 — architecture (décision actée)
 
+> **MAJ M32** : le processeur macro vit désormais dans le module `src/macros/`
+> (`mod.rs` façade + `error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/
+> `define`/`include`/`expand`). `src/preprocess.rs` n'est plus qu'un shim de re-export
+> (`pub use crate::macros::*`) ; les références historiques à `preprocess.rs` ci-dessous
+> désignent ce module.
+
 Modèle choisi : **expansion texte→texte PRE-lexer, interfoliée** avec la boucle de
 `executor::run_program`, état dans `Session` (pas de transformeur de tokens : les corps
 de `%macro` contiennent du texte SAS arbitraire, et `%str`/`%nrstr` masquent des caractères
@@ -164,7 +170,7 @@ commits d'extraction « move-only ». Les jalons de complétion font rétrécir 
 | Tâche | Jalon | Modèle | Effort | Notes |
 |---|---|---|---|---|
 | ✅ Couche de parsing PROC partagée (`src/procs/common.rs` : `parse_proc_options`/`parse_proc_body`/`expect_eq`/`parse_dataset_opt`/`unknown_option_error`/`resolve_last_dataset` + `parse_by`/`parse_var_list`/`parse_class`/`parse_weight`) puis migration des ~40 procs | M31 | **Opus** | élevé | **FAIT** : combinateurs purs pilotés par closure `FnMut(&mut StatementStream,&str)->Result<bool>` ; migration par tiers (canaris `print`/`sort` → Tier B 6/7 → Tier C 6/6 → Tier D 16/17) ; `unknown_option_error` reproduit message+span à l'octet ; messages divergents (`means`/`freq`/…), `iml`, `catalog`, `report` body gardés inline. ~−1500 lignes, 0 `.snap.new` |
-| Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | **Opus** | élevé | façade `preprocess` re-export (imports inchangés) ; `expand_open_code` + fast-path identité **restent dans `mod.rs`** ; déplacements verbatim (`Self::foo`→`module::foo`) ; 3 fusions comportementales isolées : `apply_quoting` unifié, `tokenize_eval` unifié (évaluateurs int/float séparés), registre `functions::lookup` |
+| ✅ Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | **Opus** | élevé | **FAIT** : `preprocess.rs` (4757 l.) → 12 fichiers `src/macros/` (façade `mod.rs` 1497 l. : struct + `new`/`expand_open_code`/`TextStage`/`RawSegmenter`) ; façade `preprocess` re-export (imports inchangés) ; déplacements verbatim via blocs `impl MacroEngine` en sous-module (0 changement d'appel) ; généralisations livrées : `apply_quoting` unifié (5 fns quoting + `%q*`), registre `functions::lookup` (string-fns) ; `tokenize_eval` déjà partagé. Octet-identique |
 | Complétion options procs Base/descriptifs : FREQ (BY/WEIGHT/LIST/≥3 voies/Fisher r×c), UNIVARIATE (probplot/cdfplot/pondéré), MEANS (WAYS/TYPES/percentiles), TABULATE (OUT=/4ᵉ dim/PCTN<>), REPORT (FORMAT=/COMPUTE complexe), PRINT/CONTENTS/DATASETS/SORT/APPEND | M33 | **Opus/Fable** | élevé | une case = un proc/lot ; fixtures `tests/fixtures/m33/` + snapshots vérifiés ; README 🟡→✅ |
 | Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | **Opus/Fable** | très élevé | oracles vérifiés vs SAS 9.4 ; numérique maison `src/stat/` ; fixtures `tests/fixtures/m34/` |
 | Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | **Opus** | élevé | processeur toujours actif ; nouveau comportement seulement sur nouvelles directives → snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
