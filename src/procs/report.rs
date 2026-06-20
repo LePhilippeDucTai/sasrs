@@ -61,19 +61,34 @@
 //!     SKIP/PAGE acceptés mais cosmétiques (no-op v1).
 //!   - `COMPUTE <col>; <col> = <expr>; endcomp;` : affectation simple par ligne.
 //!     `COMPUTE AFTER; line <items>; endcomp;` : ligne de texte libre. Les
-//!     COMPUTE complexes (fonctions, `_C1_`, formats) sont différés PROPREMENT
-//!     (erreur claire au parse).
+//!     affectations et LINE peuvent référencer une colonne par son nom OU par
+//!     l'alias positionnel `_Cn_` (M33.5). `line` accepte un pointeur `@<col>`
+//!     et un format de fin (`line @5 total best8.;`).
 //!   - `OUT=<ref>` : écrit les lignes du corps du rapport (détail/groupe +
 //!     sous-totaux BREAK ; le total RBREAK est exclu) comme dataset, en
 //!     respectant le type SAS de chaque colonne, et émet la NOTE de création.
 //!
+//! ## OPTIONS DEFINE AVANCÉES (M33.5) — désormais supportées :
+//!   - `FORMAT=<fmt>` : applique un format SAS / `w.d` aux valeurs affichées de
+//!     la colonne (numérique et char `$w.`), via `src/formats` (réutilise le
+//!     moteur de M33.4/TABULATE). Sans format → rendu byte-identique.
+//!   - `WIDTH=<n>` : largeur d'affichage de la colonne (troncature/padding de
+//!     l'en-tête et des cellules ; numériques justifiés à droite, char à
+//!     gauche).
+//!   - `SPACING=<n>` : nombre d'espaces avant la colonne (défaut 2). Modifie le
+//!     gap inter-colonnes du listing.
+//!   Le rendu width/spacing n'est activé que si AU MOINS un DEFINE porte
+//!   WIDTH=/SPACING= ; sinon le chemin `ListingWriter::write_table` historique
+//!   reste byte-identique.
+//!
 //! ## DEFERRALS RESTANTS (erreurs/notes PROPRES) — v1 ne supporte PAS :
-//!   - options DEFINE complexes au-delà de order=/label (FLOW, FORMAT=,
-//!                                     WIDTH=, SPACING=, multi-label, ...)
-//!                                  → "PROC REPORT v1 does not support the
-//!                                     DEFINE option 'XXX'."
-//!   - COMPUTE non trivial (fonctions, références `_Cn_`, formats) → erreur
-//!     claire au parse.
+//!   - `FLOW` (retour à la ligne des valeurs char longues) — interaction avec la
+//!     hauteur de ligne ; différé PROPREMENT → "PROC REPORT v1 does not support
+//!     the DEFINE option 'FLOW'." De même pour multi-label, etc.
+//!   - COMPUTE non trivial AU-DELÀ de `_Cn_`/nom + LINE-avec-format : affectation
+//!     back dans des colonnes calculées avec un riche jeu de fonctions n'est que
+//!     partiellement couvert (l'évaluateur d'expression local gère les fonctions
+//!     déjà disponibles ; le reste est différé).
 //!   - options PROC autres que nowd/nowindow/noheader/headline/headskip/out=
 //!                                  → "Unexpected option 'XXX' on PROC REPORT
 //!                                     statement."
@@ -122,6 +137,15 @@ pub struct Define {
     pub usage: Usage,
     pub order: OrderDir,
     pub label: Option<String>,
+    /// `format=<fmt>` — SAS format / `w.d` applied to this column's displayed
+    /// values (M33.5). `None` keeps the byte-identical default rendering.
+    pub format: Option<String>,
+    /// `width=<n>` — display width of the column (M33.5). `None` lets the
+    /// listing aligner derive the width from the data (default path).
+    pub width: Option<usize>,
+    /// `spacing=<n>` — number of blank spaces before the column (M33.5).
+    /// `None` uses the default inter-column gap (2 spaces in SAS LISTING).
+    pub spacing: Option<usize>,
 }
 
 pub struct ReportAst {
@@ -173,11 +197,15 @@ pub enum ComputeStmt {
 }
 
 /// An item in a `line` statement: a string literal or a bare expression
-/// (typically a column reference resolved per group).
+/// (typically a column reference resolved per group). An expression may carry
+/// an optional trailing SAS format token (`line @5 total best8.;`, M33.5);
+/// `None` keeps the default BESTw. rendering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineItem {
     Literal(String),
-    Expr(Expr),
+    Expr(Expr, Option<String>),
+    /// `@<col>` column pointer: pad the rendered line to (1-based) column.
+    Pointer(usize),
 }
 
 /// Statistic keywords accepted after an ANALYSIS usage on a DEFINE.
@@ -432,6 +460,9 @@ fn parse_compute(ts: &mut StatementStream) -> Result<Compute> {
 }
 
 /// Parse the items of a `line` statement up to (but not consuming) the `;`.
+/// Supports string literals, `@<col>` pointers (rendered as padding to that
+/// column), bare expressions (column references / numbers), and an optional
+/// trailing SAS format on an expression (`line @5 total best8.;`, M33.5).
 fn parse_line_items(ts: &mut StatementStream) -> Result<Vec<LineItem>> {
     let mut items = Vec::new();
     loop {
@@ -441,14 +472,50 @@ fn parse_line_items(ts: &mut StatementStream) -> Result<Vec<LineItem>> {
                 items.push(LineItem::Literal(value.clone()));
                 ts.next();
             }
+            TokenKind::At => {
+                // `@<col>` column pointer: pad the line out to column `col`.
+                ts.next();
+                if let TokenKind::Num(n) = ts.peek().kind {
+                    ts.next();
+                    items.push(LineItem::Pointer(n.max(1.0) as usize));
+                }
+                // A bare `@` without a column is ignored (lenient).
+            }
             _ => {
                 // Parse a bare expression (column reference, number, ...).
                 let e = crate::parser::expr::parse_expr(ts)?;
-                items.push(LineItem::Expr(e));
+                // Optional trailing SAS format token (e.g. `best8.`): a format
+                // is recognized only when the next token starts a format whose
+                // text contains a '.' (so plain identifiers stay expressions).
+                let fmt = if peek_is_line_format(ts) {
+                    Some(crate::parser::expr::read_format_token(ts)?)
+                } else {
+                    None
+                };
+                items.push(LineItem::Expr(e, fmt));
             }
         }
     }
     Ok(items)
+}
+
+/// True when the next token begins a SAS format used as a LINE item suffix.
+/// We only accept tokens whose joined format text contains a '.', so bare
+/// identifiers (another expression item) are not mistaken for a format.
+fn peek_is_line_format(ts: &StatementStream) -> bool {
+    // A format suffix begins with an identifier (e.g. `best8.`, `dollar8.2`)
+    // or `$`; a leading bare number like `8.2` is also a format. We confirm by
+    // requiring the following token to be a Dot or a Num adjacent to it (the
+    // shape of `best8.` / `8.2`). Two-token lookahead suffices.
+    match &ts.peek().kind {
+        TokenKind::Ident(_) => {
+            // e.g. `best8.` → ident "best8" then Dot, or ident "best" then num.
+            matches!(ts.peek2().kind, TokenKind::Dot)
+                || matches!(ts.peek2().kind, TokenKind::Num(_))
+        }
+        TokenKind::Dollar => true,
+        _ => false,
+    }
 }
 
 /// Parse a DEFINE statement body, after `define` was consumed, through `;`.
@@ -474,6 +541,9 @@ fn parse_define(ts: &mut StatementStream) -> Result<Define> {
     let mut usage: Option<Usage> = None;
     let mut order = OrderDir::Ascending;
     let mut label: Option<String> = None;
+    let mut format: Option<String> = None;
+    let mut width: Option<usize> = None;
+    let mut spacing: Option<usize> = None;
 
     if ts.peek().kind == TokenKind::Slash {
         ts.next(); // consume '/'
@@ -542,6 +612,43 @@ fn parse_define(ts: &mut StatementStream) -> Result<Define> {
                             usage = Some(Usage::Computed);
                             ts.next();
                         }
+                        // `format=<fmt>` — SAS format / `w.d` for displayed
+                        // values (M33.5). Read the raw format token verbatim.
+                        "format" => {
+                            ts.next();
+                            if ts.peek().kind != TokenKind::Eq {
+                                return Err(SasError::parse(
+                                    "expected '=' after FORMAT in DEFINE statement",
+                                    ts.peek().span,
+                                ));
+                            }
+                            ts.next(); // '='
+                            format = Some(crate::parser::expr::read_format_token(ts)?);
+                        }
+                        // `width=<n>` — column display width (M33.5).
+                        "width" => {
+                            ts.next();
+                            if ts.peek().kind != TokenKind::Eq {
+                                return Err(SasError::parse(
+                                    "expected '=' after WIDTH in DEFINE statement",
+                                    ts.peek().span,
+                                ));
+                            }
+                            ts.next(); // '='
+                            width = Some(parse_usize_opt(ts, "WIDTH")?);
+                        }
+                        // `spacing=<n>` — blank spaces before the column (M33.5).
+                        "spacing" => {
+                            ts.next();
+                            if ts.peek().kind != TokenKind::Eq {
+                                return Err(SasError::parse(
+                                    "expected '=' after SPACING in DEFINE statement",
+                                    ts.peek().span,
+                                ));
+                            }
+                            ts.next(); // '='
+                            spacing = Some(parse_usize_opt(ts, "SPACING")?);
+                        }
                         other => {
                             return Err(SasError::runtime(format!(
                                 "PROC REPORT v1 does not support the DEFINE option '{}'.",
@@ -574,7 +681,24 @@ fn parse_define(ts: &mut StatementStream) -> Result<Define> {
         usage,
         order,
         label,
+        format,
+        width,
+        spacing,
     })
+}
+
+/// Parse a non-negative integer option value (e.g. `width=8`, `spacing=4`).
+fn parse_usize_opt(ts: &mut StatementStream, opt: &str) -> Result<usize> {
+    match ts.peek().kind {
+        TokenKind::Num(n) if n >= 0.0 && n.fract() == 0.0 => {
+            ts.next();
+            Ok(n as usize)
+        }
+        _ => Err(SasError::parse(
+            format!("expected a non-negative integer after {opt}= in DEFINE statement"),
+            ts.peek().span,
+        )),
+    }
 }
 
 fn parse_order_dir(ts: &mut StatementStream) -> Result<OrderDir> {
@@ -601,6 +725,12 @@ struct ColPlan {
     usage: Usage,
     dir: OrderDir,
     header: String,
+    /// `format=<fmt>` for displayed values (M33.5); `None` → default rendering.
+    format: Option<String>,
+    /// `width=<n>` display width (M33.5); `None` → aligner-derived width.
+    width: Option<usize>,
+    /// `spacing=<n>` blank spaces before this column (M33.5); `None` → default.
+    spacing: Option<usize>,
 }
 
 /// Render a Value into a listing cell (numeric via format_best, missing → ".").
@@ -610,6 +740,22 @@ fn fmt_cell(v: &Value) -> String {
         Value::Missing(k) => k.display(),
         Value::Char(s) => s.clone(),
     }
+}
+
+/// Render a Value into a listing cell, honoring an optional `format=<fmt>`
+/// DEFINE option (M33.5). With no format, this is byte-identical to `fmt_cell`.
+/// With a format, the value routes through the SAS format engine and the
+/// leading pad is trimmed so the listing aligner controls width (mirrors
+/// TABULATE's M33.4 cell formatting).
+fn fmt_cell_fmt(
+    v: &Value,
+    format: Option<&str>,
+    catalog: &crate::formats::FormatCatalog,
+) -> String {
+    if let Some(spec) = format.and_then(crate::formats::FormatSpec::parse) {
+        return catalog.format(v, &spec).trim_start().to_string();
+    }
+    fmt_cell(v)
 }
 
 /// Execute PROC REPORT. Called by `procs::execute_proc`.
@@ -649,6 +795,9 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
                 header: def
                     .and_then(|d| d.label.clone())
                     .unwrap_or_else(|| cname.clone()),
+                format: def.and_then(|d| d.format.clone()),
+                width: def.and_then(|d| d.width),
+                spacing: def.and_then(|d| d.spacing),
             });
             continue;
         }
@@ -679,6 +828,9 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
             usage,
             dir,
             header,
+            format: def.and_then(|d| d.format.clone()),
+            width: def.and_then(|d| d.width),
+            spacing: def.and_then(|d| d.spacing),
         });
     }
 
@@ -843,20 +995,36 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     apply_row_computes(ast, &plan, &mut value_rows);
 
     // --- Render the listing. ---
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
     let rows: Vec<Vec<String>> = value_rows
         .iter()
-        .map(|ro| ro.vals.iter().map(fmt_cell).collect())
+        .map(|ro| {
+            ro.vals
+                .iter()
+                .enumerate()
+                .map(|(ci, v)| fmt_cell_fmt(v, plan[ci].format.as_deref(), &catalog))
+                .collect()
+        })
         .collect();
 
+    // Whether any DEFINE carried WIDTH=/SPACING= (M33.5). When none do, we keep
+    // the exact historical rendering path (byte-identical default).
+    let has_layout = plan.iter().any(|c| c.width.is_some() || c.spacing.is_some());
+
     session.listing.page_header();
-    if ast.noheader {
+    if has_layout {
+        write_table_layout(session, &headers, &aligns, &rows, &plan, ast.noheader);
+    } else if ast.noheader {
         write_table_noheader(session, &aligns, &rows);
     } else {
         session.listing.write_table(&headers, &aligns, &rows);
     }
 
     // --- COMPUTE AFTER / LINE: free-text lines below the report. ---
-    render_after_lines(ast, session, &plan, &value_rows);
+    render_after_lines(ast, session, &plan, &value_rows, &catalog);
 
     // --- OUT=: write the report rows (excluding RBREAK grand total) as data. ---
     if let Some(out_ref) = &ast.out {
@@ -1250,14 +1418,9 @@ fn apply_row_computes(ast: &ReportAst, plan: &[ColPlan], rows: &mut [RowOut]) {
             .position(|c| c.header.eq_ignore_ascii_case(&comp.target));
         // Build the per-row column context lazily inside the loop.
         for ro in rows.iter_mut() {
-            // Context: each plan column's header (and underlying name) → value.
-            let ctx: Vec<(String, Value)> = plan
-                .iter()
-                .enumerate()
-                .map(|(ci, c)| (c.header.to_ascii_lowercase(), ro.vals[ci].clone()))
-                .collect();
-            let cols: Vec<(String, Vec<Value>)> =
-                ctx.into_iter().map(|(n, v)| (n, vec![v])).collect();
+            // Context: each plan column referenced by its header AND by the
+            // positional alias `_Cn_` (1-based COLUMN index, M33.5).
+            let cols = compute_row_context(plan, &ro.vals);
             for st in &comp.stmts {
                 if let ComputeStmt::Assign { col, expr } = st {
                     let v = eval_row_expr(expr, &cols, 0);
@@ -1276,10 +1439,30 @@ fn apply_row_computes(ast: &ReportAst, plan: &[ColPlan], rows: &mut [RowOut]) {
     }
 }
 
+/// Build the per-row COMPUTE/LINE evaluation context: each plan column is
+/// addressable by its (lowercased) header AND by the positional alias `_Cn_`
+/// (1-based COLUMN index), matching SAS's `_C1_`/`_C2_` report-column refs
+/// (M33.5). Each column holds a single value (the current report row).
+fn compute_row_context(plan: &[ColPlan], vals: &[Value]) -> Vec<(String, Vec<Value>)> {
+    let mut cols: Vec<(String, Vec<Value>)> = Vec::with_capacity(plan.len() * 2);
+    for (ci, c) in plan.iter().enumerate() {
+        cols.push((c.header.to_ascii_lowercase(), vec![vals[ci].clone()]));
+        cols.push((format!("_c{}_", ci + 1), vec![vals[ci].clone()]));
+    }
+    cols
+}
+
 /// Render `compute after; line ...; endcomp;` free-text lines below the report.
-/// LINE items are concatenated: string literals verbatim, expressions resolved
-/// over the grand-total (all-rows) context where possible.
-fn render_after_lines(ast: &ReportAst, session: &mut Session, plan: &[ColPlan], rows: &[RowOut]) {
+/// LINE items are concatenated: string literals verbatim, `@<col>` pointers pad
+/// to a column, and expressions are resolved over the grand-total context (with
+/// `_Cn_` aliases) and rendered with an optional trailing format (M33.5).
+fn render_after_lines(
+    ast: &ReportAst,
+    session: &mut Session,
+    plan: &[ColPlan],
+    rows: &[RowOut],
+    catalog: &crate::formats::FormatCatalog,
+) {
     for comp in &ast.computes {
         if !comp.target.eq_ignore_ascii_case("after") {
             continue;
@@ -1291,26 +1474,31 @@ fn render_after_lines(ast: &ReportAst, session: &mut Session, plan: &[ColPlan], 
             .rev()
             .find(|r| r.kind == RowKind::Rbreak)
             .or_else(|| rows.last());
+        let ctx_cols: Option<Vec<(String, Vec<Value>)>> =
+            ctx_row.map(|ro| compute_row_context(plan, &ro.vals));
         for st in &comp.stmts {
             if let ComputeStmt::Line(items) = st {
                 let mut line = String::new();
                 for item in items {
                     match item {
                         LineItem::Literal(s) => line.push_str(s),
-                        LineItem::Expr(e) => {
-                            let v = if let Some(ro) = ctx_row {
-                                let cols: Vec<(String, Vec<Value>)> = plan
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(ci, c)| {
-                                        (c.header.to_ascii_lowercase(), vec![ro.vals[ci].clone()])
-                                    })
-                                    .collect();
-                                eval_row_expr(e, &cols, 0)
-                            } else {
-                                Value::missing()
+                        LineItem::Pointer(col) => {
+                            // Pad the line out to (1-based) column `col`.
+                            if *col > line.len() {
+                                line.push_str(&" ".repeat(*col - line.len()));
+                            }
+                        }
+                        LineItem::Expr(e, fmt) => {
+                            let v = match &ctx_cols {
+                                Some(cols) => eval_row_expr(e, cols, 0),
+                                None => Value::missing(),
                             };
-                            line.push_str(&value_to_disp(&v));
+                            match fmt.as_deref().and_then(crate::formats::FormatSpec::parse) {
+                                Some(spec) => {
+                                    line.push_str(catalog.format(&v, &spec).trim_start())
+                                }
+                                None => line.push_str(&value_to_disp(&v)),
+                            }
                         }
                     }
                 }
@@ -1455,6 +1643,86 @@ fn write_table_noheader(session: &mut Session, aligns: &[Align], rows: &[Vec<Str
                 }
             }
         }
+        session.listing.write_line(line.trim_end());
+    }
+}
+
+/// Render the report table honoring per-column `WIDTH=`/`SPACING=` DEFINE
+/// options (M33.5). Used only when at least one column carries WIDTH=/SPACING=;
+/// the default path stays on `ListingWriter::write_table`.
+///
+/// Semantics (faithful to SAS LISTING):
+///   - A column's width is its `WIDTH=` if given, else the max of the header
+///     and cell lengths (the auto width).
+///   - Cells/header are truncated or padded to the width; numeric (Right-
+///     aligned) columns right-justify, character (Left-aligned) columns
+///     left-justify.
+///   - `SPACING=<n>` sets the number of blank spaces BEFORE the column
+///     (default 2). The leading column's spacing is rendered as left padding
+///     too (SAS indents the first column by its spacing).
+fn write_table_layout(
+    session: &mut Session,
+    headers: &[String],
+    aligns: &[Align],
+    rows: &[Vec<String>],
+    plan: &[ColPlan],
+    noheader: bool,
+) {
+    let ncol = headers.len();
+    if ncol == 0 {
+        return;
+    }
+
+    // Resolve each column's effective width.
+    let mut widths = vec![0usize; ncol];
+    for i in 0..ncol {
+        match plan[i].width {
+            Some(w) => widths[i] = w,
+            None => {
+                let mut w = headers[i].len();
+                for row in rows {
+                    if let Some(cell) = row.get(i) {
+                        w = w.max(cell.len());
+                    }
+                }
+                widths[i] = w;
+            }
+        }
+    }
+
+    // Spacing before each column (default 2; the leading column's spacing is
+    // emitted as left indentation).
+    let spacing: Vec<usize> = plan.iter().map(|c| c.spacing.unwrap_or(2)).collect();
+
+    let pad_cell = |cell: &str, w: usize, align: Align| -> String {
+        let mut s = cell.to_string();
+        if s.len() > w {
+            s.truncate(w);
+        }
+        let pad = w.saturating_sub(s.len());
+        match align {
+            Align::Right => format!("{}{}", " ".repeat(pad), s),
+            Align::Left => format!("{}{}", s, " ".repeat(pad)),
+        }
+    };
+
+    let render = |cells: &dyn Fn(usize) -> String| -> String {
+        let mut line = String::new();
+        for i in 0..ncol {
+            line.push_str(&" ".repeat(spacing[i]));
+            let align = aligns.get(i).copied().unwrap_or(Align::Left);
+            line.push_str(&pad_cell(&cells(i), widths[i], align));
+        }
+        line
+    };
+
+    if !noheader {
+        let header_line = render(&|i| headers[i].clone());
+        session.listing.write_line(header_line.trim_end());
+        session.listing.blank();
+    }
+    for row in rows {
+        let line = render(&|i| row.get(i).cloned().unwrap_or_default());
         session.listing.write_line(line.trim_end());
     }
 }
@@ -1739,12 +2007,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "sales".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -1786,12 +2060,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "x".into(),
                     usage: Usage::Analysis("mean".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -1833,12 +2113,18 @@ mod tests {
                     usage: Usage::Order,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "v".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -1874,6 +2160,9 @@ mod tests {
                 usage: Usage::Display,
                 order: OrderDir::Ascending,
                 label: Some("My X Label".into()),
+                format: None,
+                width: None,
+                spacing: None,
             }],
             ..report_defaults()
         };
@@ -1901,6 +2190,9 @@ mod tests {
                 usage: Usage::Display,
                 order: OrderDir::Ascending,
                 label: Some("My X Label".into()),
+                format: None,
+                width: None,
+                spacing: None,
             }],
             ..report_defaults()
         };
@@ -1976,12 +2268,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "x".into(),
                     usage: Usage::Analysis("mean".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -2088,12 +2386,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             where_: Some(parse_test_expr("age > 12;")),
@@ -2121,6 +2425,9 @@ mod tests {
                 usage: Usage::Display,
                 order: OrderDir::Ascending,
                 label: None,
+                format: None,
+                width: None,
+                spacing: None,
             }],
             where_: Some(
                 parse_test_expr("sex = 'M';"),
@@ -2147,12 +2454,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             out: Some(work_ref("R")),
@@ -2197,18 +2510,27 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "sex".into(),
                     usage: Usage::Across,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "sales".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -2248,18 +2570,27 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "sub".into(),
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "sales".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             breaks: vec![Break {
@@ -2289,12 +2620,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             rbreak: Some(Break {
@@ -2322,12 +2659,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             rbreak: Some(Break {
@@ -2357,12 +2700,18 @@ mod tests {
                     usage: Usage::Display,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "dbl".into(),
                     usage: Usage::Computed,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             computes: vec![Compute {
@@ -2394,12 +2743,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             computes: vec![Compute {
@@ -2437,6 +2792,9 @@ mod tests {
                 usage: Usage::Display,
                 order: OrderDir::Ascending,
                 label: None,
+                format: None,
+                width: None,
+                spacing: None,
             }],
             where_: Some(
                 parse_test_expr("x = .;"),
@@ -2472,18 +2830,27 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "k".into(),
                     usage: Usage::Across,
                     order: OrderDir::Descending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "v".into(),
                     usage: Usage::Analysis("sum".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             ..report_defaults()
@@ -2509,12 +2876,18 @@ mod tests {
                     usage: Usage::Group,
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
                 Define {
                     var: "age".into(),
                     usage: Usage::Analysis("n".into()),
                     order: OrderDir::Ascending,
                     label: None,
+                    format: None,
+                    width: None,
+                    spacing: None,
                 },
             ],
             breaks: vec![Break {
@@ -2528,5 +2901,195 @@ mod tests {
         let listing = session.listing.into_string();
         assert!(listing.contains('3'), "F n=3: {listing}");
         assert!(listing.contains('2'), "M n=2: {listing}");
+    }
+
+    // ─────────────────── M33.5 deferred-option tests ───────────────────
+
+    /// Build a DEFINE with optional format/width/spacing (M33.5 test helper).
+    fn def(
+        var: &str,
+        usage: Usage,
+        label: Option<&str>,
+        format: Option<&str>,
+        width: Option<usize>,
+        spacing: Option<usize>,
+    ) -> Define {
+        Define {
+            var: var.into(),
+            usage,
+            order: OrderDir::Ascending,
+            label: label.map(|s| s.to_string()),
+            format: format.map(|s| s.to_string()),
+            width,
+            spacing,
+        }
+    }
+
+    #[test]
+    fn parse_define_format_width_spacing() {
+        let ast = parse_report(
+            "proc report data=a; \
+             define x / analysis sum format=dollar8.2 width=10 spacing=4; run;",
+        )
+        .unwrap();
+        let d = &ast.defines[0];
+        assert_eq!(d.format.as_deref(), Some("dollar8.2"));
+        assert_eq!(d.width, Some(10));
+        assert_eq!(d.spacing, Some(4));
+    }
+
+    #[test]
+    fn parse_define_flow_still_errors() {
+        // FLOW is genuinely deferred → clean error at parse.
+        let r = parse_report("proc report data=a; define x / display flow; run;");
+        assert!(r.err().unwrap().to_string().contains("FLOW"));
+    }
+
+    #[test]
+    fn format_applies_to_displayed_numeric() {
+        // DEFINE / FORMAT=5.1 on a detail numeric column. Oracle: 11 → "11.0".
+        let mut session = make_session();
+        let df = df!["age" => [11.0_f64, 12.0]].unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("age")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("T")),
+            columns: Some(vec!["age".into()]),
+            defines: vec![def("age", Usage::Display, None, Some("5.1"), None, None)],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("11.0"), "formatted 11.0: {listing}");
+        assert!(listing.contains("12.0"), "formatted 12.0: {listing}");
+    }
+
+    #[test]
+    fn width_truncates_and_pads_column() {
+        // WIDTH=3 on a char column truncates long values to 3 chars.
+        let mut session = make_session();
+        let df = df!["name" => ["Alfred", "Bo"]].unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("name")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("T")),
+            columns: Some(vec!["name".into()]),
+            defines: vec![def("name", Usage::Display, None, None, Some(3), None)],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // "Alfred" truncated to "Alf"; full name must NOT appear.
+        assert!(listing.contains("Alf"), "truncated to Alf: {listing}");
+        assert!(!listing.contains("Alfred"), "full name truncated away: {listing}");
+    }
+
+    #[test]
+    fn spacing_changes_intercolumn_gap() {
+        // SPACING=6 before the second column → at least 6 spaces precede it.
+        let mut session = make_session();
+        let df = df![
+            "a" => ["x", "y"],
+            "b" => ["p", "q"]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("a"), char_meta("b")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("T")),
+            noheader: true,
+            columns: Some(vec!["a".into(), "b".into()]),
+            defines: vec![
+                def("a", Usage::Display, None, None, None, None),
+                def("b", Usage::Display, None, None, None, Some(6)),
+            ],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Row "x" then 6 spaces (spacing) then "p". Default leading spacing is 2
+        // on column a. So a data line should contain "x      p" (1+6 = the gap).
+        assert!(listing.contains("x      p"), "6-space gap: {listing:?}");
+    }
+
+    #[test]
+    fn compute_reads_cn_positional_reference() {
+        // _C2_ is the 2nd COLUMN (age); ratio column = _C2_ / 10. Detail report.
+        let mut session = make_session();
+        let df = df![
+            "sex" => ["F", "M"],
+            "age" => [20.0_f64, 30.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("age")] };
+        write_dataset(&mut session, "T", ds);
+        let ast = ReportAst {
+            data: Some(work_ref("T")),
+            columns: Some(vec!["sex".into(), "age".into(), "ratio".into()]),
+            defines: vec![
+                def("age", Usage::Display, None, None, None, None),
+                def("ratio", Usage::Computed, None, None, None, None),
+            ],
+            computes: vec![Compute {
+                target: "ratio".into(),
+                stmts: vec![ComputeStmt::Assign {
+                    col: "ratio".into(),
+                    expr: parse_test_expr("_c2_ / 10;"),
+                }],
+            }],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // age 20 → ratio 2; age 30 → ratio 3.
+        assert!(listing.contains('2'), "_c2_/10 = 2: {listing}");
+        assert!(listing.contains('3'), "_c2_/10 = 3: {listing}");
+    }
+
+    #[test]
+    fn line_with_format_renders_via_format_engine() {
+        // compute after; line 'Total: ' age best8.; → grand total formatted.
+        let mut session = make_session();
+        class_like(&mut session);
+        let ast = ReportAst {
+            data: Some(work_ref("C")),
+            columns: Some(vec!["sex".into(), "age".into()]),
+            defines: vec![
+                def("sex", Usage::Group, None, None, None, None),
+                def("age", Usage::Analysis("sum".into()), None, None, None, None),
+            ],
+            rbreak: Some(Break { var: None, summarize: true }),
+            computes: vec![Compute {
+                target: "after".into(),
+                stmts: vec![ComputeStmt::Line(vec![
+                    LineItem::Literal("Total age: ".into()),
+                    LineItem::Expr(parse_test_expr("age;"), Some("best8.".into())),
+                ])],
+            }],
+            ..report_defaults()
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Grand total of ages = 65, rendered by best8. as "65".
+        assert!(listing.contains("Total age: 65"), "line with format: {listing}");
+    }
+
+    #[test]
+    fn parse_line_with_pointer_and_format() {
+        // `line @5 total best8.;` parses to Pointer + Expr-with-format.
+        let ast = parse_report(
+            "proc report data=a; compute after; line @5 age best8.; endcomp; run;",
+        )
+        .unwrap();
+        match &ast.computes[0].stmts[0] {
+            ComputeStmt::Line(items) => {
+                assert!(matches!(items[0], LineItem::Pointer(5)));
+                match &items[1] {
+                    LineItem::Expr(_, fmt) => assert_eq!(fmt.as_deref(), Some("best8.")),
+                    _ => panic!("expected Expr item"),
+                }
+            }
+            _ => panic!("expected LINE"),
+        }
     }
 }

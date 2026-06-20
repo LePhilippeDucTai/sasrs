@@ -516,7 +516,14 @@ exécution correspondante, NOTE/ERROR propres pour le résiduel différé.
   comportement SAS correct (retirée du non-couvert, message reformulé). Fixture + snapshot vérifié vs
   sashelp.class (mean F=60.59/M=63.91, weight sum F=811.0/M=1089.5, OUT= 2 obs). +7 tests (2306 lib).
   README TABULATE : reste 🟡 (PCTN<...>).
-- [ ] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable, élevé)
+- [x] M33.5 — `PROC REPORT` : `DEFINE FORMAT=/WIDTH=/FLOW/SPACING`, `COMPUTE` complexe (`_Cn_`, fonctions, formats) (Fable/Opus, élevé).
+  **FAIT** : `DEFINE / FORMAT=` (via `src/formats`, comme TABULATE M33.4), `WIDTH=` (troncature/padding,
+  num droite/char gauche), `SPACING=` (espaces avant colonne, défaut 2 ; rendu par `write_table_layout`
+  activé seulement si WIDTH=/SPACING= présents) ; `COMPUTE` avec réfs colonnes `_Cn_`/nommées
+  (`compute_row_context`) + `LINE @col fmt.` (pointeur + format). **`FLOW` différé** (interaction
+  wrap/hauteur de ligne, erreur propre) ; COMPUTE « riche » (réassignation via toute la lib de fonctions)
+  partiel. Fixture + snapshot vérifié vs sashelp.class (height 60.59/63.91, weight WIDTH=10/SPACING=5,
+  ratio `_c3_/_c2_`=1.487/1.705). +8 tests (2314 lib). README REPORT : reste 🟡 (FLOW, COMPUTE riche).
 - [ ] ⫽ M33.6 — `PROC PRINT` : `BY`, `ID`, `SUM`, `DOUBLE`/`N` (Sonnet, moyen)
 - [ ] ⫽ M33.7 — `PROC CONTENTS` : `OUT=`, `DETAILS`, `SHORT` (Sonnet, moyen)
 - [ ] ⫽ M33.8 — `PROC DATASETS` : `COPY`, `MODIFY`/`RENAME` var, `EXCHANGE`, `SAVE`, `CONTENTS` (Sonnet, moyen)
