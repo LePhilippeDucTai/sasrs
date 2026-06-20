@@ -186,43 +186,37 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut weight: Option<String> = None;
     let mut output: Option<MeansOutput> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    crate::procs::common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "class" => {
                 ts.next();
+                class = crate::procs::common::parse_class(ts)?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("class") {
-            ts.next();
-            class = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by = parse_by_list(ts)?;
-        } else if ts.peek().is_kw("weight") {
-            ts.next();
-            weight = Some(parse_single_var(ts, "WEIGHT")?);
-        } else if ts.peek().is_kw("output") {
-            ts.next();
-            output = Some(parse_output(ts)?);
-        } else {
-            // Unknown sub-statement: skip it (recovery, like sort/print).
-            ts.skip_to_semi();
-        }
-    }
+            "var" => {
+                ts.next();
+                var = crate::procs::common::parse_var_list(ts)?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by = parse_by_list(ts)?;
+                true
+            }
+            "weight" => {
+                ts.next();
+                weight = Some(crate::procs::common::parse_weight(ts)?);
+                true
+            }
+            "output" => {
+                ts.next();
+                output = Some(parse_output(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(MeansAst {
         data,
@@ -329,30 +323,6 @@ fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     }
     ts.next();
     Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &MeansAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 /// Compute one statistic over the NON-MISSING numeric values `xs` of a
@@ -617,7 +587,7 @@ fn fmt_stat_cell(stat: &str, v: &Value) -> String {
 
 /// Execute PROC MEANS / SUMMARY. Called by `procs::execute_proc`.
 pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = crate::procs::common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

@@ -119,7 +119,7 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
-use crate::procs::common::{decode_column, partition_numeric, sample_std};
+use crate::procs::common::{self, decode_column, partition_numeric, sample_std};
 use crate::session::Session;
 use crate::stat::{f_cdf, student_t_cdf};
 use crate::token::TokenKind;
@@ -282,82 +282,77 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
     let mut class_var: Option<String> = None;
     let mut paired_vars: Vec<(String, String)> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "var" => {
                 ts.next();
+                var_vars = common::parse_var_list(ts)?;
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var_vars = ts.parse_name_list()?;
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("class") {
-            ts.next();
-            let names = ts.parse_name_list()?;
-            ts.expect_semi()?;
-            if names.len() != 1 {
-                return Err(SasError::runtime(
-                    "The CLASS statement of PROC TTEST accepts exactly one variable.",
-                ));
-            }
-            class_var = Some(names.into_iter().next().unwrap());
-        } else if ts.peek().is_kw("paired") {
-            ts.next();
-            // `paired x*y z*w;` — each pair is name '*' name.
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                let left = ts
-                    .peek()
-                    .ident()
-                    .map(str::to_string)
-                    .ok_or_else(|| SasError::parse("expected a variable name in PAIRED", ts.peek().span))?;
+            "class" => {
                 ts.next();
-                if ts.peek().kind != TokenKind::Star {
-                    return Err(SasError::parse(
-                        "expected '*' between paired variables",
-                        ts.peek().span,
+                let names = ts.parse_name_list()?;
+                ts.expect_semi()?;
+                if names.len() != 1 {
+                    return Err(SasError::runtime(
+                        "The CLASS statement of PROC TTEST accepts exactly one variable.",
                     ));
                 }
-                ts.next();
-                let right = ts
-                    .peek()
-                    .ident()
-                    .map(str::to_string)
-                    .ok_or_else(|| SasError::parse("expected a variable name after '*' in PAIRED", ts.peek().span))?;
-                ts.next();
-                paired_vars.push((left, right));
+                class_var = Some(names.into_iter().next().unwrap());
+                true
             }
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            ts.skip_to_semi();
-            // BY processing is recognized but deferred.
-        } else if ts.peek().is_kw("output") {
-            // `output out=<ref>;`
-            ts.next();
-            if ts.peek().is_kw("out") {
+            "paired" => {
                 ts.next();
-                expect_eq(ts, "OUT")?;
-                output = Some(ts.parse_dataset_ref()?);
+                // `paired x*y z*w;` — each pair is name '*' name.
+                loop {
+                    if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+                        break;
+                    }
+                    let left = ts
+                        .peek()
+                        .ident()
+                        .map(str::to_string)
+                        .ok_or_else(|| SasError::parse("expected a variable name in PAIRED", ts.peek().span))?;
+                    ts.next();
+                    if ts.peek().kind != TokenKind::Star {
+                        return Err(SasError::parse(
+                            "expected '*' between paired variables",
+                            ts.peek().span,
+                        ));
+                    }
+                    ts.next();
+                    let right = ts
+                        .peek()
+                        .ident()
+                        .map(str::to_string)
+                        .ok_or_else(|| SasError::parse("expected a variable name after '*' in PAIRED", ts.peek().span))?;
+                    ts.next();
+                    paired_vars.push((left, right));
+                }
+                ts.expect_semi()?;
+                true
             }
-            ts.skip_to_semi();
-        } else {
-            // Unknown sub-statement: skip it (recovery).
-            ts.skip_to_semi();
-        }
-    }
+            "by" => {
+                ts.next();
+                ts.skip_to_semi();
+                // BY processing is recognized but deferred.
+                true
+            }
+            "output" => {
+                // `output out=<ref>;`
+                ts.next();
+                if ts.peek().is_kw("out") {
+                    ts.next();
+                    expect_eq(ts, "OUT")?;
+                    output = Some(ts.parse_dataset_ref()?);
+                }
+                ts.skip_to_semi();
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(TTestAst {
         data_options: TTestDataOptions { input, output },
@@ -541,29 +536,6 @@ fn fmt_p(p: Option<f64>) -> String {
 // ───────────────────────── execute ─────────────────────────
 
 /// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &TTestAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data_options.input {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Write a centered line within LINESIZE.
 fn centered(session: &mut Session, text: &str) {
     let ls = session.listing.ls();
@@ -575,7 +547,7 @@ fn centered(session: &mut Session, text: &str) {
 
 /// Execute PROC TTEST and produce listing + ODS output.
 pub fn execute(ast: &TTestAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

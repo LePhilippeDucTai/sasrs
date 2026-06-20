@@ -49,7 +49,8 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{
-    by_groups, decode_column, partition_weighted, phi_inv, probnorm, resolve_by_cols, sample_std,
+    self, by_groups, decode_column, partition_weighted, phi_inv, probnorm, resolve_by_cols,
+    sample_std,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -176,49 +177,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut weight: Option<String> = None;
     let mut output: Option<UnivariateOutput> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
-        if ts.peek().is_kw("var") {
-            ts.next();
-            var = ts.parse_name_list()?;
-            // Optional `/ option…` clause on VAR (e.g. `var x / normal;`).
-            if ts.peek().kind == TokenKind::Slash {
-                ts.next();
-                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                    if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
-                        normal = true;
-                    }
-                    ts.next();
-                }
-            }
-            ts.expect_semi()?;
-        } else if ts.peek().is_kw("by") {
-            ts.next();
-            by = crate::procs::means::parse_by_list(ts)?;
-        } else if ts.peek().is_kw("weight") {
-            ts.next();
-            weight = Some(crate::procs::means::parse_single_var(ts, "WEIGHT")?);
-        } else if ts.peek().is_kw("output") {
-            ts.next();
-            output = Some(parse_output(ts)?);
-        } else if let Some(kind) = graphics_kind(ts.peek()) {
-            // Graphical statement (HISTOGRAM/QQPLOT/…): capture the kind and its
-            // target variable (the first identifier after the keyword), then
-            // skip the rest of the body to `;` (trailing `/ options` are
-            // tolerated but ignored). Rendering is wired to ODS GRAPHICS (M29.3).
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        // Graphical statement (HISTOGRAM/QQPLOT/…) — keyword-driven via a token
+        // probe rather than the lowercase `kw`, so handle it before the match.
+        if let Some(kind) = graphics_kind(ts.peek()) {
+            // Capture the kind and its target variable (the first identifier
+            // after the keyword), then skip the rest of the body to `;`
+            // (trailing `/ options` are tolerated but ignored). Rendering is
+            // wired to ODS GRAPHICS (M29.3).
             ts.next(); // consume keyword
             let var = ts.peek().ident().map(str::to_string);
             if var.is_some() {
@@ -226,11 +193,43 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             }
             ts.skip_to_semi();
             plots.push(UnivariatePlot { kind, var });
-        } else {
-            // Unknown sub-statement (id, class, ...): skip leniently.
-            ts.skip_to_semi();
+            return Ok(true);
         }
-    }
+        Ok(match kw {
+            "var" => {
+                ts.next();
+                var = ts.parse_name_list()?;
+                // Optional `/ option…` clause on VAR (e.g. `var x / normal;`).
+                if ts.peek().kind == TokenKind::Slash {
+                    ts.next();
+                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                        if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
+                            normal = true;
+                        }
+                        ts.next();
+                    }
+                }
+                ts.expect_semi()?;
+                true
+            }
+            "by" => {
+                ts.next();
+                by = crate::procs::means::parse_by_list(ts)?;
+                true
+            }
+            "weight" => {
+                ts.next();
+                weight = Some(crate::procs::means::parse_single_var(ts, "WEIGHT")?);
+                true
+            }
+            "output" => {
+                ts.next();
+                output = Some(parse_output(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     Ok(UnivariateAst {
         data,
@@ -363,30 +362,6 @@ fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     }
     ts.next();
     Ok(())
-}
-
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &UnivariateAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
 }
 
 // ─────────────────────────── statistics helpers ───────────────────────────
@@ -526,7 +501,7 @@ fn fmt_opt(v: Option<f64>) -> String {
 // ─────────────────────────────── execute ──────────────────────────────────
 
 pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
     let display_name = format!("{in_libref}.{in_table}");

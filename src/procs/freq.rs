@@ -58,7 +58,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{chisq_sf, decode_column, ln_choose, probnorm};
+use crate::procs::common::{self, chisq_sf, decode_column, ln_choose, probnorm};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{format_best, Value, VarType};
@@ -143,30 +143,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
     // --- sub-statements until run;/quit; ---
     let mut tables: Vec<TableRequest> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    common::parse_proc_body(ts, |ts, kw| {
+        Ok(match kw {
+            "tables" | "table" => {
                 ts.next();
+                let reqs = parse_tables(ts)?;
+                tables.extend(reqs);
+                true
             }
-            break;
-        }
-
-        if ts.peek().is_kw("tables") || ts.peek().is_kw("table") {
-            ts.next();
-            let reqs = parse_tables(ts)?;
-            tables.extend(reqs);
-        } else {
-            // Unknown sub-statement: skip it (recovery, like means/sort).
-            ts.skip_to_semi();
-        }
-    }
+            _ => false,
+        })
+    })?;
 
     Ok(FreqAst { data, tables })
 }
@@ -315,30 +303,6 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
         .collect())
 }
 
-/// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-fn resolve_input(ast: &FreqAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime("There is no default input data set (_LAST_ is undefined).")
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
-
 /// Find a variable column index by name (case-insensitive), or error.
 fn find_var(ds: &SasDataset, name: &str) -> Result<usize> {
     ds.vars
@@ -398,7 +362,7 @@ fn tally(col: &[Value], include_missing: bool) -> (Vec<Category>, usize) {
 
 /// Execute PROC FREQ. Called by `procs::execute_proc`.
 pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 

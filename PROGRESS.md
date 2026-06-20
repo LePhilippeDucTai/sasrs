@@ -372,8 +372,13 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   **`catalog` exclu (par conception)** : `run;` y est un *no-op continue* (pas un stop) et les deux
   boucles sautent les tokens inconnus → aucune cible byte-identique via les combinateurs ; laissé tel quel.
   −212 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
-- [ ] M31.6 — migrer Tier C : `means`, `freq`, `univariate`, `corr`, `ttest`, `npar1way` —
-  un proc par commit, branches d'erreur bespoke gardées inline (Opus, moyen)
+- [x] M31.6 — migrer Tier C : `means`, `freq`, `univariate`, `corr`, `ttest`, `npar1way` —
+  un proc par commit, branches d'erreur bespoke gardées inline (Opus, moyen).
+  **FAIT (6/6)** : boucles de **corps** → `parse_proc_body` (CLASS/VAR/WEIGHT/BY via
+  `parse_class`/`parse_var_list`/`parse_weight`/`parse_by` ; OUTPUT/PAIRED/TABLES/graphics/`/`-clause
+  gardés inline dans la closure) ; `resolve_input`→`resolve_last_dataset`. **Boucles d'options
+  gardées inline** pour les 6 (messages bespoke « Unexpected token… »/« Unknown PROC … option »
+  ou skip indulgent d'univariate). −184 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
 - [ ] M31.7 — migrer Tier D : `reg`, `glm`, `anova`, `genmod`, `logistic`, `mixed`, `glimmix`,
   `factor`, `princomp`, `discrim`, `cluster`, `fastclus`, `distance`, `report`, `tabulate`,
   `sgplot`, `iml` — boucle d'options + `DATA=`/`OUT=` + erreur seulement, un proc par commit (Opus, moyen)
