@@ -93,17 +93,6 @@ pub struct TableRequest {
     pub trend: bool,
 }
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse `proc freq [data=a] ; [tables ...;]... run;`. Called AFTER
 /// "proc freq" has been consumed. Consumes through `run;`/`quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
@@ -119,8 +108,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
@@ -219,8 +207,7 @@ fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>> {
                 ts.next();
                 missing = true;
             } else if ts.peek().is_kw("out") {
-                ts.next();
-                expect_eq(ts, "OUT")?;
+                common::expect_eq(ts, "OUT")?;
                 out = Some(ts.parse_dataset_ref()?);
             } else if ts.peek().is_kw("nopercent") {
                 ts.next();

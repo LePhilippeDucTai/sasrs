@@ -169,17 +169,6 @@ impl Default for TTestProcOptions {
     }
 }
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse a numeric option value (`=<num>`); the `=` must already be consumed.
 fn parse_num_value(ts: &mut StatementStream, opt: &str) -> Result<f64> {
     let tok = ts.peek().clone();
@@ -222,28 +211,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             input = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             output = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("h0") {
-            ts.next();
-            expect_eq(ts, "H0")?;
+            common::expect_eq(ts, "H0")?;
             proc_options.h0 = parse_num_value(ts, "H0")?;
         } else if ts.peek().is_kw("alpha") {
-            ts.next();
-            expect_eq(ts, "ALPHA")?;
+            common::expect_eq(ts, "ALPHA")?;
             proc_options.alpha = parse_num_value(ts, "ALPHA")?;
         } else if ts.peek().is_kw("ci") {
-            ts.next();
-            expect_eq(ts, "CI")?;
+            common::expect_eq(ts, "CI")?;
             proc_options.ci = parse_num_value(ts, "CI")?;
         } else if ts.peek().is_kw("equal") {
-            ts.next();
-            expect_eq(ts, "EQUAL")?;
+            common::expect_eq(ts, "EQUAL")?;
             let v = ts
                 .peek()
                 .ident()
@@ -252,8 +235,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             ts.next();
             proc_options.equal = !v.eq_ignore_ascii_case("no");
         } else if ts.peek().is_kw("sides") {
-            ts.next();
-            expect_eq(ts, "SIDES")?;
+            common::expect_eq(ts, "SIDES")?;
             let v = ts
                 .peek()
                 .ident()
@@ -343,8 +325,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
                 // `output out=<ref>;`
                 ts.next();
                 if ts.peek().is_kw("out") {
-                    ts.next();
-                    expect_eq(ts, "OUT")?;
+                    common::expect_eq(ts, "OUT")?;
                     output = Some(ts.parse_dataset_ref()?);
                 }
                 ts.skip_to_semi();

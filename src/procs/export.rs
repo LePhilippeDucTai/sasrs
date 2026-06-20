@@ -36,6 +36,7 @@
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::session::Session;
 use crate::token::TokenKind;
 use polars::prelude::*;
@@ -92,16 +93,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outfile") {
-            ts.next();
-            expect_eq(ts, "OUTFILE")?;
+            common::expect_eq(ts, "OUTFILE")?;
             outfile = Some(parse_string_or_ident(ts, "OUTFILE")?);
         } else if ts.peek().is_kw("dbms") {
-            ts.next();
-            expect_eq(ts, "DBMS")?;
+            common::expect_eq(ts, "DBMS")?;
             let tok = ts.peek().clone();
             let name = tok
                 .ident()
@@ -181,7 +179,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
 /// Execute PROC EXPORT. Appelé par `procs::execute_proc`.
 pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
     // --- Résoudre le dataset source ---
-    let in_ref = resolve_input(ast, session)?;
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
 
@@ -229,32 +227,6 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Helpers internes
 // ---------------------------------------------------------------------------
-
-/// Résout le dataset source depuis `DATA=` ou `_LAST_`.
-fn resolve_input(ast: &ExportAst, session: &Session) -> Result<DatasetRef> {
-    match &ast.data {
-        Some(r) => Ok(r.clone()),
-        None => {
-            let last = session.last_dataset.clone().ok_or_else(|| {
-                SasError::runtime(
-                    "There is no default input data set (_LAST_ is undefined).",
-                )
-            })?;
-            let parts: Vec<&str> = last.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                Ok(DatasetRef {
-                    libref: Some(parts[0].to_string()),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                Ok(DatasetRef {
-                    libref: None,
-                    name: last,
-                })
-            }
-        }
-    }
-}
 
 /// Résout le séparateur en octet selon DBMS + DELIMITER éventuel.
 fn resolve_separator(ast: &ExportAst) -> u8 {

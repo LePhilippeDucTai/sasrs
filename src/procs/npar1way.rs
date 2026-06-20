@@ -153,17 +153,6 @@ impl Default for NparProcOptions {
     }
 }
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse a numeric option value (`=<num>`); the `=` must already be consumed.
 fn parse_num_value(ts: &mut StatementStream, opt: &str) -> Result<f64> {
     let tok = ts.peek().clone();
@@ -211,16 +200,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             input = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             output = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("alpha") {
-            ts.next();
-            expect_eq(ts, "ALPHA")?;
+            common::expect_eq(ts, "ALPHA")?;
             proc_options.alpha = parse_num_value(ts, "ALPHA")?;
         } else if ts.peek().is_kw("wilcoxon") {
             ts.next();
@@ -276,8 +262,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
                 // `output out=<ref>;`
                 ts.next();
                 if ts.peek().is_kw("out") {
-                    ts.next();
-                    expect_eq(ts, "OUT")?;
+                    common::expect_eq(ts, "OUT")?;
                     output = Some(ts.parse_dataset_ref()?);
                 }
                 ts.skip_to_semi();

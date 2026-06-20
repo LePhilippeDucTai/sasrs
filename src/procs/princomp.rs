@@ -57,17 +57,6 @@ pub struct PrincompAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse `proc princomp [data=a] [cov] [n=k] [out=b]; [var ...;] run;`.
 /// Called AFTER "proc princomp" has been consumed. Consumes through run;/quit;.
 pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
@@ -91,8 +80,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("n") {
-            ts.next();
-            expect_eq(ts, "N")?;
+            common::expect_eq(ts, "N")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,

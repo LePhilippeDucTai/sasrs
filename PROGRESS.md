@@ -389,8 +389,12 @@ Garde-fou byte-identité : `unknown_option_error` reproduit EXACTEMENT le messag
   « Unexpected token… ») mais migrent `DATA=`/`OUT=`. `report` body gardé inline (statement inconnu =
   ERREUR, pas `skip_to_semi`). **`iml` exclu** (sous-langage matriciel autonome : pas de `data=`/loops
   standard). −656 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning nouveau.
-- [ ] ⫽ M31.8 — balayage : remplacer les copies privées `expect_eq`/`resolve_input` par
-  `common::*`, supprimer les doublons morts ; un proc par commit (Sonnet, faible)
+- [x] ⫽ M31.8 — balayage : remplacer les copies privées `expect_eq`/`resolve_input` par
+  `common::*`, supprimer les doublons morts ; un proc par commit (Sonnet, faible).
+  **FAIT** : 4/4 `resolve_input` supprimés (gplot/gchart/plot/export → `resolve_last_dataset`) ;
+  14 `expect_eq` locaux entièrement retirés (sites `ts.next(); expect_eq` → `common::expect_eq`) ;
+  4 partiels (export/import/means/sgplot : `expect_eq` gardé pour des sites à `ts.next()` partagé
+  hors `match`, sites canoniques convertis). 20 fichiers, −313 lignes nettes. 2276 lib, 0 `.snap.new`, 0 warning.
 - [ ] DoD M31 : `cargo test -p sasrs` vert, **zéro `.snap.new`** (fixtures m1–m30 octet-identiques),
   `cargo build` 0 warning ; mettre les fichiers refactorés à jour dans la table PLAN.md ;
   passer « Jalon courant : **M32** ».

@@ -134,8 +134,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("nosimple") {
             ts.next();
@@ -156,16 +155,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             ts.next();
             kendall = true;
         } else if ts.peek().is_kw("out") || ts.peek().is_kw("outp") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             outp = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outs") {
-            ts.next();
-            expect_eq(ts, "OUTS")?;
+            common::expect_eq(ts, "OUTS")?;
             outs = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outk") {
-            ts.next();
-            expect_eq(ts, "OUTK")?;
+            common::expect_eq(ts, "OUTK")?;
             outk = Some(ts.parse_dataset_ref()?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
@@ -235,17 +231,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         outs,
         outk,
     })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 // ───────────────────────── numeric core ─────────────────────────

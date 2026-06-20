@@ -283,13 +283,11 @@ fn parse_xy_stmt(
         };
         match name.as_str() {
             "x" => {
-                ts.next();
-                expect_eq(ts, "X")?;
+                common::expect_eq(ts, "X")?;
                 x = Some(expect_ident(ts, "after X=")?);
             }
             "y" => {
-                ts.next();
-                expect_eq(ts, "Y")?;
+                common::expect_eq(ts, "Y")?;
                 y = Some(expect_ident(ts, "after Y=")?);
             }
             _ => {

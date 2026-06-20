@@ -45,17 +45,6 @@ pub struct FastclusAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 fn parse_num(ts: &mut StatementStream, opt: &str) -> Result<f64> {
     let span = ts.peek().span;
     match ts.peek().kind {
@@ -89,20 +78,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
         } else if ts.peek().is_kw("out") {
             out = Some(common::parse_out_opt(ts)?);
         } else if ts.peek().is_kw("maxclusters") || ts.peek().is_kw("maxc") {
-            ts.next();
-            expect_eq(ts, "MAXCLUSTERS")?;
+            common::expect_eq(ts, "MAXCLUSTERS")?;
             maxclusters = Some(parse_num(ts, "MAXCLUSTERS")? as usize);
         } else if ts.peek().is_kw("maxiter") {
-            ts.next();
-            expect_eq(ts, "MAXITER")?;
+            common::expect_eq(ts, "MAXITER")?;
             maxiter = parse_num(ts, "MAXITER")? as usize;
         } else if ts.peek().is_kw("converge") {
-            ts.next();
-            expect_eq(ts, "CONVERGE")?;
+            common::expect_eq(ts, "CONVERGE")?;
             converge = parse_num(ts, "CONVERGE")?;
         } else if ts.peek().is_kw("seed") {
-            ts.next();
-            expect_eq(ts, "SEED")?;
+            common::expect_eq(ts, "SEED")?;
             seed = Some(parse_num(ts, "SEED")? as i64);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;

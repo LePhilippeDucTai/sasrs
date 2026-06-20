@@ -142,8 +142,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
             // Accepted and ignored for rendering: UNIVARIATE always shows its
@@ -306,8 +305,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
             break;
         }
         if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(kw) = ts.peek().ident().map(str::to_string) {
             let stat = kw.to_ascii_lowercase();
@@ -317,8 +315,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
                     ts.peek().span,
                 ));
             }
-            ts.next(); // stat keyword
-            expect_eq(ts, "OUTPUT statistic")?;
+            common::expect_eq(ts, "OUTPUT statistic")?;
             // Collect one or more output names until the next stat keyword,
             // `out`, or `;`.
             let mut names: Vec<String> = Vec::new();
@@ -351,17 +348,6 @@ fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput> {
         SasError::runtime("The OUTPUT statement requires the OUT= option in PROC UNIVARIATE.")
     })?;
     Ok(UnivariateOutput { out, specs })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 // ─────────────────────────── statistics helpers ───────────────────────────

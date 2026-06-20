@@ -71,17 +71,6 @@ pub struct ClusterAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 fn parse_method(ts: &mut StatementStream) -> Result<LinkMethod> {
     let span = ts.peek().span;
     let name = ts
@@ -121,14 +110,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
         if ts.peek().is_kw("data") {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("method") {
-            ts.next();
-            expect_eq(ts, "METHOD")?;
+            common::expect_eq(ts, "METHOD")?;
             method = parse_method(ts)?;
         } else if ts.peek().is_kw("outtree") {
             outtree = Some(common::parse_dataset_opt(ts, "OUTTREE")?);
         } else if ts.peek().is_kw("print") {
-            ts.next();
-            expect_eq(ts, "PRINT")?;
+            common::expect_eq(ts, "PRINT")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,

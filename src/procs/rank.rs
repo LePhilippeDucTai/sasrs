@@ -179,19 +179,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("descending") {
             ts.next();
             descending = true;
         } else if ts.peek().is_kw("ties") {
-            ts.next();
-            expect_eq(ts, "TIES")?;
+            common::expect_eq(ts, "TIES")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a TIES= method (MEAN|LOW|HIGH|DENSE)", tok.span)
@@ -213,8 +210,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             };
             ts.next();
         } else if ts.peek().is_kw("groups") {
-            ts.next();
-            expect_eq(ts, "GROUPS")?;
+            common::expect_eq(ts, "GROUPS")?;
             let tok = ts.peek().clone();
             let n = match &tok.kind {
                 TokenKind::Num(v) => *v,
@@ -245,8 +241,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             ts.next();
             set_method(Method::Savage, &mut method)?;
         } else if ts.peek().is_kw("normal") {
-            ts.next();
-            expect_eq(ts, "NORMAL")?;
+            common::expect_eq(ts, "NORMAL")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a NORMAL= method (BLOM|TUKEY|VW)", tok.span)
@@ -324,17 +319,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
         var,
         ranks,
     })
-}
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 // ───────────────────────── ranking core ─────────────────────────

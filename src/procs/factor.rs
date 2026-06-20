@@ -41,17 +41,6 @@ pub struct FactorAst {
 
 // ───────────────────────── Parser ─────────────────────────
 
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Parse `proc factor [options]; [var ...;] run;`.
 /// Called AFTER "proc factor" has been consumed. Consumes through run;/quit;.
 pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
@@ -77,8 +66,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("nfactors") {
-            ts.next();
-            expect_eq(ts, "NFACTORS")?;
+            common::expect_eq(ts, "NFACTORS")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,
@@ -87,8 +75,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             ts.next();
             nfactors = Some(k as usize);
         } else if ts.peek().is_kw("method") {
-            ts.next();
-            expect_eq(ts, "METHOD")?;
+            common::expect_eq(ts, "METHOD")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(m) => {
@@ -98,8 +85,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                 None => return Err(SasError::parse("expected a method name after METHOD=", span)),
             }
         } else if ts.peek().is_kw("rotate") {
-            ts.next();
-            expect_eq(ts, "ROTATE")?;
+            common::expect_eq(ts, "ROTATE")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(r) => {

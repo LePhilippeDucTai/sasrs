@@ -57,19 +57,6 @@ pub struct DiscrimAst {
     pub id_var: Option<String>,
 }
 
-// ───────────────────────── Parser helpers ─────────────────────────
-
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 // ───────────────────────── Parser ─────────────────────────
 
 /// Parse PROC DISCRIM. Called AFTER `proc discrim` has been consumed.
@@ -101,13 +88,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
         } else if tk.is_kw("outstat") {
             outstat = Some(common::parse_dataset_opt(ts, "OUTSTAT")?);
         } else if tk.is_kw("method") {
-            ts.next();
-            expect_eq(ts, "METHOD")?;
+            common::expect_eq(ts, "METHOD")?;
             method = ts.peek().ident().map(|s| s.to_ascii_uppercase());
             ts.next();
         } else if tk.is_kw("pool") {
-            ts.next();
-            expect_eq(ts, "POOL")?;
+            common::expect_eq(ts, "POOL")?;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             pool = match v.as_deref() {
                 Some("no") => Pool::No,

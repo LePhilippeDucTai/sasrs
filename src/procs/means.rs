@@ -126,8 +126,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            ts.next();
-            expect_eq(ts, "DATA")?;
+            crate::procs::common::expect_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
             ts.next();
@@ -137,8 +136,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             ts.next();
             noprint = false;
         } else if ts.peek().is_kw("alpha") {
-            ts.next();
-            expect_eq(ts, "ALPHA")?;
+            crate::procs::common::expect_eq(ts, "ALPHA")?;
             let tok = ts.peek().clone();
             let val = match tok.kind {
                 TokenKind::Num(f) => f,
@@ -254,8 +252,7 @@ fn parse_output(ts: &mut StatementStream) -> Result<MeansOutput> {
             break;
         }
         if ts.peek().is_kw("out") {
-            ts.next();
-            expect_eq(ts, "OUT")?;
+            crate::procs::common::expect_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(stat) = ts.peek().ident().map(str::to_string) {
             // Expect `stat(var)=name`.
