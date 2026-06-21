@@ -635,6 +635,14 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   BY, OUTPUT). +8 tests (2406 lib), 0 warning, m26 octet-identique.
 - [ ] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
   `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Fable, très élevé)
+  - **MIXED FAIT** (commit dédié) : chemin dual (legacy VC intercept-seul `is_legacy_case` → octet-identité
+    m28 ; sinon `execute_general`). `REPEATED / SUBJECT= TYPE=AR(1)|UN` + design d'effets fixes général
+    (intercept/continu/CLASS reference-cell, `NOINT`) ; (RE)ML général sur V(θ)=ZGZ'+R par Nelder-Mead
+    (restarts + polish coordonné, précision ≲5e-5) ; paramétrage non contraint (log σ², tanh ρ, Cholesky UN).
+    Cov Parm `UN(i,j)`/`AR(1)`/`Residual`. **Oracle UN saturé** (ML, vecteurs (1,3)(3,1)(5,7)(7,5)) :
+    UN(1,1)=5.0000, UN(2,1)=3.0000, UN(2,2)=5.0000 (= covariance d'échantillon), Intercept=4.0000 ;
+    AR(1) ρ=0.6842, Residual=6.3333. Fixture m34 (mixed_un_ar1) + snapshot. +5 tests (2416 lib), m28 octet-identique.
+  - **reste GLIMMIX** : `TYPE=AR(1)/UN`, `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE`, NOINT/effets fixes.
 - [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
   `FACTOR` rotations obliques (Opus, élevé)
 - [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,

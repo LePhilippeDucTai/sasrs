@@ -1,0 +1,193 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/mixed_un_ar1.sas
+---
+==== LOG ====
+
+1     title 'PROC MIXED REPEATED TYPE=UN (ML)';
+
+2     data rep;
+3       input subj $ time y;
+4     datalines;
+5     A 1 1
+6     A 2 3
+7     B 1 3
+8     B 2 1
+9     C 1 5
+10    C 2 7
+11    D 1 7
+12    D 2 5
+13    ;
+NOTE: The data set WORK.REP has 8 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    proc mixed data=rep method=ml;
+15      class subj time;
+16      model y = / solution;
+17      repeated time / subject=subj type=un;
+18    run;
+NOTE: PROCEDURE MIXED used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    title 'PROC MIXED REPEATED TYPE=AR(1) (REML)';
+
+20    proc mixed data=rep;
+21      class subj time;
+22      model y = / solution;
+23      repeated time / subject=subj type=ar(1);
+24    run;
+NOTE: PROCEDURE MIXED used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    title;
+
+==== LISTING ====
+                                PROC MIXED REPEATED TYPE=UN (ML)
+
+                                      The Mixed Procedure
+
+                                       Model Information
+
+
+
+                           Data Set                     WORK.REP
+                           Dependent Variable           y
+                           Covariance Structure         Unstructured
+                           Estimation Method            ML
+                           Residual Variance Method     Profile
+                           Fixed Effects SE Method      Model-Based
+                           Degrees of Freedom Method    Contain
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   subj          4    A B C D
+
+                                           Dimensions
+
+
+
+                                   Covariance Parameters    3
+                                   Columns in X             1
+                                   Subjects                 4
+                                   Max Obs Per Subject      2
+
+                                     Number of Observations
+
+
+
+                              Number of Observations Read        8
+                              Number of Observations Used        8
+                              Number of Observations Not Used    0
+
+                                       Iteration History
+
+                     Iteration    Evaluations    -2 Log Like     Criterion
+
+                             0              1        35.6468
+                             1            377        33.7934    0.00000000
+
+                                   Convergence criteria met.
+
+                                 Covariance Parameter Estimates
+
+                                Cov Parm    Subject    Estimate
+
+                                UN(1,1)     subj         5.0000
+                                UN(2,1)     subj         3.0000
+                                UN(2,2)     subj         5.0000
+
+                                         Fit Statistics
+
+
+
+                              -2 Log Likelihood           33.7934
+                              AIC (Smaller is Better)     39.7934
+                              AICC (Smaller is Better)    45.7934
+                              BIC (Smaller is Better)     37.9523
+
+                                   Solution for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept      4.0000            1.0000     3       4.00      0.0280
+
+
+                             PROC MIXED REPEATED TYPE=AR(1) (REML)
+
+                                      The Mixed Procedure
+
+                                       Model Information
+
+
+
+                          Data Set                     WORK.REP
+                          Dependent Variable           y
+                          Covariance Structure         Autoregressive
+                          Estimation Method            REML
+                          Residual Variance Method     Profile
+                          Fixed Effects SE Method      Model-Based
+                          Degrees of Freedom Method    Contain
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   subj          4    A B C D
+
+                                           Dimensions
+
+
+
+                                   Covariance Parameters    2
+                                   Columns in X             1
+                                   Subjects                 4
+                                   Max Obs Per Subject      2
+
+                                     Number of Observations
+
+
+
+                              Number of Observations Read        8
+                              Number of Observations Used        8
+                              Number of Observations Not Used    0
+
+                                       Iteration History
+
+                   Iteration    Evaluations    -2 Res Log Like     Criterion
+
+                           0              1            33.6579
+                           1            228            31.8185    0.00000000
+
+                                   Convergence criteria met.
+
+                                 Covariance Parameter Estimates
+
+                                Cov Parm    Subject    Estimate
+
+                                AR(1)       subj         0.6842
+                                Residual                 6.3333
+
+                                         Fit Statistics
+
+
+
+                              -2 Res Log Likelihood       31.8185
+                              AIC (Smaller is Better)     35.8185
+                              AICC (Smaller is Better)    38.8185
+                              BIC (Smaller is Better)     34.5911
+
+                                   Solution for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept      4.0000            1.1547     3       3.46      0.0405
+
+
+==== EXIT 0 ====
