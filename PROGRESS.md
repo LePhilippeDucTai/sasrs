@@ -609,8 +609,18 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   0.49706 = Model SS 4823.48684 ; SSE_full invariant 4512.25 entre codages ; LSMEANS reconstruites des
   cellules : sex F=(104.25+78.8)/2=91.525, etc.). 2 fixtures m34 (anova_twoway + glm_twoway) + snapshots.
   README ANOVA 🟡→✅, GLM 🟡→✅. +2 tests (2398 lib), 0 warning, m25 octet-identique.
-- [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
-  logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
+- [x] M34.6 — `PROC LOGISTIC` : `CLASS`, `LINK=` (probit/cloglog), logistique ordinale, `OUTPUT OUT=` (Opus solo, très élevé).
+  **FAIT** : (a) `CLASS` codage reference-cell (ref=dernier niveau, PARAM=REF documenté ; SAS défaut=EFFECT,
+  écart noté ; Class Level Information ; lignes ML `var niveau`, OR `niveau vs ref`). (b) `LINK=` enum
+  {Logit défaut, Cloglog, Probit} — Logit garde le chemin exact (octet-identité m26), branche séparée
+  Fisher pour probit/cloglog (`μ=Φ(η)`/`φ` ; `1−exp(−eᵑ)`/`exp(η−eᵑ)`), table Odds Ratio omise pour
+  non-logit. (c) **Ordinale** proportional-odds (logit cumulatif) pour réponse >2 niveaux ordonnés :
+  intercepts α₁<…<α_{k−1} + pente partagée (Newton, non-convergence → NOTE séparation ; Score Test
+  Proportional Odds différé). (d) `OUTPUT OUT= PREDICTED=/P=/XBETA=`. **Oracles vérifiés** (counts m26
+  saturés) : CLASS x → fit ≡ m26 (LR 16.2787/Score 15.4286/Wald 13.5946), Intercept=ln4=1.3863, x 0=−ln10,
+  OR « 0 vs 1 »=0.10 ; PROBIT Intercept=Φ⁻¹(0.2857)=−0.5659, x=1.4076 ; CLOGLOG Intercept=−1.0892, x=1.5651 ;
+  OUTPUT phat=0.8/0.2857. 3 fixtures m34 (class_output, links, ordinal) + snapshots. README LOGISTIC
+  colonne non-couvert rétrécie. +5 tests (2411 lib), 0 warning, m26 octet-identique.
 - [x] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé).
   **FAIT** : (a) `DIST=GAMMA` câblé dans l'IRLS — `V(μ)=μ²`, lien canonique réciproque (`η=1/μ`, nouveau
   `LinkFunction::Reciprocal`) + `LINK=LOG` honoré ; domaine μ>0 protégé par step-halving (≤40) ; déviance
