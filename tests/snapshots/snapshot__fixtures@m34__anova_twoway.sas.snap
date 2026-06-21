@@ -1,0 +1,84 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/anova_twoway.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data class2;
+3       set d.class;
+4       if age >= 14 then agegrp = 'Old';
+5       else agegrp = 'Yng';
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.CLASS2 has 19 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'PROC ANOVA two-way: weight = sex agegrp sex*agegrp';
+
+8     proc anova data=class2;
+9       class sex agegrp;
+10      model weight = sex agegrp sex*agegrp;
+11    run;
+NOTE: There were 19 observations read from the data set WORK.CLASS2.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE ANOVA used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    title;
+
+==== LISTING ====
+                       PROC ANOVA two-way: weight = sex agegrp sex*agegrp
+
+                                      The ANOVA Procedure
+
+                                    Class Level Information
+
+                                  Class     Levels    Values
+
+                                  sex            2    F M
+                                  agegrp         2    Old Yng
+
+               Number of Observations Read     19
+
+
+                                   Dependent Variable: weight
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               3        4823.48684     1607.82895       5.34    0.0105
+          Error              15        4512.25000      300.81667
+          Corrected Total    18        9335.73684
+
+
+                       R-Square    Coeff Var     Root MSE    weight Mean
+
+                       0.516669    17.339504    17.344067     100.026316
+
+
+               Source        DF     Type I SS    Mean Square    F Value    Pr > F
+
+               sex            1    1681.12295     1681.12295       5.59    0.0320
+               agegrp         1    3141.86683     3141.86683      10.44    0.0056
+               sex*agegrp     1       0.49706        0.49706       0.00    0.9681
+
+
+              Source        DF    Type III SS    Mean Square    F Value    Pr > F
+
+              sex            1     1428.85000     1428.85000       4.75    0.0457
+              agegrp         1     3126.35588     3126.35588      10.39    0.0057
+              sex*agegrp     1        0.49706        0.49706       0.00    0.9681
+
+
+
+==== EXIT 0 ====

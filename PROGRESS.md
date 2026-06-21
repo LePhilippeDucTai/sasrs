@@ -595,7 +595,20 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   modèles finaux ≡ OLS m25). 2 fixtures m34 (reg_noint + reg_selection) + snapshots. README REG :
   colonne non-couvert rétrécie (NOINT/SELECTION=/MODEL multiples retirés ; reste 🟡 : TEST, CLM/CLI,
   BY, critères SELECTION= avancés). +10 tests (2386 lib), 0 warning, chemin défaut octet-identique.
-- [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)
+- [x] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Opus ×2, très élevé — Fable indisponible).
+  **FAIT (→ ✅ les deux)** : chemin dual préservant l'octet-identité des snapshots m25 (one-way inchangé ;
+  `execute_multiway` séparé déclenché par `*` / >1 terme / >1 CLASS). Parsing de termes `a b a*b`
+  (`TokenKind::Star`) → `Vec<Vec<String>>`. Moteur GLM général : design reference-cell (intercept +
+  L−1 indicatrices/effet + produits pour interactions). **Type I SS** séquentielle (reference-cell,
+  invariante au codage) ; **Type III SS** en **codage somme-nulle (effet)** — partiel sous codage effet
+  = Type III de SAS (corrige le piège : reference-cell partiel ≠ Type III pour effet principal en
+  présence d'interaction sur données déséquilibrées). GLM ajoute SOLUTION (estimations reference-cell,
+  niveaux de référence « 0/B », cross-labels d'interaction) et LSMEANS multi-voies (moyenne marginale
+  uniforme sur les autres facteurs). **Validation croisée** : ANOVA et GLM produisent des Type III
+  IDENTIQUES (sex 1428.85000, agegrp 3126.35588 ; Type I sex 1681.12295+agegrp 3141.86683+inter
+  0.49706 = Model SS 4823.48684 ; SSE_full invariant 4512.25 entre codages ; LSMEANS reconstruites des
+  cellules : sex F=(104.25+78.8)/2=91.525, etc.). 2 fixtures m34 (anova_twoway + glm_twoway) + snapshots.
+  README ANOVA 🟡→✅, GLM 🟡→✅. +2 tests (2398 lib), 0 warning, m25 octet-identique.
 - [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
   logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
 - [ ] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé)
