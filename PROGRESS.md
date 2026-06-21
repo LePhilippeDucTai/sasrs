@@ -611,7 +611,18 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   README ANOVA 🟡→✅, GLM 🟡→✅. +2 tests (2398 lib), 0 warning, m25 octet-identique.
 - [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
   logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
-- [ ] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé)
+- [x] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé).
+  **FAIT** : (a) `DIST=GAMMA` câblé dans l'IRLS — `V(μ)=μ²`, lien canonique réciproque (`η=1/μ`, nouveau
+  `LinkFunction::Reciprocal`) + `LINK=LOG` honoré ; domaine μ>0 protégé par step-halving (≤40) ; déviance
+  `2Σ[−ln(y/μ)+(y−μ)/μ]`, Pearson `Σ(y−μ)²/μ²`, LL via `ln_gamma`. (b) `CLASS` (codage reference-cell
+  ref=dernier niveau, L−1 colonnes ; Class Level Information ; lignes ML `var niveau`, niveau de référence
+  DF 0/estimate 0). (c) `SCALE=`/`NOSCALE` fixent la dispersion (Normal σ⇒φ=σ², Gamma valeur=forme 1/φ).
+  **Dispersion Gamma = estimateur de Pearson φ̂=(1/(n−p))Σ(y−μ)²/μ²**, Scale affichée = 1/φ̂ (forme SAS) —
+  approximation documentée de l'ML exact (digamma). Oracle vérifié (Gamma log-link, facteur saturé 2
+  niveaux) : Intercept=ln(20)=2.9957, grp A=ln(0.2)=−1.6094, Pearson=1.0, Scale=1/0.25=4.0, Déviance≈1.1507,
+  Wald χ²=107.69. Fixture m34 (genmod_gamma_class) + snapshot. README GENMOD : colonne non-couvert rétrécie
+  (GAMMA/CLASS/SCALE= retirés ; reste 🟡 : ML digamma exact, multinomial, GEE, OFFSET, ESTIMATE/CONTRAST,
+  BY, OUTPUT). +8 tests (2406 lib), 0 warning, m26 octet-identique.
 - [ ] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
   `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Fable, très élevé)
 - [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
