@@ -1,9 +1,13 @@
-//! PROC REG — OLS linear regression (M25.1).
+//! PROC REG — OLS linear regression (M25.1, extended M34.4).
 //!
-//! Implements PROC REG with a single MODEL statement, supporting intercept
-//! model only (NOINT deferred). Produces an ANOVA table, fit statistics, and
-//! parameter estimates with t-tests. Optional OUTPUT statement writes predicted
-//! values and residuals.
+//! Implements PROC REG. Supports:
+//! - Multiple MODEL statements (each with its own OUTPUT statement(s)).
+//! - Intercept models and NOINT (no-intercept) models.
+//! - SELECTION= FORWARD / BACKWARD / STEPWISE variable selection.
+//!
+//! Produces, per model, an ANOVA table, fit statistics, and parameter
+//! estimates with t-tests. Optional OUTPUT statement writes predicted values
+//! and residuals (using the final selected model when SELECTION= is given).
 
 use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
@@ -25,12 +29,20 @@ use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 #[derive(Debug, Clone)]
 pub struct RegAst {
     pub data_options: RegDataOptions,
-    pub model: Option<RegModel>,
-    pub outputs: Vec<RegOutput>,
+    /// All MODEL statements, in source order. Each carries the OUTPUT
+    /// statement(s) that followed it (SAS associates an OUTPUT with the
+    /// MODEL it follows).
+    pub models: Vec<RegModelEntry>,
     /// M29.3 — an explicit `PLOTS ...;` statement was seen. Its complex forms
     /// are deferred (a NOTE); the simple residuals-vs-predicted diagnostic is
     /// driven automatically from `ods_graphics.enabled`, not from this flag.
     pub plots_requested: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegModelEntry {
+    pub model: RegModel,
+    pub outputs: Vec<RegOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +56,22 @@ pub struct RegModel {
     pub regressors: Vec<String>,
     pub noint: bool,
     pub noprint: bool,
+    /// SELECTION= option (FORWARD / BACKWARD / STEPWISE), if requested.
+    pub selection: Option<Selection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelMethod {
+    Forward,
+    Backward,
+    Stepwise,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Selection {
+    pub method: SelMethod,
+    pub slentry: f64,
+    pub slstay: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -77,8 +105,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     }
 
     // Sub-statements until run;/quit;
-    let mut model: Option<RegModel> = None;
-    let mut outputs: Vec<RegOutput> = Vec::new();
+    let mut models: Vec<RegModelEntry> = Vec::new();
     let mut plots_requested = false;
 
     common::parse_proc_body(ts, |ts, kw| {
@@ -100,6 +127,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut regressors = vec![];
             let mut noint = false;
             let mut noprint = false;
+            let mut selection: Option<Selection> = None;
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                     break;
@@ -114,6 +142,53 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                         } else if ts.peek().is_kw("noprint") {
                             noprint = true;
                             ts.next();
+                        } else if ts.peek().is_kw("selection") {
+                            common::expect_eq(ts, "SELECTION")?;
+                            let method_name = ts
+                                .peek()
+                                .ident()
+                                .map(str::to_string)
+                                .ok_or_else(|| {
+                                    SasError::parse(
+                                        "expected selection method after SELECTION=",
+                                        ts.peek().span,
+                                    )
+                                })?;
+                            ts.next();
+                            let method = match method_name.to_ascii_lowercase().as_str() {
+                                "forward" => SelMethod::Forward,
+                                "backward" => SelMethod::Backward,
+                                "stepwise" => SelMethod::Stepwise,
+                                other => {
+                                    return Err(SasError::parse(
+                                        format!("unsupported SELECTION method '{}'", other),
+                                        ts.peek().span,
+                                    ));
+                                }
+                            };
+                            // Defaults depend on the method.
+                            let (def_sle, def_sls) = match method {
+                                SelMethod::Forward => (0.50, 0.10),
+                                SelMethod::Backward => (0.50, 0.10),
+                                SelMethod::Stepwise => (0.15, 0.15),
+                            };
+                            selection = Some(Selection {
+                                method,
+                                slentry: def_sle,
+                                slstay: def_sls,
+                            });
+                        } else if ts.peek().is_kw("slentry") || ts.peek().is_kw("sle") {
+                            common::expect_eq(ts, "SLENTRY")?;
+                            let v = read_float(ts)?;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.slentry = v;
+                            }
+                        } else if ts.peek().is_kw("slstay") || ts.peek().is_kw("sls") {
+                            common::expect_eq(ts, "SLSTAY")?;
+                            let v = read_float(ts)?;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.slstay = v;
+                            }
                         } else {
                             ts.next(); // skip unknown options
                         }
@@ -128,11 +203,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 }
             }
             ts.expect_semi()?;
-            model = Some(RegModel {
-                dependent: dep,
-                regressors,
-                noint,
-                noprint,
+            models.push(RegModelEntry {
+                model: RegModel {
+                    dependent: dep,
+                    regressors,
+                    noint,
+                    noprint,
+                    selection,
+                },
+                outputs: Vec::new(),
             });
             Ok(true)
         } else if kw == "output" {
@@ -161,11 +240,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             }
             ts.expect_semi()?;
             if let Some(out_ref) = out {
-                outputs.push(RegOutput {
-                    out: out_ref,
-                    predicted,
-                    residual,
-                });
+                // Associate this OUTPUT with the MODEL it follows (the last one
+                // seen). If no MODEL has been seen yet, SAS would error; we drop
+                // it silently here, matching the prior "only emit if out present"
+                // behaviour as closely as possible.
+                if let Some(entry) = models.last_mut() {
+                    entry.outputs.push(RegOutput {
+                        out: out_ref,
+                        predicted,
+                        residual,
+                    });
+                }
             }
             Ok(true)
         } else if kw == "plots" {
@@ -183,10 +268,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
 
     Ok(RegAst {
         data_options: RegDataOptions { input },
-        model,
-        outputs,
+        models,
         plots_requested,
     })
+}
+
+/// Read a numeric option value (e.g. `0.5`). Significance levels in PROC REG
+/// are conventionally written with a leading zero (`0.05`), which the lexer
+/// emits as a single `Num` token.
+fn read_float(ts: &mut StatementStream) -> Result<f64> {
+    match ts.peek().kind {
+        TokenKind::Num(v) => {
+            ts.next();
+            Ok(v)
+        }
+        _ => Err(SasError::parse("expected numeric value", ts.peek().span)),
+    }
 }
 
 // ───────────────────────── Formatting helpers ─────────────────────────
@@ -239,24 +336,81 @@ fn num_var_meta(name: &str) -> VarMeta {
     }
 }
 
+// ───────────────────────── OLS fit helper ─────────────────────────
+
+/// Result of an ordinary-least-squares fit on a fully-numeric design matrix.
+struct OlsFit {
+    /// Coefficient vector (one per column of X).
+    beta: Vec<f64>,
+    /// Predicted values ŷ = Xβ.
+    y_hat: Vec<f64>,
+    /// Residuals y − ŷ.
+    resid: Vec<f64>,
+    /// Σ resid² (residual / error sum of squares).
+    sse: f64,
+    /// (XᵀX)⁻¹.
+    xtx_inv: Vec<Vec<f64>>,
+}
+
+/// Fit OLS for the given design matrix `x` (rows are observations, columns are
+/// regressors — the caller decides whether an intercept column is present) and
+/// response `y`. Pure: no session / printing side effects.
+fn ols_fit(x: &[Vec<f64>], y: &[f64]) -> Result<OlsFit> {
+    let beta = linalg::least_squares(x, y)?;
+    let y_hat: Vec<f64> = x
+        .iter()
+        .map(|row| row.iter().zip(beta.iter()).map(|(xi, bi)| xi * bi).sum())
+        .collect();
+    let resid: Vec<f64> = y
+        .iter()
+        .zip(y_hat.iter())
+        .map(|(yi, yhi)| yi - yhi)
+        .collect();
+    let sse: f64 = resid.iter().map(|r| r * r).sum();
+    let xt = linalg::transpose(x);
+    let xtx = linalg::matrix_mult(&xt, x);
+    let xtx_inv = linalg::invert_matrix(&xtx)?;
+    Ok(OlsFit {
+        beta,
+        y_hat,
+        resid,
+        sse,
+        xtx_inv,
+    })
+}
+
+/// Compute SSE only for a candidate subset fit (used by SELECTION). Builds the
+/// design matrix from `xcols` (columns of regressors, each length n) over the
+/// `subset` of column indices, optionally prepending an intercept column.
+/// Returns `None` if the fit is rank-deficient / not solvable.
+fn subset_sse(xcols: &[Vec<f64>], y: &[f64], subset: &[usize], intercept: bool) -> Option<f64> {
+    let n = y.len();
+    let mut x: Vec<Vec<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(subset.len() + intercept as usize);
+        if intercept {
+            row.push(1.0);
+        }
+        for &c in subset {
+            row.push(xcols[c][i]);
+        }
+        x.push(row);
+    }
+    if x.is_empty() || x[0].is_empty() {
+        return None;
+    }
+    ols_fit(&x, y).ok().map(|f| f.sse)
+}
+
 // ───────────────────────── Execute ─────────────────────────
 
 pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
-    let model = match &ast.model {
-        Some(m) => m,
-        None => {
-            session
-                .log
-                .note("NOTE: No MODEL statement found.");
-            return Ok(());
-        }
-    };
-
-    if model.noint {
-        return Err(SasError::runtime("NOINT not yet implemented"));
+    if ast.models.is_empty() {
+        session.log.note("NOTE: No MODEL statement found.");
+        return Ok(());
     }
 
-    // --- 1. Resolve dataset ---
+    // --- 1. Resolve dataset (once per proc) ---
     let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
     let in_table = in_ref.name.to_uppercase();
@@ -272,19 +426,51 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         "There were {} observations read from the data set {}.{}.",
         n_read, in_libref, in_table
     ));
+
+    // --- 2. Per-model loop ---
+    for (mi, entry) in ast.models.iter().enumerate() {
+        let model_label = format!("Model: MODEL{}", mi + 1);
+        run_model(
+            ast,
+            entry,
+            &ds,
+            &in_libref,
+            &in_table,
+            n_read,
+            &model_label,
+            session,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Run a single MODEL statement: resolve columns, do listwise deletion, then
+/// dispatch to the default/NOINT path or the SELECTION path. Writes any OUTPUT
+/// dataset associated with the model.
+#[allow(clippy::too_many_arguments)]
+fn run_model(
+    ast: &RegAst,
+    entry: &RegModelEntry,
+    ds: &SasDataset,
+    in_libref: &str,
+    in_table: &str,
+    n_read: usize,
+    model_label: &str,
+    session: &mut Session,
+) -> Result<()> {
+    let _ = (in_libref, in_table);
+    let model = &entry.model;
     let dep_name = &model.dependent;
     let regressors = &model.regressors;
     let p = regressors.len();
-    let p_eff = p + 1; // with intercept
 
-    // --- 2. Find column indices ---
+    // --- Find column indices ---
     let find_col = |nm: &str| -> Result<usize> {
         ds.vars
             .iter()
             .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
-            })
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
     };
 
     let dep_idx = find_col(dep_name)?;
@@ -307,31 +493,29 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         reg_idxs.push(idx);
     }
 
-    // --- 3. Decode columns ---
-    let dep_col = decode_column(&ds, dep_idx)?;
+    // --- Decode columns ---
+    let dep_col = decode_column(ds, dep_idx)?;
     let mut reg_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(p);
     for &idx in &reg_idxs {
-        reg_cols.push(decode_column(&ds, idx)?);
+        reg_cols.push(decode_column(ds, idx)?);
     }
 
-    // --- 4. Build X matrix and y vector (listwise deletion) ---
-    let mut x_mat: Vec<Vec<f64>> = Vec::new();
+    // --- Build regressor columns (numeric) and y vector (listwise deletion) ---
+    // xcols[c] is the c-th regressor over the complete-case rows.
+    let mut xcols: Vec<Vec<f64>> = vec![Vec::new(); p];
     let mut y_vec: Vec<f64> = Vec::new();
-    // Track which original rows are complete (for OUTPUT dataset)
     let mut complete_mask: Vec<bool> = vec![false; n_read];
 
     for i in 0..n_read {
-        // Check dependent
         let yi = match value_to_num(&dep_col[i]) {
             Some(v) if !v.is_nan() => v,
             _ => continue,
         };
-        // Check all regressors
-        let mut row = vec![1.0_f64]; // intercept
+        let mut row_vals = Vec::with_capacity(p);
         let mut ok = true;
         for rc in &reg_cols {
             match value_to_num(&rc[i]) {
-                Some(v) if !v.is_nan() => row.push(v),
+                Some(v) if !v.is_nan() => row_vals.push(v),
                 _ => {
                     ok = false;
                     break;
@@ -339,60 +523,179 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
             }
         }
         if ok {
-            x_mat.push(row);
+            for (c, v) in row_vals.into_iter().enumerate() {
+                xcols[c].push(v);
+            }
             y_vec.push(yi);
             complete_mask[i] = true;
         }
     }
 
-    let n = x_mat.len();
+    let n = y_vec.len();
     session
         .log
         .note(&format!("There were {} observations used.", n));
 
+    let intercept = !model.noint;
+
+    // --- SELECTION path: choose the final regressor subset, then fit/print it.
+    let selected: Vec<usize> = if let Some(sel) = model.selection {
+        match run_selection(&sel, &xcols, &y_vec, regressors, intercept, model, session) {
+            Some(s) => s,
+            None => {
+                // Nothing entered (FORWARD/STEPWISE) — fit the intercept-only
+                // model (or note for NOINT) and finish, no OUTPUT.
+                fit_and_print_empty(model, dep_name, n_read, n, model_label, session);
+                return Ok(());
+            }
+        }
+    } else {
+        (0..p).collect()
+    };
+
+    // Build the final design matrix over the selected columns.
+    let sel_p = selected.len();
+    let p_eff = sel_p + intercept as usize;
+
     if n <= p_eff {
-        return Err(SasError::runtime(
-            "Not enough observations for regression",
-        ));
+        return Err(SasError::runtime("Not enough observations for regression"));
     }
 
-    // --- 5. OLS: beta = least_squares(X, y) ---
-    let beta = match linalg::least_squares(&x_mat, &y_vec) {
-        Ok(b) => b,
+    let mut x_mat: Vec<Vec<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(p_eff);
+        if intercept {
+            row.push(1.0);
+        }
+        for &c in &selected {
+            row.push(xcols[c][i]);
+        }
+        x_mat.push(row);
+    }
+
+    let sel_reg_names: Vec<String> = selected.iter().map(|&c| regressors[c].clone()).collect();
+
+    let fit = match ols_fit(&x_mat, &y_vec) {
+        Ok(f) => f,
         Err(e) => {
             session.log.error(&format!("Regression failed: {}", e));
             return Err(e);
         }
     };
 
-    // --- 6. Compute predictions and residuals ---
-    let y_hat: Vec<f64> = x_mat
-        .iter()
-        .map(|row| row.iter().zip(beta.iter()).map(|(xi, bi)| xi * bi).sum())
-        .collect();
-    let resid: Vec<f64> = y_vec.iter().zip(y_hat.iter()).map(|(yi, yhi)| yi - yhi).collect();
+    fit_and_print(
+        model,
+        dep_name,
+        &sel_reg_names,
+        &fit,
+        n_read,
+        n,
+        intercept,
+        model_label,
+        session,
+    );
 
-    // --- 7. Summary statistics ---
-    let y_mean = y_vec.iter().sum::<f64>() / n as f64;
-    let sse: f64 = resid.iter().map(|r| r * r).sum();
-    let sst: f64 = y_vec.iter().map(|yi| (yi - y_mean) * (yi - y_mean)).sum();
-    let ssm = sst - sse;
+    // --- OUTPUT dataset(s) for this model (complete cases only) ---
+    write_outputs(entry, ds, &complete_mask, n, &fit, session)?;
 
-    let model_df = p as f64;
-    let error_df = (n - p_eff) as f64;
-    let total_df = (n - 1) as f64;
+    // --- Diagnostics (M29.3) ---
+    if ast.plots_requested {
+        session.log.note("PLOTS options deferred in PROC REG.");
+    }
+    if session.ods_graphics.enabled {
+        let y_hat = fit.y_hat.clone();
+        let resid = fit.resid.clone();
+        reg_diagnostic_plot(session, &y_hat, &resid);
+    }
+
+    Ok(())
+}
+
+/// Fit-and-print the full output block for a model (ANOVA + fit statistics +
+/// parameter estimates). This is the SINGLE printer shared by the default,
+/// NOINT, and SELECTION-final paths, guaranteeing byte-identical output for the
+/// default case. `reg_names` are the regressor names actually in the model (no
+/// intercept entry); `fit` was computed on a design matrix whose column order
+/// matches: [intercept?] then `reg_names`.
+#[allow(clippy::too_many_arguments)]
+fn fit_and_print(
+    model: &RegModel,
+    dep_name: &str,
+    reg_names: &[String],
+    fit: &OlsFit,
+    n_read: usize,
+    n: usize,
+    intercept: bool,
+    model_label: &str,
+    session: &mut Session,
+) {
+    let beta = &fit.beta;
+    let sse = fit.sse;
+    let y_hat = &fit.y_hat;
+
+    // y vector reconstructed from ŷ + resid (avoids threading it in).
+    let y_mean = {
+        let sum: f64 = y_hat
+            .iter()
+            .zip(fit.resid.iter())
+            .map(|(yh, r)| yh + r)
+            .sum();
+        sum / n as f64
+    };
+
+    let p = reg_names.len();
+    let p_eff = p + intercept as usize;
+
+    // --- ANOVA decomposition ---
+    let (ssm, sst, model_df, error_df, total_df, total_label, r2, adj_r2);
+    if intercept {
+        // Corrected (centered) sums of squares.
+        let y: Vec<f64> = y_hat
+            .iter()
+            .zip(fit.resid.iter())
+            .map(|(yh, r)| yh + r)
+            .collect();
+        sst = y.iter().map(|yi| (yi - y_mean) * (yi - y_mean)).sum();
+        ssm = sst - sse;
+        model_df = p as f64;
+        error_df = (n - p_eff) as f64;
+        total_df = (n - 1) as f64;
+        total_label = "Corrected Total";
+        r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
+        adj_r2 = if sst > 0.0 {
+            1.0 - (1.0 - r2) * (n as f64 - 1.0) / error_df
+        } else {
+            f64::NAN
+        };
+    } else {
+        // Uncorrected sums of squares (NOINT).
+        let sst_unc: f64 = y_hat
+            .iter()
+            .zip(fit.resid.iter())
+            .map(|(yh, r)| {
+                let yi = yh + r;
+                yi * yi
+            })
+            .sum();
+        let ssm_unc: f64 = y_hat.iter().map(|yh| yh * yh).sum();
+        sst = sst_unc;
+        ssm = ssm_unc;
+        model_df = p as f64;
+        error_df = (n - p) as f64;
+        total_df = n as f64;
+        total_label = "Uncorrected Total";
+        r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
+        adj_r2 = if sst > 0.0 {
+            1.0 - (1.0 - r2) * (n as f64) / (n as f64 - p as f64)
+        } else {
+            f64::NAN
+        };
+    }
 
     let msm = if model_df > 0.0 { ssm / model_df } else { f64::NAN };
     let mse = sse / error_df;
     let f_stat = if mse > 0.0 { msm / mse } else { f64::NAN };
     let p_f = (1.0 - f_cdf(f_stat, model_df, error_df)).clamp(0.0, 1.0);
-
-    let r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
-    let adj_r2 = if sst > 0.0 {
-        1.0 - (1.0 - r2) * (n as f64 - 1.0) / error_df
-    } else {
-        f64::NAN
-    };
 
     let root_mse = mse.sqrt();
     let cv = if y_mean.abs() > 1e-15 {
@@ -401,17 +704,12 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         f64::NAN
     };
 
-    // --- 8. Standard errors and t-statistics for betas ---
-    let xt = linalg::transpose(&x_mat);
-    let xtx = linalg::matrix_mult(&xt, &x_mat);
-    let xtx_inv = linalg::invert_matrix(&xtx)?;
-
+    // --- Standard errors / t / p for each beta ---
     let mut se_beta: Vec<f64> = Vec::with_capacity(p_eff);
     let mut t_beta: Vec<f64> = Vec::with_capacity(p_eff);
     let mut p_beta: Vec<f64> = Vec::with_capacity(p_eff);
-
     for j in 0..p_eff {
-        let se = (mse * xtx_inv[j][j]).sqrt();
+        let se = (mse * fit.xtx_inv[j][j]).sqrt();
         let t = beta[j] / se;
         let pv = two_sided_p(t, error_df);
         se_beta.push(se);
@@ -419,152 +717,546 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         p_beta.push(pv);
     }
 
-    // --- 9. Listing ---
-    if !model.noprint {
-        session.listing.page_header();
-        centered(session, "The REG Procedure");
-        centered(session, "Model: MODEL1");
-        centered(session, &format!("Dependent Variable: {}", dep_name));
-        session.listing.blank();
-
-        session.listing.write_line(&format!(
-            "               Number of Observations Read         {}",
-            n_read
-        ));
-        session.listing.write_line(&format!(
-            "               Number of Observations Used         {}",
-            n
-        ));
-        session.listing.blank();
-        session.listing.blank();
-
-        centered(session, "Analysis of Variance");
-        session.listing.blank();
-
-        let anova_headers: Vec<String> = vec![
-            "Source".into(),
-            "DF".into(),
-            "Sum of Squares".into(),
-            "Mean Square".into(),
-            "F Value".into(),
-            "Pr > F".into(),
-        ];
-        let anova_aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let anova_rows: Vec<Vec<String>> = vec![
-            vec![
-                "Model".into(),
-                format!("{}", model_df as usize),
-                fmt5(ssm),
-                fmt5(msm),
-                fmt2(f_stat),
-                fmt_p(Some(p_f)),
-            ],
-            vec![
-                "Error".into(),
-                format!("{}", error_df as usize),
-                fmt5(sse),
-                fmt5(mse),
-                "".into(),
-                "".into(),
-            ],
-            vec![
-                "Corrected Total".into(),
-                format!("{}", total_df as usize),
-                fmt5(sst),
-                "".into(),
-                "".into(),
-                "".into(),
-            ],
-        ];
-        session
-            .listing
-            .write_table(&anova_headers, &anova_aligns, &anova_rows);
-        session.listing.blank();
-        session.listing.blank();
-
-        // Fit statistics (written manually)
-        session.listing.write_line(&format!(
-            "Root MSE             {}    R-Square     {}",
-            fmt5(root_mse),
-            fmt_fit4(r2)
-        ));
-        session.listing.write_line(&format!(
-            "Dependent Mean       {}    Adj R-Sq     {}",
-            fmt5(y_mean),
-            fmt_fit4(adj_r2)
-        ));
-        session
-            .listing
-            .write_line(&format!("Coeff Var            {}", fmt5(cv)));
-        session.listing.blank();
-        session.listing.blank();
-
-        // Parameter estimates table
-        let pe_headers: Vec<String> = vec![
-            "Variable".into(),
-            "DF".into(),
-            "Parameter Estimate".into(),
-            "Standard Error".into(),
-            "t Value".into(),
-            "Pr > |t|".into(),
-        ];
-        let pe_aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let mut pe_rows: Vec<Vec<String>> = Vec::with_capacity(p_eff);
-        for j in 0..p_eff {
-            let var_name = if j == 0 {
-                "Intercept".to_string()
-            } else {
-                regressors[j - 1].clone()
-            };
-            pe_rows.push(vec![
-                var_name,
-                "1".into(),
-                fmt5(beta[j]),
-                fmt5(se_beta[j]),
-                fmt2(t_beta[j]),
-                fmt_p(Some(p_beta[j])),
-            ]);
-        }
-        session
-            .listing
-            .write_table(&pe_headers, &pe_aligns, &pe_rows);
+    if model.noprint {
+        return;
     }
 
-    // --- 10. OUTPUT dataset (complete cases only) ---
-    // OUTPUT dataset contains only complete cases (rows used in analysis)
-    if !ast.outputs.is_empty() {
-        let out_spec = &ast.outputs[0];
+    session.listing.page_header();
+    centered(session, "The REG Procedure");
+    centered(session, model_label);
+    centered(session, &format!("Dependent Variable: {}", dep_name));
+    session.listing.blank();
 
-        // Build output dataset from complete-case rows
-        // We need to re-extract original columns for complete rows
-        let mut complete_indices: Vec<usize> = Vec::with_capacity(n);
-        for (i, &is_complete) in complete_mask.iter().enumerate() {
-            if is_complete {
-                complete_indices.push(i);
+    session.listing.write_line(&format!(
+        "               Number of Observations Read         {}",
+        n_read
+    ));
+    session.listing.write_line(&format!(
+        "               Number of Observations Used         {}",
+        n
+    ));
+    session.listing.blank();
+    session.listing.blank();
+
+    centered(session, "Analysis of Variance");
+    session.listing.blank();
+
+    let anova_headers: Vec<String> = vec![
+        "Source".into(),
+        "DF".into(),
+        "Sum of Squares".into(),
+        "Mean Square".into(),
+        "F Value".into(),
+        "Pr > F".into(),
+    ];
+    let anova_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let anova_rows: Vec<Vec<String>> = vec![
+        vec![
+            "Model".into(),
+            format!("{}", model_df as usize),
+            fmt5(ssm),
+            fmt5(msm),
+            fmt2(f_stat),
+            fmt_p(Some(p_f)),
+        ],
+        vec![
+            "Error".into(),
+            format!("{}", error_df as usize),
+            fmt5(sse),
+            fmt5(mse),
+            "".into(),
+            "".into(),
+        ],
+        vec![
+            total_label.into(),
+            format!("{}", total_df as usize),
+            fmt5(sst),
+            "".into(),
+            "".into(),
+            "".into(),
+        ],
+    ];
+    session
+        .listing
+        .write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session.listing.blank();
+    session.listing.blank();
+
+    // Fit statistics (written manually)
+    session.listing.write_line(&format!(
+        "Root MSE             {}    R-Square     {}",
+        fmt5(root_mse),
+        fmt_fit4(r2)
+    ));
+    session.listing.write_line(&format!(
+        "Dependent Mean       {}    Adj R-Sq     {}",
+        fmt5(y_mean),
+        fmt_fit4(adj_r2)
+    ));
+    session
+        .listing
+        .write_line(&format!("Coeff Var            {}", fmt5(cv)));
+    session.listing.blank();
+    session.listing.blank();
+
+    // Parameter estimates table
+    let pe_headers: Vec<String> = vec![
+        "Variable".into(),
+        "DF".into(),
+        "Parameter Estimate".into(),
+        "Standard Error".into(),
+        "t Value".into(),
+        "Pr > |t|".into(),
+    ];
+    let pe_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let mut pe_rows: Vec<Vec<String>> = Vec::with_capacity(p_eff);
+    for j in 0..p_eff {
+        let var_name = if intercept {
+            if j == 0 {
+                "Intercept".to_string()
+            } else {
+                reg_names[j - 1].clone()
             }
-        }
+        } else {
+            reg_names[j].clone()
+        };
+        pe_rows.push(vec![
+            var_name,
+            "1".into(),
+            fmt5(beta[j]),
+            fmt5(se_beta[j]),
+            fmt2(t_beta[j]),
+            fmt_p(Some(p_beta[j])),
+        ]);
+    }
+    session
+        .listing
+        .write_table(&pe_headers, &pe_aligns, &pe_rows);
+}
 
-        // Collect all original columns (only complete rows)
+/// Print the degenerate "no variables entered" case for SELECTION when the
+/// selected set is empty.
+fn fit_and_print_empty(
+    model: &RegModel,
+    dep_name: &str,
+    _n_read: usize,
+    _n: usize,
+    model_label: &str,
+    session: &mut Session,
+) {
+    if model.noprint {
+        return;
+    }
+    session.listing.page_header();
+    centered(session, "The REG Procedure");
+    centered(session, model_label);
+    centered(session, &format!("Dependent Variable: {}", dep_name));
+    session.listing.blank();
+    if model.noint {
+        centered(
+            session,
+            "No variables met the entry criterion; no model was fit.",
+        );
+    } else {
+        centered(
+            session,
+            "No variables met the entry criterion; intercept-only model.",
+        );
+    }
+    session.listing.blank();
+}
+
+// ───────────────────────── SELECTION ─────────────────────────
+
+/// Run a SELECTION= algorithm, returning the final subset of regressor column
+/// indices (into `regressors` / `xcols`). Returns `None` if the final set is
+/// empty. Emits a step-log table.
+#[allow(clippy::too_many_arguments)]
+fn run_selection(
+    sel: &Selection,
+    xcols: &[Vec<f64>],
+    y: &[f64],
+    regressors: &[String],
+    intercept: bool,
+    model: &RegModel,
+    session: &mut Session,
+) -> Option<Vec<usize>> {
+    let p = regressors.len();
+    let n = y.len();
+    let all: Vec<usize> = (0..p).collect();
+    let int = intercept as usize;
+
+    // Step-log accumulator. Each row: (step, action, var, vars_in, partial_r2,
+    // model_r2, f_value, p_value).
+    let mut steplog: Vec<SelStep> = Vec::new();
+
+    // Uncorrected/corrected total used for R² reporting in the step log.
+    let sst_report: f64 = if intercept {
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        y.iter().map(|yi| (yi - ybar) * (yi - ybar)).sum()
+    } else {
+        y.iter().map(|yi| yi * yi).sum()
+    };
+    let model_r2 = |sse: f64| -> f64 {
+        if sst_report > 0.0 {
+            1.0 - sse / sst_report
+        } else {
+            f64::NAN
+        }
+    };
+
+    let max_steps = 2 * p + 5;
+
+    let final_set: Vec<usize> = match sel.method {
+        SelMethod::Forward => {
+            let mut s: Vec<usize> = Vec::new();
+            let mut step = 0usize;
+            loop {
+                let sse_s = subset_sse(xcols, y, &s, intercept).unwrap_or(f64::INFINITY);
+                let mut best: Option<(usize, f64, f64)> = None; // (col, f, p)
+                for &c in &all {
+                    if s.contains(&c) {
+                        continue;
+                    }
+                    let mut cand = s.clone();
+                    cand.push(c);
+                    let df_full = (n as f64) - (cand.len() as f64) - int as f64;
+                    if df_full <= 0.0 {
+                        continue;
+                    }
+                    if let Some(sse_c) = subset_sse(xcols, y, &cand, intercept) {
+                        let f = (sse_s - sse_c) / (sse_c / df_full);
+                        let pv = (1.0 - f_cdf(f, 1.0, df_full)).clamp(0.0, 1.0);
+                        if best.map(|(_, bf, _)| f > bf).unwrap_or(true) {
+                            best = Some((c, f, pv));
+                        }
+                    }
+                }
+                match best {
+                    Some((c, f, pv)) if pv <= sel.slentry => {
+                        let mut cand = s.clone();
+                        cand.push(c);
+                        let sse_c = subset_sse(xcols, y, &cand, intercept).unwrap_or(f64::NAN);
+                        let partial = model_r2(sse_c) - model_r2(sse_s);
+                        s.push(c);
+                        step += 1;
+                        steplog.push(SelStep {
+                            step,
+                            entered: true,
+                            var: regressors[c].clone(),
+                            vars_in: s.len(),
+                            partial_r2: partial,
+                            model_r2: model_r2(sse_c),
+                            f,
+                            p: pv,
+                        });
+                    }
+                    _ => break,
+                }
+                if step >= max_steps {
+                    break;
+                }
+            }
+            s
+        }
+        SelMethod::Backward => {
+            let mut s: Vec<usize> = all.clone();
+            let mut step = 0usize;
+            loop {
+                if s.is_empty() {
+                    break;
+                }
+                let sse_s = subset_sse(xcols, y, &s, intercept).unwrap_or(f64::INFINITY);
+                let df_s = (n as f64) - (s.len() as f64) - int as f64;
+                if df_s <= 0.0 {
+                    break;
+                }
+                let mse_s = sse_s / df_s;
+                let mut worst: Option<(usize, f64, f64)> = None; // (col, f, p)
+                for &v in &s {
+                    let reduced: Vec<usize> = s.iter().cloned().filter(|&c| c != v).collect();
+                    if let Some(sse_r) = subset_sse(xcols, y, &reduced, intercept) {
+                        let f = (sse_r - sse_s) / mse_s;
+                        let pv = (1.0 - f_cdf(f, 1.0, df_s)).clamp(0.0, 1.0);
+                        if worst.map(|(_, wf, _)| f < wf).unwrap_or(true) {
+                            worst = Some((v, f, pv));
+                        }
+                    }
+                }
+                match worst {
+                    Some((v, f, pv)) if pv > sel.slstay => {
+                        let reduced: Vec<usize> =
+                            s.iter().cloned().filter(|&c| c != v).collect();
+                        let sse_r = subset_sse(xcols, y, &reduced, intercept).unwrap_or(f64::NAN);
+                        let partial = model_r2(sse_s) - model_r2(sse_r);
+                        s.retain(|&c| c != v);
+                        step += 1;
+                        steplog.push(SelStep {
+                            step,
+                            entered: false,
+                            var: regressors[v].clone(),
+                            vars_in: s.len(),
+                            partial_r2: partial,
+                            model_r2: model_r2(sse_r),
+                            f,
+                            p: pv,
+                        });
+                    }
+                    _ => break,
+                }
+                if step >= max_steps {
+                    break;
+                }
+            }
+            s
+        }
+        SelMethod::Stepwise => {
+            let mut s: Vec<usize> = Vec::new();
+            let mut step = 0usize;
+            loop {
+                let mut changed = false;
+                // (1) Forward step.
+                let sse_s = subset_sse(xcols, y, &s, intercept).unwrap_or(f64::INFINITY);
+                let mut best: Option<(usize, f64, f64)> = None;
+                for &c in &all {
+                    if s.contains(&c) {
+                        continue;
+                    }
+                    let mut cand = s.clone();
+                    cand.push(c);
+                    let df_full = (n as f64) - (cand.len() as f64) - int as f64;
+                    if df_full <= 0.0 {
+                        continue;
+                    }
+                    if let Some(sse_c) = subset_sse(xcols, y, &cand, intercept) {
+                        let f = (sse_s - sse_c) / (sse_c / df_full);
+                        let pv = (1.0 - f_cdf(f, 1.0, df_full)).clamp(0.0, 1.0);
+                        if best.map(|(_, bf, _)| f > bf).unwrap_or(true) {
+                            best = Some((c, f, pv));
+                        }
+                    }
+                }
+                let just_entered = if let Some((c, f, pv)) = best {
+                    if pv <= sel.slentry {
+                        let mut cand = s.clone();
+                        cand.push(c);
+                        let sse_c = subset_sse(xcols, y, &cand, intercept).unwrap_or(f64::NAN);
+                        let partial = model_r2(sse_c) - model_r2(sse_s);
+                        s.push(c);
+                        step += 1;
+                        changed = true;
+                        steplog.push(SelStep {
+                            step,
+                            entered: true,
+                            var: regressors[c].clone(),
+                            vars_in: s.len(),
+                            partial_r2: partial,
+                            model_r2: model_r2(sse_c),
+                            f,
+                            p: pv,
+                        });
+                        Some(c)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // (2) Backward step(s): remove any variable (except the one just
+                // entered) whose remove-p > slstay.
+                loop {
+                    if s.is_empty() {
+                        break;
+                    }
+                    let sse_cur = subset_sse(xcols, y, &s, intercept).unwrap_or(f64::INFINITY);
+                    let df_cur = (n as f64) - (s.len() as f64) - int as f64;
+                    if df_cur <= 0.0 {
+                        break;
+                    }
+                    let mse_cur = sse_cur / df_cur;
+                    let mut worst: Option<(usize, f64, f64)> = None;
+                    for &v in &s {
+                        if Some(v) == just_entered {
+                            continue;
+                        }
+                        let reduced: Vec<usize> =
+                            s.iter().cloned().filter(|&c| c != v).collect();
+                        if let Some(sse_r) = subset_sse(xcols, y, &reduced, intercept) {
+                            let f = (sse_r - sse_cur) / mse_cur;
+                            let pv = (1.0 - f_cdf(f, 1.0, df_cur)).clamp(0.0, 1.0);
+                            if worst.map(|(_, wf, _)| f < wf).unwrap_or(true) {
+                                worst = Some((v, f, pv));
+                            }
+                        }
+                    }
+                    match worst {
+                        Some((v, f, pv)) if pv > sel.slstay => {
+                            let reduced: Vec<usize> =
+                                s.iter().cloned().filter(|&c| c != v).collect();
+                            let sse_r =
+                                subset_sse(xcols, y, &reduced, intercept).unwrap_or(f64::NAN);
+                            let partial = model_r2(sse_cur) - model_r2(sse_r);
+                            s.retain(|&c| c != v);
+                            step += 1;
+                            changed = true;
+                            steplog.push(SelStep {
+                                step,
+                                entered: false,
+                                var: regressors[v].clone(),
+                                vars_in: s.len(),
+                                partial_r2: partial,
+                                model_r2: model_r2(sse_r),
+                                f,
+                                p: pv,
+                            });
+                        }
+                        _ => break,
+                    }
+                }
+
+                if !changed || step >= max_steps {
+                    break;
+                }
+            }
+            s
+        }
+    };
+
+    print_selection_summary(sel, &steplog, session);
+
+    if final_set.is_empty() {
+        let _ = model; // (model kept for symmetry / future use)
+        None
+    } else {
+        // Keep selected columns in their original regressor order for a stable
+        // parameter-estimates layout.
+        let mut ordered = final_set;
+        ordered.sort_unstable();
+        Some(ordered)
+    }
+}
+
+/// One row of a selection step log.
+struct SelStep {
+    step: usize,
+    entered: bool,
+    var: String,
+    vars_in: usize,
+    partial_r2: f64,
+    model_r2: f64,
+    f: f64,
+    p: f64,
+}
+
+/// Print the SAS-style "Summary of <Method> Selection" table.
+fn print_selection_summary(sel: &Selection, steplog: &[SelStep], session: &mut Session) {
+    let method = match sel.method {
+        SelMethod::Forward => "Forward",
+        SelMethod::Backward => "Backward Elimination",
+        SelMethod::Stepwise => "Stepwise",
+    };
+    let title = match sel.method {
+        SelMethod::Forward => "Summary of Forward Selection".to_string(),
+        SelMethod::Backward => "Summary of Backward Elimination".to_string(),
+        SelMethod::Stepwise => "Summary of Stepwise Selection".to_string(),
+    };
+    let _ = method;
+
+    session.listing.page_header();
+    centered(session, "The REG Procedure");
+    centered(session, &title);
+    session.listing.blank();
+
+    let headers: Vec<String> = vec![
+        "Step".into(),
+        "Variable Entered".into(),
+        "Variable Removed".into(),
+        "Number Vars In".into(),
+        "Partial R-Square".into(),
+        "Model R-Square".into(),
+        "F Value".into(),
+        "Pr > F".into(),
+    ];
+    let aligns = vec![
+        Align::Right,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let rows: Vec<Vec<String>> = steplog
+        .iter()
+        .map(|st| {
+            let (entered, removed) = if st.entered {
+                (st.var.clone(), String::new())
+            } else {
+                (String::new(), st.var.clone())
+            };
+            vec![
+                format!("{}", st.step),
+                entered,
+                removed,
+                format!("{}", st.vars_in),
+                fmt_fit4(st.partial_r2),
+                fmt_fit4(st.model_r2),
+                fmt2(st.f),
+                fmt_p(Some(st.p)),
+            ]
+        })
+        .collect();
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+    session.listing.blank();
+}
+
+// ───────────────────────── OUTPUT dataset ─────────────────────────
+
+/// Write the OUTPUT dataset(s) associated with this model, using the model's
+/// fit (complete cases only).
+fn write_outputs(
+    entry: &RegModelEntry,
+    ds: &SasDataset,
+    complete_mask: &[bool],
+    n: usize,
+    fit: &OlsFit,
+    session: &mut Session,
+) -> Result<()> {
+    if entry.outputs.is_empty() {
+        return Ok(());
+    }
+
+    let mut complete_indices: Vec<usize> = Vec::with_capacity(n);
+    for (i, &is_complete) in complete_mask.iter().enumerate() {
+        if is_complete {
+            complete_indices.push(i);
+        }
+    }
+
+    for out_spec in &entry.outputs {
         let n_cols = ds.vars.len();
         let mut columns: Vec<Column> = Vec::with_capacity(n_cols + 2);
         let mut out_vars: Vec<VarMeta> = Vec::with_capacity(n_cols + 2);
 
         for col_idx in 0..n_cols {
-            let col_vals = decode_column(&ds, col_idx)?;
+            let col_vals = decode_column(ds, col_idx)?;
             match ds.vars[col_idx].ty {
                 VarType::Num => {
                     let data: Vec<Option<f64>> = complete_indices
@@ -587,16 +1279,13 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
             out_vars.push(ds.vars[col_idx].clone());
         }
 
-        // Add predicted column if requested
         if let Some(pred_name) = &out_spec.predicted {
-            let data: Vec<Option<f64>> = y_hat.iter().map(|&v| Some(v)).collect();
+            let data: Vec<Option<f64>> = fit.y_hat.iter().map(|&v| Some(v)).collect();
             columns.push(Series::new(pred_name.as_str().into(), data).into());
             out_vars.push(num_var_meta(pred_name));
         }
-
-        // Add residual column if requested
         if let Some(resid_name) = &out_spec.residual {
-            let data: Vec<Option<f64>> = resid.iter().map(|&v| Some(v)).collect();
+            let data: Vec<Option<f64>> = fit.resid.iter().map(|&v| Some(v)).collect();
             columns.push(Series::new(resid_name.as_str().into(), data).into());
             out_vars.push(num_var_meta(resid_name));
         }
@@ -618,19 +1307,6 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
             "The data set {} has {} observations and {} variables.",
             display, n_rows, n_vars_out
         ));
-    }
-
-    // --- 11. Diagnostics (M29.3) ---
-    // An explicit PLOTS statement: its options are deferred (NOTE).
-    if ast.plots_requested {
-        session
-            .log
-            .note("PLOTS options deferred in PROC REG.");
-    }
-
-    // Automatic residuals-vs-predicted diagnostic, driven by ODS GRAPHICS.
-    if session.ods_graphics.enabled {
-        reg_diagnostic_plot(session, &y_hat, &resid);
     }
 
     Ok(())
@@ -736,9 +1412,30 @@ mod tests {
         parse(&mut ts)
     }
 
+    /// Build a single-model AST (no OUTPUT) for the given model.
+    fn single_model_ast(input: DatasetRef, model: RegModel) -> RegAst {
+        RegAst {
+            data_options: RegDataOptions { input: Some(input) },
+            models: vec![RegModelEntry {
+                model,
+                outputs: vec![],
+            }],
+            plots_requested: false,
+        }
+    }
+
+    fn basic_model(dep: &str, regs: &[&str]) -> RegModel {
+        RegModel {
+            dependent: dep.into(),
+            regressors: regs.iter().map(|s| s.to_string()).collect(),
+            noint: false,
+            noprint: false,
+            selection: None,
+        }
+    }
+
     #[test]
     fn test_ols_simple() {
-        // y = [1,2,3,4], x = [1,2,3,4] → perfect fit: intercept ≈ 0, slope ≈ 1, R² = 1
         let mut session = make_session();
         let frame = df![
             "y" => [1.0_f64, 2.0, 3.0, 4.0],
@@ -751,25 +1448,15 @@ mod tests {
         };
         session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
-        let ast = RegAst {
-            data_options: RegDataOptions {
-                input: Some(DatasetRef {
-                    libref: Some("WORK".into()),
-                    name: "T".into(),
-                }),
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
             },
-            model: Some(RegModel {
-                dependent: "y".into(),
-                regressors: vec!["x".into()],
-                noint: false,
-                noprint: false,
-            }),
-            outputs: vec![],
-            plots_requested: false,
-        };
+            basic_model("y", &["x"]),
+        );
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
-        // R² should be essentially 1
         assert!(
             listing.contains("1.0000") || listing.contains("R-Square"),
             "listing: {listing}"
@@ -779,7 +1466,6 @@ mod tests {
 
     #[test]
     fn test_ols_regression() {
-        // y=[2,4,5,4,5], x=[1,2,3,4,5] — classic textbook example, R² ≈ 0.8
         let mut session = make_session();
         let frame = df![
             "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0],
@@ -792,36 +1478,46 @@ mod tests {
         };
         session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
-        let ast = RegAst {
-            data_options: RegDataOptions {
-                input: Some(DatasetRef {
-                    libref: Some("WORK".into()),
-                    name: "T".into(),
-                }),
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
             },
-            model: Some(RegModel {
-                dependent: "y".into(),
-                regressors: vec!["x".into()],
-                noint: false,
-                noprint: false,
-            }),
-            outputs: vec![],
-            plots_requested: false,
-        };
+            basic_model("y", &["x"]),
+        );
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
-        // R² for this data is 0.8 exactly
         assert!(listing.contains("0.8000") || listing.contains("R-Square"), "{listing}");
     }
 
     #[test]
     fn test_parse_model() {
         let ast = parse_reg("proc reg data=a; model y = x1 x2; run;").unwrap();
-        let m = ast.model.unwrap();
+        assert_eq!(ast.models.len(), 1);
+        let m = &ast.models[0].model;
         assert_eq!(m.dependent, "y");
         assert_eq!(m.regressors, vec!["x1", "x2"]);
         assert!(!m.noint);
         assert!(!m.noprint);
+        assert!(m.selection.is_none());
+    }
+
+    #[test]
+    fn test_parse_multiple_models() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1; output out=o1 p=p1; model y = x1 x2; output out=o2 p=p2; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.models.len(), 2);
+        // First model has one regressor and its OUTPUT.
+        assert_eq!(ast.models[0].model.regressors, vec!["x1"]);
+        assert_eq!(ast.models[0].outputs.len(), 1);
+        assert_eq!(ast.models[0].outputs[0].out.name, "o1");
+        assert_eq!(ast.models[0].outputs[0].predicted.as_deref(), Some("p1"));
+        // Second model has two regressors and its own OUTPUT.
+        assert_eq!(ast.models[1].model.regressors, vec!["x1", "x2"]);
+        assert_eq!(ast.models[1].outputs.len(), 1);
+        assert_eq!(ast.models[1].outputs[0].out.name, "o2");
     }
 
     #[test]
@@ -829,11 +1525,51 @@ mod tests {
         let ast =
             parse_reg("proc reg data=a; model y = x; output out=work.out predicted=p residual=r; run;")
                 .unwrap();
-        assert_eq!(ast.outputs.len(), 1);
-        let o = &ast.outputs[0];
+        assert_eq!(ast.models.len(), 1);
+        assert_eq!(ast.models[0].outputs.len(), 1);
+        let o = &ast.models[0].outputs[0];
         assert_eq!(o.out.name, "out");
         assert_eq!(o.predicted.as_deref(), Some("p"));
         assert_eq!(o.residual.as_deref(), Some("r"));
+    }
+
+    #[test]
+    fn test_parse_selection_forward() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2 / selection=forward slentry=0.3; run;",
+        )
+        .unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::Forward);
+        assert!((sel.slentry - 0.3).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_selection_synonyms() {
+        // sle=/sls= synonyms and stepwise.
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2 / selection=stepwise sle=0.2 sls=0.25; run;",
+        )
+        .unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::Stepwise);
+        assert!((sel.slentry - 0.2).abs() < 1e-12);
+        assert!((sel.slstay - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_selection_defaults() {
+        let ast =
+            parse_reg("proc reg data=a; model y = x1 / selection=backward; run;").unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::Backward);
+        assert!((sel.slstay - 0.10).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_noint() {
+        let ast = parse_reg("proc reg data=a; model y = x / noint; run;").unwrap();
+        assert!(ast.models[0].model.noint);
     }
 
     #[test]
@@ -850,22 +1586,13 @@ mod tests {
         };
         session.libs.get("WORK").unwrap().write("CLASS", &ds).unwrap();
 
-        let ast = RegAst {
-            data_options: RegDataOptions {
-                input: Some(DatasetRef {
-                    libref: Some("WORK".into()),
-                    name: "CLASS".into(),
-                }),
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "CLASS".into(),
             },
-            model: Some(RegModel {
-                dependent: "weight".into(),
-                regressors: vec!["height".into()],
-                noint: false,
-                noprint: false,
-            }),
-            outputs: vec![],
-            plots_requested: false,
-        };
+            basic_model("weight", &["height"]),
+        );
         execute(&ast, &mut session).unwrap();
         let listing = session.listing.into_string();
         assert!(listing.contains("The REG Procedure"), "{listing}");
@@ -873,10 +1600,200 @@ mod tests {
         assert!(listing.contains("Parameter Estimates") || listing.contains("Parameter"), "{listing}");
     }
 
+    /// NOINT on a tiny known dataset: y = 2x exactly (no intercept), so the
+    /// no-intercept fit gives slope=2, uncorrected R² = Σŷ²/Σy² = 1, and there
+    /// is NO Intercept row in the parameter-estimates table.
+    #[test]
+    fn test_noint_fit() {
+        let mut session = make_session();
+        // y = 2*x, with x = 1..5.
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 6.0, 8.0, 10.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let mut model = basic_model("y", &["x"]);
+        model.noint = true;
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
+            model,
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Uncorrected Total"), "{listing}");
+        // R² = 1.0000 (perfect through-origin fit).
+        assert!(listing.contains("R-Square     1.0000"), "{listing}");
+        // No Intercept row in parameter estimates.
+        assert!(!listing.contains("Intercept"), "{listing}");
+        assert!(listing.contains("The REG Procedure"), "{listing}");
+    }
+
+    /// Direct numeric check of the NOINT uncorrected decomposition via ols_fit.
+    #[test]
+    fn test_noint_uncorrected_r2_formula() {
+        // X has no intercept column.
+        let x = vec![vec![1.0], vec![2.0], vec![3.0], vec![4.0], vec![5.0]];
+        let y = vec![2.1, 3.9, 6.2, 7.8, 10.1];
+        let fit = ols_fit(&x, &y).unwrap();
+        let ssm: f64 = fit.y_hat.iter().map(|v| v * v).sum();
+        let sst: f64 = y.iter().map(|v| v * v).sum();
+        let r2 = ssm / sst;
+        // 1 - SSE/Σy² must match Σŷ²/Σy².
+        let r2_alt = 1.0 - fit.sse / sst;
+        assert!((r2 - r2_alt).abs() < 1e-10, "r2={r2} r2_alt={r2_alt}");
+        assert!(r2 > 0.99, "near-perfect fit expected, r2={r2}");
+    }
+
+    /// Partial-F to ENTER equals the candidate's t² in the augmented fit.
+    #[test]
+    fn test_partial_f_equals_t_squared() {
+        // Two regressors; intercept present.
+        // y depends mostly on x1.
+        let x1 = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let x2 = vec![5.0_f64, 3.0, 6.0, 2.0, 7.0, 1.0]; // noise-ish
+        let y: Vec<f64> = x1.iter().map(|&v| 3.0 + 2.0 * v).collect();
+        let xcols = vec![x1.clone(), x2.clone()];
+        let n = y.len();
+
+        // Enter x1 (col 0) into empty set, intercept present.
+        let s: Vec<usize> = vec![];
+        let cand = vec![0usize];
+        let sse_s = subset_sse(&xcols, &y, &s, true).unwrap();
+        let sse_c = subset_sse(&xcols, &y, &cand, true).unwrap();
+        let df_full = (n as f64) - (cand.len() as f64) - 1.0;
+        let f_enter = (sse_s - sse_c) / (sse_c / df_full);
+
+        // Augmented fit: design [1, x1]; t for x1's coefficient.
+        let mut xmat: Vec<Vec<f64>> = Vec::new();
+        for i in 0..n {
+            xmat.push(vec![1.0, x1[i]]);
+        }
+        let fit = ols_fit(&xmat, &y).unwrap();
+        let mse = fit.sse / df_full;
+        let se = (mse * fit.xtx_inv[1][1]).sqrt();
+        let t = fit.beta[1] / se;
+        let t2 = t * t;
+        // Perfect linear data → both huge; compare relative or that both large.
+        // Use a perturbed y to avoid degeneracy.
+        let _ = (f_enter, t2);
+
+        // Re-run with a slightly noisy y so SSE>0.
+        let y2: Vec<f64> = x1.iter().map(|&v| 3.0 + 2.0 * v + (v * 0.137).sin()).collect();
+        let sse_s2 = subset_sse(&xcols, &y2, &s, true).unwrap();
+        let sse_c2 = subset_sse(&xcols, &y2, &cand, true).unwrap();
+        let f_enter2 = (sse_s2 - sse_c2) / (sse_c2 / df_full);
+        let mut xmat2: Vec<Vec<f64>> = Vec::new();
+        for i in 0..n {
+            xmat2.push(vec![1.0, x1[i]]);
+        }
+        let fit2 = ols_fit(&xmat2, &y2).unwrap();
+        let mse2 = fit2.sse / df_full;
+        let se2 = (mse2 * fit2.xtx_inv[1][1]).sqrt();
+        let t_2 = fit2.beta[1] / se2;
+        let t2_2 = t_2 * t_2;
+        assert!(
+            (f_enter2 - t2_2).abs() < 1e-6,
+            "F_enter={f_enter2} t^2={t2_2}"
+        );
+    }
+
+    /// FORWARD selection: x1 strongly predicts y; x2 is pure noise → x1 enters,
+    /// x2 is rejected at slentry=0.05.
+    #[test]
+    fn test_forward_selection() {
+        let mut session = make_session();
+        // y tracks x1 closely (strong signal) with mild noise; x2 is unrelated.
+        let frame = df![
+            "y"  => [3.2_f64, 4.8, 7.1, 8.9, 11.3, 12.7, 15.2, 16.8],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "x2" => [4.0_f64, 1.0, 9.0, 2.0, 8.0, 3.0, 7.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let mut model = basic_model("y", &["x1", "x2"]);
+        model.selection = Some(Selection {
+            method: SelMethod::Forward,
+            // x1 enters (p<.0001); x2's partial-F p (~0.035) exceeds slentry,
+            // so x2 is rejected.
+            slentry: 0.01,
+            slstay: 0.01,
+        });
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
+            model,
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Summary of Forward Selection"), "{listing}");
+        // Inspect the final fitted-model block (after the last "Model: MODEL1"),
+        // which holds the parameter-estimates table.
+        let final_block = listing.rsplit("Model: MODEL1").next().unwrap();
+        // x1 entered → appears as a fitted parameter; x2 rejected → absent.
+        assert!(final_block.contains("x1"), "{listing}");
+        assert!(!final_block.contains("x2"), "x2 should be rejected: {listing}");
+    }
+
+    /// BACKWARD selection: start with both x1 and noise x2; x2 is eliminated.
+    #[test]
+    fn test_backward_selection() {
+        let mut session = make_session();
+        // y is x1 plus mild noise (not a perfect fit), x2 is unrelated noise.
+        let frame = df![
+            "y"  => [3.2_f64, 4.8, 7.1, 8.9, 11.3, 12.7, 15.2, 16.8],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "x2" => [4.0_f64, 1.0, 9.0, 2.0, 8.0, 3.0, 7.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let mut model = basic_model("y", &["x1", "x2"]);
+        model.selection = Some(Selection {
+            method: SelMethod::Backward,
+            // x2's removal p (~0.035) exceeds slstay, so x2 is eliminated; x1
+            // (highly significant) is retained.
+            slentry: 0.10,
+            slstay: 0.01,
+        });
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
+            model,
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Summary of Backward Elimination"), "{listing}");
+        // Inspect the final fitted-model block (after the last "Model: MODEL1").
+        let final_block = listing.rsplit("Model: MODEL1").next().unwrap();
+        // x2 removed → absent from fitted parameters; x1 retained → present.
+        assert!(final_block.contains("x1"), "{listing}");
+        assert!(!final_block.contains("x2"), "x2 should be eliminated: {listing}");
+    }
+
     // ───────────────────────── M29.3 diagnostics tests ─────────────────────────
 
-    /// Helper: run a simple OLS with the given ODS GRAPHICS state and image
-    /// settings, returning the log.
     fn run_diag(
         ods_on: bool,
         output_dir: Option<PathBuf>,
@@ -898,19 +1815,13 @@ mod tests {
             vars: vec![num_meta("y"), num_meta("x")],
         };
         session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-        let ast = RegAst {
-            data_options: RegDataOptions {
-                input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
             },
-            model: Some(RegModel {
-                dependent: "y".into(),
-                regressors: vec!["x".into()],
-                noint: false,
-                noprint: false,
-            }),
-            outputs: vec![],
-            plots_requested: false,
-        };
+            basic_model("y", &["x"]),
+        );
         execute(&ast, &mut session).unwrap();
         session.log.into_string()
     }

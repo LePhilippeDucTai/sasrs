@@ -582,7 +582,19 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   χ² à un facteur ≡ Z₀² non corrigé ; exact 0.1754 = 2×0.0877). 2 fixtures m34 (scores + by_out) +
   snapshots. **Différés (README non-couvert) : exact pour Median/Savage/Normal (rang seul), colonnes BY
   OUT= stockées en chaîne formatée.** +9 tests (2376 lib), 0 warning, chemin défaut octet-identique.
-- [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)
+- [x] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé).
+  **FAIT** : refactor en `RegAst{models: Vec<RegModelEntry>}` + helpers purs `ols_fit`/`fit_and_print`
+  (imprimeur unique → chemin défaut octet-identique, snapshot m25 inchangé). (a) MODEL multiples
+  (labels MODEL1/MODEL2…, NOTE « observations used » par modèle, `OUTPUT` rattaché au MODEL qui le
+  précède) ; (b) `NOINT` — SS non corrigées (`SSM=Σŷ²`, `SST=Σy²`, ligne ANOVA `Uncorrected Total`
+  df=n), `R²=Σŷ²/Σy²`, `Adj=1−(1−R²)·n/(n−p)`, pas de ligne Intercept (vérifié sashelp.class :
+  β_height=1.61922, R²=0.9768, Σweight²=199435.75 ≡ 19·w̄²+SSCorrigée m25) ; (c) `SELECTION=`
+  FORWARD/BACKWARD/STEPWISE via F partiel d'entrée/sortie sur sous-ajustements réels
+  (`SLENTRY`/`SLE`, `SLSTAY`/`SLS`, défauts 0.50/0.10/0.15) + table « Summary of … Selection »
+  (vérifié : forward→height seul car age p=0.6865>0.50 ; backward→age retiré p=0.6865>0.10 ;
+  modèles finaux ≡ OLS m25). 2 fixtures m34 (reg_noint + reg_selection) + snapshots. README REG :
+  colonne non-couvert rétrécie (NOINT/SELECTION=/MODEL multiples retirés ; reste 🟡 : TEST, CLM/CLI,
+  BY, critères SELECTION= avancés). +10 tests (2386 lib), 0 warning, chemin défaut octet-identique.
 - [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)
 - [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
   logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
