@@ -633,16 +633,22 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   Wald χ²=107.69. Fixture m34 (genmod_gamma_class) + snapshot. README GENMOD : colonne non-couvert rétrécie
   (GAMMA/CLASS/SCALE= retirés ; reste 🟡 : ML digamma exact, multinomial, GEE, OFFSET, ESTIMATE/CONTRAST,
   BY, OUTPUT). +8 tests (2406 lib), 0 warning, m26 octet-identique.
-- [ ] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
-  `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Fable, très élevé)
-  - **MIXED FAIT** (commit dédié) : chemin dual (legacy VC intercept-seul `is_legacy_case` → octet-identité
+- [x] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
+  `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Opus ×2, très élevé — Fable indisponible).
+  - **MIXED FAIT** (`991ae60`) : chemin dual (legacy VC intercept-seul `is_legacy_case` → octet-identité
     m28 ; sinon `execute_general`). `REPEATED / SUBJECT= TYPE=AR(1)|UN` + design d'effets fixes général
     (intercept/continu/CLASS reference-cell, `NOINT`) ; (RE)ML général sur V(θ)=ZGZ'+R par Nelder-Mead
-    (restarts + polish coordonné, précision ≲5e-5) ; paramétrage non contraint (log σ², tanh ρ, Cholesky UN).
-    Cov Parm `UN(i,j)`/`AR(1)`/`Residual`. **Oracle UN saturé** (ML, vecteurs (1,3)(3,1)(5,7)(7,5)) :
-    UN(1,1)=5.0000, UN(2,1)=3.0000, UN(2,2)=5.0000 (= covariance d'échantillon), Intercept=4.0000 ;
-    AR(1) ρ=0.6842, Residual=6.3333. Fixture m34 (mixed_un_ar1) + snapshot. +5 tests (2416 lib), m28 octet-identique.
-  - **reste GLIMMIX** : `TYPE=AR(1)/UN`, `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE`, NOINT/effets fixes.
+    (restarts + polish coordonné, précision ≲5e-5). Cov Parm `UN(i,j)`/`AR(1)`/`Residual`. **Oracle UN
+    saturé** (ML, vecteurs (1,3)(3,1)(5,7)(7,5)) : UN(1,1)=5.0000, UN(2,1)=3.0000, UN(2,2)=5.0000
+    (= covariance d'échantillon), Intercept=4.0000 ; AR(1) ρ=0.6842, Residual=6.3333.
+  - **GLIMMIX FAIT** : design d'effets fixes général + `NOINT` ; `LINK=PROBIT/CLOGLOG` (alimentent le RSPL) ;
+    `TYPE=AR(1)/UN` côté R dans la boucle RSPL (machinerie V(θ) portée de MIXED) ; **`METHOD=LAPLACE`**
+    (ML vrai pour intercept aléatoire VC : mode par Newton interne + courbure, optimiseur externe sur
+    (β, σ²_u)). **Cross-checks** : PROBIT/CLOGLOG sans random ≡ LOGISTIC (Intercept −0.5659/x 1.4076 ;
+    −1.0892/1.5651) ; LAPLACE Normal+random ≡ MIXED ML (σ²_u=3.0000, σ²_e=2.0000, Intercept=4.0000).
+    Différés (NOTE) : METHOD=QUAD, DIST=GAMMA, LAPLACE sur AR(1)/UN/multi-random.
+  - 2 fixtures m34 (mixed_un_ar1 + glimmix_links_laplace) + snapshots. README MIXED & GLIMMIX mis à jour.
+    +14 tests (2425 lib), 0 warning, m28 octet-identique.
 - [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
   `FACTOR` rotations obliques (Opus, élevé)
 - [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
