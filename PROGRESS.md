@@ -660,4 +660,48 @@ directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language
   (`%ABORT`, `%RETURN`, `%GOTO`/`%label`, `%SYSCALL`, `%SYSEXEC`, `%WINDOW`/`%DISPLAY`…) —
   implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé)
 - [ ] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
-  passer « Jalon courant : **TERMINÉ (Phase E)** ».
+  passer « Jalon courant : **M36 (Phase F)** ».
+
+## M36 — `PROC REG` : complétion totale (Phase F)
+Objectif : faire passer `PROC REG` de 🟡 à **✅** en couvrant TOUTE la surface SAS 9.4 restante
+(statements, options MODEL, options PROC, datasets de sortie, diagnostics, graphiques). Jalon de
+**complétion d'options** : invariant d'octet-identité des snapshots m1–m35 (le chemin OLS par défaut +
+NOINT/SELECTION= déjà livrés restent inchangés ; nouveau comportement uniquement sur la nouvelle
+syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README REG, avec fixtures
+`tests/fixtures/m36/` + snapshots vérifiés à la main (oracles SAS). Base déjà en place (M25.1 + M34.4) :
+`DATA=`, MODEL multiples, `NOINT`, `NOPRINT`, `SELECTION=FORWARD/BACKWARD/STEPWISE` (+SLE/SLS),
+`OUTPUT OUT= PREDICTED=/RESIDUAL=`, ANOVA/R²/Adj/F/t, diagnostic résidus-vs-prédits ODS.
+
+- [ ] M36.1 — `TEST` statement (tests d'hypothèses linéaires sur β : `TEST x1=x2, x3=0;` → table
+  « Test N Results for Dependent Variable », F num/den df, Pr>F) + `RESTRICT` statement (restrictions
+  d'égalité linéaires sur β, ré-estimation contrainte par moindres carrés + ligne RESTRICT/Lagrange)
+  (Opus, élevé)
+- [ ] M36.2 — Intervalles de confiance/prédiction : MODEL `CLB` (CI des estimations), `ALPHA=`,
+  `CLI`/`CLM` (limites individu/moyenne dans le listing) + mots-clés `OUTPUT` `STDP STDI STDR
+  LCL UCL LCLM UCLM` (Opus, moyen)
+- [ ] M36.3 — Diagnostics d'observation : MODEL `R` (analyse des résidus) / `INFLUENCE` + mots-clés
+  `OUTPUT` `STUDENT RSTUDENT COOKD H (leverage) PRESS DFFITS COVRATIO DFBETAS` (Opus, élevé)
+- [ ] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de
+  conditionnement + proportions de variance), `VIF`, `TOL`, `SPEC` (test de White), `DW`/`DWPROB`
+  (Durbin-Watson), `ACOV`/`HCC` (covariance robuste à l'hétéroscédasticité) (Opus, élevé)
+- [ ] M36.5 — SS partielles & corrélations : MODEL `SS1`/`SS2` (Type I/II SS des estimations),
+  `STB` (coefficients standardisés), `PCORR1`/`PCORR2` (corrélations partielles²), `SCORR1`/`SCORR2`
+  (semi-partielles²), `SEQB` (estimations séquentielles), option `PRESS` (Opus, moyen)
+- [ ] M36.6 — Sélection avancée : `SELECTION=RSQUARE|ADJRSQ|CP(Mallows)|MAXR|MINR|NONE` + options
+  `BEST= INCLUDE= START= STOP= GROUPNAMES= DETAILS STB` (table de tous les modèles, C(p), critères)
+  (Fable, élevé)
+- [ ] ⫽ M36.7 — Statements de pondération/groupes : `WEIGHT` (MCO pondérés — X'WX), `FREQ`, `BY`
+  (analyse par groupe), `ID` (variable d'identification pour OUTPUT/listings) (Opus, moyen)
+- [ ] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),
+  `OUTSSCP=` ; options PROC `SIMPLE` (stats descriptives), `CORR`, `ALL` ; MODEL `COVB`/`CORRB`/`XPX`/`I`
+  (matrices imprimées) (Opus, moyen)
+- [ ] M36.9 — Régressions spécialisées : `RIDGE=` (ridge regression + `OUTVIF`, trace de ridge),
+  `PCOMIT=` (régression sur composantes principales incomplètes / IPC) (Fable, élevé)
+- [ ] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
+  Wilks/Pillai/Hotelling-Lawley/Roy) ; statements interactifs run-group `ADD`/`DELETE`/`REWEIGHT`/
+  `REFIT`/`PAINT`/`VAR` — implémenter le faisable, erreur propre + doc pour le résiduel (Fable, très élevé)
+- [ ] M36.11 — graphiques `PLOTS=` (sous `--features graphics`) : panel de diagnostics REG complet
+  (résidus vs prédits/régresseurs, QQ-plot, RStudent, leverage, Cook's D, fit plot avec bandes
+  CLM/CLI) + `PLOT` statement traditionnel (Opus, moyen)
+- [ ] DoD M36 : fixtures `m36/` + snapshots vérifiés (oracles) ; **README `REG` → ✅** (résiduel
+  hors périmètre documenté dans la colonne droite) ; passer « Jalon courant : **TERMINÉ (Phase F)** ».

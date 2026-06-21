@@ -175,6 +175,17 @@ commits d'extraction « move-only ». Les jalons de complétion font rétrécir 
 | Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | **Opus/Fable** | très élevé | oracles vérifiés vs SAS 9.4 ; numérique maison `src/stat/` ; fixtures `tests/fixtures/m34/` |
 | Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | **Opus** | élevé | processeur toujours actif ; nouveau comportement seulement sur nouvelles directives → snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
 
+### Phase F (M36) — `PROC REG` : complétion exhaustive (roadmap dans PROGRESS.md)
+
+Demandée après M34.4 : amener `PROC REG` à **✅** en couvrant TOUTE la surface SAS 9.4 restante.
+Jalon de complétion d'options ⇒ invariant d'octet-identité (snapshots m1–m35 inchangés ; le chemin
+OLS + NOINT/SELECTION= déjà livré reste tel quel ; nouveau comportement seulement sur la nouvelle
+syntaxe). 11 cases (M36.1–M36.11) + DoD, chacune rétrécissant la colonne « non couvert » du README REG.
+
+| Tâche | Jalon | Modèle | Effort | Notes |
+|---|---|---|---|---|
+| `TEST`/`RESTRICT` (hypothèses & restrictions linéaires sur β) ; `CLB`/`ALPHA=`/`CLI`/`CLM` + `OUTPUT` STDP/STDI/STDR/LCL/UCL/LCLM/UCLM ; diagnostics d'observation (`R`/`INFLUENCE` + STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS) ; colinéarité/spec (`COLLIN`/`VIF`/`TOL`/`SPEC`/`DW`/`ACOV`) ; SS partielles (`SS1`/`SS2`/`STB`/`PCORR`/`SCORR`/`SEQB`) ; `SELECTION=RSQUARE/ADJRSQ/CP/MAXR/MINR` (+BEST=/INCLUDE=/…) ; `WEIGHT`/`FREQ`/`BY`/`ID` ; `OUTEST=`/`OUTSSCP=`/`SIMPLE`/`CORR`/`COVB`/`XPX` ; `RIDGE=`/`PCOMIT=` ; `MTEST` + édition interactive (ADD/DELETE/REWEIGHT/REFIT/PAINT) ; panel `PLOTS=` complet | M36 | **Opus/Fable** | élevé→très élevé | oracles vérifiés vs SAS 9.4 ; matrices via `src/stat/linalg.rs` ; fixtures `tests/fixtures/m36/` ; **README `REG` → ✅** en fin de jalon |
+
 ### Conseils d'orchestration
 
 - **Ordre M1 strict** : `parser/mod.rs` → `parser/expr.rs` → `parser/{datastep,global}.rs`
