@@ -170,8 +170,9 @@ impl MacroEngine {
     /// Sous `deterministic`, valeurs FIGÉES (snapshots stables) ; sinon dérivées
     /// de l'horloge réelle. Cf. la doc de [`MacroEngine::new`].
     pub(super) fn seed_automatic_vars(&mut self, deterministic: bool) {
-        let vars: [(&str, String); 6] = if deterministic {
-            [
+        // ── Variables de date/heure (6 d'origine, inchangées) ───────────────
+        let mut vars: Vec<(&str, String)> = if deterministic {
+            vec![
                 ("SYSDATE9", "01JAN1960".to_string()),
                 ("SYSDATE", "01JAN60".to_string()),
                 ("SYSTIME", "00:00".to_string()),
@@ -196,7 +197,7 @@ impl MacroEngine {
             let sysdate = format!("{day:02}{mon}{year2:02}");
             let systime = format!("{:02}:{:02}", now.hour(), now.minute());
             let sysday = DAYS[now.weekday().num_days_from_monday() as usize].to_string();
-            [
+            vec![
                 ("SYSDATE9", sysdate9),
                 ("SYSDATE", sysdate),
                 ("SYSTIME", systime),
@@ -205,8 +206,65 @@ impl MacroEngine {
                 ("SYSSCP", "LIN X64".to_string()),
             ]
         };
+
+        // ── Status/return codes (initial values, constant in all modes) ──────
+        vars.extend([
+            ("SYSCC", "0".to_string()),
+            ("SYSERR", "0".to_string()),
+            ("SYSRC", "0".to_string()),
+            ("SYSFILRC", "0".to_string()),
+            ("SYSLIBRC", "0".to_string()),
+            ("SQLOBS", "0".to_string()),
+            ("SQLRC", "0".to_string()),
+            ("SQLEXITCODE", "0".to_string()),
+        ]);
+
+        // ── Last dataset (set to _NULL_ initially; updated live after each step) ─
+        vars.push(("SYSLAST", "_NULL_".to_string()));
+
+        // ── Static environment info (constant in all modes) ──────────────────
+        vars.extend([
+            ("SYSSCPL", "Linux".to_string()),
+            ("SYSPROCESSNAME", "DMS Process".to_string()),
+            ("SYSENV", "FORE".to_string()),
+            ("SYSMACRONAME", "".to_string()),
+            ("SYSPARM", "".to_string()),
+            ("SYSADDRSPACE", "".to_string()),
+            ("SYSNCPU", "1".to_string()),
+            ("SYSSITE", "0".to_string()),
+        ]);
+
+        // ── User/host: frozen in deterministic mode, live otherwise ──────────
+        if deterministic {
+            vars.extend([
+                ("SYSUSERID", "sasuser".to_string()),
+                ("SYSHOSTNAME", "localhost".to_string()),
+                ("SYSJOBID", "1".to_string()),
+                ("SYSPROCESSID", "0".to_string()),
+            ]);
+        } else {
+            let user = std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "sasuser".to_string());
+            let hostname = std::env::var("HOSTNAME")
+                .unwrap_or_else(|_| "localhost".to_string());
+            let pid = std::process::id();
+            vars.extend([
+                ("SYSUSERID", user),
+                ("SYSHOSTNAME", hostname),
+                ("SYSJOBID", "1".to_string()),
+                ("SYSPROCESSID", pid.to_string()),
+            ]);
+        }
+
         for (k, v) in vars {
             self.table.insert(k.to_string(), v);
         }
+    }
+
+    /// Expose a thin public setter for automatic macro variables (used by the
+    /// executor to keep &SYSLAST in sync with `session.last_dataset`).
+    pub fn set_automatic(&mut self, name: &str, value: String) {
+        self.set_symbol_global(name, value);
     }
 }

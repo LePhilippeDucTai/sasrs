@@ -338,5 +338,6 @@ fn fn_index(args: &[String]) -> Option<String> {
 
 fn fn_length(args: &[String]) -> Option<String> {
     let t = args.first().map(String::as_str).unwrap_or("");
-    Some(t.chars().count().to_string())
+    // SAS %LENGTH returns 1 for a null/empty argument (not 0).
+    Some(t.chars().count().max(1).to_string())
 }

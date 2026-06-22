@@ -712,8 +712,17 @@ directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language
   (fileref insensible à la casse, chemin relatif, stdin, ref inconnu). Fixture m35 (filename_include) +
   snapshot (NOTE device, complétion propre). README `FILENAME` 🔴→🟡, `%INCLUDE` étoffé. 2465 lib tests,
   0 warning, snapshots octet-identiques.
-- [ ] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
-  restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen)
+- [x] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
+  restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen).
+  **FAIT** : `%LENGTH` → `count.max(1)` (null/vide → 1). `seed_automatic_vars` étendu (Vec) :
+  codes retour init 0 (`SYSCC`/`SYSERR`/`SYSRC`/`SYSFILRC`/`SYSLIBRC`/`SQLOBS`/`SQLRC`/`SQLEXITCODE`),
+  `SYSLAST="_NULL_"`, infos statiques (`SYSSCPL=Linux`, `SYSPROCESSNAME=DMS Process`, `SYSENV=FORE`,
+  `SYSMACRONAME`/`SYSPARM`/`SYSADDRSPACE` vides, `SYSNCPU=1`, `SYSSITE=0`), user/host
+  (`SYSUSERID=sasuser`/`SYSHOSTNAME=localhost`/`SYSJOBID=1`/`SYSPROCESSID=0` en déterministe, env sinon).
+  `&SYSLAST` câblé en direct : l'exécuteur pousse `last_dataset` (MAJ, ou `_NULL_`) via `set_automatic`
+  après chaque étape DATA et chaque PROC. Fixture m35 (macro_conformity) : `%length()=1`, `&syscc=0`,
+  `&sysprocessname=DMS Process`, `&syslast` `_NULL_`→`WORK.A`. 2472 lib tests, 0 warning, snapshots
+  octet-identiques.
 - [ ] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
   (`%ABORT`, `%RETURN`, `%GOTO`/`%label`, `%SYSCALL`, `%SYSEXEC`, `%WINDOW`/`%DISPLAY`…) —
   implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé)
