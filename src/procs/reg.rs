@@ -51,6 +51,18 @@ pub struct RegAst {
     /// M36.8 — PROC-statement `CORR` option: print the correlation matrix among
     /// all model variables.
     pub corr: bool,
+    /// M36.10 — `VAR v1 v2 …;`: variables declared for later interactive editing.
+    /// Recorded only (used by SAS to make variables available to ADD between RUN
+    /// groups); does not affect a non-interactive fit.
+    pub var_list: Vec<String>,
+    /// M36.10 — a `REWEIGHT …;` statement was seen (interactive observation
+    /// reweighting). Deferred: parsed, a NOTE emitted at execute time.
+    pub reweight_seen: bool,
+    /// M36.10 — a `REFIT;` statement was seen (interactive refit). Deferred.
+    pub refit_seen: bool,
+    /// M36.10 — a `PAINT …;` statement was seen (interactive plot painting).
+    /// Deferred (graphics-related).
+    pub paint_seen: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +73,14 @@ pub struct RegModelEntry {
     pub tests: Vec<RegTest>,
     /// RESTRICT statements that followed this MODEL (M36.1).
     pub restricts: Vec<RegRestrict>,
+    /// MTEST statements that followed this MODEL — multivariate hypothesis tests
+    /// across the model responses (M36.10).
+    pub mtests: Vec<RegMtest>,
+    /// Regressors added via `ADD x …;` after this MODEL (M36.10, run-group
+    /// editing). Applied to the final fit.
+    pub add: Vec<String>,
+    /// Regressors removed via `DELETE x …;` after this MODEL (M36.10).
+    pub delete: Vec<String>,
 }
 
 /// A linear equation over regressor names (and the keyword `INTERCEPT`),
@@ -123,7 +143,11 @@ pub struct OutEst {
 
 #[derive(Debug, Clone)]
 pub struct RegModel {
-    pub dependent: String,
+    /// The dependent (response) variable(s). SAS PROC REG permits several
+    /// responses on the LHS of MODEL (`model y1 y2 = x1 x2;`) for use by MTEST
+    /// (M36.10). The single-response code paths read `dependent()` (the first
+    /// response); a single-response model therefore behaves exactly as before.
+    pub dependents: Vec<String>,
     pub regressors: Vec<String>,
     pub noint: bool,
     pub noprint: bool,
@@ -186,6 +210,26 @@ pub struct RegModel {
     pub covb: bool,
     /// M36.8 — CORRB: print Correlation of Estimates.
     pub corrb: bool,
+}
+
+impl RegModel {
+    /// The primary (first) response variable. All single-response code paths use
+    /// this so a one-response MODEL is byte-identical to the pre-M36.10 behaviour.
+    pub fn dependent(&self) -> &str {
+        &self.dependents[0]
+    }
+}
+
+/// A `[label:] MTEST [equations] [/ options];` statement (M36.10). Performs the
+/// multivariate test of a linear hypothesis across all model responses. With no
+/// equations the default hypothesis tests that every non-intercept coefficient
+/// is jointly zero (the overall multivariate regression test).
+#[derive(Debug, Clone)]
+pub struct RegMtest {
+    pub label: Option<String>,
+    /// Linear-hypothesis equations over the regressors (reusing `LinEq`/`build_lc`).
+    /// Empty ⇒ the default "all regressors = 0" hypothesis.
+    pub equations: Vec<LinEq>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,16 +394,28 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut freq: Option<String> = None;
     let mut by: Vec<String> = Vec::new();
     let mut id: Vec<String> = Vec::new();
+    // M36.10 run-group / VAR bookkeeping.
+    let mut var_list: Vec<String> = Vec::new();
+    let mut reweight_seen = false;
+    let mut refit_seen = false;
+    let mut paint_seen = false;
 
     common::parse_proc_body(ts, |ts, kw| {
         if kw == "model" {
             ts.next(); // consume "model"
-            let dep = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected dependent variable", ts.peek().span))?;
-            ts.next();
+            // SAS allows MULTIPLE responses on the LHS (`model y1 y2 = x …;`),
+            // consumed up to the `=`. At least one is required.
+            let mut dependents: Vec<String> = Vec::new();
+            while let Some(name) = ts.peek().ident().map(str::to_string) {
+                dependents.push(name);
+                ts.next();
+            }
+            if dependents.is_empty() {
+                return Err(SasError::parse(
+                    "expected dependent variable",
+                    ts.peek().span,
+                ));
+            }
             if ts.peek().kind != TokenKind::Eq {
                 return Err(SasError::parse(
                     "expected '=' after dependent variable in MODEL",
@@ -629,7 +685,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             }
             models.push(RegModelEntry {
                 model: RegModel {
-                    dependent: dep,
+                    dependents,
                     regressors,
                     noint,
                     noprint,
@@ -665,6 +721,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 outputs: Vec::new(),
                 tests: Vec::new(),
                 restricts: Vec::new(),
+                mtests: Vec::new(),
+                add: Vec::new(),
+                delete: Vec::new(),
             });
             Ok(true)
         } else if kw == "output" {
@@ -796,6 +855,88 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 entry.restricts.push(RegRestrict { equations });
             }
             Ok(true)
+        } else if kw == "mtest" {
+            // `MTEST [equations] [/ options];` (unlabeled — a leading `label:` is
+            // handled by the catch-all label branch). Equations are optional; an
+            // empty list means the default "all regressors = 0" hypothesis.
+            ts.next(); // consume "mtest"
+            let equations = parse_mtest_equations(ts)?;
+            // Options after `/` are accepted and ignored (e.g. CANPRINT, PRINT).
+            if ts.peek().kind == TokenKind::Slash {
+                ts.skip_to_semi();
+            } else {
+                ts.expect_semi()?;
+            }
+            if let Some(entry) = models.last_mut() {
+                entry.mtests.push(RegMtest { label: None, equations });
+            }
+            Ok(true)
+        } else if kw == "add" {
+            // `ADD x1 x2 …;` — run-group regressor addition (M36.10).
+            ts.next();
+            if let Some(entry) = models.last_mut() {
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if let Some(name) = ts.peek().ident().map(str::to_string) {
+                        entry.add.push(name);
+                        ts.next();
+                    } else {
+                        ts.next();
+                    }
+                }
+            } else {
+                ts.skip_to_semi();
+            }
+            ts.expect_semi()?;
+            Ok(true)
+        } else if kw == "delete" {
+            // `DELETE x1 x2 …;` — run-group regressor removal (M36.10).
+            ts.next();
+            if let Some(entry) = models.last_mut() {
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if let Some(name) = ts.peek().ident().map(str::to_string) {
+                        entry.delete.push(name);
+                        ts.next();
+                    } else {
+                        ts.next();
+                    }
+                }
+            } else {
+                ts.skip_to_semi();
+            }
+            ts.expect_semi()?;
+            Ok(true)
+        } else if kw == "var" {
+            // `VAR v1 v2 …;` — declare variables for later interactive editing
+            // (M36.10). Recorded only.
+            ts.next();
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    var_list.push(name);
+                    ts.next();
+                } else {
+                    ts.next();
+                }
+            }
+            ts.expect_semi()?;
+            Ok(true)
+        } else if kw == "reweight" {
+            // `REWEIGHT <condition>;` — interactive reweighting. Deferred (M36.10).
+            ts.next();
+            ts.skip_to_semi();
+            reweight_seen = true;
+            Ok(true)
+        } else if kw == "refit" {
+            // `REFIT;` — interactive refit. Deferred (M36.10).
+            ts.next();
+            ts.skip_to_semi();
+            refit_seen = true;
+            Ok(true)
+        } else if kw == "paint" {
+            // `PAINT <…>;` — interactive plot painting. Deferred (M36.10).
+            ts.next();
+            ts.skip_to_semi();
+            paint_seen = true;
+            Ok(true)
         } else if kw == "weight" {
             // `WEIGHT var;` — a single weight variable (M36.7).
             ts.next(); // consume "weight"
@@ -858,6 +999,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 entry.tests.push(RegTest { label, equations });
             }
             Ok(true)
+        } else if ts.peek2().kind == TokenKind::Colon && ts.peek_nth(2).is_kw("mtest") {
+            // `label: MTEST [eq …] [/ opts];` — the leading identifier is a label.
+            let label = ts.peek().ident().map(str::to_string);
+            ts.next(); // label ident
+            ts.next(); // ':'
+            ts.next(); // 'mtest'
+            let equations = parse_mtest_equations(ts)?;
+            if ts.peek().kind == TokenKind::Slash {
+                ts.skip_to_semi();
+            } else {
+                ts.expect_semi()?;
+            }
+            if let Some(entry) = models.last_mut() {
+                entry.mtests.push(RegMtest { label, equations });
+            }
+            Ok(true)
         } else {
             Ok(false)
         }
@@ -880,6 +1037,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         id,
         simple,
         corr,
+        var_list,
+        reweight_seen,
+        refit_seen,
+        paint_seen,
     })
 }
 
@@ -980,6 +1141,58 @@ fn parse_lin_eqs(ts: &mut StatementStream) -> Result<Vec<LinEq>> {
     let mut eqs = Vec::new();
     loop {
         eqs.push(parse_lin_eq(ts)?);
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+            continue;
+        }
+        break;
+    }
+    Ok(eqs)
+}
+
+/// Parse the (optional) equation list of an MTEST statement (M36.10). Each
+/// comma-separated entry is a linear combination of regressors; unlike
+/// TEST/RESTRICT the `= rhs` is OPTIONAL and defaults to `= 0` (MTEST tests
+/// linear combinations of the parameters against zero across all responses).
+/// Stops at the terminating `;` or a `/` option separator. An empty list
+/// (the statement is just `MTEST;`) yields no equations, meaning the default
+/// "all non-intercept coefficients = 0" hypothesis.
+fn parse_mtest_equations(ts: &mut StatementStream) -> Result<Vec<LinEq>> {
+    let mut eqs = Vec::new();
+    loop {
+        // Terminators with no (further) equation.
+        if matches!(
+            ts.peek().kind,
+            TokenKind::Semi | TokenKind::Eof | TokenKind::Slash
+        ) {
+            break;
+        }
+        // Left side: signed sum of regressor terms (and bare constants).
+        let mut terms: Vec<(f64, String)> = Vec::new();
+        let mut lhs_const = 0.0;
+        parse_lin_side(ts, 1.0, &mut terms, &mut lhs_const)?;
+        let mut rhs = -lhs_const;
+        // Optional `= rhs`.
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+            let mut rhs_terms: Vec<(f64, String)> = Vec::new();
+            let mut rhs_const = 0.0;
+            parse_lin_side(ts, 1.0, &mut rhs_terms, &mut rhs_const)?;
+            for (c, v) in rhs_terms {
+                terms.push((-c, v));
+            }
+            rhs += rhs_const;
+        }
+        // Merge duplicate variables.
+        let mut merged: Vec<(f64, String)> = Vec::new();
+        for (c, v) in terms {
+            if let Some(e) = merged.iter_mut().find(|(_, name)| *name == v) {
+                e.0 += c;
+            } else {
+                merged.push((c, v));
+            }
+        }
+        eqs.push(LinEq { terms: merged, rhs });
         if ts.peek().kind == TokenKind::Comma {
             ts.next();
             continue;
@@ -2196,7 +2409,7 @@ fn gather_simple_corr(
     // Analysis variables: regressors (MODEL order) then the dependent. SAS lists
     // the regressors first and the dependent last in the descriptive table.
     let mut names: Vec<String> = model.regressors.clone();
-    names.push(model.dependent.clone());
+    names.push(model.dependent().to_string());
     let idxs: Vec<usize> = names.iter().map(|nm| find_col(nm)).collect::<Option<_>>()?;
     let decoded: Vec<Vec<crate::value::Value>> = idxs
         .iter()
@@ -2702,6 +2915,36 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         return Ok(());
     }
 
+    // --- M36.10: clean deferrals for the inherently-interactive / graphics
+    // run-group statements. They are parsed and consumed; here we emit a single
+    // NOTE per statement kind so the PROC never crashes on them.
+    if ast.reweight_seen {
+        session.log.note(
+            "The REWEIGHT statement (interactive observation reweighting) is not supported in this build; it was ignored.",
+        );
+    }
+    if ast.refit_seen {
+        session.log.note(
+            "The REFIT statement (interactive refit) is not supported in this build; it was ignored.",
+        );
+    }
+    if ast.paint_seen {
+        session.log.note(
+            "The PAINT statement (interactive plot painting) is not supported in this build; it was ignored.",
+        );
+    }
+    // ADD/DELETE are applied to the final model fit (not interactively between RUN
+    // groups); note that when present so the non-interactive semantics are clear.
+    if ast
+        .models
+        .iter()
+        .any(|m| !m.add.is_empty() || !m.delete.is_empty())
+    {
+        session.log.note(
+            "ADD/DELETE statements were applied to the final model fit; interactive editing between RUN groups is not supported in this build.",
+        );
+    }
+
     // --- 1. Resolve dataset (once per proc) ---
     let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
     let in_libref = in_ref.libref_or_work();
@@ -2814,7 +3057,7 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
                 write_outsscp(
                     out,
                     &m0.regressors,
-                    &m0.dependent,
+                    m0.dependent(),
                     &cols,
                     !m0.noint,
                     session,
@@ -2909,8 +3152,28 @@ fn run_model(
 ) -> Result<()> {
     let _ = (in_libref, in_table);
     let model = &entry.model;
-    let dep_name = &model.dependent;
-    let regressors = &model.regressors;
+    // M36.10 run-group editing: ADD/DELETE adjust the regressor set for the
+    // final fit. With neither present this is byte-identical to `model.regressors`
+    // (we borrow it directly). ADD appends not-already-present names (MODEL order
+    // preserved, additions last); DELETE removes matching names.
+    let regressors_owned: Option<Vec<String>> = if entry.add.is_empty() && entry.delete.is_empty() {
+        None
+    } else {
+        let mut regs: Vec<String> = model.regressors.clone();
+        for a in &entry.add {
+            if !regs.iter().any(|r| r.eq_ignore_ascii_case(a)) {
+                regs.push(a.clone());
+            }
+        }
+        if !entry.delete.is_empty() {
+            regs.retain(|r| !entry.delete.iter().any(|d| d.eq_ignore_ascii_case(r)));
+        }
+        Some(regs)
+    };
+    let regressors: &[String] = match &regressors_owned {
+        Some(v) => v.as_slice(),
+        None => &model.regressors,
+    };
     let p = regressors.len();
     let n_read = rows.len();
 
@@ -2922,14 +3185,9 @@ fn run_model(
             .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
     };
 
-    let dep_idx = find_col(dep_name)?;
-    if ds.vars[dep_idx].ty != VarType::Num {
-        return Err(SasError::runtime(format!(
-            "Dependent variable {} must be numeric.",
-            dep_name.to_uppercase()
-        )));
-    }
-
+    // Regressor resolution + decode is shared across all responses (the design
+    // is common to every dependent on the MODEL LHS), so it is hoisted above the
+    // per-response loop below.
     let mut reg_idxs: Vec<usize> = Vec::with_capacity(p);
     for nm in regressors {
         let idx = find_col(nm)?;
@@ -2942,12 +3200,41 @@ fn run_model(
         reg_idxs.push(idx);
     }
 
-    // --- Decode columns ---
-    let dep_col = decode_column(ds, dep_idx)?;
+    // --- Decode regressor columns (shared) ---
     let mut reg_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(p);
     for &idx in &reg_idxs {
         reg_cols.push(decode_column(ds, idx)?);
     }
+
+    // M36.10 multi-response MODEL (`model y1 y2 = x;`): SAS PROC REG prints a
+    // SEPARATE univariate regression analysis for EACH dependent, in MODEL
+    // order, then the MTEST tables once. We loop the existing univariate
+    // fit+print path once per response. With a single response (`dependents`
+    // has one element) the loop body runs exactly once and the emitted output —
+    // headers, spacing, NOTE lines, OUTEST rows, OUTPUT datasets — is
+    // byte-identical to the prior single-response path.
+    //
+    // Per-response OUTPUT/diagnostics: each response's OUTPUT dataset, R /
+    // INFLUENCE / CLM / CLI listings, OUTEST row, and printed matrices are
+    // produced from that response's own fit, exactly as a univariate run would.
+    // OUTSSCP / SIMPLE / CORR are PROC-level displays driven off the FIRST
+    // model's variables and are emitted once in the caller, unchanged.
+    let mut outest_accum = outest_accum;
+    // MTEST runs ONCE after all per-response blocks. It needs the selected design
+    // (intercept + chosen regressors). With no SELECTION this is identical for
+    // every response; with SELECTION the prior code used the (sole) response's
+    // choice, so we capture the FIRST response's selection here for parity.
+    let mut mtest_inputs: Option<(Vec<usize>, Vec<String>, bool)> = None;
+    for (resp_i, dep_name) in model.dependents.iter().enumerate() {
+        let dep_name: &str = dep_name.as_str();
+        let dep_idx = find_col(dep_name)?;
+        if ds.vars[dep_idx].ty != VarType::Num {
+            return Err(SasError::runtime(format!(
+                "Dependent variable {} must be numeric.",
+                dep_name.to_uppercase()
+            )));
+        }
+        let dep_col = decode_column(ds, dep_idx)?;
 
     // --- M36.7 weighting bookkeeping. `wf` accumulates the effective SS weight
     // w_i·f_i for each complete-case row; `total_n` accumulates Σf_i (FREQ
@@ -3050,9 +3337,12 @@ fn run_model(
             Some(s) => s,
             None => {
                 // Nothing entered (FORWARD/STEPWISE) — fit the intercept-only
-                // model (or note for NOINT) and finish, no OUTPUT.
+                // model (or note for NOINT) and finish, no OUTPUT. With multiple
+                // responses, move on to the next dependent (`continue`); with a
+                // single response this ends the only iteration just as the prior
+                // `return Ok(())` did, so the output is unchanged.
                 fit_and_print_empty(model, dep_name, n_read, n, model_label, by_heading, session);
-                return Ok(());
+                continue;
             }
         }
     } else {
@@ -3080,6 +3370,11 @@ fn run_model(
     }
 
     let sel_reg_names: Vec<String> = selected.iter().map(|&c| regressors[c].clone()).collect();
+
+    // Capture the first response's selected design for the post-loop MTEST.
+    if resp_i == 0 {
+        mtest_inputs = Some((selected.clone(), sel_reg_names.clone(), intercept));
+    }
 
     // Weighted-least-squares fit when WEIGHT/FREQ is active; plain OLS
     // otherwise (byte-identical default path).
@@ -3238,7 +3533,7 @@ fn run_model(
     // --- OUTEST= (M36.8): record this fit for the per-PROC parameter-estimates
     // dataset. Built from the existing fit (no refit). `_MODEL_` uses the bare
     // "MODELn" label (the model_label is "Model: MODELn").
-    if let Some(accum) = outest_accum {
+    if let Some(accum) = outest_accum.as_deref_mut() {
         let n_used: f64 = weighting.as_ref().map(|w| w.total_n).unwrap_or(n as f64);
         let bare_label = model_label
             .strip_prefix("Model: ")
@@ -3398,6 +3693,29 @@ fn run_model(
         let y_hat = fit.y_hat.clone();
         let resid = fit.resid.clone();
         reg_diagnostic_plot(session, &y_hat, &resid);
+    }
+    } // end per-response loop
+
+    // --- MTEST (M36.10): multivariate hypothesis tests across all responses.
+    // Self-contained: gathers a fresh multivariate response/design matrix with
+    // listwise deletion across every response + the selected regressors, fits
+    // the multivariate coefficient matrix, and prints the four MANOVA statistics
+    // per MTEST. Printed ONCE, after every per-response univariate block. Only
+    // entered when MTEST statements are present, so the single-response /
+    // no-MTEST path is byte-identical.
+    let run_mtest = !entry.mtests.is_empty() && !model.noprint;
+    if let Some((selected, sel_reg_names, intercept)) = mtest_inputs.as_ref().filter(|_| run_mtest)
+    {
+        run_mtests(
+            &entry.mtests,
+            model,
+            ds,
+            rows,
+            selected,
+            sel_reg_names,
+            *intercept,
+            session,
+        )?;
     }
 
     Ok(())
@@ -5273,6 +5591,374 @@ fn run_tests(
     Ok(())
 }
 
+// ───────────────────────── MTEST (M36.10) ─────────────────────────
+
+/// The four multivariate test statistics with their F approximations.
+struct MtestStat {
+    name: &'static str,
+    value: f64,
+    f: f64,
+    df1: f64,
+    df2: f64,
+}
+
+/// Compute Wilks / Pillai / Hotelling-Lawley / Roy statistics with the standard
+/// SAS MANOVA F approximations from the generalized eigenvalues `λ_i` of E⁻¹H.
+///
+/// Parameters follow the SAS convention: `p` = number of responses, `q` =
+/// hypothesis degrees of freedom (rank of L), `v` = error degrees of freedom
+/// (N − rank(X)). `s = min(p, q)` is the number of non-zero eigenvalues.
+fn mtest_statistics(lambda: &[f64], p: f64, q: f64, v: f64) -> Vec<MtestStat> {
+    let s = p.min(q);
+    // Σ λ/(1+λ), Σ λ, Π 1/(1+λ), max λ.
+    let pillai: f64 = lambda.iter().map(|&l| l / (1.0 + l)).sum();
+    let hlt: f64 = lambda.iter().sum();
+    let wilks: f64 = lambda.iter().map(|&l| 1.0 / (1.0 + l)).product();
+    let roy: f64 = lambda.iter().cloned().fold(0.0_f64, f64::max);
+
+    let m_ = ((p - q).abs() - 1.0) / 2.0;
+    let n_ = (v - p - 1.0) / 2.0;
+
+    // ── Wilks' Lambda (Rao's F).
+    let (w_f, w_df1, w_df2) = {
+        let df1 = p * q;
+        let denom = p * p + q * q - 5.0;
+        let t = if denom > 0.0 {
+            ((p * p * q * q - 4.0) / denom).max(0.0).sqrt()
+        } else {
+            1.0
+        };
+        let t = if t == 0.0 { 1.0 } else { t };
+        let r = v - (p - q + 1.0) / 2.0;
+        let u = (p * q - 2.0) / 4.0;
+        let df2 = r * t - 2.0 * u;
+        let lam_root = wilks.powf(1.0 / t);
+        let f = if lam_root > 0.0 && df1 > 0.0 {
+            (1.0 - lam_root) / lam_root * (df2 / df1)
+        } else {
+            f64::NAN
+        };
+        (f, df1, df2)
+    };
+
+    // ── Pillai's Trace.
+    let (pi_f, pi_df1, pi_df2) = {
+        let df1 = s * (2.0 * m_ + s + 1.0);
+        let df2 = s * (2.0 * n_ + s + 1.0);
+        let f = if (s - pillai).abs() > 0.0 && df1 > 0.0 {
+            (df2 / df1) * (pillai / (s - pillai))
+        } else {
+            f64::NAN
+        };
+        (f, df1, df2)
+    };
+
+    // ── Hotelling-Lawley Trace.
+    let (hl_f, hl_df1, hl_df2) = {
+        let df1 = s * (2.0 * m_ + s + 1.0);
+        let df2 = 2.0 * (s * n_ + 1.0);
+        let f = if df1 > 0.0 {
+            df2 * hlt / (s * df1)
+        } else {
+            f64::NAN
+        };
+        (f, df1, df2)
+    };
+
+    // ── Roy's Greatest Root (upper bound F).
+    let (roy_f, roy_df1, roy_df2) = {
+        let r2 = p.max(q);
+        let df1 = r2;
+        let df2 = v - r2 + q;
+        let f = if df1 > 0.0 {
+            roy * df2 / df1
+        } else {
+            f64::NAN
+        };
+        (f, df1, df2)
+    };
+
+    vec![
+        MtestStat { name: "Wilks' Lambda", value: wilks, f: w_f, df1: w_df1, df2: w_df2 },
+        MtestStat { name: "Pillai's Trace", value: pillai, f: pi_f, df1: pi_df1, df2: pi_df2 },
+        MtestStat {
+            name: "Hotelling-Lawley Trace",
+            value: hlt,
+            f: hl_f,
+            df1: hl_df1,
+            df2: hl_df2,
+        },
+        MtestStat {
+            name: "Roy's Greatest Root",
+            value: roy,
+            f: roy_f,
+            df1: roy_df1,
+            df2: roy_df2,
+        },
+    ]
+}
+
+/// Generalized eigenvalues λ_i of E⁻¹H for SPD `E` (q×q) and symmetric `H`
+/// (q×q), via the symmetric reduction M = L⁻¹ H L⁻ᵀ (E = L Lᵀ, Cholesky), whose
+/// ordinary symmetric eigenvalues are exactly the generalized ones. Returns them
+/// in descending order. Errors if E is not SPD.
+fn generalized_eigenvalues(e: &[Vec<f64>], h: &[Vec<f64>]) -> Result<Vec<f64>> {
+    let l = linalg::cholesky(e)?; // E = L Lᵀ, L lower-triangular.
+    let n = l.len();
+    // Solve L W = H for W (forward substitution, column by column): W = L⁻¹ H.
+    let mut w = vec![vec![0.0; n]; n];
+    for col in 0..n {
+        for i in 0..n {
+            let mut sum = h[i][col];
+            for k in 0..i {
+                sum -= l[i][k] * w[k][col];
+            }
+            w[i][col] = sum / l[i][i];
+        }
+    }
+    // Solve L M = Wᵀ for M (so M = L⁻¹ Wᵀ = L⁻¹ H L⁻ᵀ, symmetric).
+    let wt = linalg::transpose(&w);
+    let mut m = vec![vec![0.0; n]; n];
+    for col in 0..n {
+        for i in 0..n {
+            let mut sum = wt[i][col];
+            for k in 0..i {
+                sum -= l[i][k] * m[k][col];
+            }
+            m[i][col] = sum / l[i][i];
+        }
+    }
+    // Symmetrize against round-off, then symmetric eigensolve.
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let avg = 0.5 * (m[i][j] + m[j][i]);
+            m[i][j] = avg;
+            m[j][i] = avg;
+        }
+    }
+    let mut eig = linalg::eigenvalues_jacobi(&m)?;
+    // Generalized eigenvalues of E⁻¹H are non-negative; clamp tiny negatives.
+    for e in &mut eig {
+        if *e < 0.0 && *e > -1e-9 {
+            *e = 0.0;
+        }
+    }
+    Ok(eig)
+}
+
+/// Run and print every MTEST statement of a model. Self-contained: gathers a
+/// multivariate response/design matrix with listwise deletion across all
+/// responses + the selected regressors, builds E and H, solves the generalized
+/// eigenproblem, and prints the four MANOVA statistics. (M36.10)
+#[allow(clippy::too_many_arguments)]
+fn run_mtests(
+    mtests: &[RegMtest],
+    model: &RegModel,
+    ds: &SasDataset,
+    rows: &[usize],
+    selected: &[usize],
+    sel_reg_names: &[String],
+    intercept: bool,
+    session: &mut Session,
+) -> Result<()> {
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    // Resolve and decode every response column.
+    let q_resp = model.dependents.len();
+    let mut resp_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(q_resp);
+    for nm in &model.dependents {
+        let idx = find_col(nm)?;
+        if ds.vars[idx].ty != VarType::Num {
+            return Err(SasError::runtime(format!(
+                "Dependent variable {} must be numeric.",
+                nm.to_uppercase()
+            )));
+        }
+        resp_cols.push(decode_column(ds, idx)?);
+    }
+    // Resolve and decode the selected regressor columns (MTEST runs on the
+    // selected design, intercept handled separately).
+    let mut reg_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(selected.len());
+    for nm in sel_reg_names {
+        let idx = find_col(nm)?;
+        reg_cols.push(decode_column(ds, idx)?);
+    }
+
+    // Listwise deletion across all responses + selected regressors.
+    let p_eff = sel_reg_names.len() + intercept as usize;
+    let mut x_mat: Vec<Vec<f64>> = Vec::new();
+    let mut y_mat: Vec<Vec<f64>> = Vec::new(); // rows = obs, cols = responses
+    for &i in rows {
+        let mut yr = Vec::with_capacity(q_resp);
+        let mut ok = true;
+        for rc in &resp_cols {
+            match value_to_num(&rc[i]) {
+                Some(v) if !v.is_nan() => yr.push(v),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let mut xr = Vec::with_capacity(p_eff);
+        if intercept {
+            xr.push(1.0);
+        }
+        for rc in &reg_cols {
+            match value_to_num(&rc[i]) {
+                Some(v) if !v.is_nan() => xr.push(v),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            x_mat.push(xr);
+            y_mat.push(yr);
+        }
+    }
+
+    let n = y_mat.len();
+    if n <= p_eff {
+        return Err(SasError::runtime(
+            "MTEST: not enough complete observations for the multivariate fit",
+        ));
+    }
+
+    // (X'X)⁻¹ and the coefficient matrix B = (X'X)⁻¹ X'Y (p_eff × q_resp).
+    let xt = linalg::transpose(&x_mat);
+    let xtx = linalg::matrix_mult(&xt, &x_mat);
+    let xtx_inv = linalg::invert_matrix(&xtx)?;
+    let xty = linalg::matrix_mult(&xt, &y_mat); // p_eff × q_resp
+    let b = linalg::matrix_mult(&xtx_inv, &xty); // p_eff × q_resp
+
+    // E = Y'Y − Y'X(X'X)⁻¹X'Y  (residual SSCP, q×q).
+    let yt = linalg::transpose(&y_mat);
+    let yty = linalg::matrix_mult(&yt, &y_mat); // q×q
+    let ytx = linalg::matrix_mult(&yt, &x_mat); // q×p_eff
+    let ytx_b = linalg::matrix_mult(&ytx, &b); // q×q  (= Y'X B)
+    let mut e = vec![vec![0.0; q_resp]; q_resp];
+    for i in 0..q_resp {
+        for j in 0..q_resp {
+            e[i][j] = yty[i][j] - ytx_b[i][j];
+        }
+    }
+
+    let v = (n - p_eff) as f64; // error degrees of freedom = N − rank(X).
+
+    for (ti, mt) in mtests.iter().enumerate() {
+        // Build the hypothesis matrix L (m × p_eff). Default (no equations):
+        // test that all NON-INTERCEPT coefficients are zero jointly.
+        let l: Vec<Vec<f64>> = if mt.equations.is_empty() {
+            let mut rows_l = Vec::new();
+            let base = intercept as usize;
+            for k in 0..sel_reg_names.len() {
+                let mut r = vec![0.0; p_eff];
+                r[base + k] = 1.0;
+                rows_l.push(r);
+            }
+            rows_l
+        } else {
+            let (l, _c) = build_lc(&mt.equations, sel_reg_names, intercept)?;
+            l
+        };
+        let m_rank = l.len();
+        if m_rank == 0 {
+            continue;
+        }
+
+        // H = (LB)' (L(X'X)⁻¹L')⁻¹ (LB)   (q×q).
+        let lb = linalg::matrix_mult(&l, &b); // m × q
+        let lt = linalg::transpose(&l); // p_eff × m
+        let lxi = linalg::matrix_mult(&l, &xtx_inv); // m × p_eff
+        let lxil = linalg::matrix_mult(&lxi, &lt); // m × m
+        let lxil_inv = linalg::invert_matrix(&lxil)?;
+        let mid = linalg::matrix_mult(&linalg::transpose(&lb), &lxil_inv); // q × m
+        let h = linalg::matrix_mult(&mid, &lb); // q × q
+
+        // Generalized eigenvalues of E⁻¹H (E SPD required).
+        let lambda = match generalized_eigenvalues(&e, &h) {
+            Ok(l) => l,
+            Err(err) => {
+                session.log.error(&format!(
+                    "MTEST: error sums-of-squares matrix is singular or not positive definite ({err}); the multivariate test cannot be computed."
+                ));
+                return Ok(());
+            }
+        };
+
+        let p = q_resp as f64; // number of responses
+        let qdf = m_rank as f64; // hypothesis degrees of freedom (rank L)
+        let stats = mtest_statistics(&lambda, p, qdf, v);
+
+        let label = mt
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{}", ti + 1));
+
+        session.listing.blank();
+        session.listing.blank();
+        centered(session, &format!("Multivariate Test: {}", label));
+        session.listing.blank();
+
+        let headers: Vec<String> = vec![
+            "Statistic".into(),
+            "Value".into(),
+            "F Value".into(),
+            "Num DF".into(),
+            "Den DF".into(),
+            "Pr > F".into(),
+        ];
+        let aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        let rows_out: Vec<Vec<String>> = stats
+            .iter()
+            .map(|s| {
+                let pval = if s.df1 > 0.0 && s.df2 > 0.0 && s.f.is_finite() && s.f >= 0.0 {
+                    Some((1.0 - f_cdf(s.f, s.df1, s.df2)).clamp(0.0, 1.0))
+                } else {
+                    None
+                };
+                vec![
+                    s.name.to_string(),
+                    fmt_fit4(s.value),
+                    fmt2(s.f),
+                    fmt_mtest_df(s.df1),
+                    fmt_mtest_df(s.df2),
+                    fmt_p(pval),
+                ]
+            })
+            .collect();
+        session.listing.write_table(&headers, &aligns, &rows_out);
+    }
+    Ok(())
+}
+
+/// Format a MANOVA degrees-of-freedom value: integral values plain, otherwise
+/// to two decimals (Wilks' Rao Den DF can be fractional).
+fn fmt_mtest_df(v: f64) -> String {
+    if (v - v.round()).abs() < 1e-9 {
+        format!("{}", v.round() as i64)
+    } else {
+        format!("{v:.2}")
+    }
+}
+
 // ───────────────────────── SELECTION ─────────────────────────
 
 /// Run a SELECTION= algorithm, returning the final subset of regressor column
@@ -6372,6 +7058,9 @@ mod tests {
                 outputs: vec![],
                 tests: vec![],
                 restricts: vec![],
+                mtests: vec![],
+                add: vec![],
+                delete: vec![],
             }],
             plots_requested: false,
             weight: None,
@@ -6380,12 +7069,16 @@ mod tests {
             id: Vec::new(),
             simple: false,
             corr: false,
+            var_list: Vec::new(),
+            reweight_seen: false,
+            refit_seen: false,
+            paint_seen: false,
         }
     }
 
     fn basic_model(dep: &str, regs: &[&str]) -> RegModel {
         RegModel {
-            dependent: dep.into(),
+            dependents: vec![dep.into()],
             regressors: regs.iter().map(|s| s.to_string()).collect(),
             noint: false,
             noprint: false,
@@ -6481,7 +7174,7 @@ mod tests {
         let ast = parse_reg("proc reg data=a; model y = x1 x2; run;").unwrap();
         assert_eq!(ast.models.len(), 1);
         let m = &ast.models[0].model;
-        assert_eq!(m.dependent, "y");
+        assert_eq!(m.dependents, vec!["y"]);
         assert_eq!(m.regressors, vec!["x1", "x2"]);
         assert!(!m.noint);
         assert!(!m.noprint);
@@ -9022,5 +9715,292 @@ mod tests {
         let ast =
             parse_reg("proc reg ridge=0 0.01 0.05 0.1; model y = x; run;").unwrap();
         assert_eq!(ast.data_options.ridge, vec![0.0, 0.01, 0.05, 0.1]);
+    }
+
+    // ───────────────────────── M36.10 MTEST / run-group ─────────────────────────
+
+    #[test]
+    fn test_m3610_parse_multi_response() {
+        // Two responses on the LHS → two dependents; regressors as before.
+        let ast = parse_reg("proc reg data=a; model y1 y2 = x1 x2; run;").unwrap();
+        let m = &ast.models[0].model;
+        assert_eq!(m.dependents, vec!["y1", "y2"]);
+        assert_eq!(m.regressors, vec!["x1", "x2"]);
+        assert_eq!(m.dependent(), "y1");
+        // Single response stays a one-element vector.
+        let ast2 = parse_reg("proc reg data=a; model y = x1 x2; run;").unwrap();
+        assert_eq!(ast2.models[0].model.dependents, vec!["y"]);
+    }
+
+    #[test]
+    fn test_m3610_multi_response_prints_block_per_dependent() {
+        // A two-response MODEL (`model y1 y2 = x;`) must print a SEPARATE
+        // univariate regression analysis for EACH dependent — one full
+        // "Dependent Variable: y1" block then a full "Dependent Variable: y2"
+        // block, each with its own ANOVA and Parameter Estimates — in MODEL
+        // order, followed by the MTEST table(s).
+        let mut session = make_session();
+        let frame = df![
+            "y1" => [2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0, 8.0, 9.0],
+            "y2" => [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 7.0, 8.0],
+            "x"  => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y1"), num_meta("y2"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let ast = parse_reg(
+            "proc reg data=work.t; model y1 y2 = x; mtest x; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+
+        // BOTH per-response blocks are present.
+        assert!(
+            listing.contains("Dependent Variable: y1"),
+            "missing y1 block: {listing}"
+        );
+        assert!(
+            listing.contains("Dependent Variable: y2"),
+            "missing y2 block: {listing}"
+        );
+        // MODEL order: the y1 block precedes the y2 block.
+        let p1 = listing.find("Dependent Variable: y1").unwrap();
+        let p2 = listing.find("Dependent Variable: y2").unwrap();
+        assert!(p1 < p2, "y1 block must precede y2 block: {listing}");
+        // Each response carries its own full analysis (two ANOVA tables).
+        assert_eq!(
+            listing.matches("Analysis of Variance").count(),
+            2,
+            "expected one ANOVA per response: {listing}"
+        );
+        // The MTEST table prints ONCE, after both per-response blocks.
+        let mtest_pos = listing
+            .find("Multivariate Test")
+            .expect("MTEST table missing");
+        assert!(mtest_pos > p2, "MTEST must follow the per-response blocks");
+    }
+
+    #[test]
+    fn test_m3610_parse_mtest_and_rungroup() {
+        let ast = parse_reg(
+            "proc reg data=a; model y1 y2 = x1 x2; \
+             mtest; \
+             overall: mtest x1, x2; \
+             var x3 x4; add x3; delete x1; \
+             reweight x1 > 5; refit; paint obs / red; run;",
+        )
+        .unwrap();
+        let entry = &ast.models[0];
+        // MTEST: one unlabeled (default), one labeled with two equations.
+        assert_eq!(entry.mtests.len(), 2);
+        assert!(entry.mtests[0].label.is_none());
+        assert!(entry.mtests[0].equations.is_empty());
+        assert_eq!(entry.mtests[1].label.as_deref(), Some("overall"));
+        assert_eq!(entry.mtests[1].equations.len(), 2);
+        // ADD / DELETE / VAR recorded.
+        assert_eq!(entry.add, vec!["x3"]);
+        assert_eq!(entry.delete, vec!["x1"]);
+        assert_eq!(ast.var_list, vec!["x3", "x4"]);
+        // Deferred statements flagged.
+        assert!(ast.reweight_seen);
+        assert!(ast.refit_seen);
+        assert!(ast.paint_seen);
+    }
+
+    #[test]
+    fn test_m3610_statistic_identities() {
+        // From three positive generalized eigenvalues, verify the internal
+        // identities between the four statistics.
+        let lambda = vec![2.5_f64, 1.0, 0.3];
+        let stats = mtest_statistics(&lambda, 3.0, 3.0, 20.0);
+        let by_name = |n: &str| stats.iter().find(|s| s.name == n).unwrap().value;
+        let wilks: f64 = lambda.iter().map(|&l| 1.0 / (1.0 + l)).product();
+        let pillai: f64 = lambda.iter().map(|&l| l / (1.0 + l)).sum();
+        let hlt: f64 = lambda.iter().sum();
+        let roy = 2.5_f64;
+        assert!((by_name("Wilks' Lambda") - wilks).abs() < 1e-12);
+        assert!((by_name("Pillai's Trace") - pillai).abs() < 1e-12);
+        assert!((by_name("Hotelling-Lawley Trace") - hlt).abs() < 1e-12);
+        assert!((by_name("Roy's Greatest Root") - roy).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_m3610_generalized_eig_symmetric_spd() {
+        // E SPD, H symmetric. Generalized eigenvalues of E⁻¹H must match the
+        // ordinary eigenvalues of E⁻¹H computed densely.
+        let e = vec![vec![4.0, 1.0], vec![1.0, 3.0]];
+        let h = vec![vec![2.0, 0.5], vec![0.5, 1.0]];
+        let lambda = generalized_eigenvalues(&e, &h).unwrap();
+        // Reference: eigenvalues of E⁻¹H.
+        let einv = linalg::invert_matrix(&e).unwrap();
+        let eih = linalg::matrix_mult(&einv, &h);
+        // 2×2 eigenvalues via trace/det.
+        let tr = eih[0][0] + eih[1][1];
+        let det = eih[0][0] * eih[1][1] - eih[0][1] * eih[1][0];
+        let disc = (tr * tr - 4.0 * det).max(0.0).sqrt();
+        let mut refv = vec![(tr + disc) / 2.0, (tr - disc) / 2.0];
+        refv.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        assert!((lambda[0] - refv[0]).abs() < 1e-9, "{lambda:?} vs {refv:?}");
+        assert!((lambda[1] - refv[1]).abs() < 1e-9, "{lambda:?} vs {refv:?}");
+    }
+
+    #[test]
+    fn test_m3610_single_response_reduces_to_anova_f() {
+        // Oracle: with one response the four MTEST statistics give the same F as
+        // the ANOVA overall F. Build the regression by hand and compare.
+        // Data: y = response, x1, x2 regressors, n=8.
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0];
+        let y = [3.0_f64, 5.0, 8.0, 9.0, 13.0, 14.0, 18.0, 20.0];
+        let n = y.len();
+        // Design with intercept.
+        let x_mat: Vec<Vec<f64>> = (0..n)
+            .map(|i| vec![1.0, x1[i], x2[i]])
+            .collect();
+        let fit = ols_fit(&x_mat, &y).unwrap();
+        let p_eff = 3usize;
+        let intercept = true;
+        // ANOVA overall F = (SSR/p_reg) / (SSE/(n-p_eff)).
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        let sst: f64 = y.iter().map(|v| (v - ybar) * (v - ybar)).sum();
+        let ssr = sst - fit.sse;
+        let p_reg = 2.0; // x1, x2
+        let v = (n - p_eff) as f64;
+        let anova_f = (ssr / p_reg) / (fit.sse / v);
+
+        // MTEST: q_resp = 1, default hypothesis = both regressors zero.
+        let xt = linalg::transpose(&x_mat);
+        let xtx = linalg::matrix_mult(&xt, &x_mat);
+        let xtx_inv = linalg::invert_matrix(&xtx).unwrap();
+        // Y is n×1.
+        let y_mat: Vec<Vec<f64>> = y.iter().map(|&v| vec![v]).collect();
+        let xty = linalg::matrix_mult(&xt, &y_mat);
+        let b = linalg::matrix_mult(&xtx_inv, &xty);
+        let yt = linalg::transpose(&y_mat);
+        let yty = linalg::matrix_mult(&yt, &y_mat);
+        let ytx = linalg::matrix_mult(&yt, &x_mat);
+        let ytx_b = linalg::matrix_mult(&ytx, &b);
+        let e = vec![vec![yty[0][0] - ytx_b[0][0]]];
+        // L = non-intercept rows.
+        let base = intercept as usize;
+        let l: Vec<Vec<f64>> = (0..2)
+            .map(|k| {
+                let mut r = vec![0.0; p_eff];
+                r[base + k] = 1.0;
+                r
+            })
+            .collect();
+        let lb = linalg::matrix_mult(&l, &b);
+        let lt = linalg::transpose(&l);
+        let lxi = linalg::matrix_mult(&l, &xtx_inv);
+        let lxil = linalg::matrix_mult(&lxi, &lt);
+        let lxil_inv = linalg::invert_matrix(&lxil).unwrap();
+        let mid = linalg::matrix_mult(&linalg::transpose(&lb), &lxil_inv);
+        let h = linalg::matrix_mult(&mid, &lb);
+        let lambda = generalized_eigenvalues(&e, &h).unwrap();
+        let stats = mtest_statistics(&lambda, 1.0, 2.0, v);
+        // Every statistic's F approximation must equal the ANOVA F.
+        for s in &stats {
+            assert!(
+                (s.f - anova_f).abs() < 1e-4,
+                "{} F={} vs ANOVA F={}",
+                s.name,
+                s.f,
+                anova_f
+            );
+        }
+        // H == model SS (SSR) and E == SSE for q_resp=1; both symmetric/SPD.
+        assert!((h[0][0] - ssr).abs() < 1e-6);
+        assert!((e[0][0] - fit.sse).abs() < 1e-6);
+        assert!(e[0][0] > 0.0);
+    }
+
+    #[test]
+    fn test_m3610_mtest_execute_prints_table() {
+        let mut session = make_session();
+        let frame = df![
+            "y1" => [3.0_f64, 5.0, 8.0, 9.0, 13.0, 14.0, 18.0, 20.0],
+            "y2" => [1.0_f64, 2.0, 2.5, 4.0, 4.5, 6.0, 6.5, 8.0],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "x2" => [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y1"), num_meta("y2"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t; model y1 y2 = x1 x2; mymt: mtest; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Multivariate Test: mymt"), "{listing}");
+        assert!(listing.contains("Wilks' Lambda"), "{listing}");
+        assert!(listing.contains("Pillai's Trace"), "{listing}");
+        assert!(listing.contains("Hotelling-Lawley Trace"), "{listing}");
+        assert!(listing.contains("Roy's Greatest Root"), "{listing}");
+    }
+
+    #[test]
+    fn test_m3610_add_delete_applied_to_fit() {
+        // ADD/DELETE edit the regressor set for the final fit. Verify a NOTE is
+        // emitted and the fit uses the edited set (x2 only, after deleting x1 and
+        // adding x2 which was not in the original MODEL).
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "x2" => [6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t; model y = x1; add x2; delete x1; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        let listing = session.listing.into_string();
+        // The fitted parameter table must list x2 (the edited regressor).
+        assert!(listing.contains("x2"), "{listing}");
+        assert!(
+            log.contains("ADD/DELETE statements were applied"),
+            "log: {log}"
+        );
+    }
+
+    #[test]
+    fn test_m3610_deferred_notes() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t; model y = x; reweight x > 3; refit; paint obs; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("REWEIGHT statement"), "log: {log}");
+        assert!(log.contains("REFIT statement"), "log: {log}");
+        assert!(log.contains("PAINT statement"), "log: {log}");
     }
 }

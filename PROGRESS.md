@@ -848,9 +848,17 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   NOINT+ridge → NOTE+skip ; trace → NOTE différée. Oracles : RIDGE=0=OLS, ‖b*(k)‖ décroissant, OUTVIF
   k=0=VIF ordinaire (2.92762, cohérent M36.4) et décroissant, PCOMIT=0=OLS / PCOMIT=p→0, parse de plage.
   Fixture m36/ridge_pcomit. 2582 lib tests, 0 warning, snapshots octet-identiques.
-- [ ] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
+- [x] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
   Wilks/Pillai/Hotelling-Lawley/Roy) ; statements interactifs run-group `ADD`/`DELETE`/`REWEIGHT`/
-  `REFIT`/`PAINT`/`VAR` — implémenter le faisable, erreur propre + doc pour le résiduel (Fable, très élevé)
+  `REFIT`/`PAINT`/`VAR` — implémenter le faisable, erreur propre + doc pour le résiduel (Fable → Opus, très élevé).
+  **FAIT** : MODEL multi-réponses (`dependents: Vec`, `dependent()` accesseur ; boucle d'impression par
+  réponse — mono-réponse octet-identique). `MTEST` : `E=Y'Y−Y'XB`, `H=(LB)'(L(X'X)⁻¹L')⁻¹(LB)`, valeurs
+  propres de E⁻¹H (Cholesky de E + Jacobi) → Wilks Π1/(1+λ), Pillai Σλ/(1+λ), Hotelling-Lawley Σλ, Roy λmax,
+  approximations F (Rao). Table « Multivariate Test: <label> ». Run-group : `VAR` (déclaration),
+  `ADD`/`DELETE` (appliqués au fit final, NOTE) ; `REWEIGHT`/`REFIT`/`PAINT` → NOTE différée propre.
+  Oracles : mono-réponse → F des 4 stats = F ANOVA ; identités HLT=Σλ/Pillai/Wilks/Roy ; eigen généralisés.
+  Fixture m36/mtest (F=15.67 df 2/16 ; R²(height|age)=0.6584=r² cohérent M36.8). 2591 lib tests, 0 warning,
+  snapshots octet-identiques.
 - [ ] M36.11 — graphiques `PLOTS=` (sous `--features graphics`) : panel de diagnostics REG complet
   (résidus vs prédits/régresseurs, QQ-plot, RStudent, leverage, Cook's D, fit plot avec bandes
   CLM/CLI) + `PLOT` statement traditionnel (Opus, moyen)
