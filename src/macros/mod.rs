@@ -111,6 +111,11 @@ pub struct MacroEngine {
     /// M19.2 — profondeur d'imbrication courante des `%include` (garde contre
     /// les inclusions cycliques). Plafonnée à `MAX_INCLUDE_DEPTH`.
     include_depth: usize,
+    /// M35.2 — registre minimal des `fileref` posés par le statement global
+    /// `FILENAME ref 'chemin';`. Clé = nom du fileref EN MAJUSCULES, valeur =
+    /// chemin déjà résolu (absolu ou relatif à la base). Consulté par
+    /// `%include fileref;` pour résoudre un fileref nu en chemin de fichier.
+    filerefs: std::collections::HashMap<String, std::path::PathBuf>,
     /// M19.2 — noms (MAJUSCULES) de macros dont la recherche autocall a déjà
     /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
     /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
@@ -176,6 +181,21 @@ impl MacroEngine {
     /// répertoires, dans l'ordre (premier trouvé gagne).
     pub fn set_sasautos_path(&mut self, path: Vec<std::path::PathBuf>) {
         self.sasautos_path = path;
+    }
+
+    /// M35.2 — enregistre un `fileref` (statement global `FILENAME ref 'chemin';`).
+    /// Le nom est stocké en MAJUSCULES (recherche insensible à la casse) ; le
+    /// chemin doit être DÉJÀ résolu (cf. `Session::resolve_path`). Un
+    /// ré-enregistrement écrase l'ancien chemin (dernier `FILENAME` gagne).
+    pub fn set_fileref(&mut self, name: &str, path: std::path::PathBuf) {
+        self.filerefs.insert(name.to_uppercase(), path);
+    }
+
+    /// M35.2 — chemin associé à un `fileref` (recherche insensible à la casse),
+    /// ou `None` si le fileref n'est pas enregistré. Consulté par
+    /// `%include fileref;`.
+    pub(super) fn fileref_path(&self, name: &str) -> Option<&std::path::PathBuf> {
+        self.filerefs.get(&name.to_uppercase())
     }
 
     /// M19.3 — active/désactive l'option de trace `MPRINT` (écho du code
@@ -1350,12 +1370,71 @@ mod macro_tests {
     }
 
     #[test]
-    fn include_fileref_form_unsupported_note() {
+    fn include_stdin_star_deferral_note() {
+        // M35.2 — `%include *;` (clavier/stdin) reste non supporté : note claire.
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include *; tail");
+        assert!(out.contains("keyboard/stdin"), "got: {out}");
+        assert!(out.contains("tail"), "got: {out}");
+    }
+
+    #[test]
+    fn include_unknown_bare_token_cannot_read() {
+        // M35.2 — un token nu qui n'est ni un fileref ni un fichier existant est
+        // traité comme un chemin → erreur "cannot read", le scan se poursuit.
         let dir = tempfile::tempdir().unwrap();
         let mut e = engine_in(dir.path());
         let out = e.expand_open_code("%include myref; tail");
-        assert!(out.contains("only quoted file paths"), "got: {out}");
+        assert!(out.contains("cannot read"), "got: {out}");
         assert!(out.contains("tail"), "got: {out}");
+    }
+
+    #[test]
+    fn include_via_fileref() {
+        // M35.2 — FILENAME enregistre un fileref ; `%include fileref;` inline le
+        // fichier visé (ici un %let dont l'effet est visible ensuite).
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "incref.sas", "%let x = 99;");
+        let mut e = engine_in(dir.path());
+        e.set_fileref("INC", p.clone());
+        let out = e.expand_open_code("%include inc; &x");
+        assert_eq!(out.trim(), "99");
+    }
+
+    #[test]
+    fn include_fileref_case_insensitive() {
+        // M35.2 — la recherche de fileref est insensible à la casse.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "incref2.sas", "%let y = ok;");
+        let mut e = engine_in(dir.path());
+        e.set_fileref("myref", p);
+        let out = e.expand_open_code("%include MYREF; &y");
+        assert_eq!(out.trim(), "ok");
+    }
+
+    #[test]
+    fn include_bare_relative_path() {
+        // M35.2 — un token nu non-fileref est résolu comme chemin relatif à la
+        // base d'inclusion.
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        write_file(&sub, "child.sas", "%let z = bare;");
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include sub/child.sas; &z");
+        assert_eq!(out.trim(), "bare");
+    }
+
+    #[test]
+    fn set_fileref_round_trip() {
+        // M35.2 — round-trip du registre fileref + insensibilité à la casse.
+        let mut e = MacroEngine::new(true);
+        let path = std::path::PathBuf::from("/tmp/some/where.sas");
+        e.set_fileref("Abc", path.clone());
+        assert_eq!(e.fileref_path("ABC"), Some(&path));
+        assert_eq!(e.fileref_path("abc"), Some(&path));
+        assert_eq!(e.fileref_path("nope"), None);
     }
 
     #[test]

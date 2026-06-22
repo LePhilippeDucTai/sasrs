@@ -700,8 +700,18 @@ directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language
   propcase=Hello World, mdy(7,4,1776),date9.=04JUL1776, sum(1000,234.5),dollar10.2=$1,234.50, fonction
   inconnue → ERROR. Fixture m35 (sysfunc_full) + snapshot. README Macro/Evaluation mis à jour. +N tests
   (2455 lib), 0 warning, snapshots macro octet-identiques.
-- [ ] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
-  résolution via `FILENAME` (Opus, moyen)
+- [x] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
+  résolution via `FILENAME` (Opus, moyen).
+  **FAIT** (décision utilisateur : implémenter FILENAME minimal) : nouveau statement global
+  `GlobalStmt::Filename` (`FILENAME ref 'chemin';` / `ref chemin;`) → registre `filerefs` sur le moteur
+  macro (`set_fileref`/`fileref_path`, clé MAJ, résolu via `resolve_path`) ; formes device/pipe/URL
+  notées et ignorées. `%include` : token nu → fileref enregistré sinon chemin (résolu contre
+  `include_base_dir`) ; `*`/vide → NOTE différé clavier/stdin ; chemin quoté inchangé. Caveat segment
+  documenté (FILENAME doit précéder le `%include` dans un segment antérieur). Vérifié : test exécuteur
+  bout-en-bout (`filename inc '<tmp>'; %include inc;` → `%let` inclus résolu) + tests unitaires
+  (fileref insensible à la casse, chemin relatif, stdin, ref inconnu). Fixture m35 (filename_include) +
+  snapshot (NOTE device, complétion propre). README `FILENAME` 🔴→🟡, `%INCLUDE` étoffé. 2465 lib tests,
+  0 warning, snapshots octet-identiques.
 - [ ] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
   restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen)
 - [ ] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS

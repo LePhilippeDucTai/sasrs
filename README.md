@@ -137,7 +137,7 @@ individual options of each procedure and DATA step statement. Legend:
 | Control flow | ✅ | `%IF/%THEN/%ELSE`, `%DO/%END`, `%DO i=a %TO b %BY c`, `%DO %WHILE`, `%DO %UNTIL` |
 | Evaluation | ✅ | `%EVAL`, `%SYSEVALF`, `%SYSFUNC`/`%QSYSFUNC` (full DATA step function library — no whitelist — with optional trailing `format.`) |
 | Quoting | 🟡 | `%STR`, `%NRSTR`, `%UNQUOTE`, `%CMPRES`, `%QCMPRES` (no `%SUPERQ`/`%BQUOTE`/`%NRBQUOTE`) |
-| Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
+| Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path, fileref via `FILENAME`, non-quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
 | Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR` |
 | Tracing | ✅ | `MPRINT`, `MLOGIC`, `SYMBOLGEN` |
 
@@ -172,8 +172,9 @@ individual options of each procedure and DATA step statement. Legend:
 | `OPTIONS` | 🟡 | `LINESIZE`/`LS=` applied; other options parsed with a "not yet supported" warning |
 | `TITLE` | 🟡 | `TITLE1`–`TITLE9` parsed (only `TITLE1` rendered in the listing) |
 | `ODS` | ✅ | see Output section |
-| `%INCLUDE` | 🟡 | quoted paths + autocall (no fileref / stdin form) |
-| `FILENAME`, `X` | 🔴 | not supported |
+| `%INCLUDE` | 🟡 | quoted paths, **filerefs** (via `FILENAME`), **non-quoted paths**, autocall (`SASAUTOS`); `*`/stdin deferred (NOTE) |
+| `FILENAME` | 🟡 | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device/pipe/URL forms noted & ignored |
+| `X` | 🔴 | not supported |
 
 > The coverage above reflects the current state of `main`; statistical modelling
 > procedures (`TTEST`, `NPAR1WAY`, and beyond) are the active milestones. See

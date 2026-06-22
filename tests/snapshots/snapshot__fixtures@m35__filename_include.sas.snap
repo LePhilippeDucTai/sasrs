@@ -1,0 +1,15 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m35/filename_include.sas
+---
+==== LOG ====
+step one
+step two
+
+1     filename scratch temp;
+NOTE: FILENAME device TEMP is not supported in this build; statement ignored.
+
+==== LISTING ====
+
+==== EXIT 0 ====

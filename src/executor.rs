@@ -214,6 +214,34 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             )),
             Err(e) => session.log.error(&e.to_string()),
         },
+        GlobalStmt::Filename { fileref, path, device } => {
+            // M35.2 — registre minimal fileref → chemin pour `%include fileref;`.
+            // La forme `FILENAME ref 'chemin';` (ou chemin nu) enregistre le
+            // chemin résolu (même base que %include/LIBNAME/SASAUTOS). Les
+            // formes device/options (`TEMP`, pipes, URL, …) sont acceptées mais
+            // ignorées (NOTE), car non supportées dans ce build.
+            //
+            // CAVEAT segment : un FILENAME ne devient visible pour un `%include`
+            // que si ce dernier est dans un SEGMENT/STATEMENT ULTÉRIEUR — chaque
+            // segment est expansé (où %include résout) puis exécuté avant le
+            // suivant ; le FILENAME registre son fileref à l'exécution de son
+            // propre segment.
+            match (path, device) {
+                (Some(p), _) => {
+                    let resolved = session.resolve_path(p);
+                    session.macro_engine.set_fileref(fileref, resolved);
+                }
+                (None, Some(dev)) => {
+                    session.log.note(&format!(
+                        "FILENAME device {} is not supported in this build; statement ignored.",
+                        dev
+                    ));
+                }
+                (None, None) => {
+                    // `FILENAME ref ;` dégénéré : no-op silencieux.
+                }
+            }
+        }
         GlobalStmt::Title { n, text } => {
             // M1 : seul TITLE1 est rendu par le listing ; les autres niveaux
             // sont acceptés sans effet.
@@ -578,6 +606,40 @@ mod tests {
         assert!(out.log.contains("PROCEDURE PRINT used (Total process time):"));
         assert!(out.listing.contains("Essai"), "{}", out.listing);
         assert!(out.listing.contains("Obs"));
+    }
+
+    #[test]
+    fn filename_then_include_via_executor() {
+        // M35.2 — `FILENAME inc '<tmp>'; %include inc;` enregistre le fileref
+        // dans un segment, puis un segment ULTÉRIEUR l'inclut. Le fichier inclus
+        // pose &n, utilisé par un DATA step. On vérifie l'effet observable.
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let inc = dir.path().join("inc.sas");
+        std::fs::File::create(&inc)
+            .unwrap()
+            .write_all(b"%let n = 7;")
+            .unwrap();
+        let src = format!(
+            "filename inc '{}';\n\
+             data a; run;\n\
+             %include inc;\n\
+             data b; x = &n; run;\n\
+             proc print data=b; run;\n",
+            inc.display()
+        );
+        let out = run(
+            &src,
+            RunOptions {
+                work_dir: None,
+                base_dir: Some(dir.path().to_path_buf()),
+                deterministic: true,
+                vectorize: false,
+            },
+        );
+        assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+        // &n a bien été résolu à 7 dans le DATA step b → x=7 dans le listing.
+        assert!(out.listing.contains('7'), "listing was:\n{}", out.listing);
     }
 
     #[test]
