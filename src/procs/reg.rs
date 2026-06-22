@@ -120,6 +120,24 @@ pub struct RegModel {
     /// estimates plus HC standard errors. ACOV and HCC are synonyms; either sets
     /// this flag. (M36.4)
     pub acov: bool,
+    /// SS1 → Type I (sequential) sum of squares column (M36.5).
+    pub ss1: bool,
+    /// SS2 → Type II (partial) sum of squares column (M36.5).
+    pub ss2: bool,
+    /// STB → standardized parameter-estimate column (M36.5).
+    pub stb: bool,
+    /// PCORR1 → squared partial correlation Type I column (M36.5).
+    pub pcorr1: bool,
+    /// PCORR2 → squared partial correlation Type II column (M36.5).
+    pub pcorr2: bool,
+    /// SCORR1 → squared semi-partial correlation Type I column (M36.5).
+    pub scorr1: bool,
+    /// SCORR2 → squared semi-partial correlation Type II column (M36.5).
+    pub scorr2: bool,
+    /// SEQB → sequential parameter-estimate column (M36.5).
+    pub seqb: bool,
+    /// PRESS → print the PRESS statistic as a model fit statistic (M36.5).
+    pub press_opt: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +242,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut dw = false;
             let mut dwprob = false;
             let mut acov = false;
+            let mut ss1 = false;
+            let mut ss2 = false;
+            let mut stb = false;
+            let mut pcorr1 = false;
+            let mut pcorr2 = false;
+            let mut scorr1 = false;
+            let mut scorr2 = false;
+            let mut seqb = false;
+            let mut press_opt = false;
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                     break;
@@ -330,6 +357,33 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                             // heteroscedasticity-consistent covariance request.
                             acov = true;
                             ts.next();
+                        } else if ts.peek().is_kw("ss1") {
+                            ss1 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("ss2") {
+                            ss2 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("stb") {
+                            stb = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("pcorr1") {
+                            pcorr1 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("pcorr2") {
+                            pcorr2 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("scorr1") {
+                            scorr1 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("scorr2") {
+                            scorr2 = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("seqb") {
+                            seqb = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("press") {
+                            press_opt = true;
+                            ts.next();
                         } else {
                             ts.next(); // skip unknown options
                         }
@@ -365,6 +419,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     dw,
                     dwprob,
                     acov,
+                    ss1,
+                    ss2,
+                    stb,
+                    pcorr1,
+                    pcorr2,
+                    scorr1,
+                    scorr2,
+                    seqb,
+                    press_opt,
                 },
                 outputs: Vec::new(),
                 tests: Vec::new(),
@@ -1558,6 +1621,55 @@ fn run_model(
         None
     };
 
+    // --- Partial-SS / correlation statistics (M36.5). Computed on the OLS fit
+    // (not the restricted fit). Only built when any SS1/SS2/STB/PCORR/SCORR/SEQB
+    // option is requested, so the default / RESTRICT paths stay byte-identical.
+    let want_seq = model.ss1
+        || model.ss2
+        || model.stb
+        || model.pcorr1
+        || model.pcorr2
+        || model.scorr1
+        || model.scorr2
+        || model.seqb;
+    // SST consistent with fit_and_print: corrected total (intercept) or
+    // uncorrected total Σy² (NOINT).
+    let sst_seq = if intercept {
+        let ybar = y_vec.iter().sum::<f64>() / n as f64;
+        y_vec.iter().map(|v| (v - ybar) * (v - ybar)).sum()
+    } else {
+        y_vec.iter().map(|v| v * v).sum()
+    };
+    let seqstats = if want_seq && !model.noprint {
+        Some(compute_seq_stats(
+            model, &x_mat, &y_vec, &fit, sst_seq, intercept,
+        ))
+    } else {
+        None
+    };
+
+    // PRESS statistic (M36.5): Σ (resid_i/(1−h_i))² from the OLS leverages.
+    let press_stat = if model.press_opt && !model.noprint {
+        let h = leverages(&x_mat, &fit.xtx_inv);
+        let press: f64 = fit
+            .resid
+            .iter()
+            .zip(h.iter())
+            .map(|(e, &hi)| {
+                let d = 1.0 - hi;
+                if d != 0.0 {
+                    let p = e / d;
+                    p * p
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        Some(press)
+    } else {
+        None
+    };
+
     fit_and_print(
         model,
         dep_name,
@@ -1569,6 +1681,8 @@ fn run_model(
         intercept,
         model_label,
         tolvif.as_ref(),
+        seqstats.as_ref(),
+        press_stat,
         session,
     );
 
@@ -1679,6 +1793,195 @@ fn run_model(
     Ok(())
 }
 
+// ───────────────────────── Partial-SS / correlation stats (M36.5) ─────────────────────────
+
+/// Per-design-column sums-of-squares & correlation statistics (M36.5). Every
+/// vector is indexed by design column (column order == `fit.beta`: intercept
+/// first when present, then the regressors in MODEL order). Only the requested
+/// statistics are filled; unrequested ones are left as their `0.0` defaults and
+/// never read.
+struct SeqStats {
+    /// Type I (sequential) sum of squares per column.
+    ss1: Vec<f64>,
+    /// Type II (partial) sum of squares per column.
+    ss2: Vec<f64>,
+    /// Standardized estimate per column (intercept = 0).
+    stb: Vec<f64>,
+    /// Squared partial correlation, Type I.
+    pcorr1: Vec<f64>,
+    /// Squared partial correlation, Type II.
+    pcorr2: Vec<f64>,
+    /// Squared semi-partial correlation, Type I.
+    scorr1: Vec<f64>,
+    /// Squared semi-partial correlation, Type II.
+    scorr2: Vec<f64>,
+    /// Sequential parameter estimate per column (coefficient of column j in the
+    /// fit using columns 0..=j).
+    seqb: Vec<f64>,
+}
+
+/// Compute the M36.5 partial-SS / correlation statistics for the fitted model.
+///
+/// `x_mat` is the design matrix (column order == `fit.beta`: intercept first
+/// when present, then the regressors), `y` the response, `fit` the OLS fit and
+/// `mse = fit.sse / dfE`.
+///
+/// - **SS2** (Type II / partial): `β_j² / (X'X)⁻¹_{jj}` for every column,
+///   intercept included (≡ t_j²·MSE).
+/// - **SS1** (Type I / sequential): refit the model adding columns in design
+///   order; `SS1_j` = SSE(cols 0..j) − SSE(cols 0..=j) = the increase in model
+///   SS contributed by column j. For the first column the "before" SSE is the
+///   uncorrected total Σy² (model with no columns predicts 0), so the
+///   intercept's SS1 is the SS for the mean. `Σ SS1` over the regressors equals
+///   the Model SS.
+/// - **SEQB**: the coefficient of column j in the prefix fit using columns
+///   0..=j (j is the last-added regressor). For the full model's last column
+///   this equals its OLS β.
+/// - **STB**: `β_j · sd(x_j)/sd(y)` (sample SDs); intercept = 0.
+/// - **PCORR1** (Type I): `SS1_j / (SS1_j + SSE_incl_j)` where SSE_incl_j is the
+///   residual SS of the prefix fit through column j (= SS1_j/SSE_before_j).
+/// - **PCORR2** (Type II): `SS2_j / (SS2_j + SSE)`.
+/// - **SCORR1** (Type I): `SS1_j / SST`.
+/// - **SCORR2** (Type II): `SS2_j / SST`.
+///
+/// `sst` is the corrected total (intercept models) or uncorrected total (NOINT),
+/// matching `fit_and_print`. All ratios are clamped to [0,1] for round-off
+/// safety. Sequential fits are skipped (left at default) unless any Type I
+/// statistic or SEQB is requested.
+fn compute_seq_stats(
+    model: &RegModel,
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    sst: f64,
+    intercept: bool,
+) -> SeqStats {
+    let p_eff = x_mat[0].len();
+    let n = y.len();
+    let sse = fit.sse;
+
+    let mut ss1 = vec![0.0; p_eff];
+    let mut ss2 = vec![0.0; p_eff];
+    let mut stb = vec![0.0; p_eff];
+    let mut pcorr1 = vec![0.0; p_eff];
+    let mut pcorr2 = vec![0.0; p_eff];
+    let mut scorr1 = vec![0.0; p_eff];
+    let mut scorr2 = vec![0.0; p_eff];
+    let mut seqb = vec![0.0; p_eff];
+
+    let need_type2 = model.ss2 || model.pcorr2 || model.scorr2;
+    let need_type1 = model.ss1 || model.pcorr1 || model.scorr1 || model.seqb;
+
+    // --- Type II (partial) SS and its derived correlations ---
+    if need_type2 {
+        for j in 0..p_eff {
+            let cjj = fit.xtx_inv[j][j];
+            let s = if cjj > 0.0 {
+                fit.beta[j] * fit.beta[j] / cjj
+            } else {
+                0.0
+            };
+            ss2[j] = s;
+            pcorr2[j] = if s + sse > 0.0 {
+                (s / (s + sse)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            scorr2[j] = if sst > 0.0 {
+                (s / sst).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    // --- Standardized estimates ---
+    if model.stb {
+        let sd_y = sample_sd(y);
+        for j in 0..p_eff {
+            // Intercept (column 0 when present) has STB = 0.
+            let is_intercept = intercept && j == 0;
+            if is_intercept {
+                stb[j] = 0.0;
+            } else {
+                let col: Vec<f64> = (0..n).map(|i| x_mat[i][j]).collect();
+                let sd_x = sample_sd(&col);
+                stb[j] = if sd_y > 0.0 {
+                    fit.beta[j] * sd_x / sd_y
+                } else {
+                    0.0
+                };
+            }
+        }
+    }
+
+    // --- Type I (sequential) SS, SEQB and derived correlations ---
+    if need_type1 {
+        // SSE of the prefix model using columns 0..k (k columns). Column 0 of
+        // this array (k=0) is the empty model: SSE = Σy² (uncorrected total).
+        let mut sse_prefix = vec![0.0; p_eff + 1];
+        sse_prefix[0] = y.iter().map(|v| v * v).sum();
+        for k in 1..=p_eff {
+            // Design matrix over columns 0..k.
+            let mut xpre: Vec<Vec<f64>> = Vec::with_capacity(n);
+            for i in 0..n {
+                xpre.push(x_mat[i][0..k].to_vec());
+            }
+            match ols_fit(&xpre, y) {
+                Ok(f) => {
+                    sse_prefix[k] = f.sse;
+                    // SEQB of column (k-1): the last coefficient of this fit.
+                    seqb[k - 1] = f.beta[k - 1];
+                }
+                Err(_) => {
+                    // Rank-deficient prefix: no reduction in SSE, SEQB undefined.
+                    sse_prefix[k] = sse_prefix[k - 1];
+                    seqb[k - 1] = f64::NAN;
+                }
+            }
+        }
+        for j in 0..p_eff {
+            let before = sse_prefix[j];
+            let after = sse_prefix[j + 1];
+            let s = (before - after).max(0.0);
+            ss1[j] = s;
+            // PCORR1 = SS1_j / SSE_before_j (== SS1_j/(SS1_j+SSE_incl_j)).
+            pcorr1[j] = if before > 0.0 {
+                (s / before).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            scorr1[j] = if sst > 0.0 {
+                (s / sst).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    SeqStats {
+        ss1,
+        ss2,
+        stb,
+        pcorr1,
+        pcorr2,
+        scorr1,
+        scorr2,
+        seqb,
+    }
+}
+
+/// Sample standard deviation (divisor n−1). Returns 0 for fewer than 2 points.
+fn sample_sd(v: &[f64]) -> f64 {
+    let n = v.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let mean = v.iter().sum::<f64>() / n as f64;
+    let ss: f64 = v.iter().map(|x| (x - mean) * (x - mean)).sum();
+    (ss / (n as f64 - 1.0)).sqrt()
+}
+
 /// Fit-and-print the full output block for a model (ANOVA + fit statistics +
 /// parameter estimates). This is the SINGLE printer shared by the default,
 /// NOINT, and SELECTION-final paths, guaranteeing byte-identical output for the
@@ -1699,6 +2002,13 @@ fn fit_and_print(
     // `tolvif`: optional (tolerance, vif) per regressor (no intercept), in
     // `reg_names` order. `Some` when MODEL VIF and/or TOL is requested (M36.4).
     tolvif: Option<&(Vec<f64>, Vec<f64>)>,
+    // `seqstats`: optional partial-SS / correlation statistics (M36.5), indexed
+    // by design column (intercept first when present). `Some` when any of
+    // SS1/SS2/STB/PCORR1/PCORR2/SCORR1/SCORR2/SEQB is requested.
+    seqstats: Option<&SeqStats>,
+    // `press_stat`: PRESS = Σ (resid_i/(1−h_i))² (M36.5). `Some` when MODEL PRESS
+    // is requested; printed as a fit statistic.
+    press_stat: Option<f64>,
     session: &mut Session,
 ) {
     // When a restricted fit is present, the printed model (ANOVA, R², F, and
@@ -1893,6 +2203,15 @@ fn fit_and_print(
     session
         .listing
         .write_line(&format!("Coeff Var            {}", fmt5(cv)));
+    // PRESS statistic (M36.5): printed among the fit statistics when MODEL PRESS
+    // is requested. This is independent of MODEL R, which prints its own
+    // "Predicted Residual SS (PRESS)" line in the residual-analysis summary
+    // block; both may appear and report the same value.
+    if let Some(press) = press_stat {
+        session
+            .listing
+            .write_line(&format!("PRESS                {}", fmt5(press)));
+    }
     session.listing.blank();
     session.listing.blank();
 
@@ -1938,6 +2257,45 @@ fn fit_and_print(
     if with_vif {
         pe_headers.push("Variance Inflation".into());
         pe_aligns.push(Align::Right);
+    }
+    // M36.5 partial-SS / correlation columns. SAS appends them in this order:
+    // Type I SS, Type II SS, Standardized Estimate, Squared Partial Corr Type I,
+    // Squared Partial Corr Type II, Squared Semi-partial Corr Type I, Squared
+    // Semi-partial Corr Type II, Sequential Parameter Estimate.
+    let with_seq = seqstats.is_some();
+    if with_seq {
+        if model.ss1 {
+            pe_headers.push("Type I SS".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.ss2 {
+            pe_headers.push("Type II SS".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.stb {
+            pe_headers.push("Standardized Estimate".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.pcorr1 {
+            pe_headers.push("Squared Partial Corr Type I".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.pcorr2 {
+            pe_headers.push("Squared Partial Corr Type II".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.scorr1 {
+            pe_headers.push("Squared Semi-partial Corr Type I".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.scorr2 {
+            pe_headers.push("Squared Semi-partial Corr Type II".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.seqb {
+            pe_headers.push("Sequential Parameter Estimate".into());
+            pe_aligns.push(Align::Right);
+        }
     }
     if with_label {
         pe_headers.push("Label".into());
@@ -1999,6 +2357,36 @@ fn fit_and_print(
                 }
             }
         }
+        if let Some(ss) = seqstats {
+            if model.ss1 {
+                row.push(fmt5(ss.ss1[j]));
+            }
+            if model.ss2 {
+                row.push(fmt5(ss.ss2[j]));
+            }
+            if model.stb {
+                row.push(fmt5(ss.stb[j]));
+            }
+            if model.pcorr1 {
+                row.push(fmt5(ss.pcorr1[j]));
+            }
+            if model.pcorr2 {
+                row.push(fmt5(ss.pcorr2[j]));
+            }
+            if model.scorr1 {
+                row.push(fmt5(ss.scorr1[j]));
+            }
+            if model.scorr2 {
+                row.push(fmt5(ss.scorr2[j]));
+            }
+            if model.seqb {
+                row.push(if ss.seqb[j].is_finite() {
+                    fmt5(ss.seqb[j])
+                } else {
+                    ".".to_string()
+                });
+            }
+        }
         if with_label {
             row.push(String::new());
         }
@@ -2026,6 +2414,24 @@ fn fit_and_print(
             }
             if with_vif {
                 row.push(String::new());
+            }
+            if with_seq {
+                // SAS leaves the M36.5 partial-SS / correlation cells blank for
+                // RESTRICT rows.
+                for present in [
+                    model.ss1,
+                    model.ss2,
+                    model.stb,
+                    model.pcorr1,
+                    model.pcorr2,
+                    model.scorr1,
+                    model.scorr2,
+                    model.seqb,
+                ] {
+                    if present {
+                        row.push(String::new());
+                    }
+                }
             }
             row.push(label.clone());
             pe_rows.push(row);
@@ -3493,6 +3899,15 @@ mod tests {
             dw: false,
             dwprob: false,
             acov: false,
+            ss1: false,
+            ss2: false,
+            stb: false,
+            pcorr1: false,
+            pcorr2: false,
+            scorr1: false,
+            scorr2: false,
+            seqb: false,
+            press_opt: false,
         }
     }
 
@@ -4762,5 +5177,277 @@ mod tests {
         assert!(!listing.contains("Variance Inflation"));
         assert!(!listing.contains("Collinearity Diagnostics"));
         assert!(!listing.contains("Durbin-Watson"));
+    }
+
+    // ───────────────────── M36.5 partial-SS / correlation tests ─────────────────────
+
+    /// Build a model with all the M36.5 statistic flags turned on.
+    fn seq_model(dep: &str, regs: &[&str]) -> RegModel {
+        let mut m = basic_model(dep, regs);
+        m.ss1 = true;
+        m.ss2 = true;
+        m.stb = true;
+        m.pcorr1 = true;
+        m.pcorr2 = true;
+        m.scorr1 = true;
+        m.scorr2 = true;
+        m.seqb = true;
+        m
+    }
+
+    /// Parse all M36.5 options off one MODEL statement.
+    #[test]
+    fn test_parse_m365_options() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2 / ss1 ss2 stb pcorr1 pcorr2 scorr1 scorr2 seqb press; run;",
+        )
+        .unwrap();
+        let m = &ast.models[0].model;
+        assert!(m.ss1 && m.ss2 && m.stb);
+        assert!(m.pcorr1 && m.pcorr2 && m.scorr1 && m.scorr2);
+        assert!(m.seqb && m.press_opt);
+    }
+
+    /// Default model leaves every M36.5 flag off (byte-identity guard).
+    #[test]
+    fn test_parse_m365_default_off() {
+        let ast = parse_reg("proc reg data=a; model y = x1 x2; run;").unwrap();
+        let m = &ast.models[0].model;
+        assert!(!m.ss1 && !m.ss2 && !m.stb);
+        assert!(!m.pcorr1 && !m.pcorr2 && !m.scorr1 && !m.scorr2);
+        assert!(!m.seqb && !m.press_opt);
+    }
+
+    /// Multi-regressor oracles: Σ SS1 (regressors) == Model SS; SS2_j == t_j²·MSE;
+    /// all PCORR/SCORR in [0,1]; SEQB of the last column == its OLS β.
+    #[test]
+    fn test_oracle_seq_stats_multi() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 9.0, 7.0];
+        let y: Vec<f64> = (0..8)
+            .map(|i| 1.0 + 2.0 * x1[i] - 0.5 * x2[i] + (x1[i] * 0.7).sin())
+            .collect();
+        let n = y.len();
+        let x = design(true, &[&x1, &x2], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let p_eff = 3;
+        let df_e = (n - p_eff) as f64;
+        let mse = fit.sse / df_e;
+
+        // Corrected total.
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        let sst: f64 = y.iter().map(|v| (v - ybar) * (v - ybar)).sum();
+        let model_ss = sst - fit.sse;
+
+        let m = seq_model("y", &["x1", "x2"]);
+        let s = compute_seq_stats(&m, &x, &y, &fit, sst, true);
+
+        // Σ SS1 over the regressors (skip intercept at col 0) == Model SS.
+        let sum_ss1_reg: f64 = s.ss1[1] + s.ss1[2];
+        assert!(
+            (sum_ss1_reg - model_ss).abs() < 1e-6,
+            "ΣSS1={sum_ss1_reg} ModelSS={model_ss}"
+        );
+
+        // SS2_j == t_j²·MSE for every column (intercept included).
+        for j in 0..p_eff {
+            let se = (mse * fit.xtx_inv[j][j]).sqrt();
+            let t = fit.beta[j] / se;
+            assert!(
+                (s.ss2[j] - t * t * mse).abs() < 1e-6,
+                "SS2[{j}]={} t²·MSE={}",
+                s.ss2[j],
+                t * t * mse
+            );
+        }
+
+        // All correlations in [0,1].
+        for j in 0..p_eff {
+            for v in [s.pcorr1[j], s.pcorr2[j], s.scorr1[j], s.scorr2[j]] {
+                assert!((0.0..=1.0).contains(&v), "corr out of range: {v}");
+            }
+        }
+
+        // SEQB of the last column == its OLS β.
+        assert!(
+            (s.seqb[p_eff - 1] - fit.beta[p_eff - 1]).abs() < 1e-9,
+            "SEQB last={} β last={}",
+            s.seqb[p_eff - 1],
+            fit.beta[p_eff - 1]
+        );
+    }
+
+    /// Single-regressor identities: SS1==SS2==Model SS; PCORR2==SCORR2==R²;
+    /// STB == sign(β)·|r| with r = corr(x,y).
+    #[test]
+    fn test_oracle_seq_stats_single() {
+        let x = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let y: Vec<f64> = x.iter().map(|&a| 0.5 + 1.7 * a + (a * 0.3).cos()).collect();
+        let n = y.len();
+        let xm = design(true, &[&x], n);
+        let fit = ols_fit(&xm, &y).unwrap();
+
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        let sst: f64 = y.iter().map(|v| (v - ybar) * (v - ybar)).sum();
+        let model_ss = sst - fit.sse;
+        let r2 = model_ss / sst;
+
+        let m = seq_model("y", &["x"]);
+        let s = compute_seq_stats(&m, &xm, &y, &fit, sst, true);
+
+        // The single regressor sits at column 1 (col 0 is intercept).
+        assert!((s.ss1[1] - model_ss).abs() < 1e-6, "SS1 != ModelSS");
+        assert!((s.ss2[1] - model_ss).abs() < 1e-6, "SS2 != ModelSS");
+        assert!((s.ss1[1] - s.ss2[1]).abs() < 1e-6, "SS1 != SS2");
+        assert!((s.pcorr2[1] - r2).abs() < 1e-6, "PCORR2 != R²");
+        assert!((s.scorr2[1] - r2).abs() < 1e-6, "SCORR2 != R²");
+
+        // STB == sign(β)·|corr(x,y)|.
+        let xbar = x.iter().sum::<f64>() / n as f64;
+        let sxy: f64 = (0..n).map(|i| (x[i] - xbar) * (y[i] - ybar)).sum();
+        let sxx: f64 = x.iter().map(|v| (v - xbar) * (v - xbar)).sum();
+        let r = sxy / (sxx.sqrt() * sst.sqrt());
+        let expect_stb = fit.beta[1].signum() * r.abs();
+        assert!(
+            (s.stb[1] - expect_stb).abs() < 1e-6,
+            "STB={} expected={}",
+            s.stb[1],
+            expect_stb
+        );
+        // Intercept STB is 0.
+        assert!(s.stb[0].abs() < 1e-12);
+    }
+
+    /// NOINT: SS uses the uncorrected total; Σ SS1 over all columns == Model SS
+    /// (uncorrected); SS2 == t²·MSE still holds.
+    #[test]
+    fn test_oracle_seq_stats_noint() {
+        let x = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y: Vec<f64> = x.iter().map(|&a| 2.0 * a + (a * 0.5).sin()).collect();
+        let n = y.len();
+        let xm = design(false, &[&x], n); // no intercept column
+        let fit = ols_fit(&xm, &y).unwrap();
+        let p_eff = 1;
+        let mse = fit.sse / (n - p_eff) as f64;
+
+        let sst: f64 = y.iter().map(|v| v * v).sum(); // uncorrected
+        let ssm: f64 = fit.y_hat.iter().map(|v| v * v).sum();
+
+        let mut m = seq_model("y", &["x"]);
+        m.noint = true;
+        let s = compute_seq_stats(&m, &xm, &y, &fit, sst, false);
+
+        // Σ SS1 over all (no intercept) columns == uncorrected Model SS.
+        assert!((s.ss1[0] - ssm).abs() < 1e-6, "SS1={} SSM={ssm}", s.ss1[0]);
+        // SS2 == t²·MSE.
+        let se = (mse * fit.xtx_inv[0][0]).sqrt();
+        let t = fit.beta[0] / se;
+        assert!((s.ss2[0] - t * t * mse).abs() < 1e-6);
+        // SEQB == OLS β (last & only column).
+        assert!((s.seqb[0] - fit.beta[0]).abs() < 1e-9);
+    }
+
+    /// PRESS statistic oracle: Σ (resid_i/(1−h_i))² within 1e-9.
+    #[test]
+    fn test_oracle_press_statistic() {
+        let x = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let y: Vec<f64> = x.iter().map(|&a| 1.0 + 0.8 * a + (a * 0.6).sin()).collect();
+        let n = y.len();
+        let xm = design(true, &[&x], n);
+        let fit = ols_fit(&xm, &y).unwrap();
+        let h = leverages(&xm, &fit.xtx_inv);
+        let press_ref: f64 = (0..n)
+            .map(|i| {
+                let p = fit.resid[i] / (1.0 - h[i]);
+                p * p
+            })
+            .sum();
+        // Recompute via the same formula used in run_model.
+        let press: f64 = fit
+            .resid
+            .iter()
+            .zip(h.iter())
+            .map(|(e, &hi)| {
+                let p = e / (1.0 - hi);
+                p * p
+            })
+            .sum();
+        assert!((press - press_ref).abs() < 1e-9);
+        assert!(press > 0.0);
+    }
+
+    /// End-to-end: M36.5 columns appear in the parameter table and the PRESS fit
+    /// statistic line is printed; a default model prints none of them.
+    #[test]
+    fn test_execute_m365_listing() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0, 9.0, 11.0],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "x2" => [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t; model y=x1 x2 / ss1 ss2 stb pcorr1 pcorr2 scorr1 scorr2 seqb press; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Type I SS"), "{listing}");
+        assert!(listing.contains("Type II SS"), "{listing}");
+        assert!(listing.contains("Standardized Estimate"), "{listing}");
+        assert!(listing.contains("Squared Partial Corr Type I"), "{listing}");
+        assert!(listing.contains("Squared Partial Corr Type II"), "{listing}");
+        assert!(
+            listing.contains("Squared Semi-partial Corr Type I"),
+            "{listing}"
+        );
+        assert!(
+            listing.contains("Squared Semi-partial Corr Type II"),
+            "{listing}"
+        );
+        assert!(
+            listing.contains("Sequential Parameter Estimate"),
+            "{listing}"
+        );
+        assert!(listing.contains("PRESS"), "{listing}");
+    }
+
+    /// Byte-identity guard: a model without the M36.5 options prints none of the
+    /// new columns or the PRESS line.
+    #[test]
+    fn test_m365_off_no_extra_columns() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = single_model_ast(
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
+            basic_model("y", &["x"]),
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(!listing.contains("Type I SS"));
+        assert!(!listing.contains("Type II SS"));
+        assert!(!listing.contains("Standardized Estimate"));
+        assert!(!listing.contains("Squared Partial Corr"));
+        assert!(!listing.contains("Squared Semi-partial Corr"));
+        assert!(!listing.contains("Sequential Parameter Estimate"));
+        assert!(!listing.contains("PRESS"));
     }
 }

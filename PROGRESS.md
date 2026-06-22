@@ -794,9 +794,16 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   ACOV : HC0 `(X'X)⁻¹(Σe²xxᵀ)(X'X)⁻¹` → matrice + table SE hétéroscédasticité-consistantes (ajoutée, OLS
   intacte). Oracles : `VIF·TOL=1`, proportions=1/colonne, `0≤d≤4`, HC symétrique. Fixture m36/collin_spec
   (VIF 2.92762, CI 45.81, SPEC df=5 χ²8.33, DW 1.935). 2530 lib tests, 0 warning, snapshots octet-identiques.
-- [ ] M36.5 — SS partielles & corrélations : MODEL `SS1`/`SS2` (Type I/II SS des estimations),
+- [x] M36.5 — SS partielles & corrélations : MODEL `SS1`/`SS2` (Type I/II SS des estimations),
   `STB` (coefficients standardisés), `PCORR1`/`PCORR2` (corrélations partielles²), `SCORR1`/`SCORR2`
-  (semi-partielles²), `SEQB` (estimations séquentielles), option `PRESS` (Opus, moyen)
+  (semi-partielles²), `SEQB` (estimations séquentielles), option `PRESS` (Opus, moyen).
+  **FAIT** : flags `ss1/ss2/stb/pcorr1/pcorr2/scorr1/scorr2/seqb/press_opt` → colonnes additionnelles dans
+  la table des estimations (`compute_seq_stats`). SS2=β²/(X'X)⁻¹_jj=t²·MSE ; SS1 par refits préfixes
+  (`SSE_prefix[j]−SSE_prefix[j+1]`, ΣSS1=Model SS) ; STB=β·sd(x)/sd(y) ; PCORR2=SS2/(SS2+SSE) ;
+  SCORR2=SS2/SST ; SEQB=dernier coef du fit préfixe (dernier régresseur=β OLS) ; PRESS=Σ(e/(1−h))² (ligne
+  dans le bloc de stats). Oracles : ΣSS1=Model SS, SS2=t²·MSE, single-reg SS1=SS2=Model SS / STB=sign(β)|r|,
+  SEQB(dernier)=β. Cohérence croisée : SS2(age)=22.388=numérateur du TEST age=0 (M36.1). Fixture
+  m36/partial_ss. 2538 lib tests, 0 warning, snapshots octet-identiques.
 - [ ] M36.6 — Sélection avancée : `SELECTION=RSQUARE|ADJRSQ|CP(Mallows)|MAXR|MINR|NONE` + options
   `BEST= INCLUDE= START= STOP= GROUPNAMES= DETAILS STB` (table de tous les modèles, C(p), critères)
   (Fable, élevé)
