@@ -750,10 +750,18 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
 `DATA=`, MODEL multiples, `NOINT`, `NOPRINT`, `SELECTION=FORWARD/BACKWARD/STEPWISE` (+SLE/SLS),
 `OUTPUT OUT= PREDICTED=/RESIDUAL=`, ANOVA/R²/Adj/F/t, diagnostic résidus-vs-prédits ODS.
 
-- [ ] M36.1 — `TEST` statement (tests d'hypothèses linéaires sur β : `TEST x1=x2, x3=0;` → table
+- [x] M36.1 — `TEST` statement (tests d'hypothèses linéaires sur β : `TEST x1=x2, x3=0;` → table
   « Test N Results for Dependent Variable », F num/den df, Pr>F) + `RESTRICT` statement (restrictions
   d'égalité linéaires sur β, ré-estimation contrainte par moindres carrés + ligne RESTRICT/Lagrange)
-  (Opus, élevé)
+  (Opus, élevé).
+  **FAIT** : `RegModelEntry.tests`/`.restricts` ; `LinEq` (Σ coef·var = rhs, `INTERCEPT` réservé). TEST :
+  L/c → `F=(diffᵀ M⁻¹ diff / q)/MSE`, `M=L·H·Lᵀ`, Pr>F via `stat::f_cdf` ; en-tête « Test <nom> Results
+  for Dependent Variable <dep> » (ordinal nu si non labellé, label `nom:` sinon). RESTRICT : LS contraint
+  `λ=(LHLᵀ)⁻¹(Lβ−c)`, `β_r=β−HLᵀλ`, `SSE_r`/`df_r=(n−p)+q`, SE via `Var(β_r)`/`Var(λ)` ; ANOVA/R²/F/table
+  ré-estimés contraints + lignes RESTRICT (DF=-1, estimation=λ, label expression). TEST après RESTRICT
+  opère sur l'ajustement contraint. Oracles auto-cohérents vérifiés : `TEST age=0` ⇒ Pr>F=0.6865 = Pr>|t|
+  de age ; `RESTRICT age=height` ⇒ age=height=3.11908 exact, Error DF 16→17. Fixture m36/test_restrict.
+  Chemin OLS par défaut octet-identique. 2501 lib tests, 0 warning.
 - [ ] M36.2 — Intervalles de confiance/prédiction : MODEL `CLB` (CI des estimations), `ALPHA=`,
   `CLI`/`CLM` (limites individu/moyenne dans le listing) + mots-clés `OUTPUT` `STDP STDI STDR
   LCL UCL LCLM UCLM` (Opus, moyen)

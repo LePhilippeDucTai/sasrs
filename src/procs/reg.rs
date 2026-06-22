@@ -43,6 +43,37 @@ pub struct RegAst {
 pub struct RegModelEntry {
     pub model: RegModel,
     pub outputs: Vec<RegOutput>,
+    /// TEST statements that followed this MODEL (M36.1).
+    pub tests: Vec<RegTest>,
+    /// RESTRICT statements that followed this MODEL (M36.1).
+    pub restricts: Vec<RegRestrict>,
+}
+
+/// A linear equation over regressor names (and the keyword `INTERCEPT`),
+/// normalised so that every term is moved to the left-hand side:
+///   Σ coef_i · var_i = rhs
+/// where `var_i` is an uppercased regressor name (or the literal `"INTERCEPT"`)
+/// and `rhs` is the net constant after moving variables left / constants right.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinEq {
+    /// (coefficient, uppercased variable name). The intercept maps to the
+    /// reserved name `"INTERCEPT"`.
+    pub terms: Vec<(f64, String)>,
+    /// The net constant on the right-hand side.
+    pub rhs: f64,
+}
+
+/// A `[label:] TEST eq [, eq ...];` statement (M36.1).
+#[derive(Debug, Clone)]
+pub struct RegTest {
+    pub label: Option<String>,
+    pub equations: Vec<LinEq>,
+}
+
+/// A `RESTRICT eq [, eq ...];` statement (M36.1).
+#[derive(Debug, Clone)]
+pub struct RegRestrict {
+    pub equations: Vec<LinEq>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +243,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     selection,
                 },
                 outputs: Vec::new(),
+                tests: Vec::new(),
+                restricts: Vec::new(),
             });
             Ok(true)
         } else if kw == "output" {
@@ -261,6 +294,39 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             ts.skip_to_semi();
             plots_requested = true;
             Ok(true)
+        } else if kw == "test" {
+            // `TEST eq [, eq ...];` (unlabeled form — a leading `label:` is
+            // handled by the catch-all branch below, which rewrites the kw).
+            ts.next(); // consume "test"
+            let equations = parse_lin_eqs(ts)?;
+            ts.expect_semi()?;
+            if let Some(entry) = models.last_mut() {
+                entry.tests.push(RegTest {
+                    label: None,
+                    equations,
+                });
+            }
+            Ok(true)
+        } else if kw == "restrict" {
+            ts.next(); // consume "restrict"
+            let equations = parse_lin_eqs(ts)?;
+            ts.expect_semi()?;
+            if let Some(entry) = models.last_mut() {
+                entry.restricts.push(RegRestrict { equations });
+            }
+            Ok(true)
+        } else if ts.peek2().kind == TokenKind::Colon && ts.peek_nth(2).is_kw("test") {
+            // `label: TEST eq [, eq ...];` — the leading identifier is a label.
+            let label = ts.peek().ident().map(str::to_string);
+            ts.next(); // label ident
+            ts.next(); // ':'
+            ts.next(); // 'test'
+            let equations = parse_lin_eqs(ts)?;
+            ts.expect_semi()?;
+            if let Some(entry) = models.last_mut() {
+                entry.tests.push(RegTest { label, equations });
+            }
+            Ok(true)
         } else {
             Ok(false)
         }
@@ -284,6 +350,118 @@ fn read_float(ts: &mut StatementStream) -> Result<f64> {
         }
         _ => Err(SasError::parse("expected numeric value", ts.peek().span)),
     }
+}
+
+// ───────────────────────── Linear-equation parsing (M36.1) ─────────────────────────
+
+/// Parse a comma-separated list of linear equations (`eq [, eq ...]`),
+/// stopping at the terminating `;`.
+fn parse_lin_eqs(ts: &mut StatementStream) -> Result<Vec<LinEq>> {
+    let mut eqs = Vec::new();
+    loop {
+        eqs.push(parse_lin_eq(ts)?);
+        if ts.peek().kind == TokenKind::Comma {
+            ts.next();
+            continue;
+        }
+        break;
+    }
+    Ok(eqs)
+}
+
+/// Parse one linear equation `lhs = rhs` and normalise it so every variable
+/// term sits on the left and the net constant on the right:
+/// Σ coef·var = rhs. Variable names are uppercased; `INTERCEPT` is preserved
+/// as the reserved name `"INTERCEPT"`.
+fn parse_lin_eq(ts: &mut StatementStream) -> Result<LinEq> {
+    // Left side: accumulate terms with their natural sign.
+    let mut terms: Vec<(f64, String)> = Vec::new();
+    let mut rhs = 0.0; // net constant: starts on the LHS (subtracted later).
+    let mut lhs_const = 0.0;
+    parse_lin_side(ts, 1.0, &mut terms, &mut lhs_const)?;
+
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            "expected '=' in TEST/RESTRICT equation",
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // '='
+
+    // Right side: variables flip sign (move to LHS), constants stay on RHS.
+    let mut rhs_terms: Vec<(f64, String)> = Vec::new();
+    let mut rhs_const = 0.0;
+    parse_lin_side(ts, 1.0, &mut rhs_terms, &mut rhs_const)?;
+    for (c, v) in rhs_terms {
+        terms.push((-c, v));
+    }
+    // Net constant = rhs_const - lhs_const.
+    rhs += rhs_const - lhs_const;
+
+    // Merge duplicate variables.
+    let mut merged: Vec<(f64, String)> = Vec::new();
+    for (c, v) in terms {
+        if let Some(e) = merged.iter_mut().find(|(_, name)| *name == v) {
+            e.0 += c;
+        } else {
+            merged.push((c, v));
+        }
+    }
+    Ok(LinEq { terms: merged, rhs })
+}
+
+/// Parse one side of an equation: a sum of signed terms up to `=`, `,` or `;`.
+/// Variable terms are pushed into `terms` (scaled by `sign`); bare constants
+/// accumulate into `konst`.
+fn parse_lin_side(
+    ts: &mut StatementStream,
+    sign: f64,
+    terms: &mut Vec<(f64, String)>,
+    konst: &mut f64,
+) -> Result<()> {
+    let mut pending = sign; // sign accumulated from a run of leading +/-.
+    loop {
+        match ts.peek().kind {
+            TokenKind::Eq | TokenKind::Comma | TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::Plus => {
+                ts.next();
+                continue;
+            }
+            TokenKind::Minus => {
+                pending = -pending;
+                ts.next();
+                continue;
+            }
+            _ => {}
+        }
+        // A term: optional numeric coefficient, optional `*`, then a name; or a
+        // bare constant; or a bare name (coef 1).
+        let mut coef = pending;
+        let mut have_num = false;
+        if let TokenKind::Num(v) = ts.peek().kind {
+            coef = pending * v;
+            have_num = true;
+            ts.next();
+            if ts.peek().kind == TokenKind::Star {
+                ts.next();
+            }
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            ts.next();
+            terms.push((coef, name.to_ascii_uppercase()));
+        } else if have_num {
+            // Bare constant (no variable followed the number).
+            *konst += coef;
+        } else {
+            return Err(SasError::parse(
+                "expected variable or constant in TEST/RESTRICT equation",
+                ts.peek().span,
+            ));
+        }
+        // Reset the sign for the next term.
+        pending = sign;
+    }
+    Ok(())
 }
 
 // ───────────────────────── Formatting helpers ─────────────────────────
@@ -583,17 +761,61 @@ fn run_model(
         }
     };
 
+    // --- RESTRICT (M36.1): re-estimate under the linear constraints. The model
+    // is printed as the restricted fit; TEST then operates on that fit. When
+    // there are no RESTRICT statements this stays None and the OLS path is
+    // byte-identical to before.
+    let restricted = if entry.restricts.is_empty() {
+        None
+    } else {
+        compute_restricted(
+            &entry.restricts,
+            &sel_reg_names,
+            intercept,
+            &x_mat,
+            &y_vec,
+            &fit,
+            n,
+        )?
+    };
+
     fit_and_print(
         model,
         dep_name,
         &sel_reg_names,
         &fit,
+        restricted.as_ref(),
         n_read,
         n,
         intercept,
         model_label,
         session,
     );
+
+    // --- TEST (M36.1): operate on the model as fitted (restricted if present).
+    if !entry.tests.is_empty() {
+        let (t_beta, t_xtx, t_sse, t_dfe) = match &restricted {
+            Some(r) => (&r.beta_r, &fit.xtx_inv, r.sse_r, r.df_r),
+            None => (
+                &fit.beta,
+                &fit.xtx_inv,
+                fit.sse,
+                (n - x_mat[0].len()) as f64,
+            ),
+        };
+        run_tests(
+            &entry.tests,
+            &sel_reg_names,
+            intercept,
+            dep_name,
+            t_beta,
+            t_xtx,
+            t_sse,
+            t_dfe,
+            x_mat[0].len(),
+            session,
+        )?;
+    }
 
     // --- OUTPUT dataset(s) for this model (complete cases only) ---
     write_outputs(entry, ds, &complete_mask, n, &fit, session)?;
@@ -623,42 +845,53 @@ fn fit_and_print(
     dep_name: &str,
     reg_names: &[String],
     fit: &OlsFit,
+    restricted: Option<&Restricted>,
     n_read: usize,
     n: usize,
     intercept: bool,
     model_label: &str,
     session: &mut Session,
 ) {
-    let beta = &fit.beta;
-    let sse = fit.sse;
-    let y_hat = &fit.y_hat;
+    // When a restricted fit is present, the printed model (ANOVA, R², F, and
+    // parameter estimates) reflects the RESTRICTed estimates β_r / SSE_r / df_r.
+    let beta: &[f64] = match restricted {
+        Some(r) => &r.beta_r,
+        None => &fit.beta,
+    };
+    let sse = match restricted {
+        Some(r) => r.sse_r,
+        None => fit.sse,
+    };
+    let y_hat: &[f64] = match restricted {
+        Some(r) => &r.y_hat_r,
+        None => &fit.y_hat,
+    };
+    let resid: &[f64] = match restricted {
+        Some(r) => &r.resid_r,
+        None => &fit.resid,
+    };
 
     // y vector reconstructed from ŷ + resid (avoids threading it in).
     let y_mean = {
-        let sum: f64 = y_hat
-            .iter()
-            .zip(fit.resid.iter())
-            .map(|(yh, r)| yh + r)
-            .sum();
+        let sum: f64 = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).sum();
         sum / n as f64
     };
 
     let p = reg_names.len();
     let p_eff = p + intercept as usize;
+    // Restricted error df = (n−p_eff)+qr; this raises the Error-line DF and
+    // lowers the Model DF by the number of restrictions.
+    let restrict_q = restricted.map(|r| r.lambda_rows.len()).unwrap_or(0);
 
     // --- ANOVA decomposition ---
     let (ssm, sst, model_df, error_df, total_df, total_label, r2, adj_r2);
     if intercept {
         // Corrected (centered) sums of squares.
-        let y: Vec<f64> = y_hat
-            .iter()
-            .zip(fit.resid.iter())
-            .map(|(yh, r)| yh + r)
-            .collect();
+        let y: Vec<f64> = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).collect();
         sst = y.iter().map(|yi| (yi - y_mean) * (yi - y_mean)).sum();
         ssm = sst - sse;
-        model_df = p as f64;
-        error_df = (n - p_eff) as f64;
+        model_df = (p - restrict_q) as f64;
+        error_df = (n - p_eff + restrict_q) as f64;
         total_df = (n - 1) as f64;
         total_label = "Corrected Total";
         r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
@@ -671,7 +904,7 @@ fn fit_and_print(
         // Uncorrected sums of squares (NOINT).
         let sst_unc: f64 = y_hat
             .iter()
-            .zip(fit.resid.iter())
+            .zip(resid.iter())
             .map(|(yh, r)| {
                 let yi = yh + r;
                 yi * yi
@@ -680,8 +913,8 @@ fn fit_and_print(
         let ssm_unc: f64 = y_hat.iter().map(|yh| yh * yh).sum();
         sst = sst_unc;
         ssm = ssm_unc;
-        model_df = p as f64;
-        error_df = (n - p) as f64;
+        model_df = (p - restrict_q) as f64;
+        error_df = (n - p + restrict_q) as f64;
         total_df = n as f64;
         total_label = "Uncorrected Total";
         r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
@@ -705,17 +938,25 @@ fn fit_and_print(
     };
 
     // --- Standard errors / t / p for each beta ---
-    let mut se_beta: Vec<f64> = Vec::with_capacity(p_eff);
-    let mut t_beta: Vec<f64> = Vec::with_capacity(p_eff);
-    let mut p_beta: Vec<f64> = Vec::with_capacity(p_eff);
-    for j in 0..p_eff {
-        let se = (mse * fit.xtx_inv[j][j]).sqrt();
-        let t = beta[j] / se;
-        let pv = two_sided_p(t, error_df);
-        se_beta.push(se);
-        t_beta.push(t);
-        p_beta.push(pv);
-    }
+    // For the restricted fit these come from the constrained covariance matrix
+    // computed in compute_restricted; otherwise from the usual MSE·(X'X)⁻¹.
+    let (se_beta, t_beta, p_beta): (Vec<f64>, Vec<f64>, Vec<f64>) = match restricted {
+        Some(r) => (r.se_r.clone(), r.t_r.clone(), r.p_r.clone()),
+        None => {
+            let mut se_beta = Vec::with_capacity(p_eff);
+            let mut t_beta = Vec::with_capacity(p_eff);
+            let mut p_beta = Vec::with_capacity(p_eff);
+            for j in 0..p_eff {
+                let se = (mse * fit.xtx_inv[j][j]).sqrt();
+                let t = beta[j] / se;
+                let pv = two_sided_p(t, error_df);
+                se_beta.push(se);
+                t_beta.push(t);
+                p_beta.push(pv);
+            }
+            (se_beta, t_beta, p_beta)
+        }
+    };
 
     if model.noprint {
         return;
@@ -806,8 +1047,11 @@ fn fit_and_print(
     session.listing.blank();
     session.listing.blank();
 
-    // Parameter estimates table
-    let pe_headers: Vec<String> = vec![
+    // Parameter estimates table. With RESTRICT statements a trailing Label
+    // column carries the restriction expression; the unrestricted path keeps
+    // the original 6-column layout byte-identical.
+    let with_label = restricted.is_some();
+    let mut pe_headers: Vec<String> = vec![
         "Variable".into(),
         "DF".into(),
         "Parameter Estimate".into(),
@@ -815,7 +1059,7 @@ fn fit_and_print(
         "t Value".into(),
         "Pr > |t|".into(),
     ];
-    let pe_aligns = vec![
+    let mut pe_aligns = vec![
         Align::Left,
         Align::Right,
         Align::Right,
@@ -823,6 +1067,10 @@ fn fit_and_print(
         Align::Right,
         Align::Right,
     ];
+    if with_label {
+        pe_headers.push("Label".into());
+        pe_aligns.push(Align::Left);
+    }
     let mut pe_rows: Vec<Vec<String>> = Vec::with_capacity(p_eff);
     for j in 0..p_eff {
         let var_name = if intercept {
@@ -834,14 +1082,33 @@ fn fit_and_print(
         } else {
             reg_names[j].clone()
         };
-        pe_rows.push(vec![
+        let mut row = vec![
             var_name,
             "1".into(),
             fmt5(beta[j]),
             fmt5(se_beta[j]),
             fmt2(t_beta[j]),
             fmt_p(Some(p_beta[j])),
-        ]);
+        ];
+        if with_label {
+            row.push(String::new());
+        }
+        pe_rows.push(row);
+    }
+    // Append RESTRICT rows: Variable="RESTRICT", DF=-1 (negative per SAS),
+    // Estimate=λ_i, with the restriction expression in the Label column.
+    if let Some(r) = restricted {
+        for (label, lam, se, t, pv) in &r.lambda_rows {
+            pe_rows.push(vec![
+                "RESTRICT".into(),
+                "-1".into(),
+                fmt5(*lam),
+                fmt5(*se),
+                fmt2(*t),
+                fmt_p(Some(*pv)),
+                label.clone(),
+            ]);
+        }
     }
     session
         .listing
@@ -878,6 +1145,318 @@ fn fit_and_print_empty(
         );
     }
     session.listing.blank();
+}
+
+// ───────────────────────── TEST / RESTRICT (M36.1) ─────────────────────────
+
+/// Build the L (q×p_eff) matrix and c (q-vector) for a set of linear equations,
+/// with columns ordered exactly like `fit.beta`: intercept first (if present),
+/// then `reg_names` in order. Returns an error naming the first unknown
+/// variable. The intercept keyword `INTERCEPT` maps to column 0 (only valid
+/// when an intercept is in the model).
+fn build_lc(
+    equations: &[LinEq],
+    reg_names: &[String],
+    intercept: bool,
+) -> Result<(Vec<Vec<f64>>, Vec<f64>)> {
+    let p_eff = reg_names.len() + intercept as usize;
+    // Column index for a (already uppercased) variable name.
+    let col_of = |name: &str| -> Option<usize> {
+        if name == "INTERCEPT" {
+            return if intercept { Some(0) } else { None };
+        }
+        let base = intercept as usize;
+        reg_names
+            .iter()
+            .position(|r| r.eq_ignore_ascii_case(name))
+            .map(|k| base + k)
+    };
+    let mut l = Vec::with_capacity(equations.len());
+    let mut c = Vec::with_capacity(equations.len());
+    for eq in equations {
+        let mut row = vec![0.0; p_eff];
+        for (coef, name) in &eq.terms {
+            match col_of(name) {
+                Some(j) => row[j] += *coef,
+                None => {
+                    return Err(SasError::runtime(format!(
+                        "Variable {} in TEST/RESTRICT not in the model.",
+                        name
+                    )))
+                }
+            }
+        }
+        l.push(row);
+        c.push(eq.rhs);
+    }
+    Ok((l, c))
+}
+
+/// Restricted-fit results threaded into `fit_and_print`.
+struct Restricted {
+    /// Restricted coefficient estimates β_r (same column order as `fit.beta`).
+    beta_r: Vec<f64>,
+    /// Restricted error/residual sum of squares.
+    sse_r: f64,
+    /// Restricted error degrees of freedom = (n − p_eff) + qr.
+    df_r: f64,
+    /// Predicted values from β_r.
+    y_hat_r: Vec<f64>,
+    /// Residuals from β_r.
+    resid_r: Vec<f64>,
+    /// SE / t / p for each β_r (column order matches `beta_r`).
+    se_r: Vec<f64>,
+    t_r: Vec<f64>,
+    p_r: Vec<f64>,
+    /// One appended RESTRICT row per restriction: (label, λ, SE, t, p).
+    lambda_rows: Vec<(String, f64, f64, f64, f64)>,
+}
+
+/// Compute the constrained least-squares fit under all RESTRICT equations of
+/// the model. `x_mat` is the design matrix (column order == `fit.beta`), `y`
+/// the response. Returns `None` if there are no restrictions.
+fn compute_restricted(
+    restricts: &[RegRestrict],
+    reg_names: &[String],
+    intercept: bool,
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    n: usize,
+) -> Result<Option<Restricted>> {
+    // Gather every restriction equation (with a label for the table).
+    let mut eqs: Vec<LinEq> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+    for r in restricts {
+        for eq in &r.equations {
+            labels.push(restrict_label(eq, reg_names, intercept));
+            eqs.push(eq.clone());
+        }
+    }
+    if eqs.is_empty() {
+        return Ok(None);
+    }
+    let (l, c) = build_lc(&eqs, reg_names, intercept)?;
+    let qr = l.len();
+    let p_eff = x_mat[0].len();
+    let h = &fit.xtx_inv; // (X'X)⁻¹
+    let beta = &fit.beta;
+
+    // Lβ − c.
+    let lb = linalg::matrix_vec_mult(&l, beta);
+    let diff: Vec<f64> = lb.iter().zip(c.iter()).map(|(a, b)| a - b).collect();
+
+    // M = L H Lᵀ  (qr×qr); Minv.
+    let lt = linalg::transpose(&l);
+    let lh = linalg::matrix_mult(&l, h); // qr×p_eff
+    let m = linalg::matrix_mult(&lh, &lt); // qr×qr
+    let minv = linalg::invert_matrix(&m)?;
+
+    // λ = Minv (Lβ − c).
+    let lambda = linalg::matrix_vec_mult(&minv, &diff);
+    // β_r = β − H Lᵀ λ.
+    let hlt = linalg::matrix_mult(h, &lt); // p_eff×qr
+    let correction = linalg::matrix_vec_mult(&hlt, &lambda);
+    let beta_r: Vec<f64> = beta
+        .iter()
+        .zip(correction.iter())
+        .map(|(b, d)| b - d)
+        .collect();
+
+    // SSE_r = sse + (Lβ−c)ᵀ Minv (Lβ−c).
+    let m_diff = linalg::matrix_vec_mult(&minv, &diff);
+    let quad: f64 = diff.iter().zip(m_diff.iter()).map(|(a, b)| a * b).sum();
+    let sse_r = fit.sse + quad;
+    let df_r = (n - p_eff) as f64 + qr as f64;
+    let mse_r = sse_r / df_r;
+
+    // Restricted ŷ / residuals.
+    let y_hat_r: Vec<f64> = x_mat
+        .iter()
+        .map(|row| row.iter().zip(beta_r.iter()).map(|(xi, bi)| xi * bi).sum())
+        .collect();
+    let resid_r: Vec<f64> = y
+        .iter()
+        .zip(y_hat_r.iter())
+        .map(|(yi, yhi)| yi - yhi)
+        .collect();
+
+    // Var(β_r) = MSE_r (H − H Lᵀ Minv L H).
+    let mlh = linalg::matrix_mult(&minv, &lh); // qr×p_eff
+    let hlt_mlh = linalg::matrix_mult(&hlt, &mlh); // p_eff×p_eff
+    let mut se_r = vec![0.0; p_eff];
+    let mut t_r = vec![0.0; p_eff];
+    let mut p_r = vec![0.0; p_eff];
+    for j in 0..p_eff {
+        let var = mse_r * (h[j][j] - hlt_mlh[j][j]);
+        let se = if var > 0.0 { var.sqrt() } else { 0.0 };
+        se_r[j] = se;
+        t_r[j] = if se > 0.0 { beta_r[j] / se } else { 0.0 };
+        p_r[j] = if se > 0.0 {
+            two_sided_p(t_r[j], df_r)
+        } else {
+            f64::NAN
+        };
+    }
+
+    // Var(λ) = MSE_r Minv → SE(λ_i), t_i = λ_i/SE, p via two_sided_p(·, df_r).
+    let mut lambda_rows = Vec::with_capacity(qr);
+    for i in 0..qr {
+        let var = mse_r * minv[i][i];
+        let se = if var > 0.0 { var.sqrt() } else { 0.0 };
+        let t = if se > 0.0 { lambda[i] / se } else { 0.0 };
+        let pv = if se > 0.0 {
+            two_sided_p(t, df_r)
+        } else {
+            f64::NAN
+        };
+        lambda_rows.push((labels[i].clone(), lambda[i], se, t, pv));
+    }
+
+    Ok(Some(Restricted {
+        beta_r,
+        sse_r,
+        df_r,
+        y_hat_r,
+        resid_r,
+        se_r,
+        t_r,
+        p_r,
+        lambda_rows,
+    }))
+}
+
+/// Human-readable label for a restriction row, reconstructed from the equation
+/// (e.g. `X1 = X2`, `X1 + X2 = 1`). Used in the parameter-estimates Label
+/// column for RESTRICT rows.
+fn restrict_label(eq: &LinEq, _reg_names: &[String], _intercept: bool) -> String {
+    if eq.terms.is_empty() {
+        return format!("{}", eq.rhs);
+    }
+    let mut s = String::new();
+    for (i, (coef, name)) in eq.terms.iter().enumerate() {
+        let c = *coef;
+        if i == 0 {
+            if c == 1.0 {
+                s.push_str(name);
+            } else if c == -1.0 {
+                s.push('-');
+                s.push_str(name);
+            } else {
+                s.push_str(&format!("{}*{}", trim_num(c), name));
+            }
+        } else {
+            let mag = c.abs();
+            s.push_str(if c < 0.0 { " - " } else { " + " });
+            if mag == 1.0 {
+                s.push_str(name);
+            } else {
+                s.push_str(&format!("{}*{}", trim_num(mag), name));
+            }
+        }
+    }
+    s.push_str(&format!(" = {}", trim_num(eq.rhs)));
+    s
+}
+
+/// Format a coefficient/constant without trailing `.0` for integral values.
+fn trim_num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{}", v)
+    }
+}
+
+/// Run and print every TEST statement of a model, after the parameter table.
+/// `beta`, `xtx_inv`, `sse`, `df_e`, `p_eff` come from the model **as fitted**
+/// (restricted if RESTRICT statements are present, else the OLS fit).
+#[allow(clippy::too_many_arguments)]
+fn run_tests(
+    tests: &[RegTest],
+    reg_names: &[String],
+    intercept: bool,
+    dep_name: &str,
+    beta: &[f64],
+    xtx_inv: &[Vec<f64>],
+    sse: f64,
+    df_e: f64,
+    p_eff: usize,
+    session: &mut Session,
+) -> Result<()> {
+    if tests.is_empty() {
+        return Ok(());
+    }
+    let mse = sse / df_e;
+    for (ti, test) in tests.iter().enumerate() {
+        let (l, c) = build_lc(&test.equations, reg_names, intercept)?;
+        let q = l.len();
+        // Lβ − c.
+        let lb = linalg::matrix_vec_mult(&l, beta);
+        let diff: Vec<f64> = lb.iter().zip(c.iter()).map(|(a, b)| a - b).collect();
+        // M = L H Lᵀ.
+        let lt = linalg::transpose(&l);
+        let lh = linalg::matrix_mult(&l, xtx_inv);
+        let m = linalg::matrix_mult(&lh, &lt);
+        let minv = linalg::invert_matrix(&m)?;
+        // SS = diffᵀ Minv diff.
+        let md = linalg::matrix_vec_mult(&minv, &diff);
+        let ss: f64 = diff.iter().zip(md.iter()).map(|(a, b)| a * b).sum();
+        let ms_num = ss / q as f64;
+        let f = if mse > 0.0 { ms_num / mse } else { f64::NAN };
+        let p_f = (1.0 - f_cdf(f, q as f64, df_e)).clamp(0.0, 1.0);
+
+        let _ = p_eff;
+        // SAS heading is "Test <name> Results …"; an unlabeled TEST uses the
+        // bare ordinal (→ "Test 1 …"), a labeled one its name (→ "Test peak …").
+        let label = test
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{}", ti + 1));
+
+        session.listing.blank();
+        session.listing.blank();
+        centered(
+            session,
+            &format!(
+                "Test {} Results for Dependent Variable {}",
+                label, dep_name
+            ),
+        );
+        session.listing.blank();
+        let headers: Vec<String> = vec![
+            "Source".into(),
+            "DF".into(),
+            "Mean Square".into(),
+            "F Value".into(),
+            "Pr > F".into(),
+        ];
+        let aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        let rows: Vec<Vec<String>> = vec![
+            vec![
+                "Numerator".into(),
+                format!("{}", q),
+                fmt5(ms_num),
+                fmt2(f),
+                fmt_p(Some(p_f)),
+            ],
+            vec![
+                "Denominator".into(),
+                format!("{}", df_e as usize),
+                fmt5(mse),
+                "".into(),
+                "".into(),
+            ],
+        ];
+        session.listing.write_table(&headers, &aligns, &rows);
+    }
+    Ok(())
 }
 
 // ───────────────────────── SELECTION ─────────────────────────
@@ -1419,6 +1998,8 @@ mod tests {
             models: vec![RegModelEntry {
                 model,
                 outputs: vec![],
+                tests: vec![],
+                restricts: vec![],
             }],
             plots_requested: false,
         }
@@ -1824,6 +2405,235 @@ mod tests {
         );
         execute(&ast, &mut session).unwrap();
         session.log.into_string()
+    }
+
+    // ───────────────────────── M36.1 TEST / RESTRICT tests ─────────────────────────
+
+    fn eq_terms(eq: &LinEq) -> Vec<(f64, String)> {
+        eq.terms.clone()
+    }
+
+    #[test]
+    fn test_parse_test_multi_eq() {
+        let ast = parse_reg("proc reg data=a; model y = a b c; test a=b, c=0; run;").unwrap();
+        let t = &ast.models[0].tests[0];
+        assert!(t.label.is_none());
+        assert_eq!(t.equations.len(), 2);
+        // a = b  →  A - B = 0
+        let e0 = eq_terms(&t.equations[0]);
+        assert_eq!(e0, vec![(1.0, "A".into()), (-1.0, "B".into())]);
+        assert!((t.equations[0].rhs).abs() < 1e-12);
+        // c = 0  →  C = 0
+        let e1 = eq_terms(&t.equations[1]);
+        assert_eq!(e1, vec![(1.0, "C".into())]);
+    }
+
+    #[test]
+    fn test_parse_test_label() {
+        let ast = parse_reg("proc reg data=a; model y = x1 x2; peak: test x1 = x2; run;").unwrap();
+        let t = &ast.models[0].tests[0];
+        assert_eq!(t.label.as_deref(), Some("peak"));
+        assert_eq!(
+            eq_terms(&t.equations[0]),
+            vec![(1.0, "X1".into()), (-1.0, "X2".into())]
+        );
+    }
+
+    #[test]
+    fn test_parse_restrict_sum() {
+        let ast = parse_reg("proc reg data=a; model y = a b; restrict a+b=1; run;").unwrap();
+        let r = &ast.models[0].restricts[0];
+        assert_eq!(r.equations.len(), 1);
+        assert_eq!(
+            eq_terms(&r.equations[0]),
+            vec![(1.0, "A".into()), (1.0, "B".into())]
+        );
+        assert!((r.equations[0].rhs - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_restrict_coefficients() {
+        // 2*x1 - x2 = 0
+        let ast =
+            parse_reg("proc reg data=a; model y = x1 x2; restrict 2*x1 - x2 = 0; run;").unwrap();
+        let e = &ast.models[0].restricts[0].equations[0];
+        assert_eq!(
+            eq_terms(e),
+            vec![(2.0, "X1".into()), (-1.0, "X2".into())]
+        );
+        assert!(e.rhs.abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_coef_no_star() {
+        // `2 x1` (no star) is also a coefficient form.
+        let ast =
+            parse_reg("proc reg data=a; model y = x1 x2; restrict 2 x1 = x2 + 3; run;").unwrap();
+        let e = &ast.models[0].restricts[0].equations[0];
+        // 2*x1 - x2 = 3
+        assert_eq!(
+            eq_terms(e),
+            vec![(2.0, "X1".into()), (-1.0, "X2".into())]
+        );
+        assert!((e.rhs - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_intercept_keyword() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2; restrict intercept = 0; run;",
+        )
+        .unwrap();
+        let e = &ast.models[0].restricts[0].equations[0];
+        assert_eq!(eq_terms(e), vec![(1.0, "INTERCEPT".into())]);
+    }
+
+    /// Oracle (a): a single-coefficient `TEST xj=0;` yields F == t² of xj.
+    #[test]
+    fn test_oracle_test_f_equals_t_squared() {
+        // Design: intercept + x1 + x2, with non-degenerate data.
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0];
+        let y: Vec<f64> = x1
+            .iter()
+            .zip(x2.iter())
+            .map(|(&a, &b)| 1.0 + 2.0 * a + 0.5 * b + (a * 0.3).cos())
+            .collect();
+        let n = y.len();
+        let mut x_mat = Vec::new();
+        for i in 0..n {
+            x_mat.push(vec![1.0, x1[i], x2[i]]);
+        }
+        let fit = ols_fit(&x_mat, &y).unwrap();
+        let p_eff = 3;
+        let df_e = (n - p_eff) as f64;
+        let mse = fit.sse / df_e;
+        // t for x2 (column 2).
+        let se = (mse * fit.xtx_inv[2][2]).sqrt();
+        let t = fit.beta[2] / se;
+        let t2 = t * t;
+
+        // TEST x2 = 0  →  L = [0,0,1], c = 0.
+        let reg_names = vec!["X1".to_string(), "X2".to_string()];
+        let eq = LinEq {
+            terms: vec![(1.0, "X2".into())],
+            rhs: 0.0,
+        };
+        let (l, c) = build_lc(&[eq], &reg_names, true).unwrap();
+        let lb = linalg::matrix_vec_mult(&l, &fit.beta);
+        let diff: Vec<f64> = lb.iter().zip(c.iter()).map(|(a, b)| a - b).collect();
+        let lt = linalg::transpose(&l);
+        let lh = linalg::matrix_mult(&l, &fit.xtx_inv);
+        let m = linalg::matrix_mult(&lh, &lt);
+        let minv = linalg::invert_matrix(&m).unwrap();
+        let md = linalg::matrix_vec_mult(&minv, &diff);
+        let ss: f64 = diff.iter().zip(md.iter()).map(|(a, b)| a * b).sum();
+        let f = (ss / 1.0) / mse;
+        assert!((f - t2).abs() < 1e-6, "F={f} t^2={t2}");
+    }
+
+    /// Oracle (b): restricted estimates satisfy L β_r = c exactly.
+    #[test]
+    fn test_oracle_restricted_satisfies_constraint() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let x2 = [3.0_f64, 1.0, 4.0, 1.0, 5.0, 9.0];
+        let y: Vec<f64> = x1
+            .iter()
+            .zip(x2.iter())
+            .map(|(&a, &b)| 2.0 + a - b)
+            .collect();
+        let n = y.len();
+        let mut x_mat = Vec::new();
+        for i in 0..n {
+            x_mat.push(vec![1.0, x1[i], x2[i]]);
+        }
+        let fit = ols_fit(&x_mat, &y).unwrap();
+        let reg_names = vec!["X1".to_string(), "X2".to_string()];
+        // RESTRICT x1 + x2 = 1.
+        let restricts = vec![RegRestrict {
+            equations: vec![LinEq {
+                terms: vec![(1.0, "X1".into()), (1.0, "X2".into())],
+                rhs: 1.0,
+            }],
+        }];
+        let r = compute_restricted(&restricts, &reg_names, true, &x_mat, &y, &fit, n)
+            .unwrap()
+            .unwrap();
+        // L β_r = c: β_r[1] + β_r[2] == 1.
+        let lhs = r.beta_r[1] + r.beta_r[2];
+        assert!((lhs - 1.0).abs() < 1e-9, "L beta_r = {lhs}");
+    }
+
+    /// Oracle (c): a RESTRICT already satisfied by OLS leaves estimates ~unchanged.
+    #[test]
+    fn test_oracle_redundant_restrict_unchanged() {
+        // Build y so that OLS already gives slope_x1 == slope_x2 (symmetric).
+        // y = 3 + 2*x1 + 2*x2 exactly → OLS recovers (3, 2, 2); RESTRICT x1=x2
+        // is already satisfied.
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let x2 = [5.0_f64, 1.0, 4.0, 2.0, 3.0];
+        let y: Vec<f64> = x1
+            .iter()
+            .zip(x2.iter())
+            .map(|(&a, &b)| 3.0 + 2.0 * a + 2.0 * b)
+            .collect();
+        let n = y.len();
+        let mut x_mat = Vec::new();
+        for i in 0..n {
+            x_mat.push(vec![1.0, x1[i], x2[i]]);
+        }
+        let fit = ols_fit(&x_mat, &y).unwrap();
+        let reg_names = vec!["X1".to_string(), "X2".to_string()];
+        let restricts = vec![RegRestrict {
+            equations: vec![LinEq {
+                terms: vec![(1.0, "X1".into()), (-1.0, "X2".into())],
+                rhs: 0.0,
+            }],
+        }];
+        let r = compute_restricted(&restricts, &reg_names, true, &x_mat, &y, &fit, n)
+            .unwrap()
+            .unwrap();
+        for j in 0..fit.beta.len() {
+            assert!(
+                (r.beta_r[j] - fit.beta[j]).abs() < 1e-7,
+                "beta_r[{j}]={} beta[{j}]={}",
+                r.beta_r[j],
+                fit.beta[j]
+            );
+        }
+        // λ ≈ 0 since the constraint is non-binding.
+        assert!(r.lambda_rows[0].1.abs() < 1e-6, "lambda={}", r.lambda_rows[0].1);
+    }
+
+    /// End-to-end: TEST and RESTRICT statements parse and execute, emitting the
+    /// expected blocks in the listing.
+    #[test]
+    fn test_execute_test_and_restrict() {
+        let mut session = make_session();
+        let frame = df![
+            "y"  => [3.2_f64, 4.8, 7.1, 8.9, 11.3, 12.7, 15.2, 16.8],
+            "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "x2" => [4.0_f64, 1.0, 9.0, 2.0, 8.0, 3.0, 7.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+
+        let src = "proc reg data=work.t; model y = x1 x2; peak: test x1 = x2; restrict x1 + x2 = 3; run;";
+        let source = SourceFile::new(src);
+        let mut ts = StatementStream::new(&source).unwrap();
+        ts.next();
+        ts.next();
+        let ast = parse(&mut ts).unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Test peak Results for Dependent Variable y"), "{listing}");
+        assert!(listing.contains("Numerator"), "{listing}");
+        assert!(listing.contains("Denominator"), "{listing}");
+        assert!(listing.contains("RESTRICT"), "{listing}");
     }
 
     #[test]
