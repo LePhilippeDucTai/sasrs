@@ -51,10 +51,14 @@ pub enum GchartStmt {
         sumvar: Option<String>,
         chart_type: ChartType,
     },
-    /// PIE : différé (NOTE) en v1.
+    /// PIE cat / SUMVAR= TYPE=FREQ|SUM|MEAN.
     Pie {
         #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
         category: String,
+        #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+        sumvar: Option<String>,
+        #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+        chart_type: ChartType,
     },
 }
 
@@ -226,8 +230,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<GchartAst> {
         } else if ts.peek().is_kw("pie") || ts.peek().is_kw("pie3d") {
             ts.next();
             let category = expect_ident(ts, "after PIE")?;
-            ts.skip_to_semi();
-            charts.push(GchartStmt::Pie { category });
+            let (sumvar, chart_type) = parse_bar_options(ts)?;
+            ts.expect_semi()?;
+            charts.push(GchartStmt::Pie {
+                category,
+                sumvar,
+                chart_type,
+            });
         } else {
             ts.skip_to_semi();
         }
@@ -259,7 +268,16 @@ pub fn execute(ast: &GchartAst, session: &mut Session) -> Result<()> {
     for chart in &ast.charts {
         match chart {
             GchartStmt::Pie { .. } => {
-                session.log.note("PIE chart deferred in PROC GCHART.");
+                // PIE : différé dans le build par défaut, rendu sous --features
+                // graphics (M34.11). NOTE par défaut byte-identique.
+                #[cfg(not(feature = "graphics"))]
+                {
+                    session.log.note("PIE chart deferred in PROC GCHART.");
+                }
+                #[cfg(feature = "graphics")]
+                {
+                    graphics_impl::render(ast, chart, session)?;
+                }
             }
             GchartStmt::VBar { .. } | GchartStmt::HBar { .. } => {
                 #[cfg(not(feature = "graphics"))]
@@ -282,7 +300,7 @@ pub fn execute(ast: &GchartAst, session: &mut Session) -> Result<()> {
 // ───────────────────────── Rendu (feature graphics) ─────────────────────────
 
 #[cfg(feature = "graphics")]
-mod graphics_impl {
+pub(crate) mod graphics_impl {
     use super::*;
     use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
     use crate::missing::value_to_num;
@@ -300,7 +318,7 @@ mod graphics_impl {
     }
 
     /// Agrège les valeurs (catégorie, statistique) selon `chart_type`.
-    fn aggregate(
+    pub fn aggregate(
         ds: &crate::dataset::SasDataset,
         category: &str,
         sumvar: &Option<String>,
@@ -370,7 +388,7 @@ mod graphics_impl {
     }
 
     pub fn render(ast: &GchartAst, chart: &GchartStmt, session: &mut Session) -> Result<()> {
-        let (category, sumvar, chart_type) = match chart {
+        let (category, sumvar, chart_type, is_pie) = match chart {
             GchartStmt::VBar {
                 category,
                 sumvar,
@@ -380,8 +398,12 @@ mod graphics_impl {
                 category,
                 sumvar,
                 chart_type,
-            } => (category, sumvar, *chart_type),
-            GchartStmt::Pie { .. } => return Ok(()),
+            } => (category, sumvar, *chart_type, false),
+            GchartStmt::Pie {
+                category,
+                sumvar,
+                chart_type,
+            } => (category, sumvar, *chart_type, true),
         };
 
         let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
@@ -404,7 +426,7 @@ mod graphics_impl {
             title: "The GCHART Procedure".to_string(),
             x_label: category.clone(),
             y_label,
-            plot_type: PlotType::VBar,
+            plot_type: if is_pie { PlotType::Pie } else { PlotType::VBar },
             data: vec![],
             x_categorical,
         };
@@ -517,6 +539,23 @@ mod tests {
         assert!(matches!(ast.charts[0], GchartStmt::Pie { .. }));
     }
 
+    #[test]
+    fn parse_pie_sumvar_implies_sum() {
+        let ast = parse_gchart("proc gchart data=a; pie region / sumvar=sales; run;").unwrap();
+        match &ast.charts[0] {
+            GchartStmt::Pie {
+                category,
+                sumvar,
+                chart_type,
+            } => {
+                assert_eq!(category, "region");
+                assert_eq!(sumvar.as_deref(), Some("sales"));
+                assert_eq!(*chart_type, ChartType::Sum);
+            }
+            other => panic!("expected Pie, got {other:?}"),
+        }
+    }
+
     // ── Execute tests (default build) ────────────────────────────────────
 
     #[test]
@@ -531,6 +570,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "graphics"))]
     #[test]
     fn execute_pie_defers() {
         let mut session = make_session();
@@ -601,5 +641,53 @@ mod tests {
         assert!(p.exists(), "image not created: {p:?}");
         assert!(p.metadata().unwrap().len() > 0);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn execute_pie_with_graphics_writes_image() {
+        let mut session = make_session();
+        session.ods_graphics.enabled = true;
+        session.ods_graphics.output_dir = std::env::temp_dir();
+        session.ods_graphics.file_stem = Some("gcharttest_pie".into());
+        write_cats(&mut session, "CATS");
+        let ast =
+            parse_gchart("proc gchart data=work.cats; pie category / sumvar=count; run;").unwrap();
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("written"), "log: {log}");
+        assert!(!log.contains("PIE chart deferred"), "should not defer: {log}");
+        let p = std::env::temp_dir().join("gcharttest_pie_1.png");
+        assert!(p.exists(), "pie image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn pie_aggregate_proportional_to_totals() {
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::graphics::render::pie_angles;
+        use crate::value::VarType;
+        use polars::df;
+        // FREQ : A x3, B x1 → angles 3:1.
+        let df = df!["category" => ["A", "A", "A", "B"]].unwrap();
+        let vars = vec![VarMeta {
+            name: "category".into(),
+            ty: VarType::Char,
+            length: 1,
+            format: None,
+            label: None,
+        }];
+        let ds = SasDataset { df, vars };
+        let agg = graphics_impl::aggregate(&ds, "category", &None, ChartType::Freq).unwrap();
+        let vals: Vec<f64> = agg.iter().map(|(_, v)| *v).collect();
+        let angles = pie_angles(&vals);
+        let total: f64 = angles.iter().map(|(s, e)| e - s).sum();
+        assert!((total - std::f64::consts::TAU).abs() < 1e-9);
+        // A (3) doit occuper 3x l'arc de B (1).
+        let span_a = angles[0].1 - angles[0].0;
+        let span_b = angles[1].1 - angles[1].0;
+        assert!((span_a - 3.0 * span_b).abs() < 1e-9, "a={span_a} b={span_b}");
     }
 }

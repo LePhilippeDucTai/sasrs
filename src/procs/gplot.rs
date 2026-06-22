@@ -35,8 +35,14 @@ use crate::token::TokenKind;
 pub struct GplotAst {
     /// `DATA=` ; `None` → `_LAST_`.
     pub data_ref: Option<DatasetRef>,
-    /// Statements PLOT. v1 n'en honore que le premier.
+    /// Statements PLOT (le premier est rendu ; M34.11 superpose ses séries).
     pub plots: Vec<GplotStmt>,
+    /// Statements SYMBOLn dans l'ordre (SYMBOL1, SYMBOL2, …).
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub symbols: Vec<SymbolDef>,
+    /// Statements AXISn dans l'ordre.
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub axes: Vec<AxisDef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +54,29 @@ pub enum GplotStmt {
         #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
         group_var: Option<String>,
     },
+}
+
+/// Définition d'un SYMBOLn : `interpol=` (JOIN→ligne), `value=` (marqueur),
+/// `color=`. Attributs non interprétés (HEIGHT, WIDTH, LINE, REPEAT…) ignorés.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SymbolDef {
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub interpol: Option<String>,
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub value: Option<String>,
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub color: Option<String>,
+}
+
+/// Définition d'un AXISn : `order=(min to max)` et `label=`. Le reste est ignoré.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AxisDef {
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub order_min: Option<f64>,
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub order_max: Option<f64>,
+    #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+    pub label: Option<String>,
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -163,6 +192,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
     }
 
     let mut plots: Vec<GplotStmt> = Vec::new();
+    let mut symbols: Vec<SymbolDef> = Vec::new();
+    let mut axes: Vec<AxisDef> = Vec::new();
 
     loop {
         while ts.peek().kind == TokenKind::Semi {
@@ -188,19 +219,186 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
                 ts.next();
             }
             plots.push(stmt);
-        } else if ts.peek().is_kw("symbol")
-            || ts.peek().is_kw("axis")
-            || starts_with_kw(ts, "symbol")
-            || starts_with_kw(ts, "axis")
-        {
-            // SYMBOL/AXIS dans le bloc : parsé sans erreur, ignoré en v1.
-            ts.skip_to_semi();
+        } else if ts.peek().is_kw("symbol") || starts_with_kw(ts, "symbol") {
+            ts.next();
+            symbols.push(parse_symbol_stmt(ts));
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
+        } else if ts.peek().is_kw("axis") || starts_with_kw(ts, "axis") {
+            ts.next();
+            axes.push(parse_axis_stmt(ts));
+            if ts.peek().kind == TokenKind::Semi {
+                ts.next();
+            }
         } else {
             ts.skip_to_semi();
         }
     }
 
-    Ok(GplotAst { data_ref, plots })
+    Ok(GplotAst {
+        data_ref,
+        plots,
+        symbols,
+        axes,
+    })
+}
+
+/// Lit une valeur (string, ident ou nombre) — pour `color=`, `value=`, etc.
+fn read_value(ts: &mut StatementStream) -> Option<String> {
+    match &ts.peek().kind {
+        TokenKind::Str { value, .. } => {
+            let v = value.clone();
+            ts.next();
+            Some(v)
+        }
+        TokenKind::Ident(s) => {
+            let v = s.clone();
+            ts.next();
+            Some(v)
+        }
+        TokenKind::Num(f) => {
+            let f = *f;
+            ts.next();
+            Some(if f.fract() == 0.0 {
+                format!("{}", f as i64)
+            } else {
+                format!("{f}")
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parse un SYMBOLn : suite d'options `name=value` jusqu'au `;` (non consommé).
+fn parse_symbol_stmt(ts: &mut StatementStream) -> SymbolDef {
+    let mut def = SymbolDef::default();
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+            Some(n) => n,
+            None => {
+                ts.next();
+                continue;
+            }
+        };
+        ts.next();
+        // `i`/`v`/`c` sont les abréviations SAS de interpol/value/color.
+        let canon = match name.as_str() {
+            "i" => "interpol",
+            "v" => "value",
+            "c" => "color",
+            other => other,
+        };
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+            let val = read_value(ts);
+            match canon {
+                "interpol" => def.interpol = val,
+                "value" => def.value = val,
+                "color" => def.color = val,
+                _ => {}
+            }
+        }
+    }
+    def
+}
+
+/// Parse un AXISn : `order=(min to max [by step])`, `label=('..')`. Le reste est
+/// ignoré (sauté proprement, y compris les blocs parenthésés).
+fn parse_axis_stmt(ts: &mut StatementStream) -> AxisDef {
+    let mut def = AxisDef::default();
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+            Some(n) => n,
+            None => {
+                ts.next();
+                continue;
+            }
+        };
+        ts.next();
+        match name.as_str() {
+            "order" => {
+                if ts.peek().kind == TokenKind::Eq {
+                    ts.next();
+                }
+                if ts.peek().kind == TokenKind::LParen {
+                    ts.next();
+                    let mut nums: Vec<f64> = Vec::new();
+                    while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Eof {
+                        if let TokenKind::Num(f) = ts.peek().kind {
+                            nums.push(f);
+                        }
+                        ts.next();
+                    }
+                    if ts.peek().kind == TokenKind::RParen {
+                        ts.next();
+                    }
+                    // `order=(min to max [by step])` : 1er nombre = min, 2e = max
+                    // (le 3e éventuel est le pas, ignoré).
+                    if let Some(&mn) = nums.first() {
+                        def.order_min = Some(mn);
+                    }
+                    if nums.len() >= 2 {
+                        def.order_max = Some(nums[1]);
+                    }
+                }
+            }
+            "label" => {
+                if ts.peek().kind == TokenKind::Eq {
+                    ts.next();
+                }
+                if ts.peek().kind == TokenKind::LParen {
+                    // label=('text') : prendre la première chaîne.
+                    ts.next();
+                    let mut lab: Option<String> = None;
+                    while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Eof {
+                        if lab.is_none() {
+                            if let TokenKind::Str { value, .. } = &ts.peek().kind {
+                                lab = Some(value.clone());
+                            }
+                        }
+                        ts.next();
+                    }
+                    if ts.peek().kind == TokenKind::RParen {
+                        ts.next();
+                    }
+                    def.label = lab;
+                } else {
+                    def.label = read_value(ts);
+                }
+            }
+            _ => {
+                if ts.peek().kind == TokenKind::Eq {
+                    ts.next();
+                    if ts.peek().kind == TokenKind::LParen {
+                        let mut depth = 0;
+                        loop {
+                            match ts.peek().kind {
+                                TokenKind::LParen => {
+                                    depth += 1;
+                                    ts.next();
+                                }
+                                TokenKind::RParen => {
+                                    depth -= 1;
+                                    ts.next();
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                TokenKind::Eof | TokenKind::Semi => break,
+                                _ => {
+                                    ts.next();
+                                }
+                            }
+                        }
+                    } else {
+                        let _ = read_value(ts);
+                    }
+                }
+            }
+        }
+    }
+    def
 }
 
 /// Vrai si le token courant est un identifiant dont le préfixe (sans suffixe
@@ -265,13 +463,15 @@ pub fn execute(ast: &GplotAst, session: &mut Session) -> Result<()> {
 // ───────────────────────── Rendu (feature graphics) ─────────────────────────
 
 #[cfg(feature = "graphics")]
-mod graphics_impl {
+pub(crate) mod graphics_impl {
     use super::*;
-    use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+    use crate::graphics::render::{
+        draw_to_file_ext, palette, Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
+    };
     use crate::missing::value_to_num;
     use crate::ods_graphics::ImageFmt;
     use crate::procs::common::{self, decode_column};
-    use crate::value::VarType;
+    use crate::value::{Value, VarType};
 
     /// Extrait une colonne numérique par nom (erreur propre si absente / non num).
     fn numeric_column(ds: &crate::dataset::SasDataset, name: &str) -> Result<Vec<f64>> {
@@ -295,11 +495,119 @@ mod graphics_impl {
             .collect())
     }
 
+    /// Traduit un nom de couleur SAS vers la palette logique.
+    pub fn color_from_name(name: &str) -> Option<SeriesColor> {
+        match name.to_ascii_lowercase().as_str() {
+            "blue" => Some(SeriesColor::Blue),
+            "red" => Some(SeriesColor::Red),
+            "green" => Some(SeriesColor::Green),
+            "orange" => Some(SeriesColor::Orange),
+            "black" => Some(SeriesColor::Black),
+            _ => None,
+        }
+    }
+
+    /// Décide (ligne ?, marqueur ?) à partir d'un SYMBOLn éventuel. Par défaut
+    /// SAS/GRAPH : marqueurs (pas de jointure). INTERPOL=JOIN → ligne.
+    pub fn line_marker(sym: Option<&SymbolDef>) -> (bool, bool) {
+        match sym {
+            Some(s) => {
+                let join = s
+                    .interpol
+                    .as_deref()
+                    .map(|i| i.eq_ignore_ascii_case("join"))
+                    .unwrap_or(false);
+                let has_value = s.value.is_some();
+                if join {
+                    (true, has_value)
+                } else {
+                    // Pas de JOIN : marqueurs (toujours, même sans VALUE= explicite).
+                    (false, true)
+                }
+            }
+            None => (false, true),
+        }
+    }
+
+    /// Construit la liste des séries (label, data, color, line, marker) à tracer
+    /// pour un statement PLOT, en honorant SYMBOLn et `=group`.
+    pub fn build_series(
+        ds: &crate::dataset::SasDataset,
+        stmt: &GplotStmt,
+        symbols: &[SymbolDef],
+    ) -> Result<Vec<(Vec<(f64, f64)>, SeriesColor, bool, bool)>> {
+        let GplotStmt::Plot {
+            y_vars,
+            x_var,
+            group_var,
+        } = stmt;
+        let xs = numeric_column(ds, x_var)?;
+        let mut out = Vec::new();
+
+        if let Some(g) = group_var {
+            // PLOT y*x=group : une série par niveau de groupe.
+            let y = y_vars
+                .first()
+                .ok_or_else(|| SasError::runtime("PLOT statement has no Y variable."))?;
+            let ys = numeric_column(ds, y)?;
+            let gidx = ds
+                .vars
+                .iter()
+                .position(|m| m.name.eq_ignore_ascii_case(g))
+                .ok_or_else(|| {
+                    SasError::runtime(format!("Variable {} not found.", g.to_uppercase()))
+                })?;
+            let gcol = decode_column(ds, gidx)?;
+            use std::collections::BTreeMap;
+            let mut groups: BTreeMap<String, Vec<(f64, f64)>> = BTreeMap::new();
+            for ((gx, x), yv) in gcol.iter().zip(xs.iter()).zip(ys.iter()) {
+                if !x.is_finite() || !yv.is_finite() {
+                    continue;
+                }
+                let key = match gx {
+                    Value::Char(s) => s.clone(),
+                    Value::Num(n) => format!("{n}"),
+                    Value::Missing(_) => ".".to_string(),
+                };
+                groups.entry(key).or_default().push((*x, *yv));
+            }
+            for (i, (_k, data)) in groups.into_iter().enumerate() {
+                let sym = symbols.get(i);
+                let (line, marker) = line_marker(sym);
+                let color = sym
+                    .and_then(|s| s.color.as_deref())
+                    .and_then(color_from_name)
+                    .unwrap_or_else(|| palette(i));
+                out.push((data, color, line, marker));
+            }
+        } else {
+            // PLOT (y1 y2 ...)*x : une série par variable Y.
+            for (i, y) in y_vars.iter().enumerate() {
+                let ys = numeric_column(ds, y)?;
+                let data: Vec<(f64, f64)> = xs
+                    .iter()
+                    .zip(ys.iter())
+                    .filter(|(a, b)| a.is_finite() && b.is_finite())
+                    .map(|(a, b)| (*a, *b))
+                    .collect();
+                let sym = symbols.get(i);
+                let (line, marker) = line_marker(sym);
+                let color = sym
+                    .and_then(|s| s.color.as_deref())
+                    .and_then(color_from_name)
+                    .unwrap_or_else(|| palette(i));
+                out.push((data, color, line, marker));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn render(ast: &GplotAst, stmt: &GplotStmt, session: &mut Session) -> Result<()> {
         let GplotStmt::Plot { y_vars, x_var, .. } = stmt;
         let y_var = y_vars
             .first()
-            .ok_or_else(|| SasError::runtime("PLOT statement has no Y variable."))?;
+            .ok_or_else(|| SasError::runtime("PLOT statement has no Y variable."))?
+            .clone();
 
         // Lire les données.
         let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
@@ -311,22 +619,56 @@ mod graphics_impl {
             session.log.forward(&note);
         }
 
-        let xs = numeric_column(&ds, x_var)?;
-        let ys = numeric_column(&ds, y_var)?;
-        let data: Vec<(f64, f64)> = xs
-            .iter()
-            .zip(ys.iter())
-            .filter(|(a, b)| a.is_finite() && b.is_finite())
-            .map(|(a, b)| (*a, *b))
-            .collect();
+        let series = build_series(&ds, stmt, &ast.symbols)?;
 
-        let spec = DrawingSpec {
-            title: "The GPLOT Procedure".to_string(),
-            x_label: x_var.clone(),
-            y_label: y_var.clone(),
-            plot_type: PlotType::Scatter,
-            data,
-            x_categorical: vec![],
+        // Libellés d'axe : AXIS1 LABEL= pour X, AXIS2 LABEL= pour Y (convention
+        // courante GPLOT). Sinon nom de variable.
+        let x_label = ast
+            .axes
+            .first()
+            .and_then(|a| a.label.clone())
+            .unwrap_or_else(|| x_var.clone());
+        let y_label = ast
+            .axes
+            .get(1)
+            .and_then(|a| a.label.clone())
+            .unwrap_or_else(|| y_var.clone());
+
+        // Toutes les séries (y compris la 1re) sont rendues en overlays pour
+        // honorer la couleur SYMBOL de CHACUNE (la série primaire du DrawingSpec
+        // est toujours bleue côté render.rs). Le DrawingSpec ne porte que les
+        // axes ; ses données primaires restent vides.
+        let spec = DrawingSpec::new(
+            "The GPLOT Procedure",
+            x_label,
+            y_label,
+            PlotType::Scatter,
+        );
+
+        let mut overlays: Vec<Overlay> = Vec::new();
+        for (data, color, line, marker) in series.into_iter() {
+            overlays.push(Overlay {
+                data,
+                color,
+                line,
+                marker,
+            });
+        }
+
+        // Bornes d'axes : AXIS1 ORDER= → X, AXIS2 ORDER= → Y.
+        let x_range = ast.axes.first().and_then(|a| match (a.order_min, a.order_max) {
+            (Some(lo), Some(hi)) => Some((lo, hi)),
+            _ => None,
+        });
+        let y_range = ast.axes.get(1).and_then(|a| match (a.order_min, a.order_max) {
+            (Some(lo), Some(hi)) => Some((lo, hi)),
+            _ => None,
+        });
+
+        let deco = Decorations {
+            overlays,
+            x_range,
+            y_range,
         };
 
         // Nommage séquentiel : préfixe IMAGENAME= sinon "gplot".
@@ -344,8 +686,9 @@ mod graphics_impl {
         let name = format!("{}_{}.{}", stem, session.graphics_image_count, ext);
         let path = session.ods_graphics.output_dir.join(&name);
 
-        let (w, h) = draw_to_file(
+        let (w, h) = draw_to_file_ext(
             &spec,
+            &deco,
             &path,
             session.ods_graphics.width,
             session.ods_graphics.height,
@@ -508,5 +851,162 @@ mod tests {
         assert!(p.exists(), "image not created: {p:?}");
         assert!(p.metadata().unwrap().len() > 0);
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ── M34.11 : multi-séries + SYMBOL/AXIS ──────────────────────────────
+
+    #[cfg(feature = "graphics")]
+    fn write_multi(session: &mut Session, table: &str) {
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::value::VarType;
+        use polars::df;
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0],
+            "y1" => [1.0_f64, 2.0, 3.0, 4.0],
+            "y2" => [4.0_f64, 3.0, 2.0, 1.0],
+            "g" => ["a", "b", "a", "b"]
+        ]
+        .unwrap();
+        let mk = |n: &str, t: VarType, l: usize| VarMeta {
+            name: n.into(),
+            ty: t,
+            length: l,
+            format: None,
+            label: None,
+        };
+        let vars = vec![
+            mk("x", VarType::Num, 8),
+            mk("y1", VarType::Num, 8),
+            mk("y2", VarType::Num, 8),
+            mk("g", VarType::Char, 1),
+        ];
+        let ds = SasDataset { df, vars };
+        session.libs.get("WORK").unwrap().write(table, &ds).unwrap();
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn build_series_two_y_vars_makes_two_series() {
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::value::VarType;
+        use polars::df;
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0],
+            "y1" => [1.0_f64, 2.0, 3.0],
+            "y2" => [3.0_f64, 2.0, 1.0]
+        ]
+        .unwrap();
+        let mk = |n: &str| VarMeta {
+            name: n.into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        };
+        let ds = SasDataset {
+            df,
+            vars: vec![mk("x"), mk("y1"), mk("y2")],
+        };
+        let ast = parse_gplot("proc gplot data=work.m; plot (y1 y2)*x; run;").unwrap();
+        let series =
+            graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
+        assert_eq!(series.len(), 2, "expected one series per Y var");
+        assert_eq!(series[0].0.len(), 3);
+        assert_eq!(series[1].0.len(), 3);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn build_series_group_makes_one_series_per_level() {
+        use crate::dataset::{SasDataset, VarMeta};
+        use crate::value::VarType;
+        use polars::df;
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0],
+            "y" => [1.0_f64, 2.0, 3.0, 4.0],
+            "g" => ["a", "b", "a", "b"]
+        ]
+        .unwrap();
+        let mk = |n: &str, t: VarType| VarMeta {
+            name: n.into(),
+            ty: t,
+            length: 8,
+            format: None,
+            label: None,
+        };
+        let ds = SasDataset {
+            df,
+            vars: vec![
+                mk("x", VarType::Num),
+                mk("y", VarType::Num),
+                mk("g", VarType::Char),
+            ],
+        };
+        let ast = parse_gplot("proc gplot data=work.m; plot y*x=g; run;").unwrap();
+        let series =
+            graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
+        assert_eq!(series.len(), 2, "expected one series per group level");
+        // 2 niveaux (a, b) avec 2 points chacun.
+        assert_eq!(series[0].0.len(), 2);
+        assert_eq!(series[1].0.len(), 2);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn symbol_interpol_join_makes_line() {
+        use crate::graphics::render::SeriesColor;
+        let sym = SymbolDef {
+            interpol: Some("join".into()),
+            value: None,
+            color: Some("red".into()),
+        };
+        let (line, _marker) = graphics_impl::line_marker(Some(&sym));
+        assert!(line, "INTERPOL=JOIN should yield a line");
+        assert_eq!(
+            graphics_impl::color_from_name("red"),
+            Some(SeriesColor::Red)
+        );
+        // Sans SYMBOL : marqueurs, pas de ligne.
+        let (line0, marker0) = graphics_impl::line_marker(None);
+        assert!(!line0 && marker0);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn execute_multi_series_writes_image() {
+        let mut session = make_session();
+        session.ods_graphics.enabled = true;
+        session.ods_graphics.output_dir = std::env::temp_dir();
+        session.ods_graphics.file_stem = Some("gplottest_multi".into());
+        write_multi(&mut session, "M");
+        let ast = parse_gplot(
+            "proc gplot data=work.m; symbol1 interpol=join color=blue; symbol2 interpol=join color=red; axis1 order=(0 to 5) label=('X axis'); plot (y1 y2)*x; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.symbols.len(), 2);
+        assert_eq!(ast.axes.len(), 1);
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("written"), "log: {log}");
+        let p = std::env::temp_dir().join("gplottest_multi_1.png");
+        assert!(p.exists(), "image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn parse_symbol_axis_captured() {
+        let ast = parse_gplot(
+            "proc gplot data=a; symbol1 i=join v=dot c=blue; axis1 order=(0 to 100 by 10) label=('Time'); plot y*x; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.symbols.len(), 1);
+        assert_eq!(ast.symbols[0].interpol.as_deref(), Some("join"));
+        assert_eq!(ast.symbols[0].value.as_deref(), Some("dot"));
+        assert_eq!(ast.symbols[0].color.as_deref(), Some("blue"));
+        assert_eq!(ast.axes.len(), 1);
+        assert_eq!(ast.axes[0].order_min, Some(0.0));
+        assert_eq!(ast.axes[0].order_max, Some(100.0));
+        assert_eq!(ast.axes[0].label.as_deref(), Some("Time"));
     }
 }

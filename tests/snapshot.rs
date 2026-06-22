@@ -29,6 +29,12 @@ fn fixtures() {
                     || n.starts_with("proc_plot")
                     || n.starts_with("gplot")
                     || n.starts_with("gchart")
+                    // PROC UNIVARIATE fixtures also materialise a real image
+                    // under `--features graphics` (PROBPLOT/etc.), so the
+                    // default-build snapshot — which records the "image deferred"
+                    // NOTE — would diverge: skip when graphics is on, like the
+                    // plotting procs above.
+                    || n.starts_with("univariate")
             })
         {
             return;

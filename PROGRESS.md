@@ -667,8 +667,19 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   SHAPE({1..6},2,3)={1 2 3,4 5 6}, B[1:2,2:3]={2 3,5 6}, EIGEN(diag(2,3)) val={3,2} vecteurs axe-alignés ;
   OUTTREE 9 lignes (5 feuilles+4 fusions) topologie cohérente. 2 fixtures m34 (cluster_outtree, iml_m34) +
   snapshots. README CLUSTER/IML mis à jour. +14 tests (2444 lib total après M34.9+M34.10), 0 warning, m27/m28a octet-identique.
-- [ ] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
-  `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen)
+- [x] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
+  `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen).
+  **FAIT** : tout sous `#[cfg(feature="graphics")]` (build par défaut octet-identique : NOTEs « image
+  deferred » inchangées). SGPLOT : `LOESS` (lissage local-linéaire tricube, SMOOTH=), `DENSITY`
+  (NORMAL/KERNEL gaussien) en overlays ; histogrammes en vraies barres ; XAXIS/YAXIS VALUES=→plages.
+  GCHART : `PIE` (tranches ∝ FREQ/SUM/MEAN, `pie_angles` somme 2π). GPLOT : overlays multi-séries
+  (`(y1 y2)*x`, `y*x=group`) + `SYMBOL`n (INTERPOL=JOIN/VALUE=/COLOR=) et `AXIS`n (ORDER=/LABEL=) honorés.
+  render.rs additif (PlotType::Pie, Overlay/Decorations, draw_to_file_ext ; `draw_to_file` inchangé).
+  Validé par tests unitaires feature-gated (oracles : LOESS droite exacte, densité ∫≈1, angles PIE ∝
+  totaux, N séries multi-plot, images écrites). +14 tests graphics (2464 lib --features graphics ;
+  2447 défaut). **Bonus** : `tests/snapshot.rs` skip-list (cfg graphics) complétée avec `univariate`
+  (rendait une image sous graphics → suite snapshot graphics désormais verte). README SGPLOT/GCHART/GPLOT
+  mis à jour. 0 warning nouveau, build défaut octet-identique (0 `.snap.new`).
 - [ ] DoD M34 : fixtures `m34/` + snapshots vérifiés (oracles) ; README à jour ;
   passer « Jalon courant : **M35** ».
 
