@@ -97,6 +97,14 @@ pub struct RegDataOptions {
     pub outest: Option<OutEst>,
     /// M36.8 — `OUTSSCP=ds`: sums-of-squares-and-crossproducts output dataset.
     pub outsscp: Option<DatasetRef>,
+    /// M36.9 — `RIDGE=value-list`: ridge-regression constants. Empty ⇒ no ridge.
+    pub ridge: Vec<f64>,
+    /// M36.9 — `PCOMIT=value-list`: incomplete-principal-component drop counts.
+    /// Empty ⇒ no IPC regression.
+    pub pcomit: Vec<f64>,
+    /// M36.9 — `OUTVIF` (valid with RIDGE): emit `_TYPE_="RIDGEVIF"` rows in
+    /// OUTEST= carrying the per-k ridge VIF values.
+    pub outvif: bool,
 }
 
 /// M36.8 — OUTEST= request with its modifiers.
@@ -261,6 +269,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut edf = false;
     let mut tableout = false;
     let mut outsscp: Option<DatasetRef> = None;
+    // M36.9 — ridge / IPC regression PROC options.
+    let mut ridge: Vec<f64> = Vec::new();
+    let mut pcomit: Vec<f64> = Vec::new();
+    let mut outvif = false;
 
     // PROC REG statement options, until `;`
     loop {
@@ -288,6 +300,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             ts.next();
         } else if ts.peek().is_kw("tableout") {
             tableout = true;
+            ts.next();
+        } else if ts.peek().is_kw("ridge") {
+            // RIDGE=value-list (M36.9): a list of ridge constants k, accepting
+            // both an explicit list (`ridge=0 0.01 0.1`) and a SAS numeric range
+            // (`ridge=0 to 0.1 by 0.02`).
+            common::expect_eq(ts, "RIDGE")?;
+            ridge = parse_value_list(ts)?;
+        } else if ts.peek().is_kw("pcomit") {
+            // PCOMIT=value-list (M36.9): principal-component drop counts m.
+            common::expect_eq(ts, "PCOMIT")?;
+            pcomit = parse_value_list(ts)?;
+        } else if ts.peek().is_kw("outvif") {
+            outvif = true;
             ts.next();
         } else if ts.peek().is_kw("simple") {
             simple = true;
@@ -843,6 +868,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             input,
             outest,
             outsscp,
+            ridge,
+            pcomit,
+            outvif,
         },
         models,
         plots_requested,
@@ -853,6 +881,82 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         simple,
         corr,
     })
+}
+
+/// Parse a SAS numeric value-list for RIDGE=/PCOMIT= (M36.9). Accepts a plain
+/// list of numbers (`0 0.01 0.05 0.1`) and the SAS range form
+/// `start TO stop [BY step]` (default step 1), in any mix. Stops at the next
+/// option keyword (a non-numeric, non-`TO`/`BY` identifier), a `;`, or EOF.
+/// Negative values are tolerated via a leading `-` (e.g. `-0.5`).
+fn parse_value_list(ts: &mut StatementStream) -> Result<Vec<f64>> {
+    let mut out: Vec<f64> = Vec::new();
+    // Read one signed number; returns None if the current token is not numeric.
+    fn read_num(ts: &mut StatementStream) -> Option<f64> {
+        let neg = if ts.peek().kind == TokenKind::Minus {
+            ts.next();
+            true
+        } else {
+            false
+        };
+        match ts.peek().kind {
+            TokenKind::Num(v) => {
+                ts.next();
+                Some(if neg { -v } else { v })
+            }
+            _ => None,
+        }
+    }
+    loop {
+        match ts.peek().kind {
+            TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::Num(_) | TokenKind::Minus => {
+                let start = match read_num(ts) {
+                    Some(v) => v,
+                    None => break,
+                };
+                // Optional `TO stop [BY step]` range continuation.
+                if ts.peek().is_kw("to") {
+                    ts.next();
+                    let stop = read_num(ts).ok_or_else(|| {
+                        SasError::parse("expected value after TO", ts.peek().span)
+                    })?;
+                    let step = if ts.peek().is_kw("by") {
+                        ts.next();
+                        read_num(ts).ok_or_else(|| {
+                            SasError::parse("expected value after BY", ts.peek().span)
+                        })?
+                    } else {
+                        1.0
+                    };
+                    if step == 0.0 {
+                        out.push(start);
+                    } else {
+                        // Enumerate start, start+step, … up to stop inclusive
+                        // (with a small tolerance so the endpoint is captured).
+                        let n_steps = ((stop - start) / step).floor() as i64;
+                        for i in 0..=n_steps.max(0) {
+                            out.push(start + step * i as f64);
+                        }
+                        // Guard the inclusive endpoint against rounding.
+                        let last = start + step * n_steps.max(0) as f64;
+                        if (stop - last).abs() > step.abs() * 1e-9
+                            && ((step > 0.0 && last + step <= stop + step.abs() * 1e-9)
+                                || (step < 0.0 && last + step >= stop - step.abs() * 1e-9))
+                        {
+                            out.push(last + step);
+                        }
+                    }
+                } else {
+                    out.push(start);
+                }
+            }
+            // A non-numeric identifier (other than the range keywords, which are
+            // only valid after a start value) terminates the list — it's the
+            // next PROC option.
+            _ => break,
+        }
+    }
+    Ok(out)
 }
 
 /// Read a numeric option value (e.g. `0.5`). Significance levels in PROC REG
@@ -2165,6 +2269,24 @@ struct OutEstEntry {
     /// `param_names`.
     lb: Vec<f64>,
     ub: Vec<f64>,
+    /// M36.9 — back-transformed RIDGE / RIDGEVIF / IPC rows for this model
+    /// (empty unless RIDGE=/PCOMIT= requested). Each carries the row `_TYPE_`,
+    /// the `_RIDGE_`/`_PCOMIT_` selector value, and per-parameter values aligned
+    /// with `param_names` (intercept first when present).
+    ridge_ipc: Vec<RidgeIpcRow>,
+}
+
+/// M36.9 — one OUTEST= row produced by ridge / IPC regression. `kind` is the
+/// `_TYPE_` value ("RIDGE", "RIDGEVIF", or "IPC"); `ridge_k`/`pcomit_m` carry the
+/// `_RIDGE_`/`_PCOMIT_` selector (exactly one is `Some`); `values` are aligned
+/// with the entry's `param_names` (Intercept first when present). For RIDGEVIF
+/// rows the intercept slot is `None` (VIF undefined for the intercept).
+#[derive(Clone)]
+struct RidgeIpcRow {
+    kind: &'static str,
+    ridge_k: Option<f64>,
+    pcomit_m: Option<f64>,
+    values: Vec<Option<f64>>,
 }
 
 /// Build an OUTEST= entry from a completed fit (M36.8).
@@ -2205,6 +2327,7 @@ fn build_outest_entry(
         edf,
         lb,
         ub,
+        ridge_ipc: Vec::new(),
     }
 }
 
@@ -2222,6 +2345,14 @@ fn write_outest(
         return Ok(());
     }
     let with_name = spec.covout || spec.outseb;
+    // M36.9: whether any RIDGE / IPC rows are present, and which selector
+    // columns (`_RIDGE_` / `_PCOMIT_`) the dataset needs.
+    let with_ridge = entries
+        .iter()
+        .any(|e| e.ridge_ipc.iter().any(|r| r.ridge_k.is_some()));
+    let with_pcomit = entries
+        .iter()
+        .any(|e| e.ridge_ipc.iter().any(|r| r.pcomit_m.is_some()));
 
     // Union of parameter columns (source order): Intercept first if any model
     // has it, then regressors in first-seen order.
@@ -2257,6 +2388,9 @@ fn write_outest(
     let mut dep_vals: Vec<Vec<Option<f64>>> = vec![Vec::new(); dep_cols.len()];
     let mut lb_c: Vec<Option<f64>> = Vec::new();
     let mut ub_c: Vec<Option<f64>> = Vec::new();
+    // M36.9 — `_RIDGE_` / `_PCOMIT_` selector columns (None on non-ridge/IPC rows).
+    let mut ridge_c: Vec<Option<f64>> = Vec::new();
+    let mut pcomit_c: Vec<Option<f64>> = Vec::new();
 
     // Helper: index of a parameter name within an entry (case-insensitive).
     let entry_param = |e: &OutEstEntry, nm: &str| -> Option<usize> {
@@ -2354,6 +2488,54 @@ fn write_outest(
             lb_c.push(None);
             ub_c.push(None);
         }
+
+        // --- M36.9 RIDGE / RIDGEVIF / IPC rows. The PARMS/COV/SEB rows above
+        // never touch the selector columns, so bring them up to the current row
+        // count with `None` first, then emit one row per ridge/IPC entry.
+        if !e.ridge_ipc.is_empty() {
+            while ridge_c.len() < model_c.len() {
+                ridge_c.push(None);
+            }
+            while pcomit_c.len() < model_c.len() {
+                pcomit_c.push(None);
+            }
+            for rr in &e.ridge_ipc {
+                model_c.push(Some(e.model_label.clone()));
+                type_c.push(Some(rr.kind.to_string()));
+                depvar_c.push(Some(e.depvar.clone()));
+                name_c.push(Some(String::new()));
+                // RIDGEVIF rows carry no RMSE; RIDGE/IPC reuse the OLS RMSE.
+                rmse_c.push(if rr.kind == "RIDGEVIF" {
+                    None
+                } else {
+                    Some(e.rmse)
+                });
+                in_c.push(Some(e.n_in as f64));
+                p_c.push(Some(e.n_p as f64));
+                edf_c.push(Some(e.edf));
+                for (ci, cn) in param_cols.iter().enumerate() {
+                    // Align the row's per-parameter values (Intercept first when
+                    // present) onto the union parameter columns by name.
+                    let v = entry_param(e, cn).and_then(|k| rr.values.get(k).copied().flatten());
+                    param_vals[ci].push(v);
+                }
+                for ci in 0..dep_cols.len() {
+                    dep_vals[ci].push(None);
+                }
+                lb_c.push(None);
+                ub_c.push(None);
+                ridge_c.push(rr.ridge_k);
+                pcomit_c.push(rr.pcomit_m);
+            }
+        }
+    }
+    // Pad the selector columns to the final row count (entries without any
+    // ridge/IPC rows never pushed to them).
+    while ridge_c.len() < model_c.len() {
+        ridge_c.push(None);
+    }
+    while pcomit_c.len() < model_c.len() {
+        pcomit_c.push(None);
     }
 
     // Assemble the dataset columns in SAS order.
@@ -2368,6 +2550,15 @@ fn write_outest(
     if with_name {
         columns.push(Series::new("_NAME_".into(), name_c).into());
         vars.push(char_meta("_NAME_", 32));
+    }
+    // M36.9 — selector columns precede _RMSE_ when ridge / IPC rows are present.
+    if with_ridge {
+        columns.push(Series::new("_RIDGE_".into(), ridge_c).into());
+        vars.push(num_var_meta("_RIDGE_"));
+    }
+    if with_pcomit {
+        columns.push(Series::new("_PCOMIT_".into(), pcomit_c).into());
+        vars.push(num_var_meta("_PCOMIT_"));
     }
     columns.push(Series::new("_RMSE_".into(), rmse_c).into());
     vars.push(num_var_meta("_RMSE_"));
@@ -2994,23 +3185,55 @@ fn run_model(
         None
     };
 
-    fit_and_print(
-        model,
-        dep_name,
-        &sel_reg_names,
-        &fit,
-        restricted.as_ref(),
-        n_read,
-        n,
-        intercept,
-        model_label,
-        tolvif.as_ref(),
-        seqstats.as_ref(),
-        press_stat,
-        weighting.as_ref(),
-        by_heading,
-        session,
-    );
+    // --- RIDGE= / PCOMIT= (M36.9): when requested, SAS replaces the ordinary
+    // parameter-estimates analysis with the ridge / incomplete-principal-
+    // component results. Entirely gated on the new PROC options so the default
+    // path is byte-identical. Ridge/IPC operate on the standardized model and
+    // require an intercept (SAS centers); NOINT ⇒ clean NOTE + skip.
+    let want_ridge = !ast.data_options.ridge.is_empty();
+    let want_ipc = !ast.data_options.pcomit.is_empty();
+    let ridge_ipc_active = want_ridge || want_ipc;
+    // Back-transformed ridge/IPC rows to attach to this model's OUTEST entry.
+    let mut ridge_ipc_rows: Vec<RidgeIpcRow> = Vec::new();
+    if ridge_ipc_active {
+        if !intercept {
+            session.log.note(
+                "RIDGE/PCOMIT regression requires an intercept; the NOINT model is skipped.",
+            );
+        } else {
+            ridge_ipc_rows = fit_and_print_ridge_ipc(
+                ast,
+                model,
+                dep_name,
+                &sel_reg_names,
+                &sel_cols,
+                &y_vec,
+                n_read,
+                n,
+                model_label,
+                by_heading,
+                session,
+            );
+        }
+    } else {
+        fit_and_print(
+            model,
+            dep_name,
+            &sel_reg_names,
+            &fit,
+            restricted.as_ref(),
+            n_read,
+            n,
+            intercept,
+            model_label,
+            tolvif.as_ref(),
+            seqstats.as_ref(),
+            press_stat,
+            weighting.as_ref(),
+            by_heading,
+            session,
+        );
+    }
 
     // --- OUTEST= (M36.8): record this fit for the per-PROC parameter-estimates
     // dataset. Built from the existing fit (no refit). `_MODEL_` uses the bare
@@ -3021,7 +3244,7 @@ fn run_model(
             .strip_prefix("Model: ")
             .unwrap_or(model_label)
             .to_string();
-        accum.push(build_outest_entry(
+        let mut entry = build_outest_entry(
             &bare_label,
             dep_name,
             &sel_reg_names,
@@ -3029,7 +3252,11 @@ fn run_model(
             intercept,
             n_used,
             model.alpha,
-        ));
+        );
+        // M36.9: attach back-transformed ridge / IPC rows so the per-PROC writer
+        // emits the `_TYPE_`=RIDGE/RIDGEVIF/IPC rows alongside the PARMS row.
+        entry.ridge_ipc = ridge_ipc_rows;
+        accum.push(entry);
     }
 
     // --- Printed matrices (M36.8): XPX / I / COVB / CORRB. Each is gated on its
@@ -3857,6 +4084,341 @@ fn fit_and_print(
     session
         .listing
         .write_table(&pe_headers, &pe_aligns, &pe_rows);
+}
+
+// ───────────────────────── Ridge / IPC regression (M36.9) ─────────────────────────
+
+/// Standardization summary for ridge / IPC regression (M36.9). The model is fit
+/// on centered, unit-scaled (corrected-SD) regressors and response. We keep the
+/// per-regressor and response means / SDs so standardized estimates can be
+/// back-transformed to the original scale.
+struct Standardized {
+    /// Correlation matrix R = Xs'Xs/(n−1) of the standardized regressors (p×p).
+    r: Vec<Vec<f64>>,
+    /// Correlations r_xy of each standardized regressor with the response (len p).
+    r_xy: Vec<f64>,
+    /// Regressor means (len p).
+    x_mean: Vec<f64>,
+    /// Regressor corrected SDs (len p).
+    x_sd: Vec<f64>,
+    /// Response mean.
+    y_mean: f64,
+    /// Response corrected SD.
+    y_sd: f64,
+}
+
+/// Build the standardized correlation structure for ridge / IPC (M36.9). `cols`
+/// are the (in-model, no-intercept) regressor columns over the complete-case
+/// rows; `y` is the response. R is the Pearson correlation matrix of the
+/// regressors, r_xy the regressor/response correlations.
+fn standardize_for_ridge(cols: &[Vec<f64>], y: &[f64]) -> Standardized {
+    let p = cols.len();
+    let n = y.len();
+    let nf = n as f64;
+    let x_mean: Vec<f64> = cols.iter().map(|c| c.iter().sum::<f64>() / nf).collect();
+    let x_sd: Vec<f64> = cols.iter().map(|c| sample_sd(c)).collect();
+    let y_mean = y.iter().sum::<f64>() / nf;
+    let y_sd = sample_sd(y);
+    // Standardized columns zs_j = (x_j − x̄_j)/sd_j, response zy = (y − ȳ)/sd_y.
+    let zcols: Vec<Vec<f64>> = (0..p)
+        .map(|j| {
+            let s = if x_sd[j] > 0.0 { x_sd[j] } else { 1.0 };
+            cols[j].iter().map(|v| (v - x_mean[j]) / s).collect()
+        })
+        .collect();
+    let zy: Vec<f64> = {
+        let s = if y_sd > 0.0 { y_sd } else { 1.0 };
+        y.iter().map(|v| (v - y_mean) / s).collect()
+    };
+    // R = Zs'Zs/(n−1) — the correlation matrix. r_xy = Zs'zy/(n−1).
+    let denom = nf - 1.0;
+    let mut r = vec![vec![0.0; p]; p];
+    for a in 0..p {
+        for b in a..p {
+            let s: f64 = (0..n).map(|i| zcols[a][i] * zcols[b][i]).sum::<f64>() / denom;
+            r[a][b] = s;
+            r[b][a] = s;
+        }
+    }
+    let r_xy: Vec<f64> = (0..p)
+        .map(|j| (0..n).map(|i| zcols[j][i] * zy[i]).sum::<f64>() / denom)
+        .collect();
+    Standardized {
+        r,
+        r_xy,
+        x_mean,
+        x_sd,
+        y_mean,
+        y_sd,
+    }
+}
+
+/// Back-transform standardized coefficients `b_star` (one per regressor) to the
+/// original scale (M36.9). Returns `(intercept, slopes)`:
+///   β_j = b*_j · sd(y)/sd(x_j);  β_0 = ȳ − Σ β_j x̄_j.
+fn back_transform(b_star: &[f64], std: &Standardized) -> (f64, Vec<f64>) {
+    let p = b_star.len();
+    let mut slopes = vec![0.0; p];
+    for j in 0..p {
+        let sx = if std.x_sd[j] > 0.0 { std.x_sd[j] } else { 1.0 };
+        slopes[j] = b_star[j] * std.y_sd / sx;
+    }
+    let intercept = std.y_mean - (0..p).map(|j| slopes[j] * std.x_mean[j]).sum::<f64>();
+    (intercept, slopes)
+}
+
+/// Standardized ridge estimates b*(k) = (R + kI)⁻¹ r_xy (M36.9).
+fn ridge_beta_star(r: &[Vec<f64>], r_xy: &[f64], k: f64) -> Result<Vec<f64>> {
+    let p = r.len();
+    let mut a = r.to_vec();
+    for i in 0..p {
+        a[i][i] += k;
+    }
+    let inv = linalg::invert_matrix(&a)?;
+    Ok(linalg::matrix_vec_mult(&inv, r_xy))
+}
+
+/// Ridge VIF_j(k) = [ (R+kI)⁻¹ R (R+kI)⁻¹ ]_jj (M36.9). k=0 → ordinary VIF.
+fn ridge_vif(r: &[Vec<f64>], k: f64) -> Result<Vec<f64>> {
+    let p = r.len();
+    let mut a = r.to_vec();
+    for i in 0..p {
+        a[i][i] += k;
+    }
+    let inv = linalg::invert_matrix(&a)?;
+    let m = linalg::matrix_mult(&inv, r);
+    let m = linalg::matrix_mult(&m, &inv);
+    Ok((0..p).map(|i| m[i][i]).collect())
+}
+
+/// Standardized IPC estimates dropping the `m` smallest-eigenvalue principal
+/// components of R (M36.9): b*_IPC = Σ_{i=1}^{p−m} (v_iᵀ r_xy / λ_i) v_i, using
+/// the eigenpairs of R sorted by descending eigenvalue. m=0 ⇒ full OLS-standardized
+/// estimates; m=p ⇒ all-zero.
+fn ipc_beta_star(r: &[Vec<f64>], r_xy: &[f64], m: usize) -> Result<Vec<f64>> {
+    let p = r.len();
+    // eigenvectors_jacobi returns (V, λ) with λ descending; V columns are the
+    // eigenvectors. Retain the first (p−m) (largest-eigenvalue) components.
+    let (v, lambda) = linalg::eigenvectors_jacobi(r)?;
+    let keep = p.saturating_sub(m);
+    let mut b = vec![0.0; p];
+    for comp in 0..keep {
+        let lam = lambda[comp];
+        if lam.abs() < 1e-12 {
+            continue;
+        }
+        // v_i = comp-th column of V.
+        let vi: Vec<f64> = (0..p).map(|row| v[row][comp]).collect();
+        let dot: f64 = (0..p).map(|j| vi[j] * r_xy[j]).sum();
+        let coef = dot / lam;
+        for j in 0..p {
+            b[j] += coef * vi[j];
+        }
+    }
+    Ok(b)
+}
+
+/// Compute, print, and (for OUTEST=) return the ridge / IPC regression results
+/// for one model (M36.9). `cols` are the in-model regressor columns (no
+/// intercept) over the complete-case rows; `y` the response. Requires an
+/// intercept model (the caller guards NOINT). Returns the back-transformed
+/// rows to be folded into the model's OUTEST entry (empty when OUTEST= is off
+/// makes no difference — the rows are cheap and the writer is gated).
+#[allow(clippy::too_many_arguments)]
+fn fit_and_print_ridge_ipc(
+    ast: &RegAst,
+    model: &RegModel,
+    dep_name: &str,
+    reg_names: &[String],
+    cols: &[Vec<f64>],
+    y: &[f64],
+    n_read: usize,
+    n: usize,
+    model_label: &str,
+    by_heading: Option<&str>,
+    session: &mut Session,
+) -> Vec<RidgeIpcRow> {
+    let std = standardize_for_ridge(cols, y);
+    let p = reg_names.len();
+    let want_ridge = !ast.data_options.ridge.is_empty();
+    let want_ipc = !ast.data_options.pcomit.is_empty();
+    let outvif = ast.data_options.outvif;
+    let mut rows: Vec<RidgeIpcRow> = Vec::new();
+
+    // Deferred ridge-trace graphics (consistent with the existing PLOTS
+    // deferral): emit a single clean NOTE, no image.
+    if want_ridge {
+        session
+            .log
+            .note("The ridge trace plot is not produced in this environment.");
+    }
+
+    if !model.noprint {
+        session.listing.page_header();
+        centered(session, "The REG Procedure");
+        if let Some(h) = by_heading {
+            centered(session, h);
+        }
+        centered(session, model_label);
+        centered(session, &format!("Dependent Variable: {}", dep_name));
+        session.listing.blank();
+        session.listing.write_line(&format!(
+            "               Number of Observations Read         {}",
+            n_read
+        ));
+        session.listing.write_line(&format!(
+            "               Number of Observations Used         {}",
+            n
+        ));
+        session.listing.blank();
+        session.listing.blank();
+    }
+
+    // Column layout shared by the printed ridge / IPC tables: a selector column
+    // (_RIDGE_ or _PCOMIT_), then Intercept and one column per regressor.
+    let build_headers = |selector: &str| -> (Vec<String>, Vec<Align>) {
+        let mut h = vec![selector.to_string(), "Intercept".to_string()];
+        let mut a = vec![Align::Right, Align::Right];
+        for nm in reg_names {
+            h.push(nm.clone());
+            a.push(Align::Right);
+        }
+        (h, a)
+    };
+
+    // --- RIDGE ---
+    if want_ridge {
+        if !model.noprint {
+            centered(session, "Ridge Regression Parameter Estimates");
+            session.listing.blank();
+        }
+        let (headers, aligns) = build_headers("Ridge");
+        let mut table_rows: Vec<Vec<String>> = Vec::new();
+        let mut vif_rows: Vec<Vec<String>> = Vec::new();
+        let (vif_headers, vif_aligns) = {
+            // VIF table has no intercept column.
+            let mut h = vec!["Ridge".to_string()];
+            let mut a = vec![Align::Right];
+            for nm in reg_names {
+                h.push(nm.clone());
+                a.push(Align::Right);
+            }
+            (h, a)
+        };
+        for &k in &ast.data_options.ridge {
+            let b_star = match ridge_beta_star(&std.r, &std.r_xy, k) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let (b0, slopes) = back_transform(&b_star, &std);
+            // Printed back-transformed row.
+            let mut row = vec![fmt_ridge_sel(k), fmt5(b0)];
+            for s in &slopes {
+                row.push(fmt5(*s));
+            }
+            table_rows.push(row);
+            // OUTEST RIDGE row: Intercept then slopes (param_names order).
+            let mut vals: Vec<Option<f64>> = Vec::with_capacity(p + 1);
+            vals.push(Some(b0));
+            for s in &slopes {
+                vals.push(Some(*s));
+            }
+            rows.push(RidgeIpcRow {
+                kind: "RIDGE",
+                ridge_k: Some(k),
+                pcomit_m: None,
+                values: vals,
+            });
+            // OUTVIF: ridge VIF row (no intercept value).
+            if outvif {
+                if let Ok(vif) = ridge_vif(&std.r, k) {
+                    let mut vrow = vec![fmt_ridge_sel(k)];
+                    for v in &vif {
+                        vrow.push(fmt5(*v));
+                    }
+                    vif_rows.push(vrow);
+                    let mut vvals: Vec<Option<f64>> = Vec::with_capacity(p + 1);
+                    vvals.push(None); // intercept slot
+                    for v in &vif {
+                        vvals.push(Some(*v));
+                    }
+                    rows.push(RidgeIpcRow {
+                        kind: "RIDGEVIF",
+                        ridge_k: Some(k),
+                        pcomit_m: None,
+                        values: vvals,
+                    });
+                }
+            }
+        }
+        if !model.noprint {
+            session.listing.write_table(&headers, &aligns, &table_rows);
+            if outvif && !vif_rows.is_empty() {
+                session.listing.blank();
+                session.listing.blank();
+                centered(session, "Ridge Regression VIF");
+                session.listing.blank();
+                session
+                    .listing
+                    .write_table(&vif_headers, &vif_aligns, &vif_rows);
+            }
+        }
+    }
+
+    // --- IPC ---
+    if want_ipc {
+        if !model.noprint {
+            if want_ridge {
+                session.listing.blank();
+                session.listing.blank();
+            }
+            centered(session, "Incomplete Principal Components Parameter Estimates");
+            session.listing.blank();
+        }
+        let (headers, aligns) = build_headers("PCOMIT");
+        let mut table_rows: Vec<Vec<String>> = Vec::new();
+        for &mv in &ast.data_options.pcomit {
+            let m = mv.max(0.0).trunc() as usize;
+            let m = m.min(p);
+            let b_star = match ipc_beta_star(&std.r, &std.r_xy, m) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let (b0, slopes) = back_transform(&b_star, &std);
+            let mut row = vec![format!("{}", m), fmt5(b0)];
+            for s in &slopes {
+                row.push(fmt5(*s));
+            }
+            table_rows.push(row);
+            let mut vals: Vec<Option<f64>> = Vec::with_capacity(p + 1);
+            vals.push(Some(b0));
+            for s in &slopes {
+                vals.push(Some(*s));
+            }
+            rows.push(RidgeIpcRow {
+                kind: "IPC",
+                ridge_k: None,
+                pcomit_m: Some(m as f64),
+                values: vals,
+            });
+        }
+        if !model.noprint {
+            session.listing.write_table(&headers, &aligns, &table_rows);
+        }
+    }
+
+    rows
+}
+
+/// Format a ridge constant for the printed `_RIDGE_` selector column (M36.9).
+fn fmt_ridge_sel(k: f64) -> String {
+    // Render integers without trailing decimals, otherwise a compact decimal.
+    if (k - k.round()).abs() < 1e-12 {
+        format!("{}", k.round() as i64)
+    } else {
+        let s = format!("{:.5}", k);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
 }
 
 /// Print the degenerate "no variables entered" case for SELECTION when the
@@ -5801,6 +6363,9 @@ mod tests {
                 input: Some(input),
                 outest: None,
                 outsscp: None,
+                ridge: Vec::new(),
+                pcomit: Vec::new(),
+                outvif: false,
             },
             models: vec![RegModelEntry {
                 model,
@@ -8267,5 +8832,195 @@ mod tests {
             })
             .collect();
         assert_eq!(types, vec!["PARMS", "COV", "COV", "SEB"]);
+    }
+
+    // ───────────────────────── M36.9 ridge / IPC ─────────────────────────
+
+    /// A collinear sample for the ridge / IPC oracles: x2 ≈ x1 + small noise so
+    /// R has a small eigenvalue (a clear shrinkage signal).
+    fn m369_setup() -> (Vec<Vec<f64>>, Vec<f64>) {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let x2: Vec<f64> = x1
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v + 0.05 * ((i as f64) * 0.7).sin())
+            .collect();
+        let y: Vec<f64> = (0..x1.len())
+            .map(|i| 3.0 + 1.5 * x1[i] - 0.8 * x2[i] + 0.2 * ((i as f64) * 1.3).cos())
+            .collect();
+        (vec![x1.to_vec(), x2], y)
+    }
+
+    fn norm2(v: &[f64]) -> f64 {
+        v.iter().map(|x| x * x).sum::<f64>().sqrt()
+    }
+
+    #[test]
+    fn test_m369_ridge0_equals_ols() {
+        // RIDGE=0 back-transformed estimates reproduce the OLS β (intercept +
+        // slopes) within 1e-7.
+        let (cols, y) = m369_setup();
+        let n = y.len();
+        let std = standardize_for_ridge(&cols, &y);
+        let b_star = ridge_beta_star(&std.r, &std.r_xy, 0.0).unwrap();
+        let (b0, slopes) = back_transform(&b_star, &std);
+        let xm = design(true, &[&cols[0], &cols[1]], n);
+        let fit = ols_fit(&xm, &y).unwrap();
+        assert!((b0 - fit.beta[0]).abs() < 1e-7, "intercept {b0} vs {}", fit.beta[0]);
+        assert!((slopes[0] - fit.beta[1]).abs() < 1e-7);
+        assert!((slopes[1] - fit.beta[2]).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_m369_ridge_shrinks_monotone() {
+        // ‖b*(k)‖ ≤ ‖b*(0)‖ and strictly decreasing in k under collinearity.
+        let (cols, y) = m369_setup();
+        let std = standardize_for_ridge(&cols, &y);
+        let ks = [0.0, 0.01, 0.05, 0.1, 0.5];
+        let mut prev = f64::INFINITY;
+        let n0 = norm2(&ridge_beta_star(&std.r, &std.r_xy, 0.0).unwrap());
+        for &k in &ks {
+            let nk = norm2(&ridge_beta_star(&std.r, &std.r_xy, k).unwrap());
+            assert!(nk <= n0 + 1e-12, "‖b*({k})‖ {nk} > ‖b*(0)‖ {n0}");
+            if k > 0.0 {
+                assert!(nk < prev, "norm not strictly decreasing at k={k}");
+            }
+            prev = nk;
+        }
+    }
+
+    #[test]
+    fn test_m369_outvif_k0_equals_ordinary_vif() {
+        // Ridge VIF at k=0 == ordinary VIF (within 1e-7); decreases with k.
+        let (cols, y) = m369_setup();
+        let std = standardize_for_ridge(&cols, &y);
+        let (_tol, ord_vif) = vif_tol(&cols);
+        let rvif0 = ridge_vif(&std.r, 0.0).unwrap();
+        for j in 0..cols.len() {
+            assert!(
+                (rvif0[j] - ord_vif[j]).abs() < 1e-7,
+                "ridge VIF(0) {} != ordinary VIF {} at {j}",
+                rvif0[j],
+                ord_vif[j]
+            );
+        }
+        let rvif1 = ridge_vif(&std.r, 0.1).unwrap();
+        for j in 0..cols.len() {
+            assert!(rvif1[j] < rvif0[j], "ridge VIF did not decrease at {j}");
+        }
+    }
+
+    #[test]
+    fn test_m369_pcomit0_equals_ols_and_full_drop_zero() {
+        let (cols, y) = m369_setup();
+        let n = y.len();
+        let p = cols.len();
+        let std = standardize_for_ridge(&cols, &y);
+        // m=0 → OLS β.
+        let b_star0 = ipc_beta_star(&std.r, &std.r_xy, 0).unwrap();
+        let (b0, slopes) = back_transform(&b_star0, &std);
+        let xm = design(true, &[&cols[0], &cols[1]], n);
+        let fit = ols_fit(&xm, &y).unwrap();
+        assert!((b0 - fit.beta[0]).abs() < 1e-7);
+        assert!((slopes[0] - fit.beta[1]).abs() < 1e-7);
+        assert!((slopes[1] - fit.beta[2]).abs() < 1e-7);
+        // m=p → standardized estimates all 0; intercept = ȳ.
+        let b_star_all = ipc_beta_star(&std.r, &std.r_xy, p).unwrap();
+        for b in &b_star_all {
+            assert!(b.abs() < 1e-12, "IPC drop-all coef not zero: {b}");
+        }
+        let (b0_all, slopes_all) = back_transform(&b_star_all, &std);
+        for s in &slopes_all {
+            assert!(s.abs() < 1e-12);
+        }
+        assert!((b0_all - std.y_mean).abs() < 1e-9, "intercept != ȳ");
+    }
+
+    #[test]
+    fn test_m369_parse_ridge_range() {
+        // ridge=0 to 0.1 by 0.05 → {0, 0.05, 0.1}.
+        let ast = parse_reg("proc reg ridge=0 to 0.1 by 0.05; model y = x; run;").unwrap();
+        let r = &ast.data_options.ridge;
+        assert_eq!(r.len(), 3, "ridge list {:?}", r);
+        assert!((r[0] - 0.0).abs() < 1e-12);
+        assert!((r[1] - 0.05).abs() < 1e-12);
+        assert!((r[2] - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_m369_parse_ridge_outvif_outest() {
+        let ast =
+            parse_reg("proc reg ridge=0 0.1 outvif outest=e; model y = x; run;").unwrap();
+        assert_eq!(ast.data_options.ridge, vec![0.0, 0.1]);
+        assert!(ast.data_options.outvif);
+        assert!(ast.data_options.outest.is_some());
+        assert!(ast.data_options.pcomit.is_empty());
+    }
+
+    #[test]
+    fn test_m369_parse_pcomit_outest() {
+        let ast = parse_reg("proc reg pcomit=1 outest=e; model y = x; run;").unwrap();
+        assert_eq!(ast.data_options.pcomit, vec![1.0]);
+        assert!(ast.data_options.outest.is_some());
+        assert!(ast.data_options.ridge.is_empty());
+        assert!(!ast.data_options.outvif);
+    }
+
+    #[test]
+    fn test_m369_outest_ridge_rows_and_columns() {
+        // End-to-end: RIDGE= + OUTVIF + OUTEST= produces _RIDGE_ column and
+        // RIDGE / RIDGEVIF rows; the k=0 RIDGE row reproduces the OLS PARMS.
+        let mut session = make_session();
+        let (cols, y) = m369_setup();
+        let frame = df![
+            "y" => y.clone(),
+            "x1" => cols[0].clone(),
+            "x2" => cols[1].clone()
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t ridge=0 0.1 outvif outest=est; model y = x1 x2; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        assert!(names.contains(&"_RIDGE_".to_string()), "no _RIDGE_ col: {names:?}");
+        let tidx = out.vars.iter().position(|v| v.name == "_TYPE_").unwrap();
+        let tcol = decode_column(&out, tidx).unwrap();
+        let types: Vec<String> = tcol
+            .iter()
+            .map(|v| match v {
+                crate::value::Value::Char(s) => s.trim_end().to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        // PARMS then RIDGE/RIDGEVIF pairs for k=0 and k=0.1.
+        assert_eq!(types[0], "PARMS");
+        assert!(types.iter().filter(|t| *t == "RIDGE").count() == 2);
+        assert!(types.iter().filter(|t| *t == "RIDGEVIF").count() == 2);
+        // The k=0 RIDGE row's Intercept equals the OLS PARMS Intercept.
+        let ridge_idx = out.vars.iter().position(|v| v.name == "_RIDGE_").unwrap();
+        let ridge_col = decode_column(&out, ridge_idx).unwrap();
+        let intidx = out.vars.iter().position(|v| v.name == "Intercept").unwrap();
+        let intcol = decode_column(&out, intidx).unwrap();
+        let parms_int = value_to_num(&intcol[0]).unwrap();
+        // Find the RIDGE row with _RIDGE_==0.
+        let k0row = (0..types.len())
+            .find(|&i| types[i] == "RIDGE" && value_to_num(&ridge_col[i]) == Some(0.0))
+            .unwrap();
+        assert!((value_to_num(&intcol[k0row]).unwrap() - parms_int).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_m369_value_list_plain() {
+        let ast =
+            parse_reg("proc reg ridge=0 0.01 0.05 0.1; model y = x; run;").unwrap();
+        assert_eq!(ast.data_options.ridge, vec![0.0, 0.01, 0.05, 0.1]);
     }
 }

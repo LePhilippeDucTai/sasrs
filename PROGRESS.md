@@ -838,8 +838,16 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   CORRB diag=1, XPX·(X'X)⁻¹≈I, I-coin=SSE, OUTEST β/SEB/EDF, OUTSSCP(x,y)=Σxy. Cohérence croisée :
   CORR(age,height)=0.8114=√(1−TOL) de M36.4. Fixture m36/outest_matrices. 2573 lib tests, 0 warning,
   snapshots octet-identiques.
-- [ ] M36.9 — Régressions spécialisées : `RIDGE=` (ridge regression + `OUTVIF`, trace de ridge),
-  `PCOMIT=` (régression sur composantes principales incomplètes / IPC) (Fable, élevé)
+- [x] M36.9 — Régressions spécialisées : `RIDGE=` (ridge regression + `OUTVIF`, trace de ridge),
+  `PCOMIT=` (régression sur composantes principales incomplètes / IPC) (Fable → Opus, Fable indisponible).
+  **FAIT** : `RegDataOptions.ridge`/`pcomit`/`outvif` ; `parse_value_list` (liste + plage `a to b by c`).
+  Standardisation (centrage/réduction SD corrigée → `R`, `r_xy`) puis rétro-transformation. RIDGE :
+  `b*(k)=(R+kI)⁻¹r_xy` ; OUTVIF : `VIF_j(k)=[(R+kI)⁻¹R(R+kI)⁻¹]_jj`. IPC : eigen de `R`, garde p−m
+  composantes, `b*=Σ(v_iᵀr_xy/λ_i)v_i`. Tables « Ridge Regression Parameter Estimates » / VIF / IPC
+  (colonne sélecteur Ridge/PCOMIT) ; OUTEST `_TYPE_`=RIDGE/RIDGEVIF/IPC + colonnes `_RIDGE_`/`_PCOMIT_`.
+  NOINT+ridge → NOTE+skip ; trace → NOTE différée. Oracles : RIDGE=0=OLS, ‖b*(k)‖ décroissant, OUTVIF
+  k=0=VIF ordinaire (2.92762, cohérent M36.4) et décroissant, PCOMIT=0=OLS / PCOMIT=p→0, parse de plage.
+  Fixture m36/ridge_pcomit. 2582 lib tests, 0 warning, snapshots octet-identiques.
 - [ ] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
   Wilks/Pillai/Hotelling-Lawley/Roy) ; statements interactifs run-group `ADD`/`DELETE`/`REWEIGHT`/
   `REFIT`/`PAINT`/`VAR` — implémenter le faisable, erreur propre + doc pour le résiduel (Fable, très élevé)
