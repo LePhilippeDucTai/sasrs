@@ -762,9 +762,17 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   opère sur l'ajustement contraint. Oracles auto-cohérents vérifiés : `TEST age=0` ⇒ Pr>F=0.6865 = Pr>|t|
   de age ; `RESTRICT age=height` ⇒ age=height=3.11908 exact, Error DF 16→17. Fixture m36/test_restrict.
   Chemin OLS par défaut octet-identique. 2501 lib tests, 0 warning.
-- [ ] M36.2 — Intervalles de confiance/prédiction : MODEL `CLB` (CI des estimations), `ALPHA=`,
+- [x] M36.2 — Intervalles de confiance/prédiction : MODEL `CLB` (CI des estimations), `ALPHA=`,
   `CLI`/`CLM` (limites individu/moyenne dans le listing) + mots-clés `OUTPUT` `STDP STDI STDR
-  LCL UCL LCLM UCLM` (Opus, moyen)
+  LCL UCL LCLM UCLM` (Opus, moyen).
+  **FAIT** : `RegModel.alpha`/`clb`/`clm`/`cli` ; `RegOutput` + 7 colonnes. Leviers `h_i=x_iᵀ(X'X)⁻¹x_i`,
+  `STDP=√(MSE·h)`, `STDI=√(MSE·(1+h))`, `STDR=√(MSE·(1−h))`, limites `ŷ∓t·STD`. `t_quantile(p,df)` ajouté
+  (`stat::dists`, via identité T²~F(1,df) sur `f_quantile`). CLB → colonnes « <L>% Confidence Limits »
+  dans la table des estimations ; CLM/CLI → table « Output Statistics » (jeux de colonnes selon CLM/CLI/
+  les deux). `write_outputs` étendu (calcul paresseux : chemin P=/R= seul octet-identique). Oracles :
+  `Σhᵢ=p_eff`, `STDP²+STDR²=MSE`, `STDI²−STDP²=MSE`, CLM centré sur ŷ, CLB centré sur β. Fixture
+  m36/clb_cli_clm vérifiée (height CI [2.81017,4.98789]=3.89903±2.110·SE). 2509 lib tests, 0 warning,
+  snapshots octet-identiques.
 - [ ] M36.3 — Diagnostics d'observation : MODEL `R` (analyse des résidus) / `INFLUENCE` + mots-clés
   `OUTPUT` `STUDENT RSTUDENT COOKD H (leverage) PRESS DFFITS COVRATIO DFBETAS` (Opus, élevé)
 - [ ] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de

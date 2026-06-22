@@ -19,7 +19,7 @@ use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::stat::linalg;
-use crate::stat::{f_cdf, student_t_cdf};
+use crate::stat::{f_cdf, student_t_cdf, t_quantile};
 use crate::token::TokenKind;
 use crate::value::VarType;
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
@@ -89,6 +89,14 @@ pub struct RegModel {
     pub noprint: bool,
     /// SELECTION= option (FORWARD / BACKWARD / STEPWISE), if requested.
     pub selection: Option<Selection>,
+    /// Significance level α (default 0.05) → 100(1−α)% intervals (M36.2).
+    pub alpha: f64,
+    /// CLB → confidence limits on the parameter estimates (M36.2).
+    pub clb: bool,
+    /// CLM → per-observation mean confidence limits in Output Statistics.
+    pub clm: bool,
+    /// CLI → per-observation individual prediction limits in Output Statistics.
+    pub cli: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +118,14 @@ pub struct RegOutput {
     pub out: DatasetRef,
     pub predicted: Option<String>,
     pub residual: Option<String>,
+    /// M36.2 — std errors / prediction limits requested as output columns.
+    pub stdp: Option<String>,
+    pub stdi: Option<String>,
+    pub stdr: Option<String>,
+    pub lcl: Option<String>,
+    pub ucl: Option<String>,
+    pub lclm: Option<String>,
+    pub uclm: Option<String>,
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -159,6 +175,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut noint = false;
             let mut noprint = false;
             let mut selection: Option<Selection> = None;
+            let mut alpha = 0.05_f64;
+            let mut clb = false;
+            let mut clm = false;
+            let mut cli = false;
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                     break;
@@ -220,6 +240,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                             if let Some(sel) = selection.as_mut() {
                                 sel.slstay = v;
                             }
+                        } else if ts.peek().is_kw("alpha") {
+                            common::expect_eq(ts, "ALPHA")?;
+                            alpha = read_float(ts)?;
+                        } else if ts.peek().is_kw("clb") {
+                            clb = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("clm") {
+                            clm = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("cli") {
+                            cli = true;
+                            ts.next();
                         } else {
                             ts.next(); // skip unknown options
                         }
@@ -241,6 +273,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     noint,
                     noprint,
                     selection,
+                    alpha,
+                    clb,
+                    clm,
+                    cli,
                 },
                 outputs: Vec::new(),
                 tests: Vec::new(),
@@ -252,21 +288,43 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut out: Option<DatasetRef> = None;
             let mut predicted: Option<String> = None;
             let mut residual: Option<String> = None;
+            let mut stdp: Option<String> = None;
+            let mut stdi: Option<String> = None;
+            let mut stdr: Option<String> = None;
+            let mut lcl: Option<String> = None;
+            let mut ucl: Option<String> = None;
+            let mut lclm: Option<String> = None;
+            let mut uclm: Option<String> = None;
+            // Read the value name for a `KEYWORD=name` OUTPUT option.
+            let read_name = |ts: &mut StatementStream, kw: &str| -> Result<Option<String>> {
+                common::expect_eq(ts, kw)?;
+                let name = ts.peek().ident().map(str::to_string);
+                if name.is_some() {
+                    ts.next();
+                }
+                Ok(name)
+            };
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                 if ts.peek().is_kw("out") {
                     out = Some(common::parse_out_opt(ts)?);
                 } else if ts.peek().is_kw("predicted") || ts.peek().is_kw("p") {
-                    common::expect_eq(ts, "PREDICTED")?;
-                    predicted = ts.peek().ident().map(str::to_string);
-                    if predicted.is_some() {
-                        ts.next();
-                    }
+                    predicted = read_name(ts, "PREDICTED")?;
                 } else if ts.peek().is_kw("residual") || ts.peek().is_kw("r") {
-                    common::expect_eq(ts, "RESIDUAL")?;
-                    residual = ts.peek().ident().map(str::to_string);
-                    if residual.is_some() {
-                        ts.next();
-                    }
+                    residual = read_name(ts, "RESIDUAL")?;
+                } else if ts.peek().is_kw("stdp") {
+                    stdp = read_name(ts, "STDP")?;
+                } else if ts.peek().is_kw("stdi") {
+                    stdi = read_name(ts, "STDI")?;
+                } else if ts.peek().is_kw("stdr") {
+                    stdr = read_name(ts, "STDR")?;
+                } else if ts.peek().is_kw("lclm") {
+                    lclm = read_name(ts, "LCLM")?;
+                } else if ts.peek().is_kw("uclm") {
+                    uclm = read_name(ts, "UCLM")?;
+                } else if ts.peek().is_kw("lcl") {
+                    lcl = read_name(ts, "LCL")?;
+                } else if ts.peek().is_kw("ucl") {
+                    ucl = read_name(ts, "UCL")?;
                 } else {
                     ts.next();
                 }
@@ -282,6 +340,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                         out: out_ref,
                         predicted,
                         residual,
+                        stdp,
+                        stdi,
+                        stdr,
+                        lcl,
+                        ucl,
+                        lclm,
+                        uclm,
                     });
                 }
             }
@@ -478,6 +543,18 @@ fn fmt_fit4(v: f64) -> String {
     format!("{v:.4}")
 }
 
+/// Format a confidence level (e.g. 95, 90, or 97.5) without a trailing `.0`.
+fn fmt_level(v: f64) -> String {
+    if (v - v.round()).abs() < 1e-9 {
+        format!("{}", v.round() as i64)
+    } else {
+        // Trim trailing zeros from a fixed-precision rendering.
+        let s = format!("{:.4}", v);
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        s.to_string()
+    }
+}
+
 fn fmt_p(p: Option<f64>) -> String {
     match p {
         None => ".".to_string(),
@@ -555,6 +632,27 @@ fn ols_fit(x: &[Vec<f64>], y: &[f64]) -> Result<OlsFit> {
         sse,
         xtx_inv,
     })
+}
+
+/// Per-observation leverage h_i = x_iᵀ (X'X)⁻¹ x_i for every design row of
+/// `x_mat`, given the already-computed `xtx_inv` (M36.2). Σ_i h_i == p_eff.
+fn leverages(x_mat: &[Vec<f64>], xtx_inv: &[Vec<f64>]) -> Vec<f64> {
+    let p = xtx_inv.len();
+    x_mat
+        .iter()
+        .map(|row| {
+            // h = rowᵀ · (X'X)⁻¹ · row.
+            let mut acc = 0.0;
+            for a in 0..p {
+                let mut inner = 0.0;
+                for b in 0..p {
+                    inner += xtx_inv[a][b] * row[b];
+                }
+                acc += row[a] * inner;
+            }
+            acc
+        })
+        .collect()
 }
 
 /// Compute SSE only for a candidate subset fit (used by SELECTION). Builds the
@@ -792,6 +890,14 @@ fn run_model(
         session,
     );
 
+    // --- Output Statistics (M36.2): per-observation CLM / CLI limits. Driven
+    // off the (unrestricted) OLS fit, gated on the CLM/CLI model options.
+    if (model.clm || model.cli) && !model.noprint {
+        print_output_statistics(
+            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, session,
+        );
+    }
+
     // --- TEST (M36.1): operate on the model as fitted (restricted if present).
     if !entry.tests.is_empty() {
         let (t_beta, t_xtx, t_sse, t_dfe) = match &restricted {
@@ -818,7 +924,17 @@ fn run_model(
     }
 
     // --- OUTPUT dataset(s) for this model (complete cases only) ---
-    write_outputs(entry, ds, &complete_mask, n, &fit, session)?;
+    write_outputs(
+        entry,
+        ds,
+        &complete_mask,
+        n,
+        &fit,
+        &x_mat,
+        p_eff,
+        model.alpha,
+        session,
+    )?;
 
     // --- Diagnostics (M29.3) ---
     if ast.plots_requested {
@@ -1051,6 +1167,10 @@ fn fit_and_print(
     // column carries the restriction expression; the unrestricted path keeps
     // the original 6-column layout byte-identical.
     let with_label = restricted.is_some();
+    // CLB (M36.2): append two confidence-limit columns to the parameter table.
+    let with_clb = model.clb;
+    let clb_level = 100.0 * (1.0 - model.alpha);
+    let t_crit = t_quantile(1.0 - model.alpha / 2.0, error_df);
     let mut pe_headers: Vec<String> = vec![
         "Variable".into(),
         "DF".into(),
@@ -1067,6 +1187,14 @@ fn fit_and_print(
         Align::Right,
         Align::Right,
     ];
+    if with_clb {
+        pe_headers.push(format!("{}% Confidence Limits", fmt_level(clb_level)));
+        pe_aligns.push(Align::Right);
+        // The interval prints as two value columns under one spanning header;
+        // emit a second (blank-titled) column to carry the upper limit.
+        pe_headers.push(String::new());
+        pe_aligns.push(Align::Right);
+    }
     if with_label {
         pe_headers.push("Label".into());
         pe_aligns.push(Align::Left);
@@ -1090,6 +1218,10 @@ fn fit_and_print(
             fmt2(t_beta[j]),
             fmt_p(Some(p_beta[j])),
         ];
+        if with_clb {
+            row.push(fmt5(beta[j] - t_crit * se_beta[j]));
+            row.push(fmt5(beta[j] + t_crit * se_beta[j]));
+        }
         if with_label {
             row.push(String::new());
         }
@@ -1099,15 +1231,21 @@ fn fit_and_print(
     // Estimate=λ_i, with the restriction expression in the Label column.
     if let Some(r) = restricted {
         for (label, lam, se, t, pv) in &r.lambda_rows {
-            pe_rows.push(vec![
+            let mut row = vec![
                 "RESTRICT".into(),
                 "-1".into(),
                 fmt5(*lam),
                 fmt5(*se),
                 fmt2(*t),
                 fmt_p(Some(*pv)),
-                label.clone(),
-            ]);
+            ];
+            if with_clb {
+                // SAS leaves the confidence-limit cells blank for RESTRICT rows.
+                row.push(String::new());
+                row.push(String::new());
+            }
+            row.push(label.clone());
+            pe_rows.push(row);
         }
     }
     session
@@ -1145,6 +1283,137 @@ fn fit_and_print_empty(
         );
     }
     session.listing.blank();
+}
+
+/// Per-observation std errors and CL limits for one used row (M36.2).
+struct ObsStat {
+    y: f64,
+    y_hat: f64,
+    stdp: f64,
+    stdi: f64,
+    stdr: f64,
+    lclm: f64,
+    uclm: f64,
+    lcl: f64,
+    ucl: f64,
+}
+
+/// Reconstruct the response vector y = ŷ + resid from a fit (avoids threading
+/// the y vector into helpers that already carry the fit).
+fn reconstruct_y(fit: &OlsFit) -> Vec<f64> {
+    fit.y_hat
+        .iter()
+        .zip(fit.resid.iter())
+        .map(|(yh, r)| yh + r)
+        .collect()
+}
+
+/// Compute the per-observation statistics for every used row from the OLS fit.
+/// `mse = sse/dfE`, `h_i` the leverage, `t = t_quantile(1−α/2, dfE)`.
+fn compute_obs_stats(
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    n: usize,
+    p_eff: usize,
+    alpha: f64,
+) -> Vec<ObsStat> {
+    let df_e = (n - p_eff) as f64;
+    let mse = fit.sse / df_e;
+    let t = t_quantile(1.0 - alpha / 2.0, df_e);
+    let h = leverages(x_mat, &fit.xtx_inv);
+    (0..n)
+        .map(|i| {
+            let hi = h[i];
+            let stdp = (mse * hi).sqrt();
+            let stdi = (mse * (1.0 + hi)).sqrt();
+            let stdr = (mse * (1.0 - hi)).max(0.0).sqrt();
+            let yh = fit.y_hat[i];
+            ObsStat {
+                y: y[i],
+                y_hat: yh,
+                stdp,
+                stdi,
+                stdr,
+                lclm: yh - t * stdp,
+                uclm: yh + t * stdp,
+                lcl: yh - t * stdi,
+                ucl: yh + t * stdi,
+            }
+        })
+        .collect()
+}
+
+/// Print the SAS "Output Statistics" table when CLM and/or CLI is requested.
+/// Column sets:
+///  - CLM only: Obs, Dependent Variable, Predicted Value, Std Error Mean
+///    Predict, `<L>% CL Mean` (lower upper), Residual.
+///  - CLI only: …, `<L>% CL Predict` (lower upper), Residual.
+///  - both: …, `<L>% CL Mean`, `<L>% CL Predict`, Residual.
+#[allow(clippy::too_many_arguments)]
+fn print_output_statistics(
+    model: &RegModel,
+    _dep_name: &str,
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    n: usize,
+    p_eff: usize,
+    session: &mut Session,
+) {
+    let stats = compute_obs_stats(x_mat, y, fit, n, p_eff, model.alpha);
+    let level = fmt_level(100.0 * (1.0 - model.alpha));
+
+    let mut headers: Vec<String> = vec![
+        "Obs".into(),
+        "Dependent Variable".into(),
+        "Predicted Value".into(),
+        "Std Error Mean Predict".into(),
+    ];
+    let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+    if model.clm {
+        headers.push(format!("{}% CL Mean (Lower)", level));
+        headers.push(format!("{}% CL Mean (Upper)", level));
+        aligns.push(Align::Right);
+        aligns.push(Align::Right);
+    }
+    if model.cli {
+        headers.push(format!("{}% CL Predict (Lower)", level));
+        headers.push(format!("{}% CL Predict (Upper)", level));
+        aligns.push(Align::Right);
+        aligns.push(Align::Right);
+    }
+    headers.push("Residual".into());
+    aligns.push(Align::Right);
+
+    let rows: Vec<Vec<String>> = stats
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut row = vec![
+                format!("{}", i + 1),
+                fmt5(s.y),
+                fmt5(s.y_hat),
+                fmt5(s.stdp),
+            ];
+            if model.clm {
+                row.push(fmt5(s.lclm));
+                row.push(fmt5(s.uclm));
+            }
+            if model.cli {
+                row.push(fmt5(s.lcl));
+                row.push(fmt5(s.ucl));
+            }
+            row.push(fmt5(s.y - s.y_hat));
+            row
+        })
+        .collect();
+
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "Output Statistics");
+    session.listing.blank();
+    session.listing.write_table(&headers, &aligns, &rows);
 }
 
 // ───────────────────────── TEST / RESTRICT (M36.1) ─────────────────────────
@@ -1810,17 +2079,39 @@ fn print_selection_summary(sel: &Selection, steplog: &[SelStep], session: &mut S
 
 /// Write the OUTPUT dataset(s) associated with this model, using the model's
 /// fit (complete cases only).
+#[allow(clippy::too_many_arguments)]
 fn write_outputs(
     entry: &RegModelEntry,
     ds: &SasDataset,
     complete_mask: &[bool],
     n: usize,
     fit: &OlsFit,
+    x_mat: &[Vec<f64>],
+    p_eff: usize,
+    alpha: f64,
     session: &mut Session,
 ) -> Result<()> {
     if entry.outputs.is_empty() {
         return Ok(());
     }
+
+    // Per-observation std errors / limits, computed lazily once if any OUTPUT
+    // requests a leverage-derived column. Keeps the P=/R=-only path allocation-
+    // free and byte-identical to before.
+    let needs_stats = entry.outputs.iter().any(|o| {
+        o.stdp.is_some()
+            || o.stdi.is_some()
+            || o.stdr.is_some()
+            || o.lcl.is_some()
+            || o.ucl.is_some()
+            || o.lclm.is_some()
+            || o.uclm.is_some()
+    });
+    let obs_stats: Option<Vec<ObsStat>> = if needs_stats {
+        Some(compute_obs_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, alpha))
+    } else {
+        None
+    };
 
     let mut complete_indices: Vec<usize> = Vec::with_capacity(n);
     for (i, &is_complete) in complete_mask.iter().enumerate() {
@@ -1867,6 +2158,24 @@ fn write_outputs(
             let data: Vec<Option<f64>> = fit.resid.iter().map(|&v| Some(v)).collect();
             columns.push(Series::new(resid_name.as_str().into(), data).into());
             out_vars.push(num_var_meta(resid_name));
+        }
+        // M36.2 — leverage-derived OUTPUT columns. Each is appended in the order
+        // SAS lists them on the OUTPUT statement keyword set.
+        if let Some(stats) = &obs_stats {
+            let mut push_col = |name: &Option<String>, f: &dyn Fn(&ObsStat) -> f64| {
+                if let Some(nm) = name {
+                    let data: Vec<Option<f64>> = stats.iter().map(|s| Some(f(s))).collect();
+                    columns.push(Series::new(nm.as_str().into(), data).into());
+                    out_vars.push(num_var_meta(nm));
+                }
+            };
+            push_col(&out_spec.stdp, &|s| s.stdp);
+            push_col(&out_spec.stdi, &|s| s.stdi);
+            push_col(&out_spec.stdr, &|s| s.stdr);
+            push_col(&out_spec.lclm, &|s| s.lclm);
+            push_col(&out_spec.uclm, &|s| s.uclm);
+            push_col(&out_spec.lcl, &|s| s.lcl);
+            push_col(&out_spec.ucl, &|s| s.ucl);
         }
 
         let out_df = DataFrame::new(columns)?;
@@ -2012,6 +2321,10 @@ mod tests {
             noint: false,
             noprint: false,
             selection: None,
+            alpha: 0.05,
+            clb: false,
+            clm: false,
+            cli: false,
         }
     }
 
@@ -2634,6 +2947,151 @@ mod tests {
         assert!(listing.contains("Numerator"), "{listing}");
         assert!(listing.contains("Denominator"), "{listing}");
         assert!(listing.contains("RESTRICT"), "{listing}");
+    }
+
+    // ───────────────────────── M36.2 CL / OUTPUT-stat tests ─────────────────────────
+
+    /// Build a design matrix [1, x...] for the given regressor columns.
+    fn design(intercept: bool, cols: &[&[f64]], n: usize) -> Vec<Vec<f64>> {
+        (0..n)
+            .map(|i| {
+                let mut row = Vec::new();
+                if intercept {
+                    row.push(1.0);
+                }
+                for c in cols {
+                    row.push(c[i]);
+                }
+                row
+            })
+            .collect()
+    }
+
+    /// Oracle: Σ_i h_i == p_eff (trace of the hat matrix == #params).
+    #[test]
+    fn test_oracle_leverage_trace() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0];
+        let y: Vec<f64> = x1.iter().zip(x2.iter()).map(|(&a, &b)| 1.0 + a + 0.5 * b).collect();
+        let n = y.len();
+        let x = design(true, &[&x1, &x2], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let h = leverages(&x, &fit.xtx_inv);
+        let trace: f64 = h.iter().sum();
+        assert!((trace - 3.0).abs() < 1e-9, "trace={trace}");
+        // Same for a NOINT design.
+        let xn = design(false, &[&x1, &x2], n);
+        let fitn = ols_fit(&xn, &y).unwrap();
+        let hn = leverages(&xn, &fitn.xtx_inv);
+        let tracen: f64 = hn.iter().sum();
+        assert!((tracen - 2.0).abs() < 1e-9, "trace_noint={tracen}");
+    }
+
+    /// Oracle: STDP²+STDR² == MSE and STDI²−STDP² == MSE (per observation),
+    /// and CLM is centered on ŷ.
+    #[test]
+    fn test_oracle_std_error_identities() {
+        let x1 = [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 8.0, 7.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 2.0 + 3.0 * a + (a * 0.5).sin()).collect();
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let p_eff = 2;
+        let mse = fit.sse / (n - p_eff) as f64;
+        let stats = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05);
+        for s in &stats {
+            assert!((s.stdp * s.stdp + s.stdr * s.stdr - mse).abs() < 1e-9);
+            assert!((s.stdi * s.stdi - s.stdp * s.stdp - mse).abs() < 1e-9);
+            // CLM centered on ŷ.
+            let mid = (s.lclm + s.uclm) / 2.0;
+            assert!((mid - s.y_hat).abs() < 1e-9, "mid={mid} yhat={}", s.y_hat);
+            // CLI also centered on ŷ and wider than CLM.
+            let midi = (s.lcl + s.ucl) / 2.0;
+            assert!((midi - s.y_hat).abs() < 1e-9);
+            assert!(s.ucl - s.lcl > s.uclm - s.lclm - 1e-12);
+        }
+    }
+
+    /// Oracle: CLB limits == β_j ± t·SE(β_j) with the parameter-table SE.
+    #[test]
+    fn test_oracle_clb_limits() {
+        let x1 = [1.0_f64, 2.0, 4.0, 3.0, 6.0, 5.0, 7.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos()).collect();
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let p_eff = 2;
+        let df_e = (n - p_eff) as f64;
+        let mse = fit.sse / df_e;
+        let alpha = 0.10;
+        let t = t_quantile(1.0 - alpha / 2.0, df_e);
+        for j in 0..p_eff {
+            let se = (mse * fit.xtx_inv[j][j]).sqrt();
+            let lo = fit.beta[j] - t * se;
+            let hi = fit.beta[j] + t * se;
+            // Reconstruct what fit_and_print computes.
+            assert!(lo < fit.beta[j] && fit.beta[j] < hi);
+            assert!(((lo + hi) / 2.0 - fit.beta[j]).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_parse_model_cl_options() {
+        let ast =
+            parse_reg("proc reg data=a; model y=x / clb alpha=0.10 cli clm; run;").unwrap();
+        let m = &ast.models[0].model;
+        assert!(m.clb);
+        assert!(m.cli);
+        assert!(m.clm);
+        assert!((m.alpha - 0.10).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_parse_output_cl_keywords() {
+        let ast = parse_reg(
+            "proc reg data=a; model y=x; output out=o p=pred stdp=sp lclm=lm uclm=um lcl=l ucl=u stdi=si stdr=sr; run;",
+        )
+        .unwrap();
+        let o = &ast.models[0].outputs[0];
+        assert_eq!(o.predicted.as_deref(), Some("pred"));
+        assert_eq!(o.stdp.as_deref(), Some("sp"));
+        assert_eq!(o.lclm.as_deref(), Some("lm"));
+        assert_eq!(o.uclm.as_deref(), Some("um"));
+        assert_eq!(o.lcl.as_deref(), Some("l"));
+        assert_eq!(o.ucl.as_deref(), Some("u"));
+        assert_eq!(o.stdi.as_deref(), Some("si"));
+        assert_eq!(o.stdr.as_deref(), Some("sr"));
+    }
+
+    /// End-to-end: CLB adds confidence-limit columns; CLM/CLI emit Output
+    /// Statistics. Default model (no options) must NOT print either.
+    #[test]
+    fn test_execute_cl_listing() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut model = basic_model("y", &["x"]);
+        model.clb = true;
+        model.clm = true;
+        model.cli = true;
+        let ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            model,
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("95% Confidence Limits"), "{listing}");
+        assert!(listing.contains("Output Statistics"), "{listing}");
+        assert!(listing.contains("CL Mean"), "{listing}");
+        assert!(listing.contains("CL Predict"), "{listing}");
     }
 
     #[test]

@@ -489,6 +489,32 @@ pub fn f_quantile(p: f64, df1: f64, df2: f64) -> f64 {
     )
 }
 
+/// Student-t distribution quantile (inverse CDF).
+/// Quantile of t(df) for p ∈ (0, 1). Exploits T² ~ F(1, df): for the upper
+/// tail (p ≥ 0.5) the t-quantile is √(F-quantile(2p−1, 1, df)); the lower tail
+/// is its negative mirror. Validation: t_quantile(0.975, 10) ≈ 2.228139.
+pub fn t_quantile(p: f64, df: f64) -> f64 {
+    if df <= 0.0 || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    if p == 0.5 {
+        return 0.0;
+    }
+    if p > 0.5 {
+        // Upper tail: P(T ≤ t) = p, t > 0. With f = t², P(F ≤ f) = 2p − 1.
+        f_quantile(2.0 * p - 1.0, 1.0, df).sqrt()
+    } else {
+        // Lower tail by symmetry.
+        -f_quantile(1.0 - 2.0 * p, 1.0, df).sqrt()
+    }
+}
+
 /// Gamma distribution cumulative distribution function.
 /// CDF of Gamma(shape, scale) for x ≥ 0, pdf ∝ x^(shape-1) exp(-x/scale).
 /// Implemented as 1 - gammq(shape, x/scale).
@@ -781,6 +807,28 @@ mod tests {
         assert_eq!(f_quantile(0.0, 2.0, 5.0), 0.0);
         assert!(f_quantile(1.0, 2.0, 5.0).is_infinite());
         assert!(f_cdf(1.0, -1.0, 5.0).is_nan());
+    }
+
+    #[test]
+    fn test_t_quantile() {
+        // Classic table values.
+        assert!(approx(t_quantile(0.975, 10.0), 2.228138852, 1e-6));
+        assert!(approx(t_quantile(0.95, 5.0), 2.015048373, 1e-6));
+        // Symmetry: q(1-p) == -q(p).
+        assert!(approx(t_quantile(0.025, 10.0), -2.228138852, 1e-6));
+        assert_eq!(t_quantile(0.5, 7.0), 0.0);
+        // Round-trip against the CDF.
+        assert!(approx(student_t_cdf(t_quantile(0.8, 12.0), 12.0), 0.8, 1e-7));
+        assert!(approx(student_t_cdf(t_quantile(0.3, 4.0), 4.0), 0.3, 1e-7));
+        // Large df → standard normal quantile.
+        assert!(approx(t_quantile(0.975, 1.0e6), 1.959963985, 1e-4));
+    }
+
+    #[test]
+    fn test_t_edge() {
+        assert!(t_quantile(0.0, 5.0).is_infinite() && t_quantile(0.0, 5.0) < 0.0);
+        assert!(t_quantile(1.0, 5.0).is_infinite() && t_quantile(1.0, 5.0) > 0.0);
+        assert!(t_quantile(0.9, -1.0).is_nan());
     }
 
     // ───────────────────────── gamma ─────────────────────────

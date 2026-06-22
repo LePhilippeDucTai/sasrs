@@ -41,6 +41,7 @@ pub use dists::{
     // Ajout M24.1 : F, χ², gamma, bêta CDFs et quantiles
     chisq_cdf, chisq_quantile,
     f_cdf, f_quantile,
+    t_quantile,
     gamma_cdf, gamma_quantile,
     beta_cdf, beta_quantile,
 };
