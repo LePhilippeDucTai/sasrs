@@ -37,6 +37,12 @@ pub struct RegAst {
     /// are deferred (a NOTE); the simple residuals-vs-predicted diagnostic is
     /// driven automatically from `ods_graphics.enabled`, not from this flag.
     pub plots_requested: bool,
+    /// M36.11 — parsed `PLOTS=(…)` request set (PROC- or MODEL-level diagnostic
+    /// panel selection). Defaults to "no explicit request"; `PLOTS=NONE`
+    /// suppresses even the automatic diagnostic image.
+    pub plot_requests: PlotRequests,
+    /// M36.11 — traditional `PLOT y*x …;` statement requests, in source order.
+    pub plot_statements: Vec<PlotPair>,
     /// M36.7 — `WEIGHT var;` weight variable (weighted least squares).
     pub weight: Option<String>,
     /// M36.7 — `FREQ var;` frequency variable (replication counts).
@@ -63,6 +69,65 @@ pub struct RegAst {
     /// M36.10 — a `PAINT …;` statement was seen (interactive plot painting).
     /// Deferred (graphics-related).
     pub paint_seen: bool,
+}
+
+/// M36.11 — the parsed `PLOTS=(…)` diagnostic-panel request set. Each plot
+/// family is an independent bool; `none` (PLOTS=NONE) and `all` (PLOTS=ALL)
+/// are recorded explicitly so the executor can both suppress (NONE) and expand
+/// (ALL) the automatic diagnostics. The struct's `Default` is "no explicit
+/// PLOTS= seen" (every field false), which preserves the pre-M36.11 behaviour.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlotRequests {
+    /// PLOTS=DIAGNOSTICS — the residual/leverage/QQ diagnostics panel.
+    pub diagnostics: bool,
+    /// PLOTS=RESIDUALS — residual-by-regressor scatter(s).
+    pub residuals: bool,
+    /// PLOTS=FIT — fit plot (regression line + CLM/CLI bands, single regressor).
+    pub fit: bool,
+    /// PLOTS=ALL — request every diagnostic family.
+    pub all: bool,
+    /// PLOTS=NONE — suppress all plots, including the automatic diagnostic image.
+    pub none: bool,
+    /// `PLOTS(UNPACK)=…` — render panel components as separate images. Recorded
+    /// only (panel-vs-separate is a rendering detail; we always emit separate
+    /// images), so this is informational.
+    pub unpack: bool,
+    /// `PLOTS(ONLY)=…` — render only the explicitly requested plots (suppress the
+    /// default DIAGNOSTICS panel that PLOTS= would otherwise add). Recorded.
+    pub only: bool,
+    /// An explicit `PLOTS=` (with a value other than NONE) was seen.
+    pub explicit: bool,
+}
+
+impl PlotRequests {
+    /// True when at least one renderable plot family was requested (ALL expands
+    /// to all three families). NONE always yields false.
+    fn any(&self) -> bool {
+        if self.none {
+            return false;
+        }
+        self.all || self.diagnostics || self.residuals || self.fit
+    }
+}
+
+/// M36.11 — one term of a `keyword.`-or-variable axis in a traditional `PLOT`
+/// statement. `PREDICTED.`/`P.` and `RESIDUAL.`/`R.` map to the fitted-value and
+/// residual special variables; everything else is a plain model variable name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlotVar {
+    /// A model variable, by (uppercased) name.
+    Named(String),
+    /// `PREDICTED.` / `P.` — fitted value ŷ.
+    Predicted,
+    /// `RESIDUAL.` / `R.` — residual y − ŷ.
+    Residual,
+}
+
+/// M36.11 — one `y*x` pair from a traditional `PLOT` statement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlotPair {
+    pub y: PlotVar,
+    pub x: PlotVar,
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +382,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut ridge: Vec<f64> = Vec::new();
     let mut pcomit: Vec<f64> = Vec::new();
     let mut outvif = false;
+    // M36.11 — PLOTS= may appear as a PROC-statement option as well as a
+    // sub-statement; accumulate into one request set.
+    let mut plot_requests = PlotRequests::default();
 
     // PROC REG statement options, until `;`
     loop {
@@ -364,6 +432,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         } else if ts.peek().is_kw("corr") {
             corr = true;
             ts.next();
+        } else if ts.peek().is_kw("plots") {
+            // M36.11 — PROC-level PLOTS=(…) / PLOTS(UNPACK)=… diagnostic request.
+            parse_plots_option(ts, &mut plot_requests);
         } else if ts.peek().is_kw("all") {
             proc_all = true;
             ts.next();
@@ -390,6 +461,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     // Sub-statements until run;/quit;
     let mut models: Vec<RegModelEntry> = Vec::new();
     let mut plots_requested = false;
+    let mut plot_statements: Vec<PlotPair> = Vec::new();
     let mut weight: Option<String> = None;
     let mut freq: Option<String> = None;
     let mut by: Vec<String> = Vec::new();
@@ -827,12 +899,26 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             }
             Ok(true)
         } else if kw == "plots" {
-            // M29.3 — PLOTS statement: parsed but its options are deferred (a
-            // NOTE at execute time). Skip the whole statement (including a
-            // possible `(...)` option list and trailing `/ options`).
-            ts.next();
-            ts.skip_to_semi();
-            plots_requested = true;
+            // M29.3 / M36.11 — PLOTS request. Two surface forms:
+            //   PLOTS=(…)  /  PLOTS(UNPACK)=…  — a typed request set (M36.11),
+            //   bare PLOTS [/ options];        — the legacy deferred flag (M29.3).
+            // `parse_plots_option` consumes the `plots` keyword + value when a
+            // `=`/`(` follows; otherwise we fall back to the legacy flag.
+            let nxt = &ts.peek2().kind;
+            if matches!(nxt, TokenKind::Eq | TokenKind::LParen) {
+                parse_plots_option(ts, &mut plot_requests);
+                // Consume an optional trailing `/ options` and the terminator.
+                ts.skip_to_semi();
+            } else {
+                ts.next();
+                ts.skip_to_semi();
+                plots_requested = true;
+            }
+            Ok(true)
+        } else if kw == "plot" {
+            // M36.11 — traditional `PLOT y*x [=symbol] [y2*x2 …] [/ opts];`.
+            ts.next(); // consume "plot"
+            parse_plot_statement(ts, &mut plot_statements);
             Ok(true)
         } else if kw == "test" {
             // `TEST eq [, eq ...];` (unlabeled form — a leading `label:` is
@@ -1031,6 +1117,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         },
         models,
         plots_requested,
+        plot_requests,
+        plot_statements,
         weight,
         freq,
         by,
@@ -1042,6 +1130,139 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         refit_seen,
         paint_seen,
     })
+}
+
+/// M36.11 — parse a `PLOTS` request: `PLOTS[(global-opts)]=keyword | (kw …)`.
+/// Accepts the panel modifiers `PLOTS(UNPACK)=…` / `PLOTS(ONLY)=…`, the bare
+/// keywords DIAGNOSTICS / RESIDUALS / FIT / ALL / NONE, and a parenthesised list
+/// `PLOTS=(DIAGNOSTICS RESIDUALS FIT)`. Unknown keywords are consumed cleanly
+/// (ignored). The `plots` keyword token is consumed by this function. On a
+/// malformed form (no `=`) the keyword alone is consumed and nothing recorded.
+fn parse_plots_option(ts: &mut StatementStream, req: &mut PlotRequests) {
+    ts.next(); // consume "plots"
+    // Optional global-option parenthesis directly after PLOTS: PLOTS(UNPACK)=…
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next();
+        while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Semi
+            && ts.peek().kind != TokenKind::Eof
+        {
+            if let Some(id) = ts.peek().ident() {
+                match id.to_ascii_uppercase().as_str() {
+                    "UNPACK" => req.unpack = true,
+                    "ONLY" => req.only = true,
+                    _ => {}
+                }
+            }
+            ts.next();
+        }
+        if ts.peek().kind == TokenKind::RParen {
+            ts.next();
+        }
+    }
+    // The value must be introduced by `=`. Without it there is nothing to record.
+    if ts.peek().kind != TokenKind::Eq {
+        return;
+    }
+    ts.next(); // consume "="
+    req.explicit = true;
+    // Either a parenthesised list of keywords, or a single keyword.
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next();
+        while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Semi
+            && ts.peek().kind != TokenKind::Eof
+        {
+            if let Some(id) = ts.peek().ident() {
+                apply_plot_keyword(id, req);
+            }
+            ts.next();
+        }
+        if ts.peek().kind == TokenKind::RParen {
+            ts.next();
+        }
+    } else if let Some(id) = ts.peek().ident().map(str::to_string) {
+        apply_plot_keyword(&id, req);
+        ts.next();
+    }
+}
+
+/// Apply one PLOTS= keyword to the request set. Unknown keywords are ignored.
+fn apply_plot_keyword(kw: &str, req: &mut PlotRequests) {
+    match kw.to_ascii_uppercase().as_str() {
+        "DIAGNOSTICS" | "DIAGNOSTIC" => req.diagnostics = true,
+        "RESIDUALS" | "RESIDUAL" | "RESIDUALPLOT" => req.residuals = true,
+        "FIT" | "FITPLOT" => req.fit = true,
+        "ALL" => req.all = true,
+        "NONE" => req.none = true,
+        _ => {}
+    }
+}
+
+/// M36.11 — parse one axis term of a traditional `PLOT` statement. Handles the
+/// `keyword.` special variables (`PREDICTED.`/`P.`, `RESIDUAL.`/`R.`) and plain
+/// variable names. The trailing `.` of a keyword variable is consumed when
+/// present. Returns `None` at a non-identifier token.
+fn parse_plot_var(ts: &mut StatementStream) -> Option<PlotVar> {
+    let name = ts.peek().ident().map(str::to_string)?;
+    ts.next();
+    // A trailing dot marks a SAS keyword variable (PREDICTED. / RESIDUAL. / …).
+    let has_dot = ts.peek().kind == TokenKind::Dot;
+    if has_dot {
+        ts.next();
+        match name.to_ascii_uppercase().as_str() {
+            "PREDICTED" | "PRED" | "P" => return Some(PlotVar::Predicted),
+            "RESIDUAL" | "RESID" | "R" => return Some(PlotVar::Residual),
+            // An unknown `keyword.` — treat its bare name as a model variable.
+            _ => return Some(PlotVar::Named(name.to_ascii_uppercase())),
+        }
+    }
+    Some(PlotVar::Named(name.to_ascii_uppercase()))
+}
+
+/// M36.11 — parse the body of a `PLOT y*x [=symbol] [y2*x2 …] [/ opts];` statement
+/// (the `plot` keyword has already been consumed). Each `y*x` pair is recorded;
+/// an optional `=symbol` after a pair and a trailing `/ options` clause are
+/// consumed and ignored. Stops at `;`/EOF.
+fn parse_plot_statement(ts: &mut StatementStream, out: &mut Vec<PlotPair>) {
+    loop {
+        match ts.peek().kind {
+            TokenKind::Semi => {
+                ts.next();
+                break;
+            }
+            TokenKind::Eof => break,
+            TokenKind::Slash => {
+                // Trailing `/ options` — consume the rest of the statement.
+                ts.skip_to_semi();
+                break;
+            }
+            _ => {}
+        }
+        // Expect `y * x`. If we cannot read a y, skip a token to make progress.
+        let y = match parse_plot_var(ts) {
+            Some(v) => v,
+            None => {
+                ts.next();
+                continue;
+            }
+        };
+        if ts.peek().kind != TokenKind::Star {
+            // Not a valid pair (e.g. a stray symbol); skip and continue.
+            continue;
+        }
+        ts.next(); // consume "*"
+        let x = match parse_plot_var(ts) {
+            Some(v) => v,
+            None => continue,
+        };
+        out.push(PlotPair { y, x });
+        // Optional `=symbol` (a plot symbol assignment) — consume `= token`.
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+            if ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                ts.next();
+            }
+        }
+    }
 }
 
 /// Parse a SAS numeric value-list for RIDGE=/PCOMIT= (M36.9). Accepts a plain
@@ -3689,10 +3910,41 @@ fn run_model(
     if ast.plots_requested {
         session.log.note("PLOTS options deferred in PROC REG.");
     }
-    if session.ods_graphics.enabled {
+    // M36.11 — the automatic residuals-vs-predicted diagnostic fires when ODS
+    // graphics is on, UNLESS PLOTS=NONE was requested (which suppresses it).
+    if session.ods_graphics.enabled && !ast.plot_requests.none {
         let y_hat = fit.y_hat.clone();
         let resid = fit.resid.clone();
         reg_diagnostic_plot(session, &y_hat, &resid);
+    }
+    // M36.11 — explicit PLOTS=(…) request set and traditional PLOT statements.
+    // Under the default build each requested plot is a clean deferral NOTE;
+    // under `--features graphics` each is rendered. NONE suppresses everything.
+    if ast.plot_requests.any() {
+        render_plot_requests(
+            &ast.plot_requests,
+            &x_mat,
+            &y_vec,
+            &fit,
+            n,
+            p_eff,
+            model.alpha,
+            &sel_reg_names,
+            intercept,
+            weighting.as_ref(),
+            session,
+        );
+    }
+    if !ast.plot_statements.is_empty() {
+        render_plot_statements(
+            &ast.plot_statements,
+            dep_name,
+            &x_mat,
+            &fit,
+            &sel_reg_names,
+            intercept,
+            session,
+        );
     }
     } // end per-response loop
 
@@ -4776,6 +5028,7 @@ fn fit_and_print_empty(
 }
 
 /// Per-observation std errors and CL limits for one used row (M36.2).
+#[derive(Clone)]
 struct ObsStat {
     y: f64,
     y_hat: f64,
@@ -7009,6 +7262,410 @@ fn reg_diagnostic_plot(session: &mut Session, y_hat: &[f64], resid: &[f64]) {
     }
 }
 
+/// M36.11 — render (or defer) the explicit `PLOTS=(…)` diagnostic request set
+/// after a MODEL fit. Default build: one plural-invariant deferral NOTE listing
+/// the requested plot count. `--features graphics`: each requested plot family
+/// (DIAGNOSTICS, RESIDUALS, FIT) is rendered as a separate `reg_{N}` image
+/// (panel components are emitted unpacked). `ALL` expands to all three families.
+#[allow(clippy::too_many_arguments)]
+fn render_plot_requests(
+    req: &PlotRequests,
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    n: usize,
+    p_eff: usize,
+    alpha: f64,
+    sel_reg_names: &[String],
+    intercept: bool,
+    weighting: Option<&Weighting>,
+    session: &mut Session,
+) {
+    let want_diag = req.all || req.diagnostics;
+    let want_resid = req.all || req.residuals;
+    let want_fit = req.all || req.fit;
+
+    #[cfg(not(feature = "graphics"))]
+    {
+        let _ = (x_mat, y, fit, n, p_eff, alpha, sel_reg_names, intercept, weighting);
+        let count = [want_diag, want_resid, want_fit]
+            .iter()
+            .filter(|b| **b)
+            .count();
+        session.log.note(&format!(
+            "REG PLOTS= request: {} plot(s) deferred (compile with --features graphics).",
+            count
+        ));
+        return;
+    }
+
+    #[cfg(feature = "graphics")]
+    {
+        use crate::graphics::render::{
+            Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
+        };
+
+        let obs = compute_obs_stats(x_mat, y, fit, n, p_eff, alpha, weighting);
+        let infl = compute_influence_stats(x_mat, y, fit, n, p_eff, weighting);
+
+        // Helper: residual-vs-predicted scatter (the core diagnostics panel cell).
+        if want_diag {
+            // (1) Residual vs predicted.
+            let data: Vec<(f64, f64)> = fit
+                .y_hat
+                .iter()
+                .zip(fit.resid.iter())
+                .filter(|(p, r)| p.is_finite() && r.is_finite())
+                .map(|(p, r)| (*p, *r))
+                .collect();
+            render_reg_image(
+                session,
+                &DrawingSpec {
+                    title: "Fit Diagnostics — Residual by Predicted".to_string(),
+                    x_label: "Predicted Value".to_string(),
+                    y_label: "Residual".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                },
+                &Decorations::default(),
+            );
+
+            // (2) RStudent vs predicted.
+            let data: Vec<(f64, f64)> = infl
+                .iter()
+                .filter(|s| s.y_hat.is_finite() && s.rstudent.is_finite())
+                .map(|s| (s.y_hat, s.rstudent))
+                .collect();
+            render_reg_image(
+                session,
+                &DrawingSpec {
+                    title: "Fit Diagnostics — RStudent by Predicted".to_string(),
+                    x_label: "Predicted Value".to_string(),
+                    y_label: "RStudent".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                },
+                &Decorations::default(),
+            );
+
+            // (3) Cook's D vs leverage.
+            let data: Vec<(f64, f64)> = infl
+                .iter()
+                .filter(|s| s.h.is_finite() && s.cookd.is_finite())
+                .map(|s| (s.h, s.cookd))
+                .collect();
+            render_reg_image(
+                session,
+                &DrawingSpec {
+                    title: "Fit Diagnostics — Cook's D by Leverage".to_string(),
+                    x_label: "Leverage".to_string(),
+                    y_label: "Cook's D".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                },
+                &Decorations::default(),
+            );
+
+            // (4) Normal QQ-plot of residuals: sorted residuals vs normal scores.
+            let mut rs: Vec<f64> = fit.resid.iter().copied().filter(|r| r.is_finite()).collect();
+            rs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let m = rs.len();
+            let qq: Vec<(f64, f64)> = rs
+                .iter()
+                .enumerate()
+                .map(|(i, &r)| {
+                    let p = (i as f64 + 0.5) / m as f64;
+                    (normal_quantile(p), r)
+                })
+                .collect();
+            render_reg_image(
+                session,
+                &DrawingSpec {
+                    title: "Fit Diagnostics — Normal Q-Q".to_string(),
+                    x_label: "Quantile".to_string(),
+                    y_label: "Residual".to_string(),
+                    plot_type: PlotType::Scatter,
+                    data: qq,
+                    x_categorical: vec![],
+                },
+                &Decorations::default(),
+            );
+        }
+
+        // RESIDUALS — residual vs each regressor column.
+        if want_resid {
+            let off = usize::from(intercept);
+            for (j, name) in sel_reg_names.iter().enumerate() {
+                let col = off + j;
+                let data: Vec<(f64, f64)> = (0..n)
+                    .filter_map(|i| {
+                        let xv = x_mat[i][col];
+                        let rv = fit.resid[i];
+                        (xv.is_finite() && rv.is_finite()).then_some((xv, rv))
+                    })
+                    .collect();
+                render_reg_image(
+                    session,
+                    &DrawingSpec {
+                        title: format!("Residual by {}", name),
+                        x_label: name.clone(),
+                        y_label: "Residual".to_string(),
+                        plot_type: PlotType::Scatter,
+                        data,
+                        x_categorical: vec![],
+                    },
+                    &Decorations::default(),
+                );
+            }
+        }
+
+        // FIT — single-regressor fit plot with the regression line and the
+        // CLM (mean) / CLI (individual) confidence bands. Only meaningful when
+        // there is exactly one regressor (plus the intercept).
+        if want_fit {
+            let off = usize::from(intercept);
+            if sel_reg_names.len() == 1 {
+                let col = off; // the single regressor column
+                let mut pts: Vec<(f64, ObsStat)> = (0..n)
+                    .filter(|&i| x_mat[i][col].is_finite())
+                    .map(|i| (x_mat[i][col], obs[i].clone()))
+                    .collect();
+                pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+                let data: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.y)).collect();
+                let fit_line: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.y_hat)).collect();
+                let clm_lo: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.lclm)).collect();
+                let clm_hi: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.uclm)).collect();
+                let cli_lo: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.lcl)).collect();
+                let cli_hi: Vec<(f64, f64)> =
+                    pts.iter().map(|(x, o)| (*x, o.ucl)).collect();
+                let deco = Decorations {
+                    overlays: vec![
+                        Overlay { data: fit_line, color: SeriesColor::Blue, line: true, marker: false },
+                        Overlay { data: clm_lo, color: SeriesColor::Green, line: true, marker: false },
+                        Overlay { data: clm_hi, color: SeriesColor::Green, line: true, marker: false },
+                        Overlay { data: cli_lo, color: SeriesColor::Orange, line: true, marker: false },
+                        Overlay { data: cli_hi, color: SeriesColor::Orange, line: true, marker: false },
+                    ],
+                    x_range: None,
+                    y_range: None,
+                };
+                render_reg_image(
+                    session,
+                    &DrawingSpec {
+                        title: format!("Fit Plot by {}", sel_reg_names[0]),
+                        x_label: sel_reg_names[0].clone(),
+                        y_label: "Response".to_string(),
+                        plot_type: PlotType::Scatter,
+                        data,
+                        x_categorical: vec![],
+                    },
+                    &deco,
+                );
+            } else {
+                // Multi-regressor fit plot is not meaningful; fall back to a
+                // response-vs-predicted scatter (the SAS panel's analogue).
+                let data: Vec<(f64, f64)> = (0..n)
+                    .filter(|&i| fit.y_hat[i].is_finite() && y[i].is_finite())
+                    .map(|i| (fit.y_hat[i], y[i]))
+                    .collect();
+                render_reg_image(
+                    session,
+                    &DrawingSpec {
+                        title: "Fit Plot — Observed by Predicted".to_string(),
+                        x_label: "Predicted Value".to_string(),
+                        y_label: "Response".to_string(),
+                        plot_type: PlotType::Scatter,
+                        data,
+                        x_categorical: vec![],
+                    },
+                    &Decorations::default(),
+                );
+            }
+        }
+    }
+}
+
+/// M36.11 — render (or defer) the traditional `PLOT y*x …;` scatters after a
+/// MODEL fit. Default build: one plural-invariant deferral NOTE per statement
+/// listing the pair count. `--features graphics`: each (y,x) pair is rendered as
+/// a separate `reg_{N}` scatter, resolving the `PREDICTED.`/`RESIDUAL.` special
+/// variables from the fit and plain names from the design matrix.
+#[allow(clippy::too_many_arguments)]
+fn render_plot_statements(
+    pairs: &[PlotPair],
+    dep_name: &str,
+    x_mat: &[Vec<f64>],
+    fit: &OlsFit,
+    sel_reg_names: &[String],
+    intercept: bool,
+    session: &mut Session,
+) {
+    #[cfg(not(feature = "graphics"))]
+    {
+        let _ = (dep_name, x_mat, fit, sel_reg_names, intercept);
+        session.log.note(&format!(
+            "REG PLOT statement: {} scatter(s) deferred (compile with --features graphics).",
+            pairs.len()
+        ));
+        return;
+    }
+
+    #[cfg(feature = "graphics")]
+    {
+        use crate::graphics::render::{Decorations, DrawingSpec, PlotType};
+
+        // Resolve a PlotVar to a per-observation value series + an axis label.
+        let resolve = |v: &PlotVar| -> Option<(Vec<f64>, String)> {
+            match v {
+                PlotVar::Predicted => Some((fit.y_hat.clone(), "Predicted Value".to_string())),
+                PlotVar::Residual => Some((fit.resid.clone(), "Residual".to_string())),
+                PlotVar::Named(name) => {
+                    let up = name.to_ascii_uppercase();
+                    if up == dep_name.to_ascii_uppercase() {
+                        // The dependent: reconstruct y = ŷ + resid.
+                        let yv: Vec<f64> = fit
+                            .y_hat
+                            .iter()
+                            .zip(fit.resid.iter())
+                            .map(|(p, r)| p + r)
+                            .collect();
+                        return Some((yv, name.clone()));
+                    }
+                    // A regressor column.
+                    let off = usize::from(intercept);
+                    sel_reg_names
+                        .iter()
+                        .position(|r| r.eq_ignore_ascii_case(&up))
+                        .map(|j| {
+                            let col = off + j;
+                            let vals: Vec<f64> = (0..x_mat.len()).map(|i| x_mat[i][col]).collect();
+                            (vals, name.clone())
+                        })
+                }
+            }
+        };
+
+        for pair in pairs {
+            let (Some((ys, ylab)), Some((xs, xlab))) = (resolve(&pair.y), resolve(&pair.x)) else {
+                session.log.note(
+                    "REG PLOT statement: a variable could not be resolved; that plot is skipped.",
+                );
+                continue;
+            };
+            let data: Vec<(f64, f64)> = xs
+                .iter()
+                .zip(ys.iter())
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+                .map(|(x, y)| (*x, *y))
+                .collect();
+            render_reg_image(
+                session,
+                &DrawingSpec {
+                    title: format!("Plot of {} by {}", ylab, xlab),
+                    x_label: xlab,
+                    y_label: ylab,
+                    plot_type: PlotType::Scatter,
+                    data,
+                    x_categorical: vec![],
+                },
+                &Decorations::default(),
+            );
+        }
+    }
+}
+
+/// M36.11 (graphics only) — render one `DrawingSpec`+`Decorations` into the next
+/// `reg_{N}.{fmt}` image in `ods_graphics.output_dir`, mirroring the naming /
+/// counter / NOTE convention of `reg_diagnostic_plot`.
+#[cfg(feature = "graphics")]
+fn render_reg_image(
+    session: &mut Session,
+    spec: &crate::graphics::render::DrawingSpec,
+    deco: &crate::graphics::render::Decorations,
+) {
+    use crate::graphics::render::draw_to_file_ext;
+
+    session.graphics_image_count += 1;
+    let stem = session
+        .ods_graphics
+        .file_stem
+        .clone()
+        .unwrap_or_else(|| "reg".to_string());
+    let fmt = session.ods_graphics.image_format;
+    let name = format!("{}_{}.{}", stem, session.graphics_image_count, fmt.extension());
+    let path = session.ods_graphics.output_dir.join(&name);
+    match draw_to_file_ext(
+        spec,
+        deco,
+        &path,
+        session.ods_graphics.width,
+        session.ods_graphics.height,
+        fmt,
+    ) {
+        Ok((w, h)) => {
+            session
+                .log
+                .note(&format!("Output '{}' ({}x{}) written.", name, w, h));
+        }
+        Err(e) => {
+            session
+                .log
+                .note(&format!("WARNING: could not write image {}: {}", name, e));
+        }
+    }
+}
+
+/// M36.11 (graphics only) — approximate standard-normal quantile (inverse CDF)
+/// via the Beasley-Springer/Moro algorithm, for the QQ-plot's theoretical
+/// scores. Accuracy is ample for plotting; not used on any printed path.
+#[cfg(feature = "graphics")]
+fn normal_quantile(p: f64) -> f64 {
+    // Clamp away from the open-interval endpoints.
+    let p = p.clamp(1e-9, 1.0 - 1e-9);
+    // Rational approximation (Acklam) — relative error < 1.15e-9.
+    const A: [f64; 6] = [
+        -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+        1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00,
+    ];
+    const B: [f64; 5] = [
+        -5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+        6.680131188771972e+01, -1.328068155288572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+        -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00,
+    ];
+    const D: [f64; 4] = [
+        7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+        3.754408661907416e+00,
+    ];
+    let plow = 0.02425;
+    let phigh = 1.0 - plow;
+    if p < plow {
+        let q = (-2.0 * p.ln()).sqrt();
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    } else if p <= phigh {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    } else {
+        let q = (-2.0 * (1.0 - p).ln()).sqrt();
+        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    }
+}
+
 // ───────────────────────── Tests ─────────────────────────
 
 #[cfg(test)]
@@ -7063,6 +7720,8 @@ mod tests {
                 delete: vec![],
             }],
             plots_requested: false,
+            plot_requests: PlotRequests::default(),
+            plot_statements: Vec::new(),
             weight: None,
             freq: None,
             by: Vec::new(),
@@ -10002,5 +10661,225 @@ mod tests {
         assert!(log.contains("REWEIGHT statement"), "log: {log}");
         assert!(log.contains("REFIT statement"), "log: {log}");
         assert!(log.contains("PAINT statement"), "log: {log}");
+    }
+
+    // ───────────────────────── M36.11 PLOTS= / PLOT tests ─────────────────────────
+
+    #[test]
+    fn parse_plots_diagnostics() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots=diagnostics; run;").unwrap();
+        assert!(ast.plot_requests.diagnostics);
+        assert!(ast.plot_requests.explicit);
+        assert!(!ast.plot_requests.none);
+        assert!(ast.plot_requests.any());
+    }
+
+    #[test]
+    fn parse_plots_list_residuals_fit() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots=(residuals fit); run;").unwrap();
+        assert!(ast.plot_requests.residuals);
+        assert!(ast.plot_requests.fit);
+        assert!(!ast.plot_requests.diagnostics);
+    }
+
+    #[test]
+    fn parse_plots_unpack_modifier() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots(unpack)=diagnostics; run;").unwrap();
+        assert!(ast.plot_requests.unpack);
+        assert!(ast.plot_requests.diagnostics);
+    }
+
+    #[test]
+    fn parse_plots_only_modifier() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots(only)=fit; run;").unwrap();
+        assert!(ast.plot_requests.only);
+        assert!(ast.plot_requests.fit);
+    }
+
+    #[test]
+    fn parse_plots_none() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots=none; run;").unwrap();
+        assert!(ast.plot_requests.none);
+        assert!(!ast.plot_requests.any());
+    }
+
+    #[test]
+    fn parse_plots_all() {
+        let ast = parse_reg("proc reg data=a; model y=x; plots=all; run;").unwrap();
+        assert!(ast.plot_requests.all);
+        assert!(ast.plot_requests.any());
+    }
+
+    #[test]
+    fn parse_plots_at_proc_level() {
+        let ast = parse_reg("proc reg data=a plots=diagnostics; model y=x; run;").unwrap();
+        assert!(ast.plot_requests.diagnostics);
+    }
+
+    #[test]
+    fn parse_plots_unknown_keyword_ignored() {
+        let ast =
+            parse_reg("proc reg data=a; model y=x; plots=(diagnostics bogusplot); run;").unwrap();
+        assert!(ast.plot_requests.diagnostics);
+        // Bogus keyword consumed cleanly, no other family flipped.
+        assert!(!ast.plot_requests.residuals && !ast.plot_requests.fit);
+    }
+
+    #[test]
+    fn parse_plot_statement_simple() {
+        let ast = parse_reg("proc reg data=a; model weight=height; plot weight*height; run;")
+            .unwrap();
+        assert_eq!(ast.plot_statements.len(), 1);
+        assert_eq!(ast.plot_statements[0].y, PlotVar::Named("WEIGHT".into()));
+        assert_eq!(ast.plot_statements[0].x, PlotVar::Named("HEIGHT".into()));
+    }
+
+    #[test]
+    fn parse_plot_statement_keyword_vars() {
+        let ast =
+            parse_reg("proc reg data=a; model y=x; plot residual.*predicted.; run;").unwrap();
+        assert_eq!(ast.plot_statements.len(), 1);
+        assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
+        assert_eq!(ast.plot_statements[0].x, PlotVar::Predicted);
+    }
+
+    #[test]
+    fn parse_plot_statement_short_keyword_vars() {
+        let ast = parse_reg("proc reg data=a; model y=x; plot r.*p.; run;").unwrap();
+        assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
+        assert_eq!(ast.plot_statements[0].x, PlotVar::Predicted);
+    }
+
+    #[test]
+    fn parse_plot_statement_multiple_pairs() {
+        let ast = parse_reg(
+            "proc reg data=a; model y=x z; plot y*x z*y / overlay; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.plot_statements.len(), 2);
+        assert_eq!(ast.plot_statements[0].y, PlotVar::Named("Y".into()));
+        assert_eq!(ast.plot_statements[0].x, PlotVar::Named("X".into()));
+        assert_eq!(ast.plot_statements[1].y, PlotVar::Named("Z".into()));
+        assert_eq!(ast.plot_statements[1].x, PlotVar::Named("Y".into()));
+    }
+
+    #[test]
+    fn parse_plot_statement_with_symbol() {
+        let ast =
+            parse_reg("proc reg data=a; model y=x; plot residual.*predicted.='*'; run;").unwrap();
+        assert_eq!(ast.plot_statements.len(), 1);
+        assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
+    }
+
+    /// Build + execute a model carrying explicit PLOTS=/PLOT requests, returning
+    /// the captured log. Mirrors `run_diag` but injects the M36.11 requests.
+    fn run_plots(
+        ods_on: bool,
+        none: bool,
+        plot_requests: PlotRequests,
+        plot_statements: Vec<PlotPair>,
+    ) -> String {
+        let _ = none;
+        let mut session = make_session();
+        session.ods_graphics.enabled = ods_on;
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            basic_model("y", &["x"]),
+        );
+        ast.plot_requests = plot_requests;
+        ast.plot_statements = plot_statements;
+        execute(&ast, &mut session).unwrap();
+        session.log.into_string()
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn plots_request_defers_under_default_build() {
+        let mut req = PlotRequests::default();
+        req.diagnostics = true;
+        req.explicit = true;
+        let log = run_plots(false, false, req, vec![]);
+        assert!(log.contains("REG PLOTS= request"), "log: {log}");
+        assert!(log.contains("deferred"), "log: {log}");
+    }
+
+    #[cfg(not(feature = "graphics"))]
+    #[test]
+    fn plot_statement_defers_under_default_build() {
+        let pairs = vec![PlotPair { y: PlotVar::Residual, x: PlotVar::Predicted }];
+        let log = run_plots(false, false, PlotRequests::default(), pairs);
+        assert!(log.contains("REG PLOT statement"), "log: {log}");
+        assert!(log.contains("deferred"), "log: {log}");
+    }
+
+    /// PLOTS=NONE suppresses the automatic diagnostic image/NOTE (even with ODS on).
+    #[test]
+    fn plots_none_suppresses_automatic_diagnostic() {
+        let mut req = PlotRequests::default();
+        req.none = true;
+        req.explicit = true;
+        let log = run_plots(true, true, req, vec![]);
+        assert!(!log.contains("REG diagnostics"), "log: {log}");
+        assert!(!log.contains("image deferred"), "log: {log}");
+    }
+
+    /// Byte-identity: a model WITHOUT any PLOTS=/PLOT requests produces exactly
+    /// the same log as today (no new NOTE lines from M36.11).
+    #[test]
+    fn no_plots_request_is_byte_identical() {
+        let bare = run_plots(false, false, PlotRequests::default(), vec![]);
+        assert!(!bare.contains("REG PLOTS="), "log: {bare}");
+        assert!(!bare.contains("REG PLOT statement"), "log: {bare}");
+        // And matches the pre-existing run_diag(false,…) output exactly.
+        let diag = run_diag(false, None, None);
+        assert_eq!(bare, diag);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn plots_request_renders_images_under_graphics() {
+        let dir = std::env::temp_dir().join("sasrs_reg_plots_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let mut session = make_session();
+        session.ods_graphics.enabled = true;
+        session.ods_graphics.output_dir = dir.clone();
+        session.ods_graphics.file_stem = Some("regplt".into());
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            basic_model("y", &["x"]),
+        );
+        ast.plot_requests = PlotRequests { all: true, explicit: true, ..Default::default() };
+        ast.plot_statements = vec![PlotPair { y: PlotVar::Residual, x: PlotVar::Predicted }];
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("written"), "log: {log}");
+        // The first image is the automatic diagnostic (regplt_1); subsequent
+        // images come from PLOTS=ALL + the PLOT statement. Confirm at least the
+        // automatic and one request image exist.
+        let p1 = dir.join("regplt_1.png");
+        assert!(p1.exists(), "automatic diagnostic image missing: {p1:?}");
+        let p2 = dir.join("regplt_2.png");
+        assert!(p2.exists(), "requested plot image missing: {p2:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

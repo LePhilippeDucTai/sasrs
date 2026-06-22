@@ -6,7 +6,8 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M36 (Phase F)**. M1–M35 terminés (roadmap d'origine + Phase E M31–M34 :
+Jalon courant : **TERMINÉ (Phase F)**. M1–M36 terminés — Phase F M35–M36 (complétion du langage
+macro + `PROC REG` totale) closes la roadmap, après Phase E M31–M34 :
 refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
 **statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
 MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML + graphiques LOESS/DENSITY/PIE).
@@ -859,8 +860,20 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   Oracles : mono-réponse → F des 4 stats = F ANOVA ; identités HLT=Σλ/Pillai/Wilks/Roy ; eigen généralisés.
   Fixture m36/mtest (F=15.67 df 2/16 ; R²(height|age)=0.6584=r² cohérent M36.8). 2591 lib tests, 0 warning,
   snapshots octet-identiques.
-- [ ] M36.11 — graphiques `PLOTS=` (sous `--features graphics`) : panel de diagnostics REG complet
+- [x] M36.11 — graphiques `PLOTS=` (sous `--features graphics`) : panel de diagnostics REG complet
   (résidus vs prédits/régresseurs, QQ-plot, RStudent, leverage, Cook's D, fit plot avec bandes
-  CLM/CLI) + `PLOT` statement traditionnel (Opus, moyen)
-- [ ] DoD M36 : fixtures `m36/` + snapshots vérifiés (oracles) ; **README `REG` → ✅** (résiduel
+  CLM/CLI) + `PLOT` statement traditionnel (Opus, moyen).
+  **FAIT** : `PlotRequests` (DIAGNOSTICS/RESIDUALS/FIT/ALL/NONE, liste `(…)`, modifieurs `(UNPACK)`/`(ONLY)`)
+  parsé au niveau PROC et sous-statement ; statement `PLOT y*x [=sym] [/ opts]` avec variables `keyword.`
+  (`PREDICTED.`/`P.`, `RESIDUAL.`/`R.`). Sous `--features graphics` : images `reg_{N}` séparées (résidu/prédit,
+  RStudent/prédit, Cook's D/leverage, QQ normal, résidu/régresseur, fit plot mono-régresseur + bandes CLM/CLI ;
+  scatters PLOT) via `compute_obs_stats`/`compute_influence_stats`. Build par défaut : NOTE différée propre
+  (pluriel invariable), `PLOTS=NONE` supprime le diagnostic auto, octet-identique sans PLOTS=/PLOT. Vérifié
+  les DEUX configs : `cargo test` (2608) ET `cargo build --features graphics` (0 erreur/warning), test
+  graphics-gated rendant les images dans un tempdir. Fixture m36/plots. 2608 lib tests, 0 warning.
+- [x] DoD M36 : fixtures `m36/` + snapshots vérifiés (oracles) ; **README `REG` → ✅** (résiduel
   hors périmètre documenté dans la colonne droite) ; passer « Jalon courant : **TERMINÉ (Phase F)** ».
+  **FAIT** : 11 fixtures m36 (test_restrict, clb_cli_clm, influence, collin_spec, partial_ss, selection_adv,
+  weight_by_id, outest_matrices, ridge_pcomit, mtest, plots) à oracles vérifiés à la main ; README `REG`
+  passé 🟡→✅ (résiduel : SELECTION=LASSO, DW p-values exactes, REWEIGHT/REFIT/PAINT) ; jalon courant →
+  **TERMINÉ (Phase F)**.
