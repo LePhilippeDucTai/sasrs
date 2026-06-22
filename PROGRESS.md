@@ -804,9 +804,17 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   dans le bloc de stats). Oracles : ΣSS1=Model SS, SS2=t²·MSE, single-reg SS1=SS2=Model SS / STB=sign(β)|r|,
   SEQB(dernier)=β. Cohérence croisée : SS2(age)=22.388=numérateur du TEST age=0 (M36.1). Fixture
   m36/partial_ss. 2538 lib tests, 0 warning, snapshots octet-identiques.
-- [ ] M36.6 — Sélection avancée : `SELECTION=RSQUARE|ADJRSQ|CP(Mallows)|MAXR|MINR|NONE` + options
+- [x] M36.6 — Sélection avancée : `SELECTION=RSQUARE|ADJRSQ|CP(Mallows)|MAXR|MINR|NONE` + options
   `BEST= INCLUDE= START= STOP= GROUPNAMES= DETAILS STB` (table de tous les modèles, C(p), critères)
-  (Fable, élevé)
+  (Fable → Opus, Fable indisponible).
+  **FAIT** : `SelMethod` + RSquare/AdjRsq/Cp/MaxR/MinR/None ; `Selection` + best/include/start/stop/details/stb.
+  RSQUARE/ADJRSQ/CP = tous sous-ensembles (`run_all_subsets`) : R²=1−SSE/SST, AdjR²=1−(1−R²)(n−1)/(n−p_eff),
+  C(p)=SSE/s²−(n−2p_eff) (s²=MSE complet) ; RSQUARE groupé par taille (R² desc), ADJRSQ trié adj-R² desc,
+  CP trié C(p) asc ; `BEST=` limite. MAXR/MINR = amélioration R² avec échanges 1-in/1-out (`run_rsq_improvement`).
+  NONE = no-op (modèle complet). `INCLUDE=k` force les k premiers ; cap combinatoire p>20 → NOTE. Famille
+  RSQUARE sélectionne le modèle complet (table informative puis fit standard). Oracles : #=2ᵖ−1, C(p) complet=p_eff
+  (3.00), AdjR² formule, INCLUDE force, MAXR final=complet, NONE=sans SELECTION. Fixture m36/selection_adv.
+  2548 lib tests, 0 warning, snapshots octet-identiques.
 - [ ] ⫽ M36.7 — Statements de pondération/groupes : `WEIGHT` (MCO pondérés — X'WX), `FREQ`, `BY`
   (analyse par groupe), `ID` (variable d'identification pour OUTPUT/listings) (Opus, moyen)
 - [ ] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),

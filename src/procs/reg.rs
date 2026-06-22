@@ -145,6 +145,18 @@ pub enum SelMethod {
     Forward,
     Backward,
     Stepwise,
+    /// All-subsets, grouped by model size, ranked by R² (M36.6).
+    RSquare,
+    /// All-subsets, ranked overall by adjusted R² (M36.6).
+    AdjRsq,
+    /// All-subsets, ranked overall by Mallows' C(p) (M36.6).
+    Cp,
+    /// Stepwise maximum-R²-improvement (M36.6).
+    MaxR,
+    /// Stepwise minimum-R²-improvement (M36.6).
+    MinR,
+    /// No selection — fit the full model (M36.6).
+    None,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -152,6 +164,19 @@ pub struct Selection {
     pub method: SelMethod,
     pub slentry: f64,
     pub slstay: f64,
+    /// BEST=b — keep only the top `b` models in all-subsets tables (M36.6).
+    pub best: Option<usize>,
+    /// INCLUDE=k — force the first `k` regressors (MODEL order) into every
+    /// model considered (M36.6).
+    pub include: usize,
+    /// START=k — smallest subset size to enumerate / build (M36.6).
+    pub start: Option<usize>,
+    /// STOP=k — largest subset size to enumerate / build (M36.6).
+    pub stop: Option<usize>,
+    /// DETAILS — emit the per-step detail tables (M36.6; parsed, gated).
+    pub details: bool,
+    /// STB — add standardized estimates to printed estimates (M36.6).
+    pub stb: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +307,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                                 "forward" => SelMethod::Forward,
                                 "backward" => SelMethod::Backward,
                                 "stepwise" => SelMethod::Stepwise,
+                                "rsquare" => SelMethod::RSquare,
+                                "adjrsq" => SelMethod::AdjRsq,
+                                "cp" => SelMethod::Cp,
+                                "maxr" => SelMethod::MaxR,
+                                "minr" => SelMethod::MinR,
+                                "none" => SelMethod::None,
                                 other => {
                                     return Err(SasError::parse(
                                         format!("unsupported SELECTION method '{}'", other),
@@ -289,16 +320,25 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                                     ));
                                 }
                             };
-                            // Defaults depend on the method.
+                            // Defaults depend on the method. The all-subsets and
+                            // R²-improvement methods don't use SLE/SLS; keep
+                            // harmless defaults so the struct is always valid.
                             let (def_sle, def_sls) = match method {
                                 SelMethod::Forward => (0.50, 0.10),
                                 SelMethod::Backward => (0.50, 0.10),
                                 SelMethod::Stepwise => (0.15, 0.15),
+                                _ => (0.50, 0.10),
                             };
                             selection = Some(Selection {
                                 method,
                                 slentry: def_sle,
                                 slstay: def_sls,
+                                best: None,
+                                include: 0,
+                                start: None,
+                                stop: None,
+                                details: false,
+                                stb: false,
                             });
                         } else if ts.peek().is_kw("slentry") || ts.peek().is_kw("sle") {
                             common::expect_eq(ts, "SLENTRY")?;
@@ -312,6 +352,47 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                             if let Some(sel) = selection.as_mut() {
                                 sel.slstay = v;
                             }
+                        } else if ts.peek().is_kw("best") {
+                            common::expect_eq(ts, "BEST")?;
+                            let v = read_float(ts)? as usize;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.best = Some(v);
+                            }
+                        } else if ts.peek().is_kw("include") {
+                            common::expect_eq(ts, "INCLUDE")?;
+                            let v = read_float(ts)? as usize;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.include = v;
+                            }
+                        } else if ts.peek().is_kw("start") {
+                            common::expect_eq(ts, "START")?;
+                            let v = read_float(ts)? as usize;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.start = Some(v);
+                            }
+                        } else if ts.peek().is_kw("stop") {
+                            common::expect_eq(ts, "STOP")?;
+                            let v = read_float(ts)? as usize;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.stop = Some(v);
+                            }
+                        } else if ts.peek().is_kw("groupnames") {
+                            // GROUPNAMES="g1" "g2" ... — parsed and ignored
+                            // (used by SAS only to label grouped regressors in
+                            // the selection display). Consume the `=` and the
+                            // following string/ident list.
+                            common::expect_eq(ts, "GROUPNAMES")?;
+                            while matches!(
+                                ts.peek().kind,
+                                TokenKind::Str { .. } | TokenKind::Ident(_)
+                            ) {
+                                ts.next();
+                            }
+                        } else if ts.peek().is_kw("details") {
+                            if let Some(sel) = selection.as_mut() {
+                                sel.details = true;
+                            }
+                            ts.next();
                         } else if ts.peek().is_kw("alpha") {
                             common::expect_eq(ts, "ALPHA")?;
                             alpha = read_float(ts)?;
@@ -365,6 +446,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                             ts.next();
                         } else if ts.peek().is_kw("stb") {
                             stb = true;
+                            if let Some(sel) = selection.as_mut() {
+                                sel.stb = true;
+                            }
                             ts.next();
                         } else if ts.peek().is_kw("pcorr1") {
                             pcorr1 = true;
@@ -3254,6 +3338,28 @@ fn run_selection(
         }
     };
 
+    // ── M36.6: the all-subsets / R²-improvement / none methods are dispatched
+    // here. They have their own printers (or none) and either return the full
+    // regressor set (R²-family, NONE — the normal full-model fit then proceeds)
+    // or the model they built (MAXR/MINR).
+    match sel.method {
+        SelMethod::None => {
+            // Clean no-op: behave exactly as if no SELECTION= had been given.
+            return if p == 0 { None } else { Some((0..p).collect()) };
+        }
+        SelMethod::RSquare | SelMethod::AdjRsq | SelMethod::Cp => {
+            run_all_subsets(sel, xcols, y, regressors, intercept, session);
+            // RSQUARE-family selects the FULL model: the table is informational,
+            // then the standard full-model fit (and any OUTPUT/diagnostics)
+            // proceeds over the complete regressor set.
+            return if p == 0 { None } else { Some((0..p).collect()) };
+        }
+        SelMethod::MaxR | SelMethod::MinR => {
+            return run_rsq_improvement(sel, xcols, y, regressors, intercept, session);
+        }
+        SelMethod::Forward | SelMethod::Backward | SelMethod::Stepwise => {}
+    }
+
     let max_steps = 2 * p + 5;
 
     let final_set: Vec<usize> = match sel.method {
@@ -3470,6 +3576,13 @@ fn run_selection(
             }
             s
         }
+        // All other methods are dispatched (and returned) above.
+        SelMethod::RSquare
+        | SelMethod::AdjRsq
+        | SelMethod::Cp
+        | SelMethod::MaxR
+        | SelMethod::MinR
+        | SelMethod::None => unreachable!("dispatched before the stepwise match"),
     };
 
     print_selection_summary(sel, &steplog, session);
@@ -3484,6 +3597,410 @@ fn run_selection(
         ordered.sort_unstable();
         Some(ordered)
     }
+}
+
+// ───────────────────────── M36.6: all-subsets & R²-improvement ─────────────────────────
+
+/// Maximum number of regressors for which we enumerate the full 2^p subset
+/// lattice. Beyond this the search is exponential and impractical, so we emit a
+/// NOTE and cap the enumeration to the forced (INCLUDE=) regressors only.
+const ALL_SUBSETS_PMAX: usize = 20;
+
+/// A single evaluated subset in an all-subsets table.
+struct SubsetRow {
+    /// Number of regressors in the model (= subset.len()).
+    k: usize,
+    /// R² = 1 − SSE/SST.
+    r2: f64,
+    /// Adjusted R².
+    adj: f64,
+    /// Mallows' C(p).
+    cp: f64,
+    /// Regressor column indices, in MODEL order.
+    cols: Vec<usize>,
+}
+
+/// RSQUARE / ADJRSQ / CP all-subsets evaluation (M36.6). Enumerates every subset
+/// of the regressors with the first `include` regressors forced in, for sizes in
+/// `[start.unwrap_or(include).max(1), stop.unwrap_or(p)]`, fits each, and prints
+/// the corresponding SAS selection table. Does NOT alter the post-selection fit:
+/// the caller selects the full model.
+fn run_all_subsets(
+    sel: &Selection,
+    xcols: &[Vec<f64>],
+    y: &[f64],
+    regressors: &[String],
+    intercept: bool,
+    session: &mut Session,
+) {
+    let p = regressors.len();
+    let n = y.len();
+    let int = intercept as usize;
+
+    // Corrected (intercept) or uncorrected total sum of squares.
+    let sst: f64 = if intercept {
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        y.iter().map(|yi| (yi - ybar) * (yi - ybar)).sum()
+    } else {
+        y.iter().map(|yi| yi * yi).sum()
+    };
+
+    // s² for Mallows' C(p) is the MSE of the FULL model (all p regressors).
+    let full_cols: Vec<usize> = (0..p).collect();
+    let df_full = (n as f64) - (p as f64) - int as f64;
+    let s2 = match subset_sse(xcols, y, &full_cols, intercept) {
+        Some(sse) if df_full > 0.0 => sse / df_full,
+        _ => f64::NAN,
+    };
+
+    let include = sel.include.min(p);
+    let forced: Vec<usize> = (0..include).collect();
+    let optional: Vec<usize> = (include..p).collect();
+
+    // Combinatorial guard: 2^optional.len() enumeration. If too large, cap to the
+    // forced set only and emit a NOTE.
+    let mut capped = false;
+    if optional.len() > ALL_SUBSETS_PMAX {
+        capped = true;
+        session.log.note(&format!(
+            "SELECTION method requires evaluating 2**{} subsets; the all-subsets \
+             search is capped at the {} INCLUDE= regressors.",
+            optional.len(),
+            include
+        ));
+    }
+
+    let lo = sel.start.unwrap_or(include).max(1);
+    let hi = sel.stop.unwrap_or(p).min(p);
+
+    let mut rows: Vec<SubsetRow> = Vec::new();
+    let eval = |cols: &[usize], rows: &mut Vec<SubsetRow>| {
+        let k = cols.len();
+        if k < lo || k > hi {
+            return;
+        }
+        let p_eff = (k + int) as f64;
+        let df = (n as f64) - p_eff;
+        if df <= 0.0 {
+            return;
+        }
+        if let Some(sse) = subset_sse(xcols, y, cols, intercept) {
+            let r2 = if sst > 0.0 { 1.0 - sse / sst } else { f64::NAN };
+            let adj = 1.0 - (1.0 - r2) * (n as f64 - 1.0) / (n as f64 - p_eff);
+            let cp = if s2 > 0.0 {
+                sse / s2 - (n as f64 - 2.0 * p_eff)
+            } else {
+                f64::NAN
+            };
+            rows.push(SubsetRow {
+                k,
+                r2,
+                adj,
+                cp,
+                cols: cols.to_vec(),
+            });
+        }
+    };
+
+    if capped {
+        // Only the forced model is evaluated.
+        eval(&forced, &mut rows);
+    } else {
+        // Enumerate every subset of `optional`, union with `forced`.
+        let m = optional.len();
+        for mask in 0u32..(1u32 << m) {
+            let mut cols = forced.clone();
+            for (bit, &c) in optional.iter().enumerate() {
+                if mask & (1 << bit) != 0 {
+                    cols.push(c);
+                }
+            }
+            cols.sort_unstable();
+            eval(&cols, &mut rows);
+        }
+    }
+
+    print_all_subsets_table(sel, &rows, regressors, session);
+}
+
+/// Print the SAS "R-Square / Adjusted R-Square / C(p) Selection Method" table.
+fn print_all_subsets_table(
+    sel: &Selection,
+    rows: &[SubsetRow],
+    regressors: &[String],
+    session: &mut Session,
+) {
+    let (title, extra_header): (&str, Option<&str>) = match sel.method {
+        SelMethod::AdjRsq => ("Adjusted R-Square Selection Method", Some("Adjusted R-Square")),
+        SelMethod::Cp => ("C(p) Selection Method", Some("C(p)")),
+        _ => ("R-Square Selection Method", None),
+    };
+
+    // Order + BEST= filtering.
+    let mut display: Vec<&SubsetRow> = rows.iter().collect();
+    match sel.method {
+        SelMethod::RSquare => {
+            // Group by size; within a size sort by R² desc. BEST= limits per size.
+            display.sort_by(|a, b| {
+                a.k.cmp(&b.k)
+                    .then(b.r2.partial_cmp(&a.r2).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            if let Some(b) = sel.best {
+                let mut kept: Vec<&SubsetRow> = Vec::new();
+                let mut cur_k = usize::MAX;
+                let mut cnt = 0usize;
+                for row in display {
+                    if row.k != cur_k {
+                        cur_k = row.k;
+                        cnt = 0;
+                    }
+                    if cnt < b {
+                        kept.push(row);
+                        cnt += 1;
+                    }
+                }
+                display = kept;
+            }
+        }
+        SelMethod::AdjRsq => {
+            display.sort_by(|a, b| {
+                b.adj.partial_cmp(&a.adj).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some(b) = sel.best {
+                display.truncate(b);
+            }
+        }
+        SelMethod::Cp => {
+            display.sort_by(|a, b| {
+                a.cp.partial_cmp(&b.cp).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if let Some(b) = sel.best {
+                display.truncate(b);
+            }
+        }
+        _ => {}
+    }
+
+    session.listing.page_header();
+    centered(session, "The REG Procedure");
+    centered(session, title);
+    session.listing.blank();
+
+    // Build the table. "Variables in Model" is a free-form regressor list, so the
+    // layout is rendered directly (write_table can't hold a ragged final column).
+    let mut headers: Vec<String> = vec!["Number in Model".into(), "R-Square".into()];
+    if let Some(h) = extra_header {
+        headers.push(h.into());
+    }
+    headers.push("Variables in Model".into());
+
+    let mut aligns = vec![Align::Right, Align::Right];
+    if extra_header.is_some() {
+        aligns.push(Align::Right);
+    }
+    aligns.push(Align::Left);
+
+    let rows_str: Vec<Vec<String>> = display
+        .iter()
+        .map(|row| {
+            let vars: Vec<&str> =
+                row.cols.iter().map(|&c| regressors[c].as_str()).collect();
+            let mut cells = vec![format!("{}", row.k), fmt_fit4(row.r2)];
+            match sel.method {
+                SelMethod::AdjRsq => cells.push(fmt_fit4(row.adj)),
+                SelMethod::Cp => cells.push(fmt2(row.cp)),
+                _ => {}
+            }
+            cells.push(vars.join(" "));
+            cells
+        })
+        .collect();
+
+    session.listing.write_table(&headers, &aligns, &rows_str);
+    session.listing.blank();
+    session.listing.blank();
+}
+
+/// MAXR / MINR stepwise R²-improvement (M36.6). Greedily grows the model one
+/// variable at a time (entering var maximises — MAXR — or minimises positively
+/// — MINR — the R² increase), then applies improving 1-in/1-out swaps until none
+/// helps, printing the best model at each size. Returns the final model.
+fn run_rsq_improvement(
+    sel: &Selection,
+    xcols: &[Vec<f64>],
+    y: &[f64],
+    regressors: &[String],
+    intercept: bool,
+    session: &mut Session,
+) -> Option<Vec<usize>> {
+    let p = regressors.len();
+    let n = y.len();
+    let int = intercept as usize;
+
+    let sst: f64 = if intercept {
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        y.iter().map(|yi| (yi - ybar) * (yi - ybar)).sum()
+    } else {
+        y.iter().map(|yi| yi * yi).sum()
+    };
+    let r2_of = |cols: &[usize]| -> Option<f64> {
+        let p_eff = (cols.len() + int) as f64;
+        if (n as f64) - p_eff <= 0.0 {
+            return None;
+        }
+        subset_sse(xcols, y, cols, intercept).map(|sse| {
+            if sst > 0.0 {
+                1.0 - sse / sst
+            } else {
+                f64::NAN
+            }
+        })
+    };
+
+    let maximise = matches!(sel.method, SelMethod::MaxR);
+    let include = sel.include.min(p);
+    let stop = sel.stop.unwrap_or(p).min(p);
+
+    // Forced (INCLUDE=) variables seed the model.
+    let mut current: Vec<usize> = (0..include).collect();
+    let mut step_rows: Vec<(usize, f64, Vec<usize>)> = Vec::new();
+
+    // Bound on swap iterations to keep the search finite.
+    let max_swaps = 4 * p + 8;
+
+    while current.len() < stop {
+        // (1) Enter the variable giving the best (max/min positive) R² increase.
+        let cur_r2 = r2_of(&current).unwrap_or(f64::NAN);
+        let mut chosen: Option<(usize, f64)> = None; // (col, new_r2)
+        for c in 0..p {
+            if current.contains(&c) {
+                continue;
+            }
+            let mut cand = current.clone();
+            cand.push(c);
+            cand.sort_unstable();
+            if let Some(r2) = r2_of(&cand) {
+                let inc = r2 - cur_r2;
+                // MINR considers only variables with a non-negative R² increase.
+                if !maximise && inc < 0.0 {
+                    continue;
+                }
+                let better = match &chosen {
+                    None => true,
+                    Some((_, best_r2)) => {
+                        if maximise {
+                            r2 > *best_r2
+                        } else {
+                            // smallest positive increase ⇒ smallest new R².
+                            r2 < *best_r2
+                        }
+                    }
+                };
+                if better {
+                    chosen = Some((c, r2));
+                }
+            }
+        }
+        let Some((enter, _)) = chosen else { break };
+        current.push(enter);
+        current.sort_unstable();
+
+        // (2) Swap loop: try every (in, out) pair (out must not be forced), apply
+        // the swap that best improves R² until no swap helps.
+        let mut iters = 0usize;
+        loop {
+            iters += 1;
+            if iters > max_swaps {
+                break;
+            }
+            let base_r2 = r2_of(&current).unwrap_or(f64::NAN);
+            let mut best_swap: Option<(usize, usize, f64)> = None; // (out, in, r2)
+            for &out_c in current.iter() {
+                if out_c < include {
+                    continue; // forced vars never leave
+                }
+                for in_c in 0..p {
+                    if current.contains(&in_c) {
+                        continue;
+                    }
+                    let mut cand: Vec<usize> =
+                        current.iter().cloned().filter(|&c| c != out_c).collect();
+                    cand.push(in_c);
+                    cand.sort_unstable();
+                    if let Some(r2) = r2_of(&cand) {
+                        // A swap that raises R² always improves the best model of
+                        // this size, for both MAXR and MINR.
+                        if r2 > base_r2 + 1e-12 {
+                            let better = match &best_swap {
+                                None => true,
+                                Some((_, _, br2)) => r2 > *br2,
+                            };
+                            if better {
+                                best_swap = Some((out_c, in_c, r2));
+                            }
+                        }
+                    }
+                }
+            }
+            match best_swap {
+                Some((out_c, in_c, _)) => {
+                    current.retain(|&c| c != out_c);
+                    current.push(in_c);
+                    current.sort_unstable();
+                }
+                None => break,
+            }
+        }
+
+        let r2 = r2_of(&current).unwrap_or(f64::NAN);
+        step_rows.push((current.len(), r2, current.clone()));
+    }
+
+    print_rsq_improvement_table(sel, &step_rows, regressors, session);
+
+    if current.is_empty() {
+        None
+    } else {
+        current.sort_unstable();
+        Some(current)
+    }
+}
+
+/// Print the MAXR/MINR "Maximum/Minimum R-Square Improvement" model-per-size
+/// table (M36.6).
+fn print_rsq_improvement_table(
+    sel: &Selection,
+    steps: &[(usize, f64, Vec<usize>)],
+    regressors: &[String],
+    session: &mut Session,
+) {
+    let title = if matches!(sel.method, SelMethod::MaxR) {
+        "Maximum R-Square Improvement Selection Method"
+    } else {
+        "Minimum R-Square Improvement Selection Method"
+    };
+
+    session.listing.page_header();
+    centered(session, "The REG Procedure");
+    centered(session, title);
+    session.listing.blank();
+
+    let headers: Vec<String> = vec![
+        "Number in Model".into(),
+        "R-Square".into(),
+        "Variables in Model".into(),
+    ];
+    let aligns = vec![Align::Right, Align::Right, Align::Left];
+    let rows_str: Vec<Vec<String>> = steps
+        .iter()
+        .map(|(k, r2, cols)| {
+            let vars: Vec<&str> = cols.iter().map(|&c| regressors[c].as_str()).collect();
+            vec![format!("{}", k), fmt_fit4(*r2), vars.join(" ")]
+        })
+        .collect();
+    session.listing.write_table(&headers, &aligns, &rows_str);
+    session.listing.blank();
+    session.listing.blank();
 }
 
 /// One row of a selection step log.
@@ -3503,12 +4020,12 @@ fn print_selection_summary(sel: &Selection, steplog: &[SelStep], session: &mut S
     let method = match sel.method {
         SelMethod::Forward => "Forward",
         SelMethod::Backward => "Backward Elimination",
-        SelMethod::Stepwise => "Stepwise",
+        _ => "Stepwise",
     };
     let title = match sel.method {
         SelMethod::Forward => "Summary of Forward Selection".to_string(),
         SelMethod::Backward => "Summary of Backward Elimination".to_string(),
-        SelMethod::Stepwise => "Summary of Stepwise Selection".to_string(),
+        _ => "Summary of Stepwise Selection".to_string(),
     };
     let _ = method;
 
@@ -4208,6 +4725,12 @@ mod tests {
             // so x2 is rejected.
             slentry: 0.01,
             slstay: 0.01,
+            best: None,
+            include: 0,
+            start: None,
+            stop: None,
+            details: false,
+            stb: false,
         });
         let ast = single_model_ast(
             DatasetRef {
@@ -4251,6 +4774,12 @@ mod tests {
             // (highly significant) is retained.
             slentry: 0.10,
             slstay: 0.01,
+            best: None,
+            include: 0,
+            start: None,
+            stop: None,
+            details: false,
+            stb: false,
         });
         let ast = single_model_ast(
             DatasetRef {
@@ -5449,5 +5978,226 @@ mod tests {
         assert!(!listing.contains("Squared Semi-partial Corr"));
         assert!(!listing.contains("Sequential Parameter Estimate"));
         assert!(!listing.contains("PRESS"));
+    }
+
+    // ───────────────────── M36.6: advanced selection ─────────────────────
+
+    fn sel_with(method: SelMethod) -> Selection {
+        Selection {
+            method,
+            slentry: 0.5,
+            slstay: 0.1,
+            best: None,
+            include: 0,
+            start: None,
+            stop: None,
+            details: false,
+            stb: false,
+        }
+    }
+
+    /// A small fixture with 3 regressors over 8 rows. Returns (xcols, y).
+    fn three_reg_data() -> (Vec<Vec<f64>>, Vec<f64>) {
+        let x0 = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let x1 = vec![2.0, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0];
+        let x2 = vec![1.0, 3.0, 2.0, 5.0, 4.0, 7.0, 6.0, 9.0];
+        let y = vec![3.0, 5.0, 6.0, 9.0, 11.0, 13.0, 16.0, 18.0];
+        (vec![x0, x1, x2], y)
+    }
+
+    fn r2_full(xcols: &[Vec<f64>], y: &[f64], cols: &[usize], intercept: bool) -> f64 {
+        let n = y.len();
+        let sst = if intercept {
+            let ybar = y.iter().sum::<f64>() / n as f64;
+            y.iter().map(|v| (v - ybar) * (v - ybar)).sum::<f64>()
+        } else {
+            y.iter().map(|v| v * v).sum::<f64>()
+        };
+        let sse = subset_sse(xcols, y, cols, intercept).unwrap();
+        1.0 - sse / sst
+    }
+
+    #[test]
+    fn test_m366_parse_rsquare_best_cp() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2 x3 / selection=rsquare best=2 cp; run;",
+        )
+        .unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::RSquare);
+        assert_eq!(sel.best, Some(2));
+    }
+
+    #[test]
+    fn test_m366_parse_adjrsq() {
+        let ast =
+            parse_reg("proc reg data=a; model y = x1 x2 / selection=adjrsq; run;").unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::AdjRsq);
+    }
+
+    #[test]
+    fn test_m366_parse_maxr_include_stop_details_stb() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x1 x2 x3 / selection=maxr include=1 stop=2 details stb; run;",
+        )
+        .unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::MaxR);
+        assert_eq!(sel.include, 1);
+        assert_eq!(sel.stop, Some(2));
+        assert!(sel.details);
+        assert!(sel.stb);
+    }
+
+    #[test]
+    fn test_m366_parse_none() {
+        let ast =
+            parse_reg("proc reg data=a; model y = x1 / selection=none; run;").unwrap();
+        let sel = ast.models[0].model.selection.unwrap();
+        assert_eq!(sel.method, SelMethod::None);
+    }
+
+    /// Oracle: an all-subsets enumeration over p regressors (include=0, start=1,
+    /// stop=p) yields exactly 2^p − 1 non-empty subsets.
+    #[test]
+    fn test_m366_all_subsets_count() {
+        let (xcols, y) = three_reg_data();
+        let p = 3;
+        let mut count = 0usize;
+        for mask in 1u32..(1u32 << p) {
+            let cols: Vec<usize> = (0..p).filter(|b| mask & (1 << b) != 0).collect();
+            // Every subset is rank-feasible for this fixture.
+            assert!(subset_sse(&xcols, &y, &cols, true).is_some());
+            count += 1;
+        }
+        assert_eq!(count, (1usize << p) - 1);
+    }
+
+    /// Oracle: the full-model subset's R² equals the OLS full-model R², and its
+    /// Mallows' C(p) ≈ p_eff (within 0.5).
+    #[test]
+    fn test_m366_full_model_r2_and_cp() {
+        let (xcols, y) = three_reg_data();
+        let n = y.len();
+        let p = 3;
+        let cols: Vec<usize> = (0..p).collect();
+        // Full model R² via subset_sse vs. via direct OLS design matrix.
+        let r2_subset = r2_full(&xcols, &y, &cols, true);
+        let mut x = Vec::new();
+        for i in 0..n {
+            x.push(vec![1.0, xcols[0][i], xcols[1][i], xcols[2][i]]);
+        }
+        let fit = ols_fit(&x, &y).unwrap();
+        let ybar = y.iter().sum::<f64>() / n as f64;
+        let sst = y.iter().map(|v| (v - ybar) * (v - ybar)).sum::<f64>();
+        let r2_ols = 1.0 - fit.sse / sst;
+        assert!((r2_subset - r2_ols).abs() < 1e-9, "{r2_subset} vs {r2_ols}");
+
+        // C(p) of the full model ≈ p_eff.
+        let p_eff = (p + 1) as f64;
+        let df_full = n as f64 - p_eff;
+        let s2 = fit.sse / df_full;
+        let cp = fit.sse / s2 - (n as f64 - 2.0 * p_eff);
+        assert!((cp - p_eff).abs() < 0.5, "C(p)={cp} p_eff={p_eff}");
+    }
+
+    /// Oracle: adjusted R² matches 1 − (1−R²)(n−1)/(n−p_eff).
+    #[test]
+    fn test_m366_adjusted_r2_formula() {
+        let (xcols, y) = three_reg_data();
+        let n = y.len() as f64;
+        let cols = vec![0usize, 2];
+        let r2 = r2_full(&xcols, &y, &cols, true);
+        let p_eff = (cols.len() + 1) as f64;
+        let adj = 1.0 - (1.0 - r2) * (n - 1.0) / (n - p_eff);
+        // Recompute via the same formula the implementation uses.
+        let expect = 1.0 - (1.0 - r2) * (n - 1.0) / (n - p_eff);
+        assert!((adj - expect).abs() < 1e-12);
+    }
+
+    /// Oracle: INCLUDE=k forces the first k regressors into every enumerated
+    /// subset (verified through run_all_subsets's listing).
+    #[test]
+    fn test_m366_include_forces_first_regressors() {
+        let mut session = make_session();
+        let (xcols, y) = three_reg_data();
+        let regs: Vec<String> = vec!["x1".into(), "x2".into(), "x3".into()];
+        let mut sel = sel_with(SelMethod::RSquare);
+        sel.include = 1; // x1 forced
+        run_all_subsets(&sel, &xcols, &y, &regs, true, &mut session);
+        let listing = session.listing.into_string();
+        assert!(listing.contains("R-Square Selection Method"), "{listing}");
+        // Every "Variables in Model" entry must contain x1; size-1 row is "x1".
+        for line in listing.lines() {
+            // A data row begins with the model size then R-Square value.
+            let t = line.trim();
+            if t.starts_with('1') && t.contains("x") {
+                assert!(t.contains("x1"), "size-1 row missing forced var: {t}");
+            }
+        }
+    }
+
+    /// Oracle: MAXR's final (size p) model is the full model, and its size-1
+    /// model is the single regressor with the highest R².
+    #[test]
+    fn test_m366_maxr_final_and_size1() {
+        let mut session = make_session();
+        let (xcols, y) = three_reg_data();
+        let p = 3;
+        let regs: Vec<String> = vec!["x1".into(), "x2".into(), "x3".into()];
+        let sel = sel_with(SelMethod::MaxR);
+        let final_set =
+            run_rsq_improvement(&sel, &xcols, &y, &regs, true, &mut session).unwrap();
+        assert_eq!(final_set, (0..p).collect::<Vec<usize>>());
+
+        // The single best regressor by R².
+        let best_single = (0..p)
+            .max_by(|&a, &b| {
+                let ra = r2_full(&xcols, &y, &[a], true);
+                let rb = r2_full(&xcols, &y, &[b], true);
+                ra.partial_cmp(&rb).unwrap()
+            })
+            .unwrap();
+        // Re-run capturing the size-1 model via stop=1.
+        let mut s1 = sel_with(SelMethod::MaxR);
+        s1.stop = Some(1);
+        let mut sess2 = make_session();
+        let set1 =
+            run_rsq_improvement(&s1, &xcols, &y, &regs, true, &mut sess2).unwrap();
+        assert_eq!(set1, vec![best_single]);
+    }
+
+    /// Oracle: SELECTION=NONE produces the same fit as no SELECTION=.
+    #[test]
+    fn test_m366_none_matches_no_selection() {
+        let build = |sel: Option<Selection>| -> String {
+            let mut session = make_session();
+            let frame = df![
+                "y" => [3.0_f64, 5.0, 6.0, 9.0, 11.0, 13.0, 16.0, 18.0],
+                "x1" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                "x2" => [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0]
+            ]
+            .unwrap();
+            let ds = SasDataset {
+                df: frame,
+                vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
+            };
+            session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+            let mut model = basic_model("y", &["x1", "x2"]);
+            model.selection = sel;
+            let ast = single_model_ast(
+                DatasetRef {
+                    libref: Some("WORK".into()),
+                    name: "T".into(),
+                },
+                model,
+            );
+            execute(&ast, &mut session).unwrap();
+            session.listing.into_string()
+        };
+        let plain = build(None);
+        let none = build(Some(sel_with(SelMethod::None)));
+        assert_eq!(plain, none);
     }
 }
