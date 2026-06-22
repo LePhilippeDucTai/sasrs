@@ -783,9 +783,17 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   → `préfixe_<var>`. dfE≤1 → sentinelle manquante. Oracles : RSTUDENT identité, PRESS=Σpress², DFBETAS vs
   refit leave-one-out (1e-6). Fixture m36/influence (Cook's D 0.1455, DFFITS −0.5516, COVRATIO 1.0719).
   2520 lib tests, 0 warning, snapshots octet-identiques.
-- [ ] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de
+- [x] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de
   conditionnement + proportions de variance), `VIF`, `TOL`, `SPEC` (test de White), `DW`/`DWPROB`
-  (Durbin-Watson), `ACOV`/`HCC` (covariance robuste à l'hétéroscédasticité) (Opus, élevé)
+  (Durbin-Watson), `ACOV`/`HCC` (covariance robuste à l'hétéroscédasticité) (Opus, élevé).
+  **FAIT** : flags `vif/tol/collin/collinoint/spec/dw/dwprob/acov` (ACOV=HCC synonymes). VIF/TOL → colonnes
+  `Tolerance`/`Variance Inflation` (régression de x_j sur les autres ; intercept VIF=0). COLLIN : X mis à
+  l'échelle unité → eigen (`eigenvectors_jacobi`), indices `√(λmax/λk)`, proportions `v²/λ` normalisées.
+  SPEC : régression auxiliaire de White (e² ~ régresseurs+carrés+produits), `W=n·R²`, χ²(df) via `chisq_cdf`.
+  DW : `d=Σ(e_t−e_{t-1})²/Σe²`, ρ ; p-values par approximation normale moment-matched (documentée).
+  ACOV : HC0 `(X'X)⁻¹(Σe²xxᵀ)(X'X)⁻¹` → matrice + table SE hétéroscédasticité-consistantes (ajoutée, OLS
+  intacte). Oracles : `VIF·TOL=1`, proportions=1/colonne, `0≤d≤4`, HC symétrique. Fixture m36/collin_spec
+  (VIF 2.92762, CI 45.81, SPEC df=5 χ²8.33, DW 1.935). 2530 lib tests, 0 warning, snapshots octet-identiques.
 - [ ] M36.5 — SS partielles & corrélations : MODEL `SS1`/`SS2` (Type I/II SS des estimations),
   `STB` (coefficients standardisés), `PCORR1`/`PCORR2` (corrélations partielles²), `SCORR1`/`SCORR2`
   (semi-partielles²), `SEQB` (estimations séquentielles), option `PRESS` (Opus, moyen)
