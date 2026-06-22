@@ -815,8 +815,17 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   RSQUARE sélectionne le modèle complet (table informative puis fit standard). Oracles : #=2ᵖ−1, C(p) complet=p_eff
   (3.00), AdjR² formule, INCLUDE force, MAXR final=complet, NONE=sans SELECTION. Fixture m36/selection_adv.
   2548 lib tests, 0 warning, snapshots octet-identiques.
-- [ ] ⫽ M36.7 — Statements de pondération/groupes : `WEIGHT` (MCO pondérés — X'WX), `FREQ`, `BY`
-  (analyse par groupe), `ID` (variable d'identification pour OUTPUT/listings) (Opus, moyen)
+- [x] ⫽ M36.7 — Statements de pondération/groupes : `WEIGHT` (MCO pondérés — X'WX), `FREQ`, `BY`
+  (analyse par groupe), `ID` (variable d'identification pour OUTPUT/listings) (Opus, moyen).
+  **FAIT** : `RegAst.weight/freq/by/id`. WEIGHT = `weighted_ols_fit` (lignes mises à l'échelle √w → `ols_fit`,
+  `(X'WX)⁻¹`, SSE pondéré, ŷ/résidus échelle d'origine) ; moyenne/SST/levier `h=w·xᵀ(X'WX)⁻¹x` pondérés.
+  FREQ = réplication entière (`n=Σf`, df gonflé ; poids effectif `wf=w·f`). BY via `common::by_groups`
+  (en-tête `var=val` placé après « The REG Procedure »). ID → colonne d'identification dans les tables
+  R/INFLUENCE/Output Statistics. Bloc résumé des résidus (R) et option PRESS rendus weight-aware
+  (Sum of Squared Residuals = Error SS pondéré). Oracles : WEIGHT(1)=OLS, équations normales pondérées,
+  WEIGHT(c)→SSE×c, FREQ(2)→df doublé, BY(1 groupe)=sans BY. Fixture m36/weight_by_id (WLS+ID, BY sex).
+  2560 lib tests, 0 warning, snapshots octet-identiques. (Limite documentée : RESTRICT+WEIGHT utilise la
+  machinerie RESTRICT non pondérée.)
 - [ ] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),
   `OUTSSCP=` ; options PROC `SIMPLE` (stats descriptives), `CORR`, `ALL` ; MODEL `COVB`/`CORRB`/`XPX`/`I`
   (matrices imprimées) (Opus, moyen)

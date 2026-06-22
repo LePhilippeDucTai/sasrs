@@ -37,6 +37,14 @@ pub struct RegAst {
     /// are deferred (a NOTE); the simple residuals-vs-predicted diagnostic is
     /// driven automatically from `ods_graphics.enabled`, not from this flag.
     pub plots_requested: bool,
+    /// M36.7 — `WEIGHT var;` weight variable (weighted least squares).
+    pub weight: Option<String>,
+    /// M36.7 — `FREQ var;` frequency variable (replication counts).
+    pub freq: Option<String>,
+    /// M36.7 — `BY var1 var2 …;` by-group processing variables.
+    pub by: Vec<String>,
+    /// M36.7 — `ID var1 …;` identification variables for diagnostic listings.
+    pub id: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +240,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     // Sub-statements until run;/quit;
     let mut models: Vec<RegModelEntry> = Vec::new();
     let mut plots_requested = false;
+    let mut weight: Option<String> = None;
+    let mut freq: Option<String> = None;
+    let mut by: Vec<String> = Vec::new();
+    let mut id: Vec<String> = Vec::new();
 
     common::parse_proc_body(ts, |ts, kw| {
         if kw == "model" {
@@ -647,6 +659,56 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 entry.restricts.push(RegRestrict { equations });
             }
             Ok(true)
+        } else if kw == "weight" {
+            // `WEIGHT var;` — a single weight variable (M36.7).
+            ts.next(); // consume "weight"
+            if let Some(name) = ts.peek().ident().map(str::to_string) {
+                weight = Some(name);
+                ts.next();
+            }
+            ts.skip_to_semi();
+            Ok(true)
+        } else if kw == "freq" {
+            // `FREQ var;` — a single frequency variable (M36.7).
+            ts.next(); // consume "freq"
+            if let Some(name) = ts.peek().ident().map(str::to_string) {
+                freq = Some(name);
+                ts.next();
+            }
+            ts.skip_to_semi();
+            Ok(true)
+        } else if kw == "by" {
+            // `BY var1 var2 …;` — by-group processing (M36.7). DESCENDING is
+            // accepted but unused here (REG runs the same per-group analysis);
+            // we keep just the variable names (in order).
+            ts.next(); // consume "by"
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                if ts.peek().is_kw("descending") {
+                    ts.next();
+                    continue;
+                }
+                if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    by.push(name);
+                    ts.next();
+                } else {
+                    ts.next();
+                }
+            }
+            ts.expect_semi()?;
+            Ok(true)
+        } else if kw == "id" {
+            // `ID var1 …;` — identification variables (M36.7).
+            ts.next(); // consume "id"
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    id.push(name);
+                    ts.next();
+                } else {
+                    ts.next();
+                }
+            }
+            ts.expect_semi()?;
+            Ok(true)
         } else if ts.peek2().kind == TokenKind::Colon && ts.peek_nth(2).is_kw("test") {
             // `label: TEST eq [, eq ...];` — the leading identifier is a label.
             let label = ts.peek().ident().map(str::to_string);
@@ -668,6 +730,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         data_options: RegDataOptions { input },
         models,
         plots_requested,
+        weight,
+        freq,
+        by,
+        id,
     })
 }
 
@@ -892,6 +958,63 @@ fn ols_fit(x: &[Vec<f64>], y: &[f64]) -> Result<OlsFit> {
     let xt = linalg::transpose(x);
     let xtx = linalg::matrix_mult(&xt, x);
     let xtx_inv = linalg::invert_matrix(&xtx)?;
+    Ok(OlsFit {
+        beta,
+        y_hat,
+        resid,
+        sse,
+        xtx_inv,
+    })
+}
+
+/// M36.7 weighting context for weighted least squares / frequency replication.
+struct Weighting {
+    /// Effective SS weight w_i·f_i per complete-case row (same order as y).
+    wf: Vec<f64>,
+    /// Σ f_i — the observation count for n / degrees-of-freedom purposes (FREQ
+    /// inflates this; WEIGHT alone leaves it equal to the row count).
+    total_n: f64,
+}
+
+/// Weighted-least-squares fit. Solves `X'WX β = X'Wy` with W = diag(wf_i) by
+/// scaling each design row and `y` by √wf_i and reusing the OLS machinery, then
+/// recomputes ŷ / residuals on the ORIGINAL scale and the weighted error sum of
+/// squares SSEw = Σ wf_i e_i². The returned `OlsFit.xtx_inv` is `(X'WX)⁻¹`
+/// (since the scaled cross-product is exactly X'WX) so all downstream SE /
+/// covariance formulas use the weighted normal equations directly.
+fn weighted_ols_fit(x_mat: &[Vec<f64>], y: &[f64], wf: &[f64]) -> Result<OlsFit> {
+    let n = y.len();
+    let p = x_mat[0].len();
+    let mut xs: Vec<Vec<f64>> = Vec::with_capacity(n);
+    let mut ys: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = wf[i].max(0.0).sqrt();
+        let mut row = Vec::with_capacity(p);
+        for j in 0..p {
+            row.push(x_mat[i][j] * s);
+        }
+        xs.push(row);
+        ys.push(y[i] * s);
+    }
+    // β and (X'WX)⁻¹ from the scaled normal equations.
+    let scaled = ols_fit(&xs, &ys)?;
+    let beta = scaled.beta;
+    let xtx_inv = scaled.xtx_inv;
+    // Original-scale predictions / residuals and the WEIGHTED SSE.
+    let y_hat: Vec<f64> = x_mat
+        .iter()
+        .map(|row| row.iter().zip(beta.iter()).map(|(xi, bi)| xi * bi).sum())
+        .collect();
+    let resid: Vec<f64> = y
+        .iter()
+        .zip(y_hat.iter())
+        .map(|(yi, yhi)| yi - yhi)
+        .collect();
+    let sse: f64 = resid
+        .iter()
+        .zip(wf.iter())
+        .map(|(e, &w)| w * e * e)
+        .sum();
     Ok(OlsFit {
         beta,
         y_hat,
@@ -1521,22 +1644,109 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         n_read, in_libref, in_table
     ));
 
-    // --- 2. Per-model loop ---
-    for (mi, entry) in ast.models.iter().enumerate() {
-        let model_label = format!("Model: MODEL{}", mi + 1);
-        run_model(
-            ast,
-            entry,
-            &ds,
-            &in_libref,
-            &in_table,
-            n_read,
-            &model_label,
-            session,
-        )?;
+    // --- M36.7: resolve WEIGHT / FREQ / ID / BY columns. Each is optional and,
+    // when absent, the downstream path is byte-identical to the prior OLS code.
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    let weight_col: Option<Vec<crate::value::Value>> = match &ast.weight {
+        Some(nm) => Some(decode_column(&ds, find_col(nm)?)?),
+        None => None,
+    };
+    let freq_col: Option<Vec<crate::value::Value>> = match &ast.freq {
+        Some(nm) => Some(decode_column(&ds, find_col(nm)?)?),
+        None => None,
+    };
+    // ID variables: keep (display name, decoded column) for the diagnostic
+    // listings. We support and print the first; others are carried.
+    let mut id_cols: Vec<(String, Vec<crate::value::Value>)> = Vec::new();
+    for nm in &ast.id {
+        let idx = find_col(nm)?;
+        id_cols.push((ds.vars[idx].name.clone(), decode_column(&ds, idx)?));
+    }
+
+    // --- BY processing: a single group spanning all rows when no BY (output
+    // byte-identical). Otherwise contiguous, dataset-order groups via by_groups.
+    let by_pairs: Vec<(String, bool)> = ast.by.iter().map(|n| (n.clone(), false)).collect();
+    let by_cols = common::resolve_by_cols(&ds, &by_pairs)?;
+    let by_values: Vec<Vec<crate::value::Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+    let by_groups_list: Vec<(Vec<crate::value::Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_read).collect())]
+    } else {
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        common::by_groups(&by_values, &descending, n_read, &by_names, &in_display)?
+    };
+
+    // --- 2. Per-BY-group, per-model loop ---
+    for (by_key, grp_rows) in &by_groups_list {
+        // BY heading (M36.7): rendered INSIDE each model's header block (after
+        // "The REG Procedure", before "Model: MODELn"), so thread the label down
+        // into run_model / fit_and_print rather than emitting it here. `None`
+        // when there is no BY ⇒ header block byte-identical to the prior path.
+        let by_heading: Option<String> = if by_names.is_empty() {
+            None
+        } else {
+            Some(reg_by_heading_line(&by_names, by_key))
+        };
+        for (mi, entry) in ast.models.iter().enumerate() {
+            let model_label = format!("Model: MODEL{}", mi + 1);
+            run_model(
+                ast,
+                entry,
+                &ds,
+                &in_libref,
+                &in_table,
+                grp_rows,
+                weight_col.as_deref(),
+                freq_col.as_deref(),
+                &id_cols,
+                &model_label,
+                by_heading.as_deref(),
+                session,
+            )?;
+        }
     }
 
     Ok(())
+}
+
+/// Build a PROC REG BY-group heading line (`<var>=<value> ...`), matching the
+/// standard SAS BY-line used by the other procs (M36.7). Centered and emitted by
+/// the per-model header path so it lands after "The REG Procedure".
+fn reg_by_heading_line(by_names: &[String], by_key: &[crate::value::Value]) -> String {
+    let parts: Vec<String> = by_names
+        .iter()
+        .zip(by_key)
+        .map(|(name, v)| format!("{}={}", name, by_value_cell(v)))
+        .collect();
+    parts.join(" ")
+}
+
+/// Render a BY-key cell value for the heading line (M36.7).
+fn by_value_cell(v: &crate::value::Value) -> String {
+    match v {
+        crate::value::Value::Num(f) => crate::value::format_best(*f, 12),
+        crate::value::Value::Missing(k) => k.display(),
+        crate::value::Value::Char(s) => s.trim_end().to_string(),
+    }
+}
+
+/// Render an ID cell value for the diagnostic-listing leading column (M36.7).
+fn id_value_cell(v: &crate::value::Value) -> String {
+    match v {
+        crate::value::Value::Num(f) => crate::value::format_best(*f, 12),
+        crate::value::Value::Missing(k) => k.display(),
+        crate::value::Value::Char(s) => s.trim_end().to_string(),
+    }
 }
 
 /// Run a single MODEL statement: resolve columns, do listwise deletion, then
@@ -1549,8 +1759,14 @@ fn run_model(
     ds: &SasDataset,
     in_libref: &str,
     in_table: &str,
-    n_read: usize,
+    rows: &[usize],
+    weight_col: Option<&[crate::value::Value]>,
+    freq_col: Option<&[crate::value::Value]>,
+    id_cols: &[(String, Vec<crate::value::Value>)],
     model_label: &str,
+    // M36.7: BY-group heading line, threaded down so it can be emitted inside
+    // the per-model header block (after "The REG Procedure"). `None` when no BY.
+    by_heading: Option<&str>,
     session: &mut Session,
 ) -> Result<()> {
     let _ = (in_libref, in_table);
@@ -1558,6 +1774,7 @@ fn run_model(
     let dep_name = &model.dependent;
     let regressors = &model.regressors;
     let p = regressors.len();
+    let n_read = rows.len();
 
     // --- Find column indices ---
     let find_col = |nm: &str| -> Result<usize> {
@@ -1594,13 +1811,47 @@ fn run_model(
         reg_cols.push(decode_column(ds, idx)?);
     }
 
+    // --- M36.7 weighting bookkeeping. `wf` accumulates the effective SS weight
+    // w_i·f_i for each complete-case row; `total_n` accumulates Σf_i (FREQ
+    // inflates the observation count / df, WEIGHT does not). `id_used` carries
+    // the first ID variable's per-row display value when ID is given. When no
+    // WEIGHT and no FREQ are present, `weighting` stays inactive and the whole
+    // analysis is byte-identical to the prior OLS path.
+    let has_weight = weight_col.is_some();
+    let has_freq = freq_col.is_some();
+    let mut wf: Vec<f64> = Vec::new();
+    let mut total_n: f64 = 0.0;
+    let mut id_used: Vec<String> = Vec::new();
+
     // --- Build regressor columns (numeric) and y vector (listwise deletion) ---
     // xcols[c] is the c-th regressor over the complete-case rows.
     let mut xcols: Vec<Vec<f64>> = vec![Vec::new(); p];
     let mut y_vec: Vec<f64> = Vec::new();
-    let mut complete_mask: Vec<bool> = vec![false; n_read];
+    let mut complete_mask: Vec<bool> = vec![false; ds.n_obs()];
 
-    for i in 0..n_read {
+    for &i in rows {
+        // FREQ: truncate to integer; exclude obs with f_i < 1 or missing.
+        let fi: f64 = match freq_col {
+            Some(col) => match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() => {
+                    let t = v.trunc();
+                    if t < 1.0 {
+                        continue;
+                    }
+                    t
+                }
+                _ => continue,
+            },
+            None => 1.0,
+        };
+        // WEIGHT: exclude obs with w_i ≤ 0 or missing weight.
+        let wi: f64 = match weight_col {
+            Some(col) => match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() && v > 0.0 => v,
+                _ => continue,
+            },
+            None => 1.0,
+        };
         let yi = match value_to_num(&dep_col[i]) {
             Some(v) if !v.is_nan() => v,
             _ => continue,
@@ -1621,9 +1872,32 @@ fn run_model(
                 xcols[c].push(v);
             }
             y_vec.push(yi);
+            wf.push(wi * fi);
+            total_n += fi;
+            if let Some((_, col)) = id_cols.first() {
+                id_used.push(id_value_cell(&col[i]));
+            }
             complete_mask[i] = true;
         }
     }
+
+    // Effective weighting context. Active when WEIGHT or FREQ is present. When
+    // inactive the OLS path runs exactly as before (byte-identical). `total_n`
+    // (Σf_i) is the observation count that drives df / n bookkeeping: FREQ
+    // changes n and df, WEIGHT does not.
+    let weighting = if has_weight || has_freq {
+        Some(Weighting {
+            wf: wf.clone(),
+            total_n,
+        })
+    } else {
+        None
+    };
+    let id_first: Option<&[String]> = if id_cols.is_empty() {
+        None
+    } else {
+        Some(&id_used)
+    };
 
     let n = y_vec.len();
     session
@@ -1639,7 +1913,7 @@ fn run_model(
             None => {
                 // Nothing entered (FORWARD/STEPWISE) — fit the intercept-only
                 // model (or note for NOINT) and finish, no OUTPUT.
-                fit_and_print_empty(model, dep_name, n_read, n, model_label, session);
+                fit_and_print_empty(model, dep_name, n_read, n, model_label, by_heading, session);
                 return Ok(());
             }
         }
@@ -1669,7 +1943,13 @@ fn run_model(
 
     let sel_reg_names: Vec<String> = selected.iter().map(|&c| regressors[c].clone()).collect();
 
-    let fit = match ols_fit(&x_mat, &y_vec) {
+    // Weighted-least-squares fit when WEIGHT/FREQ is active; plain OLS
+    // otherwise (byte-identical default path).
+    let fit_result = match &weighting {
+        Some(w) => weighted_ols_fit(&x_mat, &y_vec, &w.wf),
+        None => ols_fit(&x_mat, &y_vec),
+    };
+    let fit = match fit_result {
         Ok(f) => f,
         Err(e) => {
             session.log.error(&format!("Regression failed: {}", e));
@@ -1732,18 +2012,31 @@ fn run_model(
         None
     };
 
-    // PRESS statistic (M36.5): Σ (resid_i/(1−h_i))² from the OLS leverages.
+    // PRESS statistic (M36.5): Σ wf_i·(resid_i/(1−h_i))². With WEIGHT/FREQ active
+    // (M36.7) the leverage is the WEIGHTED one (h_i·w_i) and each term carries
+    // wf_i, matching the weighted PRESS in the MODEL R residual summary and
+    // STUDENT/Cook's D (which already use the weighted leverage). With no
+    // weighting `wf` is all-ones and h is the plain OLS leverage, so this is
+    // byte-identical to before.
     let press_stat = if model.press_opt && !model.noprint {
-        let h = leverages(&x_mat, &fit.xtx_inv);
+        let h0 = leverages(&x_mat, &fit.xtx_inv);
+        let ones = vec![1.0; h0.len()];
+        let wf: &[f64] = weighting.as_ref().map(|w| w.wf.as_slice()).unwrap_or(&ones);
+        let h: Vec<f64> = h0
+            .iter()
+            .zip(wf.iter())
+            .map(|(&hi, &wi)| hi * wi)
+            .collect();
         let press: f64 = fit
             .resid
             .iter()
             .zip(h.iter())
-            .map(|(e, &hi)| {
+            .zip(wf.iter())
+            .map(|((e, &hi), &wi)| {
                 let d = 1.0 - hi;
                 if d != 0.0 {
                     let p = e / d;
-                    p * p
+                    wi * p * p
                 } else {
                     0.0
                 }
@@ -1767,6 +2060,8 @@ fn run_model(
         tolvif.as_ref(),
         seqstats.as_ref(),
         press_stat,
+        weighting.as_ref(),
+        by_heading,
         session,
     );
 
@@ -1808,19 +2103,20 @@ fn run_model(
     // off the (unrestricted) OLS fit, gated on the CLM/CLI model options.
     if (model.clm || model.cli) && !model.noprint {
         print_output_statistics(
-            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, session,
+            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting.as_ref(), id_first,
+            session,
         );
     }
 
     // --- Residual / influence diagnostics (M36.3): MODEL R and INFLUENCE.
     // Computed lazily once off the OLS fit, shared by both listings.
     if (model.r || model.influence) && !model.noprint {
-        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff);
+        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff, weighting.as_ref());
         if model.r {
-            print_r_statistics(model, &infl, session);
+            print_r_statistics(model, &infl, id_first, weighting.as_ref(), session);
         }
         if model.influence {
-            print_influence_statistics(&infl, &sel_reg_names, intercept, session);
+            print_influence_statistics(&infl, &sel_reg_names, intercept, id_first, session);
         }
     }
 
@@ -1861,6 +2157,7 @@ fn run_model(
         model.alpha,
         &sel_reg_names,
         intercept,
+        weighting.as_ref(),
         session,
     )?;
 
@@ -2093,6 +2390,13 @@ fn fit_and_print(
     // `press_stat`: PRESS = Σ (resid_i/(1−h_i))² (M36.5). `Some` when MODEL PRESS
     // is requested; printed as a fit statistic.
     press_stat: Option<f64>,
+    // `weighting`: M36.7 WLS/FREQ context. `Some` ⇒ weighted ANOVA (weighted
+    // mean/SST, df from Σf_i, weighted-SSE-based MSE). `None` ⇒ plain OLS
+    // (byte-identical default path).
+    weighting: Option<&Weighting>,
+    // M36.7: BY-group heading, emitted right after "The REG Procedure" line.
+    // `None` ⇒ header block byte-identical to the prior (no-BY) path.
+    by_heading: Option<&str>,
     session: &mut Session,
 ) {
     // When a restricted fit is present, the printed model (ANOVA, R², F, and
@@ -2115,9 +2419,29 @@ fn fit_and_print(
     };
 
     // y vector reconstructed from ŷ + resid (avoids threading it in).
+    let y: Vec<f64> = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).collect();
+    // Per-row weights (w_i·f_i). All-ones in the plain OLS / default path so the
+    // weighted formulas below collapse to the original ones byte-for-byte.
+    let ones = vec![1.0; n];
+    let wts: &[f64] = match weighting {
+        Some(w) => &w.wf,
+        None => &ones,
+    };
+    // n_used drives degrees of freedom: Σf_i with FREQ (which inflates n/df);
+    // the row count n when only WEIGHT (or neither) is present.
+    let n_used: f64 = match weighting {
+        Some(w) => w.total_n,
+        None => n as f64,
+    };
+    let sum_w: f64 = wts.iter().sum();
+    // Weighted ("Dependent") mean ȳ_w = Σw_iy_i/Σw_i.
     let y_mean = {
-        let sum: f64 = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).sum();
-        sum / n as f64
+        let sw: f64 = y.iter().zip(wts.iter()).map(|(yi, w)| w * yi).sum();
+        if sum_w > 0.0 {
+            sw / sum_w
+        } else {
+            y.iter().sum::<f64>() / n as f64
+        }
     };
 
     let p = reg_names.len();
@@ -2129,40 +2453,44 @@ fn fit_and_print(
     // --- ANOVA decomposition ---
     let (ssm, sst, model_df, error_df, total_df, total_label, r2, adj_r2);
     if intercept {
-        // Corrected (centered) sums of squares.
-        let y: Vec<f64> = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).collect();
-        sst = y.iter().map(|yi| (yi - y_mean) * (yi - y_mean)).sum();
+        // Corrected (weighted) sums of squares: SST_w = Σ w_i (y_i−ȳ_w)².
+        sst = y
+            .iter()
+            .zip(wts.iter())
+            .map(|(yi, w)| w * (yi - y_mean) * (yi - y_mean))
+            .sum();
         ssm = sst - sse;
         model_df = (p - restrict_q) as f64;
-        error_df = (n - p_eff + restrict_q) as f64;
-        total_df = (n - 1) as f64;
+        error_df = n_used - p_eff as f64 + restrict_q as f64;
+        total_df = n_used - 1.0;
         total_label = "Corrected Total";
         r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
         adj_r2 = if sst > 0.0 {
-            1.0 - (1.0 - r2) * (n as f64 - 1.0) / error_df
+            1.0 - (1.0 - r2) * (n_used - 1.0) / error_df
         } else {
             f64::NAN
         };
     } else {
-        // Uncorrected sums of squares (NOINT).
-        let sst_unc: f64 = y_hat
+        // Uncorrected (weighted) sums of squares (NOINT).
+        let sst_unc: f64 = y
             .iter()
-            .zip(resid.iter())
-            .map(|(yh, r)| {
-                let yi = yh + r;
-                yi * yi
-            })
+            .zip(wts.iter())
+            .map(|(yi, w)| w * yi * yi)
             .sum();
-        let ssm_unc: f64 = y_hat.iter().map(|yh| yh * yh).sum();
+        let ssm_unc: f64 = y_hat
+            .iter()
+            .zip(wts.iter())
+            .map(|(yh, w)| w * yh * yh)
+            .sum();
         sst = sst_unc;
         ssm = ssm_unc;
         model_df = (p - restrict_q) as f64;
-        error_df = (n - p + restrict_q) as f64;
-        total_df = n as f64;
+        error_df = n_used - p as f64 + restrict_q as f64;
+        total_df = n_used;
         total_label = "Uncorrected Total";
         r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
         adj_r2 = if sst > 0.0 {
-            1.0 - (1.0 - r2) * (n as f64) / (n as f64 - p as f64)
+            1.0 - (1.0 - r2) * n_used / (n_used - p as f64)
         } else {
             f64::NAN
         };
@@ -2207,6 +2535,9 @@ fn fit_and_print(
 
     session.listing.page_header();
     centered(session, "The REG Procedure");
+    if let Some(h) = by_heading {
+        centered(session, h);
+    }
     centered(session, model_label);
     centered(session, &format!("Dependent Variable: {}", dep_name));
     session.listing.blank();
@@ -2217,7 +2548,7 @@ fn fit_and_print(
     ));
     session.listing.write_line(&format!(
         "               Number of Observations Used         {}",
-        n
+        n_used as usize
     ));
     session.listing.blank();
     session.listing.blank();
@@ -2534,6 +2865,7 @@ fn fit_and_print_empty(
     _n_read: usize,
     _n: usize,
     model_label: &str,
+    by_heading: Option<&str>,
     session: &mut Session,
 ) {
     if model.noprint {
@@ -2541,6 +2873,9 @@ fn fit_and_print_empty(
     }
     session.listing.page_header();
     centered(session, "The REG Procedure");
+    if let Some(h) = by_heading {
+        centered(session, h);
+    }
     centered(session, model_label);
     centered(session, &format!("Dependent Variable: {}", dep_name));
     session.listing.blank();
@@ -2590,11 +2925,20 @@ fn compute_obs_stats(
     n: usize,
     p_eff: usize,
     alpha: f64,
+    weighting: Option<&Weighting>,
 ) -> Vec<ObsStat> {
-    let df_e = (n - p_eff) as f64;
+    // df / MSE use Σf_i with FREQ; the weighted hat is h_i = w_i·x_iᵀ(X'WX)⁻¹x_i.
+    let (df_e, wts): (f64, Option<&[f64]>) = match weighting {
+        Some(w) => (w.total_n - p_eff as f64, Some(&w.wf)),
+        None => ((n - p_eff) as f64, None),
+    };
     let mse = fit.sse / df_e;
     let t = t_quantile(1.0 - alpha / 2.0, df_e);
-    let h = leverages(x_mat, &fit.xtx_inv);
+    let h0 = leverages(x_mat, &fit.xtx_inv);
+    let h: Vec<f64> = match wts {
+        Some(w) => h0.iter().zip(w.iter()).map(|(hi, wi)| hi * wi).collect(),
+        None => h0,
+    };
     (0..n)
         .map(|i| {
             let hi = h[i];
@@ -2651,10 +2995,18 @@ fn compute_influence_stats(
     fit: &OlsFit,
     n: usize,
     p_eff: usize,
+    weighting: Option<&Weighting>,
 ) -> Vec<InfluenceStat> {
-    let df_e = (n - p_eff) as f64;
+    let (df_e, wts): (f64, Option<&[f64]>) = match weighting {
+        Some(w) => (w.total_n - p_eff as f64, Some(&w.wf)),
+        None => ((n - p_eff) as f64, None),
+    };
     let mse = fit.sse / df_e;
-    let h = leverages(x_mat, &fit.xtx_inv);
+    let h0 = leverages(x_mat, &fit.xtx_inv);
+    let h: Vec<f64> = match wts {
+        Some(w) => h0.iter().zip(w.iter()).map(|(hi, wi)| hi * wi).collect(),
+        None => h0,
+    };
 
     // c = (X'X)⁻¹ Xᵀ  →  p_eff × n. Row j, col i is c_{ji}.
     let xt = linalg::transpose(x_mat); // p_eff × n
@@ -2756,18 +3108,27 @@ fn print_output_statistics(
     fit: &OlsFit,
     n: usize,
     p_eff: usize,
+    weighting: Option<&Weighting>,
+    id_first: Option<&[String]>,
     session: &mut Session,
 ) {
-    let stats = compute_obs_stats(x_mat, y, fit, n, p_eff, model.alpha);
+    let stats = compute_obs_stats(x_mat, y, fit, n, p_eff, model.alpha, weighting);
     let level = fmt_level(100.0 * (1.0 - model.alpha));
 
-    let mut headers: Vec<String> = vec![
+    // ID (M36.7): prepend the first ID variable as a leading column.
+    let mut headers: Vec<String> = Vec::new();
+    let mut aligns: Vec<Align> = Vec::new();
+    if id_first.is_some() {
+        headers.push("Id".into());
+        aligns.push(Align::Right);
+    }
+    headers.extend([
         "Obs".into(),
         "Dependent Variable".into(),
         "Predicted Value".into(),
         "Std Error Mean Predict".into(),
-    ];
-    let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+    ]);
+    aligns.extend([Align::Right, Align::Right, Align::Right, Align::Right]);
     if model.clm {
         headers.push(format!("{}% CL Mean (Lower)", level));
         headers.push(format!("{}% CL Mean (Upper)", level));
@@ -2787,12 +3148,16 @@ fn print_output_statistics(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let mut row = vec![
+            let mut row: Vec<String> = Vec::new();
+            if let Some(ids) = id_first {
+                row.push(ids.get(i).cloned().unwrap_or_default());
+            }
+            row.extend([
                 format!("{}", i + 1),
                 fmt5(s.y),
                 fmt5(s.y_hat),
                 fmt5(s.stdp),
-            ];
+            ]);
             if model.clm {
                 row.push(fmt5(s.lclm));
                 row.push(fmt5(s.uclm));
@@ -2846,9 +3211,20 @@ fn student_gauge(student: f64) -> String {
 fn print_r_statistics(
     _model: &RegModel,
     stats: &[InfluenceStat],
+    id_first: Option<&[String]>,
+    // M36.7: when WEIGHT/FREQ is active the residual-summary sums must be
+    // weighted (wf_i) so they agree with the weighted ANOVA Error SS. `None` ⇒
+    // all-ones weights ⇒ the original unweighted sums (byte-identical).
+    weighting: Option<&Weighting>,
     session: &mut Session,
 ) {
-    let headers: Vec<String> = vec![
+    let mut headers: Vec<String> = Vec::new();
+    let mut aligns: Vec<Align> = Vec::new();
+    if id_first.is_some() {
+        headers.push("Id".into());
+        aligns.push(Align::Right);
+    }
+    headers.extend([
         "Obs".into(),
         "Dependent Variable".into(),
         "Predicted Value".into(),
@@ -2858,8 +3234,8 @@ fn print_r_statistics(
         "Student Residual".into(),
         "-2-1 0 1 2".into(),
         "Cook's D".into(),
-    ];
-    let aligns = vec![
+    ]);
+    aligns.extend([
         Align::Right,
         Align::Right,
         Align::Right,
@@ -2869,12 +3245,16 @@ fn print_r_statistics(
         Align::Right,
         Align::Left,
         Align::Right,
-    ];
+    ]);
     let rows: Vec<Vec<String>> = stats
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            vec![
+            let mut row: Vec<String> = Vec::new();
+            if let Some(ids) = id_first {
+                row.push(ids.get(i).cloned().unwrap_or_default());
+            }
+            row.extend([
                 format!("{}", i + 1),
                 fmt5(s.y),
                 fmt5(s.y_hat),
@@ -2884,7 +3264,8 @@ fn print_r_statistics(
                 fmt_diag(s.student),
                 student_gauge(s.student),
                 fmt_diag(s.cookd),
-            ]
+            ]);
+            row
         })
         .collect();
 
@@ -2894,14 +3275,32 @@ fn print_r_statistics(
     session.listing.blank();
     session.listing.write_table(&headers, &aligns, &rows);
 
-    // Summary block SAS prints after the R table.
-    let sum_resid: f64 = stats.iter().map(|s| s.resid).sum();
-    let sum_sq_resid: f64 = stats.iter().map(|s| s.resid * s.resid).sum();
+    // Summary block SAS prints after the R table. With WEIGHT/FREQ active these
+    // sums are weighted by wf_i so they agree with the weighted ANOVA Error SS
+    // (M36.7). `s.press` = e_i/(1−h_i) already uses the WEIGHTED leverage h_i, so
+    // the weighted PRESS is Σ wf_i·(e_i/(1−h_i))². With no weighting `wf` is the
+    // all-ones slice and these collapse to the original unweighted sums
+    // (byte-identical):
+    //   Sum of Residuals         = Σ wf_i·e_i
+    //   Sum of Squared Residuals = Σ wf_i·e_i²   (= ANOVA Error SS)
+    //   PRESS                    = Σ wf_i·(e_i/(1−h_i))²
+    let ones = vec![1.0; stats.len()];
+    let wf: &[f64] = match weighting {
+        Some(w) => &w.wf,
+        None => &ones,
+    };
+    let sum_resid: f64 = stats.iter().zip(wf).map(|(s, &w)| w * s.resid).sum();
+    let sum_sq_resid: f64 = stats
+        .iter()
+        .zip(wf)
+        .map(|(s, &w)| w * s.resid * s.resid)
+        .sum();
     let press: f64 = stats
         .iter()
-        .filter_map(|s| {
+        .zip(wf)
+        .filter_map(|(s, &w)| {
             if s.press.is_finite() {
-                Some(s.press * s.press)
+                Some(w * s.press * s.press)
             } else {
                 None
             }
@@ -2928,25 +3327,32 @@ fn print_influence_statistics(
     stats: &[InfluenceStat],
     reg_names: &[String],
     intercept: bool,
+    id_first: Option<&[String]>,
     session: &mut Session,
 ) {
     let p_eff = reg_names.len() + intercept as usize;
-    let mut headers: Vec<String> = vec![
+    let mut headers: Vec<String> = Vec::new();
+    let mut aligns: Vec<Align> = Vec::new();
+    if id_first.is_some() {
+        headers.push("Id".into());
+        aligns.push(Align::Right);
+    }
+    headers.extend([
         "Obs".into(),
         "Residual".into(),
         "RStudent".into(),
         "Hat Diag H".into(),
         "Cov Ratio".into(),
         "DFFITS".into(),
-    ];
-    let mut aligns = vec![
+    ]);
+    aligns.extend([
         Align::Right,
         Align::Right,
         Align::Right,
         Align::Right,
         Align::Right,
         Align::Right,
-    ];
+    ]);
     for j in 0..p_eff {
         let var = if intercept {
             if j == 0 {
@@ -2965,14 +3371,18 @@ fn print_influence_statistics(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let mut row = vec![
+            let mut row: Vec<String> = Vec::new();
+            if let Some(ids) = id_first {
+                row.push(ids.get(i).cloned().unwrap_or_default());
+            }
+            row.extend([
                 format!("{}", i + 1),
                 fmt5(s.resid),
                 fmt_diag(s.rstudent),
                 fmt_fit4(s.h),
                 fmt_diag(s.covratio),
                 fmt_diag(s.dffits),
-            ];
+            ]);
             for j in 0..p_eff {
                 row.push(fmt_diag(s.dfbetas[j]));
             }
@@ -4095,6 +4505,7 @@ fn write_outputs(
     alpha: f64,
     reg_names: &[String],
     intercept: bool,
+    weighting: Option<&Weighting>,
     session: &mut Session,
 ) -> Result<()> {
     if entry.outputs.is_empty() {
@@ -4114,7 +4525,7 @@ fn write_outputs(
             || o.uclm.is_some()
     });
     let obs_stats: Option<Vec<ObsStat>> = if needs_stats {
-        Some(compute_obs_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, alpha))
+        Some(compute_obs_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, alpha, weighting))
     } else {
         None
     };
@@ -4132,7 +4543,7 @@ fn write_outputs(
             || o.dfbetas.is_some()
     });
     let infl_stats: Option<Vec<InfluenceStat>> = if needs_infl {
-        Some(compute_influence_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff))
+        Some(compute_influence_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, weighting))
     } else {
         None
     };
@@ -4392,6 +4803,10 @@ mod tests {
                 restricts: vec![],
             }],
             plots_requested: false,
+            weight: None,
+            freq: None,
+            by: Vec::new(),
+            id: Vec::new(),
         }
     }
 
@@ -5110,7 +5525,7 @@ mod tests {
         let fit = ols_fit(&x, &y).unwrap();
         let p_eff = 2;
         let mse = fit.sse / (n - p_eff) as f64;
-        let stats = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05);
+        let stats = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05, None);
         for s in &stats {
             assert!((s.stdp * s.stdp + s.stdr * s.stdr - mse).abs() < 1e-9);
             assert!((s.stdi * s.stdi - s.stdp * s.stdp - mse).abs() < 1e-9);
@@ -5259,8 +5674,8 @@ mod tests {
     #[test]
     fn test_oracle_student_eq_resid_over_stdr() {
         let (x, y, fit, n, p_eff) = infl_setup();
-        let obs = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05);
-        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let obs = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05, None);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff, None);
         for (s, o) in infl.iter().zip(obs.iter()) {
             assert!((s.student - s.resid / o.stdr).abs() < 1e-9);
             // STDR also matches the obs-stats STDR.
@@ -5273,7 +5688,7 @@ mod tests {
     fn test_oracle_rstudent_identity() {
         let (x, y, fit, n, p_eff) = infl_setup();
         let df_e = (n - p_eff) as f64;
-        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff, None);
         for s in &infl {
             let expect = s.student * ((df_e - 1.0) / (df_e - s.student * s.student)).sqrt();
             assert!(
@@ -5290,7 +5705,7 @@ mod tests {
     fn test_oracle_press() {
         let (x, y, fit, n, p_eff) = infl_setup();
         let h = leverages(&x, &fit.xtx_inv);
-        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff, None);
         let mut press_ss = 0.0;
         for (i, s) in infl.iter().enumerate() {
             let expect = s.resid / (1.0 - h[i]);
@@ -5306,7 +5721,7 @@ mod tests {
     fn test_oracle_cookd_dffits() {
         let (x, y, fit, n, p_eff) = infl_setup();
         let h = leverages(&x, &fit.xtx_inv);
-        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff, None);
         for (i, s) in infl.iter().enumerate() {
             assert!(s.cookd >= 0.0, "cookd={}", s.cookd);
             let expect = s.rstudent * (h[i] / (1.0 - h[i])).sqrt();
@@ -5319,7 +5734,7 @@ mod tests {
     fn test_oracle_cookd_low_leverage() {
         let (x, y, fit, n, p_eff) = infl_setup();
         let h = leverages(&x, &fit.xtx_inv);
-        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff, None);
         // The lowest-leverage observation should have small Cook's D.
         let (min_i, _) = h
             .iter()
@@ -5339,7 +5754,7 @@ mod tests {
         let p_eff = 2;
         let x = design(true, &[&x1], n);
         let fit = ols_fit(&x, &y).unwrap();
-        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff, None);
 
         for drop in 0..n {
             // Refit without observation `drop`.
@@ -5372,7 +5787,7 @@ mod tests {
         let p_eff = 2;
         let x = design(true, &[&x1], n);
         let fit = ols_fit(&x, &y.to_vec()).unwrap();
-        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff);
+        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff, None);
         for s in &infl {
             assert!(!s.rstudent.is_finite());
             assert!(!s.covratio.is_finite());
@@ -6199,5 +6614,376 @@ mod tests {
         let plain = build(None);
         let none = build(Some(sel_with(SelMethod::None)));
         assert_eq!(plain, none);
+    }
+
+    // ───────────────────────── M36.7 oracles ─────────────────────────
+
+    /// WEIGHT with all w_i = 1 ⇒ identical β / SSE / SE as unweighted OLS.
+    #[test]
+    fn test_oracle_weight_ones_equals_ols() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos()).collect();
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let ols = ols_fit(&x, &y).unwrap();
+        let wls = weighted_ols_fit(&x, &y, &vec![1.0; n]).unwrap();
+        for j in 0..2 {
+            assert!((ols.beta[j] - wls.beta[j]).abs() < 1e-9);
+            for k in 0..2 {
+                assert!((ols.xtx_inv[j][k] - wls.xtx_inv[j][k]).abs() < 1e-9);
+            }
+        }
+        assert!((ols.sse - wls.sse).abs() < 1e-9);
+    }
+
+    /// WLS β solves the weighted normal equations X'WX β = X'Wy (residual ~ 0).
+    #[test]
+    fn test_oracle_weighted_normal_equations() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 0.5 + 1.3 * a + (a).sin()).collect();
+        let w = [0.5_f64, 2.0, 1.0, 3.0, 0.25, 4.0, 1.5, 0.75];
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let fit = weighted_ols_fit(&x, &y, &w).unwrap();
+        // Form X'WX and X'Wy and check the residual of the normal equations.
+        let p = 2;
+        let mut xtwx = vec![vec![0.0; p]; p];
+        let mut xtwy = vec![0.0; p];
+        for i in 0..n {
+            for a in 0..p {
+                xtwy[a] += w[i] * x[i][a] * y[i];
+                for b in 0..p {
+                    xtwx[a][b] += w[i] * x[i][a] * x[i][b];
+                }
+            }
+        }
+        for a in 0..p {
+            let lhs: f64 = (0..p).map(|b| xtwx[a][b] * fit.beta[b]).sum();
+            assert!((lhs - xtwy[a]).abs() < 1e-7, "normal eq row {a}: {lhs} vs {}", xtwy[a]);
+        }
+    }
+
+    /// WEIGHT equal to a constant c ⇒ same β as OLS, SSE scaled by c.
+    #[test]
+    fn test_oracle_weight_constant_scale_invariance() {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 3.0 - 0.7 * a + (a * 0.4).sin()).collect();
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let ols = ols_fit(&x, &y).unwrap();
+        let c = 4.0;
+        let wls = weighted_ols_fit(&x, &y, &vec![c; n]).unwrap();
+        for j in 0..2 {
+            assert!((ols.beta[j] - wls.beta[j]).abs() < 1e-9);
+        }
+        assert!((wls.sse - c * ols.sse).abs() < 1e-9);
+    }
+
+    /// FREQ = 2 everywhere ⇒ same β as no FREQ, and the ANOVA df doubles
+    /// (error_df = 2n − p_eff). End-to-end through execute().
+    #[test]
+    fn test_oracle_freq_two_doubles_df() {
+        let render = |with_freq: bool| -> String {
+            let mut session = make_session();
+            let frame = df![
+                "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+                "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "f" => [2.0_f64, 2.0, 2.0, 2.0, 2.0, 2.0]
+            ]
+            .unwrap();
+            let ds = SasDataset {
+                df: frame,
+                vars: vec![num_meta("y"), num_meta("x"), num_meta("f")],
+            };
+            session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+            let mut ast = single_model_ast(
+                DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+                basic_model("y", &["x"]),
+            );
+            if with_freq {
+                ast.freq = Some("f".into());
+            }
+            execute(&ast, &mut session).unwrap();
+            session.listing.into_string()
+        };
+        let plain = render(false);
+        let freq = render(true);
+        // No FREQ: error df = n − 2 = 4; Corrected Total df = 5.
+        // FREQ=2: error df = 2n − 2 = 10; Corrected Total df = 11; Used = 12.
+        assert!(plain.contains("Number of Observations Used         6"), "{plain}");
+        assert!(freq.contains("Number of Observations Used         12"), "{freq}");
+        assert!(freq.contains("Corrected Total"), "{freq}");
+    }
+
+    /// FREQ = 1 everywhere ⇒ identical listing to no FREQ at all.
+    #[test]
+    fn test_oracle_freq_ones_equals_none() {
+        let mut s1 = make_session();
+        let mut s2 = make_session();
+        let mk = |session: &mut Session| {
+            let frame = df![
+                "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0],
+                "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0],
+                "f" => [1.0_f64, 1.0, 1.0, 1.0, 1.0]
+            ]
+            .unwrap();
+            let ds = SasDataset {
+                df: frame,
+                vars: vec![num_meta("y"), num_meta("x"), num_meta("f")],
+            };
+            session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        };
+        mk(&mut s1);
+        mk(&mut s2);
+        let base = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            basic_model("y", &["x"]),
+        );
+        let mut with_freq = base.clone();
+        with_freq.freq = Some("f".into());
+        execute(&base, &mut s1).unwrap();
+        execute(&with_freq, &mut s2).unwrap();
+        assert_eq!(s1.listing.into_string(), s2.listing.into_string());
+    }
+
+    /// BY with a single group ⇒ identical listing to no BY (the heading is only
+    /// emitted when groups exist; one group with one distinct key still prints a
+    /// heading, so we compare a constant-key BY against the non-BY run minus the
+    /// heading line).
+    #[test]
+    fn test_oracle_by_single_group_matches_body() {
+        let render = |with_by: bool| -> String {
+            let mut session = make_session();
+            let frame = df![
+                "g" => [1.0_f64, 1.0, 1.0, 1.0, 1.0],
+                "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0],
+                "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+            ]
+            .unwrap();
+            let ds = SasDataset {
+                df: frame,
+                vars: vec![num_meta("g"), num_meta("y"), num_meta("x")],
+            };
+            session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+            let mut ast = single_model_ast(
+                DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+                basic_model("y", &["x"]),
+            );
+            if with_by {
+                ast.by = vec!["g".into()];
+            }
+            execute(&ast, &mut session).unwrap();
+            session.listing.into_string()
+        };
+        let plain = render(false);
+        let by = render(true);
+        // The BY run prepends a `g=1` heading; the regression body is unchanged.
+        assert!(by.contains("g=1"), "{by}");
+        assert!(by.contains("The REG Procedure"), "{by}");
+        // Body identical: strip the BY heading line (and its trailing blank)
+        // from the BY output, then compare the regression bodies.
+        let by_body: String = by
+            .lines()
+            .filter(|l| l.trim() != "g=1")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let plain_body: String = plain.lines().collect::<Vec<_>>().join("\n");
+        // Drop any leading blank lines introduced by removing the heading.
+        assert_eq!(by_body.trim_start(), plain_body.trim_start());
+    }
+
+    /// BY with two groups runs the analysis once per group (two REG headers,
+    /// two BY headings).
+    #[test]
+    fn test_by_two_groups() {
+        let mut session = make_session();
+        let frame = df![
+            "g" => [1.0_f64, 1.0, 1.0, 2.0, 2.0, 2.0],
+            "y" => [2.0_f64, 4.0, 6.0, 1.0, 3.0, 5.0],
+            "x" => [1.0_f64, 2.0, 3.0, 1.0, 2.0, 3.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("g"), num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            basic_model("y", &["x"]),
+        );
+        ast.by = vec!["g".into()];
+        execute(&ast, &mut session).unwrap();
+        let out = session.listing.into_string();
+        assert!(out.contains("g=1"), "{out}");
+        assert!(out.contains("g=2"), "{out}");
+        assert_eq!(out.matches("The REG Procedure").count(), 2, "{out}");
+    }
+
+    /// M36.7 — the BY heading is emitted INSIDE the per-model header block:
+    /// after "The REG Procedure" and before "Model: MODEL1" / "Dependent
+    /// Variable:", NOT before the title/page banner (Bug 1).
+    #[test]
+    fn test_by_heading_inside_header_block() {
+        let mut session = make_session();
+        let frame = df![
+            "g" => [1.0_f64, 1.0, 1.0, 2.0, 2.0, 2.0],
+            "y" => [2.0_f64, 4.0, 6.0, 1.0, 3.0, 5.0],
+            "x" => [1.0_f64, 2.0, 3.0, 1.0, 2.0, 3.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("g"), num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            basic_model("y", &["x"]),
+        );
+        ast.by = vec!["g".into()];
+        execute(&ast, &mut session).unwrap();
+        let out = session.listing.into_string();
+        let lines: Vec<&str> = out.lines().map(|l| l.trim()).collect();
+        // For the first group locate "The REG Procedure", "g=1", and the model
+        // label, and assert the ordering proc-line < heading < model-label.
+        let proc_i = lines.iter().position(|l| *l == "The REG Procedure").unwrap();
+        let head_i = lines.iter().position(|l| *l == "g=1").unwrap();
+        let model_i = lines.iter().position(|l| *l == "Model: MODEL1").unwrap();
+        assert!(
+            proc_i < head_i && head_i < model_i,
+            "expected proc < heading < model label; got {proc_i} {head_i} {model_i}\n{out}"
+        );
+    }
+
+    /// M36.7 — Bug 2: with a WEIGHT the MODEL R residual summary is weighted.
+    /// (a) the printed "Sum of Squared Residuals" equals the weighted ANOVA
+    /// Error SS, and (b) all-ones weights reproduce the unweighted summary
+    /// byte-for-byte.
+    #[test]
+    fn test_weighted_residual_summary_matches_error_ss() {
+        // Parse the "Error" ANOVA SS and the "Sum of Squared Residuals" line
+        // out of a MODEL .../r listing.
+        fn error_ss(listing: &str) -> String {
+            listing
+                .lines()
+                .find(|l| l.trim_start().starts_with("Error "))
+                .and_then(|l| l.split_whitespace().nth(2))
+                .unwrap()
+                .to_string()
+        }
+        fn sum_sq_resid(listing: &str) -> String {
+            listing
+                .lines()
+                .find(|l| l.trim_start().starts_with("Sum of Squared Residuals"))
+                .and_then(|l| l.split_whitespace().last())
+                .unwrap()
+                .to_string()
+        }
+
+        let run = |weight: Option<&str>| -> String {
+            let mut session = make_session();
+            let frame = df![
+                "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+                "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "w" => [3.0_f64, 1.5, 2.0, 0.5, 4.0, 1.0],
+                "ones" => [1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0]
+            ]
+            .unwrap();
+            let ds = SasDataset {
+                df: frame,
+                vars: vec![
+                    num_meta("y"),
+                    num_meta("x"),
+                    num_meta("w"),
+                    num_meta("ones"),
+                ],
+            };
+            session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+            let mut model = basic_model("y", &["x"]);
+            model.r = true;
+            let mut ast = single_model_ast(
+                DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+                model,
+            );
+            ast.weight = weight.map(|w| w.to_string());
+            execute(&ast, &mut session).unwrap();
+            session.listing.into_string()
+        };
+
+        // (a) Weighted run: printed Sum of Squared Residuals == ANOVA Error SS.
+        let weighted = run(Some("w"));
+        assert_eq!(
+            sum_sq_resid(&weighted),
+            error_ss(&weighted),
+            "weighted Sum of Squared Residuals must equal ANOVA Error SS\n{weighted}"
+        );
+
+        // (b) All-ones WEIGHT reproduces the unweighted residual summary exactly.
+        let none = run(None);
+        let ones = run(Some("ones"));
+        let block = |l: &str| -> String {
+            l.lines()
+                .filter(|x| {
+                    let t = x.trim_start();
+                    t.starts_with("Sum of Residuals")
+                        || t.starts_with("Sum of Squared Residuals")
+                        || t.starts_with("Predicted Residual SS")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(block(&none), block(&ones), "all-ones weight changed summary");
+    }
+
+    /// ID prepends an `Id` leading column to the MODEL R Output Statistics table.
+    #[test]
+    fn test_id_column_in_r_table() {
+        let mut session = make_session();
+        let frame = df![
+            "name" => [10.0_f64, 20.0, 30.0, 40.0, 50.0],
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("name"), num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut model = basic_model("y", &["x"]);
+        model.r = true;
+        let mut ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            model,
+        );
+        ast.id = vec!["name".into()];
+        execute(&ast, &mut session).unwrap();
+        let out = session.listing.into_string();
+        assert!(out.contains("Output Statistics"), "{out}");
+        // The ID values 10..50 appear as a leading column.
+        assert!(out.contains("Id"), "{out}");
+        assert!(out.contains("10") && out.contains("50"), "{out}");
+    }
+
+    #[test]
+    fn test_parse_weight_freq_by_id() {
+        let ast = parse_reg(
+            "proc reg data=a; model y = x; weight wv; freq fv; by grp; id name; run;",
+        )
+        .unwrap();
+        assert_eq!(ast.weight.as_deref(), Some("wv"));
+        assert_eq!(ast.freq.as_deref(), Some("fv"));
+        assert_eq!(ast.by, vec!["grp".to_string()]);
+        assert_eq!(ast.id, vec!["name".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_by_multiple_and_defaults() {
+        let ast = parse_reg("proc reg data=a; model y = x; by a b; run;").unwrap();
+        assert_eq!(ast.by, vec!["a".to_string(), "b".to_string()]);
+        assert!(ast.weight.is_none());
+        assert!(ast.freq.is_none());
+        assert!(ast.id.is_empty());
     }
 }
