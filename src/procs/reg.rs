@@ -97,6 +97,10 @@ pub struct RegModel {
     pub clm: bool,
     /// CLI → per-observation individual prediction limits in Output Statistics.
     pub cli: bool,
+    /// R → residual-analysis "Output Statistics" listing (M36.3).
+    pub r: bool,
+    /// INFLUENCE → influence-diagnostics listing (M36.3).
+    pub influence: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +130,18 @@ pub struct RegOutput {
     pub ucl: Option<String>,
     pub lclm: Option<String>,
     pub uclm: Option<String>,
+    /// M36.3 — influence/observation diagnostics requested as output columns.
+    pub student: Option<String>,
+    pub rstudent: Option<String>,
+    pub cookd: Option<String>,
+    pub h: Option<String>,
+    pub press: Option<String>,
+    pub dffits: Option<String>,
+    pub covratio: Option<String>,
+    /// DFBETAS= prefix. SAS does not accept a single name (DFBETAS is
+    /// per-parameter); when given a prefix we emit one column per parameter
+    /// named `<prefix>_<var>` (Intercept first if present).
+    pub dfbetas: Option<String>,
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -179,6 +195,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut clb = false;
             let mut clm = false;
             let mut cli = false;
+            let mut r = false;
+            let mut influence = false;
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                     break;
@@ -252,6 +270,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                         } else if ts.peek().is_kw("cli") {
                             cli = true;
                             ts.next();
+                        } else if ts.peek().is_kw("influence") {
+                            influence = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("r") {
+                            r = true;
+                            ts.next();
                         } else {
                             ts.next(); // skip unknown options
                         }
@@ -277,6 +301,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     clb,
                     clm,
                     cli,
+                    r,
+                    influence,
                 },
                 outputs: Vec::new(),
                 tests: Vec::new(),
@@ -295,6 +321,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut ucl: Option<String> = None;
             let mut lclm: Option<String> = None;
             let mut uclm: Option<String> = None;
+            let mut student: Option<String> = None;
+            let mut rstudent: Option<String> = None;
+            let mut cookd: Option<String> = None;
+            let mut h: Option<String> = None;
+            let mut press: Option<String> = None;
+            let mut dffits: Option<String> = None;
+            let mut covratio: Option<String> = None;
+            let mut dfbetas: Option<String> = None;
             // Read the value name for a `KEYWORD=name` OUTPUT option.
             let read_name = |ts: &mut StatementStream, kw: &str| -> Result<Option<String>> {
                 common::expect_eq(ts, kw)?;
@@ -325,6 +359,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     lcl = read_name(ts, "LCL")?;
                 } else if ts.peek().is_kw("ucl") {
                     ucl = read_name(ts, "UCL")?;
+                } else if ts.peek().is_kw("student") {
+                    student = read_name(ts, "STUDENT")?;
+                } else if ts.peek().is_kw("rstudent") {
+                    rstudent = read_name(ts, "RSTUDENT")?;
+                } else if ts.peek().is_kw("cookd") {
+                    cookd = read_name(ts, "COOKD")?;
+                } else if ts.peek().is_kw("h") {
+                    h = read_name(ts, "H")?;
+                } else if ts.peek().is_kw("press") {
+                    press = read_name(ts, "PRESS")?;
+                } else if ts.peek().is_kw("dffits") {
+                    dffits = read_name(ts, "DFFITS")?;
+                } else if ts.peek().is_kw("covratio") {
+                    covratio = read_name(ts, "COVRATIO")?;
+                } else if ts.peek().is_kw("dfbetas") {
+                    dfbetas = read_name(ts, "DFBETAS")?;
                 } else {
                     ts.next();
                 }
@@ -347,6 +397,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                         ucl,
                         lclm,
                         uclm,
+                        student,
+                        rstudent,
+                        cookd,
+                        h,
+                        press,
+                        dffits,
+                        covratio,
+                        dfbetas,
                     });
                 }
             }
@@ -898,6 +956,18 @@ fn run_model(
         );
     }
 
+    // --- Residual / influence diagnostics (M36.3): MODEL R and INFLUENCE.
+    // Computed lazily once off the OLS fit, shared by both listings.
+    if (model.r || model.influence) && !model.noprint {
+        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff);
+        if model.r {
+            print_r_statistics(model, &infl, session);
+        }
+        if model.influence {
+            print_influence_statistics(&infl, &sel_reg_names, intercept, session);
+        }
+    }
+
     // --- TEST (M36.1): operate on the model as fitted (restricted if present).
     if !entry.tests.is_empty() {
         let (t_beta, t_xtx, t_sse, t_dfe) = match &restricted {
@@ -933,6 +1003,8 @@ fn run_model(
         &x_mat,
         p_eff,
         model.alpha,
+        &sel_reg_names,
+        intercept,
         session,
     )?;
 
@@ -1344,6 +1416,130 @@ fn compute_obs_stats(
         .collect()
 }
 
+/// Per-observation influence diagnostics (M36.3). Reuses the same leverage /
+/// MSE / dfE infrastructure as `compute_obs_stats` (no duplicate fit).
+///
+/// `dfbetas[i]` has one entry per parameter (column order matches `fit.beta`:
+/// intercept first if present). When `dfE ≤ 1`, RSTUDENT / COVRATIO / DFFITS /
+/// DFBETAS are undefined (their leave-one-out variance `MSE_(i)` has 0 df) and
+/// are reported as `NaN`; callers render the SAS sentinel `.`.
+struct InfluenceStat {
+    y: f64,
+    y_hat: f64,
+    resid: f64,
+    stdp: f64,
+    stdr: f64,
+    h: f64,
+    student: f64,
+    rstudent: f64,
+    cookd: f64,
+    press: f64,
+    dffits: f64,
+    covratio: f64,
+    /// One DFBETAS per parameter, same column order as `fit.beta`.
+    dfbetas: Vec<f64>,
+}
+
+/// Compute the full influence-diagnostic set for every used row. `c = (X'X)⁻¹Xᵀ`
+/// (p_eff × n) drives DFBETAS via the closed form
+/// `DFBETAS_{ij} = (rstudent_i · c_{ji}) / √(Σ_k c_{jk}²)` — no leave-one-out
+/// refits.
+fn compute_influence_stats(
+    x_mat: &[Vec<f64>],
+    y: &[f64],
+    fit: &OlsFit,
+    n: usize,
+    p_eff: usize,
+) -> Vec<InfluenceStat> {
+    let df_e = (n - p_eff) as f64;
+    let mse = fit.sse / df_e;
+    let h = leverages(x_mat, &fit.xtx_inv);
+
+    // c = (X'X)⁻¹ Xᵀ  →  p_eff × n. Row j, col i is c_{ji}.
+    let xt = linalg::transpose(x_mat); // p_eff × n
+    let c = linalg::matrix_mult(&fit.xtx_inv, &xt); // (p_eff×p_eff)·(p_eff×n)
+    // Row norms √(Σ_k c_{jk}²) for the DFBETAS denominator (= √((X'X)⁻¹_{jj})).
+    let c_row_norm: Vec<f64> = (0..p_eff)
+        .map(|j| c[j].iter().map(|v| v * v).sum::<f64>().sqrt())
+        .collect();
+
+    (0..n)
+        .map(|i| {
+            let hi = h[i];
+            let yh = fit.y_hat[i];
+            let resid = fit.resid[i];
+            let one_minus_h = 1.0 - hi;
+            let stdp = (mse * hi).sqrt();
+            let stdr = (mse * one_minus_h).max(0.0).sqrt();
+            // STUDENT = resid / STDR.
+            let student = if stdr > 0.0 { resid / stdr } else { f64::NAN };
+            // Leave-one-out MSE_(i): undefined when dfE ≤ 1.
+            let (rstudent, mse_i_ok) = if df_e > 1.0 && one_minus_h > 0.0 {
+                let mse_i = (df_e * mse - resid * resid / one_minus_h) / (df_e - 1.0);
+                if mse_i > 0.0 {
+                    (resid / (mse_i * one_minus_h).sqrt(), true)
+                } else {
+                    (f64::NAN, false)
+                }
+            } else {
+                (f64::NAN, false)
+            };
+            // Cook's D = (student²/p)·(h/(1−h)).
+            let cookd = if one_minus_h > 0.0 && p_eff > 0 {
+                (student * student / p_eff as f64) * (hi / one_minus_h)
+            } else {
+                f64::NAN
+            };
+            let press = if one_minus_h != 0.0 {
+                resid / one_minus_h
+            } else {
+                f64::NAN
+            };
+            let dffits = if mse_i_ok && one_minus_h > 0.0 {
+                rstudent * (hi / one_minus_h).sqrt()
+            } else {
+                f64::NAN
+            };
+            // COVRATIO = 1 / ( ((dfE−1+rstudent²)/dfE)^p · (1−h) ).
+            let covratio = if mse_i_ok && one_minus_h > 0.0 {
+                let base = (df_e - 1.0 + rstudent * rstudent) / df_e;
+                1.0 / (base.powi(p_eff as i32) * one_minus_h)
+            } else {
+                f64::NAN
+            };
+            // DFBETAS_{ij} = c_{ji}·rstudent_i / (√(1−h_i)·√((X'X)⁻¹_{jj})).
+            // Here √(Σ_k c_{jk}²) = √((X'X)⁻¹_{jj}) since c·cᵀ = (X'X)⁻¹.
+            // The extra √(1−h_i) converts e_i/s_(i) into rstudent_i (which
+            // carries its own √(1−h_i)); see derivation in the milestone notes.
+            let dfbetas: Vec<f64> = (0..p_eff)
+                .map(|j| {
+                    if mse_i_ok && c_row_norm[j] > 0.0 && one_minus_h > 0.0 {
+                        rstudent * c[j][i] / (c_row_norm[j] * one_minus_h.sqrt())
+                    } else {
+                        f64::NAN
+                    }
+                })
+                .collect();
+
+            InfluenceStat {
+                y: y[i],
+                y_hat: yh,
+                resid,
+                stdp,
+                stdr,
+                h: hi,
+                student,
+                rstudent,
+                cookd,
+                press,
+                dffits,
+                covratio,
+                dfbetas,
+            }
+        })
+        .collect()
+}
+
 /// Print the SAS "Output Statistics" table when CLM and/or CLI is requested.
 /// Column sets:
 ///  - CLM only: Obs, Dependent Variable, Predicted Value, Std Error Mean
@@ -1405,6 +1601,180 @@ fn print_output_statistics(
                 row.push(fmt5(s.ucl));
             }
             row.push(fmt5(s.y - s.y_hat));
+            row
+        })
+        .collect();
+
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "Output Statistics");
+    session.listing.blank();
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// Format a possibly-undefined diagnostic value: SAS prints `.` for a missing
+/// (undefined) numeric, otherwise the usual 4-decimal rendering.
+fn fmt_diag(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v:.4}")
+    } else {
+        ".".to_string()
+    }
+}
+
+/// Render SAS's `-2-1 0 1 2` character gauge for a studentized residual: a
+/// 9-cell `|....*...|`-style bar centred on 0, one `*` placed at the residual's
+/// position (clamped to ±2.x). Matches the simple gauge SAS prints in the
+/// MODEL R "Output Statistics" table.
+fn student_gauge(student: f64) -> String {
+    // Cells map the range [-2.625, 2.625] across 9 character slots; the centre
+    // slot (index 4) is 0. SAS uses one star; ties round toward centre.
+    let mut cells = [' '; 9];
+    if student.is_finite() {
+        let pos = (student / 2.625 * 4.0).round() as i64;
+        let idx = (4 + pos).clamp(0, 8) as usize;
+        cells[idx] = '*';
+    }
+    let bar: String = cells.iter().collect();
+    format!("|{}|", bar)
+}
+
+/// Print the MODEL R "Output Statistics" table (residual analysis), followed by
+/// the Sum of Residuals / Sum of Squared Residuals / PRESS summary block
+/// (M36.3). Reuses `compute_influence_stats`.
+fn print_r_statistics(
+    _model: &RegModel,
+    stats: &[InfluenceStat],
+    session: &mut Session,
+) {
+    let headers: Vec<String> = vec![
+        "Obs".into(),
+        "Dependent Variable".into(),
+        "Predicted Value".into(),
+        "Std Error Mean Predict".into(),
+        "Residual".into(),
+        "Std Error Residual".into(),
+        "Student Residual".into(),
+        "-2-1 0 1 2".into(),
+        "Cook's D".into(),
+    ];
+    let aligns = vec![
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+        Align::Right,
+    ];
+    let rows: Vec<Vec<String>> = stats
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            vec![
+                format!("{}", i + 1),
+                fmt5(s.y),
+                fmt5(s.y_hat),
+                fmt5(s.stdp),
+                fmt5(s.resid),
+                fmt5(s.stdr),
+                fmt_diag(s.student),
+                student_gauge(s.student),
+                fmt_diag(s.cookd),
+            ]
+        })
+        .collect();
+
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "Output Statistics");
+    session.listing.blank();
+    session.listing.write_table(&headers, &aligns, &rows);
+
+    // Summary block SAS prints after the R table.
+    let sum_resid: f64 = stats.iter().map(|s| s.resid).sum();
+    let sum_sq_resid: f64 = stats.iter().map(|s| s.resid * s.resid).sum();
+    let press: f64 = stats
+        .iter()
+        .filter_map(|s| {
+            if s.press.is_finite() {
+                Some(s.press * s.press)
+            } else {
+                None
+            }
+        })
+        .sum();
+    session.listing.blank();
+    session
+        .listing
+        .write_line(&format!("Sum of Residuals             {}", fmt5(sum_resid)));
+    session.listing.write_line(&format!(
+        "Sum of Squared Residuals     {}",
+        fmt5(sum_sq_resid)
+    ));
+    session.listing.write_line(&format!(
+        "Predicted Residual SS (PRESS)    {}",
+        fmt5(press)
+    ));
+}
+
+/// Print the MODEL INFLUENCE diagnostics table (M36.3): Obs, Residual,
+/// RStudent, Hat Diag H, Cov Ratio, DFFITS, then one `DFBETAS <var>` column per
+/// parameter (Intercept first if present). Reuses `compute_influence_stats`.
+fn print_influence_statistics(
+    stats: &[InfluenceStat],
+    reg_names: &[String],
+    intercept: bool,
+    session: &mut Session,
+) {
+    let p_eff = reg_names.len() + intercept as usize;
+    let mut headers: Vec<String> = vec![
+        "Obs".into(),
+        "Residual".into(),
+        "RStudent".into(),
+        "Hat Diag H".into(),
+        "Cov Ratio".into(),
+        "DFFITS".into(),
+    ];
+    let mut aligns = vec![
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    for j in 0..p_eff {
+        let var = if intercept {
+            if j == 0 {
+                "Intercept".to_string()
+            } else {
+                reg_names[j - 1].clone()
+            }
+        } else {
+            reg_names[j].clone()
+        };
+        headers.push(format!("DFBETAS {}", var));
+        aligns.push(Align::Right);
+    }
+
+    let rows: Vec<Vec<String>> = stats
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut row = vec![
+                format!("{}", i + 1),
+                fmt5(s.resid),
+                fmt_diag(s.rstudent),
+                fmt_fit4(s.h),
+                fmt_diag(s.covratio),
+                fmt_diag(s.dffits),
+            ];
+            for j in 0..p_eff {
+                row.push(fmt_diag(s.dfbetas[j]));
+            }
             row
         })
         .collect();
@@ -2089,6 +2459,8 @@ fn write_outputs(
     x_mat: &[Vec<f64>],
     p_eff: usize,
     alpha: f64,
+    reg_names: &[String],
+    intercept: bool,
     session: &mut Session,
 ) -> Result<()> {
     if entry.outputs.is_empty() {
@@ -2109,6 +2481,24 @@ fn write_outputs(
     });
     let obs_stats: Option<Vec<ObsStat>> = if needs_stats {
         Some(compute_obs_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, alpha))
+    } else {
+        None
+    };
+
+    // Influence diagnostics, computed lazily once if any OUTPUT requests a
+    // STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS column.
+    let needs_infl = entry.outputs.iter().any(|o| {
+        o.student.is_some()
+            || o.rstudent.is_some()
+            || o.cookd.is_some()
+            || o.h.is_some()
+            || o.press.is_some()
+            || o.dffits.is_some()
+            || o.covratio.is_some()
+            || o.dfbetas.is_some()
+    });
+    let infl_stats: Option<Vec<InfluenceStat>> = if needs_infl {
+        Some(compute_influence_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff))
     } else {
         None
     };
@@ -2176,6 +2566,63 @@ fn write_outputs(
             push_col(&out_spec.uclm, &|s| s.uclm);
             push_col(&out_spec.lcl, &|s| s.lcl);
             push_col(&out_spec.ucl, &|s| s.ucl);
+        }
+        // M36.3 — influence-diagnostic OUTPUT columns. Non-finite (undefined)
+        // values become SAS missing (None).
+        if let Some(stats) = &infl_stats {
+            let mut push_col = |name: &Option<String>, f: &dyn Fn(&InfluenceStat) -> f64| {
+                if let Some(nm) = name {
+                    let data: Vec<Option<f64>> = stats
+                        .iter()
+                        .map(|s| {
+                            let v = f(s);
+                            if v.is_finite() {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    columns.push(Series::new(nm.as_str().into(), data).into());
+                    out_vars.push(num_var_meta(nm));
+                }
+            };
+            push_col(&out_spec.student, &|s| s.student);
+            push_col(&out_spec.rstudent, &|s| s.rstudent);
+            push_col(&out_spec.cookd, &|s| s.cookd);
+            push_col(&out_spec.h, &|s| s.h);
+            push_col(&out_spec.press, &|s| s.press);
+            push_col(&out_spec.dffits, &|s| s.dffits);
+            push_col(&out_spec.covratio, &|s| s.covratio);
+            // DFBETAS= prefix → one column per parameter named `<prefix>_<var>`
+            // (Intercept first if present).
+            if let Some(prefix) = &out_spec.dfbetas {
+                for j in 0..p_eff {
+                    let var = if intercept {
+                        if j == 0 {
+                            "Intercept".to_string()
+                        } else {
+                            reg_names[j - 1].clone()
+                        }
+                    } else {
+                        reg_names[j].clone()
+                    };
+                    let col_name = format!("{}_{}", prefix, var);
+                    let data: Vec<Option<f64>> = stats
+                        .iter()
+                        .map(|s| {
+                            let v = s.dfbetas[j];
+                            if v.is_finite() {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    columns.push(Series::new(col_name.as_str().into(), data).into());
+                    out_vars.push(num_var_meta(&col_name));
+                }
+            }
         }
 
         let out_df = DataFrame::new(columns)?;
@@ -2325,6 +2772,8 @@ mod tests {
             clb: false,
             clm: false,
             cli: false,
+            r: false,
+            influence: false,
         }
     }
 
@@ -3127,5 +3576,233 @@ mod tests {
         assert!(p.exists(), "diagnostic image not created: {p:?}");
         assert!(p.metadata().unwrap().len() > 0);
         let _ = std::fs::remove_file(&p);
+    }
+
+    // ───────────── M36.3 influence-diagnostic oracles ─────────────
+
+    /// Sample design reused by the influence oracles (intercept + one regressor,
+    /// a non-degenerate fit with dfE = n − 2 > 1).
+    fn infl_setup() -> (Vec<Vec<f64>>, Vec<f64>, OlsFit, usize, usize) {
+        let x1 = [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 8.0, 7.0];
+        let y: Vec<f64> = x1.iter().map(|&a| 2.0 + 3.0 * a + (a * 0.7).sin()).collect();
+        let n = y.len();
+        let x = design(true, &[&x1], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let p_eff = 2;
+        (x, y, fit, n, p_eff)
+    }
+
+    /// STUDENT = resid / STDR (matches M36.2 STDR).
+    #[test]
+    fn test_oracle_student_eq_resid_over_stdr() {
+        let (x, y, fit, n, p_eff) = infl_setup();
+        let obs = compute_obs_stats(&x, &y, &fit, n, p_eff, 0.05);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        for (s, o) in infl.iter().zip(obs.iter()) {
+            assert!((s.student - s.resid / o.stdr).abs() < 1e-9);
+            // STDR also matches the obs-stats STDR.
+            assert!((s.stdr - o.stdr).abs() < 1e-9);
+        }
+    }
+
+    /// RSTUDENT = student·√((dfE−1)/(dfE−student²)).
+    #[test]
+    fn test_oracle_rstudent_identity() {
+        let (x, y, fit, n, p_eff) = infl_setup();
+        let df_e = (n - p_eff) as f64;
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        for s in &infl {
+            let expect = s.student * ((df_e - 1.0) / (df_e - s.student * s.student)).sqrt();
+            assert!(
+                (s.rstudent - expect).abs() < 1e-9,
+                "rstudent={} expect={}",
+                s.rstudent,
+                expect
+            );
+        }
+    }
+
+    /// PRESS = resid/(1−h) and Σ press² is the printed PRESS.
+    #[test]
+    fn test_oracle_press() {
+        let (x, y, fit, n, p_eff) = infl_setup();
+        let h = leverages(&x, &fit.xtx_inv);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        let mut press_ss = 0.0;
+        for (i, s) in infl.iter().enumerate() {
+            let expect = s.resid / (1.0 - h[i]);
+            assert!((s.press - expect).abs() < 1e-9);
+            press_ss += s.press * s.press;
+        }
+        let printed: f64 = infl.iter().map(|s| s.press * s.press).sum();
+        assert!((press_ss - printed).abs() < 1e-9);
+    }
+
+    /// Cook's D ≥ 0, and DFFITS = rstudent·√(h/(1−h)).
+    #[test]
+    fn test_oracle_cookd_dffits() {
+        let (x, y, fit, n, p_eff) = infl_setup();
+        let h = leverages(&x, &fit.xtx_inv);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        for (i, s) in infl.iter().enumerate() {
+            assert!(s.cookd >= 0.0, "cookd={}", s.cookd);
+            let expect = s.rstudent * (h[i] / (1.0 - h[i])).sqrt();
+            assert!((s.dffits - expect).abs() < 1e-9);
+        }
+    }
+
+    /// Near-zero-leverage point → Cook's D ≈ 0.
+    #[test]
+    fn test_oracle_cookd_low_leverage() {
+        let (x, y, fit, n, p_eff) = infl_setup();
+        let h = leverages(&x, &fit.xtx_inv);
+        let infl = compute_influence_stats(&x, &y, &fit, n, p_eff);
+        // The lowest-leverage observation should have small Cook's D.
+        let (min_i, _) = h
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+        assert!(infl[min_i].cookd < 0.5, "cookd={}", infl[min_i].cookd);
+    }
+
+    /// DFBETAS closed form == an explicit leave-one-out refit (within 1e-6).
+    #[test]
+    fn test_oracle_dfbetas_loo_refit() {
+        // Tiny dataset, intercept + slope.
+        let x1 = [1.0_f64, 2.0, 3.0, 5.0, 8.0];
+        let y = [2.1_f64, 3.9, 6.2, 9.8, 16.1];
+        let n = y.len();
+        let p_eff = 2;
+        let x = design(true, &[&x1], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff);
+
+        for drop in 0..n {
+            // Refit without observation `drop`.
+            let xr: Vec<Vec<f64>> = (0..n).filter(|&i| i != drop).map(|i| x[i].clone()).collect();
+            let yr: Vec<f64> = (0..n).filter(|&i| i != drop).map(|i| y[i]).collect();
+            let fit_i = ols_fit(&xr, &yr).unwrap();
+            // s_(i) = √MSE_(i).
+            let df_i = (n - 1 - p_eff) as f64;
+            let s_i = (fit_i.sse / df_i).sqrt();
+            for j in 0..p_eff {
+                let denom = s_i * fit.xtx_inv[j][j].sqrt();
+                let expect = (fit.beta[j] - fit_i.beta[j]) / denom;
+                assert!(
+                    (infl[drop].dfbetas[j] - expect).abs() < 1e-6,
+                    "drop={drop} j={j} got={} expect={}",
+                    infl[drop].dfbetas[j],
+                    expect
+                );
+            }
+        }
+    }
+
+    /// dfE ≤ 1 → RSTUDENT/COVRATIO/DFFITS/DFBETAS undefined (NaN).
+    #[test]
+    fn test_dfe_le_one_undefined() {
+        // n=3, p_eff=2 → dfE=1.
+        let x1 = [1.0_f64, 2.0, 4.0];
+        let y = [1.0_f64, 3.0, 2.5];
+        let n = y.len();
+        let p_eff = 2;
+        let x = design(true, &[&x1], n);
+        let fit = ols_fit(&x, &y.to_vec()).unwrap();
+        let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff);
+        for s in &infl {
+            assert!(!s.rstudent.is_finite());
+            assert!(!s.covratio.is_finite());
+            assert!(!s.dffits.is_finite());
+            assert!(s.dfbetas.iter().all(|v| !v.is_finite()));
+            // STUDENT and PRESS remain defined.
+            assert!(s.press.is_finite());
+        }
+        // fmt_diag renders the SAS sentinel.
+        assert_eq!(fmt_diag(f64::NAN), ".");
+    }
+
+    #[test]
+    fn test_parse_model_r_influence() {
+        let ast = parse_reg("proc reg data=a; model y=x / r influence; run;").unwrap();
+        let m = &ast.models[0].model;
+        assert!(m.r);
+        assert!(m.influence);
+    }
+
+    #[test]
+    fn test_parse_output_influence_keywords() {
+        let ast = parse_reg(
+            "proc reg data=a; model y=x; output out=o student=rs rstudent=er cookd=cd h=hat press=pr dffits=df covratio=cv dfbetas=b; run;",
+        )
+        .unwrap();
+        let o = &ast.models[0].outputs[0];
+        assert_eq!(o.student.as_deref(), Some("rs"));
+        assert_eq!(o.rstudent.as_deref(), Some("er"));
+        assert_eq!(o.cookd.as_deref(), Some("cd"));
+        assert_eq!(o.h.as_deref(), Some("hat"));
+        assert_eq!(o.press.as_deref(), Some("pr"));
+        assert_eq!(o.dffits.as_deref(), Some("df"));
+        assert_eq!(o.covratio.as_deref(), Some("cv"));
+        assert_eq!(o.dfbetas.as_deref(), Some("b"));
+    }
+
+    /// End-to-end: R and INFLUENCE listings print; default model prints neither.
+    #[test]
+    fn test_execute_r_influence_listing() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let mut model = basic_model("y", &["x"]);
+        model.r = true;
+        model.influence = true;
+        let ast = single_model_ast(
+            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            model,
+        );
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Student Residual"), "{listing}");
+        assert!(listing.contains("Sum of Residuals"), "{listing}");
+        assert!(listing.contains("PRESS"), "{listing}");
+        assert!(listing.contains("RStudent"), "{listing}");
+        assert!(listing.contains("DFBETAS Intercept"), "{listing}");
+        assert!(listing.contains("DFBETAS x"), "{listing}");
+    }
+
+    /// OUTPUT influence columns appear; DFBETAS= emits one column per parameter.
+    #[test]
+    fn test_output_influence_columns() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 7.0, 8.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t; model y=x; output out=work.o student=stu cookd=cd h=hat dfbetas=b; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
+        let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"stu"));
+        assert!(names.contains(&"cd"));
+        assert!(names.contains(&"hat"));
+        assert!(names.contains(&"b_Intercept"));
+        assert!(names.contains(&"b_x"));
     }
 }

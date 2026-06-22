@@ -773,8 +773,16 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   `Σhᵢ=p_eff`, `STDP²+STDR²=MSE`, `STDI²−STDP²=MSE`, CLM centré sur ŷ, CLB centré sur β. Fixture
   m36/clb_cli_clm vérifiée (height CI [2.81017,4.98789]=3.89903±2.110·SE). 2509 lib tests, 0 warning,
   snapshots octet-identiques.
-- [ ] M36.3 — Diagnostics d'observation : MODEL `R` (analyse des résidus) / `INFLUENCE` + mots-clés
-  `OUTPUT` `STUDENT RSTUDENT COOKD H (leverage) PRESS DFFITS COVRATIO DFBETAS` (Opus, élevé)
+- [x] M36.3 — Diagnostics d'observation : MODEL `R` (analyse des résidus) / `INFLUENCE` + mots-clés
+  `OUTPUT` `STUDENT RSTUDENT COOKD H (leverage) PRESS DFFITS COVRATIO DFBETAS` (Opus, élevé).
+  **FAIT** : `RegModel.r`/`influence` ; `RegOutput` + 7 colonnes + préfixe `dfbetas`. `compute_influence_stats`
+  réutilise les leviers M36.2 : STUDENT=resid/STDR, RSTUDENT (MSE leave-one-out), COOKD, PRESS=resid/(1−h),
+  DFFITS, COVRATIO, DFBETAS (forme close `c=(X'X)⁻¹Xᵀ`). MODEL R → table « Output Statistics » (Std Error
+  Residual, Student Residual + jauge `-2-1 0 1 2`, Cook's D + bloc Sum of Residuals/PRESS) ; MODEL INFLUENCE
+  → RStudent/Hat Diag/Cov Ratio/DFFITS + une colonne `DFBETAS <var>` par paramètre. OUTPUT `DFBETAS=préfixe`
+  → `préfixe_<var>`. dfE≤1 → sentinelle manquante. Oracles : RSTUDENT identité, PRESS=Σpress², DFBETAS vs
+  refit leave-one-out (1e-6). Fixture m36/influence (Cook's D 0.1455, DFFITS −0.5516, COVRATIO 1.0719).
+  2520 lib tests, 0 warning, snapshots octet-identiques.
 - [ ] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de
   conditionnement + proportions de variance), `VIF`, `TOL`, `SPEC` (test de White), `DW`/`DWPROB`
   (Durbin-Watson), `ACOV`/`HCC` (covariance robuste à l'hétéroscédasticité) (Opus, élevé)
