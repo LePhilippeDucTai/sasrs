@@ -45,6 +45,12 @@ pub struct RegAst {
     pub by: Vec<String>,
     /// M36.7 — `ID var1 …;` identification variables for diagnostic listings.
     pub id: Vec<String>,
+    /// M36.8 — PROC-statement `SIMPLE` option: print descriptive statistics for
+    /// all model variables.
+    pub simple: bool,
+    /// M36.8 — PROC-statement `CORR` option: print the correlation matrix among
+    /// all model variables.
+    pub corr: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +93,24 @@ pub struct RegRestrict {
 #[derive(Debug, Clone)]
 pub struct RegDataOptions {
     pub input: Option<DatasetRef>,
+    /// M36.8 — `OUTEST=ds`: parameter-estimates output dataset (+ modifiers).
+    pub outest: Option<OutEst>,
+    /// M36.8 — `OUTSSCP=ds`: sums-of-squares-and-crossproducts output dataset.
+    pub outsscp: Option<DatasetRef>,
+}
+
+/// M36.8 — OUTEST= request with its modifiers.
+#[derive(Debug, Clone)]
+pub struct OutEst {
+    pub out: DatasetRef,
+    /// COVOUT → emit `_TYPE_="COV"` rows (covariance matrix MSE·(X'X)⁻¹).
+    pub covout: bool,
+    /// OUTSEB → emit a `_TYPE_="SEB"` row with the parameter standard errors.
+    pub outseb: bool,
+    /// EDF → emit `_IN_`/`_P_`/`_EDF_` degrees-of-freedom columns.
+    pub edf: bool,
+    /// TABLEOUT → emit `_LB_`/`_UB_` confidence-bound columns (estimate subset).
+    pub tableout: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +170,14 @@ pub struct RegModel {
     pub seqb: bool,
     /// PRESS → print the PRESS statistic as a model fit statistic (M36.5).
     pub press_opt: bool,
+    /// M36.8 — XPX: print the X'X crossproducts matrix (augmented with X'Y/Y'Y).
+    pub xpx: bool,
+    /// M36.8 — I: print the (X'X)⁻¹ inverse matrix (augmented with estimates/SSE).
+    pub inv: bool,
+    /// M36.8 — COVB: print Covariance of Estimates = MSE·(X'X)⁻¹.
+    pub covb: bool,
+    /// M36.8 — CORRB: print Correlation of Estimates.
+    pub corrb: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +251,16 @@ pub struct RegOutput {
 /// Parse PROC REG. Called AFTER `proc reg` has been consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut input: Option<DatasetRef> = None;
+    // M36.8 — PROC-statement flags / output-dataset requests.
+    let mut simple = false;
+    let mut corr = false;
+    let mut proc_all = false;
+    let mut outest: Option<DatasetRef> = None;
+    let mut covout = false;
+    let mut outseb = false;
+    let mut edf = false;
+    let mut tableout = false;
+    let mut outsscp: Option<DatasetRef> = None;
 
     // PROC REG statement options, until `;`
     loop {
@@ -231,11 +273,50 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         }
         if ts.peek().is_kw("data") {
             input = Some(common::parse_dataset_opt(ts, "DATA")?);
+        } else if ts.peek().is_kw("outest") {
+            outest = Some(common::parse_dataset_opt(ts, "OUTEST")?);
+        } else if ts.peek().is_kw("outsscp") {
+            outsscp = Some(common::parse_dataset_opt(ts, "OUTSSCP")?);
+        } else if ts.peek().is_kw("covout") {
+            covout = true;
+            ts.next();
+        } else if ts.peek().is_kw("outseb") {
+            outseb = true;
+            ts.next();
+        } else if ts.peek().is_kw("edf") {
+            edf = true;
+            ts.next();
+        } else if ts.peek().is_kw("tableout") {
+            tableout = true;
+            ts.next();
+        } else if ts.peek().is_kw("simple") {
+            simple = true;
+            ts.next();
+        } else if ts.peek().is_kw("corr") {
+            corr = true;
+            ts.next();
+        } else if ts.peek().is_kw("all") {
+            proc_all = true;
+            ts.next();
         } else {
             // Skip unknown proc-level options
             ts.next();
         }
     }
+
+    // ALL implies SIMPLE + CORR at PROC level (and the MODEL matrix options,
+    // applied per-model below).
+    if proc_all {
+        simple = true;
+        corr = true;
+    }
+    let outest = outest.map(|out| OutEst {
+        out,
+        covout,
+        outseb,
+        edf,
+        tableout,
+    });
 
     // Sub-statements until run;/quit;
     let mut models: Vec<RegModelEntry> = Vec::new();
@@ -288,6 +369,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             let mut scorr2 = false;
             let mut seqb = false;
             let mut press_opt = false;
+            let mut xpx = false;
+            let mut inv = false;
+            let mut covb = false;
+            let mut corrb = false;
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                     break;
@@ -480,6 +565,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                         } else if ts.peek().is_kw("press") {
                             press_opt = true;
                             ts.next();
+                        } else if ts.peek().is_kw("xpx") {
+                            xpx = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("i") {
+                            inv = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("covb") {
+                            covb = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("corrb") {
+                            corrb = true;
+                            ts.next();
                         } else {
                             ts.next(); // skip unknown options
                         }
@@ -494,6 +591,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 }
             }
             ts.expect_semi()?;
+            // PROC-level ALL turns on the MODEL matrix options (and CLM/CLI) on
+            // every model, as SAS does. Other ALL-implied displays (SIMPLE/CORR)
+            // are handled at the PROC level.
+            if proc_all {
+                xpx = true;
+                inv = true;
+                covb = true;
+                corrb = true;
+                clm = true;
+                cli = true;
+            }
             models.push(RegModelEntry {
                 model: RegModel {
                     dependent: dep,
@@ -524,6 +632,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                     scorr2,
                     seqb,
                     press_opt,
+                    xpx,
+                    inv,
+                    covb,
+                    corrb,
                 },
                 outputs: Vec::new(),
                 tests: Vec::new(),
@@ -727,13 +839,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     })?;
 
     Ok(RegAst {
-        data_options: RegDataOptions { input },
+        data_options: RegDataOptions {
+            input,
+            outest,
+            outsscp,
+        },
         models,
         plots_requested,
         weight,
         freq,
         by,
         id,
+        simple,
+        corr,
     })
 }
 
@@ -1619,6 +1737,772 @@ fn print_acov(
     session.listing.write_table(&hh, &ha, &rows2);
 }
 
+// ───────────────────────── Printed matrices (M36.8) ─────────────────────────
+
+/// Design-column label: "Intercept" for column 0 when an intercept is present,
+/// otherwise the corresponding regressor name (M36.8).
+fn design_label(j: usize, reg_names: &[String], intercept: bool) -> String {
+    if intercept {
+        if j == 0 {
+            "Intercept".to_string()
+        } else {
+            reg_names[j - 1].clone()
+        }
+    } else {
+        reg_names[j].clone()
+    }
+}
+
+/// Build the X'X crossproducts matrix augmented with X'Y and Y'Y (M36.8).
+/// Returns a (p_eff+1)×(p_eff+1) matrix: the leading p_eff×p_eff block is X'X,
+/// the last column is X'Y (and the last row is its transpose Y'X), and the
+/// bottom-right corner is Y'Y. Column/row order matches the design matrix
+/// (intercept first when present), with the dependent appended last.
+fn build_xpx(x_mat: &[Vec<f64>], y: &[f64]) -> Vec<Vec<f64>> {
+    let p = x_mat[0].len();
+    let n = x_mat.len();
+    let m = p + 1;
+    let mut a = vec![vec![0.0; m]; m];
+    for r in 0..p {
+        for c in 0..p {
+            let mut s = 0.0;
+            for i in 0..n {
+                s += x_mat[i][r] * x_mat[i][c];
+            }
+            a[r][c] = s;
+        }
+    }
+    // X'Y column / Y'X row.
+    for r in 0..p {
+        let mut s = 0.0;
+        for i in 0..n {
+            s += x_mat[i][r] * y[i];
+        }
+        a[r][p] = s;
+        a[p][r] = s;
+    }
+    // Y'Y.
+    a[p][p] = y.iter().map(|v| v * v).sum();
+    a
+}
+
+/// Print a labeled square matrix (M36.8). `title` is centered; the first column
+/// carries the row labels under a blank header, then one numeric column per
+/// `col_labels` entry. Values use the 8-decimal `fmt8` rendering SAS uses for
+/// these crossproduct/inverse displays.
+fn print_labeled_matrix(
+    title: &str,
+    row_labels: &[String],
+    col_labels: &[String],
+    data: &[Vec<f64>],
+    session: &mut Session,
+) {
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "The REG Procedure");
+    centered(session, title);
+    session.listing.blank();
+    let mut headers: Vec<String> = vec!["".into()];
+    let mut aligns = vec![Align::Left];
+    for lbl in col_labels {
+        headers.push(lbl.clone());
+        aligns.push(Align::Right);
+    }
+    let rows: Vec<Vec<String>> = row_labels
+        .iter()
+        .enumerate()
+        .map(|(i, lbl)| {
+            let mut row = vec![lbl.clone()];
+            for j in 0..col_labels.len() {
+                row.push(fmt8(data[i][j]));
+            }
+            row
+        })
+        .collect();
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// 8-decimal fixed formatting for the crossproduct / inverse matrix cells.
+fn fmt8(v: f64) -> String {
+    format!("{v:.8}")
+}
+
+/// Print the XPX crossproducts matrix block (M36.8). Layout: rows/cols are
+/// Intercept (if present), the regressors, then the dependent variable; the cell
+/// values are X'X augmented with X'Y / Y'Y.
+fn print_xpx(
+    xpx: &[Vec<f64>],
+    reg_names: &[String],
+    dep_name: &str,
+    intercept: bool,
+    session: &mut Session,
+) {
+    let p = xpx.len() - 1;
+    let mut labels: Vec<String> = (0..p)
+        .map(|j| design_label(j, reg_names, intercept))
+        .collect();
+    labels.push(dep_name.to_string());
+    print_labeled_matrix(
+        "Model Crossproducts X'X X'Y Y'Y",
+        &labels,
+        &labels,
+        xpx,
+        session,
+    );
+}
+
+/// Print the (X'X)⁻¹ block augmented with the parameter estimates and SSE
+/// (M36.8). The matrix is (p_eff+1)×(p_eff+1): the leading block is (X'X)⁻¹;
+/// the last column holds the parameter estimates β (and the last row their
+/// transpose); the bottom-right corner holds the error sum of squares (SSE).
+/// This mirrors SAS's "X'X Inverse, Parameter Estimates, and SSE" display.
+fn print_inverse(
+    xtx_inv: &[Vec<f64>],
+    beta: &[f64],
+    sse: f64,
+    reg_names: &[String],
+    dep_name: &str,
+    intercept: bool,
+    session: &mut Session,
+) {
+    let p = xtx_inv.len();
+    let m = p + 1;
+    let mut aug = vec![vec![0.0; m]; m];
+    for r in 0..p {
+        for c in 0..p {
+            aug[r][c] = xtx_inv[r][c];
+        }
+        aug[r][p] = beta[r];
+        aug[p][r] = beta[r];
+    }
+    aug[p][p] = sse;
+    let mut labels: Vec<String> = (0..p)
+        .map(|j| design_label(j, reg_names, intercept))
+        .collect();
+    labels.push(dep_name.to_string());
+    print_labeled_matrix(
+        "X'X Inverse, Parameter Estimates, and SSE",
+        &labels,
+        &labels,
+        &aug,
+        session,
+    );
+}
+
+/// Covariance of the estimates = MSE·(X'X)⁻¹ (M36.8).
+fn covb_matrix(xtx_inv: &[Vec<f64>], mse: f64) -> Vec<Vec<f64>> {
+    xtx_inv
+        .iter()
+        .map(|row| row.iter().map(|&v| mse * v).collect())
+        .collect()
+}
+
+/// Correlation of the estimates from the covariance matrix (M36.8):
+/// corr_ij = covb_ij / √(covb_ii·covb_jj); diagonal = 1.
+fn corrb_matrix(covb: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let p = covb.len();
+    let mut c = vec![vec![0.0; p]; p];
+    for i in 0..p {
+        for j in 0..p {
+            let d = (covb[i][i] * covb[j][j]).sqrt();
+            c[i][j] = if d > 0.0 { covb[i][j] / d } else { 0.0 };
+        }
+    }
+    c
+}
+
+/// Print the COVB ("Covariance of Estimates") and/or CORRB ("Correlation of
+/// Estimates") matrices (M36.8), each labeled with Intercept + regressor names.
+fn print_estimate_matrices(
+    model: &RegModel,
+    xtx_inv: &[Vec<f64>],
+    mse: f64,
+    reg_names: &[String],
+    intercept: bool,
+    session: &mut Session,
+) {
+    let p = xtx_inv.len();
+    let labels: Vec<String> = (0..p)
+        .map(|j| design_label(j, reg_names, intercept))
+        .collect();
+    let covb = covb_matrix(xtx_inv, mse);
+    if model.covb {
+        print_labeled_matrix(
+            "Covariance of Estimates",
+            &labels,
+            &labels,
+            &covb,
+            session,
+        );
+    }
+    if model.corrb {
+        let corrb = corrb_matrix(&covb);
+        print_labeled_matrix(
+            "Correlation of Estimates",
+            &labels,
+            &labels,
+            &corrb,
+            session,
+        );
+    }
+}
+
+// ───────────────────────── SIMPLE / CORR (M36.8) ─────────────────────────
+
+/// Print the PROC-level "Descriptive Statistics" table (SIMPLE option, M36.8).
+/// `var_names` are the analysis variables in SAS order (regressors then the
+/// dependent); `cols[v]` holds the complete-case values for variable v. Columns
+/// printed: Variable, Sum, Mean, Uncorrected SS, Variance, Std Deviation.
+fn print_simple_stats(var_names: &[String], cols: &[Vec<f64>], session: &mut Session) {
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "The REG Procedure");
+    centered(session, "Descriptive Statistics");
+    session.listing.blank();
+    let headers: Vec<String> = vec![
+        "Variable".into(),
+        "Sum".into(),
+        "Mean".into(),
+        "Uncorrected SS".into(),
+        "Variance".into(),
+        "Std Deviation".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let rows: Vec<Vec<String>> = var_names
+        .iter()
+        .zip(cols.iter())
+        .map(|(name, col)| {
+            let n = col.len();
+            let sum: f64 = col.iter().sum();
+            let mean = if n > 0 { sum / n as f64 } else { f64::NAN };
+            let uss: f64 = col.iter().map(|v| v * v).sum();
+            let var = sample_variance(col);
+            let sd = var.sqrt();
+            vec![
+                name.clone(),
+                fmt5(sum),
+                fmt5(mean),
+                fmt5(uss),
+                fmt5(var),
+                fmt5(sd),
+            ]
+        })
+        .collect();
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// Sample variance (divisor n−1). Returns NaN for fewer than 2 points.
+fn sample_variance(v: &[f64]) -> f64 {
+    let n = v.len();
+    if n < 2 {
+        return f64::NAN;
+    }
+    let mean = v.iter().sum::<f64>() / n as f64;
+    let ss: f64 = v.iter().map(|x| (x - mean) * (x - mean)).sum();
+    ss / (n as f64 - 1.0)
+}
+
+/// Pearson correlation between two equal-length vectors. Returns NaN if either
+/// has zero variance.
+fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len();
+    if n < 2 {
+        return f64::NAN;
+    }
+    let ma = a.iter().sum::<f64>() / n as f64;
+    let mb = b.iter().sum::<f64>() / n as f64;
+    let mut sab = 0.0;
+    let mut saa = 0.0;
+    let mut sbb = 0.0;
+    for i in 0..n {
+        let da = a[i] - ma;
+        let db = b[i] - mb;
+        sab += da * db;
+        saa += da * da;
+        sbb += db * db;
+    }
+    let d = (saa * sbb).sqrt();
+    if d > 0.0 {
+        sab / d
+    } else {
+        f64::NAN
+    }
+}
+
+/// Print the PROC-level "Correlation" matrix (CORR option, M36.8) among all
+/// analysis variables. Symmetric, diagonal 1; uses Pearson r over the
+/// complete-case rows.
+fn print_corr_matrix(var_names: &[String], cols: &[Vec<f64>], session: &mut Session) {
+    let k = var_names.len();
+    session.listing.blank();
+    session.listing.blank();
+    centered(session, "The REG Procedure");
+    centered(session, "Correlation");
+    session.listing.blank();
+    let mut headers: Vec<String> = vec!["Variable".into()];
+    let mut aligns = vec![Align::Left];
+    for name in var_names {
+        headers.push(name.clone());
+        aligns.push(Align::Right);
+    }
+    let rows: Vec<Vec<String>> = (0..k)
+        .map(|i| {
+            let mut row = vec![var_names[i].clone()];
+            for j in 0..k {
+                let r = if i == j {
+                    1.0
+                } else {
+                    pearson_r(&cols[i], &cols[j])
+                };
+                row.push(fmt_fit4(r));
+            }
+            row
+        })
+        .collect();
+    session.listing.write_table(&headers, &aligns, &rows);
+}
+
+/// Gather the complete-case numeric columns for the SIMPLE / CORR PROC-level
+/// displays (M36.8). Uses the FIRST model's regressors + dependent, applying the
+/// same listwise deletion (and WEIGHT/FREQ exclusion of non-positive weights /
+/// missing freqs) as the model fit, over the given group rows. Returns the
+/// analysis variable names in SAS order (regressors first, dependent last) and
+/// the parallel complete-case value columns, or `None` if a variable is missing
+/// / non-numeric (mirroring the error the model path would raise).
+fn gather_simple_corr(
+    ds: &SasDataset,
+    model: &RegModel,
+    rows: &[usize],
+    weight_col: Option<&[crate::value::Value]>,
+    freq_col: Option<&[crate::value::Value]>,
+) -> Option<(Vec<String>, Vec<Vec<f64>>)> {
+    let find_col = |nm: &str| -> Option<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .filter(|&i| ds.vars[i].ty == VarType::Num)
+    };
+    // Analysis variables: regressors (MODEL order) then the dependent. SAS lists
+    // the regressors first and the dependent last in the descriptive table.
+    let mut names: Vec<String> = model.regressors.clone();
+    names.push(model.dependent.clone());
+    let idxs: Vec<usize> = names.iter().map(|nm| find_col(nm)).collect::<Option<_>>()?;
+    let decoded: Vec<Vec<crate::value::Value>> = idxs
+        .iter()
+        .map(|&i| decode_column(ds, i).ok())
+        .collect::<Option<_>>()?;
+    let k = names.len();
+    let mut cols: Vec<Vec<f64>> = vec![Vec::new(); k];
+    for &i in rows {
+        // FREQ / WEIGHT exclusion identical to the model path.
+        if let Some(col) = freq_col {
+            match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() && v.trunc() >= 1.0 => {}
+                _ => continue,
+            }
+        }
+        if let Some(col) = weight_col {
+            match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() && v > 0.0 => {}
+                _ => continue,
+            }
+        }
+        let mut vals = Vec::with_capacity(k);
+        let mut ok = true;
+        for c in &decoded {
+            match value_to_num(&c[i]) {
+                Some(v) if !v.is_nan() => vals.push(v),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            for (c, v) in vals.into_iter().enumerate() {
+                cols[c].push(v);
+            }
+        }
+    }
+    Some((names, cols))
+}
+
+// ───────────────────────── OUTEST= / OUTSSCP= datasets (M36.8) ─────────────────────────
+
+/// One fitted model's contribution to the OUTEST= dataset (M36.8). Captures
+/// everything needed to emit the PARMS row (and, with modifiers, the COV/SEB
+/// rows and the EDF / TABLEOUT columns). Parameter values are stored by name so
+/// the writer can align them into the union of parameter columns across models.
+struct OutEstEntry {
+    /// Model label, e.g. "MODEL1".
+    model_label: String,
+    /// Dependent variable name.
+    depvar: String,
+    /// Root MSE.
+    rmse: f64,
+    /// Parameter names in design order: "Intercept" (if present) then regressors.
+    param_names: Vec<String>,
+    /// Parameter estimates aligned with `param_names`.
+    beta: Vec<f64>,
+    /// Standard errors aligned with `param_names`.
+    se: Vec<f64>,
+    /// Covariance matrix MSE·(X'X)⁻¹ (p_eff×p_eff), aligned with `param_names`.
+    covb: Vec<Vec<f64>>,
+    /// Number of regressors in the model (_IN_).
+    n_in: usize,
+    /// Number of parameters (_P_).
+    n_p: usize,
+    /// Error degrees of freedom (_EDF_).
+    edf: f64,
+    /// Lower/upper confidence bounds per parameter (TABLEOUT), aligned with
+    /// `param_names`.
+    lb: Vec<f64>,
+    ub: Vec<f64>,
+}
+
+/// Build an OUTEST= entry from a completed fit (M36.8).
+fn build_outest_entry(
+    model_label: &str,
+    dep_name: &str,
+    reg_names: &[String],
+    fit: &OlsFit,
+    intercept: bool,
+    n_used: f64,
+    alpha: f64,
+) -> OutEstEntry {
+    let p_eff = fit.beta.len();
+    let edf = n_used - p_eff as f64;
+    let mse = if edf > 0.0 { fit.sse / edf } else { f64::NAN };
+    let param_names: Vec<String> = (0..p_eff)
+        .map(|j| design_label(j, reg_names, intercept))
+        .collect();
+    let covb = covb_matrix(&fit.xtx_inv, mse);
+    let se: Vec<f64> = (0..p_eff).map(|j| covb[j][j].max(0.0).sqrt()).collect();
+    let t_crit = t_quantile(1.0 - alpha / 2.0, edf);
+    let lb: Vec<f64> = (0..p_eff)
+        .map(|j| fit.beta[j] - t_crit * se[j])
+        .collect();
+    let ub: Vec<f64> = (0..p_eff)
+        .map(|j| fit.beta[j] + t_crit * se[j])
+        .collect();
+    OutEstEntry {
+        model_label: model_label.to_string(),
+        depvar: dep_name.to_string(),
+        rmse: mse.sqrt(),
+        param_names,
+        beta: fit.beta.clone(),
+        se,
+        covb,
+        n_in: reg_names.len(),
+        n_p: p_eff,
+        edf,
+        lb,
+        ub,
+    }
+}
+
+/// Write the OUTEST= dataset from the accumulated per-model entries (M36.8).
+/// Variables: `_MODEL_`, `_TYPE_`, `_DEPVAR_`, [`_NAME_` when COVOUT/OUTSEB],
+/// `_RMSE_`, [EDF cols], one column per parameter (union over models, source
+/// order), the dependent column (=-1), then [TABLEOUT cols]. One PARMS row per
+/// model; COVOUT/OUTSEB add extra rows per model.
+fn write_outest(
+    spec: &OutEst,
+    entries: &[OutEstEntry],
+    session: &mut Session,
+) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let with_name = spec.covout || spec.outseb;
+
+    // Union of parameter columns (source order): Intercept first if any model
+    // has it, then regressors in first-seen order.
+    let mut param_cols: Vec<String> = Vec::new();
+    for e in entries {
+        for nm in &e.param_names {
+            if !param_cols.iter().any(|c| c.eq_ignore_ascii_case(nm)) {
+                param_cols.push(nm.clone());
+            }
+        }
+    }
+    // Union of dependent-variable columns (marked −1 in their model's PARMS row).
+    let mut dep_cols: Vec<String> = Vec::new();
+    for e in entries {
+        if !dep_cols.iter().any(|c| c.eq_ignore_ascii_case(&e.depvar))
+            && !param_cols.iter().any(|c| c.eq_ignore_ascii_case(&e.depvar))
+        {
+            dep_cols.push(e.depvar.clone());
+        }
+    }
+
+    // Row accumulators.
+    let mut model_c: Vec<Option<String>> = Vec::new();
+    let mut type_c: Vec<Option<String>> = Vec::new();
+    let mut depvar_c: Vec<Option<String>> = Vec::new();
+    let mut name_c: Vec<Option<String>> = Vec::new();
+    let mut rmse_c: Vec<Option<f64>> = Vec::new();
+    let mut in_c: Vec<Option<f64>> = Vec::new();
+    let mut p_c: Vec<Option<f64>> = Vec::new();
+    let mut edf_c: Vec<Option<f64>> = Vec::new();
+    // One numeric vector per parameter column and per dependent column.
+    let mut param_vals: Vec<Vec<Option<f64>>> = vec![Vec::new(); param_cols.len()];
+    let mut dep_vals: Vec<Vec<Option<f64>>> = vec![Vec::new(); dep_cols.len()];
+    let mut lb_c: Vec<Option<f64>> = Vec::new();
+    let mut ub_c: Vec<Option<f64>> = Vec::new();
+
+    // Helper: index of a parameter name within an entry (case-insensitive).
+    let entry_param = |e: &OutEstEntry, nm: &str| -> Option<usize> {
+        e.param_names.iter().position(|p| p.eq_ignore_ascii_case(nm))
+    };
+
+    for e in entries {
+        // --- PARMS row ---
+        model_c.push(Some(e.model_label.clone()));
+        type_c.push(Some("PARMS".to_string()));
+        depvar_c.push(Some(e.depvar.clone()));
+        name_c.push(Some(String::new()));
+        rmse_c.push(Some(e.rmse));
+        in_c.push(Some(e.n_in as f64));
+        p_c.push(Some(e.n_p as f64));
+        edf_c.push(Some(e.edf));
+        for (ci, cn) in param_cols.iter().enumerate() {
+            param_vals[ci].push(entry_param(e, cn).map(|k| e.beta[k]));
+        }
+        for (ci, cn) in dep_cols.iter().enumerate() {
+            // The dependent column for this model's response is −1; others miss.
+            dep_vals[ci].push(if cn.eq_ignore_ascii_case(&e.depvar) {
+                Some(-1.0)
+            } else {
+                None
+            });
+        }
+        lb_c.push(None);
+        ub_c.push(None);
+
+        // --- TABLEOUT: L95B / U95B rows for the estimates (documented subset:
+        // the parameter confidence bounds at the model α). SAS emits dedicated
+        // _TYPE_ rows; we add an L95B and a U95B row carrying the bounds in the
+        // parameter columns.
+        if spec.tableout {
+            for (is_upper, src) in [(false, &e.lb), (true, &e.ub)] {
+                model_c.push(Some(e.model_label.clone()));
+                type_c.push(Some(if is_upper { "U95B" } else { "L95B" }.to_string()));
+                depvar_c.push(Some(e.depvar.clone()));
+                name_c.push(Some(String::new()));
+                rmse_c.push(Some(e.rmse));
+                in_c.push(Some(e.n_in as f64));
+                p_c.push(Some(e.n_p as f64));
+                edf_c.push(Some(e.edf));
+                for (ci, cn) in param_cols.iter().enumerate() {
+                    param_vals[ci].push(entry_param(e, cn).map(|k| src[k]));
+                }
+                for ci in 0..dep_cols.len() {
+                    dep_vals[ci].push(None);
+                }
+                lb_c.push(None);
+                ub_c.push(None);
+            }
+        }
+
+        // --- COVOUT: one row per parameter with that row of the covariance
+        // matrix (MSE·(X'X)⁻¹), _TYPE_="COV", _NAME_=parameter name.
+        if spec.covout {
+            for (k, pn) in e.param_names.iter().enumerate() {
+                model_c.push(Some(e.model_label.clone()));
+                type_c.push(Some("COV".to_string()));
+                depvar_c.push(Some(e.depvar.clone()));
+                name_c.push(Some(pn.clone()));
+                rmse_c.push(Some(e.rmse));
+                in_c.push(Some(e.n_in as f64));
+                p_c.push(Some(e.n_p as f64));
+                edf_c.push(Some(e.edf));
+                for (ci, cn) in param_cols.iter().enumerate() {
+                    param_vals[ci].push(entry_param(e, cn).map(|j| e.covb[k][j]));
+                }
+                for ci in 0..dep_cols.len() {
+                    dep_vals[ci].push(None);
+                }
+                lb_c.push(None);
+                ub_c.push(None);
+            }
+        }
+
+        // --- OUTSEB: a row of standard errors, _TYPE_="SEB".
+        if spec.outseb {
+            model_c.push(Some(e.model_label.clone()));
+            type_c.push(Some("SEB".to_string()));
+            depvar_c.push(Some(e.depvar.clone()));
+            name_c.push(Some(String::new()));
+            rmse_c.push(Some(e.rmse));
+            in_c.push(Some(e.n_in as f64));
+            p_c.push(Some(e.n_p as f64));
+            edf_c.push(Some(e.edf));
+            for (ci, cn) in param_cols.iter().enumerate() {
+                param_vals[ci].push(entry_param(e, cn).map(|k| e.se[k]));
+            }
+            for ci in 0..dep_cols.len() {
+                dep_vals[ci].push(None);
+            }
+            lb_c.push(None);
+            ub_c.push(None);
+        }
+    }
+
+    // Assemble the dataset columns in SAS order.
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+    columns.push(Series::new("_MODEL_".into(), model_c).into());
+    vars.push(char_meta("_MODEL_", 32));
+    columns.push(Series::new("_TYPE_".into(), type_c).into());
+    vars.push(char_meta("_TYPE_", 8));
+    columns.push(Series::new("_DEPVAR_".into(), depvar_c).into());
+    vars.push(char_meta("_DEPVAR_", 32));
+    if with_name {
+        columns.push(Series::new("_NAME_".into(), name_c).into());
+        vars.push(char_meta("_NAME_", 32));
+    }
+    columns.push(Series::new("_RMSE_".into(), rmse_c).into());
+    vars.push(num_var_meta("_RMSE_"));
+    if spec.edf {
+        columns.push(Series::new("_IN_".into(), in_c).into());
+        vars.push(num_var_meta("_IN_"));
+        columns.push(Series::new("_P_".into(), p_c).into());
+        vars.push(num_var_meta("_P_"));
+        columns.push(Series::new("_EDF_".into(), edf_c).into());
+        vars.push(num_var_meta("_EDF_"));
+    }
+    for (ci, cn) in param_cols.iter().enumerate() {
+        columns.push(Series::new(cn.as_str().into(), param_vals[ci].clone()).into());
+        vars.push(num_var_meta(cn));
+    }
+    for (ci, cn) in dep_cols.iter().enumerate() {
+        columns.push(Series::new(cn.as_str().into(), dep_vals[ci].clone()).into());
+        vars.push(num_var_meta(cn));
+    }
+    if spec.tableout {
+        columns.push(Series::new("_LB_".into(), lb_c).into());
+        vars.push(num_var_meta("_LB_"));
+        columns.push(Series::new("_UB_".into(), ub_c).into());
+        vars.push(num_var_meta("_UB_"));
+    }
+
+    let out_df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df: out_df, vars };
+    let out_libref = spec.out.libref_or_work();
+    let out_table = spec.out.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars_out = out_ds.vars.len();
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars_out
+    ));
+    Ok(())
+}
+
+/// Build and write the OUTSSCP= dataset for one analysis (M36.8). `var_names`
+/// are the analysis variables (regressors then dependent); `cols` the parallel
+/// complete-case columns. The SSCP matrix has an `Intercept` row/col (= n on the
+/// diagonal, column sums off-diagonal) unless `intercept` is false. Layout:
+/// `_TYPE_`="SSCP", `_NAME_`=row label, then one numeric column per variable
+/// (Intercept, regressors, dependent) holding X'X augmented with X'Y / Y'Y.
+fn write_outsscp(
+    out: &DatasetRef,
+    reg_names: &[String],
+    dep_name: &str,
+    cols: &[Vec<f64>],
+    intercept: bool,
+    session: &mut Session,
+) -> Result<()> {
+    // Order of the analysis columns in `cols`: regressors then dependent. Build
+    // a combined matrix V (rows = obs) whose columns are [Intercept?, regressors,
+    // dependent], then A = VᵀV.
+    let n = cols.first().map(|c| c.len()).unwrap_or(0);
+    // Column labels for the matrix (Intercept first when present).
+    let mut labels: Vec<String> = Vec::new();
+    if intercept {
+        labels.push("Intercept".to_string());
+    }
+    for nm in reg_names {
+        labels.push(nm.clone());
+    }
+    labels.push(dep_name.to_string());
+
+    let m = labels.len();
+    // value(i, col): the col-th analysis value for row i (Intercept = 1).
+    let col_value = |row: usize, label_idx: usize| -> f64 {
+        if intercept && label_idx == 0 {
+            1.0
+        } else {
+            // cols index: subtract the intercept offset.
+            let ci = if intercept { label_idx - 1 } else { label_idx };
+            cols[ci][row]
+        }
+    };
+    let mut a = vec![vec![0.0; m]; m];
+    for r in 0..m {
+        for c in 0..m {
+            let mut s = 0.0;
+            for i in 0..n {
+                s += col_value(i, r) * col_value(i, c);
+            }
+            a[r][c] = s;
+        }
+    }
+
+    // Build the dataset: _TYPE_ (char), _NAME_ (char), then one numeric column
+    // per analysis variable.
+    let mut columns: Vec<Column> = Vec::with_capacity(m + 2);
+    let mut vars: Vec<VarMeta> = Vec::with_capacity(m + 2);
+    let type_col: Vec<Option<String>> = (0..m).map(|_| Some("SSCP".to_string())).collect();
+    let name_col: Vec<Option<String>> = labels.iter().map(|l| Some(l.clone())).collect();
+    columns.push(Series::new("_TYPE_".into(), type_col).into());
+    vars.push(char_meta("_TYPE_", 8));
+    columns.push(Series::new("_NAME_".into(), name_col).into());
+    vars.push(char_meta("_NAME_", 32));
+    for (c, lbl) in labels.iter().enumerate() {
+        let data: Vec<Option<f64>> = (0..m).map(|r| Some(a[r][c])).collect();
+        columns.push(Series::new(lbl.as_str().into(), data).into());
+        vars.push(num_var_meta(lbl));
+    }
+
+    let out_df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df: out_df, vars };
+    let out_libref = out.libref_or_work();
+    let out_table = out.name.to_uppercase();
+    let display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars_out = out_ds.vars.len();
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display, n_rows, n_vars_out
+    ));
+    Ok(())
+}
+
+/// VarMeta for a character output column (M36.8).
+fn char_meta(name: &str, length: usize) -> VarMeta {
+    VarMeta {
+        name: name.to_string(),
+        ty: VarType::Char,
+        length,
+        format: None,
+        label: None,
+    }
+}
+
 // ───────────────────────── Execute ─────────────────────────
 
 pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
@@ -1687,6 +2571,10 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
     };
 
     // --- 2. Per-BY-group, per-model loop ---
+    // M36.8: OUTEST= accumulates one PARMS entry per model per BY group; written
+    // once after the loop. None when no OUTEST= so the path stays byte-identical.
+    let mut outest_entries: Vec<OutEstEntry> = Vec::new();
+    let want_outest = ast.data_options.outest.is_some();
     for (by_key, grp_rows) in &by_groups_list {
         // BY heading (M36.7): rendered INSIDE each model's header block (after
         // "The REG Procedure", before "Model: MODELn"), so thread the label down
@@ -1697,6 +2585,51 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         } else {
             Some(reg_by_heading_line(&by_names, by_key))
         };
+        // SIMPLE / CORR PROC-level displays (M36.8): printed once per BY group,
+        // over the FIRST model's analysis variables (regressors + dependent),
+        // using the same listwise deletion as that model. Gated on the PROC
+        // flags so a PROC without SIMPLE/CORR is byte-identical to before.
+        if (ast.simple || ast.corr) && !ast.models.is_empty() {
+            if let Some((names, cols)) = gather_simple_corr(
+                &ds,
+                &ast.models[0].model,
+                grp_rows,
+                weight_col.as_deref(),
+                freq_col.as_deref(),
+            ) {
+                if ast.simple {
+                    print_simple_stats(&names, &cols, session);
+                }
+                if ast.corr {
+                    print_corr_matrix(&names, &cols, session);
+                }
+            }
+        }
+        // OUTSSCP= (M36.8): one SSCP matrix per BY group, built from the FIRST
+        // model's analysis variables (Intercept + regressors + dependent) over
+        // the same complete-case rows. Gated so a PROC without OUTSSCP= is
+        // byte-identical to before.
+        if let Some(out) = &ast.data_options.outsscp {
+            if let Some((_, cols)) = gather_simple_corr(
+                &ds,
+                &ast.models[0].model,
+                grp_rows,
+                weight_col.as_deref(),
+                freq_col.as_deref(),
+            ) {
+                // `gather_simple_corr` returns the regressor columns then the
+                // dependent column; `write_outsscp` consumes them in that order.
+                let m0 = &ast.models[0].model;
+                write_outsscp(
+                    out,
+                    &m0.regressors,
+                    &m0.dependent,
+                    &cols,
+                    !m0.noint,
+                    session,
+                )?;
+            }
+        }
         for (mi, entry) in ast.models.iter().enumerate() {
             let model_label = format!("Model: MODEL{}", mi + 1);
             run_model(
@@ -1711,9 +2644,19 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
                 &id_cols,
                 &model_label,
                 by_heading.as_deref(),
+                if want_outest {
+                    Some(&mut outest_entries)
+                } else {
+                    None
+                },
                 session,
             )?;
         }
+    }
+
+    // OUTEST= (M36.8): write the accumulated parameter-estimates dataset.
+    if let Some(spec) = &ast.data_options.outest {
+        write_outest(spec, &outest_entries, session)?;
     }
 
     Ok(())
@@ -1767,6 +2710,10 @@ fn run_model(
     // M36.7: BY-group heading line, threaded down so it can be emitted inside
     // the per-model header block (after "The REG Procedure"). `None` when no BY.
     by_heading: Option<&str>,
+    // M36.8: OUTEST= accumulator. `Some` when a PROC OUTEST= was requested; this
+    // model pushes its PARMS/cov/se data here for the per-PROC writer. `None`
+    // keeps the OUTEST-free path byte-identical.
+    outest_accum: Option<&mut Vec<OutEstEntry>>,
     session: &mut Session,
 ) -> Result<()> {
     let _ = (in_libref, in_table);
@@ -2064,6 +3011,61 @@ fn run_model(
         by_heading,
         session,
     );
+
+    // --- OUTEST= (M36.8): record this fit for the per-PROC parameter-estimates
+    // dataset. Built from the existing fit (no refit). `_MODEL_` uses the bare
+    // "MODELn" label (the model_label is "Model: MODELn").
+    if let Some(accum) = outest_accum {
+        let n_used: f64 = weighting.as_ref().map(|w| w.total_n).unwrap_or(n as f64);
+        let bare_label = model_label
+            .strip_prefix("Model: ")
+            .unwrap_or(model_label)
+            .to_string();
+        accum.push(build_outest_entry(
+            &bare_label,
+            dep_name,
+            &sel_reg_names,
+            &fit,
+            intercept,
+            n_used,
+            model.alpha,
+        ));
+    }
+
+    // --- Printed matrices (M36.8): XPX / I / COVB / CORRB. Each is gated on its
+    // MODEL option (and !noprint), computed from the existing fit (no refit), so
+    // a MODEL without any of these options is byte-identical to before. MSE uses
+    // the same error df as the ANOVA table (Σf_i − p_eff with FREQ active).
+    if (model.xpx || model.inv || model.covb || model.corrb) && !model.noprint {
+        let n_used: f64 = weighting.as_ref().map(|w| w.total_n).unwrap_or(n as f64);
+        let error_df = n_used - p_eff as f64;
+        let mse = if error_df > 0.0 { fit.sse / error_df } else { f64::NAN };
+        if model.xpx {
+            let xpx = build_xpx(&x_mat, &y_vec);
+            print_xpx(&xpx, &sel_reg_names, dep_name, intercept, session);
+        }
+        if model.inv {
+            print_inverse(
+                &fit.xtx_inv,
+                &fit.beta,
+                fit.sse,
+                &sel_reg_names,
+                dep_name,
+                intercept,
+                session,
+            );
+        }
+        if model.covb || model.corrb {
+            print_estimate_matrices(
+                model,
+                &fit.xtx_inv,
+                mse,
+                &sel_reg_names,
+                intercept,
+                session,
+            );
+        }
+    }
 
     // --- Collinearity / specification / autocorrelation diagnostics (M36.4).
     // All gated on the corresponding flags (and !noprint), so a MODEL without
@@ -4795,7 +5797,11 @@ mod tests {
     /// Build a single-model AST (no OUTPUT) for the given model.
     fn single_model_ast(input: DatasetRef, model: RegModel) -> RegAst {
         RegAst {
-            data_options: RegDataOptions { input: Some(input) },
+            data_options: RegDataOptions {
+                input: Some(input),
+                outest: None,
+                outsscp: None,
+            },
             models: vec![RegModelEntry {
                 model,
                 outputs: vec![],
@@ -4807,6 +5813,8 @@ mod tests {
             freq: None,
             by: Vec::new(),
             id: Vec::new(),
+            simple: false,
+            corr: false,
         }
     }
 
@@ -4840,6 +5848,10 @@ mod tests {
             scorr2: false,
             seqb: false,
             press_opt: false,
+            xpx: false,
+            inv: false,
+            covb: false,
+            corrb: false,
         }
     }
 
@@ -6985,5 +7997,275 @@ mod tests {
         assert!(ast.weight.is_none());
         assert!(ast.freq.is_none());
         assert!(ast.id.is_empty());
+    }
+
+    // ───────────── M36.8 parse tests ─────────────
+
+    #[test]
+    fn test_parse_simple_corr_all() {
+        let ast = parse_reg("proc reg data=a simple corr all; model y = x; run;").unwrap();
+        assert!(ast.simple);
+        assert!(ast.corr);
+        let m = &ast.models[0].model;
+        // ALL turns on the MODEL matrix options + CLM/CLI.
+        assert!(m.xpx && m.inv && m.covb && m.corrb);
+        assert!(m.clm && m.cli);
+    }
+
+    #[test]
+    fn test_parse_model_matrix_options() {
+        let ast =
+            parse_reg("proc reg data=a; model y = x / xpx i covb corrb; run;").unwrap();
+        let m = &ast.models[0].model;
+        assert!(m.xpx && m.inv && m.covb && m.corrb);
+        // Untouched flags stay off (byte-identity guard).
+        assert!(!m.clb && !m.vif);
+    }
+
+    #[test]
+    fn test_parse_outest_modifiers() {
+        let ast =
+            parse_reg("proc reg data=a outest=e covout outseb edf; model y = x; run;")
+                .unwrap();
+        let oe = ast.data_options.outest.as_ref().unwrap();
+        assert_eq!(oe.out.name, "e");
+        assert!(oe.covout && oe.outseb && oe.edf);
+        assert!(!oe.tableout);
+    }
+
+    #[test]
+    fn test_parse_outsscp() {
+        let ast = parse_reg("proc reg data=a outsscp=s; model y = x; run;").unwrap();
+        assert_eq!(ast.data_options.outsscp.as_ref().unwrap().name, "s");
+    }
+
+    #[test]
+    fn test_parse_default_m368_off() {
+        // A plain PROC/MODEL leaves every M36.8 flag off (byte-identity guard).
+        let ast = parse_reg("proc reg data=a; model y = x; run;").unwrap();
+        assert!(!ast.simple && !ast.corr);
+        assert!(ast.data_options.outest.is_none());
+        assert!(ast.data_options.outsscp.is_none());
+        let m = &ast.models[0].model;
+        assert!(!m.xpx && !m.inv && !m.covb && !m.corrb);
+    }
+
+    // ───────────── M36.8 self-consistency oracles ─────────────
+
+    /// Shared design: intercept + two regressors, non-degenerate.
+    fn m368_setup() -> (Vec<Vec<f64>>, Vec<f64>, OlsFit, Vec<String>, usize) {
+        let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0, 7.0];
+        let y: Vec<f64> = (0..8)
+            .map(|i| 1.0 + 2.0 * x1[i] - 0.5 * x2[i] + (x1[i] * 0.3).cos())
+            .collect();
+        let n = y.len();
+        let x = design(true, &[&x1, &x2], n);
+        let fit = ols_fit(&x, &y).unwrap();
+        let names = vec!["x1".to_string(), "x2".to_string()];
+        (x, y, fit, names, n)
+    }
+
+    #[test]
+    fn test_oracle_covb_diag_eq_se_squared() {
+        let (_x, _y, fit, _names, n) = m368_setup();
+        let p_eff = fit.beta.len();
+        let mse = fit.sse / (n - p_eff) as f64;
+        let covb = covb_matrix(&fit.xtx_inv, mse);
+        for j in 0..p_eff {
+            let se = (mse * fit.xtx_inv[j][j]).sqrt();
+            assert!(
+                (covb[j][j] - se * se).abs() < 1e-9,
+                "covb_jj != SE_j^2 at {j}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_oracle_corrb_diag_one_symmetric() {
+        let (_x, _y, fit, _names, n) = m368_setup();
+        let p_eff = fit.beta.len();
+        let mse = fit.sse / (n - p_eff) as f64;
+        let covb = covb_matrix(&fit.xtx_inv, mse);
+        let corrb = corrb_matrix(&covb);
+        for i in 0..p_eff {
+            assert!((corrb[i][i] - 1.0).abs() < 1e-12, "corrb diagonal != 1");
+            for j in 0..p_eff {
+                assert!(
+                    (corrb[i][j] - corrb[j][i]).abs() < 1e-12,
+                    "corrb not symmetric"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_oracle_xpx_diag_n_and_inverse() {
+        let (x, y, fit, _names, n) = m368_setup();
+        let p = fit.beta.len();
+        let xpx = build_xpx(&x, &y);
+        // Intercept column diagonal == n.
+        assert!((xpx[0][0] - n as f64).abs() < 1e-9, "X'X[0][0] != n");
+        // Symmetric over the full augmented matrix.
+        for i in 0..xpx.len() {
+            for j in 0..xpx.len() {
+                assert!((xpx[i][j] - xpx[j][i]).abs() < 1e-6, "X'X not symmetric");
+            }
+        }
+        // (X'X block) · (X'X)^-1 ≈ I.
+        for i in 0..p {
+            for j in 0..p {
+                let mut s = 0.0;
+                for k in 0..p {
+                    s += xpx[i][k] * fit.xtx_inv[k][j];
+                }
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((s - want).abs() < 1e-6, "X'X·inv != I at ({i},{j}): {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_oracle_simple_stats() {
+        let col = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let n = col.len() as f64;
+        let mean = col.iter().sum::<f64>() / n;
+        assert!((mean - 3.0).abs() < 1e-12);
+        let uss: f64 = col.iter().map(|v| v * v).sum();
+        assert!((uss - 55.0).abs() < 1e-12);
+        let var = sample_variance(&col);
+        assert!((var - 2.5).abs() < 1e-12, "variance: {var}");
+    }
+
+    #[test]
+    fn test_oracle_outest_parms_row() {
+        let (_x, _y, fit, names, n) = m368_setup();
+        let entry =
+            build_outest_entry("MODEL1", "y", &names, &fit, true, n as f64, 0.05);
+        // Parameter estimates equal fit.beta.
+        for j in 0..fit.beta.len() {
+            assert!((entry.beta[j] - fit.beta[j]).abs() < 1e-12);
+        }
+        // _RMSE_ == Root MSE.
+        let mse = fit.sse / (n - fit.beta.len()) as f64;
+        assert!((entry.rmse - mse.sqrt()).abs() < 1e-9);
+        // EDF / IN / P.
+        assert_eq!(entry.n_in, 2);
+        assert_eq!(entry.n_p, 3);
+        assert!((entry.edf - (n as f64 - 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_oracle_outest_dataset_dep_is_minus1() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast =
+            parse_reg("proc reg data=work.t outest=est; model y = x; run;").unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        // _MODEL_ _TYPE_ _DEPVAR_ _RMSE_ Intercept x y
+        assert!(names.contains(&"_MODEL_".to_string()));
+        assert!(names.contains(&"_TYPE_".to_string()));
+        assert!(names.contains(&"Intercept".to_string()));
+        // The dependent column 'y' is set to -1 in the PARMS row.
+        let yidx = out.vars.iter().position(|v| v.name == "y").unwrap();
+        let ycol = decode_column(&out, yidx).unwrap();
+        assert_eq!(value_to_num(&ycol[0]), Some(-1.0));
+        // _RMSE_ matches a direct fit.
+        let xcol = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let yv = vec![2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0];
+        let xm = design(true, &[&xcol], 6);
+        let fit = ols_fit(&xm, &yv).unwrap();
+        let rmse_idx = out.vars.iter().position(|v| v.name == "_RMSE_").unwrap();
+        let rmse_col = decode_column(&out, rmse_idx).unwrap();
+        let mse = fit.sse / (6 - 2) as f64;
+        assert!((value_to_num(&rmse_col[0]).unwrap() - mse.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_oracle_outsscp_dataset() {
+        let mut session = make_session();
+        let xcol = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let yv = [2.0_f64, 4.0, 5.0, 4.0, 5.0];
+        let frame = df!["y" => yv.to_vec(), "x" => xcol.to_vec()].unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast =
+            parse_reg("proc reg data=work.t outsscp=sscp; model y = x; run;").unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("SSCP").unwrap();
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        assert_eq!(names[0], "_TYPE_");
+        assert_eq!(names[1], "_NAME_");
+        assert!(names.contains(&"Intercept".to_string()));
+        // Intercept diagonal == n: the Intercept row's Intercept column == 5.
+        let nameidx = 1;
+        let namecol = decode_column(&out, nameidx).unwrap();
+        let int_row = namecol
+            .iter()
+            .position(|v| matches!(v, crate::value::Value::Char(s) if s.trim_end() == "Intercept"))
+            .unwrap();
+        let intcolidx = out.vars.iter().position(|v| v.name == "Intercept").unwrap();
+        let intcol = decode_column(&out, intcolidx).unwrap();
+        assert_eq!(value_to_num(&intcol[int_row]), Some(5.0));
+        // (regressor x, dependent y) cell == Σ x_j·y.
+        let xrow = namecol
+            .iter()
+            .position(|v| matches!(v, crate::value::Value::Char(s) if s.trim_end() == "x"))
+            .unwrap();
+        let ycolidx = out.vars.iter().position(|v| v.name == "y").unwrap();
+        let ycol = decode_column(&out, ycolidx).unwrap();
+        let want: f64 = xcol.iter().zip(yv.iter()).map(|(a, b)| a * b).sum();
+        assert!((value_to_num(&ycol[xrow]).unwrap() - want).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_outest_covout_outseb_edf_rows() {
+        let mut session = make_session();
+        let frame = df![
+            "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0, 7.0],
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y"), num_meta("x")],
+        };
+        session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
+        let ast = parse_reg(
+            "proc reg data=work.t outest=est covout outseb edf; model y = x; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
+        let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+        assert!(names.contains(&"_NAME_".to_string()));
+        assert!(names.contains(&"_IN_".to_string()));
+        assert!(names.contains(&"_P_".to_string()));
+        assert!(names.contains(&"_EDF_".to_string()));
+        // _TYPE_ rows: PARMS, COV x2 (Intercept, x), SEB.
+        let tidx = out.vars.iter().position(|v| v.name == "_TYPE_").unwrap();
+        let tcol = decode_column(&out, tidx).unwrap();
+        let types: Vec<String> = tcol
+            .iter()
+            .map(|v| match v {
+                crate::value::Value::Char(s) => s.trim_end().to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(types, vec!["PARMS", "COV", "COV", "SEB"]);
     }
 }

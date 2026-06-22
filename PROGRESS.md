@@ -826,9 +826,18 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   WEIGHT(c)→SSE×c, FREQ(2)→df doublé, BY(1 groupe)=sans BY. Fixture m36/weight_by_id (WLS+ID, BY sex).
   2560 lib tests, 0 warning, snapshots octet-identiques. (Limite documentée : RESTRICT+WEIGHT utilise la
   machinerie RESTRICT non pondérée.)
-- [ ] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),
+- [x] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),
   `OUTSSCP=` ; options PROC `SIMPLE` (stats descriptives), `CORR`, `ALL` ; MODEL `COVB`/`CORRB`/`XPX`/`I`
-  (matrices imprimées) (Opus, moyen)
+  (matrices imprimées) (Opus, moyen).
+  **FAIT** : PROC `SIMPLE` (Variable/Sum/Mean/Uncorrected SS/Variance/Std), `CORR` (matrice Pearson),
+  `ALL` (→ SIMPLE+CORR + XPX/I/COVB/CORRB/CLM/CLI par modèle). Matrices : `XPX` (X'X|X'Y|Y'Y),
+  `I` ((X'X)⁻¹ augmentée des estimations + SSE au coin), `COVB`=MSE·(X'X)⁻¹, `CORRB`=covb_ij/√(covb_ii·covb_jj).
+  `OUTEST=` : obs PARMS par modèle (`_MODEL_`/`_TYPE_`/`_DEPVAR_`/`_RMSE_` + estimations, dépendante=−1)
+  + `COVOUT` (lignes COV), `OUTSEB` (ligne SEB), `EDF` (`_IN_`/`_P_`/`_EDF_`), `TABLEOUT` (`L95B`/`U95B`).
+  `OUTSSCP=` : matrice SSCP (`_TYPE_=SSCP`, `_NAME_`, intercept diag=n). Oracles : COVB_jj=SE²,
+  CORRB diag=1, XPX·(X'X)⁻¹≈I, I-coin=SSE, OUTEST β/SEB/EDF, OUTSSCP(x,y)=Σxy. Cohérence croisée :
+  CORR(age,height)=0.8114=√(1−TOL) de M36.4. Fixture m36/outest_matrices. 2573 lib tests, 0 warning,
+  snapshots octet-identiques.
 - [ ] M36.9 — Régressions spécialisées : `RIDGE=` (ridge regression + `OUTVIF`, trace de ridge),
   `PCOMIT=` (régression sur composantes principales incomplètes / IPC) (Fable, élevé)
 - [ ] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
