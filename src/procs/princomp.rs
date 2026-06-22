@@ -433,13 +433,106 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
         session.listing.blank();
     }
 
-    // OUT= : scores not produced in v1 (parse-accepted only).
-    if ast.out.is_some() {
-        session.log.note(
-            "PROC PRINCOMP OUT= scoring is not yet implemented; the output data set was not created.",
-        );
+    // OUT= : write input columns + Prin1..Prink component scores.
+    //
+    // Scoring method: for each complete-case observation, the score on
+    // component j is the (standardized — or only centered, if COV) data vector
+    // dotted with eigenvector column j (the SAME eigenvectors, with the SAME
+    // sign convention, used for the Eigenvectors listing above). For
+    // correlation-based PCA each variable is standardized by its sample mean
+    // and std; for COV the variable is only centered by its mean. With this
+    // convention the score on component j has sample variance equal to
+    // eigenvalue_j. Observations with any missing analysis variable receive
+    // missing scores (rows are kept in input order, mirroring SAS).
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(session, &ds, &decoded, &means, &stds, &v, ast.cov, p, k, out_ref)?;
     }
 
+    Ok(())
+}
+
+/// Build and write the PRINCOMP OUT= dataset: every input column plus
+/// `Prin1..Prink` component scores. `decoded` holds the analysis columns in
+/// original-row order (NaN for missing); `means`/`stds` are the sample
+/// statistics; `v` the eigenvectors (columns), already sign-fixed.
+#[allow(clippy::too_many_arguments)]
+fn write_out_dataset(
+    session: &mut Session,
+    ds: &crate::dataset::SasDataset,
+    decoded: &[Vec<f64>],
+    means: &[f64],
+    stds: &[f64],
+    v: &[Vec<f64>],
+    cov: bool,
+    p: usize,
+    k: usize,
+    out_ref: &DatasetRef,
+) -> Result<()> {
+    use crate::dataset::{SasDataset, VarMeta};
+    use polars::prelude::*;
+
+    let n_read = ds.n_obs();
+
+    // Per-component score columns (Option<f64>: None => SAS missing).
+    let mut score_cols: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(n_read); k];
+    for r in 0..n_read {
+        let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
+        if row.iter().all(|x| x.is_finite()) {
+            // Standardize (or center for COV).
+            let z: Vec<f64> = (0..p)
+                .map(|j| {
+                    let centered = row[j] - means[j];
+                    if cov {
+                        centered
+                    } else if stds[j] > 0.0 {
+                        centered / stds[j]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            for comp in 0..k {
+                let score: f64 = (0..p).map(|j| z[j] * v[j][comp]).sum();
+                score_cols[comp].push(Some(score));
+            }
+        } else {
+            for comp in 0..k {
+                score_cols[comp].push(None);
+            }
+        }
+    }
+
+    let mut out_df = ds.df.clone();
+    for comp in 0..k {
+        let name = format!("Prin{}", comp + 1);
+        out_df
+            .with_column(Series::new(name.into(), score_cols[comp].clone()))
+            .map_err(|e| SasError::runtime(format!("PRINCOMP OUT= build failed: {e}")))?;
+    }
+
+    let mut vars = ds.vars.clone();
+    for comp in 0..k {
+        vars.push(VarMeta {
+            name: format!("Prin{}", comp + 1),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        });
+    }
+
+    let out_ds = SasDataset { df: out_df, vars };
+    let out_libref = out_ref.libref_or_work();
+    let out_table = out_ref.name.to_uppercase();
+    let out_display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars = out_ds.vars.len();
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(out_display.clone());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        out_display, n_rows, n_vars
+    ));
     Ok(())
 }
 
@@ -631,5 +724,99 @@ mod tests {
         // Means 3.0000 (x) and 3.4000 (y).
         assert!(listing.contains("3.0000"), "{listing}");
         assert!(listing.contains("3.4000"), "{listing}");
+    }
+
+    /// OUT= oracle: on the 2-var fixture, each component score must have
+    /// sample variance (n-1) equal to its eigenvalue (1+r and 1-r), and the
+    /// score columns must have mean ≈ 0.
+    #[test]
+    fn out_scores_variance_equals_eigenvalues() {
+        use polars::prelude::*;
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0],
+            "y" => [2.0_f64, 3.0, 3.0, 5.0, 4.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("x"), num_meta("y")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = PrincompAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            cov: false,
+            n: None,
+            out: Some(DatasetRef { libref: Some("WORK".into()), name: "SCORES".into() }),
+            var: vec!["x".into(), "y".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+
+        // _LAST_ should now be the OUT= dataset.
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.SCORES"));
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("SCORES").unwrap();
+        // Input columns + Prin1 + Prin2.
+        assert!(out.vars.iter().any(|m| m.name == "Prin1"));
+        assert!(out.vars.iter().any(|m| m.name == "Prin2"));
+        assert!(out.vars.iter().any(|m| m.name.eq_ignore_ascii_case("x")));
+
+        // Known correlation r = 0.8321 -> eigenvalues 1+r and 1-r.
+        let r = 0.8320502943378437_f64;
+        let expected = [1.0 + r, 1.0 - r];
+
+        for (comp, &lam) in expected.iter().enumerate() {
+            let col = out
+                .df
+                .column(&format!("Prin{}", comp + 1))
+                .unwrap()
+                .f64()
+                .unwrap();
+            let vals: Vec<f64> = col.into_no_null_iter().collect();
+            let n = vals.len() as f64;
+            let mean = vals.iter().sum::<f64>() / n;
+            assert!(mean.abs() < 1e-9, "Prin{} mean={mean}", comp + 1);
+            let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
+            assert!(
+                (var - lam).abs() < 1e-9,
+                "Prin{} variance={var}, expected eigenvalue {lam}",
+                comp + 1
+            );
+        }
+    }
+
+    /// COV scoring: scores are only centered, not standardized; their sample
+    /// variances equal the covariance-matrix eigenvalues (== column variances'
+    /// sum). Verify the score column means are ≈ 0.
+    #[test]
+    fn out_scores_cov_centered_mean_zero() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0],
+            "y" => [2.0_f64, 3.0, 3.0, 5.0, 4.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("x"), num_meta("y")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = PrincompAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            cov: true,
+            n: None,
+            out: Some(DatasetRef { libref: Some("WORK".into()), name: "CS".into() }),
+            var: vec!["x".into(), "y".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+        let (out, _) = session.libs.get("WORK").unwrap().read("CS").unwrap();
+        for comp in 1..=2 {
+            let col = out.df.column(&format!("Prin{comp}")).unwrap().f64().unwrap();
+            let vals: Vec<f64> = col.into_no_null_iter().collect();
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            assert!(mean.abs() < 1e-9, "Prin{comp} mean={mean}");
+        }
     }
 }

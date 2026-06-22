@@ -5,10 +5,14 @@
 //!  var <name list>; run;`
 //!
 //! ## Périmètre
-//! - `data=`, `cov`, `nfactors=`, `rotate=varimax|none`, `out=` (parse-accepted).
+//! - `data=`, `cov`, `nfactors=`, `rotate=varimax|none|promax`, `out=`.
 //! - Critère de rétention : Kaiser (λ>1) ou NFACTORS=k explicite.
 //! - Rotation VARIMAX (Kaiser 1958) : orthogonale, normalisation Kaiser.
-//! - Différé : METHOD=ML/ITER, HEYWOOD, ALPHA, SCORE, rotations obliques.
+//! - Rotation PROMAX : oblique, partant de la solution VARIMAX (cible élevée à
+//!   la puissance k=4, ajustement de Procrustes). Produit le « Rotated Factor
+//!   Pattern » oblique et les « Inter-Factor Correlations ».
+//! - OUT= : colonnes d'entrée + `Factor1..Factorm` (scores par régression).
+//! - Différé : METHOD=ML/ITER, HEYWOOD, ALPHA, ROTATE=OBLIMIN.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -17,7 +21,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::stat::eigenvectors_jacobi;
+use crate::stat::{eigenvectors_jacobi, invert_matrix};
 use crate::token::TokenKind;
 use crate::value::VarType;
 
@@ -31,9 +35,9 @@ pub struct FactorAst {
     pub nfactors: Option<usize>,
     /// Factor extraction method (only "principal" supported).
     pub method: String,
-    /// Rotation method: "none" or "varimax".
+    /// Rotation method: "none", "varimax", or "promax".
     pub rotate: String,
-    /// OUT= dataset (parse-accepted; not executed).
+    /// OUT= dataset (factor scores).
     pub out: Option<DatasetRef>,
     /// VAR list (analysis variables, user order preserved).
     pub var: Vec<String>,
@@ -244,6 +248,136 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     (l_rot, rot)
 }
 
+// ───────────────────────── PROMAX rotation ─────────────────────────
+
+/// Result of a PROMAX (oblique) rotation.
+pub struct PromaxResult {
+    /// Oblique factor pattern P (n_vars × k): standardized regression
+    /// coefficients of the variables on the (correlated) factors.
+    pub pattern: Vec<Vec<f64>>,
+    /// Inter-factor correlation matrix Φ (k × k).
+    pub phi: Vec<Vec<f64>>,
+}
+
+/// Multiply two row-major matrices: (m×n) · (n×p) → (m×p).
+fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let m = a.len();
+    let n = if m > 0 { a[0].len() } else { 0 };
+    let p = if !b.is_empty() { b[0].len() } else { 0 };
+    let mut out = vec![vec![0.0_f64; p]; m];
+    for i in 0..m {
+        for k in 0..n {
+            let aik = a[i][k];
+            if aik == 0.0 {
+                continue;
+            }
+            for j in 0..p {
+                out[i][j] += aik * b[k][j];
+            }
+        }
+    }
+    out
+}
+
+/// Transpose a row-major matrix.
+fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let m = a.len();
+    let n = if m > 0 { a[0].len() } else { 0 };
+    let mut out = vec![vec![0.0_f64; m]; n];
+    for i in 0..m {
+        for j in 0..n {
+            out[j][i] = a[i][j];
+        }
+    }
+    out
+}
+
+/// Apply PROMAX (Hendrickson & White 1964) oblique rotation, starting from the
+/// orthogonal VARIMAX loadings `l_varimax` (n_vars × k). Power `power` (k=4 by
+/// default in SAS) controls how aggressively the target sharpens the loadings.
+///
+/// Algorithm:
+///   1. Build the target matrix `target[i][j] = |l[i][j]|^(power+1) / l[i][j]`
+///      (sign-preserving power), i.e. raise each loading to `power` in
+///      magnitude while keeping its sign.
+///   2. Least-squares fit a transformation Q minimizing ‖L·Q − target‖:
+///      Q = (Lᵀ L)⁻¹ Lᵀ target  (Procrustes / column-wise regression).
+///   3. Normalize the columns of Q so that diag((QᵀQ)⁻¹) = 1, giving the
+///      oblique pattern P = L · Q and inter-factor correlations
+///      Φ = (Qᵀ Q)⁻¹ after the same normalization.
+///
+/// Returns the oblique pattern and the inter-factor correlation matrix.
+pub fn promax(l_varimax: &[Vec<f64>], power: i32) -> Result<PromaxResult> {
+    let n_vars = l_varimax.len();
+    let k = if n_vars > 0 { l_varimax[0].len() } else { 0 };
+
+    if k < 2 {
+        // No oblique rotation possible with a single factor: identity Φ.
+        let phi = vec![vec![1.0_f64; k.max(1)]; k.max(1)];
+        return Ok(PromaxResult {
+            pattern: l_varimax.to_vec(),
+            phi,
+        });
+    }
+
+    // 1. Sign-preserving power target: target = sign(l) * |l|^power.
+    let target: Vec<Vec<f64>> = l_varimax
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&x| x.signum() * x.abs().powi(power))
+                .collect()
+        })
+        .collect();
+
+    // 2. Q = (Lᵀ L)⁻¹ Lᵀ target.
+    let lt = transpose(l_varimax);
+    let ltl = matmul(&lt, l_varimax); // k×k
+    let ltl_inv = invert_matrix(&ltl)?;
+    let lt_target = matmul(&lt, &target); // k×k
+    let mut q = matmul(&ltl_inv, &lt_target); // k×k
+
+    // 3. Normalize columns of Q so that the resulting factors have unit
+    //    variance: scale column j by 1/sqrt(diag((QᵀQ)⁻¹)[j]).
+    let qtq = matmul(&transpose(&q), &q); // k×k
+    let qtq_inv = invert_matrix(&qtq)?;
+    let scale: Vec<f64> = (0..k)
+        .map(|j| {
+            let d = qtq_inv[j][j];
+            if d > 0.0 {
+                d.sqrt()
+            } else {
+                1.0
+            }
+        })
+        .collect();
+    for row in q.iter_mut() {
+        for j in 0..k {
+            row[j] *= scale[j];
+        }
+    }
+
+    // Oblique pattern P = L · Q.
+    let pattern = matmul(l_varimax, &q);
+
+    // Inter-factor correlations Φ = (Qᵀ Q)⁻¹ for the normalized Q.
+    let qtq2 = matmul(&transpose(&q), &q);
+    let mut phi = invert_matrix(&qtq2)?;
+    // Force exact unit diagonal and symmetry (clean display).
+    for i in 0..k {
+        for j in (i + 1)..k {
+            let avg = 0.5 * (phi[i][j] + phi[j][i]);
+            phi[i][j] = avg;
+            phi[j][i] = avg;
+        }
+    }
+    for i in 0..k {
+        phi[i][i] = 1.0;
+    }
+
+    Ok(PromaxResult { pattern, phi })
+}
+
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
@@ -256,9 +390,14 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
     }
 
     // Validate rotate.
-    if ast.rotate != "none" && ast.rotate != "varimax" {
+    if ast.rotate == "oblimin" {
+        return Err(SasError::runtime(
+            "PROC FACTOR ROTATE=OBLIMIN is not yet implemented. Use ROTATE=PROMAX, VARIMAX or NONE.",
+        ));
+    }
+    if ast.rotate != "none" && ast.rotate != "varimax" && ast.rotate != "promax" {
         return Err(SasError::runtime(format!(
-            "PROC FACTOR ROTATE={} is not supported. Use ROTATE=VARIMAX or ROTATE=NONE.",
+            "PROC FACTOR ROTATE={} is not supported. Use ROTATE=PROMAX, VARIMAX or NONE.",
             ast.rotate.to_uppercase()
         )));
     }
@@ -600,9 +739,13 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         session.listing.blank();
     }
 
+    // Pattern used for OUT= factor scoring (rotated when a rotation applies).
+    let mut final_pattern: Vec<Vec<f64>> = loadings.clone();
+
     // ───── VARIMAX rotation (if requested and k >= 2) ─────
     if ast.rotate == "varimax" && k >= 2 {
         let (l_rot, _rot_matrix) = varimax(&loadings);
+        final_pattern = l_rot.clone();
 
         // Rotated variance by factor.
         let rot_variance: Vec<f64> = (0..k)
@@ -680,13 +823,173 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // OUT= note.
-    if ast.out.is_some() {
-        session.log.note(
-            "PROC FACTOR OUT= scoring is not yet implemented; the output data set was not created.",
-        );
+    // ───── PROMAX oblique rotation (if requested and k >= 2) ─────
+    if ast.rotate == "promax" && k >= 2 {
+        // Promax starts from the orthogonal VARIMAX solution.
+        let (l_varimax, _rot_matrix) = varimax(&loadings);
+        let pm = promax(&l_varimax, 4)?;
+        final_pattern = pm.pattern.clone();
+
+        centered(session, "Rotation Method: Promax (power = 4)");
+        session.listing.blank();
+
+        // Oblique Rotated Factor Pattern (Standardized Regression Coefficients).
+        centered(session, "Rotated Factor Pattern (Standardized Regression Coefficients)");
+        session.listing.blank();
+        {
+            let mut headers: Vec<String> = vec![String::new()];
+            let mut aligns: Vec<Align> = vec![Align::Left];
+            for j in 0..k {
+                headers.push(format!("Factor{}", j + 1));
+                aligns.push(Align::Right);
+            }
+            let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
+            for i in 0..p {
+                let mut row = vec![names[i].clone()];
+                for j in 0..k {
+                    row.push(format!("{:.4}", pm.pattern[i][j]));
+                }
+                rows.push(row);
+            }
+            session.listing.write_table(&headers, &aligns, &rows);
+            session.listing.blank();
+        }
+
+        // Inter-Factor Correlations.
+        centered(session, "Inter-Factor Correlations");
+        session.listing.blank();
+        {
+            let mut headers: Vec<String> = vec![String::new()];
+            let mut aligns: Vec<Align> = vec![Align::Left];
+            for j in 0..k {
+                headers.push(format!("Factor{}", j + 1));
+                aligns.push(Align::Right);
+            }
+            let mut rows: Vec<Vec<String>> = Vec::with_capacity(k);
+            for i in 0..k {
+                let mut row = vec![format!("Factor{}", i + 1)];
+                for j in 0..k {
+                    row.push(format!("{:.4}", pm.phi[i][j]));
+                }
+                rows.push(row);
+            }
+            session.listing.write_table(&headers, &aligns, &rows);
+            session.listing.blank();
+        }
     }
 
+    // OUT= : write input columns + Factor1..Factorm regression factor scores.
+    //
+    // Scoring method (standard SAS regression scoring): with Z the matrix of
+    // standardized analysis variables, R the correlation matrix and `pattern`
+    // the (possibly rotated) factor pattern, the standardized scoring
+    // coefficients are B = R⁻¹ · pattern (n_vars × k) and the factor scores are
+    // F = Z · B. For COV analysis the variables are only centered. Observations
+    // with any missing analysis variable receive missing scores.
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(
+            session,
+            &ds,
+            &decoded,
+            &means,
+            &stds,
+            &amat,
+            &final_pattern,
+            ast.cov,
+            p,
+            k,
+            out_ref,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Build and write the FACTOR OUT= dataset: every input column plus
+/// `Factor1..Factorm` regression factor scores. Scores = Z · (R⁻¹ · pattern),
+/// where Z is the standardized (or, for COV, centered) data and R = `amat` the
+/// analysis matrix. Incomplete observations receive missing scores; rows are
+/// kept in input order (mirroring SAS).
+#[allow(clippy::too_many_arguments)]
+fn write_out_dataset(
+    session: &mut Session,
+    ds: &crate::dataset::SasDataset,
+    decoded: &[Vec<f64>],
+    means: &[f64],
+    stds: &[f64],
+    amat: &[Vec<f64>],
+    pattern: &[Vec<f64>],
+    cov: bool,
+    p: usize,
+    k: usize,
+    out_ref: &DatasetRef,
+) -> Result<()> {
+    use crate::dataset::{SasDataset, VarMeta};
+    use polars::prelude::*;
+
+    // Scoring coefficients B = R⁻¹ · pattern  (p × k).
+    let r_inv = invert_matrix(amat)?;
+    let coef = matmul(&r_inv, pattern);
+
+    let n_read = ds.n_obs();
+    let mut score_cols: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(n_read); k];
+    for row_idx in 0..n_read {
+        let row: Vec<f64> = decoded.iter().map(|col| col[row_idx]).collect();
+        if row.iter().all(|x| x.is_finite()) {
+            let z: Vec<f64> = (0..p)
+                .map(|j| {
+                    let centered = row[j] - means[j];
+                    if cov {
+                        centered
+                    } else if stds[j] > 0.0 {
+                        centered / stds[j]
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            for f in 0..k {
+                let score: f64 = (0..p).map(|j| z[j] * coef[j][f]).sum();
+                score_cols[f].push(Some(score));
+            }
+        } else {
+            for f in 0..k {
+                score_cols[f].push(None);
+            }
+        }
+    }
+
+    let mut out_df = ds.df.clone();
+    for f in 0..k {
+        let name = format!("Factor{}", f + 1);
+        out_df
+            .with_column(Series::new(name.into(), score_cols[f].clone()))
+            .map_err(|e| SasError::runtime(format!("FACTOR OUT= build failed: {e}")))?;
+    }
+
+    let mut vars = ds.vars.clone();
+    for f in 0..k {
+        vars.push(VarMeta {
+            name: format!("Factor{}", f + 1),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        });
+    }
+
+    let out_ds = SasDataset { df: out_df, vars };
+    let out_libref = out_ref.libref_or_work();
+    let out_table = out_ref.name.to_uppercase();
+    let out_display = format!("{out_libref}.{out_table}");
+    let n_rows = out_ds.n_obs();
+    let n_vars = out_ds.vars.len();
+    session.libs.get(&out_libref)?.write(&out_table, &out_ds)?;
+    session.last_dataset = Some(out_display.clone());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        out_display, n_rows, n_vars
+    ));
     Ok(())
 }
 
@@ -819,13 +1122,30 @@ mod tests {
             cov: false,
             nfactors: None,
             method: "principal".into(),
-            rotate: "promax".into(),
+            rotate: "quartimax".into(),
             out: None,
             var: vec!["x".into(), "y".into()],
         };
         let r = execute(&ast, &mut session);
         assert!(r.is_err());
-        assert!(r.err().unwrap().to_string().contains("PROMAX"));
+        assert!(r.err().unwrap().to_string().contains("QUARTIMAX"));
+    }
+
+    #[test]
+    fn execute_oblimin_deferred_errors() {
+        let mut session = make_session();
+        let ast = FactorAst {
+            data: None,
+            cov: false,
+            nfactors: None,
+            method: "principal".into(),
+            rotate: "oblimin".into(),
+            out: None,
+            var: vec!["x".into(), "y".into()],
+        };
+        let r = execute(&ast, &mut session);
+        assert!(r.is_err());
+        assert!(r.err().unwrap().to_string().contains("OBLIMIN"));
     }
 
     /// Oracle test: x=[1,2,3,4,5], y=[2,3,3,5,4]
@@ -980,5 +1300,133 @@ mod tests {
         assert!(listing.contains("Rotation Method: Varimax"), "{listing}");
         // No NaN in the listing.
         assert!(!listing.contains("NaN"), "NaN found in listing: {listing}");
+    }
+
+    /// PROMAX oracle: on a clearly-clustered loading matrix (two blocks), the
+    /// oblique solution must (a) have an inter-factor correlation off-diagonal
+    /// that is non-zero (factors become correlated), and (b) produce a sharper
+    /// pattern than VARIMAX — larger primary loadings and smaller cross-loadings
+    /// (closer to a {0,1} structure).
+    #[test]
+    fn promax_correlates_factors_and_sharpens() {
+        // 4 variables: vars 0,1 load on factor 1; vars 2,3 on factor 2, but
+        // with a deliberate cross-loading so the clusters are oblique.
+        let l = vec![
+            vec![0.80, 0.40],
+            vec![0.75, 0.35],
+            vec![0.40, 0.80],
+            vec![0.35, 0.75],
+        ];
+        let (l_var, _) = varimax(&l);
+        let pm = promax(&l_var, 4).unwrap();
+
+        // (a) Inter-factor correlation is not the identity.
+        let off = pm.phi[0][1].abs();
+        assert!(off > 1e-3, "Inter-factor correlation too small: {off}");
+        assert!((pm.phi[0][0] - 1.0).abs() < 1e-9, "phi diag != 1");
+
+        // (b) Sharper: for each variable, the dominant pattern loading is at
+        // least as large in magnitude, and the cross-loading is smaller, than
+        // varimax — on aggregate the cross-loadings shrink.
+        let cross_varimax: f64 = (0..4)
+            .map(|i| l_var[i][0].abs().min(l_var[i][1].abs()))
+            .sum();
+        let cross_promax: f64 = (0..4)
+            .map(|i| pm.pattern[i][0].abs().min(pm.pattern[i][1].abs()))
+            .sum();
+        assert!(
+            cross_promax < cross_varimax,
+            "promax cross-loadings ({cross_promax:.4}) not smaller than varimax ({cross_varimax:.4})"
+        );
+    }
+
+    /// PROMAX on k=1 is a no-op returning the input pattern and Φ=[[1]].
+    #[test]
+    fn promax_k1_noop() {
+        let l = vec![vec![0.8], vec![0.7], vec![0.9]];
+        let pm = promax(&l, 4).unwrap();
+        assert_eq!(pm.phi.len(), 1);
+        assert!((pm.phi[0][0] - 1.0).abs() < 1e-12);
+        for (a, b) in l.iter().zip(&pm.pattern) {
+            assert!((a[0] - b[0]).abs() < 1e-12);
+        }
+    }
+
+    /// End-to-end PROMAX listing: prints the oblique pattern and inter-factor
+    /// correlations and creates no NaNs.
+    #[test]
+    fn execute_promax_listing() {
+        let mut session = make_session();
+        let df = df![
+            "a" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "b" => [1.0_f64, 2.1, 2.9, 4.2, 5.1, 5.8],
+            "c" => [6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0],
+            "d" => [5.9_f64, 5.1, 4.0, 2.9, 2.1, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("a"), num_meta("b"), num_meta("c"), num_meta("d")],
+        };
+        write_dataset(&mut session, "P", ds);
+
+        let ast = FactorAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "P".into() }),
+            cov: false,
+            nfactors: Some(2),
+            method: "principal".into(),
+            rotate: "promax".into(),
+            out: None,
+            var: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Rotation Method: Promax"), "{listing}");
+        assert!(
+            listing.contains("Inter-Factor Correlations"),
+            "{listing}"
+        );
+        assert!(!listing.contains("NaN"), "NaN in listing: {listing}");
+    }
+
+    /// OUT= : the dataset is created with input columns + Factor1..Factork,
+    /// _LAST_ is updated, and the standardized factor scores have mean ≈ 0.
+    #[test]
+    fn execute_out_factor_scores() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0],
+            "y" => [2.0_f64, 3.0, 3.0, 5.0, 4.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("x"), num_meta("y")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let ast = FactorAst {
+            data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            cov: false,
+            nfactors: Some(1),
+            method: "principal".into(),
+            rotate: "none".into(),
+            out: Some(DatasetRef { libref: Some("WORK".into()), name: "FS".into() }),
+            var: vec!["x".into(), "y".into()],
+        };
+        execute(&ast, &mut session).unwrap();
+        assert_eq!(session.last_dataset.as_deref(), Some("WORK.FS"));
+
+        let (out, _) = session.libs.get("WORK").unwrap().read("FS").unwrap();
+        assert!(out.vars.iter().any(|m| m.name == "Factor1"));
+        assert!(out.vars.iter().any(|m| m.name.eq_ignore_ascii_case("x")));
+
+        let col = out.df.column("Factor1").unwrap().f64().unwrap();
+        let vals: Vec<f64> = col.into_no_null_iter().collect();
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        assert!(mean.abs() < 1e-9, "Factor1 mean={mean}");
+        // Standardized regression scores have ~unit variance for a 1-factor
+        // solution that explains most variance; just assert finiteness here.
+        assert!(vals.iter().all(|v| v.is_finite()), "non-finite score");
     }
 }

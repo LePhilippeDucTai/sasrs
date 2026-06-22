@@ -649,8 +649,15 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
     Différés (NOTE) : METHOD=QUAD, DIST=GAMMA, LAPLACE sur AR(1)/UN/multi-random.
   - 2 fixtures m34 (mixed_un_ar1 + glimmix_links_laplace) + snapshots. README MIXED & GLIMMIX mis à jour.
     +14 tests (2425 lib), 0 warning, m28 octet-identique.
-- [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
-  `FACTOR` rotations obliques (Opus, élevé)
+- [x] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
+  `FACTOR` rotations obliques (Opus, élevé).
+  **FAIT** : PRINCOMP `OUT=` (input + `Prin1..k`, scores = données standardisées/centrées × vecteurs propres,
+  variance du score = valeur propre, vérifié) ; FACTOR `OUT=` (scores de régression `Z·R⁻¹·pattern`) +
+  **ROTATE=PROMAX** oblique (cible puissance Procrustes depuis VARIMAX → Rotated Factor Pattern +
+  Inter-Factor Correlations). DISCRIM `OUT=` déjà livré (M27). Oracles : PRINCOMP variance Prin_j = λ_j
+  (sashelp.class λ=2.6214/0.2684/0.1103) ; PROMAX inter-facteurs 0.7558 ≠ I, structure simple plus nette.
+  2 fixtures m34 (princomp_out, factor_promax) + snapshots. README PRINCOMP/FACTOR mis à jour. +13 tests
+  (2438 lib princomp/factor), 0 warning, m27 octet-identique.
 - [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
   sous-scripts intervalle `a:b` (Opus, élevé)
 - [ ] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
