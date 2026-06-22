@@ -892,6 +892,56 @@ mod macro_tests {
         assert!(out.contains("not supported") || out.contains("unknown"), "got: {out}");
     }
 
+    // --- M35.1 : %sysfunc délègue à la bibliothèque COMPLÈTE (plus de whitelist) ---
+
+    #[test]
+    fn sysfunc_non_whitelisted_reverse() {
+        // REVERSE n'était PAS dans l'ancienne liste blanche.
+        assert_eq!(run("%sysfunc(reverse(abc))"), "cba");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_repeat() {
+        // REPEAT(x, 2) → 2 copies (implémentation s.repeat(n) de la lib).
+        assert_eq!(run("%sysfunc(repeat(x,2))"), "xx");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_propcase() {
+        assert_eq!(run("%sysfunc(propcase(hello world))"), "Hello World");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_math_sqrt() {
+        assert_eq!(run("%sysfunc(sqrt(16))"), "4");
+    }
+
+    // --- M35.1 : argument de format optionnel ---
+
+    #[test]
+    fn sysfunc_format_dollar() {
+        // sum(1000, 234.5) = 1234.5 reformaté en dollar10.2 ; les blancs de tête
+        // sont retirés pour l'insertion macro.
+        assert_eq!(run("%sysfunc(sum(1000,234.5), dollar10.2)"), "$1,234.50");
+    }
+
+    #[test]
+    fn sysfunc_format_round_width() {
+        // round(3.7) = 4, formaté en 8. → "4" (blancs de tête retirés).
+        assert_eq!(run("%sysfunc(round(3.7), 8.)"), "4");
+    }
+
+    #[test]
+    fn sysfunc_format_date9() {
+        assert_eq!(run("%sysfunc(mdy(1,1,2020), date9.)"), "01JAN2020");
+    }
+
+    #[test]
+    fn sysfunc_no_format_unchanged() {
+        // Sans format : comportement identique à avant (texte brut).
+        assert_eq!(run("%sysfunc(mdy(1,1,2020))"), "21915");
+    }
+
     // --- M11.6 : automatic macro variables (deterministic frozen) ---
 
     #[test]

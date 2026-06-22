@@ -691,9 +691,15 @@ Phase E. Combler les derniers écarts macro pour un support intégral. Processeu
 invariant : snapshots m1–m34 octet-identiques (nouveau comportement seulement sur nouvelles
 directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language » du README → ✅.
 
-- [ ] M35.1 — `%SYSFUNC`/`%QSYSFUNC` : remplacer la liste blanche (~18 fns) par une délégation à
+- [x] M35.1 — `%SYSFUNC`/`%QSYSFUNC` : remplacer la liste blanche (~18 fns) par une délégation à
   TOUTE la bibliothèque `datastep::functions::call` (typage args num/char, support `fmt.`),
-  erreurs propres pour les fonctions réellement absentes (Opus, élevé)
+  erreurs propres pour les fonctions réellement absentes (Opus, élevé).
+  **FAIT** : liste blanche `SYSFUNC_WHITELIST` supprimée ; `eval_sysfunc` délègue TOUTE fonction à
+  `functions::call` (erreur propre si `None`). Argument format optionnel `%sysfunc(f(args), fmt)` appliqué
+  via le chemin `PUT`/`formats` (trim des blancs). Oracles : reverse(abcde)=edcba, sqrt(144)=12,
+  propcase=Hello World, mdy(7,4,1776),date9.=04JUL1776, sum(1000,234.5),dollar10.2=$1,234.50, fonction
+  inconnue → ERROR. Fixture m35 (sysfunc_full) + snapshot. README Macro/Evaluation mis à jour. +N tests
+  (2455 lib), 0 warning, snapshots macro octet-identiques.
 - [ ] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
   résolution via `FILENAME` (Opus, moyen)
 - [ ] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
