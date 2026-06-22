@@ -658,8 +658,15 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   (sashelp.class λ=2.6214/0.2684/0.1103) ; PROMAX inter-facteurs 0.7558 ≠ I, structure simple plus nette.
   2 fixtures m34 (princomp_out, factor_promax) + snapshots. README PRINCOMP/FACTOR mis à jour. +13 tests
   (2438 lib princomp/factor), 0 warning, m27 octet-identique.
-- [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
-  sous-scripts intervalle `a:b` (Opus, élevé)
+- [x] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
+  sous-scripts intervalle `a:b` (Opus, élevé).
+  **FAIT** : CLUSTER `OUTTREE=` (1 ligne/nœud = feuilles+fusions : `_NAME_/_PARENT_/_NCL_/_FREQ_/_HEIGHT_`
+  + coords VAR des feuilles ; `_HEIGHT_`=1−RSQ monotone, cohérent avec la Cluster History). IML : `SHAPE`
+  (reshape row-major + recyclage), sous-scripts intervalle `A[1:2,2:3]`/`A[2:3,*]`, `DET` (LU pivoté),
+  `EIGVEC` + `CALL EIGEN(val,vec,A)` (symétrique, ordre décroissant). Oracles : DET({4 3,6 3})=−6,
+  SHAPE({1..6},2,3)={1 2 3,4 5 6}, B[1:2,2:3]={2 3,5 6}, EIGEN(diag(2,3)) val={3,2} vecteurs axe-alignés ;
+  OUTTREE 9 lignes (5 feuilles+4 fusions) topologie cohérente. 2 fixtures m34 (cluster_outtree, iml_m34) +
+  snapshots. README CLUSTER/IML mis à jour. +14 tests (2444 lib total après M34.9+M34.10), 0 warning, m27/m28a octet-identique.
 - [ ] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
   `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen)
 - [ ] DoD M34 : fixtures `m34/` + snapshots vérifiés (oracles) ; README à jour ;
