@@ -146,6 +146,47 @@ pub struct MacroEngine {
     /// lignes `MPRINT(nom):` / `MLOGIC(nom):`. La macro la plus interne est en
     /// fin de pile. Vide en code ouvert.
     macro_stack: Vec<String>,
+    /// M35.4 — `%return` demandé : interrompt l'expansion du corps de macro
+    /// COURANT (revient à l'appelant). Posé par `consume_return`, testé en tête
+    /// de la boucle `process_impl`, et RÉINITIALISÉ par `expand_invocation`
+    /// après l'expansion du corps (ré-entrance : ne fuit jamais vers
+    /// l'appelant ni l'open code).
+    return_requested: bool,
+    /// M35.4 — `%abort` demandé : interrompt l'expansion comme `%return` mais
+    /// se PROPAGE vers le haut (l'appelant l'observe). `expand_invocation` ne le
+    /// réinitialise PAS ; il est drainé par l'exécuteur via
+    /// `take_abort_request` après l'expansion d'un segment d'open code.
+    abort_requested: bool,
+    /// M35.4 — variante du `%abort` en cours (forme/option et code retour).
+    abort_kind: Option<AbortKind>,
+    /// M35.4 — saut `%goto` en attente : nom (MAJUSCULES) de l'étiquette cible.
+    /// Posé par `consume_goto`, il « remonte » : chaque niveau de `process_impl`
+    /// (corps de macro, action de `%if`/`%do`) tente de trouver `%label:` dans
+    /// SON propre texte ; s'il y parvient il réinitialise le drapeau et saute,
+    /// sinon il laisse remonter au niveau parent. Au niveau le PLUS externe du
+    /// corps, un drapeau encore posé = étiquette introuvable → NOTE.
+    goto_requested: Option<String>,
+    /// M35.4 — budget de sauts `%goto` partagé sur toute l'expansion d'un corps
+    /// (garde anti-boucle ; voir `MAX_GOTO_JUMPS`). `None` = pas d'expansion de
+    /// corps en cours (réinitialisé à l'entrée de l'invocation).
+    goto_budget: i64,
+}
+
+/// M35.4 — variante d'un `%abort` macro rencontré pendant l'expansion.
+///
+/// Le processeur macro ne pouvant pas réellement terminer le process (pas de
+/// `process::exit`), on enregistre l'INTENTION : l'exécuteur peut la draîner via
+/// `take_abort_request` et arrêter proprement la soumission s'il le souhaite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AbortKind {
+    /// `%abort;` — arrêt simple.
+    Plain,
+    /// `%abort abend [n];` — arrêt « anormal » (code retour optionnel).
+    Abend(Option<i64>),
+    /// `%abort cancel;` — annulation de la soumission courante.
+    Cancel,
+    /// `%abort return [n];` — arrêt avec code retour optionnel.
+    Return(Option<i64>),
 }
 
 impl MacroEngine {
@@ -238,6 +279,15 @@ impl MacroEngine {
     /// en code macro, à exécuter après le segment courant.
     pub fn take_pending_call_execute(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_call_execute)
+    }
+
+    /// M35.4 — draine une éventuelle demande d'`%abort` rencontrée pendant
+    /// l'expansion du dernier segment, et remet à zéro l'état d'abort. L'exécuteur
+    /// peut consulter ce résultat après chaque `expand_open_code` pour arrêter
+    /// proprement la soumission. Rend `None` si aucun `%abort` n'a été vu.
+    pub fn take_abort_request(&mut self) -> Option<AbortKind> {
+        self.abort_requested = false;
+        self.abort_kind.take()
     }
 
     /// M19.3 — écho d'une ligne de log (helper interne). On la pousse dans le
@@ -1622,5 +1672,164 @@ mod macro_tests {
         assert!(logs.iter().any(|l| l.contains("MLOGIC")), "got logs: {:?}", logs);
         assert!(logs.iter().any(|l| l.contains("is TRUE")), "got logs: {:?}", logs);
         assert!(logs.iter().any(|l| l.contains("MPRINT")), "got logs: {:?}", logs);
+    }
+
+    // --- M35.4 : %return / %goto / %abort / hors-périmètre ---
+
+    #[test]
+    fn return_stops_body_caller_continues() {
+        // Le texte APRÈS `%return;` dans le corps n'est PAS émis ; l'appelant
+        // (open code) poursuit normalement.
+        let out = run("%macro m; A %return; B %mend; %m C");
+        assert_eq!(out, "A  C");
+    }
+
+    #[test]
+    fn return_honours_if_branch() {
+        // `%if ... %then %return;` saute le reste du corps quand pris.
+        let out = run("%macro m(x); P %if &x %then %return; Q %mend; %m(1)|%m(0)");
+        assert_eq!(out, "P |P  Q");
+    }
+
+    #[test]
+    fn return_in_open_code_notes_and_continues() {
+        let out = run("X %return; Y");
+        assert!(out.contains("NOTE: %RETURN is not valid in open code"), "got: {out}");
+        assert!(out.contains('X') && out.contains('Y'), "got: {out}");
+    }
+
+    #[test]
+    fn return_reentrancy_two_calls_identical() {
+        // Ré-entrance : deux invocations se comportent à l'identique (le drapeau
+        // ne fuit pas d'un appel à l'autre).
+        let out = run("%macro m; A %return; B %mend; [%m][%m]");
+        assert_eq!(out, "[A ][A ]");
+    }
+
+    #[test]
+    fn goto_skips_block_forward() {
+        // `%goto skip;` saute le bloc intermédiaire jusqu'à `%skip:`.
+        let out = run("%macro m; A %goto skip; B %skip: C %mend; %m");
+        assert_eq!(out, "A  C");
+    }
+
+    #[test]
+    fn goto_bounded_loop() {
+        // Idiome boucle bornée : `&i` incrémenté par `%let`, sortie par `%if`.
+        let src = "%macro m; %let i=0; \
+                   %top: [&i] %let i=%eval(&i+1); %if &i < 3 %then %goto top; \
+                   done %mend; %m";
+        let out = run(src);
+        assert!(out.contains("[0]") && out.contains("[1]") && out.contains("[2]"), "got: {out}");
+        assert!(out.contains("done"), "got: {out}");
+        assert!(!out.contains("[3]"), "got: {out}");
+    }
+
+    #[test]
+    fn goto_missing_label_notes() {
+        let out = run("%macro m; A %goto nope; B %mend; %m");
+        assert!(out.contains("NOTE: %GOTO target label %nope: not found"), "got: {out}");
+    }
+
+    #[test]
+    fn goto_in_open_code_notes() {
+        let out = run("%goto x;");
+        assert!(out.contains("NOTE: %GOTO is not valid in open code"), "got: {out}");
+    }
+
+    #[test]
+    fn label_marker_emits_nothing() {
+        let out = run("%macro m; %lbl: hi %mend; %m");
+        assert_eq!(out.trim(), "hi");
+    }
+
+    #[test]
+    fn abort_stops_body_and_notes() {
+        let mut e = MacroEngine::new(true);
+        let out = e.expand_open_code("%macro m; AAA %abort; ZZZ %mend; %m");
+        assert!(out.contains("NOTE: %ABORT encountered"), "got: {out}");
+        assert!(out.contains("AAA") && !out.contains("ZZZ"), "got: {out}");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Plain));
+    }
+
+    #[test]
+    fn abort_variants_parsed() {
+        let mut e = MacroEngine::new(true);
+        let _ = e.expand_open_code("%macro m; %abort cancel; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Cancel));
+        let _ = e.expand_open_code("%macro m; %abort return 8; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Return(Some(8))));
+        let _ = e.expand_open_code("%macro m; %abort abend; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Abend(None)));
+    }
+
+    #[test]
+    fn abort_propagates_to_caller() {
+        // `%abort` dans une macro interne stoppe AUSSI l'expansion de l'appelant.
+        let out = run("%macro inner; III %abort; JJJ %mend; %macro outer; PPP %inner QQQ %mend; %outer RRR");
+        assert!(out.contains("PPP") && out.contains("III"), "got: {out}");
+        assert!(!out.contains("JJJ") && !out.contains("QQQ") && !out.contains("RRR"), "got: {out}");
+    }
+
+    #[test]
+    fn abort_reentrancy_reset_between_segments() {
+        // Après drainage, un 2ᵉ programme se comporte à l'identique.
+        let mut e = MacroEngine::new(true);
+        let out1 = e.expand_open_code("%macro m; AAA %abort; ZZZ %mend; %m");
+        let _ = e.take_abort_request();
+        let out2 = e.expand_open_code("%macro m2; AAA %abort; ZZZ %mend; %m2");
+        assert!(out1.contains("AAA") && !out1.contains("ZZZ"));
+        assert!(out2.contains("AAA") && !out2.contains("ZZZ"));
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Plain));
+    }
+
+    #[test]
+    fn sysexec_noted_and_consumed() {
+        let out = run("before %sysexec(rm -rf x); after");
+        assert!(out.contains("%SYSEXEC") && out.contains("not supported in this build"), "got: {out}");
+        assert!(out.contains("before") && out.contains("after"), "got: {out}");
+    }
+
+    #[test]
+    fn sysexec_inner_semicolon_not_a_cutoff() {
+        // Le `;` à l'intérieur des parenthèses ne doit pas couper prématurément.
+        let out = run("%sysexec(echo a; echo b); tail");
+        assert!(out.contains("not supported"), "got: {out}");
+        assert!(out.contains("tail") && !out.contains("echo b"), "got: {out}");
+    }
+
+    #[test]
+    fn window_display_noted_and_consumed() {
+        let out = run("a %window w color=red; b %display w; c");
+        assert!(out.contains("%WINDOW") && out.contains("%DISPLAY"), "got: {out}");
+        assert!(out.contains('a') && out.contains('b') && out.contains('c'), "got: {out}");
+    }
+
+    #[test]
+    fn syscall_noted_and_consumed() {
+        let out = run("p %syscall scan(s,n,r); q");
+        assert!(out.contains("%SYSCALL") && out.contains("not supported"), "got: {out}");
+        assert!(out.contains('p') && out.contains('q'), "got: {out}");
+    }
+
+    #[test]
+    fn misc_unsupported_keywords_consumed() {
+        for (src, tag) in [
+            ("%sysmacdelete m;", "%SYSMACDELETE"),
+            ("%sysmstoreclear;", "%SYSMSTORECLEAR"),
+            ("%syslput x=1;", "%SYSLPUT"),
+            ("%sysrput x=1;", "%SYSRPUT"),
+        ] {
+            let out = run(src);
+            assert!(out.contains(tag) && out.contains("not supported"), "src {src} got: {out}");
+        }
+    }
+
+    #[test]
+    fn unknown_macro_keyword_left_verbatim() {
+        // Un `%foo` inconnu (non défini, non mot-clé) reste verbatim — pas de
+        // panic ni de consommation parasite.
+        let out = run("%notakeyword bar");
+        assert_eq!(out, "%notakeyword bar");
     }
 }

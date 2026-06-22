@@ -7,6 +7,9 @@ use super::*;
 impl MacroEngine {
     /// Garde anti-boucle-folle pour les `%do` itératifs.
     pub(super) const MAX_LOOP_ITERS: i64 = 1_000_000;
+    /// M35.4 — garde anti-boucle pour les sauts `%goto` (un saut arrière permet
+    /// de boucler ; on plafonne le nombre total de sauts par expansion de corps).
+    pub(super) const MAX_GOTO_JUMPS: i64 = 1_000_000;
 }
 
 impl MacroEngine {
@@ -327,5 +330,223 @@ impl MacroEngine {
         } else {
             self.table.insert(key, value.to_string());
         }
+    }
+}
+
+// ── M35.4 : %return / %abort / %goto + %label ────────────────────────────────
+
+impl MacroEngine {
+    /// Consomme `%return;` : pose le drapeau `return_requested` (la boucle
+    /// `process_impl` cessera d'expanser le reste de CE corps en tête du prochain
+    /// tour) et avale le `;` terminal. En OPEN CODE (hors d'une macro), `%return`
+    /// est sans objet : SAS émet un avertissement ; on émet une NOTE propre et on
+    /// NE pose PAS le drapeau (rien à interrompre). Rend l'index après le `;`.
+    pub(super) fn consume_return(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%return".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        // `;` terminal optionnel (toléré absent en fin de source).
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        if self.macro_stack.is_empty() {
+            // Open code : pas de corps à interrompre.
+            out.push_str("/* NOTE: %RETURN is not valid in open code; statement ignored */");
+        } else {
+            self.return_requested = true;
+        }
+        Some(Self::skip_trailing_newline(chars, j, out))
+    }
+
+    /// Consomme `%abort [cancel | abend [n] | return [n]];` : enregistre
+    /// l'intention d'abort (drapeau `abort_requested` + variante `abort_kind`),
+    /// émet la NOTE SAS-like, et avale jusqu'au `;`. Le drapeau se PROPAGE
+    /// (l'appelant l'observe et stoppe à son tour) — il n'est PAS réinitialisé par
+    /// `expand_invocation`. On NE fait jamais `process::exit`/`panic`. Rend
+    /// l'index après le `;`.
+    pub(super) fn consume_abort(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%abort".len();
+        // Lire les options/arguments jusqu'au `;`.
+        let arg_start = j;
+        while j < chars.len() && chars[j] != ';' {
+            j += 1;
+        }
+        let args: String = chars[arg_start..j].iter().collect();
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        // Analyser la forme : 1er token = option, 2nd = code retour éventuel.
+        let mut toks = args.split_whitespace();
+        let opt = toks.next().map(|s| s.to_ascii_uppercase());
+        let code: Option<i64> = toks.next().and_then(|s| s.parse::<i64>().ok());
+        let kind = match opt.as_deref() {
+            None => AbortKind::Plain,
+            Some("CANCEL") => AbortKind::Cancel,
+            Some("ABEND") => AbortKind::Abend(code),
+            Some("RETURN") => AbortKind::Return(code),
+            // Option inconnue (ou code retour nu sans mot-clé) : on retombe sur la
+            // forme simple en gardant le code retour si c'était un entier.
+            Some(other) => match other.parse::<i64>() {
+                Ok(n) => AbortKind::Return(Some(n)),
+                Err(_) => AbortKind::Plain,
+            },
+        };
+        let detail = match &kind {
+            AbortKind::Plain => String::new(),
+            AbortKind::Cancel => " CANCEL".to_string(),
+            AbortKind::Abend(Some(n)) => format!(" ABEND {n}"),
+            AbortKind::Abend(None) => " ABEND".to_string(),
+            AbortKind::Return(Some(n)) => format!(" RETURN {n}"),
+            AbortKind::Return(None) => " RETURN".to_string(),
+        };
+        out.push_str(&format!(
+            "/* NOTE: %ABORT{detail} encountered; macro expansion stopped */"
+        ));
+        self.abort_requested = true;
+        self.abort_kind = Some(kind);
+        Some(Self::skip_trailing_newline(chars, j, out))
+    }
+
+    /// Consomme `%goto label;` (ou `%goto label` sans `;`) : POSE une demande de
+    /// saut (`goto_requested`). La résolution effective (recherche de `%label:`
+    /// et repositionnement du scan) a lieu en tête de la boucle `process_impl`,
+    /// éventuellement APRÈS remontée hors d'une action `%then`/`%do` imbriquée
+    /// (le `%goto` peut sauter vers une étiquette du corps englobant). `budget`
+    /// partagé décrémenté à chaque saut ; épuisé → NOTE d'erreur (anti-boucle).
+    /// Open code → NOTE propre. Rend l'index après le `;`.
+    pub(super) fn consume_goto(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+        let mut j = i + "%goto".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        let (label, after_label) = Self::read_name(chars, j)?;
+        j = after_label;
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        // `;` terminal optionnel.
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        let after_stmt = Self::skip_trailing_newline(chars, j, out);
+        if self.macro_stack.is_empty() {
+            out.push_str("/* NOTE: %GOTO is not valid in open code; statement ignored */");
+            return Some(after_stmt);
+        }
+        if self.goto_budget <= 0 {
+            Self::emit_error(
+                out,
+                &MacroError::new(format!(
+                    "ERROR: %GOTO jump budget ({}) exhausted (runaway guard)",
+                    Self::MAX_GOTO_JUMPS
+                )),
+            );
+            return Some(after_stmt);
+        }
+        self.goto_budget -= 1;
+        // Poser la demande : la boucle `process_impl` la résoudra (ici ou au
+        // niveau parent). On cesse d'émettre la suite de CE fragment.
+        self.goto_requested = Some(label.to_uppercase());
+        Some(after_stmt)
+    }
+
+    /// Cherche le marqueur d'étiquette `%<label>:` (insensible casse) dans
+    /// `chars`. Rend l'index JUSTE APRÈS le `:` (point de reprise du scan), ou
+    /// `None` si absent.
+    pub(super) fn find_label(chars: &[char], label: &str) -> Option<usize> {
+        let mut k = 0;
+        while k < chars.len() {
+            if chars[k] == '%' {
+                if let Some((name, after)) = Self::read_name(chars, k + 1) {
+                    // Un marqueur d'étiquette est `%name` immédiatement suivi de
+                    // `:` (blancs optionnels), ce que confirme `skip_label_marker`.
+                    let mut m = after;
+                    while matches!(chars.get(m), Some(c) if c.is_whitespace()) {
+                        m += 1;
+                    }
+                    if chars.get(m) == Some(&':') && name.eq_ignore_ascii_case(label) {
+                        return Some(m + 1);
+                    }
+                }
+            }
+            k += 1;
+        }
+        None
+    }
+
+    /// Si `chars[i..]` est un marqueur d'étiquette `%name:` (un nom suivi,
+    /// blancs optionnels, d'un `:` qui n'est PAS `:=`), rend l'index après le `:`
+    /// (le marqueur n'émet rien). Sinon `None`. On EXCLUT `%name :` suivi d'un
+    /// second `:` (pas un cas SAS courant) et `%name(` (invocation).
+    pub(super) fn skip_label_marker(chars: &[char], i: usize) -> Option<usize> {
+        let (_name, after) = Self::read_name(chars, i + 1)?;
+        let mut m = after;
+        while matches!(chars.get(m), Some(c) if c.is_whitespace()) {
+            m += 1;
+        }
+        if chars.get(m) == Some(&':') {
+            Some(m + 1)
+        } else {
+            None
+        }
+    }
+}
+
+// ── M35.4 : constructions macro hors-périmètre (NOTE + consommation) ──────────
+
+impl MacroEngine {
+    /// Reconnaît et consomme proprement les statements macro NON pris en charge
+    /// dans ce build (interactif/OS) : `%syscall`, `%sysexec`, `%window`,
+    /// `%display`, `%sysmacdelete`, `%sysmstoreclear`, `%syslput`, `%sysrput`.
+    /// Chacun émet une NOTE « not supported in this build » et est consommé
+    /// jusqu'à son `;` terminal (en respectant les parenthèses équilibrées du
+    /// premier `(...)` éventuel, pour ne pas couper sur un `;` interne). Rend
+    /// l'index après le `;`, ou `None` si aucun de ces mots-clés ne matche.
+    pub(super) fn consume_unsupported_stmt(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        // (mot-clé, libellé affiché). `%sysexec` et `%syscall` acceptent une
+        // forme à parenthèses ou nue ; les autres sont des statements à `;`.
+        const KW: &[(&str, &str)] = &[
+            ("sysexec", "%SYSEXEC (OS command execution)"),
+            ("syscall", "%SYSCALL (CALL routine invocation)"),
+            ("window", "%WINDOW (interactive window definition)"),
+            ("display", "%DISPLAY (interactive window display)"),
+            ("sysmacdelete", "%SYSMACDELETE"),
+            ("sysmstoreclear", "%SYSMSTORECLEAR"),
+            ("syslput", "%SYSLPUT (remote macro variable)"),
+            ("sysrput", "%SYSRPUT (remote macro variable)"),
+        ];
+        let (matched, label) = KW
+            .iter()
+            .find(|(kw, _)| Self::matches_kw(chars, i, kw) || Self::matches_kw_paren(chars, i, kw))
+            .map(|(kw, label)| (*kw, *label))?;
+
+        let mut j = i + 1 + matched.len();
+        // Sauter un premier groupe `(...)` éventuel à parenthèses équilibrées
+        // (ex. `%sysexec(rm x;y)` — le `;` interne ne doit pas couper).
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) == Some(&'(') {
+            if let Some((_, after)) = Self::read_balanced_parens(chars, j) {
+                j = after;
+            }
+        }
+        // Consommer le reste jusqu'au `;` terminal (options/arguments ignorés).
+        while j < chars.len() && chars[j] != ';' {
+            j += 1;
+        }
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        out.push_str(&format!(
+            "/* NOTE: {label} is not supported in this build; statement ignored */"
+        ));
+        Some(Self::skip_trailing_newline(chars, j, out))
     }
 }

@@ -6,7 +6,7 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M35**. M1–M34 terminés (roadmap d'origine + Phase E M31–M34 :
+Jalon courant : **M36 (Phase F)**. M1–M35 terminés (roadmap d'origine + Phase E M31–M34 :
 refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
 **statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
 MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML + graphiques LOESS/DENSITY/PIE).
@@ -723,11 +723,22 @@ directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language
   après chaque étape DATA et chaque PROC. Fixture m35 (macro_conformity) : `%length()=1`, `&syscc=0`,
   `&sysprocessname=DMS Process`, `&syslast` `_NULL_`→`WORK.A`. 2472 lib tests, 0 warning, snapshots
   octet-identiques.
-- [ ] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
+- [x] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
   (`%ABORT`, `%RETURN`, `%GOTO`/`%label`, `%SYSCALL`, `%SYSEXEC`, `%WINDOW`/`%DISPLAY`…) —
-  implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé)
-- [ ] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
-  passer « Jalon courant : **M36 (Phase F)** ».
+  implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé).
+  **FAIT** : `%RETURN` (sortie anticipée du corps, flag `return_requested` réinitialisé par invocation),
+  `%GOTO`/`%label:` (saut dans le corps, budget anti-emballement `MAX_GOTO_JUMPS=1e6`, idiome
+  `%if … %then %goto exit; … %exit:` + boucles arrière), `%ABORT` (`;`/`CANCEL`/`ABEND [n]`/`RETURN [n]`,
+  stoppe corps + soumission, `AbortKind`/`take_abort_request`). Hors périmètre → NOTE propre + consommation
+  saine (jamais panic/boucle) : `%SYSEXEC`, `%WINDOW`/`%DISPLAY`, `%SYSCALL` (pas d'entrée CALL atteignable
+  depuis le contexte macro), `%SYSMACDELETE`, `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` ; `%keyword` inconnu
+  laissé verbatim (comportement SAS). Ré-entrance verrouillée (flags sauvés/restaurés par invocation).
+  Fixtures m35 : macro_control (`%return` + boucle `%goto`), macro_abort (halte corps+soumission).
+  +19 tests unitaires. 2491 lib tests, 0 warning, snapshots octet-identiques.
+- [x] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
+  passer « Jalon courant : **M36 (Phase F)** ». **FAIT** : 5 fixtures m35 (filename_include, macro_conformity,
+  macro_control, macro_abort + M35.1) ; README Macro étoffé (Control flow + Automatic vars + ligne
+  « Unsupported (clean NOTE) ») ; jalon courant passé à **M36 (Phase F)**.
 
 ## M36 — `PROC REG` : complétion totale (Phase F)
 Objectif : faire passer `PROC REG` de 🟡 à **✅** en couvrant TOUTE la surface SAS 9.4 restante

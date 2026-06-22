@@ -134,12 +134,13 @@ individual options of each procedure and DATA step statement. Legend:
 | --- | :---: | --- |
 | Definition / call | ✅ | `%MACRO`/`%MEND`, positional & keyword params with defaults, `%name(args)` |
 | Variables | ✅ | `%LET`, `&var`/`&var.`, `%LOCAL`, `%GLOBAL`, nested indirection `&&&x` |
-| Control flow | ✅ | `%IF/%THEN/%ELSE`, `%DO/%END`, `%DO i=a %TO b %BY c`, `%DO %WHILE`, `%DO %UNTIL` |
+| Control flow | ✅ | `%IF/%THEN/%ELSE`, `%DO/%END`, `%DO i=a %TO b %BY c`, `%DO %WHILE`, `%DO %UNTIL`, `%RETURN`, `%GOTO`/`%label:`, `%ABORT` (`CANCEL`/`ABEND`/`RETURN [n]`) |
 | Evaluation | ✅ | `%EVAL`, `%SYSEVALF`, `%SYSFUNC`/`%QSYSFUNC` (full DATA step function library — no whitelist — with optional trailing `format.`) |
 | Quoting | 🟡 | `%STR`, `%NRSTR`, `%UNQUOTE`, `%CMPRES`, `%QCMPRES` (no `%SUPERQ`/`%BQUOTE`/`%NRBQUOTE`) |
 | Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path, fileref via `FILENAME`, non-quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
-| Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR` |
+| Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR`, `&SYSVER`, `&SYSSCP(L)`; status codes `&SYSCC`/`&SYSERR`/`&SYSRC`/`&SQLOBS`/`&SQLRC`; `&SYSLAST` (live, last dataset); env info `&SYSPROCESSNAME`, `&SYSENV`, `&SYSUSERID`, `&SYSHOSTNAME`, … |
 | Tracing | ✅ | `MPRINT`, `MLOGIC`, `SYMBOLGEN` |
+| Unsupported (clean NOTE) | 🔴 | `%SYSEXEC` (OS command), `%WINDOW`/`%DISPLAY` (interactive), `%SYSCALL`, `%SYSMACDELETE`, `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` — consumed with a "not supported in this build" NOTE; unknown `%keyword` left verbatim (SAS behaviour) |
 
 ### PROC SQL
 

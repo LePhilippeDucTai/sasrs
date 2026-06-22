@@ -15,7 +15,74 @@ impl MacroEngine {
         let mut out = String::with_capacity(source.len());
         let mut i = 0;
         while i < chars.len() {
+            // M35.4 — `%return`/`%abort` posés par un statement précédent (ou par
+            // une macro invoquée dont l'abort se propage) : on cesse d'expanser
+            // le reste de CE corps. `expand_invocation` réinitialise
+            // `return_requested` après le corps ; `abort_requested` se propage.
+            if self.return_requested || self.abort_requested {
+                break;
+            }
+
+            // M35.4 — saut `%goto` en attente : on tente de trouver `%label:` dans
+            // CE texte. Trouvé → on saute (drapeau réinitialisé) ; introuvable →
+            // on laisse remonter au niveau parent (on cesse d'expanser ici). Cela
+            // gère le `%goto` posé dans une action `%then`/`%do` imbriquée.
+            if let Some(label) = self.goto_requested.clone() {
+                if let Some(target) = Self::find_label(&chars, &label) {
+                    self.goto_requested = None;
+                    i = target;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+
             let c = chars[i];
+
+            // M35.4 — marqueur d'étiquette `%name:` (cible de `%goto`). Il n'émet
+            // RIEN ; on le saute (jusqu'au `:` inclus). On le teste AVANT
+            // l'invocation `%name` pour ne pas confondre `%exit:` avec un appel.
+            if c == '%' {
+                if let Some(next) = Self::skip_label_marker(&chars, i) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%goto label;` : pose un saut vers `%label:` (résolu en tête
+            // de boucle, éventuellement après remontée hors d'une action `%then`).
+            if c == '%' && Self::matches_kw(&chars, i, "goto") {
+                if let Some(next) = self.consume_goto(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%return;` : sortie anticipée du corps de macro courant.
+            if c == '%' && Self::matches_kw(&chars, i, "return") {
+                if let Some(next) = self.consume_return(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%abort [cancel|abend|return [n]];` : terminaison propre.
+            if c == '%' && Self::matches_kw(&chars, i, "abort") {
+                if let Some(next) = self.consume_abort(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — constructions hors-périmètre (interactif/OS) : NOTE propre
+            // + consommation jusqu'au `;`. Aucune n'est exprimable dans le modèle
+            // d'expansion textuel ; on garantit l'absence de crash/boucle.
+            if c == '%' {
+                if let Some(next) = self.consume_unsupported_stmt(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
 
             // `%let` insensible à la casse.
             if c == '%' && Self::matches_let(&chars, i) {

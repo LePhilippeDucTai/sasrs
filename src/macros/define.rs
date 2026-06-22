@@ -322,7 +322,30 @@ impl MacroEngine {
         self.scopes.push(scope);
         self.macro_stack.push(label.clone());
         self.depth += 1;
-        let expanded = self.process_impl(&def.body);
+        // M35.4 — budget de sauts `%goto` propre à CETTE invocation (save/restore
+        // pour les appels imbriqués). Un `%goto` posé par une macro plus interne
+        // ne doit pas franchir la frontière de macro : on capture l'état avant le
+        // corps et on le restaure après.
+        let saved_goto_budget = self.goto_budget;
+        let saved_goto_requested = self.goto_requested.take();
+        self.goto_budget = Self::MAX_GOTO_JUMPS;
+        let mut expanded = self.process_impl(&def.body);
+        // Un `%goto` non résolu remonté jusqu'ici = étiquette introuvable dans CE
+        // corps : NOTE propre (et on ne propage pas hors de la macro).
+        if let Some(missing) = self.goto_requested.take() {
+            expanded.push_str(&format!(
+                "/* NOTE: %GOTO target label %{}: not found; statement ignored */",
+                missing.to_lowercase()
+            ));
+        }
+        self.goto_budget = saved_goto_budget;
+        self.goto_requested = saved_goto_requested;
+        // M35.4 — `%return` est local à CE corps : on réinitialise le drapeau
+        // après l'expansion afin qu'il ne fuie ni vers l'appelant ni vers l'open
+        // code (garantie de ré-entrance : un 2ᵉ appel de la même macro se comporte
+        // à l'identique). `%abort`, lui, se PROPAGE (drapeau laissé tel quel) :
+        // l'expansion de l'appelant l'observera en tête de sa boucle.
+        self.return_requested = false;
         self.depth -= 1;
         self.macro_stack.pop();
         self.scopes.pop();
