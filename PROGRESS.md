@@ -6,9 +6,11 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M34**. M1–M33 terminés (roadmap d'origine : couverture SAS
-quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
-SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
+Jalon courant : **M37 (Phase G)**. M1–M36 terminés (Phase F M35–M36 : complétion du langage macro +
+`PROC REG` totale ; Phase E M31–M34 :
+refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
+**statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
+MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML + graphiques LOESS/DENSITY/PIE).
 Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
 (crates pour l'I/O lourd, numérique stat **fait maison** dans `src/stat/`) ; ODS
 HTML/RTF/PDF/Excel + ODS OUTPUT→datasets.
@@ -554,39 +556,541 @@ Phase E. Compléter les options différées des procs stat/modélisation (colonn
 Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`). Fixtures
 `tests/fixtures/m34/` + snapshots. Une case = un proc / un lot cohérent.
 
-- [ ] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé)
-- [ ] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen)
-- [ ] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen)
-- [ ] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé)
-- [ ] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Fable, très élevé)
-- [ ] M34.6 — `PROC LOGISTIC` : `CLASS` (codage référence/effet), `LINK=` (probit/cloglog),
-  logistique ordinale/nominale, `OUTPUT OUT=` (Fable, très élevé)
-- [ ] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé)
-- [ ] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
-  `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Fable, très élevé)
-- [ ] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
-  `FACTOR` rotations obliques (Opus, élevé)
-- [ ] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
-  sous-scripts intervalle `a:b` (Opus, élevé)
-- [ ] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
-  `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen)
-- [ ] DoD M34 : fixtures `m34/` + snapshots vérifiés (oracles) ; README à jour ;
-  passer « Jalon courant : **M35** ».
+- [x] M34.1 — `PROC CORR` : corrélation partielle (`PARTIAL`), `HOEFFDING`, Spearman/Kendall pondérés (Opus, élevé).
+  **FAIT** : (a) `PARTIAL` — résidualisation moindres carrés `stat::linalg::least_squares` sur `[1, vars
+  partielles]`, listwise-complete, Pearson sur résidus, df = n−k−2 (r(height,weight|age)=0.70467 = SAS,
+  p=0.0011) ; (b) `HOEFFDING` — D exact (≡ SAS sashelp.class : height×weight 0.31609, height×age 0.18856,
+  weight×age 0.20579) + `Prob > D` (approximation asymptotique Blum-Kiefer-Rosenblatt/Imhof, n≥5) ;
+  (c) WEIGHT étendu à Spearman (rangs moyens pondérés) & Kendall (paires pondérées wᵢ·wⱼ) — ≡ méthode
+  ordinaire sur données répliquées (tests). 2 fixtures m34 (corr_options + corr_hoeffding) + snapshots
+  vérifiés. **Différés (README non-couvert) : partial Spearman/Kendall, Prob>D tabulée exacte petit n.**
+  +13 tests (2367 lib), 0 warning. (PARTIAL implémenté en direct pendant la panne de l'outil Agent.)
+- [x] ⫽ M34.2 — `PROC TTEST` : `BY`, p unilatéral câblé (`SIDES=`), colonnes CI (Sonnet, moyen).
+  **FAIT (→ ✅)** : `BY` (analyse par groupe via `common::by_groups`/`resolve_by_cols`, 1-sample/2-sample
+  CLASS/PAIRED) ; `SIDES=U|L|2` câblé (en-tête `Pr > t`/`Pr < t`, `sided_p`) ; colonnes CI gated par `CI=`
+  (chemin défaut byte-identique) — CL Mean (t) + CL Std (χ², `chisq_quantile` via `common::chisq_sf`),
+  2-sample → Mean Diff + CL Diff. Fixture + snapshot vérifié vs sashelp.class (BY sex F t=0.352/M t=2.504 ;
+  SIDES=U t=1.9867/Pr>t=0.0312 ; CI=95 Mean [59.866,64.808], Std [3.874,7.582]). +6 tests (2356 lib). README TTEST → ✅.
+- [x] ⫽ M34.3 — `PROC NPAR1WAY` : `BY`, `OUT=`, scores Median/Savage/Normal, Wilcoxon exact (Opus, moyen).
+  **FAIT (→ ✅)** : (a) `BY` (partition `common::by_groups`, en-têtes `name=value`, niveaux CLASS
+  recalculés par groupe) ; (b) cadre générique de scores rang-linéaires (`raw_score`/`tie_averaged_scores`/
+  `score_analysis`/`score_two_sample`/`score_one_way`) couvrant `MEDIAN`, `SAVAGE`, `NORMAL`/`VW` —
+  table 2-échantillons (Statistic/Mean/Std/Z continuité-corrigé/Pr>|Z|) + analyse à un facteur χ²
+  (df=k−1) ; Wilcoxon reste le cas rang (closed-form `analyze`, inchangé) ; (c) Wilcoxon `EXACT`
+  (k=2) — distribution de permutation exacte par DP `dp[count][sum2]` sur rangs ×2, `Pr<=S` /
+  `Pr>=|S−Mean|`, plafond `EXACT_N_CAP=30` (NOTE au-delà) ; (d) `OUTPUT OUT=` — 1 obs/VAR/groupe BY,
+  colonnes `_WIL_/Z_WIL/P2_WIL/P1_WIL`, `XP1_WIL/XP2_WIL` (exact), `_KW_/DF_KW/P_KW`, et par score
+  `_MED_/_SAV_/_VW_` (+`Z_*`/`P2_*`/`P_*`/`DF_*`). Oracles vérifiés (Wilcoxon ≡ m24 73/90/12.2367/−1.3484 ;
+  χ² à un facteur ≡ Z₀² non corrigé ; exact 0.1754 = 2×0.0877). 2 fixtures m34 (scores + by_out) +
+  snapshots. **Différés (README non-couvert) : exact pour Median/Savage/Normal (rang seul), colonnes BY
+  OUT= stockées en chaîne formatée.** +9 tests (2376 lib), 0 warning, chemin défaut octet-identique.
+- [x] M34.4 — `PROC REG` : `NOINT`, `SELECTION=` (FORWARD/BACKWARD/STEPWISE), MODEL multiples (Opus, élevé).
+  **FAIT** : refactor en `RegAst{models: Vec<RegModelEntry>}` + helpers purs `ols_fit`/`fit_and_print`
+  (imprimeur unique → chemin défaut octet-identique, snapshot m25 inchangé). (a) MODEL multiples
+  (labels MODEL1/MODEL2…, NOTE « observations used » par modèle, `OUTPUT` rattaché au MODEL qui le
+  précède) ; (b) `NOINT` — SS non corrigées (`SSM=Σŷ²`, `SST=Σy²`, ligne ANOVA `Uncorrected Total`
+  df=n), `R²=Σŷ²/Σy²`, `Adj=1−(1−R²)·n/(n−p)`, pas de ligne Intercept (vérifié sashelp.class :
+  β_height=1.61922, R²=0.9768, Σweight²=199435.75 ≡ 19·w̄²+SSCorrigée m25) ; (c) `SELECTION=`
+  FORWARD/BACKWARD/STEPWISE via F partiel d'entrée/sortie sur sous-ajustements réels
+  (`SLENTRY`/`SLE`, `SLSTAY`/`SLS`, défauts 0.50/0.10/0.15) + table « Summary of … Selection »
+  (vérifié : forward→height seul car age p=0.6865>0.50 ; backward→age retiré p=0.6865>0.10 ;
+  modèles finaux ≡ OLS m25). 2 fixtures m34 (reg_noint + reg_selection) + snapshots. README REG :
+  colonne non-couvert rétrécie (NOINT/SELECTION=/MODEL multiples retirés ; reste 🟡 : TEST, CLM/CLI,
+  BY, critères SELECTION= avancés). +10 tests (2386 lib), 0 warning, chemin défaut octet-identique.
+- [x] M34.5 — `PROC ANOVA` & `PROC GLM` : effets d'interaction (`a*b`), CLASS multiples (Opus ×2, très élevé — Fable indisponible).
+  **FAIT (→ ✅ les deux)** : chemin dual préservant l'octet-identité des snapshots m25 (one-way inchangé ;
+  `execute_multiway` séparé déclenché par `*` / >1 terme / >1 CLASS). Parsing de termes `a b a*b`
+  (`TokenKind::Star`) → `Vec<Vec<String>>`. Moteur GLM général : design reference-cell (intercept +
+  L−1 indicatrices/effet + produits pour interactions). **Type I SS** séquentielle (reference-cell,
+  invariante au codage) ; **Type III SS** en **codage somme-nulle (effet)** — partiel sous codage effet
+  = Type III de SAS (corrige le piège : reference-cell partiel ≠ Type III pour effet principal en
+  présence d'interaction sur données déséquilibrées). GLM ajoute SOLUTION (estimations reference-cell,
+  niveaux de référence « 0/B », cross-labels d'interaction) et LSMEANS multi-voies (moyenne marginale
+  uniforme sur les autres facteurs). **Validation croisée** : ANOVA et GLM produisent des Type III
+  IDENTIQUES (sex 1428.85000, agegrp 3126.35588 ; Type I sex 1681.12295+agegrp 3141.86683+inter
+  0.49706 = Model SS 4823.48684 ; SSE_full invariant 4512.25 entre codages ; LSMEANS reconstruites des
+  cellules : sex F=(104.25+78.8)/2=91.525, etc.). 2 fixtures m34 (anova_twoway + glm_twoway) + snapshots.
+  README ANOVA 🟡→✅, GLM 🟡→✅. +2 tests (2398 lib), 0 warning, m25 octet-identique.
+- [x] M34.6 — `PROC LOGISTIC` : `CLASS`, `LINK=` (probit/cloglog), logistique ordinale, `OUTPUT OUT=` (Opus solo, très élevé).
+  **FAIT** : (a) `CLASS` codage reference-cell (ref=dernier niveau, PARAM=REF documenté ; SAS défaut=EFFECT,
+  écart noté ; Class Level Information ; lignes ML `var niveau`, OR `niveau vs ref`). (b) `LINK=` enum
+  {Logit défaut, Cloglog, Probit} — Logit garde le chemin exact (octet-identité m26), branche séparée
+  Fisher pour probit/cloglog (`μ=Φ(η)`/`φ` ; `1−exp(−eᵑ)`/`exp(η−eᵑ)`), table Odds Ratio omise pour
+  non-logit. (c) **Ordinale** proportional-odds (logit cumulatif) pour réponse >2 niveaux ordonnés :
+  intercepts α₁<…<α_{k−1} + pente partagée (Newton, non-convergence → NOTE séparation ; Score Test
+  Proportional Odds différé). (d) `OUTPUT OUT= PREDICTED=/P=/XBETA=`. **Oracles vérifiés** (counts m26
+  saturés) : CLASS x → fit ≡ m26 (LR 16.2787/Score 15.4286/Wald 13.5946), Intercept=ln4=1.3863, x 0=−ln10,
+  OR « 0 vs 1 »=0.10 ; PROBIT Intercept=Φ⁻¹(0.2857)=−0.5659, x=1.4076 ; CLOGLOG Intercept=−1.0892, x=1.5651 ;
+  OUTPUT phat=0.8/0.2857. 3 fixtures m34 (class_output, links, ordinal) + snapshots. README LOGISTIC
+  colonne non-couvert rétrécie. +5 tests (2411 lib), 0 warning, m26 octet-identique.
+- [x] M34.7 — `PROC GENMOD` : `CLASS`, `DIST=GAMMA` (+ lien canonique), `SCALE=` (Opus, élevé).
+  **FAIT** : (a) `DIST=GAMMA` câblé dans l'IRLS — `V(μ)=μ²`, lien canonique réciproque (`η=1/μ`, nouveau
+  `LinkFunction::Reciprocal`) + `LINK=LOG` honoré ; domaine μ>0 protégé par step-halving (≤40) ; déviance
+  `2Σ[−ln(y/μ)+(y−μ)/μ]`, Pearson `Σ(y−μ)²/μ²`, LL via `ln_gamma`. (b) `CLASS` (codage reference-cell
+  ref=dernier niveau, L−1 colonnes ; Class Level Information ; lignes ML `var niveau`, niveau de référence
+  DF 0/estimate 0). (c) `SCALE=`/`NOSCALE` fixent la dispersion (Normal σ⇒φ=σ², Gamma valeur=forme 1/φ).
+  **Dispersion Gamma = estimateur de Pearson φ̂=(1/(n−p))Σ(y−μ)²/μ²**, Scale affichée = 1/φ̂ (forme SAS) —
+  approximation documentée de l'ML exact (digamma). Oracle vérifié (Gamma log-link, facteur saturé 2
+  niveaux) : Intercept=ln(20)=2.9957, grp A=ln(0.2)=−1.6094, Pearson=1.0, Scale=1/0.25=4.0, Déviance≈1.1507,
+  Wald χ²=107.69. Fixture m34 (genmod_gamma_class) + snapshot. README GENMOD : colonne non-couvert rétrécie
+  (GAMMA/CLASS/SCALE= retirés ; reste 🟡 : ML digamma exact, multinomial, GEE, OFFSET, ESTIMATE/CONTRAST,
+  BY, OUTPUT). +8 tests (2406 lib), 0 warning, m26 octet-identique.
+- [x] M34.8 — `PROC MIXED` & `PROC GLIMMIX` : `TYPE=AR(1)/UN`, `NOINT`, effets fixes CLASS/continus,
+  `LINK=PROBIT/CLOGLOG`, `METHOD=LAPLACE` (GLIMMIX) (Opus ×2, très élevé — Fable indisponible).
+  - **MIXED FAIT** (`991ae60`) : chemin dual (legacy VC intercept-seul `is_legacy_case` → octet-identité
+    m28 ; sinon `execute_general`). `REPEATED / SUBJECT= TYPE=AR(1)|UN` + design d'effets fixes général
+    (intercept/continu/CLASS reference-cell, `NOINT`) ; (RE)ML général sur V(θ)=ZGZ'+R par Nelder-Mead
+    (restarts + polish coordonné, précision ≲5e-5). Cov Parm `UN(i,j)`/`AR(1)`/`Residual`. **Oracle UN
+    saturé** (ML, vecteurs (1,3)(3,1)(5,7)(7,5)) : UN(1,1)=5.0000, UN(2,1)=3.0000, UN(2,2)=5.0000
+    (= covariance d'échantillon), Intercept=4.0000 ; AR(1) ρ=0.6842, Residual=6.3333.
+  - **GLIMMIX FAIT** : design d'effets fixes général + `NOINT` ; `LINK=PROBIT/CLOGLOG` (alimentent le RSPL) ;
+    `TYPE=AR(1)/UN` côté R dans la boucle RSPL (machinerie V(θ) portée de MIXED) ; **`METHOD=LAPLACE`**
+    (ML vrai pour intercept aléatoire VC : mode par Newton interne + courbure, optimiseur externe sur
+    (β, σ²_u)). **Cross-checks** : PROBIT/CLOGLOG sans random ≡ LOGISTIC (Intercept −0.5659/x 1.4076 ;
+    −1.0892/1.5651) ; LAPLACE Normal+random ≡ MIXED ML (σ²_u=3.0000, σ²_e=2.0000, Intercept=4.0000).
+    Différés (NOTE) : METHOD=QUAD, DIST=GAMMA, LAPLACE sur AR(1)/UN/multi-random.
+  - 2 fixtures m34 (mixed_un_ar1 + glimmix_links_laplace) + snapshots. README MIXED & GLIMMIX mis à jour.
+    +14 tests (2425 lib), 0 warning, m28 octet-identique.
+- [x] ⫽ M34.9 — `PROC PRINCOMP`/`FACTOR`/`DISCRIM` : `OUT=` scoring (composantes/scores/classification) ;
+  `FACTOR` rotations obliques (Opus, élevé).
+  **FAIT** : PRINCOMP `OUT=` (input + `Prin1..k`, scores = données standardisées/centrées × vecteurs propres,
+  variance du score = valeur propre, vérifié) ; FACTOR `OUT=` (scores de régression `Z·R⁻¹·pattern`) +
+  **ROTATE=PROMAX** oblique (cible puissance Procrustes depuis VARIMAX → Rotated Factor Pattern +
+  Inter-Factor Correlations). DISCRIM `OUT=` déjà livré (M27). Oracles : PRINCOMP variance Prin_j = λ_j
+  (sashelp.class λ=2.6214/0.2684/0.1103) ; PROMAX inter-facteurs 0.7558 ≠ I, structure simple plus nette.
+  2 fixtures m34 (princomp_out, factor_promax) + snapshots. README PRINCOMP/FACTOR mis à jour. +13 tests
+  (2438 lib princomp/factor), 0 warning, m27 octet-identique.
+- [x] ⫽ M34.10 — `PROC CLUSTER` `OUTTREE=` ; `PROC IML` : `SHAPE`, `DET`, `CALL EIGEN`/`EIGVEC`,
+  sous-scripts intervalle `a:b` (Opus, élevé).
+  **FAIT** : CLUSTER `OUTTREE=` (1 ligne/nœud = feuilles+fusions : `_NAME_/_PARENT_/_NCL_/_FREQ_/_HEIGHT_`
+  + coords VAR des feuilles ; `_HEIGHT_`=1−RSQ monotone, cohérent avec la Cluster History). IML : `SHAPE`
+  (reshape row-major + recyclage), sous-scripts intervalle `A[1:2,2:3]`/`A[2:3,*]`, `DET` (LU pivoté),
+  `EIGVEC` + `CALL EIGEN(val,vec,A)` (symétrique, ordre décroissant). Oracles : DET({4 3,6 3})=−6,
+  SHAPE({1..6},2,3)={1 2 3,4 5 6}, B[1:2,2:3]={2 3,5 6}, EIGEN(diag(2,3)) val={3,2} vecteurs axe-alignés ;
+  OUTTREE 9 lignes (5 feuilles+4 fusions) topologie cohérente. 2 fixtures m34 (cluster_outtree, iml_m34) +
+  snapshots. README CLUSTER/IML mis à jour. +14 tests (2444 lib total après M34.9+M34.10), 0 warning, m27/m28a octet-identique.
+- [x] M34.11 — graphiques (sous `--features graphics`) : `SGPLOT` rendu `LOESS`/`DENSITY` réel,
+  `GCHART` `PIE`, `GPLOT` PLOT multiples + `SYMBOL`/`AXIS` honorés (Opus, moyen).
+  **FAIT** : tout sous `#[cfg(feature="graphics")]` (build par défaut octet-identique : NOTEs « image
+  deferred » inchangées). SGPLOT : `LOESS` (lissage local-linéaire tricube, SMOOTH=), `DENSITY`
+  (NORMAL/KERNEL gaussien) en overlays ; histogrammes en vraies barres ; XAXIS/YAXIS VALUES=→plages.
+  GCHART : `PIE` (tranches ∝ FREQ/SUM/MEAN, `pie_angles` somme 2π). GPLOT : overlays multi-séries
+  (`(y1 y2)*x`, `y*x=group`) + `SYMBOL`n (INTERPOL=JOIN/VALUE=/COLOR=) et `AXIS`n (ORDER=/LABEL=) honorés.
+  render.rs additif (PlotType::Pie, Overlay/Decorations, draw_to_file_ext ; `draw_to_file` inchangé).
+  Validé par tests unitaires feature-gated (oracles : LOESS droite exacte, densité ∫≈1, angles PIE ∝
+  totaux, N séries multi-plot, images écrites). +14 tests graphics (2464 lib --features graphics ;
+  2447 défaut). **Bonus** : `tests/snapshot.rs` skip-list (cfg graphics) complétée avec `univariate`
+  (rendait une image sous graphics → suite snapshot graphics désormais verte). README SGPLOT/GCHART/GPLOT
+  mis à jour. 0 warning nouveau, build défaut octet-identique (0 `.snap.new`).
+- [x] DoD M34 : fixtures `m34/` (19) + snapshots vérifiés à la main (oracles SAS) ; README à jour
+  (CORR/TTEST/NPAR1WAY→✅ ; REG/ANOVA/GLM/LOGISTIC/GENMOD/MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML
+  colonnes « non couvert » rétrécies) ; 2447 tests défaut, 0 `.snap.new`, build défaut octet-identique.
+  Curseur passé à **M35**.
 
 ## M35 — macro : complétion totale
 Phase E. Combler les derniers écarts macro pour un support intégral. Processeur toujours actif ;
 invariant : snapshots m1–m34 octet-identiques (nouveau comportement seulement sur nouvelles
 directives/fonctions). Fixtures `tests/fixtures/m35/`. Tableau « Macro language » du README → ✅.
 
-- [ ] M35.1 — `%SYSFUNC`/`%QSYSFUNC` : remplacer la liste blanche (~18 fns) par une délégation à
+- [x] M35.1 — `%SYSFUNC`/`%QSYSFUNC` : remplacer la liste blanche (~18 fns) par une délégation à
   TOUTE la bibliothèque `datastep::functions::call` (typage args num/char, support `fmt.`),
-  erreurs propres pour les fonctions réellement absentes (Opus, élevé)
-- [ ] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
-  résolution via `FILENAME` (Opus, moyen)
-- [ ] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
-  restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen)
-- [ ] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
+  erreurs propres pour les fonctions réellement absentes (Opus, élevé).
+  **FAIT** : liste blanche `SYSFUNC_WHITELIST` supprimée ; `eval_sysfunc` délègue TOUTE fonction à
+  `functions::call` (erreur propre si `None`). Argument format optionnel `%sysfunc(f(args), fmt)` appliqué
+  via le chemin `PUT`/`formats` (trim des blancs). Oracles : reverse(abcde)=edcba, sqrt(144)=12,
+  propcase=Hello World, mdy(7,4,1776),date9.=04JUL1776, sum(1000,234.5),dollar10.2=$1,234.50, fonction
+  inconnue → ERROR. Fixture m35 (sysfunc_full) + snapshot. README Macro/Evaluation mis à jour. +N tests
+  (2455 lib), 0 warning, snapshots macro octet-identiques.
+- [x] M35.2 — `%INCLUDE` : filerefs (`%include myref;`), chemins non quotés, `*`/stdin ;
+  résolution via `FILENAME` (Opus, moyen).
+  **FAIT** (décision utilisateur : implémenter FILENAME minimal) : nouveau statement global
+  `GlobalStmt::Filename` (`FILENAME ref 'chemin';` / `ref chemin;`) → registre `filerefs` sur le moteur
+  macro (`set_fileref`/`fileref_path`, clé MAJ, résolu via `resolve_path`) ; formes device/pipe/URL
+  notées et ignorées. `%include` : token nu → fileref enregistré sinon chemin (résolu contre
+  `include_base_dir`) ; `*`/vide → NOTE différé clavier/stdin ; chemin quoté inchangé. Caveat segment
+  documenté (FILENAME doit précéder le `%include` dans un segment antérieur). Vérifié : test exécuteur
+  bout-en-bout (`filename inc '<tmp>'; %include inc;` → `%let` inclus résolu) + tests unitaires
+  (fileref insensible à la casse, chemin relatif, stdin, ref inconnu). Fixture m35 (filename_include) +
+  snapshot (NOTE device, complétion propre). README `FILENAME` 🔴→🟡, `%INCLUDE` étoffé. 2465 lib tests,
+  0 warning, snapshots octet-identiques.
+- [x] ⫽ M35.3 — conformité fine : `%LENGTH("")`→1, écarts documentés résorbés ; variables auto
+  restantes (`&SYSPROCESSNAME`, `&SQLOBS`, `&SYSCC`, `&SYSERR`, `&SYSLAST`, …) (Sonnet, moyen).
+  **FAIT** : `%LENGTH` → `count.max(1)` (null/vide → 1). `seed_automatic_vars` étendu (Vec) :
+  codes retour init 0 (`SYSCC`/`SYSERR`/`SYSRC`/`SYSFILRC`/`SYSLIBRC`/`SQLOBS`/`SQLRC`/`SQLEXITCODE`),
+  `SYSLAST="_NULL_"`, infos statiques (`SYSSCPL=Linux`, `SYSPROCESSNAME=DMS Process`, `SYSENV=FORE`,
+  `SYSMACRONAME`/`SYSPARM`/`SYSADDRSPACE` vides, `SYSNCPU=1`, `SYSSITE=0`), user/host
+  (`SYSUSERID=sasuser`/`SYSHOSTNAME=localhost`/`SYSJOBID=1`/`SYSPROCESSID=0` en déterministe, env sinon).
+  `&SYSLAST` câblé en direct : l'exécuteur pousse `last_dataset` (MAJ, ou `_NULL_`) via `set_automatic`
+  après chaque étape DATA et chaque PROC. Fixture m35 (macro_conformity) : `%length()=1`, `&syscc=0`,
+  `&sysprocessname=DMS Process`, `&syslast` `_NULL_`→`WORK.A`. 2472 lib tests, 0 warning, snapshots
+  octet-identiques.
+- [x] M35.4 — audit exhaustif macro : revue de chaque statement/fonction macro SAS
   (`%ABORT`, `%RETURN`, `%GOTO`/`%label`, `%SYSCALL`, `%SYSEXEC`, `%WINDOW`/`%DISPLAY`…) —
-  implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé)
-- [ ] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
-  passer « Jalon courant : **TERMINÉ (Phase E)** ».
+  implémenter le faisable, erreur propre + documentation pour le résiduel hors périmètre (Opus, élevé).
+  **FAIT** : `%RETURN` (sortie anticipée du corps, flag `return_requested` réinitialisé par invocation),
+  `%GOTO`/`%label:` (saut dans le corps, budget anti-emballement `MAX_GOTO_JUMPS=1e6`, idiome
+  `%if … %then %goto exit; … %exit:` + boucles arrière), `%ABORT` (`;`/`CANCEL`/`ABEND [n]`/`RETURN [n]`,
+  stoppe corps + soumission, `AbortKind`/`take_abort_request`). Hors périmètre → NOTE propre + consommation
+  saine (jamais panic/boucle) : `%SYSEXEC`, `%WINDOW`/`%DISPLAY`, `%SYSCALL` (pas d'entrée CALL atteignable
+  depuis le contexte macro), `%SYSMACDELETE`, `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` ; `%keyword` inconnu
+  laissé verbatim (comportement SAS). Ré-entrance verrouillée (flags sauvés/restaurés par invocation).
+  Fixtures m35 : macro_control (`%return` + boucle `%goto`), macro_abort (halte corps+soumission).
+  +19 tests unitaires. 2491 lib tests, 0 warning, snapshots octet-identiques.
+- [x] DoD M35 : fixtures `m35/` + snapshots vérifiés ; tableau Macro README en ✅ (résiduel documenté) ;
+  passer « Jalon courant : **M36 (Phase F)** ». **FAIT** : 5 fixtures m35 (filename_include, macro_conformity,
+  macro_control, macro_abort + M35.1) ; README Macro étoffé (Control flow + Automatic vars + ligne
+  « Unsupported (clean NOTE) ») ; jalon courant passé à **M36 (Phase F)**.
+
+## M36 — `PROC REG` : complétion totale (Phase F)
+Objectif : faire passer `PROC REG` de 🟡 à **✅** en couvrant TOUTE la surface SAS 9.4 restante
+(statements, options MODEL, options PROC, datasets de sortie, diagnostics, graphiques). Jalon de
+**complétion d'options** : invariant d'octet-identité des snapshots m1–m35 (le chemin OLS par défaut +
+NOINT/SELECTION= déjà livrés restent inchangés ; nouveau comportement uniquement sur la nouvelle
+syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README REG, avec fixtures
+`tests/fixtures/m36/` + snapshots vérifiés à la main (oracles SAS). Base déjà en place (M25.1 + M34.4) :
+`DATA=`, MODEL multiples, `NOINT`, `NOPRINT`, `SELECTION=FORWARD/BACKWARD/STEPWISE` (+SLE/SLS),
+`OUTPUT OUT= PREDICTED=/RESIDUAL=`, ANOVA/R²/Adj/F/t, diagnostic résidus-vs-prédits ODS.
+
+- [x] M36.1 — `TEST` statement (tests d'hypothèses linéaires sur β : `TEST x1=x2, x3=0;` → table
+  « Test N Results for Dependent Variable », F num/den df, Pr>F) + `RESTRICT` statement (restrictions
+  d'égalité linéaires sur β, ré-estimation contrainte par moindres carrés + ligne RESTRICT/Lagrange)
+  (Opus, élevé).
+  **FAIT** : `RegModelEntry.tests`/`.restricts` ; `LinEq` (Σ coef·var = rhs, `INTERCEPT` réservé). TEST :
+  L/c → `F=(diffᵀ M⁻¹ diff / q)/MSE`, `M=L·H·Lᵀ`, Pr>F via `stat::f_cdf` ; en-tête « Test <nom> Results
+  for Dependent Variable <dep> » (ordinal nu si non labellé, label `nom:` sinon). RESTRICT : LS contraint
+  `λ=(LHLᵀ)⁻¹(Lβ−c)`, `β_r=β−HLᵀλ`, `SSE_r`/`df_r=(n−p)+q`, SE via `Var(β_r)`/`Var(λ)` ; ANOVA/R²/F/table
+  ré-estimés contraints + lignes RESTRICT (DF=-1, estimation=λ, label expression). TEST après RESTRICT
+  opère sur l'ajustement contraint. Oracles auto-cohérents vérifiés : `TEST age=0` ⇒ Pr>F=0.6865 = Pr>|t|
+  de age ; `RESTRICT age=height` ⇒ age=height=3.11908 exact, Error DF 16→17. Fixture m36/test_restrict.
+  Chemin OLS par défaut octet-identique. 2501 lib tests, 0 warning.
+- [x] M36.2 — Intervalles de confiance/prédiction : MODEL `CLB` (CI des estimations), `ALPHA=`,
+  `CLI`/`CLM` (limites individu/moyenne dans le listing) + mots-clés `OUTPUT` `STDP STDI STDR
+  LCL UCL LCLM UCLM` (Opus, moyen).
+  **FAIT** : `RegModel.alpha`/`clb`/`clm`/`cli` ; `RegOutput` + 7 colonnes. Leviers `h_i=x_iᵀ(X'X)⁻¹x_i`,
+  `STDP=√(MSE·h)`, `STDI=√(MSE·(1+h))`, `STDR=√(MSE·(1−h))`, limites `ŷ∓t·STD`. `t_quantile(p,df)` ajouté
+  (`stat::dists`, via identité T²~F(1,df) sur `f_quantile`). CLB → colonnes « <L>% Confidence Limits »
+  dans la table des estimations ; CLM/CLI → table « Output Statistics » (jeux de colonnes selon CLM/CLI/
+  les deux). `write_outputs` étendu (calcul paresseux : chemin P=/R= seul octet-identique). Oracles :
+  `Σhᵢ=p_eff`, `STDP²+STDR²=MSE`, `STDI²−STDP²=MSE`, CLM centré sur ŷ, CLB centré sur β. Fixture
+  m36/clb_cli_clm vérifiée (height CI [2.81017,4.98789]=3.89903±2.110·SE). 2509 lib tests, 0 warning,
+  snapshots octet-identiques.
+- [x] M36.3 — Diagnostics d'observation : MODEL `R` (analyse des résidus) / `INFLUENCE` + mots-clés
+  `OUTPUT` `STUDENT RSTUDENT COOKD H (leverage) PRESS DFFITS COVRATIO DFBETAS` (Opus, élevé).
+  **FAIT** : `RegModel.r`/`influence` ; `RegOutput` + 7 colonnes + préfixe `dfbetas`. `compute_influence_stats`
+  réutilise les leviers M36.2 : STUDENT=resid/STDR, RSTUDENT (MSE leave-one-out), COOKD, PRESS=resid/(1−h),
+  DFFITS, COVRATIO, DFBETAS (forme close `c=(X'X)⁻¹Xᵀ`). MODEL R → table « Output Statistics » (Std Error
+  Residual, Student Residual + jauge `-2-1 0 1 2`, Cook's D + bloc Sum of Residuals/PRESS) ; MODEL INFLUENCE
+  → RStudent/Hat Diag/Cov Ratio/DFFITS + une colonne `DFBETAS <var>` par paramètre. OUTPUT `DFBETAS=préfixe`
+  → `préfixe_<var>`. dfE≤1 → sentinelle manquante. Oracles : RSTUDENT identité, PRESS=Σpress², DFBETAS vs
+  refit leave-one-out (1e-6). Fixture m36/influence (Cook's D 0.1455, DFFITS −0.5516, COVRATIO 1.0719).
+  2520 lib tests, 0 warning, snapshots octet-identiques.
+- [x] M36.4 — Diagnostics de colinéarité & spécification : MODEL `COLLIN`/`COLLINOINT` (indice de
+  conditionnement + proportions de variance), `VIF`, `TOL`, `SPEC` (test de White), `DW`/`DWPROB`
+  (Durbin-Watson), `ACOV`/`HCC` (covariance robuste à l'hétéroscédasticité) (Opus, élevé).
+  **FAIT** : flags `vif/tol/collin/collinoint/spec/dw/dwprob/acov` (ACOV=HCC synonymes). VIF/TOL → colonnes
+  `Tolerance`/`Variance Inflation` (régression de x_j sur les autres ; intercept VIF=0). COLLIN : X mis à
+  l'échelle unité → eigen (`eigenvectors_jacobi`), indices `√(λmax/λk)`, proportions `v²/λ` normalisées.
+  SPEC : régression auxiliaire de White (e² ~ régresseurs+carrés+produits), `W=n·R²`, χ²(df) via `chisq_cdf`.
+  DW : `d=Σ(e_t−e_{t-1})²/Σe²`, ρ ; p-values par approximation normale moment-matched (documentée).
+  ACOV : HC0 `(X'X)⁻¹(Σe²xxᵀ)(X'X)⁻¹` → matrice + table SE hétéroscédasticité-consistantes (ajoutée, OLS
+  intacte). Oracles : `VIF·TOL=1`, proportions=1/colonne, `0≤d≤4`, HC symétrique. Fixture m36/collin_spec
+  (VIF 2.92762, CI 45.81, SPEC df=5 χ²8.33, DW 1.935). 2530 lib tests, 0 warning, snapshots octet-identiques.
+- [x] M36.5 — SS partielles & corrélations : MODEL `SS1`/`SS2` (Type I/II SS des estimations),
+  `STB` (coefficients standardisés), `PCORR1`/`PCORR2` (corrélations partielles²), `SCORR1`/`SCORR2`
+  (semi-partielles²), `SEQB` (estimations séquentielles), option `PRESS` (Opus, moyen).
+  **FAIT** : flags `ss1/ss2/stb/pcorr1/pcorr2/scorr1/scorr2/seqb/press_opt` → colonnes additionnelles dans
+  la table des estimations (`compute_seq_stats`). SS2=β²/(X'X)⁻¹_jj=t²·MSE ; SS1 par refits préfixes
+  (`SSE_prefix[j]−SSE_prefix[j+1]`, ΣSS1=Model SS) ; STB=β·sd(x)/sd(y) ; PCORR2=SS2/(SS2+SSE) ;
+  SCORR2=SS2/SST ; SEQB=dernier coef du fit préfixe (dernier régresseur=β OLS) ; PRESS=Σ(e/(1−h))² (ligne
+  dans le bloc de stats). Oracles : ΣSS1=Model SS, SS2=t²·MSE, single-reg SS1=SS2=Model SS / STB=sign(β)|r|,
+  SEQB(dernier)=β. Cohérence croisée : SS2(age)=22.388=numérateur du TEST age=0 (M36.1). Fixture
+  m36/partial_ss. 2538 lib tests, 0 warning, snapshots octet-identiques.
+- [x] M36.6 — Sélection avancée : `SELECTION=RSQUARE|ADJRSQ|CP(Mallows)|MAXR|MINR|NONE` + options
+  `BEST= INCLUDE= START= STOP= GROUPNAMES= DETAILS STB` (table de tous les modèles, C(p), critères)
+  (Fable → Opus, Fable indisponible).
+  **FAIT** : `SelMethod` + RSquare/AdjRsq/Cp/MaxR/MinR/None ; `Selection` + best/include/start/stop/details/stb.
+  RSQUARE/ADJRSQ/CP = tous sous-ensembles (`run_all_subsets`) : R²=1−SSE/SST, AdjR²=1−(1−R²)(n−1)/(n−p_eff),
+  C(p)=SSE/s²−(n−2p_eff) (s²=MSE complet) ; RSQUARE groupé par taille (R² desc), ADJRSQ trié adj-R² desc,
+  CP trié C(p) asc ; `BEST=` limite. MAXR/MINR = amélioration R² avec échanges 1-in/1-out (`run_rsq_improvement`).
+  NONE = no-op (modèle complet). `INCLUDE=k` force les k premiers ; cap combinatoire p>20 → NOTE. Famille
+  RSQUARE sélectionne le modèle complet (table informative puis fit standard). Oracles : #=2ᵖ−1, C(p) complet=p_eff
+  (3.00), AdjR² formule, INCLUDE force, MAXR final=complet, NONE=sans SELECTION. Fixture m36/selection_adv.
+  2548 lib tests, 0 warning, snapshots octet-identiques.
+- [x] ⫽ M36.7 — Statements de pondération/groupes : `WEIGHT` (MCO pondérés — X'WX), `FREQ`, `BY`
+  (analyse par groupe), `ID` (variable d'identification pour OUTPUT/listings) (Opus, moyen).
+  **FAIT** : `RegAst.weight/freq/by/id`. WEIGHT = `weighted_ols_fit` (lignes mises à l'échelle √w → `ols_fit`,
+  `(X'WX)⁻¹`, SSE pondéré, ŷ/résidus échelle d'origine) ; moyenne/SST/levier `h=w·xᵀ(X'WX)⁻¹x` pondérés.
+  FREQ = réplication entière (`n=Σf`, df gonflé ; poids effectif `wf=w·f`). BY via `common::by_groups`
+  (en-tête `var=val` placé après « The REG Procedure »). ID → colonne d'identification dans les tables
+  R/INFLUENCE/Output Statistics. Bloc résumé des résidus (R) et option PRESS rendus weight-aware
+  (Sum of Squared Residuals = Error SS pondéré). Oracles : WEIGHT(1)=OLS, équations normales pondérées,
+  WEIGHT(c)→SSE×c, FREQ(2)→df doublé, BY(1 groupe)=sans BY. Fixture m36/weight_by_id (WLS+ID, BY sex).
+  2560 lib tests, 0 warning, snapshots octet-identiques. (Limite documentée : RESTRICT+WEIGHT utilise la
+  machinerie RESTRICT non pondérée.)
+- [x] ⫽ M36.8 — Datasets & matrices de sortie : `OUTEST=` (+ `COVOUT OUTSEB TABLEOUT EDF`),
+  `OUTSSCP=` ; options PROC `SIMPLE` (stats descriptives), `CORR`, `ALL` ; MODEL `COVB`/`CORRB`/`XPX`/`I`
+  (matrices imprimées) (Opus, moyen).
+  **FAIT** : PROC `SIMPLE` (Variable/Sum/Mean/Uncorrected SS/Variance/Std), `CORR` (matrice Pearson),
+  `ALL` (→ SIMPLE+CORR + XPX/I/COVB/CORRB/CLM/CLI par modèle). Matrices : `XPX` (X'X|X'Y|Y'Y),
+  `I` ((X'X)⁻¹ augmentée des estimations + SSE au coin), `COVB`=MSE·(X'X)⁻¹, `CORRB`=covb_ij/√(covb_ii·covb_jj).
+  `OUTEST=` : obs PARMS par modèle (`_MODEL_`/`_TYPE_`/`_DEPVAR_`/`_RMSE_` + estimations, dépendante=−1)
+  + `COVOUT` (lignes COV), `OUTSEB` (ligne SEB), `EDF` (`_IN_`/`_P_`/`_EDF_`), `TABLEOUT` (`L95B`/`U95B`).
+  `OUTSSCP=` : matrice SSCP (`_TYPE_=SSCP`, `_NAME_`, intercept diag=n). Oracles : COVB_jj=SE²,
+  CORRB diag=1, XPX·(X'X)⁻¹≈I, I-coin=SSE, OUTEST β/SEB/EDF, OUTSSCP(x,y)=Σxy. Cohérence croisée :
+  CORR(age,height)=0.8114=√(1−TOL) de M36.4. Fixture m36/outest_matrices. 2573 lib tests, 0 warning,
+  snapshots octet-identiques.
+- [x] M36.9 — Régressions spécialisées : `RIDGE=` (ridge regression + `OUTVIF`, trace de ridge),
+  `PCOMIT=` (régression sur composantes principales incomplètes / IPC) (Fable → Opus, Fable indisponible).
+  **FAIT** : `RegDataOptions.ridge`/`pcomit`/`outvif` ; `parse_value_list` (liste + plage `a to b by c`).
+  Standardisation (centrage/réduction SD corrigée → `R`, `r_xy`) puis rétro-transformation. RIDGE :
+  `b*(k)=(R+kI)⁻¹r_xy` ; OUTVIF : `VIF_j(k)=[(R+kI)⁻¹R(R+kI)⁻¹]_jj`. IPC : eigen de `R`, garde p−m
+  composantes, `b*=Σ(v_iᵀr_xy/λ_i)v_i`. Tables « Ridge Regression Parameter Estimates » / VIF / IPC
+  (colonne sélecteur Ridge/PCOMIT) ; OUTEST `_TYPE_`=RIDGE/RIDGEVIF/IPC + colonnes `_RIDGE_`/`_PCOMIT_`.
+  NOINT+ridge → NOTE+skip ; trace → NOTE différée. Oracles : RIDGE=0=OLS, ‖b*(k)‖ décroissant, OUTVIF
+  k=0=VIF ordinaire (2.92762, cohérent M36.4) et décroissant, PCOMIT=0=OLS / PCOMIT=p→0, parse de plage.
+  Fixture m36/ridge_pcomit. 2582 lib tests, 0 warning, snapshots octet-identiques.
+- [x] M36.10 — Multivarié & édition interactive : `MTEST` (tests multivariés sur réponses multiples :
+  Wilks/Pillai/Hotelling-Lawley/Roy) ; statements interactifs run-group `ADD`/`DELETE`/`REWEIGHT`/
+  `REFIT`/`PAINT`/`VAR` — implémenter le faisable, erreur propre + doc pour le résiduel (Fable → Opus, très élevé).
+  **FAIT** : MODEL multi-réponses (`dependents: Vec`, `dependent()` accesseur ; boucle d'impression par
+  réponse — mono-réponse octet-identique). `MTEST` : `E=Y'Y−Y'XB`, `H=(LB)'(L(X'X)⁻¹L')⁻¹(LB)`, valeurs
+  propres de E⁻¹H (Cholesky de E + Jacobi) → Wilks Π1/(1+λ), Pillai Σλ/(1+λ), Hotelling-Lawley Σλ, Roy λmax,
+  approximations F (Rao). Table « Multivariate Test: <label> ». Run-group : `VAR` (déclaration),
+  `ADD`/`DELETE` (appliqués au fit final, NOTE) ; `REWEIGHT`/`REFIT`/`PAINT` → NOTE différée propre.
+  Oracles : mono-réponse → F des 4 stats = F ANOVA ; identités HLT=Σλ/Pillai/Wilks/Roy ; eigen généralisés.
+  Fixture m36/mtest (F=15.67 df 2/16 ; R²(height|age)=0.6584=r² cohérent M36.8). 2591 lib tests, 0 warning,
+  snapshots octet-identiques.
+- [x] M36.11 — graphiques `PLOTS=` (sous `--features graphics`) : panel de diagnostics REG complet
+  (résidus vs prédits/régresseurs, QQ-plot, RStudent, leverage, Cook's D, fit plot avec bandes
+  CLM/CLI) + `PLOT` statement traditionnel (Opus, moyen).
+  **FAIT** : `PlotRequests` (DIAGNOSTICS/RESIDUALS/FIT/ALL/NONE, liste `(…)`, modifieurs `(UNPACK)`/`(ONLY)`)
+  parsé au niveau PROC et sous-statement ; statement `PLOT y*x [=sym] [/ opts]` avec variables `keyword.`
+  (`PREDICTED.`/`P.`, `RESIDUAL.`/`R.`). Sous `--features graphics` : images `reg_{N}` séparées (résidu/prédit,
+  RStudent/prédit, Cook's D/leverage, QQ normal, résidu/régresseur, fit plot mono-régresseur + bandes CLM/CLI ;
+  scatters PLOT) via `compute_obs_stats`/`compute_influence_stats`. Build par défaut : NOTE différée propre
+  (pluriel invariable), `PLOTS=NONE` supprime le diagnostic auto, octet-identique sans PLOTS=/PLOT. Vérifié
+  les DEUX configs : `cargo test` (2608) ET `cargo build --features graphics` (0 erreur/warning), test
+  graphics-gated rendant les images dans un tempdir. Fixture m36/plots. 2608 lib tests, 0 warning.
+- [x] DoD M36 : fixtures `m36/` + snapshots vérifiés (oracles) ; **README `REG` → ✅** (résiduel
+  hors périmètre documenté dans la colonne droite) ; passer « Jalon courant : **TERMINÉ (Phase F)** ».
+  **FAIT** : 11 fixtures m36 (test_restrict, clb_cli_clm, influence, collin_spec, partial_ss, selection_adv,
+  weight_by_id, outest_matrices, ridge_pcomit, mtest, plots) à oracles vérifiés à la main ; README `REG`
+  passé 🟡→✅ (résiduel : SELECTION=LASSO, DW p-values exactes, REWEIGHT/REFIT/PAINT) ; jalon courant →
+  **TERMINÉ (Phase F)**.
+
+# Phase G — tout 🟡 (+ 🔴 faisable) → ✅
+
+Objectif : amener à **✅** chaque fonctionnalité partielle (26 🟡) et les 🔴 faisables, sur 30 jalons
+M37–M66 (un par gros proc, précédés d'un bloc d'infrastructure partagée). Implémentation **intégrale
+quel que soit l'effort**. Invariant de complétion d'options : snapshots m1–m36 **octet-identiques**
+(tout gardé derrière une option/statement neuf), `cargo test -p sasrs` vert, 0 warning, fixtures
+`tests/fixtures/m<NN>/` à oracles vérifiés à la main, colonne « non couvert » du README rétrécie.
+Restent 🔴 documentés : `X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYSRPUT`, `.sas7bcat` binaire.
+**Ordre dur** : Bloc 0 (M37–M42) avant ses consommateurs ; graphiques (M63–M66) en dernier.
+
+## BLOC 0 — Infrastructure partagée
+
+## M37 — Moteur linéaire partagé `lincom` + digamma/trigamma
+Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de GLM puis ajouts testés.
+- [ ] M37.1 — Extraire de `glm.rs` un `src/procs/lincom.rs` : `LinCombEngine { beta, cov, coding, df }`
+  → `estimate(L,c)`, `contrast(L,c)`, `lsmeans(effect)` ; GLM rebranché **octet-identique** (Opus, élevé)
+- [ ] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
+  `reference_coding` de `mixed.rs`/`glimmix.rs`) ; oracle : PARAM=REF = coding actuel, somme effect=0 (Opus, moyen)
+- [ ] M37.3 — `score_test(U,I)` + promotion `digamma`/ajout `trigamma` dans `stat/dists.rs` (re-export
+  côté DATA step) ; oracles ψ(1)=−γ, ψ(x+1)−ψ(x)=1/x, ψ′(1)=π²/6 (Opus, moyen)
+- [ ] DoD M37 : `lincom.rs` créé, GLM octet-identique, digamma/trigamma testés ; pointeur → M38.
+
+## M38 — Langage global + ODS capture/sélection
+Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS SELECT/EXCLUDE+OUTPUT.
+- [ ] M38.1 — TITLE1–9 + FOOTNOTE1–9 : trait `OutputDestination` → `set_titles(Vec)`/`set_footnotes`
+  (+ 5 destinations), `executor.rs` stocke tous les niveaux ; oracle : un seul TITLE1 = rendu actuel (Opus, moyen)
+- [ ] M38.2 — OPTIONS appliquées (PAGESIZE/PS=, NODATE/NONUMBER, MISSING=, YEARCUTOFF=, FMTSEARCH=)
+  au-delà du warning ; non reconnues gardent le warning (Sonnet, moyen)
+- [ ] M38.3 — ODS OUTPUT **généralisé** : nommer chaque `write_table`, matérialiser en dataset via
+  `ods_output_target` ; oracle : `ods output OneWayFreqs=f;` = colonnes du listing FREQ (Opus, élevé)
+- [ ] M38.4 — ODS SELECT/EXCLUDE : sets Session consultés dans `write_table` (remplace l'erreur différée
+  `parser/global.rs`) ; oracle : `ods exclude all;` supprime les tables, log inchangé (Opus, moyen)
+- [ ] M38.5 — `%INCLUDE *`/stdin + FILENAME device/pipe/URL reconnus (NOTE propre, sortis du 🟡) (Sonnet, faible)
+- [ ] DoD M38 : fixtures m38 (titres multiples, ODS OUTPUT depuis FREQ, ODS EXCLUDE) ; 6 cellules → ✅ ; → M39.
+
+## M39 — Store de catalogue de format persistant
+Prérequis FORMAT/CATALOG/IML STORE.
+- [ ] M39.1 — Sérialiser `FormatCatalog` en sidecar JSON par libref (chargé au LIBNAME, sauvé après
+  PROC FORMAT) ; oracle round-trip (définir, relancer, résout encore) (Opus, moyen)
+- [ ] M39.2 — `CNTLOUT=` (catalogue→dataset FMTNAME/START/END/LABEL/TYPE) + `CNTLIN=` (dataset→catalogue) ;
+  oracle CNTLOUT→CNTLIN round-trip identique (Opus, moyen)
+- [ ] M39.3 — `FMTLIB`, `FMTSEARCH=` (lie M38.2) ; oracle : FMTLIB liste exactement les formats définis (Sonnet, faible)
+- [ ] DoD M39 : fixtures m39 ; README FORMAT/User formats préparés ; path in-memory octet-identique ; → M40.
+
+## M40 — DATA step : statements manquants + CALL routines
+Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
+- [ ] M40.1 — CALL routines faisables : MISSING, SYMPUTX, SCAN, LABEL, VNAME, SORTN/SORTC, STDIZE,
+  PRX* (si regex) ; oracle `CALL MISSING(x)`⇒x=. (Opus, élevé)
+- [ ] M40.2 — Multiple `SET` (lecture parallèle, EOF par site) + bare `SET;`/`MERGE;` (re-réf `_LAST_`) ;
+  touche boucle implicite + PDV ; oracle 2 SET ⇒ 1 obs/itération, fin au 1ᵉʳ EOF (Opus, très élevé)
+- [ ] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)
+- [ ] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
+
+## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE
+Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
+- [ ] M41.1 — `%BQUOTE`/`%NRBQUOTE` (quoting exécution, masque `&`/`%`) via `apply_quoting` ; oracle
+  `%bquote(a&b)` masque `&` sans résoudre (Opus, élevé)
+- [ ] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) ; oracle
+  `%let x=&y; %superq(x)`→`&y` littéral (Opus, élevé)
+- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Opus, moyen)
+- [ ] DoD M41 : fixtures m41 ; README Macro Quoting → ✅ (reste %SYSEXEC/%WINDOW/%DISPLAY/%SYSLPUT/%SYSRPUT doc) ; → M42.
+
+## M42 — PROC SQL : dictionnaires + prédicats
+Cellule README PROC SQL Not supported 🔴→✅.
+- [ ] M42.1 — Dictionary tables (`DICTIONARY.TABLES/.COLUMNS/.MEMBERS` → vues sur `LibraryManager`) ;
+  oracle : `SELECT * FROM dictionary.columns` liste les colonnes connues (Opus, élevé)
+- [ ] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) ; oracle CONTAINS≡INDEX>0, SOUNDS LIKE=même soundex (Sonnet, moyen)
+- [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
+- [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
+
+## BLOC 1 — Procs Base & descriptifs
+
+## M43 — PROC FORMAT : complétion totale
+- [ ] M43.1 — Brancher CNTLIN/CNTLOUT/FMTLIB (M39) dans `procs/format.rs` ; multi-label, largeurs
+  MAX=/MIN=/DEFAULT= ; oracle : largeur défaut = max label, CNTLOUT round-trip (Sonnet, moyen)
+- [ ] DoD M43 : fixture m43 ; README FORMAT → ✅ ; → M44.
+
+## M44 — PROC FREQ : Fisher exact r×c
+- [ ] M44.1 — Fisher exact r×c (réseau Freeman-Halton/Mehta-Patel + garde combinatoire + fallback
+  Monte-Carlo déterministe PRNG maison) ; oracle : 2×2 = Fisher existant, Σtables≤p(obs) (Opus, très élevé)
+- [ ] DoD M44 : fixture m44 (3×3 vs doc SAS) ; README FREQ → ✅ (résiduel grandes tables MC documenté) ; → M45.
+
+## M45 — PROC UNIVARIATE : pondération + plots
+- [ ] M45.1 — Skewness/kurtosis pondérés (moments m3/m4, VARDEF=DF) ; oracle poids=1 = actuel, symétrique⇒skew≈0 (Opus, moyen)
+- [ ] M45.2 — Plot-statement `HISTOGRAM/QQPLOT … /NORMAL` overlay + annotation (`graphics/render.rs`) ;
+  oracle : NORMAL centré sur μ̂,σ̂ ; sans graphics → NOTE-deferred (Opus, moyen)
+- [ ] DoD M45 : fixture m45 ; README UNIVARIATE → ✅ ; → M46.
+
+## M46 — PROC TABULATE : PCTN<dim>
+- [ ] M46.1 — Dénominateurs paramétrés `PCTN<row|col>`/`PCTSUM<dim>` ; oracle : PCTN sans `<>` inchangé,
+  PCTN<row> somme 100/ligne (Opus, élevé)
+- [ ] DoD M46 : fixture m46 ; README TABULATE → ✅ ; → M47.
+
+## M47 — PROC REPORT : DEFINE FLOW + COMPUTE riche
+- [ ] M47.1 — `DEFINE var / FLOW` (wrap WIDTH=) ; oracle largeur respectée (Opus, moyen)
+- [ ] M47.2 — `COMPUTE` via `datastep::eval` + `functions::call` (bibliothèque complète, ré-assignation
+  colonnes calculées) ; oracle `compute x; x=round(y,.1); endcomp;` = ROUND DATA step (Opus, élevé)
+- [ ] DoD M47 : fixture m47 ; README REPORT → ✅ ; → M48.
+
+## M48 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR
+- [ ] M48.1 — `APPEND` (réutilise `procs/append.rs`) + `MODIFY` attrs (label/type) ; oracle = PROC APPEND (Sonnet, moyen)
+- [ ] M48.2 — `CONTENTS` (réutilise `procs/contents.rs`) + `REPAIR` (no-op + NOTE) ; oracle CONTENTS interne = autonome (Sonnet, faible)
+- [ ] DoD M48 : fixture m48 ; README DATASETS → ✅ (résiduel REPAIR réel documenté) ; → M49.
+
+## M49 — PROC CATALOG : catalogues réels
+- [ ] M49.1 — Brancher sur le store M39 ; `ENTRYTYPE=`/sélection, COPY/DELETE réels d'entrées ;
+  oracle : DELETE entrée puis CONTENTS ne la liste plus (Opus, moyen)
+- [ ] DoD M49 : fixture m49 ; README CATALOG → ✅ (résiduel `.sas7bcat` binaire documenté) ; → M50.
+
+## M50 — PROC PRINTTO : routage fichier réel
+- [ ] M50.1 — `printto_log`/`printto_print` ouvrent les fichiers et redirigent Log/Listing ; reset
+  restaure ; oracle : sortie écrite dans le fichier cible, reset rétablit (Opus, moyen)
+- [ ] DoD M50 : fixture m50 (contenu fichier routé) ; README PRINTTO → ✅ ; → M51.
+
+## M51 — PROC OPTIONS : détail par option
+- [ ] M51.1 — Table option-par-option (`OPTION=`, `GROUP=`, SHORT/LONG) ; oracle : `OPTION=LINESIZE`
+  affiche `session.options.ls` (Sonnet, faible)
+- [ ] DoD M51 : fixture m51 ; README OPTIONS → ✅ ; → M52.
+
+## BLOC 2 — Procs de modélisation (réutilisent M37 `lincom`)
+
+## M52 — PROC LOGISTIC : complétion totale
+- [ ] M52.1 — `PARAM=EFFECT|GLM|REF` (M37 coding) ; oracle PARAM=REF inchangé (Opus, élevé)
+- [ ] M52.2 — Multinomial generalized-logit (LINK=GLOGIT) + ordinal ; oracle 2 catégories ⇒ binaire (Opus, très élevé)
+- [ ] M52.3 — Score Test prop-odds (M37 score_test) ; oracle χ², df=(k−2)·p (Opus, élevé)
+- [ ] M52.4 — `UNITS`, `SCORE DATA=`, `ROC` (AUC + comparaison) ; oracle AUC∈[0,1], 0.5 si non discriminant (Opus, élevé)
+- [ ] M52.5 — `BY` + ESTIMATE/CONTRAST (M37) ; oracle 1 groupe = sans BY (Opus, moyen)
+- [ ] DoD M52 : fixtures m52 ; README LOGISTIC → ✅ ; → M53.
+
+## M53 — PROC GENMOD : complétion totale
+- [ ] M53.1 — Gamma scale ML exact (digamma/trigamma, Newton) ; oracle remplace l'approx Pearson, ψ′>0 (Opus, élevé)
+- [ ] M53.2 — `OFFSET=` + `OUTPUT OUT=` (xbeta/pred/resid/deviance) ; oracle OFFSET=0 inchangé (Opus, moyen)
+- [ ] M53.3 — Multinomial cumulative logit ordinal ; oracle réduction binaire (Opus, élevé)
+- [ ] M53.4 — GEE/REPEATED (Fisher-scoring + sandwich, corr IND/EXCH/AR(1)/UN) ; oracle IND ⇒ β≈GLM,
+  SE sandwich≠model-based, matrice de travail symétrique (Opus, très élevé)
+- [ ] M53.5 — ESTIMATE/CONTRAST (M37) + BY ; oracle contrast = combinaison testée (Opus, moyen)
+- [ ] DoD M53 : fixtures m53 ; README GENMOD → ✅ ; → M54.
+
+## M54 — PROC MIXED : complétion totale
+- [ ] M54.1 — RANDOM slopes/multiples (ZGZ'+R général) ; oracle random intercept seul = actuel (Opus, très élevé)
+- [ ] M54.2 — TYPE= étendu (TOEP/ARH(1)/CSH/UN(1)) ; oracle UN 1 niveau = VC, AR(1) ρ=0 = VC (Opus, élevé)
+- [ ] M54.3 — df Satterthwaite + Kenward-Roger (dérivées de V) ; oracle équilibré ⇒ df KR ≈ df ANOVA (Opus, très élevé)
+- [ ] M54.4 — LSMEANS/ESTIMATE/CONTRAST (M37, df de M54.3) + COVTEST (LR composantes) ; oracle LSMEANS = moyennes marginales (Opus, élevé)
+- [ ] M54.5 — `BY` ; oracle 1 groupe = sans BY (Sonnet, faible)
+- [ ] DoD M54 : fixtures m54 ; README MIXED → ✅ ; → M55.
+
+## M55 — PROC GLIMMIX : complétion totale
+- [ ] M55.1 — `METHOD=QUAD` (Gauss-Hermite adaptative) ; oracle nœuds→∞ ⇒ converge vers LAPLACE (Opus, très élevé)
+- [ ] M55.2 — `DIST=GAMMA` (scale M53.1) ; oracle cohérent GENMOD Gamma sans random (Opus, moyen)
+- [ ] M55.3 — LAPLACE avec AR(1)/UN/multiple-random + RANDOM slopes (G de M54.1) ; oracle VC single = actuel (Opus, très élevé)
+- [ ] M55.4 — LSMEANS/ESTIMATE/CONTRAST (M37) + WEIGHT + BY ; oracle WEIGHT=1 inchangé (Opus, élevé)
+- [ ] DoD M55 : fixtures m55 ; README GLIMMIX → ✅ ; → M56.
+
+## BLOC 3 — Procs multivariés
+
+## M56 — PROC PRINCOMP : complétion totale
+- [ ] M56.1 — `WEIGHT` + `PARTIAL` ; oracle poids=1 inchangé, PARTIAL 0 var = PCA standard (Opus, élevé)
+- [ ] M56.2 — `TYPE=CORR` input + `OUTSTAT=` (helper OUTSTAT) ; oracle OUTSTAT→TYPE=CORR round-trip eigenvalues (Opus, moyen)
+- [ ] M56.3 — `BY` ; oracle 1 groupe = sans BY (Sonnet, faible)
+- [ ] DoD M56 : fixtures m56 ; README PRINCOMP → ✅ ; → M57.
+
+## M57 — PROC FACTOR : complétion totale
+- [ ] M57.1 — `METHOD=ML`/`PRINIT` (vraie ML : discrepance + eigen Jacobi) ; oracle communalités∈[0,1] (Opus, très élevé)
+- [ ] M57.2 — `HEYWOOD` + `ALPHA` + `ROTATE=OBLIMIN` ; oracle OBLIMIN(γ=0)=quartimin, HEYWOOD plafonne (Opus, élevé)
+- [ ] M57.3 — `SCORE`/OUTSTAT scoring + `BY` ; oracle scores standardisés var≈1 (Opus, moyen)
+- [ ] DoD M57 : fixtures m57 ; README FACTOR → ✅ ; → M58.
+
+## M58 — PROC DISCRIM : complétion totale
+- [ ] M58.1 — `POOL=NO` (QDA) ; oracle covariances égales ⇒ QDA≈LDA (Opus, élevé)
+- [ ] M58.2 — `CROSSVALIDATE` (LOO rang-1) + `OUTSTAT=` ; oracle CV error ≥ resubstitution (Opus, élevé)
+- [ ] M58.3 — `METHOD=NPAR/KERNEL` (densités noyau) + `THRESHOLD=` + `BY` ; oracle postérieurs somment à 1 (Opus, très élevé)
+- [ ] DoD M58 : fixtures m58 ; README DISCRIM → ✅ ; → M59.
+
+## M59 — PROC DISTANCE : complétion totale
+- [ ] M59.1 — `SHAPE=SQUARE|TRIANGLE|LIST`, `ID` labels, normalisation (STD/RANGE), `FREQ` ;
+  oracle SHAPE=SQUARE symétrique diag 0, STD ⇒ variance 1 (Opus, moyen)
+- [ ] DoD M59 : fixture m59 ; README DISTANCE → ✅ ; → M60.
+
+## M60 — PROC CLUSTER : complétion totale
+- [ ] M60.1 — `PSEUDO` (pseudo-F/t²) + `NOEIGEN` ; oracle pseudo-F décroît globalement (Opus, moyen)
+- [ ] M60.2 — `CCC` (cubic clustering criterion, eigen Jacobi) ; oracle pic au bon k sur données séparées (Opus, élevé)
+- [ ] M60.3 — Dendrogramme graphique (`graphics/render.rs`) ; oracle sans graphics → NOTE-deferred (Opus, moyen)
+- [ ] DoD M60 : fixtures m60 ; README CLUSTER → ✅ ; → M61.
+
+## M61 — PROC FASTCLUS : complétion totale
+- [ ] M61.1 — `SEED=` (obs/dataset) + `RADIUS=` + `DISTANCE` ; oracle SEED fixé ⇒ déterministe (Opus, moyen)
+- [ ] M61.2 — `MEAN=` + fuzzy (FUZZ=) ; oracle MEAN = centroïdes, appartenances fuzzy somment à 1 (Opus, moyen)
+- [ ] DoD M61 : fixtures m61 ; README FASTCLUS → ✅ ; → M62.
+
+## M62 — PROC IML : complétion totale
+- [ ] M62.1 — `READ NEXT`/`READ … WHERE` (curseur + filtre) ; oracle READ NEXT en boucle = READ ALL (Opus, élevé)
+- [ ] M62.2 — Modules `START name(args); … FINISH;` + appel/portée ; oracle module identité retourne son arg (Opus, très élevé)
+- [ ] M62.3 — `STORE`/`LOAD`/`SHOW` (store M39) ; oracle STORE→LOAD round-trip une matrice (Opus, moyen)
+- [ ] DoD M62 : fixtures m62 ; README IML → ✅ ; → M63.
+
+## BLOC 4 — Graphiques (réutilisent `graphics/render.rs` ; testés `--features graphics`)
+
+## M63 — PROC GPLOT : complétion totale
+- [ ] M63.1 — SYMBOL HEIGHT/WIDTH/LINE/REPEAT ; AXIS log/discrete/ticks ; oracle LINE=1 = actuel, log⇒ticks géométriques (Opus, élevé)
+- [ ] M63.2 — PLOT2 (2ᵉ axe Y), `=group`×multi-Y, VPLOT, `BY` ; oracle PLOT2 partage l'axe X, BY⇒N images (Opus, élevé)
+- [ ] DoD M63 : fixtures m63 ; README GPLOT → ✅ ; → M64.
+
+## M64 — PROC GCHART : complétion totale
+- [ ] M64.1 — `SUBGROUP=` (empilé) + rendu HBAR + `BY` ; oracle segments empilés = barre totale, HBAR = VBAR transposé (Opus, moyen)
+- [ ] DoD M64 : fixtures m64 ; README GCHART → ✅ ; → M65.
+
+## M65 — PROC PLOT : complétion totale
+- [ ] M65.1 — `HREF=`/`VREF=`, `HAXIS=`/`VAXIS=`, grille multi-plots, `BY` ; oracle HREF positionne la
+  colonne de référence dans la grille ASCII (Opus, moyen)
+- [ ] DoD M65 : fixtures m65 ; README PLOT → ✅ ; → M66.
+
+## M66 — PROC SGPLOT : complétion totale
+- [ ] M66.1 — Rendu réel HBAR/VBOX/REG ; oracle VBOX médiane/quartiles = UNIVARIATE, REG = droite OLS (Opus, élevé)
+- [ ] M66.2 — MARKERATTRS=/LINEATTRS=, overlays multiples, légendes, images BY-group ; oracle sans attrs = actuel (Opus, élevé)
+- [ ] DoD M66 : fixtures m66 ; README SGPLOT → ✅ ; **fin de Phase G** : tous les tableaux README en ✅
+  (résiduel hors périmètre documenté) ; passer « Jalon courant : **TERMINÉ (Phase G)** ».

@@ -1,0 +1,49 @@
+---
+source: tests/snapshot.rs
+assertion_line: 50
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/corr_options.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'CORR partial: height & weight controlling for age';
+
+3     proc corr data=d.class;
+4       var height weight;
+5       partial age;
+6     run;
+NOTE: PROCEDURE CORR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                       CORR partial: height & weight controlling for age
+
+                                       The CORR Procedure
+
+2 Variables:  height weight
+
+                                       Simple Statistics
+
+         Variable     N            Mean         Std Dev       Sum    Minimum    Maximum
+
+         height      19    62.336842105    5.1270752466    1184.4       51.3         72
+         weight      19    100.02631579    22.773933494    1900.5       50.5        150
+
+                 Pearson Partial Correlation Coefficients, Controlled for: age
+                               Prob > |r| under H0: Partial Rho=0
+
+                                             height     weight
+
+                                  height    1.00000    0.70467
+                                                        0.0011
+                                  weight    0.70467    1.00000
+                                             0.0011
+
+
+==== EXIT 0 ====

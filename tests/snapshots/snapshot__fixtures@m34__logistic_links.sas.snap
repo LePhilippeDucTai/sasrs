@@ -1,0 +1,150 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/logistic_links.sas
+---
+==== LOG ====
+
+1     title 'PROC LOGISTIC PROBIT link';
+
+2     data counts;
+3       input y x count;
+4       datalines;
+5     1 1 20
+6     1 0 10
+7     0 1  5
+8     0 0 25
+9     ;
+NOTE: The data set WORK.COUNTS has 4 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    proc logistic data=counts;
+11      model y(descending) = x / link=probit;
+12      freq count;
+13    run;
+NOTE: There were 4 observations read from the data set WORK.COUNTS.
+NOTE: There were 60 observations used.
+NOTE: PROCEDURE LOGISTIC used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title 'PROC LOGISTIC CLOGLOG link';
+
+15    proc logistic data=counts;
+16      model y(descending) = x / link=cloglog;
+17      freq count;
+18    run;
+NOTE: There were 4 observations read from the data set WORK.COUNTS.
+NOTE: There were 60 observations used.
+NOTE: PROCEDURE LOGISTIC used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    title;
+
+==== LISTING ====
+                                   PROC LOGISTIC PROBIT link
+
+                                     The LOGISTIC Procedure
+
+                                       Model Information
+
+
+
+                          Data Set                     WORK.COUNTS
+                          Response Variable            y
+                          Number of Response Levels    2
+                          Model                        binary probit
+                          Optimization Technique       Newton-Raphson
+
+                                        Response Profile
+
+                             Ordered Value    y    Total Frequency
+
+                                         1    1                 30
+                                         2    0                 30
+
+PROC LOGISTIC is modeling the probability that y=1.
+
+                                    Model Convergence Status
+
+     Convergence criterion (GCONV=1E-8) satisfied.
+
+                                      Model Fit Statistics
+
+                    Criterion    Intercept Only    Intercept and Covariates
+
+                    AIC                 85.1777                     70.8990
+                    SC                  87.2720                     75.0877
+                    -2 Log L            83.1777                     66.8990
+
+                             Testing Global Null Hypothesis: BETA=0
+
+                       Test                Chi-Square    DF    Pr > ChiSq
+
+                       Likelihood Ratio       16.2787     1        <.0001
+                       Score                  15.4286     1        <.0001
+                       Wald                   14.9955     1        0.0001
+
+                            Analysis of Maximum Likelihood Estimates
+
+         Parameter    DF    Estimate    Standard Error    Wald Chi-Square    Pr > ChiSq
+
+         Intercept     1     -0.5659            0.2247             6.3465        0.0118
+         x             1      1.4076            0.3635            14.9955        0.0001
+
+
+                                   PROC LOGISTIC CLOGLOG link
+
+                                     The LOGISTIC Procedure
+
+                                       Model Information
+
+
+
+                          Data Set                     WORK.COUNTS
+                          Response Variable            y
+                          Number of Response Levels    2
+                          Model                        binary cloglog
+                          Optimization Technique       Newton-Raphson
+
+                                        Response Profile
+
+                             Ordered Value    y    Total Frequency
+
+                                         1    1                 30
+                                         2    0                 30
+
+PROC LOGISTIC is modeling the probability that y=1.
+
+                                    Model Convergence Status
+
+     Convergence criterion (GCONV=1E-8) satisfied.
+
+                                      Model Fit Statistics
+
+                    Criterion    Intercept Only    Intercept and Covariates
+
+                    AIC                 85.1777                     70.8990
+                    SC                  87.2720                     75.0877
+                    -2 Log L            83.1777                     66.8990
+
+                             Testing Global Null Hypothesis: BETA=0
+
+                       Test                Chi-Square    DF    Pr > ChiSq
+
+                       Likelihood Ratio       16.2787     1        <.0001
+                       Score                  15.4286     1        <.0001
+                       Wald                   15.0545     1        0.0001
+
+                            Analysis of Maximum Likelihood Estimates
+
+         Parameter    DF    Estimate    Standard Error    Wald Chi-Square    Pr > ChiSq
+
+         Intercept     1     -1.0892            0.3177            11.7531        0.0006
+         x             1      1.5651            0.4034            15.0545        0.0001
+
+
+==== EXIT 0 ====

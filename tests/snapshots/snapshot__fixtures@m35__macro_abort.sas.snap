@@ -1,0 +1,12 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m35/macro_abort.sas
+---
+==== LOG ====
+before_macro
+in_macro
+
+==== LISTING ====
+
+==== EXIT 0 ====

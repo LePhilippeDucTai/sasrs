@@ -41,6 +41,8 @@ pub enum LinkFunction {
     Log,
     Logit,
     Identity,
+    /// Reciprocal (inverse) link: η = 1/μ, μ = 1/η — Gamma canonical link.
+    Reciprocal,
 }
 
 /// Canonical link for each distribution (SAS 9.4 defaults).
@@ -49,7 +51,8 @@ fn canonical_link(dist: &Distribution) -> LinkFunction {
         Distribution::Poisson => LinkFunction::Log,
         Distribution::Binomial => LinkFunction::Logit,
         Distribution::Normal => LinkFunction::Identity,
-        Distribution::Gamma => LinkFunction::Log, // moot, deferred
+        // SAS GENMOD canonical link for Gamma is the reciprocal (power(-1)).
+        Distribution::Gamma => LinkFunction::Reciprocal,
     }
 }
 
@@ -75,11 +78,21 @@ pub struct GenmodModel {
     pub dist: Distribution,
     pub link: LinkFunction,
     pub noprint: bool,
+    /// MODEL ... / SCALE=value — fix the dispersion at this value instead of
+    /// estimating it (Normal/Gamma). `None` → estimate.
+    pub scale: Option<f64>,
+    /// MODEL ... / NOSCALE — hold the scale fixed at 1 (Normal/Gamma) rather
+    /// than estimating it. Combined with SCALE= it fixes at the given value.
+    pub noscale: bool,
 }
 
 // ───────────────────────── Link / variance functions ─────────────────────────
 
 /// Apply inverse link: η → μ (mean on natural scale).
+///
+/// For the reciprocal link μ = 1/η; the IRLS step can drive η through 0 and
+/// make μ negative, which is invalid for Gamma (μ > 0). We clamp μ to a small
+/// positive floor here; the IRLS loop additionally step-halves on invalid μ.
 fn inv_link(eta: f64, lf: &LinkFunction) -> f64 {
     match lf {
         LinkFunction::Log => eta.exp().max(1e-10),
@@ -88,6 +101,18 @@ fn inv_link(eta: f64, lf: &LinkFunction) -> f64 {
             1.0 / (1.0 + e)
         }
         LinkFunction::Identity => eta,
+        LinkFunction::Reciprocal => {
+            if eta.abs() < 1e-12 {
+                1e12
+            } else {
+                let mu = 1.0 / eta;
+                if mu > 0.0 {
+                    mu
+                } else {
+                    1e-10
+                }
+            }
+        }
     }
 }
 
@@ -100,7 +125,8 @@ fn variance(mu: f64, dist: &Distribution) -> f64 {
             v.max(1e-15)
         }
         Distribution::Normal => 1.0,
-        Distribution::Gamma => unreachable!("Gamma execution should be caught at guard"),
+        // Gamma: V(μ) = μ².
+        Distribution::Gamma => (mu * mu).max(1e-15),
     }
 }
 
@@ -113,6 +139,8 @@ fn deta_dmu(mu: f64, lf: &LinkFunction) -> f64 {
             1.0 / v.max(1e-15)
         }
         LinkFunction::Identity => 1.0,
+        // η = 1/μ ⇒ dη/dμ = −1/μ².
+        LinkFunction::Reciprocal => -1.0 / (mu * mu).max(1e-15),
     }
 }
 
@@ -214,6 +242,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
             let mut dist_opt: Option<Distribution> = None;
             let mut link_opt: Option<LinkFunction> = None;
             let mut noprint = false;
+            let mut scale_opt: Option<f64> = None;
+            let mut noscale = false;
 
             loop {
                 if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
@@ -249,12 +279,37 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
                                     "log" => link_opt = Some(LinkFunction::Log),
                                     "logit" => link_opt = Some(LinkFunction::Logit),
                                     "identity" => link_opt = Some(LinkFunction::Identity),
+                                    "reciprocal" | "inverse" | "power" => {
+                                        // POWER(-1) ≈ reciprocal; treat POWER as
+                                        // reciprocal here (full power family deferred).
+                                        link_opt = Some(LinkFunction::Reciprocal)
+                                    }
                                     _ => {} // ignore unknown
                                 }
                             }
                         } else if ts.peek().is_kw("noprint") {
                             noprint = true;
                             ts.next();
+                        } else if ts.peek().is_kw("noscale") {
+                            noscale = true;
+                            ts.next();
+                        } else if ts.peek().is_kw("scale") {
+                            ts.next();
+                            if ts.peek().kind == TokenKind::Eq {
+                                ts.next();
+                            }
+                            // SCALE=<number>; accept numeric literal.
+                            if let TokenKind::Num(v) = ts.peek().kind {
+                                scale_opt = Some(v);
+                                ts.next();
+                            } else if let Some(s) = ts.peek().ident().map(str::to_string) {
+                                if let Ok(v) = s.parse::<f64>() {
+                                    scale_opt = Some(v);
+                                }
+                                ts.next();
+                            } else {
+                                ts.next();
+                            }
                         } else {
                             ts.next();
                         }
@@ -283,6 +338,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
                 dist,
                 link,
                 noprint,
+                scale: scale_opt,
+                noscale,
             });
             Ok(true)
         } else if kw == "freq" {
@@ -372,6 +429,45 @@ fn dev_contribution_binom(y: f64, mu: f64) -> f64 {
     2.0 * (t1 + t2)
 }
 
+// ───────────────────────── CLASS design terms ─────────────────────────
+
+/// One term on the MODEL right-hand side, expanded into design columns.
+///
+/// PARAM = reference coding with ref = LAST level (matches SAS GENMOD default
+/// `PARAM=GLM`-style ordering with the last level as the reference cell). A
+/// CLASS factor with L distinct non-missing levels (in `Value::sas_cmp` order)
+/// contributes L−1 design columns; the last level is the dropped reference.
+enum DesignTerm {
+    /// Continuous predictor → a single design column carrying the numeric value.
+    Continuous { name: String, col: usize },
+    /// CLASS predictor → L−1 indicator columns (reference = last level).
+    Class {
+        name: String,
+        col: usize,
+        /// Distinct non-missing levels, `sas_cmp` order. Reference = last.
+        levels: Vec<Value>,
+    },
+}
+
+impl DesignTerm {
+    /// Number of design columns this term contributes.
+    fn n_cols(&self) -> usize {
+        match self {
+            DesignTerm::Continuous { .. } => 1,
+            DesignTerm::Class { levels, .. } => levels.len().saturating_sub(1),
+        }
+    }
+}
+
+/// Level label for a CLASS value, matching the Class Level Information scheme.
+fn class_level_label(v: &Value) -> String {
+    match v {
+        Value::Char(s) => s.trim_end().to_string(),
+        Value::Num(f) => format!("{f}"),
+        Value::Missing(k) => k.display(),
+    }
+}
+
 // ───────────────────────── Execute ─────────────────────────
 
 pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
@@ -379,18 +475,6 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     let model = ast.model.as_ref().ok_or_else(|| {
         SasError::runtime("MODEL statement required for PROC GENMOD")
     })?;
-
-    if !ast.class_vars.is_empty() {
-        return Err(SasError::runtime(
-            "CLASS variables not yet implemented in PROC GENMOD",
-        ));
-    }
-
-    if model.dist == Distribution::Gamma {
-        return Err(SasError::runtime(
-            "DIST=GAMMA is not yet implemented in PROC GENMOD",
-        ));
-    }
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
     let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
@@ -447,6 +531,51 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     } else {
         None
     };
+
+    // ── Build design terms (CLASS reference-cell coding, ref = last level) ──
+    // Each predictor is either continuous (1 column) or a CLASS factor (L−1
+    // indicator columns). CLASS levels are the distinct non-missing values in
+    // `Value::sas_cmp` order; the last level is the reference cell.
+    let mut design_terms: Vec<DesignTerm> = Vec::with_capacity(nb_preds);
+    for (pi, nm) in predictors.iter().enumerate() {
+        let is_class = ast
+            .class_vars
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(nm));
+        if is_class {
+            let col = &pred_cols[pi];
+            let mut levels: Vec<Value> = Vec::new();
+            for v in col.iter() {
+                if v.is_missing() {
+                    continue;
+                }
+                if !levels
+                    .iter()
+                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+                {
+                    levels.push(v.clone());
+                }
+            }
+            levels.sort_by(|a, b| a.sas_cmp(b));
+            if levels.len() < 2 {
+                return Err(SasError::runtime(format!(
+                    "CLASS variable {} must have at least 2 levels.",
+                    nm.to_uppercase()
+                )));
+            }
+            design_terms.push(DesignTerm::Class {
+                name: ds.vars[pred_idxs[pi]].name.clone(),
+                col: pi,
+                levels,
+            });
+        } else {
+            design_terms.push(DesignTerm::Continuous {
+                name: ds.vars[pred_idxs[pi]].name.clone(),
+                col: pi,
+            });
+        }
+    }
+    let n_design: usize = design_terms.iter().map(|t| t.n_cols()).sum();
 
     // ── 3. Prepare response for Binomial (determine event level) ──────────
     // For non-binomial, collect distinct levels for reference but encode y
@@ -560,12 +689,40 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
         let mut row = vec![1.0_f64]; // intercept
         let mut ok = true;
-        for pc in &pred_cols {
-            match value_to_num(&pc[i]) {
-                Some(v) if !v.is_nan() => row.push(v),
-                _ => {
-                    ok = false;
-                    break;
+        for term in &design_terms {
+            match term {
+                DesignTerm::Continuous { col, .. } => {
+                    match value_to_num(&pred_cols[*col][i]) {
+                        Some(v) if !v.is_nan() => row.push(v),
+                        _ => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                DesignTerm::Class { col, levels, .. } => {
+                    let v = &pred_cols[*col][i];
+                    if v.is_missing() {
+                        ok = false;
+                        break;
+                    }
+                    // Reference-cell dummies: 1 for the matching non-reference
+                    // level, 0 elsewhere (reference = last level → all zeros).
+                    let nref = levels.len() - 1;
+                    let pos = levels
+                        .iter()
+                        .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal);
+                    match pos {
+                        Some(li) => {
+                            for k in 0..nref {
+                                row.push(if k == li { 1.0 } else { 0.0 });
+                            }
+                        }
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -602,9 +759,9 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         n_total as i64
     ));
 
-    let p_param = 1 + nb_preds; // intercept + predictors
+    let p_param = 1 + n_design; // intercept + design columns
 
-    if n_obs <= nb_preds {
+    if n_obs <= n_design {
         return Err(SasError::runtime(
             "Not enough observations for PROC GENMOD",
         ));
@@ -631,6 +788,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             LinkFunction::Log => "Log",
             LinkFunction::Logit => "Logit",
             LinkFunction::Identity => "Identity",
+            LinkFunction::Reciprocal => "Reciprocal",
         };
 
         let info_headers: Vec<String> = vec!["".into(), "".into()];
@@ -647,6 +805,32 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             .listing
             .write_table(&info_headers, &info_aligns, &info_rows);
         session.listing.blank();
+
+        // ── Class Level Information (only when CLASS variables present) ────
+        if !ast.class_vars.is_empty() {
+            centered(session, "Class Level Information");
+            session.listing.blank();
+
+            let cli_headers: Vec<String> =
+                vec!["Class".into(), "Levels".into(), "Values".into()];
+            let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
+            let mut cli_rows: Vec<Vec<String>> = Vec::new();
+            for term in &design_terms {
+                if let DesignTerm::Class { name, levels, .. } = term {
+                    let values_str: Vec<String> =
+                        levels.iter().map(class_level_label).collect();
+                    cli_rows.push(vec![
+                        name.clone(),
+                        format!("{}", levels.len()),
+                        values_str.join(" "),
+                    ]);
+                }
+            }
+            session
+                .listing
+                .write_table(&cli_headers, &cli_aligns, &cli_rows);
+            session.listing.blank();
+        }
 
         // ── 7. Response Profile (Binomial only) ───────────────────────────
         if *dist == Distribution::Binomial {
@@ -708,6 +892,8 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             (p / (1.0 - p)).ln().clamp(-10.0, 10.0)
         }
         LinkFunction::Identity => y_mean,
+        // η = 1/μ; guard ȳ > 0 (Gamma response is positive).
+        LinkFunction::Reciprocal => 1.0 / y_mean.max(1e-10),
     };
 
     let mut beta: Vec<f64> = vec![0.0; p_param];
@@ -749,13 +935,42 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         let h_inv = invert_matrix(&hessian)?;
         let delta = mat_vec(&h_inv, &score);
 
-        // Update β
-        for j in 0..p_param {
-            beta[j] += delta[j];
-        }
+        // Update β with step-halving to keep μ valid (μ>0 for Gamma/Poisson,
+        // 0<μ<1 for Binomial). The reciprocal link in particular can drive μ
+        // negative; halve the step until every fitted μ is in range.
+        let mu_in_range = |b: &[f64]| -> bool {
+            for xi in x_mat.iter() {
+                let eta: f64 = xi.iter().zip(b.iter()).map(|(x, c)| x * c).sum();
+                let mu = inv_link(eta, lf);
+                let ok = match dist {
+                    Distribution::Binomial => mu > 0.0 && mu < 1.0,
+                    _ => mu > 0.0,
+                };
+                if !ok || !mu.is_finite() {
+                    return false;
+                }
+            }
+            true
+        };
 
-        // GCONV convergence check
-        let max_delta = delta.iter().map(|d| d.abs()).fold(0.0_f64, f64::max);
+        let mut step = 1.0_f64;
+        let mut trial = beta.clone();
+        for _ in 0..40 {
+            for j in 0..p_param {
+                trial[j] = beta[j] + step * delta[j];
+            }
+            if mu_in_range(&trial) {
+                break;
+            }
+            step *= 0.5;
+        }
+        beta = trial;
+
+        // GCONV convergence check (scaled by the realized step length)
+        let max_delta = delta
+            .iter()
+            .map(|d| (step * d).abs())
+            .fold(0.0_f64, f64::max);
         let max_beta = beta.iter().map(|b| b.abs()).fold(0.0_f64, f64::max);
         let gconv = max_delta / (1.0 + max_beta);
         if gconv < 1e-8 {
@@ -765,6 +980,10 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     }
 
     if !converged {
+        // NOTE (not a panic): report non-convergence and stop this PROC cleanly.
+        session
+            .log
+            .note("PROC GENMOD failed to converge within the iteration limit.");
         return Err(SasError::runtime("PROC GENMOD failed to converge"));
     }
 
@@ -790,32 +1009,96 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     let h_inv = invert_matrix(&final_hessian)?;
 
     // ── 10. Scale / Dispersion ────────────────────────────────────────────
-    // Poisson, Binomial: scale=1 (fixed, DF=0)
-    // Normal: scale = sqrt(MSE) = sqrt(SSE / (n-p)), DF=n-p
+    // Poisson, Binomial: scale=1 (fixed, DF=0).
+    // Normal: φ̂ = MSE = SSE/(n−p); reported Scale = √φ̂ = σ̂, DF=n−p.
+    // Gamma:  Pearson dispersion φ̂ = (1/(n−p)) Σ (y−μ)²/μ²; reported Scale is
+    //         the estimate of 1/φ (SAS GENMOD reports the Gamma "Scale" in the
+    //         1/φ form). The exact SAS default uses the ML (digamma) scale; we
+    //         approximate it by the moment-based Pearson dispersion — the two
+    //         agree asymptotically but differ in finite samples. DF=n−p.
+    //
+    // NOSCALE / SCALE=: when NOSCALE, the dispersion is held FIXED rather than
+    // estimated (φ=1 by default, or derived from SCALE=); when SCALE=v is given
+    // the reported Scale is fixed at v (for Normal v=σ ⇒ φ=v²; for Gamma the
+    // value is the 1/φ form ⇒ φ=1/v). A fixed scale carries DF=0.
+    //
+    // `disp_phi` is the dispersion φ used to scale Var(β̂)=φ·H⁻¹ and the scaled
+    // criteria. `scale_est` is the value printed on the Scale row.
     let scale_est: f64;
     let scale_df: i64;
+    let disp_phi: f64;
     let var_beta: Vec<Vec<f64>>;
 
-    if *dist == Distribution::Normal {
-        let sse: f64 = y_vec
-            .iter()
-            .zip(final_mu.iter())
-            .zip(freq_vec.iter())
-            .map(|((y, mu), w)| w * (y - mu) * (y - mu))
-            .sum();
-        let df_err = (n_total as i64) - (p_param as i64);
-        let mse = sse / (df_err as f64);
-        scale_est = mse.sqrt();
-        scale_df = df_err;
-        // Var(β̂) = MSE * H⁻¹
-        var_beta = h_inv
-            .iter()
-            .map(|row| row.iter().map(|v| mse * v).collect())
-            .collect();
-    } else {
-        scale_est = 1.0;
-        scale_df = 0;
-        var_beta = h_inv;
+    let df_err = (n_total as i64) - (p_param as i64);
+    let fixed_scale = model.noscale || model.scale.is_some();
+
+    match dist {
+        Distribution::Normal => {
+            if fixed_scale {
+                // SCALE= is σ for Normal (default 1 under NOSCALE alone).
+                let sigma = model.scale.unwrap_or(1.0);
+                scale_est = sigma;
+                disp_phi = sigma * sigma;
+                scale_df = 0;
+            } else {
+                let sse: f64 = y_vec
+                    .iter()
+                    .zip(final_mu.iter())
+                    .zip(freq_vec.iter())
+                    .map(|((y, mu), w)| w * (y - mu) * (y - mu))
+                    .sum();
+                let mse = sse / (df_err as f64);
+                scale_est = mse.sqrt();
+                disp_phi = mse;
+                scale_df = df_err;
+            }
+            var_beta = h_inv
+                .iter()
+                .map(|row| row.iter().map(|v| disp_phi * v).collect())
+                .collect();
+        }
+        Distribution::Gamma => {
+            // Pearson dispersion φ̂ = (1/(n−p)) Σ w (y−μ)²/μ².
+            let pearson_disp: f64 = {
+                let s: f64 = (0..n_obs)
+                    .map(|i| {
+                        let y = y_vec[i];
+                        let mu = final_mu[i];
+                        freq_vec[i] * (y - mu) * (y - mu) / (mu * mu)
+                    })
+                    .sum();
+                s / (df_err as f64)
+            };
+            if fixed_scale {
+                // For Gamma the printed Scale is the 1/φ form; SCALE=v ⇒ φ=1/v.
+                let s = model.scale.unwrap_or(1.0);
+                scale_est = s;
+                disp_phi = if s != 0.0 { 1.0 / s } else { 1.0 };
+                scale_df = 0;
+            } else {
+                disp_phi = pearson_disp;
+                scale_est = if pearson_disp != 0.0 {
+                    1.0 / pearson_disp
+                } else {
+                    0.0
+                };
+                scale_df = df_err;
+            }
+            var_beta = h_inv
+                .iter()
+                .map(|row| row.iter().map(|v| disp_phi * v).collect())
+                .collect();
+        }
+        _ => {
+            // Poisson / Binomial: dispersion fixed at 1 (φ=1), Scale row = 1.
+            // SCALE= is accepted but only rescales the scaled criteria below; the
+            // SEs are left at the φ=1 model (overdispersion adjustment of SEs is
+            // deferred).
+            scale_est = 1.0;
+            scale_df = 0;
+            disp_phi = 1.0;
+            var_beta = h_inv;
+        }
     }
 
     // ── 11. SE, Wald chi², CI ─────────────────────────────────────────────
@@ -854,7 +1137,21 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
                 })
                 .sum()
         }
-        Distribution::Gamma => unreachable!(),
+        Distribution::Gamma => {
+            // Full Gamma log-likelihood with dispersion φ (shape ν = 1/φ):
+            //   Σ fi·[ (ν−1)·ln y − ν·y/μ − ν·ln μ + ν·ln ν − ln Γ(ν) ].
+            let nu = if disp_phi > 0.0 { 1.0 / disp_phi } else { 1.0 };
+            (0..n_obs)
+                .map(|i| {
+                    let y = y_vec[i].max(1e-300);
+                    let mu = final_mu[i].max(1e-300);
+                    let fi = freq_vec[i];
+                    fi * ((nu - 1.0) * y.ln() - nu * y / mu - nu * mu.ln()
+                        + nu * nu.ln()
+                        - crate::stat::ln_gamma(nu))
+                })
+                .sum()
+        }
     };
 
     let deviance: f64 = match dist {
@@ -883,7 +1180,15 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
                 fi * (y - mu) * (y - mu)
             })
             .sum(),
-        Distribution::Gamma => unreachable!(),
+        // Gamma deviance = 2·Σ fi·[ −ln(y/μ) + (y−μ)/μ ].
+        Distribution::Gamma => (0..n_obs)
+            .map(|i| {
+                let y = y_vec[i].max(1e-300);
+                let mu = final_mu[i].max(1e-300);
+                let fi = freq_vec[i];
+                fi * 2.0 * (-(y / mu).ln() + (y - mu) / mu)
+            })
+            .sum(),
     };
 
     let pearson: f64 = (0..n_obs)
@@ -898,11 +1203,12 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
     let df_gof = (n_total as i64) - (p_param as i64);
 
-    // Scaled deviance and scaled Pearson: divide by scale^2 (for Normal/Gamma);
-    // for Poisson/Binomial scale=1 so same value.
-    let scale_sq = scale_est * scale_est;
-    let scaled_deviance = deviance / scale_sq;
-    let scaled_pearson = pearson / scale_sq;
+    // Scaled deviance and scaled Pearson: divide by the dispersion φ. For Normal
+    // φ=σ²=scale_est² and for Poisson/Binomial φ=1, so the values match the
+    // previous scale_est² form byte-for-byte; for Gamma φ is the dispersion
+    // (scale_est=1/φ), so dividing by φ (not scale_est²) is the correct scaling.
+    let scaled_deviance = deviance / disp_phi;
+    let scaled_pearson = pearson / disp_phi;
 
     // Information criteria — n_params excludes Scale for Poisson/Binomial
     // (scale fixed, not estimated), but for Normal Scale is estimated via
@@ -915,8 +1221,11 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             / (n_total - n_params as f64 - 1.0);
     let bic = -2.0 * log_lik + (n_params as f64) * n_total.ln();
 
-    // Scale SE (Normal only): SE(scale) = scale / sqrt(2 * df_error)
-    let se_scale: f64 = if *dist == Distribution::Normal && scale_df > 0 {
+    // Scale SE (Normal/Gamma, when estimated): SE(scale) ≈ scale / sqrt(2·df).
+    let se_scale: f64 = if (*dist == Distribution::Normal
+        || *dist == Distribution::Gamma)
+        && scale_df > 0
+    {
         scale_est / (2.0 * scale_df as f64).sqrt()
     } else {
         0.0
@@ -1002,37 +1311,94 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
         let mut amle_rows: Vec<Vec<String>> = Vec::with_capacity(p_param + 1);
 
-        for j in 0..p_param {
-            let param_name = if j == 0 {
-                "Intercept".to_string()
-            } else {
-                predictors[j - 1].clone()
-            };
-            let ci_lower = beta[j] - 1.96 * se_beta[j];
-            let ci_upper = beta[j] + 1.96 * se_beta[j];
+        // Intercept row.
+        {
+            let ci_lower = beta[0] - 1.96 * se_beta[0];
+            let ci_upper = beta[0] + 1.96 * se_beta[0];
             amle_rows.push(vec![
-                param_name,
+                "Intercept".to_string(),
                 "1".into(),
-                fmt4(beta[j]),
-                fmt4(se_beta[j]),
+                fmt4(beta[0]),
+                fmt4(se_beta[0]),
                 fmt4(ci_lower),
                 fmt4(ci_upper),
-                fmt4(wald_chi2[j]),
-                fmt_p_opt(wald_p[j]),
+                fmt4(wald_chi2[0]),
+                fmt_p_opt(wald_p[0]),
             ]);
         }
 
-        // Scale row
-        let scale_ci_lower = if *dist == Distribution::Normal {
-            fmt4((scale_est - 1.96 * se_scale).max(0.0))
-        } else {
-            fmt4(1.0)
-        };
-        let scale_ci_upper = if *dist == Distribution::Normal {
-            fmt4(scale_est + 1.96 * se_scale)
-        } else {
-            fmt4(1.0)
-        };
+        // Predictor / CLASS rows. `col` walks the β vector starting after the
+        // intercept; CLASS factors emit one row per non-reference level (label
+        // "classvar level") followed by a reference-level row (estimate 0, DF 0,
+        // ref = last level). Continuous predictors emit a single row labelled by
+        // the variable name (byte-identical to the pre-CLASS layout).
+        let mut col = 1usize;
+        for term in &design_terms {
+            match term {
+                DesignTerm::Continuous { name, .. } => {
+                    let j = col;
+                    let ci_lower = beta[j] - 1.96 * se_beta[j];
+                    let ci_upper = beta[j] + 1.96 * se_beta[j];
+                    amle_rows.push(vec![
+                        name.clone(),
+                        "1".into(),
+                        fmt4(beta[j]),
+                        fmt4(se_beta[j]),
+                        fmt4(ci_lower),
+                        fmt4(ci_upper),
+                        fmt4(wald_chi2[j]),
+                        fmt_p_opt(wald_p[j]),
+                    ]);
+                    col += 1;
+                }
+                DesignTerm::Class { name, levels, .. } => {
+                    let nref = levels.len() - 1;
+                    for li in 0..nref {
+                        let j = col + li;
+                        let lbl = format!("{} {}", name, class_level_label(&levels[li]));
+                        let ci_lower = beta[j] - 1.96 * se_beta[j];
+                        let ci_upper = beta[j] + 1.96 * se_beta[j];
+                        amle_rows.push(vec![
+                            lbl,
+                            "1".into(),
+                            fmt4(beta[j]),
+                            fmt4(se_beta[j]),
+                            fmt4(ci_lower),
+                            fmt4(ci_upper),
+                            fmt4(wald_chi2[j]),
+                            fmt_p_opt(wald_p[j]),
+                        ]);
+                    }
+                    // Reference level row (last level): estimate 0, DF 0.
+                    let ref_lbl =
+                        format!("{} {}", name, class_level_label(&levels[nref]));
+                    amle_rows.push(vec![
+                        ref_lbl,
+                        "0".into(),
+                        fmt4(0.0),
+                        fmt4(0.0),
+                        fmt4(0.0),
+                        fmt4(0.0),
+                        ".".into(),
+                        ".".into(),
+                    ]);
+                    col += nref;
+                }
+            }
+        }
+
+        // Scale row. Normal: Scale=σ̂ with a Wald CI from se_scale. Gamma: Scale
+        // is the 1/φ estimate (Pearson-based); we report the estimate and its CI
+        // from se_scale (≈ Scale/√(2·df)). Poisson/Binomial: fixed at 1.
+        let (scale_ci_lower, scale_ci_upper) =
+            if *dist == Distribution::Normal || *dist == Distribution::Gamma {
+                (
+                    fmt4((scale_est - 1.96 * se_scale).max(0.0)),
+                    fmt4(scale_est + 1.96 * se_scale),
+                )
+            } else {
+                (fmt4(1.0), fmt4(1.0))
+            };
 
         amle_rows.push(vec![
             "Scale".into(),
@@ -1117,6 +1483,8 @@ mod tests {
                 dist: Distribution::Poisson,
                 link: LinkFunction::Log,
                 noprint: false,
+                scale: None,
+                noscale: false,
             }),
             freq_var: None,
         };
@@ -1172,28 +1540,31 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_gamma_error() {
-        // Execute with Gamma should return an error
-        let session = make_session();
-        let ast = GenmodAst {
-            data_options: GenmodDataOptions { input: None },
-            class_vars: vec![],
-            model: Some(GenmodModel {
-                response: "y".into(),
-                event: None,
-                descending: false,
-                predictors: vec!["x".into()],
-                dist: Distribution::Gamma,
-                link: LinkFunction::Log,
-                noprint: true,
-            }),
-            freq_var: None,
-        };
-        let mut s = session;
-        let result = execute(&ast, &mut s);
-        assert!(result.is_err());
-        let msg = result.err().unwrap().to_string();
-        assert!(msg.contains("GAMMA"), "Expected GAMMA in error: {msg}");
+    fn test_parse_gamma_default_link_reciprocal() {
+        // DIST=GAMMA without an explicit LINK= → canonical reciprocal.
+        let ast = parse_genmod("proc genmod; model y = x / dist=gamma; run;").unwrap();
+        let m = ast.model.unwrap();
+        assert_eq!(m.dist, Distribution::Gamma);
+        assert_eq!(m.link, LinkFunction::Reciprocal);
+    }
+
+    #[test]
+    fn test_parse_gamma_link_log() {
+        let ast =
+            parse_genmod("proc genmod; model y = x / dist=gamma link=log; run;").unwrap();
+        let m = ast.model.unwrap();
+        assert_eq!(m.dist, Distribution::Gamma);
+        assert_eq!(m.link, LinkFunction::Log);
+    }
+
+    #[test]
+    fn test_parse_scale_noscale() {
+        let ast =
+            parse_genmod("proc genmod; model y = x / dist=normal noscale; run;").unwrap();
+        assert!(ast.model.unwrap().noscale);
+        let ast2 =
+            parse_genmod("proc genmod; model y = x / dist=normal scale=2.5; run;").unwrap();
+        assert_eq!(ast2.model.unwrap().scale, Some(2.5));
     }
 
     // ── Execute tests — Poisson oracle ───────────────────────────────────
@@ -1272,6 +1643,8 @@ mod tests {
                 dist: Distribution::Normal,
                 link: LinkFunction::Identity,
                 noprint: false,
+                scale: None,
+                noscale: false,
             }),
             freq_var: None,
         };
@@ -1304,5 +1677,256 @@ mod tests {
             listing.contains("1.0000") || listing.contains("1.000"),
             "Scale not found: {listing}"
         );
+    }
+
+    // ── Gamma + CLASS + SCALE tests (M34.7) ──────────────────────────────
+
+    fn char_meta(name: &str) -> VarMeta {
+        VarMeta {
+            name: name.into(),
+            ty: VarType::Char,
+            length: 8,
+            format: None,
+            label: None,
+        }
+    }
+
+    /// Intercept-only Gamma; y has mean ȳ. `link` selects LOG or RECIPROCAL.
+    fn make_gamma_intercept_session(link: LinkFunction) -> (Session, GenmodAst) {
+        let session = make_session();
+        let frame = df![
+            "y" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df: frame,
+            vars: vec![num_meta("y")],
+        };
+        session.libs.get("WORK").unwrap().write("GAM", &ds).unwrap();
+        let ast = GenmodAst {
+            data_options: GenmodDataOptions {
+                input: Some(DatasetRef {
+                    libref: Some("WORK".into()),
+                    name: "GAM".into(),
+                }),
+            },
+            class_vars: vec![],
+            model: Some(GenmodModel {
+                response: "y".into(),
+                event: None,
+                descending: false,
+                predictors: vec![],
+                dist: Distribution::Gamma,
+                link,
+                noprint: true,
+                scale: None,
+                noscale: false,
+            }),
+            freq_var: None,
+        };
+        (session, ast)
+    }
+
+    /// Pull β̂₀ from the listing of an intercept-only model by parsing the
+    /// Intercept row's Estimate column. Easier: run with noprint=false and grep.
+    fn gamma_intercept_estimate(link: LinkFunction) -> f64 {
+        let (mut session, mut ast) = make_gamma_intercept_session(link);
+        ast.model.as_mut().unwrap().noprint = false;
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        // Find the "Intercept" line and take its first numeric token.
+        let line = listing
+            .lines()
+            .find(|l| l.trim_start().starts_with("Intercept"))
+            .expect("Intercept row");
+        // tokens after "Intercept": DF Estimate ...
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        // toks[0]="Intercept", toks[1]=DF("1"), toks[2]=Estimate
+        toks[2].parse::<f64>().expect("estimate parse")
+    }
+
+    #[test]
+    fn test_gamma_intercept_only_log_link() {
+        // LINK=LOG intercept-only Gamma ⇒ β̂₀ = ln(ȳ); ȳ = 3.5.
+        let est = gamma_intercept_estimate(LinkFunction::Log);
+        let expected = (3.5_f64).ln();
+        assert!(
+            (est - expected).abs() < 1e-3,
+            "log-link intercept {est} vs ln(3.5)={expected}"
+        );
+    }
+
+    #[test]
+    fn test_gamma_intercept_only_reciprocal_link() {
+        // Canonical reciprocal intercept-only Gamma ⇒ β̂₀ = 1/ȳ; ȳ = 3.5.
+        let est = gamma_intercept_estimate(LinkFunction::Reciprocal);
+        let expected = 1.0 / 3.5;
+        assert!(
+            (est - expected).abs() < 1e-3,
+            "reciprocal-link intercept {est} vs 1/3.5={expected}"
+        );
+    }
+
+    #[test]
+    fn test_gamma_pearson_dispersion() {
+        // Independently verify the Pearson dispersion φ̂ for an intercept-only
+        // reciprocal-link Gamma: μ̂ = ȳ for every obs, so
+        //   φ̂ = (1/(n−1)) Σ (y−ȳ)²/ȳ².
+        let (mut session, mut ast) =
+            make_gamma_intercept_session(LinkFunction::Reciprocal);
+        ast.model.as_mut().unwrap().noprint = false;
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+
+        let y = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let ybar = 3.5;
+        let phi: f64 =
+            y.iter().map(|v| (v - ybar).powi(2) / (ybar * ybar)).sum::<f64>() / 5.0;
+        // Reported Scale = 1/φ.
+        let scale = 1.0 / phi;
+        let scale_str = format!("{scale:.4}");
+        assert!(
+            listing.contains(&scale_str),
+            "expected Scale={scale_str} (1/φ) in listing:\n{listing}"
+        );
+    }
+
+    /// 2-level CLASS predictor must equal manual 0/1 dummy coding of the same
+    /// predictor (reference = last level → "b", design column flags level "a").
+    #[test]
+    fn test_class_two_level_equals_manual_dummy() {
+        // CLASS version: group ∈ {a,a,a,b,b,b}, y Poisson counts.
+        let session = make_session();
+        let frame_c = df![
+            "y" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "g" => ["a", "a", "a", "b", "b", "b"]
+        ]
+        .unwrap();
+        let ds_c = SasDataset {
+            df: frame_c,
+            vars: vec![num_meta("y"), char_meta("g")],
+        };
+        session.libs.get("WORK").unwrap().write("CLS", &ds_c).unwrap();
+        let ast_c = GenmodAst {
+            data_options: GenmodDataOptions {
+                input: Some(DatasetRef {
+                    libref: Some("WORK".into()),
+                    name: "CLS".into(),
+                }),
+            },
+            class_vars: vec!["g".into()],
+            model: Some(GenmodModel {
+                response: "y".into(),
+                event: None,
+                descending: false,
+                predictors: vec!["g".into()],
+                dist: Distribution::Poisson,
+                link: LinkFunction::Log,
+                noprint: false,
+                scale: None,
+                noscale: false,
+            }),
+            freq_var: None,
+        };
+        let mut s_c = session;
+        execute(&ast_c, &mut s_c).unwrap();
+        let listing_c = s_c.listing.into_string();
+
+        // Manual dummy: d = 1 if g=="a" else 0 (ref = last level "b").
+        let session2 = make_session();
+        let frame_d = df![
+            "y" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "d" => [1.0_f64, 1.0, 1.0, 0.0, 0.0, 0.0]
+        ]
+        .unwrap();
+        let ds_d = SasDataset {
+            df: frame_d,
+            vars: vec![num_meta("y"), num_meta("d")],
+        };
+        session2.libs.get("WORK").unwrap().write("DUM", &ds_d).unwrap();
+        let ast_d = GenmodAst {
+            data_options: GenmodDataOptions {
+                input: Some(DatasetRef {
+                    libref: Some("WORK".into()),
+                    name: "DUM".into(),
+                }),
+            },
+            class_vars: vec![],
+            model: Some(GenmodModel {
+                response: "y".into(),
+                event: None,
+                descending: false,
+                predictors: vec!["d".into()],
+                dist: Distribution::Poisson,
+                link: LinkFunction::Log,
+                noprint: false,
+                scale: None,
+                noscale: false,
+            }),
+            freq_var: None,
+        };
+        let mut s_d = session2;
+        execute(&ast_d, &mut s_d).unwrap();
+        let listing_d = s_d.listing.into_string();
+
+        // Both fit β̂ for the "a vs b" contrast = ln(2) − ln(5) = ln(0.4).
+        let contrast = (2.0_f64).ln() - (5.0_f64).ln();
+        let contrast_str = format!("{contrast:.4}");
+        assert!(
+            listing_c.contains(&contrast_str),
+            "CLASS contrast {contrast_str} missing:\n{listing_c}"
+        );
+        assert!(
+            listing_d.contains(&contrast_str),
+            "manual-dummy contrast {contrast_str} missing:\n{listing_d}"
+        );
+        // The Class Level Information table must appear for the CLASS run.
+        assert!(listing_c.contains("Class Level Information"));
+        // Reference level row "g b" with DF 0 must be present.
+        assert!(
+            listing_c.contains("g b"),
+            "reference-level row 'g b' missing:\n{listing_c}"
+        );
+    }
+
+    /// Design-matrix dimensionality: a 3-level CLASS contributes L−1=2 columns,
+    /// plus a continuous predictor and the intercept ⇒ p = 4.
+    #[test]
+    fn test_design_matrix_dimensions() {
+        let three = DesignTerm::Class {
+            name: "g".into(),
+            col: 0,
+            levels: vec![
+                Value::Char("a".into()),
+                Value::Char("b".into()),
+                Value::Char("c".into()),
+            ],
+        };
+        assert_eq!(three.n_cols(), 2);
+        let cont = DesignTerm::Continuous {
+            name: "x".into(),
+            col: 1,
+        };
+        assert_eq!(cont.n_cols(), 1);
+        // intercept + 2 (class) + 1 (continuous) = 4 parameters.
+        let p_param = 1 + three.n_cols() + cont.n_cols();
+        assert_eq!(p_param, 4);
+    }
+
+    #[test]
+    fn test_scale_fixed_normal_noscale() {
+        // NOSCALE on Normal fixes σ at 1 ⇒ Scale row = 1.0000, DF 0.
+        let (mut session, mut ast) = make_normal_session();
+        ast.model.as_mut().unwrap().noscale = true;
+        execute(&ast, &mut session).unwrap();
+        let listing = session.listing.into_string();
+        let scale_line = listing
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>())
+            .find(|toks| toks.first() == Some(&"Scale"))
+            .expect("Scale row");
+        // toks: ["Scale", DF, Estimate, ...]
+        assert_eq!(scale_line[1], "0", "NOSCALE ⇒ DF 0: {scale_line:?}");
+        assert_eq!(scale_line[2], "1.0000", "NOSCALE ⇒ Scale 1: {scale_line:?}");
     }
 }

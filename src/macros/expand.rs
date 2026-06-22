@@ -15,7 +15,74 @@ impl MacroEngine {
         let mut out = String::with_capacity(source.len());
         let mut i = 0;
         while i < chars.len() {
+            // M35.4 — `%return`/`%abort` posés par un statement précédent (ou par
+            // une macro invoquée dont l'abort se propage) : on cesse d'expanser
+            // le reste de CE corps. `expand_invocation` réinitialise
+            // `return_requested` après le corps ; `abort_requested` se propage.
+            if self.return_requested || self.abort_requested {
+                break;
+            }
+
+            // M35.4 — saut `%goto` en attente : on tente de trouver `%label:` dans
+            // CE texte. Trouvé → on saute (drapeau réinitialisé) ; introuvable →
+            // on laisse remonter au niveau parent (on cesse d'expanser ici). Cela
+            // gère le `%goto` posé dans une action `%then`/`%do` imbriquée.
+            if let Some(label) = self.goto_requested.clone() {
+                if let Some(target) = Self::find_label(&chars, &label) {
+                    self.goto_requested = None;
+                    i = target;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+
             let c = chars[i];
+
+            // M35.4 — marqueur d'étiquette `%name:` (cible de `%goto`). Il n'émet
+            // RIEN ; on le saute (jusqu'au `:` inclus). On le teste AVANT
+            // l'invocation `%name` pour ne pas confondre `%exit:` avec un appel.
+            if c == '%' {
+                if let Some(next) = Self::skip_label_marker(&chars, i) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%goto label;` : pose un saut vers `%label:` (résolu en tête
+            // de boucle, éventuellement après remontée hors d'une action `%then`).
+            if c == '%' && Self::matches_kw(&chars, i, "goto") {
+                if let Some(next) = self.consume_goto(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%return;` : sortie anticipée du corps de macro courant.
+            if c == '%' && Self::matches_kw(&chars, i, "return") {
+                if let Some(next) = self.consume_return(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — `%abort [cancel|abend|return [n]];` : terminaison propre.
+            if c == '%' && Self::matches_kw(&chars, i, "abort") {
+                if let Some(next) = self.consume_abort(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
+
+            // M35.4 — constructions hors-périmètre (interactif/OS) : NOTE propre
+            // + consommation jusqu'au `;`. Aucune n'est exprimable dans le modèle
+            // d'expansion textuel ; on garantit l'absence de crash/boucle.
+            if c == '%' {
+                if let Some(next) = self.consume_unsupported_stmt(&chars, i, &mut out) {
+                    i = next;
+                    continue;
+                }
+            }
 
             // `%let` insensible à la casse.
             if c == '%' && Self::matches_let(&chars, i) {
@@ -425,21 +492,36 @@ impl MacroEngine {
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
         }
-        // Arguments : `(...)` optionnel (fonctions sans argument : TODAY()).
-        let arg_strings: Vec<String> = if chars.get(j) == Some(&'(') {
-            let (args_inner, _) = Self::read_balanced_parens(&chars, j)
+        // Arguments : `(...)` optionnel (fonctions sans argument : TODAY()). On
+        // garde l'index APRÈS la parenthèse fermante de la fonction pour repérer
+        // un éventuel `, <format>` de niveau supérieur (M35.1).
+        let (arg_strings, after_call) = if chars.get(j) == Some(&'(') {
+            let (args_inner, after_call) = Self::read_balanced_parens(&chars, j)
                 .ok_or_else(|| MacroError::new("ERROR: unbalanced parentheses in %SYSFUNC"))?;
-            Self::split_top_level_commas(&args_inner)
+            (Self::split_top_level_commas(&args_inner), after_call)
         } else {
-            Vec::new()
+            (Vec::new(), j)
+        };
+        // Argument de format optionnel : `%sysfunc(func(args), format)`. Le
+        // contenu restant après l'appel doit être `, <format>` (un seul token au
+        // niveau supérieur). On ne consomme PAS de virgule à l'intérieur des
+        // parenthèses de la fonction (elles sont équilibrées par read_balanced).
+        let mut k = after_call;
+        while matches!(chars.get(k), Some(c) if c.is_whitespace()) {
+            k += 1;
+        }
+        let format: Option<String> = if chars.get(k) == Some(&',') {
+            let rest: String = chars[k + 1..].iter().collect();
+            let f = rest.trim().to_string();
+            if f.is_empty() {
+                None
+            } else {
+                Some(f)
+            }
+        } else {
+            None
         };
         let upper = name.to_uppercase();
-        if !Self::SYSFUNC_WHITELIST.contains(&upper.as_str()) {
-            return Err(MacroError::new(format!(
-                "ERROR: Function {} not supported by %SYSFUNC in this interpreter",
-                name
-            )));
-        }
         // Typage des arguments : un argument qui parse en nombre devient
         // `Value::Num`, sinon `Value::Char` (le trim de bord est appliqué, comme
         // SAS pour les arguments macro).
@@ -453,15 +535,33 @@ impl MacroEngine {
                 }
             })
             .collect();
-        // EvalCtx minimal jetable : `Default` suffit (aucune dépendance PDV pour
-        // les fonctions whitelistées).
+        // EvalCtx minimal jetable : `Default` suffit. Les fonctions qui auraient
+        // besoin du PDV/dataset n'y ont pas accès (comme %SYSFUNC sous SAS) et
+        // rendent une valeur missing — comportement acceptable.
         let mut ctx = crate::datastep::eval::EvalCtx::default();
-        match crate::datastep::functions::call(&upper, &args, &mut ctx) {
-            Some(v) => Ok(Self::value_to_text(&v)),
-            None => Err(MacroError::new(format!(
-                "ERROR: Function {} is unknown to %SYSFUNC",
+        // Délégation à la bibliothèque COMPLÈTE de fonctions DATA-step (plus de
+        // liste blanche, M35.1). Fonction inconnue → None → note d'erreur propre.
+        let result = crate::datastep::functions::call(&upper, &args, &mut ctx).ok_or_else(|| {
+            MacroError::new(format!(
+                "ERROR: Function {} not found or not supported by %SYSFUNC",
                 name
-            ))),
+            ))
+        })?;
+        match format {
+            // Format présent : on l'applique via le MÊME chemin que PUT (module
+            // formats), puis on rogne les blancs (SAS gauche-aligne / retire les
+            // blancs de tête du résultat formaté de %sysfunc).
+            Some(fmt) => {
+                let formatted = crate::datastep::functions::call(
+                    "PUT",
+                    &[result, crate::value::Value::Char(fmt)],
+                    &mut ctx,
+                )
+                .map(|v| Self::value_to_text(&v))
+                .unwrap_or_default();
+                Ok(formatted.trim().to_string())
+            }
+            None => Ok(Self::value_to_text(&result)),
         }
     }
 

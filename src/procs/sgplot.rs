@@ -84,6 +84,9 @@ pub enum SgplotStmt {
     Density {
         #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
         var: String,
+        /// `TYPE=KERNEL` → vrai ; défaut (ou `TYPE=NORMAL`) → faux.
+        #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
+        kernel: bool,
     },
     VBox {
         #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
@@ -661,8 +664,46 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
             "density" => {
                 ts.next();
                 let var = expect_ident(ts, "after DENSITY")?;
-                ts.skip_to_semi();
-                plot_stmts.push(SgplotStmt::Density { var });
+                // Options après `/` : TYPE=KERNEL|NORMAL (KERNEL/NORMAL aussi
+                // acceptés en mots-clés nus). Reste ignoré.
+                let mut kernel = false;
+                if ts.peek().kind == TokenKind::Slash {
+                    ts.next();
+                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
+                            Some(n) => n,
+                            None => {
+                                ts.next();
+                                continue;
+                            }
+                        };
+                        ts.next();
+                        match name.as_str() {
+                            "kernel" => kernel = true,
+                            "normal" => kernel = false,
+                            "type" => {
+                                if ts.peek().kind == TokenKind::Eq {
+                                    ts.next();
+                                }
+                                if let Some(v) = read_value(ts) {
+                                    kernel = v.eq_ignore_ascii_case("kernel");
+                                }
+                            }
+                            _ => {
+                                if ts.peek().kind == TokenKind::Eq {
+                                    ts.next();
+                                    if ts.peek().kind == TokenKind::LParen {
+                                        let _ = parse_paren_attrs(ts);
+                                    } else {
+                                        let _ = read_value(ts);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ts.expect_semi()?;
+                plot_stmts.push(SgplotStmt::Density { var, kernel });
                 true
             }
             "vbox" => {
@@ -769,8 +810,10 @@ pub fn execute(ast: &SgplotAst, session: &mut Session) -> Result<()> {
         return Ok(());
     }
 
-    // 4) Fonctions différées sur le PREMIER statement (avant le gate feature
-    //    pour que la NOTE soit testable dans le build par défaut).
+    // 4) LOESS / DENSITY : différés UNIQUEMENT dans le build par défaut (sans
+    //    --features graphics). Sous graphics, ils sont rendus (M34.11). On
+    //    garde la NOTE de différé byte-identique au build par défaut.
+    #[cfg(not(feature = "graphics"))]
     match first {
         SgplotStmt::Loess { .. } => {
             session
@@ -787,18 +830,17 @@ pub fn execute(ast: &SgplotAst, session: &mut Session) -> Result<()> {
         _ => {}
     }
 
-    // 5) v1 : un seul plot par image — prévenir si plusieurs.
-    if ast.plot_stmts.len() > 1 {
-        session.log.note(&format!(
-            "PROC SGPLOT v1 renders only the first plot statement ({}); {} additional statement(s) ignored.",
-            stmt_kind(first),
-            ast.plot_stmts.len() - 1
-        ));
-    }
-
-    // 6) Génération de l'image.
+    // 5) Génération de l'image.
     #[cfg(not(feature = "graphics"))]
     {
+        // v1 (build par défaut) : un seul plot par image — prévenir si plusieurs.
+        if ast.plot_stmts.len() > 1 {
+            session.log.note(&format!(
+                "PROC SGPLOT v1 renders only the first plot statement ({}); {} additional statement(s) ignored.",
+                stmt_kind(first),
+                ast.plot_stmts.len() - 1
+            ));
+        }
         let _ = first;
         session
             .log
@@ -808,20 +850,168 @@ pub fn execute(ast: &SgplotAst, session: &mut Session) -> Result<()> {
 
     #[cfg(feature = "graphics")]
     {
-        graphics_impl::render(ast, first, session)
+        let _ = first;
+        graphics_impl::render(ast, session)
     }
 }
 
 // ───────────────────────── Rendu (feature graphics) ─────────────────────────
 
 #[cfg(feature = "graphics")]
-mod graphics_impl {
+pub(crate) mod graphics_impl {
     use super::*;
-    use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+    use crate::graphics::render::{
+        draw_to_file_ext, Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
+    };
     use crate::missing::value_to_num;
     use crate::ods_graphics::ImageFmt;
     use crate::procs::common::decode_column;
     use crate::value::VarType;
+
+    /// Courbe LOESS : lissage local pondéré (poids tricube, ajustement linéaire
+    /// local) sur `npoints` abscisses réparties sur la plage des x. `frac` est la
+    /// fraction de points dans la fenêtre locale (SMOOTH=, défaut ~0.5).
+    ///
+    /// Renvoie une liste `(x, yhat)` triée par x croissant. Si trop peu de points
+    /// ou plage nulle, renvoie un vecteur vide.
+    pub fn loess_curve(
+        xs: &[f64],
+        ys: &[f64],
+        frac: f64,
+        npoints: usize,
+    ) -> Vec<(f64, f64)> {
+        // Paires finies, triées par x.
+        let mut pts: Vec<(f64, f64)> = xs
+            .iter()
+            .zip(ys.iter())
+            .filter(|(a, b)| a.is_finite() && b.is_finite())
+            .map(|(a, b)| (*a, *b))
+            .collect();
+        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let n = pts.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let x_min = pts[0].0;
+        let x_max = pts[n - 1].0;
+        if (x_max - x_min).abs() < f64::EPSILON {
+            return Vec::new();
+        }
+        let frac = frac.clamp(0.05, 1.0);
+        // Taille de fenêtre (au moins 2 voisins).
+        let win = ((frac * n as f64).ceil() as usize).clamp(2, n);
+
+        let np = npoints.max(2);
+        let mut out = Vec::with_capacity(np);
+        for i in 0..np {
+            let x0 = x_min + (x_max - x_min) * i as f64 / (np - 1) as f64;
+            // Distances à x0, prendre les `win` plus proches.
+            let mut dist: Vec<f64> = pts.iter().map(|(x, _)| (x - x0).abs()).collect();
+            let mut sorted = dist.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let dmax = sorted[win - 1].max(f64::EPSILON);
+            // Poids tricube ; régression linéaire locale pondérée.
+            let (mut sw, mut swx, mut swy, mut swxx, mut swxy) = (0.0, 0.0, 0.0, 0.0, 0.0);
+            for (k, (x, y)) in pts.iter().enumerate() {
+                let d = dist[k] / dmax;
+                if d >= 1.0 {
+                    continue;
+                }
+                let w = {
+                    let t = 1.0 - d * d * d;
+                    t * t * t
+                };
+                sw += w;
+                swx += w * x;
+                swy += w * y;
+                swxx += w * x * x;
+                swxy += w * x * y;
+            }
+            // Résolution du système 2x2 pour (a, b) : y = a + b x.
+            let denom = sw * swxx - swx * swx;
+            let yhat = if denom.abs() > 1e-12 {
+                let b = (sw * swxy - swx * swy) / denom;
+                let a = (swy - b * swx) / sw;
+                a + b * x0
+            } else if sw > 0.0 {
+                swy / sw
+            } else {
+                f64::NAN
+            };
+            dist.clear();
+            if yhat.is_finite() {
+                out.push((x0, yhat));
+            }
+        }
+        out
+    }
+
+    /// Densité normale (gaussienne) ajustée par moyenne/écart-type des données,
+    /// évaluée sur `npoints` abscisses couvrant la plage [min, max] élargie.
+    pub fn normal_density_curve(xs: &[f64], npoints: usize) -> Vec<(f64, f64)> {
+        let vals: Vec<f64> = xs.iter().copied().filter(|v| v.is_finite()).collect();
+        let n = vals.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let mean = vals.iter().sum::<f64>() / n as f64;
+        let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
+        let sd = var.sqrt();
+        if !(sd > 0.0) {
+            return Vec::new();
+        }
+        let x_min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+        let x_max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        // Élargir un peu pour englober les queues.
+        let lo = x_min - 0.5 * sd;
+        let hi = x_max + 0.5 * sd;
+        let np = npoints.max(2);
+        let inv = 1.0 / (sd * (std::f64::consts::TAU).sqrt());
+        (0..np)
+            .map(|i| {
+                let x = lo + (hi - lo) * i as f64 / (np - 1) as f64;
+                let z = (x - mean) / sd;
+                let pdf = inv * (-0.5 * z * z).exp();
+                (x, pdf)
+            })
+            .collect()
+    }
+
+    /// Densité par noyau gaussien (KDE), bande passante de Silverman, évaluée sur
+    /// `npoints` abscisses.
+    pub fn kernel_density_curve(xs: &[f64], npoints: usize) -> Vec<(f64, f64)> {
+        let vals: Vec<f64> = xs.iter().copied().filter(|v| v.is_finite()).collect();
+        let n = vals.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let mean = vals.iter().sum::<f64>() / n as f64;
+        let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
+        let sd = var.sqrt();
+        if !(sd > 0.0) {
+            return Vec::new();
+        }
+        // Bande passante de Silverman (règle du pouce).
+        let h = 1.06 * sd * (n as f64).powf(-0.2);
+        let h = if h > 0.0 { h } else { sd };
+        let x_min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+        let x_max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let lo = x_min - 3.0 * h;
+        let hi = x_max + 3.0 * h;
+        let np = npoints.max(2);
+        let inv = 1.0 / ((n as f64) * h * (std::f64::consts::TAU).sqrt());
+        (0..np)
+            .map(|i| {
+                let x = lo + (hi - lo) * i as f64 / (np - 1) as f64;
+                let mut s = 0.0;
+                for &v in &vals {
+                    let z = (x - v) / h;
+                    s += (-0.5 * z * z).exp();
+                }
+                (x, inv * s)
+            })
+            .collect()
+    }
 
     /// Extrait une colonne numérique par nom (erreur propre si absente / non num).
     fn numeric_column(
@@ -848,18 +1038,19 @@ mod graphics_impl {
             .collect())
     }
 
-    /// Construit le DrawingSpec depuis le premier statement de tracé.
-    fn build_spec(
+    /// Construit le DrawingSpec depuis le statement PRIMAIRE (scatter / series /
+    /// histogram / vbar). Les statements LOESS / DENSITY / REG deviennent des
+    /// overlays ajoutés ensuite par [`build_overlays`].
+    fn build_primary_spec(
         ds: &crate::dataset::SasDataset,
         stmt: &SgplotStmt,
         ast: &SgplotAst,
         title: String,
     ) -> Result<DrawingSpec> {
-        // Libellés d'axes : XAXIS/YAXIS LABEL= sinon le nom de variable.
         let x_axis_label = ast.xaxis.as_ref().and_then(|a| a.label.clone());
         let y_axis_label = ast.yaxis.as_ref().and_then(|a| a.label.clone());
 
-        match stmt {
+        let spec = match stmt {
             SgplotStmt::Scatter { x, y, .. } | SgplotStmt::Series { x, y, .. } => {
                 let xs = numeric_column(ds, x)?;
                 let ys = numeric_column(ds, y)?;
@@ -874,14 +1065,45 @@ mod graphics_impl {
                 } else {
                     PlotType::Scatter
                 };
-                Ok(DrawingSpec {
+                let mut s = DrawingSpec::new(
                     title,
-                    x_label: x_axis_label.unwrap_or_else(|| x.clone()),
-                    y_label: y_axis_label.unwrap_or_else(|| y.clone()),
+                    x_axis_label.unwrap_or_else(|| x.clone()),
+                    y_axis_label.unwrap_or_else(|| y.clone()),
                     plot_type,
-                    data,
-                    x_categorical: vec![],
-                })
+                );
+                s.data = data;
+                s
+            }
+            // LOESS / DENSITY seuls (pas de scatter/histogram parent) : on les
+            // rend en SERIES sur leur propre courbe.
+            SgplotStmt::Loess { x, y, smooth } => {
+                let xs = numeric_column(ds, x)?;
+                let ys = numeric_column(ds, y)?;
+                let curve = loess_curve(&xs, &ys, *smooth, 100);
+                let mut s = DrawingSpec::new(
+                    title,
+                    x_axis_label.unwrap_or_else(|| x.clone()),
+                    y_axis_label.unwrap_or_else(|| y.clone()),
+                    PlotType::Series,
+                );
+                s.data = curve;
+                s
+            }
+            SgplotStmt::Density { var, kernel } => {
+                let xs = numeric_column(ds, var)?;
+                let curve = if *kernel {
+                    kernel_density_curve(&xs, 100)
+                } else {
+                    normal_density_curve(&xs, 100)
+                };
+                let mut s = DrawingSpec::new(
+                    title,
+                    x_axis_label.unwrap_or_else(|| var.clone()),
+                    y_axis_label.unwrap_or_else(|| "Density".to_string()),
+                    PlotType::Series,
+                );
+                s.data = curve;
+                s
             }
             SgplotStmt::Histogram { var, binwidth, .. } => {
                 let xs: Vec<f64> = numeric_column(ds, var)?
@@ -897,17 +1119,16 @@ mod graphics_impl {
                     }
                     _ => 10,
                 };
-                Ok(DrawingSpec {
+                let mut s = DrawingSpec::new(
                     title,
-                    x_label: x_axis_label.unwrap_or_else(|| var.clone()),
-                    y_label: y_axis_label.unwrap_or_else(|| "Frequency".to_string()),
-                    plot_type: PlotType::Histogram { bins },
-                    data,
-                    x_categorical: vec![],
-                })
+                    x_axis_label.unwrap_or_else(|| var.clone()),
+                    y_axis_label.unwrap_or_else(|| "Frequency".to_string()),
+                    PlotType::Histogram { bins },
+                );
+                s.data = data;
+                s
             }
             SgplotStmt::VBar { category, .. } => {
-                // VBAR : agrégat FREQ par catégorie (v1 : compte les occurrences).
                 let idx = ds
                     .vars
                     .iter()
@@ -926,25 +1147,135 @@ mod graphics_impl {
                     };
                     *counts.entry(key).or_insert(0.0) += 1.0;
                 }
-                let x_categorical: Vec<(String, f64)> = counts.into_iter().collect();
-                Ok(DrawingSpec {
+                let mut s = DrawingSpec::new(
                     title,
-                    x_label: x_axis_label.unwrap_or_else(|| category.clone()),
-                    y_label: y_axis_label.unwrap_or_else(|| "Frequency".to_string()),
-                    plot_type: PlotType::VBar,
-                    data: vec![],
-                    x_categorical,
-                })
+                    x_axis_label.unwrap_or_else(|| category.clone()),
+                    y_axis_label.unwrap_or_else(|| "Frequency".to_string()),
+                    PlotType::VBar,
+                );
+                s.x_categorical = counts.into_iter().collect();
+                s
             }
-            // Types non encore rendus par l'infra render.rs : géré en amont.
-            _ => Err(SasError::runtime(format!(
-                "{} plot not yet rendered in PROC SGPLOT.",
-                stmt_kind(stmt)
-            ))),
-        }
+            _ => {
+                return Err(SasError::runtime(format!(
+                    "{} plot not yet rendered in PROC SGPLOT.",
+                    stmt_kind(stmt)
+                )))
+            }
+        };
+        Ok(spec)
     }
 
-    pub fn render(ast: &SgplotAst, stmt: &SgplotStmt, session: &mut Session) -> Result<()> {
+    /// Bornes d'axe forcées par XAXIS/YAXIS VALUES=.
+    fn axis_ranges(ast: &SgplotAst) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
+        let x = ast.xaxis.as_ref().and_then(|ax| {
+            match (ax.values_min, ax.values_max) {
+                (Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => None,
+            }
+        });
+        let y = ast.yaxis.as_ref().and_then(|ax| {
+            match (ax.values_min, ax.values_max) {
+                (Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => None,
+            }
+        });
+        (x, y)
+    }
+
+    /// Construit les overlays (LOESS, DENSITY, REG droite) à superposer, en
+    /// excluant le statement primaire déjà tracé.
+    fn build_overlays(
+        ds: &crate::dataset::SasDataset,
+        ast: &SgplotAst,
+        primary: usize,
+    ) -> Result<Vec<Overlay>> {
+        let mut overlays = Vec::new();
+        let mut ci = 1usize;
+        for (i, stmt) in ast.plot_stmts.iter().enumerate() {
+            if i == primary {
+                continue;
+            }
+            match stmt {
+                SgplotStmt::Loess { x, y, smooth } => {
+                    let xs = numeric_column(ds, x)?;
+                    let ys = numeric_column(ds, y)?;
+                    let curve = loess_curve(&xs, &ys, *smooth, 100);
+                    if !curve.is_empty() {
+                        overlays.push(Overlay {
+                            data: curve,
+                            color: crate::graphics::render::palette(ci),
+                            line: true,
+                            marker: false,
+                        });
+                        ci += 1;
+                    }
+                }
+                SgplotStmt::Density { var, kernel } => {
+                    let xs = numeric_column(ds, var)?;
+                    let curve = if *kernel {
+                        kernel_density_curve(&xs, 100)
+                    } else {
+                        normal_density_curve(&xs, 100)
+                    };
+                    if !curve.is_empty() {
+                        overlays.push(Overlay {
+                            data: curve,
+                            color: SeriesColor::Red,
+                            line: true,
+                            marker: false,
+                        });
+                        ci += 1;
+                    }
+                }
+                SgplotStmt::Series { x, y, .. } | SgplotStmt::Scatter { x, y, .. } => {
+                    // Série additionnelle superposée.
+                    let xs = numeric_column(ds, x)?;
+                    let ys = numeric_column(ds, y)?;
+                    let data: Vec<(f64, f64)> = xs
+                        .iter()
+                        .zip(ys.iter())
+                        .filter(|(a, b)| a.is_finite() && b.is_finite())
+                        .map(|(a, b)| (*a, *b))
+                        .collect();
+                    if !data.is_empty() {
+                        let line = matches!(stmt, SgplotStmt::Series { .. });
+                        overlays.push(Overlay {
+                            data,
+                            color: crate::graphics::render::palette(ci),
+                            line,
+                            marker: !line,
+                        });
+                        ci += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(overlays)
+    }
+
+    /// Indice du statement primaire : le premier qui n'est PAS une simple courbe
+    /// (LOESS/DENSITY). Si tous sont des courbes, on prend le premier.
+    fn primary_index(ast: &SgplotAst) -> usize {
+        ast.plot_stmts
+            .iter()
+            .position(|s| {
+                matches!(
+                    s,
+                    SgplotStmt::Scatter { .. }
+                        | SgplotStmt::Series { .. }
+                        | SgplotStmt::Histogram { .. }
+                        | SgplotStmt::VBar { .. }
+                )
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn render(ast: &SgplotAst, session: &mut Session) -> Result<()> {
+        let primary = primary_index(ast);
+        let stmt = &ast.plot_stmts[primary];
+
         // Types non supportés par render.rs (HBAR, VBOX, REG) → NOTE, pas d'erreur.
         if matches!(
             stmt,
@@ -967,7 +1298,13 @@ mod graphics_impl {
             session.log.forward(&note);
         }
 
-        let spec = build_spec(&ds, stmt, ast, "The SGPlot Procedure".to_string())?;
+        let spec = build_primary_spec(&ds, stmt, ast, "The SGPlot Procedure".to_string())?;
+        let (x_range, y_range) = axis_ranges(ast);
+        let deco = Decorations {
+            overlays: build_overlays(&ds, ast, primary)?,
+            x_range,
+            y_range,
+        };
 
         // Nommage séquentiel : préfixe IMAGENAME= sinon "sgplot".
         session.graphics_image_count += 1;
@@ -984,8 +1321,9 @@ mod graphics_impl {
         let name = format!("{}_{}.{}", stem, session.graphics_image_count, ext);
         let path = session.ods_graphics.output_dir.join(&name);
 
-        let (w, h) = draw_to_file(
+        let (w, h) = draw_to_file_ext(
             &spec,
+            &deco,
             &path,
             session.ods_graphics.width,
             session.ods_graphics.height,
@@ -1158,7 +1496,22 @@ mod tests {
     #[test]
     fn parse_density() {
         let ast = parse_sgplot("proc sgplot data=a; density height / kernel; run;").unwrap();
-        assert!(matches!(ast.plot_stmts[0], SgplotStmt::Density { .. }));
+        match &ast.plot_stmts[0] {
+            SgplotStmt::Density { var, kernel } => {
+                assert_eq!(var, "height");
+                assert!(*kernel);
+            }
+            other => panic!("expected Density, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_density_default_normal() {
+        let ast = parse_sgplot("proc sgplot data=a; density height; run;").unwrap();
+        match &ast.plot_stmts[0] {
+            SgplotStmt::Density { kernel, .. } => assert!(!*kernel),
+            other => panic!("expected Density, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1205,6 +1558,7 @@ mod tests {
         assert!(log.contains("image deferred"), "log: {log}");
     }
 
+    #[cfg(not(feature = "graphics"))]
     #[test]
     fn execute_loess_defers() {
         let mut session = make_session();
@@ -1216,6 +1570,7 @@ mod tests {
         assert!(log.contains("LOESS plot deferred"), "log: {log}");
     }
 
+    #[cfg(not(feature = "graphics"))]
     #[test]
     fn execute_density_defers() {
         let mut session = make_session();
@@ -1305,6 +1660,112 @@ mod tests {
         assert!(p2.exists(), "second image missing");
         let _ = std::fs::remove_file(&p1);
         let _ = std::fs::remove_file(&p2);
+    }
+
+    // ── M34.11 : LOESS / DENSITY oracles ─────────────────────────────────
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn loess_curve_npoints_and_monotone_x() {
+        use graphics_impl::loess_curve;
+        let xs: Vec<f64> = (0..20).map(|i| i as f64).collect();
+        let ys: Vec<f64> = xs.iter().map(|x| 2.0 * x + 1.0).collect();
+        let curve = loess_curve(&xs, &ys, 0.5, 50);
+        assert_eq!(curve.len(), 50, "expected 50 points");
+        // x strictement croissant.
+        for w in curve.windows(2) {
+            assert!(w[1].0 > w[0].0, "x not monotone: {:?}", w);
+        }
+        // Sur données linéaires, LOESS local-linéaire reproduit la droite.
+        for (x, y) in &curve {
+            assert!((y - (2.0 * x + 1.0)).abs() < 1e-6, "x={x} y={y}");
+        }
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn loess_curve_degenerate_returns_empty() {
+        use graphics_impl::loess_curve;
+        assert!(loess_curve(&[1.0], &[2.0], 0.5, 10).is_empty());
+        assert!(loess_curve(&[3.0, 3.0, 3.0], &[1.0, 2.0, 3.0], 0.5, 10).is_empty());
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn normal_density_peaks_at_mean_and_integrates_to_one() {
+        use graphics_impl::normal_density_curve;
+        // Échantillon symétrique autour de 0.
+        let xs: Vec<f64> = (-50..=50).map(|i| i as f64 / 10.0).collect();
+        let curve = normal_density_curve(&xs, 400);
+        assert_eq!(curve.len(), 400);
+        // Intégrale par trapèzes ≈ 1 (la plage couvre l'essentiel de la masse).
+        let mut area = 0.0;
+        for w in curve.windows(2) {
+            area += 0.5 * (w[0].1 + w[1].1) * (w[1].0 - w[0].0);
+        }
+        assert!((area - 1.0).abs() < 0.05, "area={area}");
+        // pdf au mode ≈ 1/(sd*sqrt(2π)) ; vérifie que le max est près de x=mean=0.
+        let (mode_x, _) = curve
+            .iter()
+            .cloned()
+            .fold((0.0, f64::NEG_INFINITY), |acc, p| if p.1 > acc.1 { p } else { acc });
+        assert!(mode_x.abs() < 0.5, "mode_x={mode_x}");
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn kernel_density_integrates_to_one() {
+        use graphics_impl::kernel_density_curve;
+        let xs: Vec<f64> = (0..200).map(|i| (i as f64 * 0.137).sin() * 3.0 + 5.0).collect();
+        let curve = kernel_density_curve(&xs, 500);
+        let mut area = 0.0;
+        for w in curve.windows(2) {
+            area += 0.5 * (w[0].1 + w[1].1) * (w[1].0 - w[0].0);
+        }
+        assert!((area - 1.0).abs() < 0.05, "area={area}");
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn execute_loess_writes_image() {
+        let mut session = make_session();
+        session.ods_graphics.enabled = true;
+        session.ods_graphics.output_dir = std::env::temp_dir();
+        session.ods_graphics.file_stem = Some("sgtest_loess".into());
+        write_heights(&mut session, "H");
+        let ast = parse_sgplot(
+            "proc sgplot data=work.h; scatter x=age y=height; loess x=age y=height / smooth=0.6; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("written"), "log: {log}");
+        assert!(!log.contains("LOESS plot deferred"), "should not defer: {log}");
+        let p = std::env::temp_dir().join("sgtest_loess_1.png");
+        assert!(p.exists(), "image not created: {p:?}");
+        assert!(p.metadata().unwrap().len() > 0);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[cfg(feature = "graphics")]
+    #[test]
+    fn execute_density_writes_image() {
+        let mut session = make_session();
+        session.ods_graphics.enabled = true;
+        session.ods_graphics.output_dir = std::env::temp_dir();
+        session.ods_graphics.file_stem = Some("sgtest_density".into());
+        write_heights(&mut session, "H");
+        let ast = parse_sgplot(
+            "proc sgplot data=work.h; histogram height; density height; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let log = session.log.into_string();
+        assert!(log.contains("written"), "log: {log}");
+        assert!(!log.contains("DENSITY plot deferred"), "should not defer: {log}");
+        let p = std::env::temp_dir().join("sgtest_density_1.png");
+        assert!(p.exists(), "image not created: {p:?}");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[cfg(feature = "graphics")]

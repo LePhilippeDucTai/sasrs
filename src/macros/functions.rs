@@ -4,8 +4,7 @@
 //!
 //! Extrait VERBATIM de `crate::macros` (technique impl-block-in-submodule) :
 //! les méthodes restent des `impl MacroEngine`, les appels via `self.`/`Self::`
-//! résolvent inchangés. `SYSFUNC_WHITELIST` reste un `const` associé pour que
-//! `Self::SYSFUNC_WHITELIST` continue de résoudre depuis `mod.rs`.
+//! résolvent inchangés.
 
 use super::*;
 
@@ -13,9 +12,9 @@ impl MacroEngine {
     /// Consomme `%sysfunc ( func(args) )` (ou `%qsysfunc`). Résout les `&refs`,
     /// parse `func(arg1, arg2, ...)`, appelle `functions::call` avec les args
     /// typés (numérique si l'argument parse en nombre, sinon `Char`), puis
-    /// splice le résultat formaté en texte. Fonction inconnue / non whitelistée
-    /// → note d'erreur propre (pas de panic). Rend l'index après la `)`, ou
-    /// `None` si la parenthèse externe n'est pas trouvée.
+    /// splice le résultat formaté en texte. Fonction inconnue → note d'erreur
+    /// propre (pas de panic). Rend l'index après la `)`, ou `None` si la
+    /// parenthèse externe n'est pas trouvée.
     pub(super) fn consume_sysfunc(
         &mut self,
         chars: &[char],
@@ -48,15 +47,6 @@ impl MacroEngine {
         }
         Some(after)
     }
-
-    /// Liste blanche des fonctions DATA-step appelables via `%sysfunc`. On
-    /// délègue à `functions::call`, mais on filtre explicitement pour éviter
-    /// d'exposer des fonctions sans signification en contexte macro (texte).
-    pub(super) const SYSFUNC_WHITELIST: &'static [&'static str] = &[
-        "UPCASE", "LOWCASE", "SUBSTR", "TRIM", "STRIP", "LEFT", "COMPRESS", "INDEX", "SCAN",
-        "LENGTH", "CAT", "CATS", "CATX", "TRANWRD", "SUM", "MAX", "MIN", "ABS", "INT", "MDY",
-        "YEAR", "MONTH", "DAY", "TODAY", "DATE", "WEEKDAY",
-    ];
 
     /// Formate une `Value` en texte pour l'insertion macro : `Char` tel quel
     /// (trim de droite), `Num` via le format BEST (entier sans décimales),
@@ -348,5 +338,6 @@ fn fn_index(args: &[String]) -> Option<String> {
 
 fn fn_length(args: &[String]) -> Option<String> {
     let t = args.first().map(String::as_str).unwrap_or("");
-    Some(t.chars().count().to_string())
+    // SAS %LENGTH returns 1 for a null/empty argument (not 0).
+    Some(t.chars().count().max(1).to_string())
 }

@@ -1,0 +1,96 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/princomp_out.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC PRINCOMP OUT= component scores';
+
+3     proc princomp data=d.class out=pcout;
+4       var height weight age;
+5     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.PCOUT has 19 observations and 8 variables.
+NOTE: PROCEDURE PRINCOMP used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     proc print data=pcout noobs; run;
+NOTE: There were 19 observations read from the data set WORK.PCOUT.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title;
+
+==== LISTING ====
+                              PROC PRINCOMP OUT= component scores
+
+                                     The PRINCOMP Procedure
+
+ Observations            19
+ Variables                3
+
+                                       Simple Statistics
+
+                                       height      weight        age
+
+                            Mean      62.3368    100.0263    13.3158
+                            StdDev     5.1271     22.7739     1.4927
+
+                                       Correlation Matrix
+
+                                        height    weight       age
+
+                              height    1.0000    0.8778    0.8114
+                              weight    0.8778    1.0000    0.7409
+                              age       0.8114    0.7409    1.0000
+
+                             Eigenvalues of the Correlation Matrix
+
+                          Eigenvalue    Difference    Proportion    Cumulative
+
+                 PRIN1        2.6214        2.3530        0.8738        0.8738
+                 PRIN2        0.2684        0.1581        0.0895        0.9632
+                 PRIN3        0.1103             .        0.0368        1.0000
+
+                                          Eigenvectors
+
+                                       PRIN1        PRIN2        PRIN3
+
+                          height    0.593307    -0.191592     0.781843
+                          weight    0.577476    -0.575355    -0.579213
+                          age       0.560811     0.795147    -0.230722
+
+
+                              PROC PRINCOMP OUT= component scores
+
+   name       sex    age    height    weight           Prin1           Prin2           Prin3
+
+   Alfred     M       14        69     112.5    1.3444207885    -0.199647133    0.5930817127
+   Alice      F       13      56.5        84    -1.200463642    0.4547795955    -0.433666484
+   Barbara    F       13      65.3        98    0.1728716047    -0.227758254    0.5522082905
+   Carol      F       14      62.8     102.5     0.373385928    0.2846768669    -0.098043719
+   Henry      M       14      63.5     102.5    0.4543901726    0.2585187399    0.0087014343
+   James      M       12      57.3        83    -1.508953516    -0.082551852    -0.131668779
+   Jane       F       12      59.8      84.5    -1.181617338    -0.213869394    0.2114141658
+   Janet      F       15      62.5     112.5    0.9679478018     0.575949979    -0.552693365
+   Jeffrey    M       13      62.5        84    -0.506141546    0.2305670784    0.4812919768
+   John       M       12        59      99.5    -0.893840576    -0.562930989    -0.292077761
+   Joyce      F       11      51.3      50.5    -3.403083153    0.4300330756    -0.065479319
+   Judy       F       14      64.3        90     0.230005584    0.5444209022    0.4486104504
+   Louise     F       12      56.3        77    -1.776815082    0.1063995403     -0.13156287
+   Mary       F       15      66.5       112    1.4181507645    0.4391068542    0.0699955246
+   Philip     M       16        72       150     3.393883009    -0.193744449    -0.212322878
+   Robert     M       12      64.8       128    0.5000082292    -1.499687291    -0.132463101
+   Ronald     M       15        67       133    2.0085051975    -0.110116759    -0.387854389
+   Thomas     M       11      57.5        85    -1.810804991    -0.673253367    0.0025335855
+   William    M       15      66.5       112    1.4181507645    0.4391068542    0.0699955246
+
+==== EXIT 0 ====

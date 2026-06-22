@@ -1,0 +1,84 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/factor_promax.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC FACTOR ROTATE=PROMAX (oblique)';
+
+3     proc factor data=d.class nfactors=2 rotate=promax;
+4       var height weight age;
+5     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: PROCEDURE FACTOR used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title;
+
+==== LISTING ====
+                              PROC FACTOR ROTATE=PROMAX (oblique)
+
+                                      The FACTOR Procedure
+
+                          Initial Factor Method: Principal Components
+
+                                Prior Communality Estimates: ONE
+
+                             Eigenvalues of the Correlation Matrix
+                                    Total = 3   Average = 1
+
+                        Eigenvalue    Difference    Proportion    Cumulative
+
+                   1        2.6214        2.3530        0.8738        0.8738
+                   2        0.2684        0.1581        0.0895        0.9632
+                   3        0.1103             .        0.0368        1.0000
+
+                     2 factors will be retained by the NFACTORS criterion.
+
+                                         Factor Pattern
+
+                                            Factor1    Factor2
+
+                                  height     0.9606    -0.0993
+                                  weight     0.9350    -0.2981
+                                  age        0.9080     0.4119
+
+                               Variance Explained by Each Factor
+
+                                              Factor1    Factor2
+
+                                Weighted       2.6214     0.2684
+                                Unweighted     2.6214     0.2684
+
+                          Final Communality Estimates: Total = 2.8897
+
+                                     height    weight       age
+
+                                     0.9326    0.9630    0.9941
+
+                              Rotation Method: Promax (power = 4)
+
+                 Rotated Factor Pattern (Standardized Regression Coefficients)
+
+                                            Factor1    Factor2
+
+                                  height     0.7629     0.2498
+                                  weight     1.0208    -0.0531
+                                  age        0.0226     0.9798
+
+                                   Inter-Factor Correlations
+
+                                            Factor1    Factor2
+
+                                 Factor1     1.0000     0.7558
+                                 Factor2     0.7558     1.0000
+
+
+==== EXIT 0 ====

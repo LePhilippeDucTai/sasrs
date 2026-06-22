@@ -637,6 +637,20 @@ pub enum GlobalStmt {
     LibnameClear {
         libref: String,
     },
+    /// M35.2 — `FILENAME fileref 'chemin';` (ou chemin nu) : enregistre un
+    /// fileref → chemin pour `%include fileref;`. Forme minimale : seuls le nom
+    /// du fileref et un unique chemin (fichier ou répertoire) sont portés. Les
+    /// variantes device/options (`TEMP`, pipes, URL, listes) sont
+    /// acceptées-et-ignorées au parse (cf. `device`), sans enregistrement.
+    Filename {
+        fileref: String,
+        /// Chemin (fichier ou répertoire) à enregistrer. `None` si la forme
+        /// reconnue est un device/options sans chemin exploitable (ignorée).
+        path: Option<String>,
+        /// Mot-clé device éventuel (`TEMP`, `PIPE`, `URL`, …) en MAJUSCULES,
+        /// pour la NOTE d'ignorance. `None` pour la forme `ref 'chemin';`.
+        device: Option<String>,
+    },
     Title {
         n: u8,
         text: Option<String>,

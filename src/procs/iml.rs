@@ -26,12 +26,13 @@
 //!   `SUM`, `STD`, `MIN`, `MAX`, `ABS`, `SQRT`, `EXP`, `LOG`).
 //! - M28a.3 : algèbre linéaire — `INV`, `SOLVE`, `EIGVAL` (symétrique),
 //!   `CHOL` (upper, convention SAS), `CALL QR(Q, R, A)`,
-//!   `CALL SVDCD(U, D, V, A)` (méthode ATA-Jacobi). Différés : `EIGVEC`,
-//!   `DET`, `CALL EIGEN`.
+//!   `CALL SVDCD(U, D, V, A)` (méthode ATA-Jacobi).
 //! - M28a.4 : I/O datasets — `CREATE ds FROM mat[COLNAME=cn]`, `APPEND FROM`,
 //!   `CLOSE`, `USE`, `READ ALL VAR {..} INTO mat`. Différés : `READ NEXT`,
 //!   `WHERE`, `LOAD`/`STORE`/`SHOW`.
-//! - Différés v1 (erreur propre) : `SHAPE`, sous-matrices `a[1:2, 1:2]`.
+//! - M34.10 : `SHAPE(x, nrow [, ncol])` (reshape row-major avec recyclage),
+//!   sous-matrices à intervalle `a[1:2, 1:3]`, `a[2:3, *]`, `DET(A)`,
+//!   `EIGVEC(A)` et `CALL EIGEN(values, vectors, A)` (symétrique).
 
 use crate::error::{Result, SasError};
 use crate::session::Session;
@@ -92,7 +93,7 @@ pub enum ImlExpr {
 pub enum ImlIndex {
     All,
     Scalar(Box<ImlExpr>),
-    /// `a:b` — différé en v1 (erreur propre à l'exécution).
+    /// `a:b` — intervalle inclusif 1-basé (M34.10).
     Range(Box<ImlExpr>, Box<ImlExpr>),
 }
 
@@ -790,8 +791,12 @@ impl Parser {
     }
 
     fn parse_index(&mut self) -> Result<ImlIndex> {
+        // `*` or an empty position (before `,` or `]`) both mean "all".
         if self.peek() == &Tok::Star {
             self.next();
+            return Ok(ImlIndex::All);
+        }
+        if matches!(self.peek(), Tok::Comma | Tok::RBracket) {
             return Ok(ImlIndex::All);
         }
         let e = self.parse_add()?;
@@ -1147,34 +1152,37 @@ fn kronecker(l: &Matrix, r: &Matrix) -> Matrix {
 
 fn eval_subscript(m: &Matrix, row: &ImlIndex, col: &ImlIndex, env: &Env) -> Result<Matrix> {
     let (nr, nc) = dims(m);
-    let resolve = |idx: &ImlIndex, max: usize| -> Result<IndexSel> {
+    // Resolve an index expression to the explicit (0-based) list of positions.
+    let resolve = |idx: &ImlIndex, max: usize| -> Result<Vec<usize>> {
+        let check = |v: f64| -> Result<usize> {
+            let i = v.round() as i64;
+            if i < 1 || i as usize > max {
+                return Err(SasError::runtime(format!(
+                    "IML: subscript {i} is out of range 1..{max}."
+                )));
+            }
+            Ok((i as usize) - 1)
+        };
         match idx {
-            ImlIndex::All => Ok(IndexSel::All),
+            ImlIndex::All => Ok((0..max).collect()),
             ImlIndex::Scalar(e) => {
                 let v = as_scalar(&eval_expr(e, env)?)?;
-                let i = v.round() as i64;
-                if i < 1 || i as usize > max {
-                    return Err(SasError::runtime(format!(
-                        "IML: subscript {i} is out of range 1..{max}."
-                    )));
-                }
-                Ok(IndexSel::One((i as usize) - 1))
+                Ok(vec![check(v)?])
             }
-            ImlIndex::Range(_, _) => Err(SasError::runtime(
-                "IML: range subscripts (a:b) are not yet implemented.",
-            )),
+            ImlIndex::Range(a, b) => {
+                let lo = check(as_scalar(&eval_expr(a, env)?)?)?;
+                let hi = check(as_scalar(&eval_expr(b, env)?)?)?;
+                // Inclusive range; support both ascending and descending bounds.
+                if lo <= hi {
+                    Ok((lo..=hi).collect())
+                } else {
+                    Ok((hi..=lo).rev().collect())
+                }
+            }
         }
     };
-    let rsel = resolve(row, nr)?;
-    let csel = resolve(col, nc)?;
-    let rows: Vec<usize> = match rsel {
-        IndexSel::All => (0..nr).collect(),
-        IndexSel::One(i) => vec![i],
-    };
-    let cols: Vec<usize> = match csel {
-        IndexSel::All => (0..nc).collect(),
-        IndexSel::One(j) => vec![j],
-    };
+    let rows = resolve(row, nr)?;
+    let cols = resolve(col, nc)?;
     let mut out = Vec::with_capacity(rows.len());
     for &i in &rows {
         let mut r = Vec::with_capacity(cols.len());
@@ -1184,11 +1192,6 @@ fn eval_subscript(m: &Matrix, row: &ImlIndex, col: &ImlIndex, env: &Env) -> Resu
         out.push(r);
     }
     Ok(out)
-}
-
-enum IndexSel {
-    All,
-    One(usize),
 }
 
 fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix> {
@@ -1206,9 +1209,17 @@ fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix> {
             Ok(vec![vec![nr as f64, nc as f64]])
         }
         "t" => Ok(transpose(&arg(0)?)),
-        "shape" => Err(SasError::runtime(
-            "IML: the SHAPE function is not yet implemented.",
-        )),
+        "shape" => {
+            // SHAPE(x, nrow [, ncol]) — reshape row-major, recycling elements.
+            // nrow=0 → infer from element count and ncol; ncol omitted/0 → infer.
+            let src = arg(0)?;
+            let nrow = as_scalar(&arg(1)?)?.round() as i64;
+            let ncol = match args.get(2) {
+                Some(e) => as_scalar(&eval_expr(e, env)?)?.round() as i64,
+                None => 0,
+            };
+            iml_shape(&src, nrow, ncol)
+        }
         "sum" => Ok(scalar(all_elems(&arg(0)?).iter().sum())),
         "mean" => {
             let v = all_elems(&arg(0)?);
@@ -1247,10 +1258,8 @@ fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix> {
         "solve" => iml_solve(&arg(0)?, &arg(1)?),
         "eigval" => iml_eigval(&arg(0)?),
         "chol" => iml_chol(&arg(0)?),
-        "eigvec" => Err(SasError::runtime(
-            "EIGVEC: use `CALL EIGEN` for eigenvectors (not yet implemented)",
-        )),
-        "det" => Err(SasError::runtime("DET not yet implemented in PROC IML")),
+        "eigvec" => iml_eigvec(&arg(0)?),
+        "det" => Ok(scalar(iml_det(&arg(0)?)?)),
         _ => Err(SasError::runtime(format!(
             "IML: the function {} is not yet implemented.",
             name.to_uppercase()
@@ -1333,6 +1342,114 @@ fn iml_chol(a: &Matrix) -> Result<Matrix> {
     require_square(a, "CHOL")?;
     let l = crate::stat::linalg::cholesky(a)?;
     Ok(transpose(&l))
+}
+
+/// `SHAPE(x, nrow [, ncol])` → reshape row-major, recycling elements (SAS).
+/// `nrow = 0` infers the number of rows from the element count and `ncol`.
+/// `ncol = 0` (or omitted) infers the number of columns from the count and
+/// `nrow`. When the target has more cells than the source, the source elements
+/// are recycled (repeated) in row-major order; when fewer, they are truncated.
+fn iml_shape(src: &Matrix, nrow: i64, ncol: i64) -> Result<Matrix> {
+    let elems = all_elems(src);
+    let cnt = elems.len();
+    if nrow < 0 || ncol < 0 {
+        return Err(SasError::runtime("IML: SHAPE dimensions must be non-negative."));
+    }
+    let (nr, nc) = match (nrow, ncol) {
+        (0, 0) => {
+            return Err(SasError::runtime(
+                "IML: SHAPE requires at least the number of rows.",
+            ));
+        }
+        (r, 0) => {
+            let r = r as usize;
+            if r == 0 {
+                return Err(SasError::runtime("IML: SHAPE row count cannot be zero here."));
+            }
+            // ncol inferred: ceil(cnt / r) so all elements fit.
+            let c = cnt.div_ceil(r).max(1);
+            (r, c)
+        }
+        (0, c) => {
+            let c = c as usize;
+            let r = cnt.div_ceil(c).max(1);
+            (r, c)
+        }
+        (r, c) => (r as usize, c as usize),
+    };
+    if cnt == 0 {
+        return Err(SasError::runtime("IML: SHAPE of an empty matrix."));
+    }
+    let mut out = vec![vec![0.0; nc]; nr];
+    let mut k = 0usize;
+    for i in 0..nr {
+        for j in 0..nc {
+            out[i][j] = elems[k % cnt];
+            k += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// `DET(A)` → determinant via LU decomposition with partial pivoting.
+fn iml_det(a: &Matrix) -> Result<f64> {
+    let n = require_square(a, "DET")?;
+    // Work on a mutable copy.
+    let mut m: Vec<Vec<f64>> = a.to_vec();
+    let mut det = 1.0_f64;
+    for col in 0..n {
+        // Partial pivot: find the largest magnitude entry in this column.
+        let mut pivot = col;
+        let mut best = m[col][col].abs();
+        for r in (col + 1)..n {
+            if m[r][col].abs() > best {
+                best = m[r][col].abs();
+                pivot = r;
+            }
+        }
+        if best < 1e-300 {
+            return Ok(0.0);
+        }
+        if pivot != col {
+            m.swap(pivot, col);
+            det = -det;
+        }
+        det *= m[col][col];
+        let inv = 1.0 / m[col][col];
+        for r in (col + 1)..n {
+            let factor = m[r][col] * inv;
+            if factor != 0.0 {
+                for c in col..n {
+                    m[r][c] -= factor * m[col][c];
+                }
+            }
+        }
+    }
+    Ok(det)
+}
+
+/// `EIGVEC(A)` → matrix of eigenvectors of a symmetric matrix (columns are the
+/// orthonormal eigenvectors, ordered by descending eigenvalue, matching EIGVAL).
+fn iml_eigvec(a: &Matrix) -> Result<Matrix> {
+    let (vecs, _vals) = symmetric_eigen(a, "EIGVEC")?;
+    Ok(vecs)
+}
+
+/// Shared symmetric eigendecomposition for EIGVEC and CALL EIGEN. Validates the
+/// matrix is square and symmetric, then returns (V, λ) with columns of V being
+/// orthonormal eigenvectors and λ in descending order.
+fn symmetric_eigen(a: &Matrix, fname: &str) -> Result<(Matrix, Vec<f64>)> {
+    let n = require_square(a, fname)?;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if (a[i][j] - a[j][i]).abs() > 1e-10 {
+                return Err(SasError::runtime(format!(
+                    "ERROR: The argument to the {fname} function must be a symmetric matrix."
+                )));
+            }
+        }
+    }
+    crate::stat::linalg::eigenvectors_jacobi(a)
 }
 
 /// `CALL SVDCD(U, D, V, A)` : A = U*diag(D)*V', via la méthode ATA-Jacobi.
@@ -1551,9 +1668,23 @@ fn exec_call(func: &str, args: &[ImlExpr], env: &mut Env) -> Result<()> {
             env.vars.insert(v_name, v);
             Ok(())
         }
-        "eigen" => Err(SasError::runtime(
-            "CALL EIGEN not yet implemented in PROC IML",
-        )),
+        "eigen" => {
+            // CALL EIGEN(values, vectors, A): values = column vector (descending),
+            // vectors = matrix of eigenvectors (columns), A symmetric.
+            if args.len() != 3 {
+                return Err(SasError::runtime(
+                    "IML: CALL EIGEN requires 3 arguments: CALL EIGEN(values, vectors, A).",
+                ));
+            }
+            let val_name = out_name(&args[0])?;
+            let vec_name = out_name(&args[1])?;
+            let a = eval_expr(&args[2], env)?;
+            let (vecs, vals) = symmetric_eigen(&a, "EIGEN")?;
+            let val_col: Matrix = vals.into_iter().map(|v| vec![v]).collect();
+            env.vars.insert(val_name, val_col);
+            env.vars.insert(vec_name, vecs);
+            Ok(())
+        }
         other => Err(SasError::runtime(format!(
             "IML: the {} subroutine is not yet implemented.",
             other.to_uppercase()
@@ -2138,10 +2269,113 @@ mod tests {
         assert!(approx(recon[0][0], 1.0, 1e-4) && approx(recon[1][1], 4.0, 1e-4), "recon={recon:?}");
     }
 
+    // ───────────────────── M34.10 : SHAPE / range / DET / EIGEN ─────────────
+
     #[test]
-    fn deferred_eigvec_and_det_errors() {
-        assert!(eval_try("eigvec({1 0, 0 1})").is_err());
-        assert!(eval_try("det({1 0, 0 1})").is_err());
+    fn shape_exact_reshape() {
+        assert_eq!(
+            eval_one("shape({1 2 3 4 5 6}, 2, 3)"),
+            vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]
+        );
+    }
+
+    #[test]
+    fn shape_recycles() {
+        assert_eq!(
+            eval_one("shape({1 2}, 2, 2)"),
+            vec![vec![1.0, 2.0], vec![1.0, 2.0]]
+        );
+    }
+
+    #[test]
+    fn shape_infers_ncol() {
+        // 6 elements into 2 rows → 3 columns inferred.
+        assert_eq!(
+            eval_one("shape({1 2 3 4 5 6}, 2)"),
+            vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]
+        );
+    }
+
+    #[test]
+    fn range_subscript_2x2_block() {
+        // Top-right 2×2 of a 3×3 (rows 1:2, cols 2:3).
+        let m = run_get("a = {1 2 3, 4 5 6, 7 8 9}; r = a[1:2, 2:3];", "r");
+        assert_eq!(m, vec![vec![2.0, 3.0], vec![5.0, 6.0]]);
+    }
+
+    #[test]
+    fn range_subscript_rows_all_cols() {
+        let m = run_get("a = {1 2 3, 4 5 6, 7 8 9}; r = a[2:3, *];", "r");
+        assert_eq!(m, vec![vec![4.0, 5.0, 6.0], vec![7.0, 8.0, 9.0]]);
+    }
+
+    #[test]
+    fn range_subscript_all_rows_cols() {
+        let m = run_get("a = {1 2 3, 4 5 6, 7 8 9}; r = a[ , 1:2];", "r");
+        assert_eq!(m, vec![vec![1.0, 2.0], vec![4.0, 5.0], vec![7.0, 8.0]]);
+    }
+
+    #[test]
+    fn det_2x2_oracle() {
+        // DET({4 3, 6 3}) = 4*3 - 3*6 = -6.
+        let d = as_scalar(&eval_one("det({4 3, 6 3})")).unwrap();
+        assert!(approx(d, -6.0, 1e-9), "det = {d}");
+    }
+
+    #[test]
+    fn det_identity_is_one() {
+        let d = as_scalar(&eval_one("det({1 0 0, 0 1 0, 0 0 1})")).unwrap();
+        assert!(approx(d, 1.0, 1e-9), "det = {d}");
+    }
+
+    #[test]
+    fn det_singular_is_zero() {
+        let d = as_scalar(&eval_one("det({1 2, 2 4})")).unwrap();
+        assert!(approx(d, 0.0, 1e-9), "det = {d}");
+    }
+
+    #[test]
+    fn eigvec_orthonormal() {
+        // V'V = I for a symmetric matrix.
+        let v = eval_one("eigvec({2 0, 0 3})");
+        let vtv = eval_binop(ImlOp::Mul, &transpose(&v), &v).unwrap();
+        assert!(approx(vtv[0][0], 1.0, 1e-9), "vtv={vtv:?}");
+        assert!(approx(vtv[1][1], 1.0, 1e-9), "vtv={vtv:?}");
+        assert!(approx(vtv[0][1], 0.0, 1e-9), "vtv={vtv:?}");
+        assert!(approx(vtv[1][0], 0.0, 1e-9), "vtv={vtv:?}");
+    }
+
+    #[test]
+    fn call_eigen_values_and_vectors() {
+        // {2 0, 0 3}: eigenvalues 3,2 (descending) with axis-aligned vectors.
+        let prog = parse_body("call eigen(val, vec, {2 0, 0 3});").unwrap();
+        let mut env = Env::new();
+        let mut ops = Vec::new();
+        let mut session = test_session();
+        exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
+        let val = env.vars.get("VAL").unwrap();
+        assert_eq!(dims(val), (2, 1), "values must be a column vector");
+        assert!(approx(val[0][0], 3.0, 1e-9), "val={val:?}");
+        assert!(approx(val[1][0], 2.0, 1e-9), "val={val:?}");
+        // Vectors orthonormal: Vᵀ V = I.
+        let vec = env.vars.get("VEC").unwrap().clone();
+        let vtv = eval_binop(ImlOp::Mul, &transpose(&vec), &vec).unwrap();
+        assert!(approx(vtv[0][0], 1.0, 1e-9) && approx(vtv[1][1], 1.0, 1e-9), "vtv={vtv:?}");
+        assert!(approx(vtv[0][1], 0.0, 1e-9) && approx(vtv[1][0], 0.0, 1e-9), "vtv={vtv:?}");
+        // Reconstruct A = V diag(λ) Vᵀ.
+        let vd: Matrix = vec
+            .iter()
+            .map(|row| row.iter().enumerate().map(|(j, &x)| x * val[j][0]).collect())
+            .collect();
+        let recon = eval_binop(ImlOp::Mul, &vd, &transpose(&vec)).unwrap();
+        assert!(approx(recon[0][0], 2.0, 1e-9) && approx(recon[1][1], 3.0, 1e-9), "recon={recon:?}");
+    }
+
+    #[test]
+    fn eigvec_nonsymmetric_errors() {
+        let e = eval_try("eigvec({1 2, 3 4})");
+        assert!(e.is_err());
+        assert!(e.err().unwrap().to_string().contains("symmetric"));
     }
 
     // ───────────────────── M28a.4 : I/O datasets ─────────────────────

@@ -111,6 +111,11 @@ pub struct MacroEngine {
     /// M19.2 — profondeur d'imbrication courante des `%include` (garde contre
     /// les inclusions cycliques). Plafonnée à `MAX_INCLUDE_DEPTH`.
     include_depth: usize,
+    /// M35.2 — registre minimal des `fileref` posés par le statement global
+    /// `FILENAME ref 'chemin';`. Clé = nom du fileref EN MAJUSCULES, valeur =
+    /// chemin déjà résolu (absolu ou relatif à la base). Consulté par
+    /// `%include fileref;` pour résoudre un fileref nu en chemin de fichier.
+    filerefs: std::collections::HashMap<String, std::path::PathBuf>,
     /// M19.2 — noms (MAJUSCULES) de macros dont la recherche autocall a déjà
     /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
     /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
@@ -141,6 +146,47 @@ pub struct MacroEngine {
     /// lignes `MPRINT(nom):` / `MLOGIC(nom):`. La macro la plus interne est en
     /// fin de pile. Vide en code ouvert.
     macro_stack: Vec<String>,
+    /// M35.4 — `%return` demandé : interrompt l'expansion du corps de macro
+    /// COURANT (revient à l'appelant). Posé par `consume_return`, testé en tête
+    /// de la boucle `process_impl`, et RÉINITIALISÉ par `expand_invocation`
+    /// après l'expansion du corps (ré-entrance : ne fuit jamais vers
+    /// l'appelant ni l'open code).
+    return_requested: bool,
+    /// M35.4 — `%abort` demandé : interrompt l'expansion comme `%return` mais
+    /// se PROPAGE vers le haut (l'appelant l'observe). `expand_invocation` ne le
+    /// réinitialise PAS ; il est drainé par l'exécuteur via
+    /// `take_abort_request` après l'expansion d'un segment d'open code.
+    abort_requested: bool,
+    /// M35.4 — variante du `%abort` en cours (forme/option et code retour).
+    abort_kind: Option<AbortKind>,
+    /// M35.4 — saut `%goto` en attente : nom (MAJUSCULES) de l'étiquette cible.
+    /// Posé par `consume_goto`, il « remonte » : chaque niveau de `process_impl`
+    /// (corps de macro, action de `%if`/`%do`) tente de trouver `%label:` dans
+    /// SON propre texte ; s'il y parvient il réinitialise le drapeau et saute,
+    /// sinon il laisse remonter au niveau parent. Au niveau le PLUS externe du
+    /// corps, un drapeau encore posé = étiquette introuvable → NOTE.
+    goto_requested: Option<String>,
+    /// M35.4 — budget de sauts `%goto` partagé sur toute l'expansion d'un corps
+    /// (garde anti-boucle ; voir `MAX_GOTO_JUMPS`). `None` = pas d'expansion de
+    /// corps en cours (réinitialisé à l'entrée de l'invocation).
+    goto_budget: i64,
+}
+
+/// M35.4 — variante d'un `%abort` macro rencontré pendant l'expansion.
+///
+/// Le processeur macro ne pouvant pas réellement terminer le process (pas de
+/// `process::exit`), on enregistre l'INTENTION : l'exécuteur peut la draîner via
+/// `take_abort_request` et arrêter proprement la soumission s'il le souhaite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AbortKind {
+    /// `%abort;` — arrêt simple.
+    Plain,
+    /// `%abort abend [n];` — arrêt « anormal » (code retour optionnel).
+    Abend(Option<i64>),
+    /// `%abort cancel;` — annulation de la soumission courante.
+    Cancel,
+    /// `%abort return [n];` — arrêt avec code retour optionnel.
+    Return(Option<i64>),
 }
 
 impl MacroEngine {
@@ -176,6 +222,21 @@ impl MacroEngine {
     /// répertoires, dans l'ordre (premier trouvé gagne).
     pub fn set_sasautos_path(&mut self, path: Vec<std::path::PathBuf>) {
         self.sasautos_path = path;
+    }
+
+    /// M35.2 — enregistre un `fileref` (statement global `FILENAME ref 'chemin';`).
+    /// Le nom est stocké en MAJUSCULES (recherche insensible à la casse) ; le
+    /// chemin doit être DÉJÀ résolu (cf. `Session::resolve_path`). Un
+    /// ré-enregistrement écrase l'ancien chemin (dernier `FILENAME` gagne).
+    pub fn set_fileref(&mut self, name: &str, path: std::path::PathBuf) {
+        self.filerefs.insert(name.to_uppercase(), path);
+    }
+
+    /// M35.2 — chemin associé à un `fileref` (recherche insensible à la casse),
+    /// ou `None` si le fileref n'est pas enregistré. Consulté par
+    /// `%include fileref;`.
+    pub(super) fn fileref_path(&self, name: &str) -> Option<&std::path::PathBuf> {
+        self.filerefs.get(&name.to_uppercase())
     }
 
     /// M19.3 — active/désactive l'option de trace `MPRINT` (écho du code
@@ -218,6 +279,15 @@ impl MacroEngine {
     /// en code macro, à exécuter après le segment courant.
     pub fn take_pending_call_execute(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_call_execute)
+    }
+
+    /// M35.4 — draine une éventuelle demande d'`%abort` rencontrée pendant
+    /// l'expansion du dernier segment, et remet à zéro l'état d'abort. L'exécuteur
+    /// peut consulter ce résultat après chaque `expand_open_code` pour arrêter
+    /// proprement la soumission. Rend `None` si aucun `%abort` n'a été vu.
+    pub fn take_abort_request(&mut self) -> Option<AbortKind> {
+        self.abort_requested = false;
+        self.abort_kind.take()
     }
 
     /// M19.3 — écho d'une ligne de log (helper interne). On la pousse dans le
@@ -892,6 +962,56 @@ mod macro_tests {
         assert!(out.contains("not supported") || out.contains("unknown"), "got: {out}");
     }
 
+    // --- M35.1 : %sysfunc délègue à la bibliothèque COMPLÈTE (plus de whitelist) ---
+
+    #[test]
+    fn sysfunc_non_whitelisted_reverse() {
+        // REVERSE n'était PAS dans l'ancienne liste blanche.
+        assert_eq!(run("%sysfunc(reverse(abc))"), "cba");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_repeat() {
+        // REPEAT(x, 2) → 2 copies (implémentation s.repeat(n) de la lib).
+        assert_eq!(run("%sysfunc(repeat(x,2))"), "xx");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_propcase() {
+        assert_eq!(run("%sysfunc(propcase(hello world))"), "Hello World");
+    }
+
+    #[test]
+    fn sysfunc_non_whitelisted_math_sqrt() {
+        assert_eq!(run("%sysfunc(sqrt(16))"), "4");
+    }
+
+    // --- M35.1 : argument de format optionnel ---
+
+    #[test]
+    fn sysfunc_format_dollar() {
+        // sum(1000, 234.5) = 1234.5 reformaté en dollar10.2 ; les blancs de tête
+        // sont retirés pour l'insertion macro.
+        assert_eq!(run("%sysfunc(sum(1000,234.5), dollar10.2)"), "$1,234.50");
+    }
+
+    #[test]
+    fn sysfunc_format_round_width() {
+        // round(3.7) = 4, formaté en 8. → "4" (blancs de tête retirés).
+        assert_eq!(run("%sysfunc(round(3.7), 8.)"), "4");
+    }
+
+    #[test]
+    fn sysfunc_format_date9() {
+        assert_eq!(run("%sysfunc(mdy(1,1,2020), date9.)"), "01JAN2020");
+    }
+
+    #[test]
+    fn sysfunc_no_format_unchanged() {
+        // Sans format : comportement identique à avant (texte brut).
+        assert_eq!(run("%sysfunc(mdy(1,1,2020))"), "21915");
+    }
+
     // --- M11.6 : automatic macro variables (deterministic frozen) ---
 
     #[test]
@@ -1300,12 +1420,71 @@ mod macro_tests {
     }
 
     #[test]
-    fn include_fileref_form_unsupported_note() {
+    fn include_stdin_star_deferral_note() {
+        // M35.2 — `%include *;` (clavier/stdin) reste non supporté : note claire.
+        let dir = tempfile::tempdir().unwrap();
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include *; tail");
+        assert!(out.contains("keyboard/stdin"), "got: {out}");
+        assert!(out.contains("tail"), "got: {out}");
+    }
+
+    #[test]
+    fn include_unknown_bare_token_cannot_read() {
+        // M35.2 — un token nu qui n'est ni un fileref ni un fichier existant est
+        // traité comme un chemin → erreur "cannot read", le scan se poursuit.
         let dir = tempfile::tempdir().unwrap();
         let mut e = engine_in(dir.path());
         let out = e.expand_open_code("%include myref; tail");
-        assert!(out.contains("only quoted file paths"), "got: {out}");
+        assert!(out.contains("cannot read"), "got: {out}");
         assert!(out.contains("tail"), "got: {out}");
+    }
+
+    #[test]
+    fn include_via_fileref() {
+        // M35.2 — FILENAME enregistre un fileref ; `%include fileref;` inline le
+        // fichier visé (ici un %let dont l'effet est visible ensuite).
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "incref.sas", "%let x = 99;");
+        let mut e = engine_in(dir.path());
+        e.set_fileref("INC", p.clone());
+        let out = e.expand_open_code("%include inc; &x");
+        assert_eq!(out.trim(), "99");
+    }
+
+    #[test]
+    fn include_fileref_case_insensitive() {
+        // M35.2 — la recherche de fileref est insensible à la casse.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_file(dir.path(), "incref2.sas", "%let y = ok;");
+        let mut e = engine_in(dir.path());
+        e.set_fileref("myref", p);
+        let out = e.expand_open_code("%include MYREF; &y");
+        assert_eq!(out.trim(), "ok");
+    }
+
+    #[test]
+    fn include_bare_relative_path() {
+        // M35.2 — un token nu non-fileref est résolu comme chemin relatif à la
+        // base d'inclusion.
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        write_file(&sub, "child.sas", "%let z = bare;");
+        let mut e = engine_in(dir.path());
+        let out = e.expand_open_code("%include sub/child.sas; &z");
+        assert_eq!(out.trim(), "bare");
+    }
+
+    #[test]
+    fn set_fileref_round_trip() {
+        // M35.2 — round-trip du registre fileref + insensibilité à la casse.
+        let mut e = MacroEngine::new(true);
+        let path = std::path::PathBuf::from("/tmp/some/where.sas");
+        e.set_fileref("Abc", path.clone());
+        assert_eq!(e.fileref_path("ABC"), Some(&path));
+        assert_eq!(e.fileref_path("abc"), Some(&path));
+        assert_eq!(e.fileref_path("nope"), None);
     }
 
     #[test]
@@ -1493,5 +1672,164 @@ mod macro_tests {
         assert!(logs.iter().any(|l| l.contains("MLOGIC")), "got logs: {:?}", logs);
         assert!(logs.iter().any(|l| l.contains("is TRUE")), "got logs: {:?}", logs);
         assert!(logs.iter().any(|l| l.contains("MPRINT")), "got logs: {:?}", logs);
+    }
+
+    // --- M35.4 : %return / %goto / %abort / hors-périmètre ---
+
+    #[test]
+    fn return_stops_body_caller_continues() {
+        // Le texte APRÈS `%return;` dans le corps n'est PAS émis ; l'appelant
+        // (open code) poursuit normalement.
+        let out = run("%macro m; A %return; B %mend; %m C");
+        assert_eq!(out, "A  C");
+    }
+
+    #[test]
+    fn return_honours_if_branch() {
+        // `%if ... %then %return;` saute le reste du corps quand pris.
+        let out = run("%macro m(x); P %if &x %then %return; Q %mend; %m(1)|%m(0)");
+        assert_eq!(out, "P |P  Q");
+    }
+
+    #[test]
+    fn return_in_open_code_notes_and_continues() {
+        let out = run("X %return; Y");
+        assert!(out.contains("NOTE: %RETURN is not valid in open code"), "got: {out}");
+        assert!(out.contains('X') && out.contains('Y'), "got: {out}");
+    }
+
+    #[test]
+    fn return_reentrancy_two_calls_identical() {
+        // Ré-entrance : deux invocations se comportent à l'identique (le drapeau
+        // ne fuit pas d'un appel à l'autre).
+        let out = run("%macro m; A %return; B %mend; [%m][%m]");
+        assert_eq!(out, "[A ][A ]");
+    }
+
+    #[test]
+    fn goto_skips_block_forward() {
+        // `%goto skip;` saute le bloc intermédiaire jusqu'à `%skip:`.
+        let out = run("%macro m; A %goto skip; B %skip: C %mend; %m");
+        assert_eq!(out, "A  C");
+    }
+
+    #[test]
+    fn goto_bounded_loop() {
+        // Idiome boucle bornée : `&i` incrémenté par `%let`, sortie par `%if`.
+        let src = "%macro m; %let i=0; \
+                   %top: [&i] %let i=%eval(&i+1); %if &i < 3 %then %goto top; \
+                   done %mend; %m";
+        let out = run(src);
+        assert!(out.contains("[0]") && out.contains("[1]") && out.contains("[2]"), "got: {out}");
+        assert!(out.contains("done"), "got: {out}");
+        assert!(!out.contains("[3]"), "got: {out}");
+    }
+
+    #[test]
+    fn goto_missing_label_notes() {
+        let out = run("%macro m; A %goto nope; B %mend; %m");
+        assert!(out.contains("NOTE: %GOTO target label %nope: not found"), "got: {out}");
+    }
+
+    #[test]
+    fn goto_in_open_code_notes() {
+        let out = run("%goto x;");
+        assert!(out.contains("NOTE: %GOTO is not valid in open code"), "got: {out}");
+    }
+
+    #[test]
+    fn label_marker_emits_nothing() {
+        let out = run("%macro m; %lbl: hi %mend; %m");
+        assert_eq!(out.trim(), "hi");
+    }
+
+    #[test]
+    fn abort_stops_body_and_notes() {
+        let mut e = MacroEngine::new(true);
+        let out = e.expand_open_code("%macro m; AAA %abort; ZZZ %mend; %m");
+        assert!(out.contains("NOTE: %ABORT encountered"), "got: {out}");
+        assert!(out.contains("AAA") && !out.contains("ZZZ"), "got: {out}");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Plain));
+    }
+
+    #[test]
+    fn abort_variants_parsed() {
+        let mut e = MacroEngine::new(true);
+        let _ = e.expand_open_code("%macro m; %abort cancel; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Cancel));
+        let _ = e.expand_open_code("%macro m; %abort return 8; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Return(Some(8))));
+        let _ = e.expand_open_code("%macro m; %abort abend; %mend; %m");
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Abend(None)));
+    }
+
+    #[test]
+    fn abort_propagates_to_caller() {
+        // `%abort` dans une macro interne stoppe AUSSI l'expansion de l'appelant.
+        let out = run("%macro inner; III %abort; JJJ %mend; %macro outer; PPP %inner QQQ %mend; %outer RRR");
+        assert!(out.contains("PPP") && out.contains("III"), "got: {out}");
+        assert!(!out.contains("JJJ") && !out.contains("QQQ") && !out.contains("RRR"), "got: {out}");
+    }
+
+    #[test]
+    fn abort_reentrancy_reset_between_segments() {
+        // Après drainage, un 2ᵉ programme se comporte à l'identique.
+        let mut e = MacroEngine::new(true);
+        let out1 = e.expand_open_code("%macro m; AAA %abort; ZZZ %mend; %m");
+        let _ = e.take_abort_request();
+        let out2 = e.expand_open_code("%macro m2; AAA %abort; ZZZ %mend; %m2");
+        assert!(out1.contains("AAA") && !out1.contains("ZZZ"));
+        assert!(out2.contains("AAA") && !out2.contains("ZZZ"));
+        assert_eq!(e.take_abort_request(), Some(AbortKind::Plain));
+    }
+
+    #[test]
+    fn sysexec_noted_and_consumed() {
+        let out = run("before %sysexec(rm -rf x); after");
+        assert!(out.contains("%SYSEXEC") && out.contains("not supported in this build"), "got: {out}");
+        assert!(out.contains("before") && out.contains("after"), "got: {out}");
+    }
+
+    #[test]
+    fn sysexec_inner_semicolon_not_a_cutoff() {
+        // Le `;` à l'intérieur des parenthèses ne doit pas couper prématurément.
+        let out = run("%sysexec(echo a; echo b); tail");
+        assert!(out.contains("not supported"), "got: {out}");
+        assert!(out.contains("tail") && !out.contains("echo b"), "got: {out}");
+    }
+
+    #[test]
+    fn window_display_noted_and_consumed() {
+        let out = run("a %window w color=red; b %display w; c");
+        assert!(out.contains("%WINDOW") && out.contains("%DISPLAY"), "got: {out}");
+        assert!(out.contains('a') && out.contains('b') && out.contains('c'), "got: {out}");
+    }
+
+    #[test]
+    fn syscall_noted_and_consumed() {
+        let out = run("p %syscall scan(s,n,r); q");
+        assert!(out.contains("%SYSCALL") && out.contains("not supported"), "got: {out}");
+        assert!(out.contains('p') && out.contains('q'), "got: {out}");
+    }
+
+    #[test]
+    fn misc_unsupported_keywords_consumed() {
+        for (src, tag) in [
+            ("%sysmacdelete m;", "%SYSMACDELETE"),
+            ("%sysmstoreclear;", "%SYSMSTORECLEAR"),
+            ("%syslput x=1;", "%SYSLPUT"),
+            ("%sysrput x=1;", "%SYSRPUT"),
+        ] {
+            let out = run(src);
+            assert!(out.contains(tag) && out.contains("not supported"), "src {src} got: {out}");
+        }
+    }
+
+    #[test]
+    fn unknown_macro_keyword_left_verbatim() {
+        // Un `%foo` inconnu (non défini, non mot-clé) reste verbatim — pas de
+        // panic ni de consommation parasite.
+        let out = run("%notakeyword bar");
+        assert_eq!(out, "%notakeyword bar");
     }
 }

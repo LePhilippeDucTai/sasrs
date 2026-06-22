@@ -36,7 +36,7 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
         Some(s) => s.to_ascii_lowercase(),
         None => {
             return Err(SasError::parse(
-                "expected LIBNAME, OPTIONS, or TITLE keyword",
+                "expected LIBNAME, FILENAME, OPTIONS, or TITLE keyword",
                 head.span,
             ));
         }
@@ -45,6 +45,9 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
     if kw == "libname" {
         ts.next(); // consume `libname`
         parse_libname(ts)
+    } else if kw == "filename" {
+        ts.next(); // consume `filename`
+        parse_filename(ts)
     } else if kw == "options" {
         ts.next(); // consume `options`
         parse_options(ts)
@@ -57,7 +60,7 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
     } else {
         Err(SasError::parse(
             format!(
-                "Expected LIBNAME, OPTIONS, ODS, or TITLEn; got '{}'",
+                "Expected LIBNAME, FILENAME, OPTIONS, ODS, or TITLEn; got '{}'",
                 kw.to_uppercase()
             ),
             head.span,
@@ -563,6 +566,93 @@ fn parse_libname(ts: &mut StatementStream) -> Result<GlobalStmt> {
     ))
 }
 
+// ── FILENAME (M35.2) ─────────────────────────────────────────────────────────
+
+/// Parse `FILENAME fileref <chemin|device> ;` (le mot-clé `FILENAME` est déjà
+/// consommé) — M35.2, forme MINIMALE.
+///
+/// Formes reconnues :
+/// - `FILENAME ref 'chemin' ;` / `FILENAME ref "chemin" ;` : chemin entre
+///   guillemets → enregistré tel quel (résolu à l'exécution).
+/// - `FILENAME ref chemin ;` : un identifiant nu est traité comme un chemin
+///   (fichier ou répertoire), SAUF s'il s'agit d'un mot-clé device reconnu.
+/// - `FILENAME ref TEMP|PIPE|URL|DUMMY|… [...] ;` : device/options →
+///   accepté-et-ignoré (`path = None`, `device = Some(...)`), une NOTE est
+///   émise à l'exécution. Le reste de la ligne (options) est consommé sans
+///   interprétation.
+///
+/// On reste volontairement permissif : tout token résiduel jusqu'au `;` est
+/// consommé (les options éventuelles d'un `FILENAME ref 'p' lrecl=...;` sont
+/// ignorées) afin de ne JAMAIS produire d'erreur de parse sur un `FILENAME`.
+fn parse_filename(ts: &mut StatementStream) -> Result<GlobalStmt> {
+    // Nom du fileref (identifiant).
+    let ref_tok = ts.peek().clone();
+    let fileref = match ref_tok.ident() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(SasError::parse(
+                "FILENAME requires a fileref (1–8 character identifier)",
+                ref_tok.span,
+            ));
+        }
+    };
+    ts.next(); // consume fileref
+
+    // Token suivant : chemin entre guillemets, identifiant (device ou chemin nu),
+    // ou directement `;` (forme dégénérée acceptée comme no-op).
+    let next_tok = ts.peek().clone();
+    let mut path: Option<String> = None;
+    let mut device: Option<String> = None;
+
+    match &next_tok.kind {
+        TokenKind::Semi => {
+            // `FILENAME ref ;` — rien à enregistrer (no-op).
+        }
+        TokenKind::Str { value, suffix } => {
+            if *suffix != StrSuffix::None {
+                return Err(SasError::parse(
+                    "FILENAME path must be a plain string literal (no date/time suffix)",
+                    next_tok.span,
+                ));
+            }
+            path = Some(value.clone());
+            ts.next(); // consume the string literal
+        }
+        TokenKind::Ident(id) => {
+            // Mots-clés device connus → accepté-et-ignoré (pas de chemin).
+            let upper = id.to_ascii_uppercase();
+            const DEVICES: &[&str] = &[
+                "TEMP", "PIPE", "URL", "DUMMY", "TERMINAL", "PLOTTER", "PRINTER",
+                "TAPE", "DISK", "CATALOG", "FTP", "SOCKET", "EMAIL", "CLIPBRD",
+                "ZIP", "HADOOP", "SFTP", "WEBDAV", "JMS",
+            ];
+            if DEVICES.contains(&upper.as_str()) {
+                device = Some(upper);
+            } else {
+                // Identifiant nu traité comme chemin (fichier ou répertoire).
+                path = Some(id.clone());
+            }
+            ts.next(); // consume the identifier
+        }
+        _ => {
+            return Err(SasError::parse(
+                format!(
+                    "Expected a quoted path, a path, or a device after fileref {}.",
+                    fileref.to_uppercase()
+                ),
+                next_tok.span,
+            ));
+        }
+    }
+
+    // Consommer tout résidu (options device, lrecl=, etc.) jusqu'au `;`.
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        ts.next();
+    }
+    ts.expect_semi()?;
+    Ok(GlobalStmt::Filename { fileref, path, device })
+}
+
 // ── TITLE ────────────────────────────────────────────────────────────────────
 
 fn parse_title(ts: &mut StatementStream, n: u8) -> Result<GlobalStmt> {
@@ -823,6 +913,62 @@ mod tests {
         // `libname mylib 123;` — path is not a string literal.
         let err = parse("libname mylib 123;").unwrap_err();
         assert!(!err.to_string().is_empty());
+    }
+
+    // ── FILENAME (M35.2) ─────────────────────────────────────────────────────
+
+    #[test]
+    fn filename_quoted_path() {
+        let stmt = parse("filename inc '/tmp/x.sas';").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Filename {
+                fileref: "inc".into(),
+                path: Some("/tmp/x.sas".into()),
+                device: None,
+            }
+        );
+    }
+
+    #[test]
+    fn filename_bare_path() {
+        // Un identifiant nu (non-device) est traité comme chemin.
+        let stmt = parse("filename inc myfile;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Filename {
+                fileref: "inc".into(),
+                path: Some("myfile".into()),
+                device: None,
+            }
+        );
+    }
+
+    #[test]
+    fn filename_device_temp_ignored() {
+        let stmt = parse("filename tmp TEMP;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Filename {
+                fileref: "tmp".into(),
+                path: None,
+                device: Some("TEMP".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn filename_options_after_path_ignored() {
+        // Résidu d'options après le chemin → consommé sans erreur.
+        let stmt = parse("filename inc '/tmp/x.sas' lrecl=256;").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Filename {
+                fileref: "inc".into(),
+                path: Some("/tmp/x.sas".into()),
+                device: None,
+            }
+        );
     }
 
     // ── TITLE ────────────────────────────────────────────────────────────────

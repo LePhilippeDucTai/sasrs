@@ -175,6 +175,41 @@ commits d'extraction « move-only ». Les jalons de complétion font rétrécir 
 | Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | **Opus/Fable** | très élevé | oracles vérifiés vs SAS 9.4 ; numérique maison `src/stat/` ; fixtures `tests/fixtures/m34/` |
 | Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | **Opus** | élevé | processeur toujours actif ; nouveau comportement seulement sur nouvelles directives → snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
 
+### Phase F (M36) — `PROC REG` : complétion exhaustive (roadmap dans PROGRESS.md)
+
+Demandée après M34.4 : amener `PROC REG` à **✅** en couvrant TOUTE la surface SAS 9.4 restante.
+Jalon de complétion d'options ⇒ invariant d'octet-identité (snapshots m1–m35 inchangés ; le chemin
+OLS + NOINT/SELECTION= déjà livré reste tel quel ; nouveau comportement seulement sur la nouvelle
+syntaxe). 11 cases (M36.1–M36.11) + DoD, chacune rétrécissant la colonne « non couvert » du README REG.
+
+| Tâche | Jalon | Modèle | Effort | Notes |
+|---|---|---|---|---|
+| `TEST`/`RESTRICT` (hypothèses & restrictions linéaires sur β) ; `CLB`/`ALPHA=`/`CLI`/`CLM` + `OUTPUT` STDP/STDI/STDR/LCL/UCL/LCLM/UCLM ; diagnostics d'observation (`R`/`INFLUENCE` + STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS) ; colinéarité/spec (`COLLIN`/`VIF`/`TOL`/`SPEC`/`DW`/`ACOV`) ; SS partielles (`SS1`/`SS2`/`STB`/`PCORR`/`SCORR`/`SEQB`) ; `SELECTION=RSQUARE/ADJRSQ/CP/MAXR/MINR` (+BEST=/INCLUDE=/…) ; `WEIGHT`/`FREQ`/`BY`/`ID` ; `OUTEST=`/`OUTSSCP=`/`SIMPLE`/`CORR`/`COVB`/`XPX` ; `RIDGE=`/`PCOMIT=` ; `MTEST` + édition interactive (ADD/DELETE/REWEIGHT/REFIT/PAINT) ; panel `PLOTS=` complet | M36 | **Opus/Fable** | élevé→très élevé | oracles vérifiés vs SAS 9.4 ; matrices via `src/stat/linalg.rs` ; fixtures `tests/fixtures/m36/` ; **README `REG` → ✅** en fin de jalon |
+
+### Phase G (M37–M66) — tout 🟡 (+ 🔴 faisable) → ✅ (roadmap dans PROGRESS.md)
+
+Demandée après M36 : amener **toutes** les fonctionnalités partielles (26 🟡) et les 🔴 faisables à
+**✅** dans les tableaux de couverture du README. Décisions actées : implémentation **intégrale quel
+que soit l'effort** (vraie numérique GEE/Kenward-Roger/ML factor/QUAD/CCC/Fisher r×c, catalogues
+persistants, rendu graphique complet) ; **un jalon par gros proc** ; bloc d'**infrastructure
+partagée** (M37–M42) construit une fois et réutilisé. Restent 🔴 documentés (environnement/interactif) :
+`X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYSRPUT`, `.sas7bcat` binaire (→ sidecar JSON).
+Invariant de complétion d'options : octet-identité des snapshots m1–m36 (tout gardé derrière une
+option/statement neuf). Détail des cases dans `PROGRESS.md`.
+
+| Bloc | Jalons | Modèle | Effort |
+|---|---|---|---|
+| 0 — Infra partagée | M37 `lincom`+digamma/trigamma · M38 globals+ODS capture/select+titres · M39 store catalogue persistant · M40 DATA step (multiple SET/CALL/WHERE/INFORMAT) · M41 macro quoting (%SUPERQ/%BQUOTE/%NRBQUOTE/%SYSCALL/%SYSMACDELETE) · M42 SQL (dictionaries/CONTAINS/SOUNDS LIKE) | **Opus** | élevé→très élevé |
+| 1 — Base/descriptifs | M43 FORMAT · M44 FREQ (Fisher r×c) · M45 UNIVARIATE · M46 TABULATE · M47 REPORT · M48 DATASETS · M49 CATALOG · M50 PRINTTO · M51 OPTIONS | **Sonnet/Opus** | faible→très élevé |
+| 2 — Modélisation | M52 LOGISTIC · M53 GENMOD (GEE) · M54 MIXED (Kenward-Roger) · M55 GLIMMIX (QUAD) | **Opus** | très élevé |
+| 3 — Multivarié | M56 PRINCOMP · M57 FACTOR (ML) · M58 DISCRIM · M59 DISTANCE · M60 CLUSTER (CCC) · M61 FASTCLUS · M62 IML | **Opus** | moyen→très élevé |
+| 4 — Graphiques | M63 GPLOT · M64 GCHART · M65 PLOT · M66 SGPLOT (réutilisent `src/graphics/render.rs` ; testés `--features graphics`) | **Opus** | moyen→élevé |
+
+Pièces transverses (construire UNE fois) : `src/procs/lincom.rs` (LSMEANS/ESTIMATE/CONTRAST/score,
+extrait de `glm.rs`) ; généralisation ODS OUTPUT + SELECT/EXCLUDE (`session.rs`/`output/mod.rs`) ;
+store catalogue sidecar (`formats/mod.rs`) ; titres multiples (trait `OutputDestination`) ;
+digamma/trigamma (`stat/dists.rs`). Ordre dur : Bloc 0 avant ses consommateurs ; graphiques en dernier.
+
 ### Conseils d'orchestration
 
 - **Ordre M1 strict** : `parser/mod.rs` → `parser/expr.rs` → `parser/{datastep,global}.rs`

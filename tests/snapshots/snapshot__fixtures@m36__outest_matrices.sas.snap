@@ -1,0 +1,236 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m36/outest_matrices.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC REG: SIMPLE/CORR + printed matrices (XPX, I, COVB, CORRB)';
+
+3     proc reg data=d.class simple corr;
+4       model weight = age height / xpx i covb corrb;
+5     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title 'OUTEST= dataset (with COVOUT, OUTSEB, EDF)';
+
+7     proc reg data=d.class outest=est covout outseb edf;
+8       model weight = age height;
+9     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: The data set WORK.EST has 5 observations and 12 variables.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    proc print data=est;
+11    run;
+NOTE: There were 5 observations read from the data set WORK.EST.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    title 'OUTSSCP= dataset';
+
+13    proc reg data=d.class outsscp=sscp;
+14      model weight = age height;
+15    run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.SSCP has 4 observations and 6 variables.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    proc print data=sscp;
+17    run;
+NOTE: There were 4 observations read from the data set WORK.SSCP.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    title;
+
+==== LISTING ====
+
+
+                                       The REG Procedure
+                                     Descriptive Statistics
+
+      Variable           Sum         Mean    Uncorrected SS     Variance    Std Deviation
+
+      age          253.00000     13.31579        3409.00000      2.22807          1.49267
+      height      1184.40000     62.33684       74304.92000     26.28690          5.12708
+      weight      1900.50000    100.02632      199435.75000    518.65205         22.77393
+
+
+                                       The REG Procedure
+                                          Correlation
+
+                             Variable       age    height    weight
+
+                             age         1.0000    0.8114    0.7409
+                             height      0.8114    1.0000    0.8778
+                             weight      0.7409    0.8778    1.0000
+                 PROC REG: SIMPLE/CORR + printed matrices (XPX, I, COVB, CORRB)
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+
+                                       The REG Procedure
+                                Model Crossproducts X'X X'Y Y'Y
+
+                        Intercept               age             height             weight
+
+       Intercept      19.00000000      253.00000000      1184.40000000      1900.50000000
+       age           253.00000000     3409.00000000     15883.00000000     25760.00000000
+       height       1184.40000000    15883.00000000     74304.92000000    120316.05000000
+       weight       1900.50000000    25760.00000000    120316.05000000    199435.75000000
+
+
+                                       The REG Procedure
+                           X'X Inverse, Parameter Estimates, and SSE
+
+                            Intercept            age         height           weight
+
+           Intercept       8.41040380     0.10296326    -0.15606837    -141.22376347
+           age             0.10296326     0.07299842    -0.01724494       1.27839251
+           height         -0.15606837    -0.01724494     0.00618732       3.59702651
+           weight       -141.22376347     1.27839251     3.59702651    2120.09973899
+
+
+                                       The REG Procedure
+                                    Covariance of Estimates
+
+                                    Intercept            age          height
+
+                   Intercept    1114.43093134    13.64327348    -20.68003179
+                   age            13.64327348     9.67274525     -2.28506142
+                   height        -20.68003179    -2.28506142      0.81985912
+
+
+                                       The REG Procedure
+                                    Correlation of Estimates
+
+                                    Intercept            age         height
+
+                     Intercept     1.00000000     0.13140659    -0.68415579
+                     age           0.13140659     1.00000000    -0.81143435
+                     height       -0.68415579    -0.81143435     1.00000000
+
+                           OUTEST= dataset (with COVOUT, OUTSEB, EDF)
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+                           OUTEST= dataset (with COVOUT, OUTSEB, EDF)
+
+Obs    _MODEL_    _TYPE_    _DEPVAR_    _NAME_             _RMSE_    _IN_    _P_    _EDF_       Intercept             age          height    weight
+
+  1    MODEL1     PARMS     weight                   11.511135204       2      3       16    -141.2237635    1.2783925135    3.5970265113        -1
+  2    MODEL1     COV       weight      Intercept    11.511135204       2      3       16    1114.4309313    13.643273484    -20.68003179         .
+  3    MODEL1     COV       weight      age          11.511135204       2      3       16    13.643273484    9.6727452527    -2.285061419         .
+  4    MODEL1     COV       weight      height       11.511135204       2      3       16    -20.68003179    -2.285061419    0.8198591212         .
+  5    MODEL1     SEB       weight                   11.511135204       2      3       16    33.383093496    3.1101037366    0.9054607232         .
+
+                                        OUTSSCP= dataset
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+                                        OUTSSCP= dataset
+
+           Obs    _TYPE_    _NAME_       Intercept      age       height       weight
+
+             1    SSCP      Intercept           19      253       1184.4       1900.5
+             2    SSCP      age                253     3409        15883        25760
+             3    SSCP      height          1184.4    15883     74304.92    120316.05
+             4    SSCP      weight          1900.5    25760    120316.05    199435.75
+
+==== EXIT 0 ====

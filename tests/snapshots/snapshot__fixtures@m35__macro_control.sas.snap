@@ -1,0 +1,16 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m35/macro_control.sas
+---
+==== LOG ====
+early_before
+count=1
+count=2
+count=3
+countup_done
+after_all
+
+==== LISTING ====
+
+==== EXIT 0 ====

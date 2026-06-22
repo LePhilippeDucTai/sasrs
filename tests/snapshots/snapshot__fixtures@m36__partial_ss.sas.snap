@@ -1,0 +1,58 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m36/partial_ss.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC REG: Type I/II SS, standardized & partial/semi-partial correlations';
+
+3     proc reg data=d.class;
+4       model weight = age height / ss1 ss2 stb pcorr2 scorr2 seqb press;
+5     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title;
+
+==== LISTING ====
+            PROC REG: Type I/II SS, standardized & partial/semi-partial correlations
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+PRESS                3272.72186
+
+
+Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|       Type I SS    Type II SS    Standardized Estimate    Squared Partial Corr Type II    Squared Semi-partial Corr Type II    Sequential Parameter Estimate
+
+Intercept     1            -141.22376          33.38309      -4.23      0.0006    190100.01316    2371.36668                  0.00000                         0.52797                              0.25401                        100.02632
+age           1               1.27839           3.11010       0.41      0.6865      5124.49111      22.38798                  0.08379                         0.01045                              0.00240                         11.30381
+height        1               3.59703           0.90546       3.97      0.0011      2091.14600    2091.14600                  0.80980                         0.49656                              0.22399                          3.59703
+
+==== EXIT 0 ====

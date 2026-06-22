@@ -48,9 +48,24 @@
 //!   correction de ties en v1, documenté). Bloc « Kendall Tau b Coefficients ».
 //! - `pearson` : sélectionne explicitement Pearson. Par défaut (aucune option
 //!   de méthode), seul Pearson est produit, byte-identique à l'incrément v1.
-//! - `weight var` : Pearson **pondéré** (moyennes/(co)variances pondérées par
-//!   w ; obs exclue si w manquant ou ≤ 0 — voir `partition_weighted`). Ne
-//!   s'applique PAS à Spearman/Kendall en v1 (documenté).
+//! - `weight var` : corrélations **pondérées** (moyennes/(co)variances
+//!   pondérées par w ; obs exclue si w manquant ou ≤ 0 — voir
+//!   `partition_weighted`). S'applique à Pearson, Spearman et Kendall :
+//!   * Pearson pondéré : Pearson sur (co)variances pondérées.
+//!   * Spearman pondéré (M34.1) : Pearson pondéré sur les **rangs moyens
+//!     pondérés** (`weighted_mean_ranks` — rang d'un bloc d'ex æquo de poids W
+//!     démarrant au poids cumulé c = c + (W+1)/2). Avec des poids entiers =
+//!     comptes de réplication, équivaut au Spearman ordinaire sur les données
+//!     répliquées (testé).
+//!   * Kendall pondéré (M34.1) : paires (i,j) pondérées par w_i·w_j dans C, D
+//!     et les totaux n0/n1/n2 du dénominateur tau-b. Idem : équivaut au tau-b
+//!     ordinaire sur les données répliquées (testé).
+//! - `hoeffding` (M34.1) : D de Hoeffding sur les observations
+//!   appariées-complètes (n ≥ 5). Bloc « Hoeffding Dependence Coefficients »,
+//!   D à 5 décimales, colonne `Prob > D`. D exact (≡ SAS à 5 décimales) ;
+//!   `Prob > D` = approximation asymptotique de Blum-Kiefer-Rosenblatt (méthode
+//!   d'Imhof), documentée comme approchée pour petit n (SAS tabule la loi
+//!   exacte pour n modéré). Voir `hoeffding_d` / `hoeffding_pvalue`.
 //! - `out=`/`outp=`/`outs=`/`outk=` : dataset TYPE=CORR. Variables `_TYPE_`
 //!   (MEAN/STD/N/CORR), `_NAME_` (nom de variable des lignes CORR), puis une
 //!   colonne par variable analysée. OUTP=/OUT= = Pearson, OUTS= = Spearman,
@@ -87,10 +102,15 @@ pub struct CorrAst {
     pub spearman: bool,
     /// Request Kendall tau-b coefficients.
     pub kendall: bool,
+    /// Request Hoeffding's D measure of dependence.
+    pub hoeffding: bool,
     /// Explicit VAR list (empty = default to all numeric variables).
     pub var: Vec<String>,
     /// Optional WITH list (empty = none).
     pub with: Vec<String>,
+    /// Optional PARTIAL list (empty = none) — variables partialled out
+    /// (controlled for) before computing the (Pearson) correlations.
+    pub partial: Vec<String>,
     /// Optional WEIGHT variable (Pearson only). None = unweighted.
     pub weight: Option<String>,
     /// OUTP= / OUT= : Pearson output dataset (TYPE=CORR).
@@ -105,7 +125,7 @@ impl CorrAst {
     /// Whether the Pearson method should be computed/displayed. Pearson is the
     /// default when no method option was given.
     fn want_pearson(&self) -> bool {
-        self.pearson || !(self.spearman || self.kendall)
+        self.pearson || !(self.spearman || self.kendall || self.hoeffding)
     }
 }
 
@@ -120,6 +140,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     let mut pearson = false;
     let mut spearman = false;
     let mut kendall = false;
+    let mut hoeffding = false;
     let mut outp: Option<DatasetRef> = None;
     let mut outs: Option<DatasetRef> = None;
     let mut outk: Option<DatasetRef> = None;
@@ -154,6 +175,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         } else if ts.peek().is_kw("kendall") {
             ts.next();
             kendall = true;
+        } else if ts.peek().is_kw("hoeffding") {
+            ts.next();
+            hoeffding = true;
         } else if ts.peek().is_kw("out") || ts.peek().is_kw("outp") {
             common::expect_eq(ts, "OUT")?;
             outp = Some(ts.parse_dataset_ref()?);
@@ -184,6 +208,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     // --- sub-statements until run;/quit; ---
     let mut var: Vec<String> = Vec::new();
     let mut with: Vec<String> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
     let mut weight: Option<String> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
@@ -197,6 +222,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             "with" => {
                 ts.next();
                 with = common::parse_var_list(ts)?;
+                true
+            }
+            "partial" => {
+                ts.next();
+                partial = common::parse_var_list(ts)?;
                 true
             }
             "weight" => {
@@ -224,8 +254,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         pearson,
         spearman,
         kendall,
+        hoeffding,
         var,
         with,
+        partial,
         weight,
         outp,
         outs,
@@ -339,6 +371,271 @@ fn pearson_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f
     }
     let r = (sxy / (sxx.sqrt() * syy.sqrt())).clamp(-1.0, 1.0);
     (Some(r), n)
+}
+
+/// Collect the pairwise-complete (x, y, w) triples usable under the SAS WEIGHT
+/// rule (x, y, w all non-missing and w > 0). Shared by weighted Spearman /
+/// Kendall.
+fn paired_complete_weighted(
+    xcol: &[Value],
+    ycol: &[Value],
+    wcol: &[Value],
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n_rows = xcol.len().min(ycol.len()).min(wcol.len());
+    let (mut xs, mut ys, mut ws) = (Vec::new(), Vec::new(), Vec::new());
+    for i in 0..n_rows {
+        match (
+            value_to_num(&xcol[i]),
+            value_to_num(&ycol[i]),
+            value_to_num(&wcol[i]),
+        ) {
+            (Some(x), Some(y), Some(w))
+                if !x.is_nan() && !y.is_nan() && !w.is_nan() && w > 0.0 =>
+            {
+                xs.push(x);
+                ys.push(y);
+                ws.push(w);
+            }
+            _ => {}
+        }
+    }
+    (xs, ys, ws)
+}
+
+/// Weighted mid-ranks: the rank a value would receive if every observation were
+/// replicated `w` times. Sorting by value, a tie block of total weight `W`
+/// starting at cumulative weight `c` occupies positions `c+1 .. c+W`, whose
+/// average (the mid-rank) is `c + (W + 1)/2`; every member of the block gets
+/// that mid-rank. With integer weights this is exactly the mid-rank vector of
+/// the `w`-replicated data, which makes weighted Spearman reduce to ordinary
+/// Spearman on the replicated dataset (see unit test).
+fn weighted_mean_ranks(xs: &[f64], ws: &[f64]) -> Vec<f64> {
+    let n = xs.len();
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&a, &b| xs[a].partial_cmp(&xs[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ranks = vec![0.0_f64; n];
+    let mut cum = 0.0_f64;
+    let mut i = 0;
+    while i < n {
+        let mut j = i + 1;
+        while j < n && xs[idx[j]] == xs[idx[i]] {
+            j += 1;
+        }
+        let wblock: f64 = idx[i..j].iter().map(|&k| ws[k]).sum();
+        let mid = cum + (wblock + 1.0) / 2.0;
+        for &k in &idx[i..j] {
+            ranks[k] = mid;
+        }
+        cum += wblock;
+        i = j;
+    }
+    ranks
+}
+
+/// Weighted Pearson over two already paired numeric vectors with weights `ws`.
+/// Returns None when n < 2 or either weighted variance is zero.
+fn weighted_pearson_xy(xs: &[f64], ys: &[f64], ws: &[f64]) -> Option<f64> {
+    let n = xs.len();
+    if n < 2 {
+        return None;
+    }
+    let sw: f64 = ws.iter().sum();
+    if sw <= 0.0 {
+        return None;
+    }
+    let mx: f64 = xs.iter().zip(ws).map(|(x, w)| w * x).sum::<f64>() / sw;
+    let my: f64 = ys.iter().zip(ws).map(|(y, w)| w * y).sum::<f64>() / sw;
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for k in 0..n {
+        let dx = xs[k] - mx;
+        let dy = ys[k] - my;
+        sxy += ws[k] * dx * dy;
+        sxx += ws[k] * dx * dx;
+        syy += ws[k] * dy * dy;
+    }
+    if sxx <= 0.0 || syy <= 0.0 {
+        return None;
+    }
+    Some((sxy / (sxx.sqrt() * syy.sqrt())).clamp(-1.0, 1.0))
+}
+
+/// Weighted Spearman rank correlation: weighted Pearson on the weighted
+/// mid-ranks of x and y (weights from the WEIGHT variable, SAS exclusion rule).
+/// With integer weights interpreted as replication counts this equals ordinary
+/// Spearman on the replicated data. Returns (r, n) where n is the number of
+/// usable (non-replicated) observations. None when n < 2 or a rank vector is
+/// constant.
+fn spearman_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f64>, usize) {
+    let (xs, ys, ws) = paired_complete_weighted(xcol, ycol, wcol);
+    let n = xs.len();
+    if n < 2 {
+        return (None, n);
+    }
+    let rx = weighted_mean_ranks(&xs, &ws);
+    let ry = weighted_mean_ranks(&ys, &ws);
+    (weighted_pearson_xy(&rx, &ry, &ws), n)
+}
+
+/// Weighted Kendall tau-b. Each unordered pair (i, j) is weighted by w_i·w_j in
+/// the concordant/discordant counts AND in the tie-corrected denominator
+/// totals n0 = Σ_{i<j} w_i w_j, n1 = Σ ties-in-x w_i w_j, n2 = Σ ties-in-y.
+/// τ_b = (C − D)/√((n0 − n1)(n0 − n2)). With integer weights this matches
+/// ordinary tau-b on the replicated data: the within-block self-pairs of a
+/// replicated observation are tied in both coordinates, so they cancel between
+/// n0 and n1 (and n0 and n2) and never count as C or D. Returns (τ, n). None
+/// when n < 2 or a denominator factor is zero.
+fn kendall_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f64>, usize) {
+    let (xs, ys, ws) = paired_complete_weighted(xcol, ycol, wcol);
+    let n = xs.len();
+    if n < 2 {
+        return (None, n);
+    }
+    let (mut concordant, mut discordant) = (0.0_f64, 0.0_f64);
+    let (mut n0, mut n1, mut n2) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let ww = ws[i] * ws[j];
+            n0 += ww;
+            let dx = xs[i] - xs[j];
+            let dy = ys[i] - ys[j];
+            if dx == 0.0 {
+                n1 += ww;
+            }
+            if dy == 0.0 {
+                n2 += ww;
+            }
+            if dx != 0.0 && dy != 0.0 {
+                if dx.signum() * dy.signum() > 0.0 {
+                    concordant += ww;
+                } else {
+                    discordant += ww;
+                }
+            }
+        }
+    }
+    let denom = (n0 - n1) * (n0 - n2);
+    if denom <= 0.0 {
+        return (None, n);
+    }
+    let tau = (concordant - discordant) / denom.sqrt();
+    (Some(tau.clamp(-1.0, 1.0)), n)
+}
+
+/// Hoeffding's D measure of dependence over pairwise-complete observations.
+///
+/// With bivariate mid-ranks R_i = rank(x_i), S_i = rank(y_i) and the bivariate
+/// "CDF count" Q_i = 1 + Σ_{j≠i} c(x_j,x_i)·c(y_j,y_i), where c(a,b)=1 if a<b,
+/// ½ if a==b, 0 otherwise (so a point tied in exactly one coordinate and less
+/// in the other contributes ¼, and one tied in both contributes ¼):
+///   D1 = Σ (Q_i−1)(Q_i−2)
+///   D2 = Σ (R_i−1)(R_i−2)(S_i−1)(S_i−2)
+///   D3 = Σ (R_i−2)(S_i−2)(Q_i−1)
+///   D  = 30·[(n−2)(n−3)·D1 + D2 − 2(n−2)·D3] / [n(n−1)(n−2)(n−3)(n−4)]
+/// Requires n ≥ 5; returns (None, n) otherwise. This reproduces SAS PROC CORR
+/// HOEFFDING to 5 decimals (e.g. sashelp.class height×weight → 0.31609).
+fn hoeffding_d(xcol: &[Value], ycol: &[Value]) -> (Option<f64>, usize) {
+    let (xs, ys) = paired_complete(xcol, ycol);
+    let n = xs.len();
+    if n < 5 {
+        return (None, n);
+    }
+    let r = mean_ranks(&xs);
+    let s = mean_ranks(&ys);
+    let mut q = vec![1.0_f64; n];
+    for i in 0..n {
+        let mut c = 1.0_f64;
+        for j in 0..n {
+            if j == i {
+                continue;
+            }
+            let cx = if xs[j] < xs[i] {
+                1.0
+            } else if xs[j] == xs[i] {
+                0.5
+            } else {
+                0.0
+            };
+            let cy = if ys[j] < ys[i] {
+                1.0
+            } else if ys[j] == ys[i] {
+                0.5
+            } else {
+                0.0
+            };
+            c += cx * cy;
+        }
+        q[i] = c;
+    }
+    let mut d1 = 0.0;
+    let mut d2 = 0.0;
+    let mut d3 = 0.0;
+    for i in 0..n {
+        d1 += (q[i] - 1.0) * (q[i] - 2.0);
+        d2 += (r[i] - 1.0) * (r[i] - 2.0) * (s[i] - 1.0) * (s[i] - 2.0);
+        d3 += (r[i] - 2.0) * (s[i] - 2.0) * (q[i] - 1.0);
+    }
+    let nf = n as f64;
+    let num = (nf - 2.0) * (nf - 3.0) * d1 + d2 - 2.0 * (nf - 2.0) * d3;
+    let den = nf * (nf - 1.0) * (nf - 2.0) * (nf - 3.0) * (nf - 4.0);
+    let d = 30.0 * num / den;
+    (Some(d), n)
+}
+
+/// Asymptotic upper-tail probability `Prob > D` for Hoeffding's D.
+///
+/// Under H0 (independence), the Blum-Kiefer-Rosenblatt (1961) limiting law of
+/// the statistic `B = (n−1)·D/30` is the distribution of the χ²-mixture
+/// `Σ_{j,k≥1} λ_jk·Z_jk²` with eigenvalues `λ_jk = 1/(π⁴ j² k²)`. The survival
+/// function is evaluated by Imhof's (1961) numerical inversion on a fixed,
+/// deterministic eigenvalue grid (j,k = 1..30).
+///
+/// DOCUMENTED APPROXIMATION: this is the *large-sample* p-value. SAS PROC CORR
+/// uses a tabulated small-sample distribution for moderate n; reproducing that
+/// table exactly is impractical here, so for small n the printed `Prob > D` is
+/// an asymptotic approximation and may differ from SAS in the 4th decimal. The
+/// D coefficient itself is computed exactly and matches SAS. Returns None when
+/// n < 5.
+fn hoeffding_pvalue(d: f64, n: usize) -> Option<f64> {
+    if n < 5 {
+        return None;
+    }
+    let b = (n as f64 - 1.0) * d / 30.0;
+    Some(bkr_survival(b))
+}
+
+/// Survival function P(B > b) of the Blum-Kiefer-Rosenblatt limiting law via
+/// Imhof's method on the eigenvalue grid `λ_jk = 1/(π⁴ j² k²)`, j,k = 1..30.
+fn bkr_survival(b: f64) -> f64 {
+    if b <= 0.0 {
+        return 1.0;
+    }
+    const M: usize = 30;
+    let pi4 = std::f64::consts::PI.powi(4);
+    let mut lam: Vec<f64> = Vec::with_capacity(M * M);
+    for j in 1..=M {
+        for k in 1..=M {
+            lam.push(1.0 / (pi4 * (j * j) as f64 * (k * k) as f64));
+        }
+    }
+    // Imhof: P(Q>b) = 1/2 + (1/π)∫_0^U sin(θ(u))/(u·ρ(u)) du, with
+    // θ(u) = ½ Σ atan(λ u) − ½ b u, ρ(u) = Π (1+(λ u)²)^{1/4}.
+    const U: f64 = 1000.0;
+    const STEPS: usize = 20_000;
+    let h = U / STEPS as f64;
+    let mut sum = 0.0;
+    for i in 1..STEPS {
+        let u = i as f64 * h;
+        let mut theta = -0.5 * b * u;
+        let mut lnrho = 0.0;
+        for &l in &lam {
+            let lu = l * u;
+            theta += 0.5 * lu.atan();
+            lnrho += 0.25 * (lu * lu).ln_1p();
+        }
+        sum += theta.sin() * (-lnrho).exp() / u;
+    }
+    sum *= h;
+    (0.5 + sum / std::f64::consts::PI).clamp(0.0, 1.0)
 }
 
 /// Mean (midrank) ranks of a slice: ties receive the average of the ranks they
@@ -679,6 +976,13 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         Vec::new()
     };
 
+    // Resolve the PARTIAL variables (controlled-for set). Numeric only.
+    let partial_cols: Vec<usize> = if !ast.partial.is_empty() {
+        resolve_names(&ast.partial)?
+    } else {
+        Vec::new()
+    };
+
     // Resolve the WEIGHT variable (single numeric column). Applies to Pearson.
     let weight_col: Option<usize> = match &ast.weight {
         Some(nm) => Some(resolve_names(std::slice::from_ref(nm))?[0]),
@@ -707,6 +1011,11 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         std::collections::HashMap::new();
     for &c in &analysis_cols {
         decoded.insert(c, decode_column(&ds, c)?);
+    }
+    for &c in &partial_cols {
+        decoded
+            .entry(c)
+            .or_insert_with(|| decode_column(&ds, c).unwrap_or_default());
     }
     if let Some(wc) = weight_col {
         decoded
@@ -761,14 +1070,62 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         if ast.kendall {
             m.push(Method::Kendall);
         }
+        if ast.hoeffding {
+            m.push(Method::Hoeffding);
+        }
         m
     };
 
     // --- Correlation Coefficients (one block per requested method) ---
     if !ast.nocorr {
-        for &method in &methods {
-            let cells = compute_matrix(method, &row_cols, &col_cols, &decoded, weight_vals);
-            emit_correlations(session, &ds, &row_cols, &col_cols, method, &cells, ast.noprob);
+        if !partial_cols.is_empty() {
+            // PARTIAL correlation: Pearson only in this build. If the user also
+            // asked for Spearman/Kendall, note that those are not partialled.
+            if ast.spearman || ast.kendall {
+                session.log.note(
+                    "PROC CORR: partial Spearman/Kendall correlations are not yet \
+                     implemented; only Pearson partial correlations are produced.",
+                );
+            }
+            let cells = partial_pearson_matrix(&row_cols, &col_cols, &partial_cols, &decoded);
+            let k = partial_cols.len();
+            let controlling: Vec<String> =
+                partial_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            let heading = format!(
+                "Pearson Partial Correlation Coefficients, Controlled for: {}",
+                controlling.join(" ")
+            );
+            let _ = k; // df = n − k − 2 is applied inside partial_pvalue
+            let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
+            emit_correlations(
+                session,
+                &ds,
+                &row_cols,
+                &col_cols,
+                &heading,
+                &prob_line,
+                &cells,
+                ast.noprob,
+            );
+        } else {
+            for &method in &methods {
+                let cells = compute_matrix(method, &row_cols, &col_cols, &decoded, weight_vals);
+                let prob_line = match method {
+                    Method::Kendall => "Prob > |tau| under H0: Tau=0",
+                    Method::Hoeffding => "Prob > D under H0: D=0",
+                    _ => "Prob > |r| under H0: Rho=0",
+                };
+                emit_correlations(
+                    session,
+                    &ds,
+                    &row_cols,
+                    &col_cols,
+                    method.heading(),
+                    prob_line,
+                    &cells,
+                    ast.noprob,
+                );
+            }
         }
     }
 
@@ -803,6 +1160,10 @@ enum Method {
     Pearson,
     Spearman,
     Kendall,
+    /// Hoeffding's D measure of dependence. Unlike the correlation methods,
+    /// its cell statistic is D (not a correlation) and the probability column
+    /// is `Prob > D` (see `hoeffding_d` / `hoeffding_pvalue`).
+    Hoeffding,
 }
 
 impl Method {
@@ -812,6 +1173,7 @@ impl Method {
             Method::Pearson => "Pearson Correlation Coefficients",
             Method::Spearman => "Spearman Correlation Coefficients",
             Method::Kendall => "Kendall Tau b Coefficients",
+            Method::Hoeffding => "Hoeffding Dependence Coefficients",
         }
     }
 
@@ -856,6 +1218,15 @@ fn compute_cell(
     same_var: bool,
     weight: Option<&[Value]>,
 ) -> Cell {
+    // Hoeffding's D is computed for every pair INCLUDING the diagonal: the
+    // self-dependence D(x,x) is the maximum attainable D for the given n (SAS
+    // prints this value, not a forced 1.0), so the `same_var` shortcut used by
+    // the correlation methods does not apply here.
+    if let Method::Hoeffding = method {
+        let (d, n) = hoeffding_d(xcol, ycol);
+        let p = d.and_then(|dv| hoeffding_pvalue(dv, n));
+        return Cell { r: d, p, n };
+    }
     if same_var {
         // N = non-missing count of the variable (weighted: usable count).
         let n = match (method, weight) {
@@ -880,16 +1251,138 @@ fn compute_cell(
             Cell { r, p, n }
         }
         Method::Spearman => {
-            let (r, n) = spearman(xcol, ycol);
+            let (r, n) = match weight {
+                Some(w) => spearman_weighted(xcol, ycol, w),
+                None => spearman(xcol, ycol),
+            };
             let p = r.and_then(|rv| pearson_pvalue(rv, n));
             Cell { r, p, n }
         }
         Method::Kendall => {
-            let (r, n) = kendall_tau_b(xcol, ycol);
+            let (r, n) = match weight {
+                Some(w) => kendall_weighted(xcol, ycol, w),
+                None => kendall_tau_b(xcol, ycol),
+            };
             let p = r.and_then(|rv| kendall_pvalue(rv, n));
             Cell { r, p, n }
         }
+        // Hoeffding is handled by the early return above; unreachable here.
+        Method::Hoeffding => {
+            let (d, n) = hoeffding_d(xcol, ycol);
+            let p = d.and_then(|dv| hoeffding_pvalue(dv, n));
+            Cell { r: d, p, n }
+        }
     }
+}
+
+/// Two-sided p-value for a PARTIAL Pearson correlation with `k` partialled
+/// variables: df = n − k − 2 (vs n − 2 for an ordinary correlation).
+fn partial_pvalue(r: f64, n: usize, k: usize) -> Option<f64> {
+    let df = (n as i64) - (k as i64) - 2;
+    if df < 1 {
+        return None;
+    }
+    let df = df as f64;
+    if r.abs() >= 1.0 {
+        return Some(0.0);
+    }
+    let t = r * (df / (1.0 - r * r)).sqrt();
+    Some(student_t_sf_two_sided(t.abs(), df))
+}
+
+/// Partial Pearson correlation matrix (rows × cols), controlling for
+/// `partial_cols`. Observations are **listwise-complete** across the union of
+/// all row, column and partial variables. Each analysis variable is regressed
+/// on `[1, partial vars]` (ordinary least squares via `stat::linalg`) and the
+/// residuals are Pearson-correlated. The p-value uses df = n − k − 2.
+fn partial_pearson_matrix(
+    row_cols: &[usize],
+    col_cols: &[usize],
+    partial_cols: &[usize],
+    decoded: &std::collections::HashMap<usize, Vec<Value>>,
+) -> Vec<Vec<Cell>> {
+    let k = partial_cols.len();
+    let mut involved: Vec<usize> = Vec::new();
+    for &c in row_cols.iter().chain(col_cols).chain(partial_cols) {
+        if !involved.contains(&c) {
+            involved.push(c);
+        }
+    }
+    let n_obs = involved
+        .first()
+        .and_then(|c| decoded.get(c))
+        .map(|v| v.len())
+        .unwrap_or(0);
+
+    // Listwise-complete rows: every involved variable non-missing numeric.
+    let mut rows_idx: Vec<usize> = Vec::new();
+    'row: for i in 0..n_obs {
+        for &c in &involved {
+            match value_to_num(&decoded[&c][i]) {
+                Some(f) if !f.is_nan() => {}
+                _ => continue 'row,
+            }
+        }
+        rows_idx.push(i);
+    }
+    let n = rows_idx.len();
+
+    // Design matrix P = [1, partial vars] over the complete rows.
+    let design: Vec<Vec<f64>> = rows_idx
+        .iter()
+        .map(|&i| {
+            let mut row = Vec::with_capacity(k + 1);
+            row.push(1.0);
+            for &c in partial_cols {
+                row.push(value_to_num(&decoded[&c][i]).unwrap());
+            }
+            row
+        })
+        .collect();
+
+    // Residualise one involved variable on the partial set (None if rank-deficient).
+    let residual = |c: usize| -> Option<Vec<f64>> {
+        if n < k + 2 {
+            return None;
+        }
+        let y: Vec<f64> = rows_idx
+            .iter()
+            .map(|&i| value_to_num(&decoded[&c][i]).unwrap())
+            .collect();
+        let beta = crate::stat::linalg::least_squares(&design, &y).ok()?;
+        Some(
+            y.iter()
+                .zip(&design)
+                .map(|(yi, xr)| yi - xr.iter().zip(&beta).map(|(a, b)| a * b).sum::<f64>())
+                .collect(),
+        )
+    };
+    let mut resid: std::collections::HashMap<usize, Option<Vec<f64>>> =
+        std::collections::HashMap::new();
+    for &c in &involved {
+        resid.insert(c, residual(c));
+    }
+
+    let mut out = vec![vec![Cell { r: None, p: None, n }; col_cols.len()]; row_cols.len()];
+    for (i, &rc) in row_cols.iter().enumerate() {
+        for (j, &cc) in col_cols.iter().enumerate() {
+            if rc == cc {
+                out[i][j] = Cell { r: Some(1.0), p: None, n };
+                continue;
+            }
+            let rx = resid.get(&rc).and_then(|o| o.as_ref());
+            let ry = resid.get(&cc).and_then(|o| o.as_ref());
+            out[i][j] = match (rx, ry) {
+                (Some(rx), Some(ry)) => {
+                    let r = pearson_xy(rx, ry);
+                    let p = r.and_then(|rv| partial_pvalue(rv, n, k));
+                    Cell { r, p, n }
+                }
+                _ => Cell { r: None, p: None, n },
+            };
+        }
+    }
+    out
 }
 
 /// Write a centered line within LINESIZE.
@@ -973,18 +1466,13 @@ fn emit_correlations(
     ds: &crate::dataset::SasDataset,
     row_cols: &[usize],
     col_cols: &[usize],
-    method: Method,
+    heading: &str,
+    prob_line: &str,
     cells: &[Vec<Cell>],
     noprob: bool,
 ) {
-    centered(session, method.heading());
+    centered(session, heading);
     if !noprob {
-        // Symbol matches the coefficient: r for Pearson/Spearman, tau for
-        // Kendall.
-        let prob_line = match method {
-            Method::Kendall => "Prob > |tau| under H0: Tau=0",
-            _ => "Prob > |r| under H0: Rho=0",
-        };
         centered(session, prob_line);
     }
     session.listing.blank();
@@ -1315,6 +1803,54 @@ mod tests {
     }
 
     #[test]
+    fn partial_pearson_matches_single_control_formula() {
+        // Oracle: for ONE control variable z, the partial correlation
+        //   r_xy.z = (r_xy − r_xz·r_yz) / sqrt((1−r_xz²)(1−r_yz²))
+        // must equal the residual-method result computed by
+        // `partial_pearson_matrix`. Two independent derivations agreeing.
+        let xf = [2.0, 4.0, 5.0, 4.0, 7.0, 8.0];
+        let yf = [1.0, 3.0, 4.0, 6.0, 7.0, 9.0];
+        let zf = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let r_xy = pearson_xy(&xf, &yf).unwrap();
+        let r_xz = pearson_xy(&xf, &zf).unwrap();
+        let r_yz = pearson_xy(&yf, &zf).unwrap();
+        let expected =
+            (r_xy - r_xz * r_yz) / ((1.0 - r_xz * r_xz) * (1.0 - r_yz * r_yz)).sqrt();
+
+        let to_col = |v: &[f64]| -> Vec<Value> { v.iter().map(|f| Value::Num(*f)).collect() };
+        let mut decoded: std::collections::HashMap<usize, Vec<Value>> =
+            std::collections::HashMap::new();
+        decoded.insert(0, to_col(&xf)); // X
+        decoded.insert(1, to_col(&yf)); // Y
+        decoded.insert(2, to_col(&zf)); // Z (control)
+
+        let cells = partial_pearson_matrix(&[0], &[1], &[2], &decoded);
+        let got = cells[0][0].r.unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "partial r mismatch: got {got}, expected {expected}"
+        );
+        assert_eq!(cells[0][0].n, 6); // listwise-complete count
+        // df = n − k − 2 = 6 − 1 − 2 = 3 → p-value present and in (0,1].
+        let p = cells[0][0].p.unwrap();
+        assert!(p > 0.0 && p <= 1.0, "p out of range: {p}");
+    }
+
+    #[test]
+    fn partial_pearson_diagonal_is_one() {
+        let xf = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let zf = [2.0, 1.0, 4.0, 3.0, 6.0];
+        let to_col = |v: &[f64]| -> Vec<Value> { v.iter().map(|f| Value::Num(*f)).collect() };
+        let mut decoded: std::collections::HashMap<usize, Vec<Value>> =
+            std::collections::HashMap::new();
+        decoded.insert(0, to_col(&xf));
+        decoded.insert(1, to_col(&zf));
+        let cells = partial_pearson_matrix(&[0], &[0], &[1], &decoded);
+        assert_eq!(cells[0][0].r, Some(1.0));
+        assert!(cells[0][0].p.is_none());
+    }
+
+    #[test]
     fn pearson_pairwise_complete_n() {
         // Drop rows where either is missing.
         let x = vec![
@@ -1387,9 +1923,11 @@ mod tests {
             nocorr: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1428,9 +1966,11 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1468,9 +2008,11 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into(), "z".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1505,9 +2047,11 @@ mod tests {
             nocorr: false,
             var: vec!["x".into(), "y".into()],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1542,9 +2086,11 @@ mod tests {
             nocorr: false,
             var: vec!["a".into(), "b".into()],
             with: vec!["w".into()],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1582,9 +2128,11 @@ mod tests {
             nocorr: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             weight: None,
             outp: None,
             outs: None,
@@ -1609,8 +2157,10 @@ mod tests {
             pearson: false,
             spearman: false,
             kendall: false,
+            hoeffding: false,
             var: vec![],
             with: vec![],
+            partial: vec![],
             weight: None,
             outp: None,
             outs: None,
@@ -1928,5 +2478,212 @@ mod tests {
         // With w=1 the weighted r equals the unweighted perfect correlation.
         assert!(listing.contains("1.00000"), "{listing}");
         assert!(listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    }
+
+    // ───────────── M34.1: Hoeffding D + weighted Spearman / Kendall ─────────
+
+    /// Replicate `xs` according to integer weights `ws` (oracle helper).
+    fn replicate(xs: &[f64], ws: &[usize]) -> Vec<f64> {
+        let mut out = Vec::new();
+        for (&x, &w) in xs.iter().zip(ws) {
+            for _ in 0..w {
+                out.push(x);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn hoeffding_perfect_monotone_n5() {
+        // x=1..5, y=1..5: a strictly increasing pair. By hand, all ranks and
+        // bivariate counts coincide: R_i = S_i = Q_i = i (1..5). Then
+        //   D1 = Σ(Q-1)(Q-2) = 0+0+2+6+12 = 20
+        //   D2 = Σ(R-1)(R-2)(S-1)(S-2) = 0+0+4+36+144 = 184
+        //   D3 = Σ(R-2)(S-2)(Q-1) = 1·1·0 ... = 0+0+2+18+72 = 92  (wait: see below)
+        // With n=5: den = 5·4·3·2·1 = 120; num = 3·2·20 + 184 − 2·3·92
+        //   = 120 + 184 − 552 = -248? Recompute D3 carefully in the assertion.
+        // We assert the closed value D = 1.0 (perfect monotone dependence, n=5).
+        let x = vnum(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let y = vnum(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let (d, n) = hoeffding_d(&x, &y);
+        assert_eq!(n, 5);
+        assert!((d.unwrap() - 1.0).abs() < 1e-12, "D={d:?}");
+    }
+
+    #[test]
+    fn hoeffding_hand_arithmetic_n5() {
+        // Spell out the arithmetic for x=1..5, y=1..5 to validate the formula.
+        // R = S = Q = [1,2,3,4,5].
+        // D1 = Σ(Q-1)(Q-2) = (0)(−1)+(1)(0)+(2)(1)+(3)(2)+(4)(3) = 0+0+2+6+12 = 20.
+        // D2 = Σ(R-1)(R-2)(S-1)(S-2): for i, ((R-1)(R-2))² since R=S.
+        //   R=1→0, R=2→0, R=3→(2·1)²=4, R=4→(3·2)²=36, R=5→(4·3)²=144 ⇒ 184.
+        // D3 = Σ(R-2)(S-2)(Q-1) = Σ(R-2)²(R-1) (R=S=Q):
+        //   R=1→(−1)²·0=0, R=2→0·1=0, R=3→1·2=2, R=4→4·3=12, R=5→9·4=36 ⇒ 50.
+        // num = (n-2)(n-3)D1 + D2 − 2(n-2)D3 = 3·2·20 + 184 − 2·3·50
+        //     = 120 + 184 − 300 = 4.  den = 5·4·3·2·1 = 120.
+        // D = 30·4/120 = 1.0.
+        let d1 = 20.0_f64;
+        let d2 = 184.0_f64;
+        let d3 = 50.0_f64;
+        let num = 3.0 * 2.0 * d1 + d2 - 2.0 * 3.0 * d3;
+        let den = 5.0 * 4.0 * 3.0 * 2.0 * 1.0;
+        let d = 30.0 * num / den;
+        assert!((d - 1.0).abs() < 1e-12, "hand D={d}");
+        // And the implementation agrees.
+        let x = vnum(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let y = vnum(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!((hoeffding_d(&x, &y).0.unwrap() - d).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hoeffding_requires_n5() {
+        let x = vnum(&[1.0, 2.0, 3.0, 4.0]);
+        let y = vnum(&[1.0, 2.0, 3.0, 4.0]);
+        let (d, n) = hoeffding_d(&x, &y);
+        assert_eq!(n, 4);
+        assert!(d.is_none());
+    }
+
+    #[test]
+    fn hoeffding_matches_sas_class_oracle() {
+        // sashelp.class height × weight (19 obs) → SAS PROC CORR HOEFFDING
+        // reports D = 0.31609 (exact to 5 decimals).
+        let h = vnum(&[
+            69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5,
+            72.0, 64.8, 67.0, 57.5, 66.5,
+        ]);
+        let w = vnum(&[
+            112.5, 84.0, 98.0, 102.5, 102.5, 83.0, 84.5, 112.5, 84.0, 99.5, 50.5, 90.0, 77.0,
+            112.0, 150.0, 128.0, 133.0, 85.0, 112.0,
+        ]);
+        let (d, n) = hoeffding_d(&h, &w);
+        assert_eq!(n, 19);
+        assert!((d.unwrap() - 0.31609).abs() < 5e-6, "D={d:?}");
+    }
+
+    #[test]
+    fn hoeffding_pvalue_in_range() {
+        // Strong dependence → small Prob > D; independence-ish → larger.
+        let p = hoeffding_pvalue(0.31609, 19).unwrap();
+        assert!(p > 0.0 && p < 0.01, "p={p}");
+        let p0 = hoeffding_pvalue(0.0, 19).unwrap();
+        assert!(p0 > 0.5, "p0={p0}");
+    }
+
+    #[test]
+    fn weighted_spearman_equals_replicated() {
+        // Oracle: weighted Spearman with integer weights {2,1,1,1} equals
+        // ordinary Spearman on the {2,1,1,1}-replicated data.
+        let xf = [1.0, 2.0, 3.0, 4.0];
+        let yf = [2.0, 1.0, 4.0, 3.0];
+        let ws = [2usize, 1, 1, 1];
+        let x = vnum(&xf);
+        let y = vnum(&yf);
+        let w = vnum(&[2.0, 1.0, 1.0, 1.0]);
+        let (rw, nw) = spearman_weighted(&x, &y, &w);
+        assert_eq!(nw, 4); // usable (non-replicated) observations
+        let xr = vnum(&replicate(&xf, &ws));
+        let yr = vnum(&replicate(&yf, &ws));
+        let (rr, _) = spearman(&xr, &yr);
+        assert!(
+            (rw.unwrap() - rr.unwrap()).abs() < 1e-12,
+            "weighted={rw:?} replicated={rr:?}"
+        );
+        // And the shared value (hand: 0.57894736842…).
+        assert!((rw.unwrap() - 0.578_947_368_421_052_6).abs() < 1e-12, "rw={rw:?}");
+    }
+
+    #[test]
+    fn weighted_spearman_w1_equals_unweighted() {
+        let x = vnum(&[1.0, 2.0, 3.0, 5.0]);
+        let y = vnum(&[2.0, 1.0, 4.0, 3.0]);
+        let w = vnum(&[1.0, 1.0, 1.0, 1.0]);
+        let (ru, _) = spearman(&x, &y);
+        let (rw, _) = spearman_weighted(&x, &y, &w);
+        assert!((ru.unwrap() - rw.unwrap()).abs() < 1e-12, "{ru:?} {rw:?}");
+    }
+
+    #[test]
+    fn weighted_kendall_equals_replicated() {
+        // Oracle: weighted tau-b with integer weights {2,1,1,1} equals ordinary
+        // tau-b on the replicated data.
+        let xf = [1.0, 2.0, 3.0, 4.0];
+        let yf = [2.0, 1.0, 4.0, 3.0];
+        let ws = [2usize, 1, 1, 1];
+        let x = vnum(&xf);
+        let y = vnum(&yf);
+        let w = vnum(&[2.0, 1.0, 1.0, 1.0]);
+        let (tw, nw) = kendall_weighted(&x, &y, &w);
+        assert_eq!(nw, 4);
+        let xr = vnum(&replicate(&xf, &ws));
+        let yr = vnum(&replicate(&yf, &ws));
+        let (tr, _) = kendall_tau_b(&xr, &yr);
+        assert!(
+            (tw.unwrap() - tr.unwrap()).abs() < 1e-12,
+            "weighted={tw:?} replicated={tr:?}"
+        );
+        // Shared value (hand: 1/3).
+        assert!((tw.unwrap() - 1.0 / 3.0).abs() < 1e-12, "tw={tw:?}");
+    }
+
+    #[test]
+    fn weighted_kendall_w1_equals_unweighted() {
+        let x = vnum(&[1.0, 2.0, 3.0, 4.0]);
+        let y = vnum(&[1.0, 3.0, 2.0, 4.0]);
+        let w = vnum(&[1.0, 1.0, 1.0, 1.0]);
+        let (tu, _) = kendall_tau_b(&x, &y);
+        let (tw, _) = kendall_weighted(&x, &y, &w);
+        assert!((tu.unwrap() - tw.unwrap()).abs() < 1e-12, "{tu:?} {tw:?}");
+    }
+
+    #[test]
+    fn execute_hoeffding_block() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0],
+            "y" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
+        ]
+        .unwrap();
+        let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = base_ast("T");
+        ast.hoeffding = true;
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Hoeffding Dependence Coefficients"), "{listing}");
+        assert!(listing.contains("Prob > D"), "{listing}");
+        // Off-diagonal D = 1.00000 (perfect monotone).
+        assert!(listing.contains("1.00000"), "{listing}");
+        // No Pearson block when only hoeffding requested.
+        assert!(!listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    }
+
+    #[test]
+    fn execute_weighted_spearman_block() {
+        let mut session = make_session();
+        let df = df![
+            "x" => [1.0_f64, 2.0, 3.0, 4.0],
+            "y" => [2.0_f64, 1.0, 4.0, 3.0],
+            "wt" => [2.0_f64, 1.0, 1.0, 1.0]
+        ]
+        .unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("x"), num_meta("y"), num_meta("wt")],
+        };
+        write_dataset(&mut session, "T", ds);
+
+        let mut ast = base_ast("T");
+        ast.var = vec!["x".into(), "y".into()];
+        ast.spearman = true;
+        ast.weight = Some("wt".into());
+        execute(&ast, &mut session).unwrap();
+
+        let listing = session.listing.into_string();
+        assert!(listing.contains("Spearman Correlation Coefficients"), "{listing}");
+        // Weighted r_s = 0.57895 (matches replicated Spearman).
+        assert!(listing.contains("0.57895"), "{listing}");
     }
 }

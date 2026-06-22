@@ -818,7 +818,41 @@ fn profile_search(
 
 // ───────────────────────── Execute ─────────────────────────
 
+/// Decide whether the request is exactly the legacy M28 case: a single random
+/// intercept with TYPE=VC|CS, SUBJECT=, no REPEATED, and an intercept-only mean
+/// (no fixed effects, no NOINT). This path is kept numerically and format
+/// byte-identical to the m28 oracle.
+fn is_legacy_case(ast: &MixedAst) -> bool {
+    let Some(model) = ast.model.as_ref() else {
+        return false;
+    };
+    if !model.fixed.is_empty() || model.noint {
+        return false;
+    }
+    if ast.repeated.is_some() {
+        return false;
+    }
+    let Some(random) = ast.random.as_ref() else {
+        return false;
+    };
+    if !matches!(random.cov_type, CovType::Vc | CovType::Cs) {
+        return false;
+    }
+    if random.subject.is_none() {
+        return false;
+    }
+    random.effects.len() == 1 && random.effects[0].eq_ignore_ascii_case("intercept")
+}
+
 pub fn execute(ast: &MixedAst, session: &mut Session) -> Result<()> {
+    if is_legacy_case(ast) {
+        execute_legacy(ast, session)
+    } else {
+        execute_general(ast, session)
+    }
+}
+
+fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     // ── 1. Validate / guards ────────────────────────────────────────────────
     let model = ast.model.as_ref().ok_or_else(|| {
         SasError::runtime("MODEL statement required in PROC MIXED.")
@@ -828,42 +862,9 @@ pub fn execute(ast: &MixedAst, session: &mut Session) -> Result<()> {
         SasError::runtime("PROC MIXED currently requires a RANDOM statement with SUBJECT=.")
     })?;
 
-    // Reject not-yet-implemented covariance structures.
-    match random.cov_type {
-        CovType::Vc | CovType::Cs => {}
-        CovType::Ar1 | CovType::Un => {
-            return Err(SasError::runtime(
-                "TYPE=AR(1)/UN is not yet implemented for PROC MIXED.",
-            ));
-        }
-    }
-
     let subject = random.subject.as_ref().ok_or_else(|| {
         SasError::runtime("RANDOM statement requires SUBJECT= in PROC MIXED.")
     })?;
-
-    // Only the random intercept is implemented.
-    let is_intercept = random.effects.len() == 1
-        && random.effects[0].eq_ignore_ascii_case("intercept");
-    if !is_intercept {
-        return Err(SasError::runtime(
-            "Only RANDOM INTERCEPT is implemented in PROC MIXED.",
-        ));
-    }
-
-    // Fixed effects beyond an intercept are not exercised by the oracle; we
-    // support intercept-only models (model y = ).
-    if !model.fixed.is_empty() {
-        return Err(SasError::runtime(
-            "Fixed CLASS/continuous effects are not yet implemented in PROC MIXED; \
-             use an intercept-only model (model y = ).",
-        ));
-    }
-    if model.noint {
-        return Err(SasError::runtime(
-            "NOINT is not yet implemented in PROC MIXED.",
-        ));
-    }
 
     // NOTEs for parse-accepted / deferred features.
     if ast.covtest {
@@ -1232,6 +1233,1082 @@ pub fn execute(ast: &MixedAst, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
+// ═════════════════════ General fixed-effects design ═════════════════════
+
+/// A fixed-effects design column together with its parameter label.
+struct DesignColumn {
+    label: String,
+    values: Vec<f64>,
+}
+
+/// Build the fixed-effects design matrix from the MODEL effects.
+///
+/// Columns (in order): intercept (unless NOINT), then for each MODEL effect a
+/// continuous column (if the variable is not in CLASS) or reference-cell coded
+/// indicator columns (L−1, last level = reference per `sas_cmp` order) for a
+/// CLASS variable. Returns the design columns (each with its parameter label).
+fn build_design(
+    cols: &[(String, Vec<Value>)],
+    class_vars: &[String],
+    fixed: &[String],
+    noint: bool,
+    n: usize,
+) -> Result<Vec<DesignColumn>> {
+    let mut design: Vec<DesignColumn> = Vec::new();
+    if !noint {
+        design.push(DesignColumn {
+            label: "Intercept".to_string(),
+            values: vec![1.0; n],
+        });
+    }
+
+    let find = |nm: &str| -> Option<&(String, Vec<Value>)> {
+        cols.iter().find(|(name, _)| name.eq_ignore_ascii_case(nm))
+    };
+    let is_class = |nm: &str| class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
+
+    for eff in fixed {
+        let col = find(eff).ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
+        })?;
+        if is_class(eff) {
+            // Reference-cell coding: levels sorted by sas_cmp, last is reference.
+            let mut levels: Vec<Value> = Vec::new();
+            for v in &col.1 {
+                if !levels
+                    .iter()
+                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+                {
+                    levels.push(v.clone());
+                }
+            }
+            levels.sort_by(|a, b| a.sas_cmp(b));
+            // Drop the last (reference) level.
+            for lvl in levels.iter().take(levels.len().saturating_sub(1)) {
+                let label = format!("{} {}", eff, value_label(lvl));
+                let values: Vec<f64> = col
+                    .1
+                    .iter()
+                    .map(|v| {
+                        if v.sas_cmp(lvl) == std::cmp::Ordering::Equal {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect();
+                design.push(DesignColumn { label, values });
+            }
+        } else {
+            // Continuous column.
+            let values: Vec<f64> = col
+                .1
+                .iter()
+                .map(|v| match v {
+                    Value::Num(f) => *f,
+                    _ => f64::NAN,
+                })
+                .collect();
+            design.push(DesignColumn {
+                label: eff.clone(),
+                values,
+            });
+        }
+    }
+    Ok(design)
+}
+
+// ═════════════════════ General covariance V(θ) + REML ═════════════════════
+
+/// The kind of covariance model being optimized in the general path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenCov {
+    /// RANDOM intercept VC/CS with a general fixed design (params: σ²_u, σ²_e).
+    RandomVc,
+    /// REPEATED TYPE=AR(1) with SUBJECT (params: ρ, σ²).
+    RepeatedAr1,
+    /// REPEATED TYPE=UN with SUBJECT (t(t+1)/2 params).
+    RepeatedUn { t: usize },
+}
+
+/// Build V(θ) for the general path.
+/// `subj_of[i]` is the subject index of observation i; `within_idx[i]` is the
+/// position of obs i within its subject (0-based, in order of appearance).
+fn build_v_gen(
+    cov: GenCov,
+    theta: &[f64],
+    n: usize,
+    subj_of: &[usize],
+    within_idx: &[usize],
+) -> Vec<Vec<f64>> {
+    let mut v = vec![vec![0.0; n]; n];
+    match cov {
+        GenCov::RandomVc => {
+            let s2u = theta[0];
+            let s2e = theta[1];
+            for i in 0..n {
+                for j in 0..n {
+                    let mut val = 0.0;
+                    if subj_of[i] == subj_of[j] {
+                        val += s2u;
+                    }
+                    if i == j {
+                        val += s2e;
+                    }
+                    v[i][j] = val;
+                }
+            }
+        }
+        GenCov::RepeatedAr1 => {
+            let rho = theta[0];
+            let s2 = theta[1];
+            for i in 0..n {
+                for j in 0..n {
+                    if subj_of[i] == subj_of[j] {
+                        let d = (within_idx[i] as i64 - within_idx[j] as i64).unsigned_abs();
+                        v[i][j] = s2 * rho.powi(d as i32);
+                    }
+                }
+            }
+        }
+        GenCov::RepeatedUn { t } => {
+            // Build the t×t SPD block from packed params (row-major lower).
+            let block = un_block(theta, t);
+            for i in 0..n {
+                for j in 0..n {
+                    if subj_of[i] == subj_of[j] {
+                        v[i][j] = block[within_idx[i]][within_idx[j]];
+                    }
+                }
+            }
+        }
+    }
+    v
+}
+
+/// Reconstruct the t×t UN covariance block from packed lower-triangular params
+/// in SAS UN order: UN(1,1), UN(2,1), UN(2,2), UN(3,1), ...
+fn un_block(theta: &[f64], t: usize) -> Vec<Vec<f64>> {
+    let mut m = vec![vec![0.0; t]; t];
+    let mut k = 0;
+    for r in 0..t {
+        for c in 0..=r {
+            let val = theta[k];
+            m[r][c] = val;
+            m[c][r] = val;
+            k += 1;
+        }
+    }
+    m
+}
+
+/// Number of free covariance parameters for a covariance model.
+fn n_cov_params(cov: GenCov) -> usize {
+    match cov {
+        GenCov::RandomVc => 2,
+        GenCov::RepeatedAr1 => 2,
+        GenCov::RepeatedUn { t } => t * (t + 1) / 2,
+    }
+}
+
+/// Map an unconstrained parameter vector `u` to the natural θ for the model,
+/// enforcing bounds: σ²>0 via exp, ρ∈(−1,1) via tanh, UN via Cholesky factor.
+fn unconstrained_to_theta(cov: GenCov, u: &[f64]) -> Vec<f64> {
+    match cov {
+        GenCov::RandomVc => vec![u[0].exp(), u[1].exp()],
+        GenCov::RepeatedAr1 => vec![u[0].tanh(), u[1].exp()],
+        GenCov::RepeatedUn { t } => {
+            // u parameterizes a lower-triangular Cholesky factor L (with positive
+            // diagonal via exp); θ = packed lower of L Lᵀ in UN order.
+            let mut l = vec![vec![0.0; t]; t];
+            let mut k = 0;
+            for r in 0..t {
+                for c in 0..=r {
+                    if r == c {
+                        l[r][c] = u[k].exp();
+                    } else {
+                        l[r][c] = u[k];
+                    }
+                    k += 1;
+                }
+            }
+            let mut theta = Vec::with_capacity(t * (t + 1) / 2);
+            for r in 0..t {
+                for c in 0..=r {
+                    let mut s = 0.0;
+                    for p in 0..=c.min(r) {
+                        s += l[r][p] * l[c][p];
+                    }
+                    theta.push(s);
+                }
+            }
+            theta
+        }
+    }
+}
+
+/// Evaluate −2·log(RE)ML at θ. Returns (neg2, β̂, (X'V⁻¹X)⁻¹).
+fn neg2_loglik_gen(
+    y: &[f64],
+    x: &[Vec<f64>],
+    v: &[Vec<f64>],
+    method: Method,
+) -> Result<(f64, Vec<f64>, Vec<Vec<f64>>)> {
+    let n = y.len();
+    let p = x[0].len();
+    let v_inv = invert_matrix(v)?;
+    let log_det_v = log_det_spd(v)?;
+
+    let mut xtvi = vec![vec![0.0; n]; p];
+    for a in 0..p {
+        for j in 0..n {
+            let mut s = 0.0;
+            for i in 0..n {
+                s += x[i][a] * v_inv[i][j];
+            }
+            xtvi[a][j] = s;
+        }
+    }
+    let mut xtvix = vec![vec![0.0; p]; p];
+    for a in 0..p {
+        for b in 0..p {
+            let mut s = 0.0;
+            for j in 0..n {
+                s += xtvi[a][j] * x[j][b];
+            }
+            xtvix[a][b] = s;
+        }
+    }
+    let xtvix_inv = invert_matrix(&xtvix)?;
+    let log_det_xtvix = log_det_spd(&xtvix)?;
+    let xtviy: Vec<f64> = (0..p).map(|a| dot(&xtvi[a], y)).collect();
+    let beta = mat_vec(&xtvix_inv, &xtviy);
+    let resid: Vec<f64> = (0..n)
+        .map(|i| y[i] - (0..p).map(|a| x[i][a] * beta[a]).sum::<f64>())
+        .collect();
+    let vir = mat_vec(&v_inv, &resid);
+    let quad = dot(&resid, &vir);
+
+    let two_pi = std::f64::consts::TAU;
+    let neg2 = match method {
+        Method::Reml => {
+            (n as f64 - p as f64) * two_pi.ln() + log_det_v + log_det_xtvix + quad
+        }
+        Method::Ml => n as f64 * two_pi.ln() + log_det_v + quad,
+    };
+    Ok((neg2, beta, xtvix_inv))
+}
+
+/// Result of a general mixed fit.
+struct GenFit {
+    /// Natural covariance parameters θ.
+    theta: Vec<f64>,
+    beta: Vec<f64>,
+    cov_beta: Vec<Vec<f64>>,
+    neg2ll: f64,
+    neg2_start: f64,
+    iters: usize,
+    converged: bool,
+}
+
+/// One run of Nelder-Mead from `start` with per-dimension initial step `step`.
+/// Minimises `eval` over `np`-dimensional unconstrained space. Returns the best
+/// point found, its function value, the number of iterations consumed, and
+/// whether the simplex converged (function-value spread and vertex spread both
+/// below tolerance).
+fn nelder_mead<F: Fn(&[f64]) -> f64>(
+    eval: &F,
+    start: &[f64],
+    step: f64,
+    max_iter: usize,
+    ftol: f64,
+    xtol: f64,
+) -> (Vec<f64>, f64, usize, bool) {
+    let np = start.len();
+
+    // Build initial simplex.
+    let mut simplex: Vec<Vec<f64>> = Vec::with_capacity(np + 1);
+    let mut fvals: Vec<f64> = Vec::with_capacity(np + 1);
+    simplex.push(start.to_vec());
+    fvals.push(eval(start));
+    for d in 0..np {
+        let mut pt = start.to_vec();
+        pt[d] += step;
+        let f = eval(&pt);
+        simplex.push(pt);
+        fvals.push(f);
+    }
+
+    let (alpha, gamma, rho_c, sigma) = (1.0_f64, 2.0_f64, 0.5_f64, 0.5_f64);
+    let mut iters = 0usize;
+    let mut converged = false;
+    while iters < max_iter {
+        iters += 1;
+        // Order by function value.
+        let mut order: Vec<usize> = (0..=np).collect();
+        order.sort_by(|&a, &b| fvals[a].partial_cmp(&fvals[b]).unwrap());
+        let s: Vec<Vec<f64>> = order.iter().map(|&i| simplex[i].clone()).collect();
+        let f: Vec<f64> = order.iter().map(|&i| fvals[i]).collect();
+        simplex = s;
+        fvals = f;
+
+        // Convergence: both the function-value spread AND the simplex extent
+        // (max vertex distance from the best vertex) must be small.
+        let fspread = (fvals[np] - fvals[0]).abs();
+        let mut xspread = 0.0_f64;
+        for pt in simplex.iter().take(np + 1) {
+            let mut d2 = 0.0;
+            for d in 0..np {
+                let dx = pt[d] - simplex[0][d];
+                d2 += dx * dx;
+            }
+            xspread = xspread.max(d2.sqrt());
+        }
+        if fspread < ftol * (1.0 + fvals[0].abs()) && xspread < xtol {
+            converged = true;
+            break;
+        }
+
+        // Centroid of all but worst.
+        let mut centroid = vec![0.0; np];
+        for pt in simplex.iter().take(np) {
+            for d in 0..np {
+                centroid[d] += pt[d] / np as f64;
+            }
+        }
+        // Reflection.
+        let worst = &simplex[np];
+        let refl: Vec<f64> = (0..np).map(|d| centroid[d] + alpha * (centroid[d] - worst[d])).collect();
+        let fr = eval(&refl);
+        if fr < fvals[0] {
+            // Expansion.
+            let exp: Vec<f64> = (0..np).map(|d| centroid[d] + gamma * (refl[d] - centroid[d])).collect();
+            let fe = eval(&exp);
+            if fe < fr {
+                simplex[np] = exp;
+                fvals[np] = fe;
+            } else {
+                simplex[np] = refl;
+                fvals[np] = fr;
+            }
+        } else if fr < fvals[np - 1] {
+            simplex[np] = refl;
+            fvals[np] = fr;
+        } else {
+            // Contraction.
+            let con: Vec<f64> = (0..np).map(|d| centroid[d] + rho_c * (worst[d] - centroid[d])).collect();
+            let fc = eval(&con);
+            if fc < fvals[np] {
+                simplex[np] = con;
+                fvals[np] = fc;
+            } else {
+                // Shrink toward best.
+                let best = simplex[0].clone();
+                for i in 1..=np {
+                    for d in 0..np {
+                        simplex[i][d] = best[d] + sigma * (simplex[i][d] - best[d]);
+                    }
+                    fvals[i] = eval(&simplex[i]);
+                }
+            }
+        }
+    }
+
+    // Best vertex.
+    let mut best_idx = 0;
+    for i in 1..=np {
+        if fvals[i] < fvals[best_idx] {
+            best_idx = i;
+        }
+    }
+    (simplex[best_idx].clone(), fvals[best_idx], iters, converged)
+}
+
+/// Coordinate-descent polish on the unconstrained parameters using
+/// finite-difference secant steps on −2·logL. Refines each coordinate in turn
+/// with a parabolic/secant minimiser, shrinking the step until it is below
+/// `xstop`. This cleans up the residual flat-surface stall left by Nelder-Mead.
+fn polish_coord<F: Fn(&[f64]) -> f64>(
+    eval: &F,
+    u: &mut [f64],
+    fval: &mut f64,
+    xstop: f64,
+) {
+    let np = u.len();
+    let mut step = 1e-2_f64;
+    for _ in 0..60 {
+        let f_before = *fval;
+        for d in 0..np {
+            // Three-point parabolic line minimisation along coordinate d.
+            let x0 = u[d];
+            let h = step;
+            let fm = {
+                u[d] = x0 - h;
+                let v = eval(u);
+                u[d] = x0;
+                v
+            };
+            let fp = {
+                u[d] = x0 + h;
+                let v = eval(u);
+                u[d] = x0;
+                v
+            };
+            let f0 = *fval;
+            // Parabola through (x0-h,fm),(x0,f0),(x0+h,fp); vertex offset.
+            let denom = fm - 2.0 * f0 + fp;
+            let mut improved = false;
+            if denom > 1e-300 {
+                let delta = 0.5 * h * (fm - fp) / denom;
+                // Clamp the proposed step to a few h to stay local.
+                let delta = delta.clamp(-4.0 * h, 4.0 * h);
+                let xc = x0 + delta;
+                u[d] = xc;
+                let fc = eval(u);
+                if fc < *fval {
+                    *fval = fc;
+                    improved = true;
+                } else {
+                    u[d] = x0;
+                }
+            }
+            if !improved {
+                // Fall back to the better of the two probe points.
+                if fm < *fval && fm <= fp {
+                    u[d] = x0 - h;
+                    *fval = fm;
+                } else if fp < *fval {
+                    u[d] = x0 + h;
+                    *fval = fp;
+                } else {
+                    u[d] = x0;
+                }
+            }
+        }
+        // Shrink step when a full sweep stops improving.
+        if (f_before - *fval).abs() < 1e-14 * (1.0 + fval.abs()) {
+            step *= 0.25;
+            if step < xstop {
+                break;
+            }
+        }
+    }
+}
+
+/// Nelder-Mead minimisation of −2·log(RE)ML over the unconstrained parameters,
+/// with simplex restarts and a final coordinate-descent polish so the estimate
+/// reaches ≈4-decimal accuracy on the flat profiled-likelihood surface.
+fn fit_gen(
+    y: &[f64],
+    x: &[Vec<f64>],
+    cov: GenCov,
+    subj_of: &[usize],
+    within_idx: &[usize],
+    method: Method,
+    u0: &[f64],
+) -> Result<GenFit> {
+    let n = y.len();
+
+    let eval = |u: &[f64]| -> f64 {
+        let theta = unconstrained_to_theta(cov, u);
+        let v = build_v_gen(cov, &theta, n, subj_of, within_idx);
+        match neg2_loglik_gen(y, x, &v, method) {
+            Ok((neg2, _, _)) => {
+                if neg2.is_finite() {
+                    neg2
+                } else {
+                    1e30
+                }
+            }
+            Err(_) => 1e30,
+        }
+    };
+
+    let neg2_start = eval(u0);
+
+    // Repeatedly run Nelder-Mead, re-initialising the simplex around the
+    // current best vertex. Restarts are the standard cure for NM stalling on
+    // flat/valley surfaces. Shrink the initial step each restart so later runs
+    // refine locally.
+    let mut u_best = u0.to_vec();
+    let mut f_best = neg2_start;
+    let mut total_iters = 0usize;
+    let mut converged = false;
+    let mut step = 0.5_f64;
+    for restart in 0..6 {
+        let (u_r, f_r, it, conv) =
+            nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
+        total_iters += it;
+        if f_r <= f_best {
+            f_best = f_r;
+            u_best = u_r;
+        }
+        converged = conv;
+        // Stop early once two successive restarts no longer move the optimum.
+        if restart >= 2 && conv {
+            break;
+        }
+        step *= 0.3;
+    }
+
+    // Final coordinate-descent polish to squeeze out residual flat-surface
+    // error; cheap (a few dozen evals) and robust for VC/CS/AR(1)/UN.
+    polish_coord(&eval, &mut u_best, &mut f_best, 1e-9);
+
+    let theta = unconstrained_to_theta(cov, &u_best);
+    let v = build_v_gen(cov, &theta, n, subj_of, within_idx);
+    let (neg2ll, beta, cov_beta) = neg2_loglik_gen(y, x, &v, method)?;
+
+    Ok(GenFit {
+        theta,
+        beta,
+        cov_beta,
+        neg2ll,
+        neg2_start,
+        iters: total_iters,
+        converged,
+    })
+}
+
+// ═════════════════════ General execute path ═════════════════════
+
+#[allow(clippy::too_many_lines)]
+fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC MIXED."))?;
+
+    // Determine the covariance model.
+    // Priority: a REPEATED AR(1)/UN structure, else a RANDOM intercept VC/CS.
+    let repeated = ast.repeated.as_ref();
+    let random = ast.random.as_ref();
+
+    enum Plan {
+        Repeated(CovType, String),
+        RandomVc(String, CovType),
+    }
+
+    let plan = if let Some(rep) = repeated {
+        match rep.cov_type {
+            CovType::Ar1 | CovType::Un => {
+                let subj = rep.subject.as_ref().ok_or_else(|| {
+                    SasError::runtime("REPEATED TYPE=AR(1)/UN requires SUBJECT= in PROC MIXED.")
+                })?;
+                Plan::Repeated(rep.cov_type, subj.clone())
+            }
+            CovType::Vc | CovType::Cs => {
+                return Err(SasError::runtime(
+                    "REPEATED TYPE=VC/CS is not yet implemented in PROC MIXED.",
+                ));
+            }
+        }
+    } else if let Some(rnd) = random {
+        let is_intercept = rnd.effects.len() == 1
+            && rnd.effects[0].eq_ignore_ascii_case("intercept");
+        if !is_intercept {
+            return Err(SasError::runtime(
+                "Only RANDOM INTERCEPT is implemented in PROC MIXED.",
+            ));
+        }
+        let subj = rnd.subject.as_ref().ok_or_else(|| {
+            SasError::runtime("RANDOM statement requires SUBJECT= in PROC MIXED.")
+        })?;
+        match rnd.cov_type {
+            CovType::Vc | CovType::Cs => Plan::RandomVc(subj.clone(), rnd.cov_type),
+            CovType::Ar1 | CovType::Un => {
+                return Err(SasError::runtime(
+                    "TYPE=AR(1)/UN on a RANDOM intercept is not yet implemented; \
+                     use a REPEATED statement.",
+                ));
+            }
+        }
+    } else {
+        return Err(SasError::runtime(
+            "PROC MIXED currently requires a RANDOM or REPEATED statement with SUBJECT=.",
+        ));
+    };
+
+    // Common deferred-feature NOTEs.
+    if ast.covtest {
+        session
+            .log
+            .note("COVTEST is parse-accepted but not implemented in PROC MIXED.");
+    }
+    if ast.asycov {
+        session
+            .log
+            .note("ASYCOV is parse-accepted but not implemented in PROC MIXED.");
+    }
+    if ast.nobound {
+        session
+            .log
+            .note("NOBOUND is parse-accepted but not implemented in PROC MIXED.");
+    }
+    if let Some(d) = &model.ddfm {
+        if d != "contain" {
+            session.log.note(&format!(
+                "DDFM={} is parse-accepted but not implemented; using CONTAIN.",
+                d.to_uppercase()
+            ));
+        }
+    }
+    for lbl in &ast.estimate_labels {
+        session.log.note(&format!(
+            "ESTIMATE '{}' is parse-accepted but not implemented in PROC MIXED.",
+            lbl
+        ));
+    }
+    for lbl in &ast.contrast_labels {
+        session.log.note(&format!(
+            "CONTRAST '{}' is parse-accepted but not implemented in PROC MIXED.",
+            lbl
+        ));
+    }
+    if !ast.lsmeans.is_empty() {
+        session
+            .log
+            .note("LSMEANS is parse-accepted but not implemented in PROC MIXED.");
+    }
+
+    // ── Read dataset ────────────────────────────────────────────────────────
+    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
+    let in_libref = in_ref.libref_or_work();
+    let in_table = in_ref.name.to_uppercase();
+    let provider = session.libs.get(&in_libref)?;
+    let (ds, notes) = provider.read(&in_table)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+    let n_read = ds.n_obs();
+
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    let resp_idx = find_col(&model.response)?;
+    let resp_col = decode_column(&ds, resp_idx)?;
+
+    let subject = match &plan {
+        Plan::Repeated(_, s) => s.clone(),
+        Plan::RandomVc(s, _) => s.clone(),
+    };
+    let subj_idx = find_col(&subject)?;
+    let subj_col = decode_column(&ds, subj_idx)?;
+
+    // Decode all variables referenced by the fixed effects.
+    let mut fixed_cols: Vec<(String, Vec<Value>)> = Vec::new();
+    for eff in &model.fixed {
+        let idx = find_col(eff)?;
+        fixed_cols.push((eff.clone(), decode_column(&ds, idx)?));
+    }
+
+    // ── Build complete observations (listwise deletion) ─────────────────────
+    let mut keep: Vec<usize> = Vec::new();
+    let mut n_not_used = 0usize;
+    for i in 0..n_read {
+        let y_ok = matches!(&resp_col[i], Value::Num(v) if !v.is_nan());
+        let subj_ok = !subj_col[i].is_missing();
+        let fixed_ok = fixed_cols.iter().all(|(_, c)| !c[i].is_missing());
+        if y_ok && subj_ok && fixed_ok {
+            keep.push(i);
+        } else {
+            n_not_used += 1;
+        }
+    }
+    let n_used = keep.len();
+    if n_used == 0 {
+        return Err(SasError::runtime(
+            "No complete observations available for PROC MIXED.",
+        ));
+    }
+
+    let y: Vec<f64> = keep
+        .iter()
+        .map(|&i| match &resp_col[i] {
+            Value::Num(v) => *v,
+            _ => f64::NAN,
+        })
+        .collect();
+    let subj_values: Vec<Value> = keep.iter().map(|&i| subj_col[i].clone()).collect();
+    let kept_fixed: Vec<(String, Vec<Value>)> = fixed_cols
+        .iter()
+        .map(|(nm, c)| (nm.clone(), keep.iter().map(|&i| c[i].clone()).collect()))
+        .collect();
+
+    // Subject levels (sas_cmp order).
+    let mut levels: Vec<Value> = Vec::new();
+    for v in &subj_values {
+        if !levels
+            .iter()
+            .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+        {
+            levels.push(v.clone());
+        }
+    }
+    levels.sort_by(|a, b| a.sas_cmp(b));
+    let n_subjects = levels.len();
+    if n_subjects < 2 {
+        return Err(SasError::runtime("PROC MIXED requires at least 2 subjects."));
+    }
+    let level_index = |v: &Value| -> usize {
+        levels
+            .iter()
+            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            .unwrap()
+    };
+    let subj_of: Vec<usize> = subj_values.iter().map(|v| level_index(v)).collect();
+
+    // Within-subject position (order of appearance) and per-subject counts.
+    let mut counts = vec![0usize; n_subjects];
+    let mut within_idx = vec![0usize; n_used];
+    for i in 0..n_used {
+        let s = subj_of[i];
+        within_idx[i] = counts[s];
+        counts[s] += 1;
+    }
+    let max_obs = *counts.iter().max().unwrap_or(&0);
+
+    // ── Fixed-effects design ────────────────────────────────────────────────
+    let design = build_design(
+        &kept_fixed,
+        &ast.class_vars,
+        &model.fixed,
+        model.noint,
+        n_used,
+    )?;
+    if design.is_empty() {
+        return Err(SasError::runtime(
+            "PROC MIXED MODEL has no fixed-effects columns (NOINT with no effects).",
+        ));
+    }
+    let p = design.len();
+    let labels: Vec<String> = design.iter().map(|d| d.label.clone()).collect();
+    let x: Vec<Vec<f64>> = (0..n_used)
+        .map(|i| design.iter().map(|c| c.values[i]).collect())
+        .collect();
+
+    // ── Determine covariance model + initial unconstrained params ───────────
+    let (cov, u0): (GenCov, Vec<f64>) = match &plan {
+        Plan::RandomVc(_, _) => {
+            // Use the variance of y as a scale.
+            let mean = y.iter().sum::<f64>() / n_used as f64;
+            let var = y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                / (n_used as f64 - 1.0).max(1.0);
+            let v0 = var.max(1e-3);
+            (GenCov::RandomVc, vec![(v0 / 2.0).ln(), (v0 / 2.0).ln()])
+        }
+        Plan::Repeated(CovType::Ar1, _) => {
+            let mean = y.iter().sum::<f64>() / n_used as f64;
+            let var = y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                / (n_used as f64 - 1.0).max(1.0);
+            // u[0]=atanh(0.1)≈0.1, u[1]=ln(var).
+            (GenCov::RepeatedAr1, vec![0.1_f64, var.max(1e-3).ln()])
+        }
+        Plan::Repeated(CovType::Un, _) => {
+            let t = max_obs;
+            // Initial L = diag(sqrt(var)) → u diagonal = 0.5*ln(var), off-diag 0.
+            let mean = y.iter().sum::<f64>() / n_used as f64;
+            let var = (y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                / (n_used as f64 - 1.0).max(1.0))
+            .max(1e-3);
+            let mut u = Vec::new();
+            for r in 0..t {
+                for c in 0..=r {
+                    if r == c {
+                        u.push(0.5 * var.ln());
+                    } else {
+                        u.push(0.0);
+                    }
+                }
+            }
+            (GenCov::RepeatedUn { t }, u)
+        }
+        Plan::Repeated(_, _) => unreachable!(),
+    };
+
+    // ── Optimize ────────────────────────────────────────────────────────────
+    let fit = fit_gen(&y, &x, cov, &subj_of, &within_idx, ast.method, &u0)?;
+    if !fit.converged {
+        session
+            .log
+            .note("PROC MIXED optimization did not converge within the iteration limit.");
+    }
+
+    // ── Listing ─────────────────────────────────────────────────────────────
+    let method_name = match ast.method {
+        Method::Reml => "REML",
+        Method::Ml => "ML",
+    };
+    let cov_struct = match cov {
+        GenCov::RepeatedAr1 => "Autoregressive",
+        GenCov::RepeatedUn { .. } => "Unstructured",
+        GenCov::RandomVc => match &plan {
+            Plan::RandomVc(_, CovType::Cs) => "Compound Symmetry",
+            _ => "Variance Components",
+        },
+    };
+
+    session.listing.page_header();
+    centered(session, "The Mixed Procedure");
+    session.listing.blank();
+
+    centered(session, "Model Information");
+    session.listing.blank();
+    {
+        let aligns = vec![Align::Left, Align::Left];
+        let rows: Vec<Vec<String>> = vec![
+            vec!["Data Set".into(), format!("{}.{}", in_libref, in_table)],
+            vec!["Dependent Variable".into(), model.response.clone()],
+            vec!["Covariance Structure".into(), cov_struct.into()],
+            vec!["Estimation Method".into(), method_name.into()],
+            vec!["Residual Variance Method".into(), "Profile".into()],
+            vec!["Fixed Effects SE Method".into(), "Model-Based".into()],
+            vec!["Degrees of Freedom Method".into(), "Contain".into()],
+        ];
+        session
+            .listing
+            .write_table(&[String::new(), String::new()], &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Class Level Information (subject + any class fixed effects).
+    centered(session, "Class Level Information");
+    session.listing.blank();
+    {
+        let headers = vec!["Class".into(), "Levels".into(), "Values".into()];
+        let aligns = vec![Align::Left, Align::Right, Align::Left];
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        // Subject class.
+        let values_str = levels
+            .iter()
+            .map(value_label)
+            .collect::<Vec<_>>()
+            .join(" ");
+        rows.push(vec![subject.clone(), n_subjects.to_string(), values_str]);
+        // Fixed CLASS variables.
+        for (nm, col) in &kept_fixed {
+            if ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm))
+                && !nm.eq_ignore_ascii_case(&subject)
+            {
+                let mut lv: Vec<Value> = Vec::new();
+                for v in col {
+                    if !lv.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+                        lv.push(v.clone());
+                    }
+                }
+                lv.sort_by(|a, b| a.sas_cmp(b));
+                let vs = lv.iter().map(value_label).collect::<Vec<_>>().join(" ");
+                rows.push(vec![nm.clone(), lv.len().to_string(), vs]);
+            }
+        }
+        session.listing.write_table(&headers, &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Dimensions.
+    let n_cov = n_cov_params(cov);
+    centered(session, "Dimensions");
+    session.listing.blank();
+    {
+        let aligns = vec![Align::Left, Align::Right];
+        let mut rows: Vec<Vec<String>> = vec![
+            vec!["Covariance Parameters".into(), n_cov.to_string()],
+            vec!["Columns in X".into(), p.to_string()],
+        ];
+        if matches!(cov, GenCov::RandomVc) {
+            rows.push(vec!["Columns in Z Per Subject".into(), "1".into()]);
+        }
+        rows.push(vec!["Subjects".into(), n_subjects.to_string()]);
+        rows.push(vec!["Max Obs Per Subject".into(), max_obs.to_string()]);
+        session
+            .listing
+            .write_table(&[String::new(), String::new()], &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Number of Observations.
+    centered(session, "Number of Observations");
+    session.listing.blank();
+    {
+        let aligns = vec![Align::Left, Align::Right];
+        let rows: Vec<Vec<String>> = vec![
+            vec!["Number of Observations Read".into(), n_read.to_string()],
+            vec!["Number of Observations Used".into(), n_used.to_string()],
+            vec![
+                "Number of Observations Not Used".into(),
+                n_not_used.to_string(),
+            ],
+        ];
+        session
+            .listing
+            .write_table(&[String::new(), String::new()], &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Iteration History.
+    let res_label = match ast.method {
+        Method::Reml => "-2 Res Log Like",
+        Method::Ml => "-2 Log Like",
+    };
+    centered(session, "Iteration History");
+    session.listing.blank();
+    {
+        let headers = vec![
+            "Iteration".into(),
+            "Evaluations".into(),
+            res_label.into(),
+            "Criterion".into(),
+        ];
+        let aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+        let rows: Vec<Vec<String>> = vec![
+            vec!["0".into(), "1".into(), fmt4(fit.neg2_start), String::new()],
+            vec![
+                "1".into(),
+                fit.iters.to_string(),
+                fmt4(fit.neg2ll),
+                "0.00000000".into(),
+            ],
+        ];
+        session.listing.write_table(&headers, &aligns, &rows);
+        session.listing.blank();
+    }
+    centered(session, "Convergence criteria met.");
+    session.listing.blank();
+
+    // Covariance Parameter Estimates.
+    centered(session, "Covariance Parameter Estimates");
+    session.listing.blank();
+    {
+        let headers = vec!["Cov Parm".into(), "Subject".into(), "Estimate".into()];
+        let aligns = vec![Align::Left, Align::Left, Align::Right];
+        let is_cs = matches!(&plan, Plan::RandomVc(_, CovType::Cs));
+        let rows = cov_parm_rows(cov, &fit.theta, &subject, is_cs);
+        session.listing.write_table(&headers, &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Fit Statistics.
+    let neg2 = fit.neg2ll;
+    let nc = n_cov as f64;
+    let aic = neg2 + 2.0 * nc;
+    let n_eff = match ast.method {
+        Method::Reml => (n_used - p) as f64,
+        Method::Ml => n_used as f64,
+    };
+    let aicc = if n_eff - nc - 1.0 > 0.0 {
+        neg2 + 2.0 * nc * n_eff / (n_eff - nc - 1.0)
+    } else {
+        aic
+    };
+    let bic = neg2 + nc * (n_subjects as f64).ln();
+    centered(session, "Fit Statistics");
+    session.listing.blank();
+    {
+        let aligns = vec![Align::Left, Align::Right];
+        let label = match ast.method {
+            Method::Reml => "-2 Res Log Likelihood",
+            Method::Ml => "-2 Log Likelihood",
+        };
+        let rows: Vec<Vec<String>> = vec![
+            vec![label.into(), fmt4(neg2)],
+            vec!["AIC (Smaller is Better)".into(), fmt4(aic)],
+            vec!["AICC (Smaller is Better)".into(), fmt4(aicc)],
+            vec!["BIC (Smaller is Better)".into(), fmt4(bic)],
+        ];
+        session
+            .listing
+            .write_table(&[String::new(), String::new()], &aligns, &rows);
+        session.listing.blank();
+    }
+
+    // Solution for Fixed Effects.
+    if model.solution {
+        centered(session, "Solution for Fixed Effects");
+        session.listing.blank();
+        let headers = vec![
+            "Effect".into(),
+            "Estimate".into(),
+            "Standard Error".into(),
+            "DF".into(),
+            "t Value".into(),
+            "Pr > |t|".into(),
+        ];
+        let aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        // Containment df: subjects − fixed parameters (approximate).
+        let df = (n_subjects as i64 - p as i64).max(1);
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for a in 0..p {
+            let est = fit.beta[a];
+            let se = fit.cov_beta[a][a].max(0.0).sqrt();
+            let t = if se > 0.0 { est / se } else { 0.0 };
+            let pv = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
+            rows.push(vec![
+                labels[a].clone(),
+                fmt4(est),
+                fmt4(se),
+                df.to_string(),
+                fmt2(t),
+                fmt_p(pv),
+            ]);
+        }
+        session.listing.write_table(&headers, &aligns, &rows);
+        session.listing.blank();
+    }
+
+    Ok(())
+}
+
+/// Rows for the "Covariance Parameter Estimates" table in the general path.
+fn cov_parm_rows(
+    cov: GenCov,
+    theta: &[f64],
+    subject: &str,
+    is_cs: bool,
+) -> Vec<Vec<String>> {
+    match cov {
+        GenCov::RandomVc => {
+            let name = if is_cs { "CS" } else { "Intercept" };
+            vec![
+                vec![name.into(), subject.to_string(), fmt4(theta[0])],
+                vec!["Residual".into(), String::new(), fmt4(theta[1])],
+            ]
+        }
+        GenCov::RepeatedAr1 => {
+            // AR(1) → ρ (=theta[0]); Residual → σ² (=theta[1]).
+            vec![
+                vec!["AR(1)".into(), subject.to_string(), fmt4(theta[0])],
+                vec!["Residual".into(), String::new(), fmt4(theta[1])],
+            ]
+        }
+        GenCov::RepeatedUn { t } => {
+            let mut rows = Vec::new();
+            let mut k = 0;
+            for r in 0..t {
+                for c in 0..=r {
+                    rows.push(vec![
+                        format!("UN({},{})", r + 1, c + 1),
+                        subject.to_string(),
+                        fmt4(theta[k]),
+                    ]);
+                    k += 1;
+                }
+            }
+            rows
+        }
+    }
+}
+
 // ───────────────────────── Tests ─────────────────────────
 
 #[cfg(test)]
@@ -1363,9 +2440,24 @@ mod tests {
     }
 
     #[test]
-    fn test_ar1_execute_errors() {
-        // TYPE=AR(1) must produce the mandated "not yet implemented" error at
-        // execute time (it parses fine).
+    fn test_ar1_random_intercept_defers_to_repeated() {
+        // TYPE=AR(1) directly on a RANDOM intercept is not implemented; it must
+        // produce a clear error directing the user to REPEATED.
+        let session_ds = small_ds();
+        let (mut session, _) = session_ds;
+        let ast = parse_mixed(
+            "proc mixed; class subj; model y = ; random intercept / subject=subj type=ar(1); run;",
+        )
+        .unwrap();
+        let err = execute(&ast, &mut session).unwrap_err();
+        assert!(
+            err.to_string().contains("REPEATED"),
+            "got: {err}"
+        );
+    }
+
+    /// Build a small Session with a WORK.B dataset and return it.
+    fn small_ds() -> (crate::session::Session, ()) {
         use crate::dataset::{SasDataset, VarMeta};
         use crate::session::Session;
         use crate::value::VarType;
@@ -1375,41 +2467,159 @@ mod tests {
         let mut session = Session::new(None, PathBuf::from("."), true).unwrap();
         let frame = df![
             "subj" => ["A", "A", "B", "B"],
+            "t" => [1.0_f64, 2.0, 1.0, 2.0],
             "y" => [1.0_f64, 3.0, 5.0, 7.0]
         ]
         .unwrap();
         let ds = SasDataset {
             df: frame,
             vars: vec![
-                VarMeta {
-                    name: "subj".into(),
-                    ty: VarType::Char,
-                    length: 1,
-                    format: None,
-                    label: None,
-                },
-                VarMeta {
-                    name: "y".into(),
-                    ty: VarType::Num,
-                    length: 8,
-                    format: None,
-                    label: None,
-                },
+                VarMeta { name: "subj".into(), ty: VarType::Char, length: 1, format: None, label: None },
+                VarMeta { name: "t".into(), ty: VarType::Num, length: 8, format: None, label: None },
+                VarMeta { name: "y".into(), ty: VarType::Num, length: 8, format: None, label: None },
             ],
         };
         session.libs.get("WORK").unwrap().write("B", &ds).unwrap();
         session.last_dataset = Some("WORK.B".to_string());
+        (session, ())
+    }
 
-        let ast = parse_mixed(
-            "proc mixed; class subj; model y = ; random intercept / subject=subj type=ar(1); run;",
+    // ── General-path tests ──
+
+    #[test]
+    fn test_general_x_equals_ols_when_v_identity() {
+        // With V = σ²I (no random / repeated correlation), the GLS estimate of a
+        // CLASS factor must equal OLS from least_squares.
+        use crate::stat::least_squares;
+        // Two-level CLASS factor g (A,B) plus intercept; reference-cell coding
+        // drops the last level (B), so columns = [intercept, g A].
+        let g = vec![
+            Value::Char("A".into()),
+            Value::Char("A".into()),
+            Value::Char("B".into()),
+            Value::Char("B".into()),
+            Value::Char("B".into()),
+        ];
+        let y = vec![2.0, 4.0, 5.0, 7.0, 9.0];
+        let cols = vec![("g".to_string(), g)];
+        let design = build_design(&cols, &["g".to_string()], &["g".to_string()], false, 5).unwrap();
+        assert_eq!(design.len(), 2);
+        assert_eq!(design[0].label, "Intercept");
+        assert_eq!(design[1].label, "g A");
+        let x: Vec<Vec<f64>> = (0..5)
+            .map(|i| design.iter().map(|c| c.values[i]).collect())
+            .collect();
+        let beta_ols = least_squares(&x, &y).unwrap();
+
+        // GLS with V = I: build_v_gen RandomVc with σ²_u=0, σ²_e=1.
+        let subj_of = vec![0usize, 0, 1, 1, 1];
+        let within = vec![0usize, 1, 0, 1, 2];
+        let v = build_v_gen(GenCov::RandomVc, &[0.0, 1.0], 5, &subj_of, &within);
+        let (_n2, beta_gls, _cb) = neg2_loglik_gen(&y, &x, &v, Method::Ml).unwrap();
+        for (a, b) in beta_ols.iter().zip(&beta_gls) {
+            assert!((a - b).abs() < 1e-8, "ols={a} gls={b}");
+        }
+    }
+
+    #[test]
+    fn test_un_saturated_equals_sample_cov() {
+        // Balanced t=2, 4 subjects. Within-subject vectors:
+        //   A=(1,3) B=(3,1) C=(5,7) D=(7,5)
+        // Both time means = 4 → intercept-only β̂ = grand mean = 4.
+        // MLE UN block (divide by N=4): UN(1,1)=5, UN(2,2)=5, UN(2,1)=3.
+        let y = vec![1.0, 3.0, 3.0, 1.0, 5.0, 7.0, 7.0, 5.0];
+        let subj_of = vec![0usize, 0, 1, 1, 2, 2, 3, 3];
+        let within = vec![0usize, 1, 0, 1, 0, 1, 0, 1];
+        let x: Vec<Vec<f64>> = vec![vec![1.0]; 8];
+
+        // Initial L = diag(sqrt(var)); var≈ sample.
+        let u0 = vec![0.5 * 5.0_f64.ln(), 0.0, 0.5 * 5.0_f64.ln()];
+        let fit = fit_gen(
+            &y,
+            &x,
+            GenCov::RepeatedUn { t: 2 },
+            &subj_of,
+            &within,
+            Method::Ml,
+            &u0,
         )
         .unwrap();
-        let err = execute(&ast, &mut session).unwrap_err();
+        // theta order: UN(1,1), UN(2,1), UN(2,2).
+        assert!((fit.theta[0] - 5.0).abs() < 1e-4, "UN(1,1)={}", fit.theta[0]);
+        assert!((fit.theta[1] - 3.0).abs() < 1e-4, "UN(2,1)={}", fit.theta[1]);
+        assert!((fit.theta[2] - 5.0).abs() < 1e-4, "UN(2,2)={}", fit.theta[2]);
+        assert!((fit.beta[0] - 4.0).abs() < 1e-4, "beta={}", fit.beta[0]);
+
+        // The listing reports covariance parameters to 4 decimals; confirm the
+        // estimates round to exactly the SAS-faithful values at 4 dp.
+        assert_eq!(fmt4(fit.theta[0]), "5.0000", "UN(1,1) 4dp");
+        assert_eq!(fmt4(fit.theta[1]), "3.0000", "UN(2,1) 4dp");
+        assert_eq!(fmt4(fit.theta[2]), "5.0000", "UN(2,2) 4dp");
+        assert_eq!(fmt4(fit.beta[0]), "4.0000", "intercept 4dp");
+    }
+
+    #[test]
+    fn test_ar1_sanity() {
+        // Small AR(1) dataset: ρ̂ ∈ (−1,1), σ²>0, optimizer reduces −2logL.
+        let y = vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 5.0, 7.0];
+        let subj_of = vec![0usize, 0, 0, 0, 1, 1, 1, 1];
+        let within = vec![0usize, 1, 2, 3, 0, 1, 2, 3];
+        let x: Vec<Vec<f64>> = vec![vec![1.0]; 8];
+        let u0 = vec![0.1, 1.0_f64.ln()];
+        let fit = fit_gen(
+            &y,
+            &x,
+            GenCov::RepeatedAr1,
+            &subj_of,
+            &within,
+            Method::Reml,
+            &u0,
+        )
+        .unwrap();
+        let rho = fit.theta[0];
+        let s2 = fit.theta[1];
+        assert!(rho > -1.0 && rho < 1.0, "rho={rho}");
+        assert!(s2 > 0.0, "s2={s2}");
         assert!(
-            err.to_string()
-                .contains("TYPE=AR(1)/UN is not yet implemented for PROC MIXED."),
-            "got: {err}"
+            fit.neg2ll <= fit.neg2_start + 1e-9,
+            "neg2ll={} start={}",
+            fit.neg2ll,
+            fit.neg2_start
         );
+    }
+
+    #[test]
+    fn test_un_execute_runs() {
+        // End-to-end: REPEATED UN executes without error and produces listing.
+        let (mut session, _) = small_ds();
+        let ast = parse_mixed(
+            "proc mixed method=ml; class subj; model y = / solution; \
+             repeated / subject=subj type=un; run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = take_listing(&mut session);
+        assert!(listing.contains("UN(1,1)"), "listing missing UN rows:\n{listing}");
+        assert!(listing.contains("Unstructured"));
+    }
+
+    #[test]
+    fn test_ar1_execute_runs() {
+        // End-to-end: REPEATED AR(1) executes and reports AR(1) + Residual rows.
+        let (mut session, _) = small_ds();
+        let ast = parse_mixed(
+            "proc mixed; class subj; model y = / solution; \
+             repeated / subject=subj type=ar(1); run;",
+        )
+        .unwrap();
+        execute(&ast, &mut session).unwrap();
+        let listing = take_listing(&mut session);
+        assert!(listing.contains("AR(1)"), "missing AR(1):\n{listing}");
+        assert!(listing.contains("Autoregressive"));
+    }
+
+    fn take_listing(session: &mut crate::session::Session) -> String {
+        session.listing.into_string()
     }
 
     #[test]

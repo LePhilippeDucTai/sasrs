@@ -1,0 +1,105 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/npar1way_scores.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'NPAR1WAY scores: height by sex (Wilcoxon/Median/Savage/Normal)';
+
+3     proc npar1way data=d.class wilcoxon median savage normal;
+4       class sex;
+5       var height;
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: PROCEDURE NPAR1WAY used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'NPAR1WAY exact Wilcoxon: height by sex';
+
+8     proc npar1way data=d.class wilcoxon exact;
+9       class sex;
+10      var height;
+11    run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: PROCEDURE NPAR1WAY used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    title;
+
+==== LISTING ====
+                 NPAR1WAY scores: height by sex (Wilcoxon/Median/Savage/Normal)
+
+                                     The NPAR1WAY Procedure
+
+                                   One-Way Analysis of height
+
+                                    Wilcoxon Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               73.0000          90.0000             12.2367    -1.3484      0.1775
+
+                                     Median Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+                3.0000           4.2632              1.1165    -0.6835      0.4943
+
+                                    Median One-Way Analysis
+
+                                 Chi-Square    DF    Pr > ChiSq
+
+                                     1.2800     1        0.2579
+
+                                     Savage Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               -3.1269          -0.0000              2.0142    -1.3042      0.1922
+
+                                    Savage One-Way Analysis
+
+                                 Chi-Square    DF    Pr > ChiSq
+
+                                     2.4099     1        0.1206
+
+                                Van der Waerden Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               -3.0019          -0.0000              1.9301    -1.2963      0.1949
+
+                                Van der Waerden One-Way Analysis
+
+                                 Chi-Square    DF    Pr > ChiSq
+
+                                     2.4190     1        0.1199
+
+
+                             NPAR1WAY exact Wilcoxon: height by sex
+
+                                     The NPAR1WAY Procedure
+
+                                   One-Way Analysis of height
+
+                                    Wilcoxon Two-Sample Test
+
+             Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
+
+               73.0000          90.0000             12.2367    -1.3484      0.1775
+
+                                           Exact Test
+
+One-Sided Pr <= S            0.0877
+Two-Sided Pr >= |S - Mean|   0.1754
+
+
+==== EXIT 0 ====

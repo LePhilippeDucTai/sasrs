@@ -23,49 +23,69 @@ impl MacroEngine {
     /// - `%include 'chemin';` / `%include "chemin";` : littéral entre guillemets.
     ///   Le chemin est résolu via `include_base_dir` (relatif) ou tel quel
     ///   (absolu).
+    /// - `%include fileref;` (M35.2) : un nom NU enregistré comme `fileref` par
+    ///   un `FILENAME ref 'chemin';` antérieur → résolu vers ce chemin.
+    /// - `%include chemin/sans/guillemets.sas;` (M35.2) : un token NU qui n'est
+    ///   PAS un fileref connu est traité comme un chemin (résolu comme la forme
+    ///   entre guillemets).
     ///
     /// # Cas d'erreur (jamais de `panic`)
     /// - profondeur d'inclusion > `MAX_INCLUDE_DEPTH` (cycle présumé) → un
     ///   commentaire de note SAS-like est émis, le statement est consommé ;
     /// - fichier illisible/absent → idem (commentaire d'erreur) ;
-    /// - `%include` sans guillemets (ex. `%include fileref;` ou `*` / stdin) →
-    ///   non supporté ici : un commentaire de note est émis et le statement
-    ///   consommé jusqu'au `;`.
+    /// - `%include *;` (clavier/stdin) → non supporté : un commentaire de note
+    ///   est émis et le statement consommé jusqu'au `;`.
     pub(super) fn consume_include(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
         let mut j = i + "%include".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
         }
-        // Chemin entre guillemets simples ou doubles.
+        // Chemin entre guillemets simples ou doubles, ou token nu (fileref/chemin).
         let quote = match chars.get(j) {
-            Some(&q @ ('\'' | '"')) => q,
-            _ => {
-                // Forme non supportée (fileref nu, `*` stdin) : consommer jusqu'au
-                // `;` et émettre une note plutôt que de laisser un résidu.
-                let mut k = j;
-                while k < chars.len() && chars[k] != ';' {
-                    k += 1;
+            Some(&q @ ('\'' | '"')) => Some(q),
+            _ => None,
+        };
+        // `path` est le chemin LITTÉRAL à charger (résolu plus bas). Pour la forme
+        // entre guillemets, c'est le contenu du littéral ; pour un token nu, c'est
+        // soit le chemin du fileref, soit le token lui-même traité comme chemin.
+        let path: String = match quote {
+            Some(q) => {
+                j += 1; // après le guillemet ouvrant
+                let path_start = j;
+                while j < chars.len() && chars[j] != q {
+                    j += 1;
                 }
-                if chars.get(k) != Some(&';') {
+                if chars.get(j) != Some(&q) {
+                    return None; // guillemet non fermé
+                }
+                let p: String = chars[path_start..j].iter().collect();
+                j += 1; // après le guillemet fermant
+                p
+            }
+            None => {
+                // Token nu : lire jusqu'au `;`, puis trimer.
+                let tok_start = j;
+                while j < chars.len() && chars[j] != ';' {
+                    j += 1;
+                }
+                if chars.get(j) != Some(&';') {
                     return None;
                 }
-                out.push_str(
-                    "/* %include: only quoted file paths are supported (fileref/stdin deferred) */",
-                );
-                return Some(Self::skip_trailing_newline(chars, k + 1, out));
+                let raw: String = chars[tok_start..j].iter().collect();
+                let token = raw.trim().to_string();
+                // `*` ou vide : clavier/stdin, non supporté → note de déferrement.
+                if token.is_empty() || token == "*" {
+                    out.push_str("/* %include: keyboard/stdin (*) is not supported */");
+                    return Some(Self::skip_trailing_newline(chars, j + 1, out));
+                }
+                // Fileref connu → son chemin ; sinon le token est traité comme chemin.
+                match self.fileref_path(&token) {
+                    Some(p) => p.to_string_lossy().into_owned(),
+                    None => token,
+                }
             }
         };
-        j += 1; // après le guillemet ouvrant
-        let path_start = j;
-        while j < chars.len() && chars[j] != quote {
-            j += 1;
-        }
-        if chars.get(j) != Some(&quote) {
-            return None; // guillemet non fermé
-        }
-        let path: String = chars[path_start..j].iter().collect();
-        j += 1; // après le guillemet fermant
-                // Consommer le reste jusqu'au `;` terminal (options éventuelles ignorées).
+        // Consommer le reste jusqu'au `;` terminal (options éventuelles ignorées).
         while j < chars.len() && chars[j] != ';' {
             j += 1;
         }

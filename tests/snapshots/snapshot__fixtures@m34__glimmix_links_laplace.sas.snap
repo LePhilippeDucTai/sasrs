@@ -1,0 +1,257 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/glimmix_links_laplace.sas
+---
+==== LOG ====
+
+1     title 'PROC GLIMMIX PROBIT (binary, no random) — cross-check LOGISTIC';
+
+2     data counts;
+3       input y x count;
+4     datalines;
+5     1 1 20
+6     1 0 10
+7     0 1  5
+8     0 0 25
+9     ;
+NOTE: The data set WORK.COUNTS has 4 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    proc glimmix data=counts;
+11      model y(event='1') = x / dist=binary link=probit solution;
+12      freq count;
+13    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title 'PROC GLIMMIX CLOGLOG (binary, no random)';
+
+15    proc glimmix data=counts;
+16      model y(event='1') = x / dist=binary link=cloglog solution;
+17      freq count;
+18    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    title 'PROC GLIMMIX METHOD=LAPLACE (Normal + random intercept) — cross-check MIXED ML';
+
+20    data balanced;
+21      input subj $ y;
+22    datalines;
+23    A 1
+24    A 3
+25    B 5
+26    B 7
+27    ;
+NOTE: The data set WORK.BALANCED has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    proc glimmix data=balanced method=laplace;
+29      class subj;
+30      model y = / dist=normal link=identity solution;
+31      random intercept / subject=subj type=vc;
+32    run;
+NOTE: PROCEDURE GLIMMIX used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+33    title;
+
+==== LISTING ====
+              PROC GLIMMIX PROBIT (binary, no random) â cross-check LOGISTIC
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                            Data Set                     WORK.COUNTS
+                            Response Variable            y
+                            Response Distribution        Binary
+                            Link Function                Probit
+                            Variance Function            Default
+                            Estimation Technique         Residual PL
+                            Degrees of Freedom Method    Contain
+
+                                     Number of Observations
+
+
+
+                             Number of Observations Read         4
+                             Number of Observations Used        60
+                             Number of Observations Not Used     0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1      60.0000
+                        1           0              2      60.0000    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                         Fit Statistics
+
+
+
+                               Generalized Chi-Square    60.0000
+                               Gener. Chi-Square / DF     1.0345
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1        58       6.35    0.0145
+                       x                 1        58      15.00    0.0003
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept     -0.5659            0.2247    58      -2.52      0.0145
+              x              1.4076            0.3635    58       3.87      0.0003
+
+
+                            PROC GLIMMIX CLOGLOG (binary, no random)
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                       Data Set                     WORK.COUNTS
+                       Response Variable            y
+                       Response Distribution        Binary
+                       Link Function                Complementary log-log
+                       Variance Function            Default
+                       Estimation Technique         Residual PL
+                       Degrees of Freedom Method    Contain
+
+                                     Number of Observations
+
+
+
+                             Number of Observations Read         4
+                             Number of Observations Used        60
+                             Number of Observations Not Used     0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1      60.0000
+                        1           0              2      60.0000    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                         Fit Statistics
+
+
+
+                               Generalized Chi-Square    60.0000
+                               Gener. Chi-Square / DF     1.0345
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1        58      11.75    0.0011
+                       x                 1        58      15.05    0.0003
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept     -1.0892            0.3177    58      -3.43      0.0011
+              x              1.5651            0.4034    58       3.88      0.0003
+
+
+      PROC GLIMMIX METHOD=LAPLACE (Normal + random intercept) â cross-check MIXED ML
+
+                                     The GLIMMIX Procedure
+
+                                       Model Information
+
+
+
+                        Data Set                     WORK.BALANCED
+                        Response Variable            y
+                        Response Distribution        Normal
+                        Link Function                Identity
+                        Variance Function            Default
+                        Estimation Technique         Maximum Likelihood
+                        Likelihood Approximation     Laplace
+                        Degrees of Freedom Method    Contain
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   subj          2    A B
+
+                                           Dimensions
+
+
+
+                                 Covariance Parameters       2
+                                 Columns in X                1
+                                 Columns in Z Per Subject    1
+                                 Subjects                    2
+                                 Max Obs Per Subject         2
+
+                                     Number of Observations
+
+
+
+                              Number of Observations Read        4
+                              Number of Observations Used        4
+                              Number of Observations Not Used    0
+
+                                       Iteration History
+
+                Iteration    Restarts    Evaluations    Objective        Change
+
+                        0           0              1      16.8967
+                        1           0              2      16.8967    0.00000000
+
+                         Convergence criterion (GCONV=1E-8) satisfied.
+
+                                 Covariance Parameter Estimates
+
+                                Cov Parm     Subject    Estimate
+
+                                Intercept    subj         3.0000
+                                Residual                  2.0000
+
+                                         Fit Statistics
+
+
+
+                              -2 Log Likelihood           16.8967
+                              AIC  (smaller is better)    22.8967
+                              AICC (smaller is better)    22.8967
+                              BIC  (smaller is better)    18.9761
+
+                                Type III Tests of Fixed Effects
+
+                       Effect       Num DF    Den DF    F Value    Pr > F
+
+                       Intercept         1         1       8.00    0.2163
+
+                                  Solutions for Fixed Effects
+
+              Effect       Estimate    Standard Error    DF    t Value    Pr > |t|
+
+              Intercept      4.0000            1.4142     1       2.83      0.2163
+
+
+==== EXIT 0 ====

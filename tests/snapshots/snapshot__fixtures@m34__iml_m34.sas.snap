@@ -1,0 +1,65 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m34/iml_m34.sas
+---
+==== LOG ====
+
+1     title 'PROC IML: SHAPE / range subscripts / DET / CALL EIGEN';
+
+2     proc iml;
+3       a = {4 3, 6 3};
+4       d = det(a);
+5       print d;
+6       m = shape({1 2 3 4 5 6}, 2, 3);
+7       print m;
+8       b = {1 2 3, 4 5 6, 7 8 10};
+9       sub = b[1:2, 2:3];
+10      print sub;
+11      s = {2 0, 0 3};
+12      call eigen(val, vec, s);
+13      print val vec;
+14    quit;
+NOTE: PROCEDURE IML used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+15    title;
+
+==== LISTING ====
+                     PROC IML: SHAPE / range subscripts / DET / CALL EIGEN
+
+                                       The IML Procedure
+
+D
+
+    -6
+
+M
+
+      COL1  COL2  COL3
+
+ROW1     1     2     3
+ROW2     4     5     6
+
+SUB
+
+      COL1  COL2
+
+ROW1     2     3
+ROW2     5     6
+
+VAL
+
+ROW1     3
+ROW2     2
+
+VEC
+
+      COL1  COL2
+
+ROW1     0     1
+ROW2     1     0
+
+
+==== EXIT 0 ====

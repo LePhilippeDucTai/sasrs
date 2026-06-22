@@ -1,0 +1,178 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m36/selection_adv.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     title 'PROC REG: RSQUARE all-subsets selection';
+
+3     proc reg data=d.class;
+4       model weight = age height / selection=rsquare;
+5     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title 'PROC REG: CP (Mallows) selection';
+
+7     proc reg data=d.class;
+8       model weight = age height / selection=cp;
+9     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title 'PROC REG: ADJRSQ selection';
+
+11    proc reg data=d.class;
+12      model weight = age height / selection=adjrsq;
+13    run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: There were 19 observations used.
+NOTE: PROCEDURE REG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title;
+
+==== LISTING ====
+                            PROC REG: RSQUARE all-subsets selection
+
+                                       The REG Procedure
+                                   R-Square Selection Method
+
+                       Number in Model    R-Square    Variables in Model
+
+                                     1      0.7705    height
+                                     1      0.5489    age
+                                     2      0.7729    age height
+
+
+
+                            PROC REG: RSQUARE all-subsets selection
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+                                PROC REG: CP (Mallows) selection
+
+                                       The REG Procedure
+                                     C(p) Selection Method
+
+                   Number in Model    R-Square     C(p)    Variables in Model
+
+                                 1      0.7705     1.17    height
+                                 2      0.7729     3.00    age height
+                                 1      0.5489    16.78    age
+
+
+
+                                PROC REG: CP (Mallows) selection
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+                                   PROC REG: ADJRSQ selection
+
+                                       The REG Procedure
+                               Adjusted R-Square Selection Method
+
+             Number in Model    R-Square    Adjusted R-Square    Variables in Model
+
+                           1      0.7705               0.7570    height
+                           2      0.7729               0.7445    age height
+                           1      0.5489               0.5224    age
+
+
+
+                                   PROC REG: ADJRSQ selection
+
+                                       The REG Procedure
+                                         Model: MODEL1
+                                   Dependent Variable: weight
+
+               Number of Observations Read         19
+               Number of Observations Used         19
+
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               2        7215.63710     3607.81855      27.23    <.0001
+          Error              16        2120.09974      132.50623
+          Corrected Total    18        9335.73684
+
+
+Root MSE             11.51114    R-Square     0.7729
+Dependent Mean       100.02632    Adj R-Sq     0.7445
+Coeff Var            11.50811
+
+
+         Variable     DF    Parameter Estimate    Standard Error    t Value    Pr > |t|
+
+         Intercept     1            -141.22376          33.38309      -4.23      0.0006
+         age           1               1.27839           3.11010       0.41      0.6865
+         height        1               3.59703           0.90546       3.97      0.0011
+
+==== EXIT 0 ====
