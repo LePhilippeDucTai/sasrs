@@ -6,8 +6,8 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **TERMINÉ (Phase F)**. M1–M36 terminés — Phase F M35–M36 (complétion du langage
-macro + `PROC REG` totale) closes la roadmap, après Phase E M31–M34 :
+Jalon courant : **M37 (Phase G)**. M1–M36 terminés (Phase F M35–M36 : complétion du langage macro +
+`PROC REG` totale ; Phase E M31–M34 :
 refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
 **statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
 MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML + graphiques LOESS/DENSITY/PIE).
@@ -877,3 +877,220 @@ syntaxe). Chaque case rétrécit d'autant la colonne « non couvert » du README
   weight_by_id, outest_matrices, ridge_pcomit, mtest, plots) à oracles vérifiés à la main ; README `REG`
   passé 🟡→✅ (résiduel : SELECTION=LASSO, DW p-values exactes, REWEIGHT/REFIT/PAINT) ; jalon courant →
   **TERMINÉ (Phase F)**.
+
+# Phase G — tout 🟡 (+ 🔴 faisable) → ✅
+
+Objectif : amener à **✅** chaque fonctionnalité partielle (26 🟡) et les 🔴 faisables, sur 30 jalons
+M37–M66 (un par gros proc, précédés d'un bloc d'infrastructure partagée). Implémentation **intégrale
+quel que soit l'effort**. Invariant de complétion d'options : snapshots m1–m36 **octet-identiques**
+(tout gardé derrière une option/statement neuf), `cargo test -p sasrs` vert, 0 warning, fixtures
+`tests/fixtures/m<NN>/` à oracles vérifiés à la main, colonne « non couvert » du README rétrécie.
+Restent 🔴 documentés : `X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYSRPUT`, `.sas7bcat` binaire.
+**Ordre dur** : Bloc 0 (M37–M42) avant ses consommateurs ; graphiques (M63–M66) en dernier.
+
+## BLOC 0 — Infrastructure partagée
+
+## M37 — Moteur linéaire partagé `lincom` + digamma/trigamma
+Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de GLM puis ajouts testés.
+- [ ] M37.1 — Extraire de `glm.rs` un `src/procs/lincom.rs` : `LinCombEngine { beta, cov, coding, df }`
+  → `estimate(L,c)`, `contrast(L,c)`, `lsmeans(effect)` ; GLM rebranché **octet-identique** (Opus, élevé)
+- [ ] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
+  `reference_coding` de `mixed.rs`/`glimmix.rs`) ; oracle : PARAM=REF = coding actuel, somme effect=0 (Opus, moyen)
+- [ ] M37.3 — `score_test(U,I)` + promotion `digamma`/ajout `trigamma` dans `stat/dists.rs` (re-export
+  côté DATA step) ; oracles ψ(1)=−γ, ψ(x+1)−ψ(x)=1/x, ψ′(1)=π²/6 (Opus, moyen)
+- [ ] DoD M37 : `lincom.rs` créé, GLM octet-identique, digamma/trigamma testés ; pointeur → M38.
+
+## M38 — Langage global + ODS capture/sélection
+Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS SELECT/EXCLUDE+OUTPUT.
+- [ ] M38.1 — TITLE1–9 + FOOTNOTE1–9 : trait `OutputDestination` → `set_titles(Vec)`/`set_footnotes`
+  (+ 5 destinations), `executor.rs` stocke tous les niveaux ; oracle : un seul TITLE1 = rendu actuel (Opus, moyen)
+- [ ] M38.2 — OPTIONS appliquées (PAGESIZE/PS=, NODATE/NONUMBER, MISSING=, YEARCUTOFF=, FMTSEARCH=)
+  au-delà du warning ; non reconnues gardent le warning (Sonnet, moyen)
+- [ ] M38.3 — ODS OUTPUT **généralisé** : nommer chaque `write_table`, matérialiser en dataset via
+  `ods_output_target` ; oracle : `ods output OneWayFreqs=f;` = colonnes du listing FREQ (Opus, élevé)
+- [ ] M38.4 — ODS SELECT/EXCLUDE : sets Session consultés dans `write_table` (remplace l'erreur différée
+  `parser/global.rs`) ; oracle : `ods exclude all;` supprime les tables, log inchangé (Opus, moyen)
+- [ ] M38.5 — `%INCLUDE *`/stdin + FILENAME device/pipe/URL reconnus (NOTE propre, sortis du 🟡) (Sonnet, faible)
+- [ ] DoD M38 : fixtures m38 (titres multiples, ODS OUTPUT depuis FREQ, ODS EXCLUDE) ; 6 cellules → ✅ ; → M39.
+
+## M39 — Store de catalogue de format persistant
+Prérequis FORMAT/CATALOG/IML STORE.
+- [ ] M39.1 — Sérialiser `FormatCatalog` en sidecar JSON par libref (chargé au LIBNAME, sauvé après
+  PROC FORMAT) ; oracle round-trip (définir, relancer, résout encore) (Opus, moyen)
+- [ ] M39.2 — `CNTLOUT=` (catalogue→dataset FMTNAME/START/END/LABEL/TYPE) + `CNTLIN=` (dataset→catalogue) ;
+  oracle CNTLOUT→CNTLIN round-trip identique (Opus, moyen)
+- [ ] M39.3 — `FMTLIB`, `FMTSEARCH=` (lie M38.2) ; oracle : FMTLIB liste exactement les formats définis (Sonnet, faible)
+- [ ] DoD M39 : fixtures m39 ; README FORMAT/User formats préparés ; path in-memory octet-identique ; → M40.
+
+## M40 — DATA step : statements manquants + CALL routines
+Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
+- [ ] M40.1 — CALL routines faisables : MISSING, SYMPUTX, SCAN, LABEL, VNAME, SORTN/SORTC, STDIZE,
+  PRX* (si regex) ; oracle `CALL MISSING(x)`⇒x=. (Opus, élevé)
+- [ ] M40.2 — Multiple `SET` (lecture parallèle, EOF par site) + bare `SET;`/`MERGE;` (re-réf `_LAST_`) ;
+  touche boucle implicite + PDV ; oracle 2 SET ⇒ 1 obs/itération, fin au 1ᵉʳ EOF (Opus, très élevé)
+- [ ] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)
+- [ ] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
+
+## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE
+Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
+- [ ] M41.1 — `%BQUOTE`/`%NRBQUOTE` (quoting exécution, masque `&`/`%`) via `apply_quoting` ; oracle
+  `%bquote(a&b)` masque `&` sans résoudre (Opus, élevé)
+- [ ] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) ; oracle
+  `%let x=&y; %superq(x)`→`&y` littéral (Opus, élevé)
+- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Opus, moyen)
+- [ ] DoD M41 : fixtures m41 ; README Macro Quoting → ✅ (reste %SYSEXEC/%WINDOW/%DISPLAY/%SYSLPUT/%SYSRPUT doc) ; → M42.
+
+## M42 — PROC SQL : dictionnaires + prédicats
+Cellule README PROC SQL Not supported 🔴→✅.
+- [ ] M42.1 — Dictionary tables (`DICTIONARY.TABLES/.COLUMNS/.MEMBERS` → vues sur `LibraryManager`) ;
+  oracle : `SELECT * FROM dictionary.columns` liste les colonnes connues (Opus, élevé)
+- [ ] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) ; oracle CONTAINS≡INDEX>0, SOUNDS LIKE=même soundex (Sonnet, moyen)
+- [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
+- [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
+
+## BLOC 1 — Procs Base & descriptifs
+
+## M43 — PROC FORMAT : complétion totale
+- [ ] M43.1 — Brancher CNTLIN/CNTLOUT/FMTLIB (M39) dans `procs/format.rs` ; multi-label, largeurs
+  MAX=/MIN=/DEFAULT= ; oracle : largeur défaut = max label, CNTLOUT round-trip (Sonnet, moyen)
+- [ ] DoD M43 : fixture m43 ; README FORMAT → ✅ ; → M44.
+
+## M44 — PROC FREQ : Fisher exact r×c
+- [ ] M44.1 — Fisher exact r×c (réseau Freeman-Halton/Mehta-Patel + garde combinatoire + fallback
+  Monte-Carlo déterministe PRNG maison) ; oracle : 2×2 = Fisher existant, Σtables≤p(obs) (Opus, très élevé)
+- [ ] DoD M44 : fixture m44 (3×3 vs doc SAS) ; README FREQ → ✅ (résiduel grandes tables MC documenté) ; → M45.
+
+## M45 — PROC UNIVARIATE : pondération + plots
+- [ ] M45.1 — Skewness/kurtosis pondérés (moments m3/m4, VARDEF=DF) ; oracle poids=1 = actuel, symétrique⇒skew≈0 (Opus, moyen)
+- [ ] M45.2 — Plot-statement `HISTOGRAM/QQPLOT … /NORMAL` overlay + annotation (`graphics/render.rs`) ;
+  oracle : NORMAL centré sur μ̂,σ̂ ; sans graphics → NOTE-deferred (Opus, moyen)
+- [ ] DoD M45 : fixture m45 ; README UNIVARIATE → ✅ ; → M46.
+
+## M46 — PROC TABULATE : PCTN<dim>
+- [ ] M46.1 — Dénominateurs paramétrés `PCTN<row|col>`/`PCTSUM<dim>` ; oracle : PCTN sans `<>` inchangé,
+  PCTN<row> somme 100/ligne (Opus, élevé)
+- [ ] DoD M46 : fixture m46 ; README TABULATE → ✅ ; → M47.
+
+## M47 — PROC REPORT : DEFINE FLOW + COMPUTE riche
+- [ ] M47.1 — `DEFINE var / FLOW` (wrap WIDTH=) ; oracle largeur respectée (Opus, moyen)
+- [ ] M47.2 — `COMPUTE` via `datastep::eval` + `functions::call` (bibliothèque complète, ré-assignation
+  colonnes calculées) ; oracle `compute x; x=round(y,.1); endcomp;` = ROUND DATA step (Opus, élevé)
+- [ ] DoD M47 : fixture m47 ; README REPORT → ✅ ; → M48.
+
+## M48 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR
+- [ ] M48.1 — `APPEND` (réutilise `procs/append.rs`) + `MODIFY` attrs (label/type) ; oracle = PROC APPEND (Sonnet, moyen)
+- [ ] M48.2 — `CONTENTS` (réutilise `procs/contents.rs`) + `REPAIR` (no-op + NOTE) ; oracle CONTENTS interne = autonome (Sonnet, faible)
+- [ ] DoD M48 : fixture m48 ; README DATASETS → ✅ (résiduel REPAIR réel documenté) ; → M49.
+
+## M49 — PROC CATALOG : catalogues réels
+- [ ] M49.1 — Brancher sur le store M39 ; `ENTRYTYPE=`/sélection, COPY/DELETE réels d'entrées ;
+  oracle : DELETE entrée puis CONTENTS ne la liste plus (Opus, moyen)
+- [ ] DoD M49 : fixture m49 ; README CATALOG → ✅ (résiduel `.sas7bcat` binaire documenté) ; → M50.
+
+## M50 — PROC PRINTTO : routage fichier réel
+- [ ] M50.1 — `printto_log`/`printto_print` ouvrent les fichiers et redirigent Log/Listing ; reset
+  restaure ; oracle : sortie écrite dans le fichier cible, reset rétablit (Opus, moyen)
+- [ ] DoD M50 : fixture m50 (contenu fichier routé) ; README PRINTTO → ✅ ; → M51.
+
+## M51 — PROC OPTIONS : détail par option
+- [ ] M51.1 — Table option-par-option (`OPTION=`, `GROUP=`, SHORT/LONG) ; oracle : `OPTION=LINESIZE`
+  affiche `session.options.ls` (Sonnet, faible)
+- [ ] DoD M51 : fixture m51 ; README OPTIONS → ✅ ; → M52.
+
+## BLOC 2 — Procs de modélisation (réutilisent M37 `lincom`)
+
+## M52 — PROC LOGISTIC : complétion totale
+- [ ] M52.1 — `PARAM=EFFECT|GLM|REF` (M37 coding) ; oracle PARAM=REF inchangé (Opus, élevé)
+- [ ] M52.2 — Multinomial generalized-logit (LINK=GLOGIT) + ordinal ; oracle 2 catégories ⇒ binaire (Opus, très élevé)
+- [ ] M52.3 — Score Test prop-odds (M37 score_test) ; oracle χ², df=(k−2)·p (Opus, élevé)
+- [ ] M52.4 — `UNITS`, `SCORE DATA=`, `ROC` (AUC + comparaison) ; oracle AUC∈[0,1], 0.5 si non discriminant (Opus, élevé)
+- [ ] M52.5 — `BY` + ESTIMATE/CONTRAST (M37) ; oracle 1 groupe = sans BY (Opus, moyen)
+- [ ] DoD M52 : fixtures m52 ; README LOGISTIC → ✅ ; → M53.
+
+## M53 — PROC GENMOD : complétion totale
+- [ ] M53.1 — Gamma scale ML exact (digamma/trigamma, Newton) ; oracle remplace l'approx Pearson, ψ′>0 (Opus, élevé)
+- [ ] M53.2 — `OFFSET=` + `OUTPUT OUT=` (xbeta/pred/resid/deviance) ; oracle OFFSET=0 inchangé (Opus, moyen)
+- [ ] M53.3 — Multinomial cumulative logit ordinal ; oracle réduction binaire (Opus, élevé)
+- [ ] M53.4 — GEE/REPEATED (Fisher-scoring + sandwich, corr IND/EXCH/AR(1)/UN) ; oracle IND ⇒ β≈GLM,
+  SE sandwich≠model-based, matrice de travail symétrique (Opus, très élevé)
+- [ ] M53.5 — ESTIMATE/CONTRAST (M37) + BY ; oracle contrast = combinaison testée (Opus, moyen)
+- [ ] DoD M53 : fixtures m53 ; README GENMOD → ✅ ; → M54.
+
+## M54 — PROC MIXED : complétion totale
+- [ ] M54.1 — RANDOM slopes/multiples (ZGZ'+R général) ; oracle random intercept seul = actuel (Opus, très élevé)
+- [ ] M54.2 — TYPE= étendu (TOEP/ARH(1)/CSH/UN(1)) ; oracle UN 1 niveau = VC, AR(1) ρ=0 = VC (Opus, élevé)
+- [ ] M54.3 — df Satterthwaite + Kenward-Roger (dérivées de V) ; oracle équilibré ⇒ df KR ≈ df ANOVA (Opus, très élevé)
+- [ ] M54.4 — LSMEANS/ESTIMATE/CONTRAST (M37, df de M54.3) + COVTEST (LR composantes) ; oracle LSMEANS = moyennes marginales (Opus, élevé)
+- [ ] M54.5 — `BY` ; oracle 1 groupe = sans BY (Sonnet, faible)
+- [ ] DoD M54 : fixtures m54 ; README MIXED → ✅ ; → M55.
+
+## M55 — PROC GLIMMIX : complétion totale
+- [ ] M55.1 — `METHOD=QUAD` (Gauss-Hermite adaptative) ; oracle nœuds→∞ ⇒ converge vers LAPLACE (Opus, très élevé)
+- [ ] M55.2 — `DIST=GAMMA` (scale M53.1) ; oracle cohérent GENMOD Gamma sans random (Opus, moyen)
+- [ ] M55.3 — LAPLACE avec AR(1)/UN/multiple-random + RANDOM slopes (G de M54.1) ; oracle VC single = actuel (Opus, très élevé)
+- [ ] M55.4 — LSMEANS/ESTIMATE/CONTRAST (M37) + WEIGHT + BY ; oracle WEIGHT=1 inchangé (Opus, élevé)
+- [ ] DoD M55 : fixtures m55 ; README GLIMMIX → ✅ ; → M56.
+
+## BLOC 3 — Procs multivariés
+
+## M56 — PROC PRINCOMP : complétion totale
+- [ ] M56.1 — `WEIGHT` + `PARTIAL` ; oracle poids=1 inchangé, PARTIAL 0 var = PCA standard (Opus, élevé)
+- [ ] M56.2 — `TYPE=CORR` input + `OUTSTAT=` (helper OUTSTAT) ; oracle OUTSTAT→TYPE=CORR round-trip eigenvalues (Opus, moyen)
+- [ ] M56.3 — `BY` ; oracle 1 groupe = sans BY (Sonnet, faible)
+- [ ] DoD M56 : fixtures m56 ; README PRINCOMP → ✅ ; → M57.
+
+## M57 — PROC FACTOR : complétion totale
+- [ ] M57.1 — `METHOD=ML`/`PRINIT` (vraie ML : discrepance + eigen Jacobi) ; oracle communalités∈[0,1] (Opus, très élevé)
+- [ ] M57.2 — `HEYWOOD` + `ALPHA` + `ROTATE=OBLIMIN` ; oracle OBLIMIN(γ=0)=quartimin, HEYWOOD plafonne (Opus, élevé)
+- [ ] M57.3 — `SCORE`/OUTSTAT scoring + `BY` ; oracle scores standardisés var≈1 (Opus, moyen)
+- [ ] DoD M57 : fixtures m57 ; README FACTOR → ✅ ; → M58.
+
+## M58 — PROC DISCRIM : complétion totale
+- [ ] M58.1 — `POOL=NO` (QDA) ; oracle covariances égales ⇒ QDA≈LDA (Opus, élevé)
+- [ ] M58.2 — `CROSSVALIDATE` (LOO rang-1) + `OUTSTAT=` ; oracle CV error ≥ resubstitution (Opus, élevé)
+- [ ] M58.3 — `METHOD=NPAR/KERNEL` (densités noyau) + `THRESHOLD=` + `BY` ; oracle postérieurs somment à 1 (Opus, très élevé)
+- [ ] DoD M58 : fixtures m58 ; README DISCRIM → ✅ ; → M59.
+
+## M59 — PROC DISTANCE : complétion totale
+- [ ] M59.1 — `SHAPE=SQUARE|TRIANGLE|LIST`, `ID` labels, normalisation (STD/RANGE), `FREQ` ;
+  oracle SHAPE=SQUARE symétrique diag 0, STD ⇒ variance 1 (Opus, moyen)
+- [ ] DoD M59 : fixture m59 ; README DISTANCE → ✅ ; → M60.
+
+## M60 — PROC CLUSTER : complétion totale
+- [ ] M60.1 — `PSEUDO` (pseudo-F/t²) + `NOEIGEN` ; oracle pseudo-F décroît globalement (Opus, moyen)
+- [ ] M60.2 — `CCC` (cubic clustering criterion, eigen Jacobi) ; oracle pic au bon k sur données séparées (Opus, élevé)
+- [ ] M60.3 — Dendrogramme graphique (`graphics/render.rs`) ; oracle sans graphics → NOTE-deferred (Opus, moyen)
+- [ ] DoD M60 : fixtures m60 ; README CLUSTER → ✅ ; → M61.
+
+## M61 — PROC FASTCLUS : complétion totale
+- [ ] M61.1 — `SEED=` (obs/dataset) + `RADIUS=` + `DISTANCE` ; oracle SEED fixé ⇒ déterministe (Opus, moyen)
+- [ ] M61.2 — `MEAN=` + fuzzy (FUZZ=) ; oracle MEAN = centroïdes, appartenances fuzzy somment à 1 (Opus, moyen)
+- [ ] DoD M61 : fixtures m61 ; README FASTCLUS → ✅ ; → M62.
+
+## M62 — PROC IML : complétion totale
+- [ ] M62.1 — `READ NEXT`/`READ … WHERE` (curseur + filtre) ; oracle READ NEXT en boucle = READ ALL (Opus, élevé)
+- [ ] M62.2 — Modules `START name(args); … FINISH;` + appel/portée ; oracle module identité retourne son arg (Opus, très élevé)
+- [ ] M62.3 — `STORE`/`LOAD`/`SHOW` (store M39) ; oracle STORE→LOAD round-trip une matrice (Opus, moyen)
+- [ ] DoD M62 : fixtures m62 ; README IML → ✅ ; → M63.
+
+## BLOC 4 — Graphiques (réutilisent `graphics/render.rs` ; testés `--features graphics`)
+
+## M63 — PROC GPLOT : complétion totale
+- [ ] M63.1 — SYMBOL HEIGHT/WIDTH/LINE/REPEAT ; AXIS log/discrete/ticks ; oracle LINE=1 = actuel, log⇒ticks géométriques (Opus, élevé)
+- [ ] M63.2 — PLOT2 (2ᵉ axe Y), `=group`×multi-Y, VPLOT, `BY` ; oracle PLOT2 partage l'axe X, BY⇒N images (Opus, élevé)
+- [ ] DoD M63 : fixtures m63 ; README GPLOT → ✅ ; → M64.
+
+## M64 — PROC GCHART : complétion totale
+- [ ] M64.1 — `SUBGROUP=` (empilé) + rendu HBAR + `BY` ; oracle segments empilés = barre totale, HBAR = VBAR transposé (Opus, moyen)
+- [ ] DoD M64 : fixtures m64 ; README GCHART → ✅ ; → M65.
+
+## M65 — PROC PLOT : complétion totale
+- [ ] M65.1 — `HREF=`/`VREF=`, `HAXIS=`/`VAXIS=`, grille multi-plots, `BY` ; oracle HREF positionne la
+  colonne de référence dans la grille ASCII (Opus, moyen)
+- [ ] DoD M65 : fixtures m65 ; README PLOT → ✅ ; → M66.
+
+## M66 — PROC SGPLOT : complétion totale
+- [ ] M66.1 — Rendu réel HBAR/VBOX/REG ; oracle VBOX médiane/quartiles = UNIVARIATE, REG = droite OLS (Opus, élevé)
+- [ ] M66.2 — MARKERATTRS=/LINEATTRS=, overlays multiples, légendes, images BY-group ; oracle sans attrs = actuel (Opus, élevé)
+- [ ] DoD M66 : fixtures m66 ; README SGPLOT → ✅ ; **fin de Phase G** : tous les tableaux README en ✅
+  (résiduel hors périmètre documenté) ; passer « Jalon courant : **TERMINÉ (Phase G)** ».
