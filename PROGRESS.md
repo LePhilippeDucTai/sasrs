@@ -6,9 +6,10 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M34**. M1–M33 terminés (roadmap d'origine : couverture SAS
-quasi-intégrale — I/O fichiers plats, bibliothèque de fonctions, hash, compléments
-SQL/macro/formats, complétion des procs, ODS, modélisation statistique, graphiques).
+Jalon courant : **M35**. M1–M34 terminés (roadmap d'origine + Phase E M31–M34 :
+refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
+**statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
+MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML + graphiques LOESS/DENSITY/PIE).
 Décisions verrouillées : graphiques en images PNG/SVG via `plotters` ; dépendances mixtes
 (crates pour l'I/O lourd, numérique stat **fait maison** dans `src/stat/`) ; ODS
 HTML/RTF/PDF/Excel + ODS OUTPUT→datasets.
@@ -680,8 +681,10 @@ Oracles vérifiés vs SAS 9.4 documenté ; numérique fait maison (`src/stat/`).
   2447 défaut). **Bonus** : `tests/snapshot.rs` skip-list (cfg graphics) complétée avec `univariate`
   (rendait une image sous graphics → suite snapshot graphics désormais verte). README SGPLOT/GCHART/GPLOT
   mis à jour. 0 warning nouveau, build défaut octet-identique (0 `.snap.new`).
-- [ ] DoD M34 : fixtures `m34/` + snapshots vérifiés (oracles) ; README à jour ;
-  passer « Jalon courant : **M35** ».
+- [x] DoD M34 : fixtures `m34/` (19) + snapshots vérifiés à la main (oracles SAS) ; README à jour
+  (CORR/TTEST/NPAR1WAY→✅ ; REG/ANOVA/GLM/LOGISTIC/GENMOD/MIXED/GLIMMIX/PRINCOMP/FACTOR/CLUSTER/IML
+  colonnes « non couvert » rétrécies) ; 2447 tests défaut, 0 `.snap.new`, build défaut octet-identique.
+  Curseur passé à **M35**.
 
 ## M35 — macro : complétion totale
 Phase E. Combler les derniers écarts macro pour un support intégral. Processeur toujours actif ;
