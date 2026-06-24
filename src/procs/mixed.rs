@@ -1283,18 +1283,22 @@ fn build_design(
                 }
             }
             levels.sort_by(|a, b| a.sas_cmp(b));
-            // Drop the last (reference) level.
-            for lvl in levels.iter().take(levels.len().saturating_sub(1)) {
+            // PARAM=REFERENCE coding (last level = reference, dropped).
+            // `coding[li]` is the coding row of level `li`; column `j` is the
+            // indicator of `levels[j]` (j < L−1), so for a data value `v` whose
+            // level index is `li`, the column-`j` value is `coding[li][j]`.
+            let coding = crate::procs::lincom::class_coding(&levels, crate::procs::lincom::Param::Ref);
+            for (j, lvl) in levels.iter().take(levels.len().saturating_sub(1)).enumerate() {
                 let label = format!("{} {}", eff, value_label(lvl));
                 let values: Vec<f64> = col
                     .1
                     .iter()
                     .map(|v| {
-                        if v.sas_cmp(lvl) == std::cmp::Ordering::Equal {
-                            1.0
-                        } else {
-                            0.0
-                        }
+                        let li = levels
+                            .iter()
+                            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+                            .expect("data value must match a deduped level");
+                        coding[li][j]
                     })
                     .collect();
                 design.push(DesignColumn { label, values });

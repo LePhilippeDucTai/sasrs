@@ -344,6 +344,140 @@ fn level_label_value(v: &Value) -> String {
     }
 }
 
+// ───────────────────────── CLASS variable coding ─────────────────────────
+
+/// SAS CLASS-variable parameterization (`PARAM=` option).
+///
+/// Selects how the levels of a CLASS variable are expanded into design
+/// (indicator) columns. The reference cell, where applicable, is the **last**
+/// level in `sas_cmp` order (SAS default), matching the existing reference-cell
+/// coding used by `mixed`/`glimmix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Param {
+    /// `PARAM=REFERENCE` (SAS default for many procs). `L−1` columns of 0/1; the
+    /// indicator of level `i` (`i < L−1`); the reference (last) level is all 0.
+    Ref,
+    /// `PARAM=EFFECT`. `L−1` columns; level `i` (`i < L−1`) → its own 0/1
+    /// indicator; the reference (last) level → `−1` in every column, so each
+    /// column sums to 0 over the levels.
+    Effect,
+    /// `PARAM=GLM`. `L` columns (over-parameterized): one 0/1 indicator per
+    /// level, no reference dropped. Each level's row has exactly one `1`.
+    Glm,
+    /// `PARAM=POLY`. `L−1` columns of orthogonal polynomials of degrees `1..=L−1`
+    /// evaluated on the equally-spaced integer scores `1, 2, …, L` of the levels
+    /// (in `sas_cmp` order). Column 0 is the linear trend; columns are pairwise
+    /// orthogonal. (See [`poly_coding`] for the exact normalization.)
+    Poly,
+}
+
+/// Build the CLASS-variable coding matrix for `levels`, parameterized by `param`.
+///
+/// **Precondition:** `levels` must already be the distinct levels of the CLASS
+/// variable in `sas_cmp` order (deduped + sorted by the caller). This function
+/// does NOT reorder — for [`Param::Ref`] / [`Param::Effect`] the reference cell
+/// is taken to be the LAST element. Ordering is the caller's responsibility
+/// (reuse `Value::sas_cmp`, never raw string compares).
+///
+/// Returns one row per level (same order as `levels`); each row is that level's
+/// coding (indicator/contrast) values. The number of columns depends on `param`:
+/// `Ref`/`Effect`/`Poly` → `L−1`; `Glm` → `L` (where `L = levels.len()`). With
+/// `L == 0` the result is empty; with `L == 1`, `Ref`/`Effect`/`Poly` yield one
+/// empty row and `Glm` yields `[[1.0]]`.
+pub fn class_coding(levels: &[Value], param: Param) -> Vec<Vec<f64>> {
+    let l = levels.len();
+    match param {
+        Param::Ref => {
+            // L−1 columns; row i = unit vector e_i for i<L−1, reference (last) = 0.
+            let ncol = l.saturating_sub(1);
+            (0..l)
+                .map(|i| {
+                    let mut row = vec![0.0; ncol];
+                    if i < ncol {
+                        row[i] = 1.0;
+                    }
+                    row
+                })
+                .collect()
+        }
+        Param::Effect => {
+            // L−1 columns; row i = e_i for i<L−1, reference (last) = all −1.
+            let ncol = l.saturating_sub(1);
+            (0..l)
+                .map(|i| {
+                    if i < ncol {
+                        let mut row = vec![0.0; ncol];
+                        row[i] = 1.0;
+                        row
+                    } else {
+                        vec![-1.0; ncol]
+                    }
+                })
+                .collect()
+        }
+        Param::Glm => {
+            // L columns; row i = unit vector e_i (one indicator per level).
+            (0..l)
+                .map(|i| {
+                    let mut row = vec![0.0; l];
+                    row[i] = 1.0;
+                    row
+                })
+                .collect()
+        }
+        Param::Poly => poly_coding(l),
+    }
+}
+
+/// Orthogonal-polynomial coding on equally-spaced integer scores `1..=L`.
+///
+/// Produces `L` rows (one per level, in score order `1, 2, …, L`) of `L−1`
+/// columns; column `d−1` holds the degree-`d` orthogonal polynomial
+/// (`d = 1..=L−1`) evaluated at the scores, built by Gram–Schmidt of the power
+/// basis `{1, x, x², …}` against the constant. Each contrast vector is scaled to
+/// unit length (Euclidean norm 1), so columns are orthonormal; column 0 is the
+/// monotone linear trend. (`L ≤ 1` → no contrast columns.)
+fn poly_coding(l: usize) -> Vec<Vec<f64>> {
+    if l == 0 {
+        return Vec::new();
+    }
+    let ncol = l - 1;
+    // Scores x_k = k+1 (1-based), as f64.
+    let x: Vec<f64> = (0..l).map(|k| (k + 1) as f64).collect();
+    // Orthogonal basis vectors, starting with the constant (degree 0), which we
+    // keep only to orthogonalize against (it is NOT emitted as a column).
+    let mut basis: Vec<Vec<f64>> = Vec::with_capacity(ncol + 1);
+    basis.push(vec![1.0; l]); // degree 0 (constant)
+    for deg in 1..=ncol {
+        // Raw power vector x^deg.
+        let mut v: Vec<f64> = x.iter().map(|&xi| xi.powi(deg as i32)).collect();
+        // Gram–Schmidt against all previous (orthogonal) basis vectors.
+        for u in &basis {
+            let uu: f64 = u.iter().map(|&a| a * a).sum();
+            if uu == 0.0 {
+                continue;
+            }
+            let uv: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| a * b).sum();
+            let coef = uv / uu;
+            for (vi, &ui) in v.iter_mut().zip(u.iter()) {
+                *vi -= coef * ui;
+            }
+        }
+        // Normalize to unit length.
+        let norm: f64 = v.iter().map(|&a| a * a).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            for vi in v.iter_mut() {
+                *vi /= norm;
+            }
+        }
+        basis.push(v);
+    }
+    // Emit rows: row k = (col_1[k], …, col_{L-1}[k]); skip basis[0] (constant).
+    (0..l)
+        .map(|k| basis[1..].iter().map(|col| col[k]).collect())
+        .collect()
+}
+
 // ───────────────────────── Tests ─────────────────────────
 
 #[cfg(test)]
@@ -439,5 +573,110 @@ mod tests {
     fn test_lsmeans_unknown_effect() {
         let eng = engine_ab();
         assert!(eng.lsmeans("nope").is_empty());
+    }
+
+    // ─────────────────────── class_coding ───────────────────────
+
+    fn levels(names: &[&str]) -> Vec<Value> {
+        names.iter().map(|s| Value::Char((*s).into())).collect()
+    }
+
+    /// Ref coding must reproduce the manual reference-cell layout (last = ref).
+    #[test]
+    fn test_class_coding_ref_matches_manual() {
+        let lv = levels(&["A", "B", "C"]); // already sas_cmp order
+        let coding = class_coding(&lv, Param::Ref);
+        // 3 rows, 2 columns each.
+        assert_eq!(coding, vec![
+            vec![1.0, 0.0], // A
+            vec![0.0, 1.0], // B
+            vec![0.0, 0.0], // C = reference
+        ]);
+        // Manual oracle: column j is the indicator of levels[j] (j < L−1).
+        let l = lv.len();
+        for (li, _) in lv.iter().enumerate() {
+            for j in 0..l - 1 {
+                let manual = if li == j { 1.0 } else { 0.0 };
+                assert_eq!(coding[li][j], manual, "li={li} j={j}");
+            }
+        }
+    }
+
+    /// Effect coding: reference (last) = −1 everywhere ⇒ each column sums to 0.
+    #[test]
+    fn test_class_coding_effect_columns_sum_to_zero() {
+        let lv = levels(&["A", "B", "C", "D"]);
+        let coding = class_coding(&lv, Param::Effect);
+        assert_eq!(coding.len(), 4);
+        let ncol = lv.len() - 1;
+        for row in &coding {
+            assert_eq!(row.len(), ncol);
+        }
+        // Last row all −1.
+        assert_eq!(coding[3], vec![-1.0, -1.0, -1.0]);
+        // Each column sums to 0.
+        for j in 0..ncol {
+            let s: f64 = coding.iter().map(|r| r[j]).sum();
+            assert!(s.abs() < 1e-12, "col {j} sum = {s}");
+        }
+    }
+
+    /// Glm coding: L columns, exactly one 1 per row, rest 0.
+    #[test]
+    fn test_class_coding_glm_one_hot() {
+        let lv = levels(&["A", "B", "C"]);
+        let coding = class_coding(&lv, Param::Glm);
+        assert_eq!(coding.len(), 3);
+        for (i, row) in coding.iter().enumerate() {
+            assert_eq!(row.len(), 3, "L columns");
+            let ones: Vec<usize> = row.iter().enumerate().filter(|&(_, &v)| v == 1.0).map(|(k, _)| k).collect();
+            assert_eq!(ones, vec![i], "row {i} must be one-hot at i");
+            let sum: f64 = row.iter().sum();
+            assert_eq!(sum, 1.0);
+        }
+    }
+
+    /// Poly coding: L−1 columns, pairwise orthogonal, col 0 = linear trend.
+    #[test]
+    fn test_class_coding_poly_orthogonal() {
+        let lv = levels(&["A", "B", "C", "D", "E"]); // L = 5
+        let coding = class_coding(&lv, Param::Poly);
+        let l = lv.len();
+        let ncol = l - 1;
+        assert_eq!(coding.len(), l);
+        for row in &coding {
+            assert_eq!(row.len(), ncol);
+        }
+        // Pairwise orthogonality (and orthogonality to the constant).
+        for a in 0..ncol {
+            let dot_const: f64 = (0..l).map(|k| coding[k][a]).sum();
+            assert!(dot_const.abs() < 1e-9, "col {a} not orthogonal to constant: {dot_const}");
+            for b in (a + 1)..ncol {
+                let dot: f64 = (0..l).map(|k| coding[k][a] * coding[k][b]).sum();
+                assert!(dot.abs() < 1e-9, "cols {a},{b} not orthogonal: {dot}");
+            }
+            // Unit norm (orthonormal).
+            let nn: f64 = (0..l).map(|k| coding[k][a] * coding[k][a]).sum();
+            assert!((nn - 1.0).abs() < 1e-9, "col {a} not unit norm: {nn}");
+        }
+        // Column 0 is the linear trend: strictly monotone with equal spacing.
+        let col0: Vec<f64> = (0..l).map(|k| coding[k][0]).collect();
+        let step = col0[1] - col0[0];
+        assert!(step > 0.0, "linear trend must increase: step={step}");
+        for k in 1..l {
+            assert!((col0[k] - col0[k - 1] - step).abs() < 1e-9, "col0 not equally spaced at {k}");
+        }
+    }
+
+    /// Degenerate sizes.
+    #[test]
+    fn test_class_coding_edge_sizes() {
+        assert!(class_coding(&[], Param::Ref).is_empty());
+        assert!(class_coding(&[], Param::Glm).is_empty());
+        let one = levels(&["X"]);
+        assert_eq!(class_coding(&one, Param::Ref), vec![vec![] as Vec<f64>]);
+        assert_eq!(class_coding(&one, Param::Effect), vec![vec![] as Vec<f64>]);
+        assert_eq!(class_coding(&one, Param::Poly), vec![vec![] as Vec<f64>]);
+        assert_eq!(class_coding(&one, Param::Glm), vec![vec![1.0]]);
     }
 }

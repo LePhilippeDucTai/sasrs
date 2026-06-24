@@ -894,7 +894,7 @@ Restent 🔴 documentés : `X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYS
 Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de GLM puis ajouts testés.
 - [x] M37.1 — Extraire de `glm.rs` un `src/procs/lincom.rs` : `LinCombEngine { beta, cov, coding, df }`
   → `estimate(L,c)`, `contrast(L,c)`, `lsmeans(effect)` ; GLM rebranché **octet-identique** (Opus, élevé)
-- [ ] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
+- [x] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
   `reference_coding` de `mixed.rs`/`glimmix.rs`) ; oracle : PARAM=REF = coding actuel, somme effect=0 (Opus, moyen)
 - [ ] M37.3 — `score_test(U,I)` + promotion `digamma`/ajout `trigamma` dans `stat/dists.rs` (re-export
   côté DATA step) ; oracles ψ(1)=−γ, ψ(x+1)−ψ(x)=1/x, ψ′(1)=π²/6 (Opus, moyen)
