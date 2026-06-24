@@ -6,7 +6,8 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M37 (Phase G)**. M1–M36 terminés (Phase F M35–M36 : complétion du langage macro +
+Jalon courant : **M38 (Phase G)**. M1–M37 terminés (Phase G M37 : moteur linéaire partagé
+`lincom` — `LinCombEngine`, `class_coding(Param)`, `score_test`, digamma/trigamma). M1–M36 (Phase F M35–M36 : complétion du langage macro +
 `PROC REG` totale ; Phase E M31–M34 :
 refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
 **statistiques/modélisation** — CORR/TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/
@@ -896,9 +897,9 @@ Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de G
   → `estimate(L,c)`, `contrast(L,c)`, `lsmeans(effect)` ; GLM rebranché **octet-identique** (Opus, élevé)
 - [x] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
   `reference_coding` de `mixed.rs`/`glimmix.rs`) ; oracle : PARAM=REF = coding actuel, somme effect=0 (Opus, moyen)
-- [ ] M37.3 — `score_test(U,I)` + promotion `digamma`/ajout `trigamma` dans `stat/dists.rs` (re-export
+- [x] M37.3 — `score_test(U,I)` + promotion `digamma`/ajout `trigamma` dans `stat/dists.rs` (re-export
   côté DATA step) ; oracles ψ(1)=−γ, ψ(x+1)−ψ(x)=1/x, ψ′(1)=π²/6 (Opus, moyen)
-- [ ] DoD M37 : `lincom.rs` créé, GLM octet-identique, digamma/trigamma testés ; pointeur → M38.
+- [x] DoD M37 : `lincom.rs` créé, GLM octet-identique, digamma/trigamma testés ; pointeur → M38.
 
 ## M38 — Langage global + ODS capture/sélection
 Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS SELECT/EXCLUDE+OUTPUT.

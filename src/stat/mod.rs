@@ -44,6 +44,8 @@ pub use dists::{
     t_quantile,
     gamma_cdf, gamma_quantile,
     beta_cdf, beta_quantile,
+    // Ajout M37.3 : digamma ψ et trigamma ψ′
+    digamma, trigamma,
 };
 
 pub use linalg::{

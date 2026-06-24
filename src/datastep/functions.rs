@@ -797,7 +797,28 @@ fn fn_digamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
                     ctx.invalid_data += 1;
                     return Value::missing();
                 }
-                let result = digamma_approx(x);
+                let result = crate::stat::digamma(x);
+                Value::Num(result)
+            }
+        },
+    }
+}
+
+/// TRIGAMMA(x): trigamma ψ′(x) = d²/dx² log Γ(x).
+/// x ≤ 0 integer → missing + error (mirrors DIGAMMA's pole handling).
+fn fn_trigamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => {
+                // Check if x <= 0 and integer
+                if x <= 0.0 && x.fract() == 0.0 {
+                    ctx.error_flag = true;
+                    ctx.invalid_data += 1;
+                    return Value::missing();
+                }
+                let result = crate::stat::trigamma(x);
                 Value::Num(result)
             }
         },
@@ -1031,24 +1052,6 @@ fn lgamma_approx(x: f64) -> f64 {
         x_minus_half * x.ln() - x + 0.5 * ln_2pi
             + 1.0 / (12.0 * x)
             - 1.0 / (360.0 * x * x * x)
-    }
-}
-
-/// Digamma approximation using Stirling's derivative.
-/// ψ(x) = d/dx ln Γ(x) ≈ ln(x) - 1/(2x) - 1/(12x^2) + 1/(120x^4) - ...
-fn digamma_approx(x: f64) -> f64 {
-    if x < 0.5 {
-        // Use reflection formula: ψ(x) = -ψ(1-x) - π/tan(πx)
-        let pi = std::f64::consts::PI;
-        -digamma_approx(1.0 - x) - pi / (pi * x).tan()
-    } else if x < 1.5 {
-        // Use recursion: ψ(x+1) = ψ(x) + 1/x
-        digamma_approx(x + 1.0) - 1.0 / x
-    } else {
-        // Asymptotic expansion
-        let ln_x = x.ln();
-        let inv_x = 1.0 / x;
-        ln_x - 0.5 * inv_x - inv_x * inv_x / 12.0 + inv_x * inv_x * inv_x / 120.0
     }
 }
 
@@ -3598,6 +3601,7 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("GAMMA", fn_gamma),
     ("LGAMMA", fn_lgamma),
     ("DIGAMMA", fn_digamma),
+    ("TRIGAMMA", fn_trigamma),
     ("BETA", fn_beta),
     ("ROUNDZ", fn_roundz),
     ("RANGE", fn_range),
@@ -4380,6 +4384,24 @@ mod tests {
     fn digamma_zero_integer() {
         let mut c = ctx();
         let r = invoke_ctx("DIGAMMA", &[num(0.0)], &mut c);
+        assert_eq!(r, miss());
+        assert!(c.error_flag);
+    }
+
+    // ── TRIGAMMA ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trigamma_one() {
+        // ψ′(1) = π²/6 ≈ 1.6449340668.
+        let result = invoke("TRIGAMMA", &[num(1.0)]);
+        let val = coerce_num(&result, &mut ctx()).unwrap();
+        assert!((val - 1.6449340668).abs() < 0.001);
+    }
+
+    #[test]
+    fn trigamma_zero_integer() {
+        let mut c = ctx();
+        let r = invoke_ctx("TRIGAMMA", &[num(0.0)], &mut c);
         assert_eq!(r, miss());
         assert!(c.error_flag);
     }

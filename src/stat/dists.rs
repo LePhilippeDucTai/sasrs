@@ -620,6 +620,71 @@ pub fn beta_quantile(p: f64, alpha: f64, beta: f64) -> f64 {
     )
 }
 
+/// ─────────────────────────── M37.3 additions ───────────────────────────
+
+/// Digamma function ψ(x) = d/dx ln Γ(x).
+///
+/// Promoted verbatim (M37.3) from the DATA-step `digamma_approx` so that the
+/// `DIGAMMA` SAS function stays **byte-identical**: same branch thresholds, same
+/// asymptotic expression and exact operation order. The pole handling for
+/// non-positive integers is the caller's responsibility (see `fn_digamma`),
+/// matching the previous split.
+///
+/// ψ(x) ≈ ln(x) - 1/(2x) - 1/(12x²) + 1/(120x³)  (asymptotic, as historically
+/// written), with the reflection formula below 0.5 and one recursion step in
+/// [0.5, 1.5).
+pub fn digamma(x: f64) -> f64 {
+    if x < 0.5 {
+        // Use reflection formula: ψ(x) = -ψ(1-x) - π/tan(πx)
+        let pi = std::f64::consts::PI;
+        -digamma(1.0 - x) - pi / (pi * x).tan()
+    } else if x < 1.5 {
+        // Use recursion: ψ(x+1) = ψ(x) + 1/x
+        digamma(x + 1.0) - 1.0 / x
+    } else {
+        // Asymptotic expansion
+        let ln_x = x.ln();
+        let inv_x = 1.0 / x;
+        ln_x - 0.5 * inv_x - inv_x * inv_x / 12.0 + inv_x * inv_x * inv_x / 120.0
+    }
+}
+
+/// Trigamma function ψ′(x) = d²/dx² ln Γ(x) = Σ_{k≥0} 1/(x+k)².
+///
+/// New in M37.3 (no byte-identity constraint, so this targets ~1e-12). Strategy:
+/// - For x < 0.5 use the reflection formula ψ′(1−x) + ψ′(x) = π²/sin²(πx).
+/// - Otherwise push x above a threshold via the recurrence
+///   ψ′(x) = ψ′(x+1) + 1/x², then apply the asymptotic series
+///   ψ′(z) ≈ 1/z + 1/(2z²) + 1/(6z³) − 1/(30z⁵) + 1/(42z⁷).
+///
+/// The pole at non-positive integers is handled by the caller (`fn_trigamma`),
+/// mirroring `digamma` / `fn_digamma`.
+pub fn trigamma(x: f64) -> f64 {
+    if x < 0.5 {
+        // Reflection: ψ′(x) = π²/sin²(πx) − ψ′(1−x).
+        let pi = std::f64::consts::PI;
+        let s = (pi * x).sin();
+        pi * pi / (s * s) - trigamma(1.0 - x)
+    } else {
+        // Recurrence: accumulate 1/z² while pushing z up to the threshold.
+        let mut z = x;
+        let mut acc = 0.0;
+        while z < 12.0 {
+            acc += 1.0 / (z * z);
+            z += 1.0;
+        }
+        // Asymptotic expansion at z (≥ 12): 1/z + 1/(2z²) + 1/(6z³) − 1/(30z⁵) + 1/(42z⁷).
+        let inv = 1.0 / z;
+        let inv2 = inv * inv;
+        let asymp = inv
+            + 0.5 * inv2
+            + inv2 * inv / 6.0
+            - inv2 * inv2 * inv / 30.0
+            + inv2 * inv2 * inv2 * inv / 42.0;
+        acc + asymp
+    }
+}
+
 /// Generic Newton-Raphson root finder for `cdf(x) = p` on the open interval
 /// (lo, hi), with bisection fallback for robustness. `cdf` must be a strictly
 /// increasing CDF and `pdf` its derivative. Bracket is maintained from the
@@ -888,5 +953,53 @@ mod tests {
         // Quantile stays within [0,1].
         let q = beta_quantile(0.99, 2.0, 8.0);
         assert!((0.0..=1.0).contains(&q));
+    }
+
+    // ─────────────────────── digamma / trigamma (M37.3) ───────────────────────
+
+    const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+
+    // NOTE: `digamma` is the byte-identical legacy DATA-step algorithm (truncated
+    // asymptotic series + single recursion step), accurate only to ~few·1e-4.
+    // Tolerances below reflect that, NOT a more precise expansion.
+    #[test]
+    fn test_digamma_at_one() {
+        // ψ(1) = −γ.
+        assert!(approx(digamma(1.0), -EULER_GAMMA, 1e-3), "digamma(1)={}", digamma(1.0));
+    }
+
+    #[test]
+    fn test_digamma_recurrence() {
+        // ψ(x+1) − ψ(x) = 1/x (exact in theory; the truncated series introduces
+        // a small numeric residual).
+        for &x in &[2.5_f64, 7.0, 0.75, 13.2] {
+            let lhs = digamma(x + 1.0) - digamma(x);
+            assert!(approx(lhs, 1.0 / x, 1e-3), "x={x}: {lhs} vs {}", 1.0 / x);
+        }
+    }
+
+    // `trigamma` is the new high-accuracy implementation (~1e-9 or better).
+    #[test]
+    fn test_trigamma_at_one() {
+        // ψ′(1) = π²/6.
+        let pi2_6 = std::f64::consts::PI * std::f64::consts::PI / 6.0;
+        assert!(approx(trigamma(1.0), pi2_6, 1e-8), "trigamma(1)={}", trigamma(1.0));
+    }
+
+    #[test]
+    fn test_trigamma_recurrence() {
+        // ψ′(x) − ψ′(x+1) = 1/x².
+        for &x in &[2.5_f64, 7.0, 0.75, 13.2, 0.3] {
+            let lhs = trigamma(x) - trigamma(x + 1.0);
+            assert!(approx(lhs, 1.0 / (x * x), 1e-8), "x={x}: {lhs} vs {}", 1.0 / (x * x));
+        }
+    }
+
+    #[test]
+    fn test_trigamma_known_values() {
+        // ψ′(2) = π²/6 − 1; ψ′(0.5) = π²/2.
+        let pi = std::f64::consts::PI;
+        assert!(approx(trigamma(2.0), pi * pi / 6.0 - 1.0, 1e-8), "trigamma(2)={}", trigamma(2.0));
+        assert!(approx(trigamma(0.5), pi * pi / 2.0, 1e-8), "trigamma(0.5)={}", trigamma(0.5));
     }
 }

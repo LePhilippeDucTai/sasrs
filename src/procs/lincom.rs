@@ -29,7 +29,8 @@
 //! The `coding` describes the reference-cell dummy layout of the fitted design
 //! so that LS-means estimable functions can be rebuilt the same way GLM did.
 
-use crate::stat::{f_cdf, student_t_cdf};
+use crate::stat::{chisq_cdf, f_cdf, student_t_cdf};
+use crate::stat::linalg::invert_matrix;
 use crate::value::Value;
 
 /// Reference-cell coding layout of a fitted multiway GLM design.
@@ -341,6 +342,63 @@ fn level_label_value(v: &Value) -> String {
         Value::Char(s) => s.trim_end().to_string(),
         Value::Num(f) => format!("{f}"),
         Value::Missing(k) => k.display(),
+    }
+}
+
+// ───────────────────────── Rao score (Lagrange-multiplier) test ─────────────────────────
+
+/// Result of a Rao score (Lagrange-multiplier) test.
+#[derive(Debug, Clone)]
+pub struct ScoreTest {
+    /// Score statistic χ² = Uᵀ I⁻¹ U.
+    pub chi_square: f64,
+    /// Degrees of freedom = length of the score vector U.
+    pub df: f64,
+    /// Pr > χ² (None when the information matrix is singular / χ² is NaN).
+    pub p: Option<f64>,
+}
+
+/// Rao score (Lagrange-multiplier) test statistic `χ² = Uᵀ I⁻¹ U`.
+///
+/// `u` is the score (gradient of the log-likelihood) evaluated under the null,
+/// `info` the corresponding (expected or observed) Fisher information matrix.
+/// Degrees of freedom equal the length of `u`. The χ² tail probability is
+/// computed from the already-available [`chisq_cdf`].
+///
+/// The matrix inversion reuses [`invert_matrix`]; when `info` is singular (or
+/// dimensions are inconsistent) the test degrades gracefully to
+/// `chi_square = NaN`, `p = None`.
+pub fn score_test(u: &[f64], info: &[Vec<f64>]) -> ScoreTest {
+    let k = u.len();
+    let df = k as f64;
+    // Dimension sanity: square info matching u.
+    let dims_ok = info.len() == k && info.iter().all(|r| r.len() == k);
+    let inv = if dims_ok { invert_matrix(info).ok() } else { None };
+    let chi_square = match inv {
+        Some(inv) => {
+            // Quadratic form Uᵀ I⁻¹ U, mirroring quad_form's accumulation shape.
+            let mut q = 0.0;
+            for a in 0..k {
+                if u[a] == 0.0 {
+                    continue;
+                }
+                for (b, invb) in inv[a].iter().enumerate().take(k) {
+                    q += u[a] * invb * u[b];
+                }
+            }
+            q
+        }
+        None => f64::NAN,
+    };
+    let p = if chi_square.is_nan() || k == 0 {
+        None
+    } else {
+        Some((1.0 - chisq_cdf(chi_square, df)).clamp(0.0, 1.0))
+    };
+    ScoreTest {
+        chi_square,
+        df,
+        p,
     }
 }
 
@@ -678,5 +736,51 @@ mod tests {
         assert_eq!(class_coding(&one, Param::Effect), vec![vec![] as Vec<f64>]);
         assert_eq!(class_coding(&one, Param::Poly), vec![vec![] as Vec<f64>]);
         assert_eq!(class_coding(&one, Param::Glm), vec![vec![1.0]]);
+    }
+
+    // ─────────────────────── score_test (Rao) ───────────────────────
+
+    fn identity(k: usize) -> Vec<Vec<f64>> {
+        (0..k)
+            .map(|i| (0..k).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+            .collect()
+    }
+
+    /// I = identity ⇒ χ² = Σ uᵢ², df = k.
+    #[test]
+    fn test_score_identity() {
+        let u = vec![1.0, -2.0, 3.0];
+        let st = score_test(&u, &identity(3));
+        assert!((st.chi_square - (1.0 + 4.0 + 9.0)).abs() < 1e-12, "chi2={}", st.chi_square);
+        assert_eq!(st.df, 3.0);
+        let p = st.p.unwrap();
+        assert!((0.0..=1.0).contains(&p));
+        // χ²=14 on 3 df → p ≈ 0.0029.
+        assert!((p - 0.0029074).abs() < 1e-4, "p={p}");
+    }
+
+    /// Hand-checked 2×2: I = [[2,1],[1,2]] (det=3), I⁻¹ = (1/3)[[2,-1],[-1,2]].
+    /// U = [1, 0] ⇒ χ² = Uᵀ I⁻¹ U = inv[0][0] = 2/3.
+    #[test]
+    fn test_score_2x2() {
+        let u = vec![1.0, 0.0];
+        let info = vec![vec![2.0, 1.0], vec![1.0, 2.0]];
+        let st = score_test(&u, &info);
+        assert!((st.chi_square - 2.0 / 3.0).abs() < 1e-10, "chi2={}", st.chi_square);
+        assert_eq!(st.df, 2.0);
+        // Full U = [1, 2]: Uᵀ I⁻¹ U = (1/3)(2·1 −1·2 −2·1 +2·4) = (1/3)(2−2−2+8)=2.
+        let st2 = score_test(&[1.0, 2.0], &info);
+        assert!((st2.chi_square - 2.0).abs() < 1e-10, "chi2={}", st2.chi_square);
+    }
+
+    /// Singular information ⇒ NaN statistic, p = None.
+    #[test]
+    fn test_score_singular() {
+        let u = vec![1.0, 1.0];
+        let info = vec![vec![1.0, 1.0], vec![1.0, 1.0]]; // rank 1
+        let st = score_test(&u, &info);
+        assert!(st.chi_square.is_nan());
+        assert!(st.p.is_none());
+        assert_eq!(st.df, 2.0);
     }
 }
