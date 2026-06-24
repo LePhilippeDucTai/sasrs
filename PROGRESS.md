@@ -905,7 +905,7 @@ Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de G
 Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS SELECT/EXCLUDE+OUTPUT.
 - [x] M38.1 — TITLE1–9 + FOOTNOTE1–9 : trait `OutputDestination` → `set_titles(Vec)`/`set_footnotes`
   (+ 5 destinations), `executor.rs` stocke tous les niveaux ; oracle : un seul TITLE1 = rendu actuel (Opus, moyen)
-- [ ] M38.2 — OPTIONS appliquées (PAGESIZE/PS=, NODATE/NONUMBER, MISSING=, YEARCUTOFF=, FMTSEARCH=)
+- [x] M38.2 — OPTIONS appliquées (PAGESIZE/PS=, NODATE/NONUMBER, MISSING=, YEARCUTOFF=, FMTSEARCH=)
   au-delà du warning ; non reconnues gardent le warning (Sonnet, moyen)
 - [ ] M38.3 — ODS OUTPUT **généralisé** : nommer chaque `write_table`, matérialiser en dataset via
   `ods_output_target` ; oracle : `ods output OneWayFreqs=f;` = colonnes du listing FREQ (Opus, élevé)

@@ -436,6 +436,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             hashes: hash_objects,
             hash_iters,
             format_catalog: session.format_catalog.clone(),
+            yearcutoff: session.options.yearcutoff,
             ..EvalCtx::default()
         },
         outputs,
@@ -714,6 +715,7 @@ fn build_um_runner(
     by: &[ByVar],
     macro_symbols: HashMap<String, String>,
     format_catalog: crate::formats::FormatCatalog,
+    yearcutoff: u16,
 ) -> Runner {
     let builders: Vec<Vec<ColBuilder>> = outputs
         .iter()
@@ -748,6 +750,7 @@ fn build_um_runner(
             by_flags,
             macro_symbols,
             format_catalog,
+            yearcutoff,
             ..EvalCtx::default()
         },
         outputs,
@@ -932,6 +935,7 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         &upd.by,
         macro_symbols,
         format_catalog,
+        session.options.yearcutoff,
     );
 
     for (slot, v) in initial_values {
@@ -1079,7 +1083,7 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
 
     let macro_symbols = session.macro_engine.symbols_snapshot();
     let format_catalog = session.format_catalog.clone();
-    let mut r = build_um_runner(pdv, outputs, arrays, labels, &[], macro_symbols, format_catalog);
+    let mut r = build_um_runner(pdv, outputs, arrays, labels, &[], macro_symbols, format_catalog, session.options.yearcutoff);
 
     for (slot, v) in initial_values {
         r.pdv.set(slot, v);

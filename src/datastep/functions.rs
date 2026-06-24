@@ -2564,9 +2564,15 @@ fn fn_datejul(args: &[Value], ctx: &mut EvalCtx) -> Value {
         ctx.error_flag = true;
         return Value::missing();
     }
-    // Interprétation de l'année à 2 chiffres : 0–99 → 1900–1999, 100–199 → 2000–2099.
+    // Interprétation de l'année à 2 chiffres via la fenêtre glissante YEARCUTOFF.
+    // La fenêtre : pour yy (0..99), base = (yearcutoff / 100) * 100 ;
+    // si base + yy < yearcutoff alors base += 100. Avec yearcutoff=1900
+    // (défaut) cela donne 0–99 → 1900–1999, identique à l'ancien code en dur.
     let year = if year_part < 100 {
-        1900 + year_part
+        let cutoff = ctx.yearcutoff as i64;
+        let base = (cutoff / 100) * 100;
+        let candidate = base + year_part;
+        if candidate < cutoff { candidate + 100 } else { candidate }
     } else if year_part < 200 {
         2000 + (year_part - 100)
     } else {

@@ -111,6 +111,10 @@ pub struct EvalCtx {
     /// informats utilisateur. L'évaluateur n'a pas accès à `Session`, donc
     /// on passe le catalogue ici au début de chaque étape DATA.
     pub format_catalog: crate::formats::FormatCatalog,
+    /// M38.2 — YEARCUTOFF= mirrored from `session.options.yearcutoff`.
+    /// Used by date functions (e.g. DATEJUL) to interpret 2-digit years.
+    /// Default 1900 preserves the pre-M38.2 behaviour (0–99 → 1900–1999).
+    pub yearcutoff: u16,
 }
 
 /// Une sortie de hash en attente (M17.2). `vars` porte les `VarMeta` des
@@ -150,6 +154,7 @@ impl Default for EvalCtx {
             hash_iters: HashMap::new(),
             hash_outputs: Vec::new(),
             format_catalog: crate::formats::FormatCatalog::default(),
+            yearcutoff: 1900,
         }
     }
 }

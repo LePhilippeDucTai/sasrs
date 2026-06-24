@@ -225,6 +225,8 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
     // Take a shared reference to the session's format catalog for formatting.
     // All cell formatting is done here, before any &mut session use below.
     let cat = &session.format_catalog;
+    // M38.2 — MISSING= : character for ordinary numeric missing ('.').
+    let missing_char = session.options.missing_char;
 
     // Décode chaque colonne UNE seule fois (downcast par colonne, jamais
     // par cellule — checklist PLAN.md point 3). On formate à la fois les
@@ -244,6 +246,11 @@ pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
                     match &spec {
                         Some(spec) => cat.format(&v, spec),
                         None => match v {
+                            // Ordinary missing `.` uses the session MISSING= char.
+                            // Special missings keep their SAS suffix (._/.A..Z).
+                            Value::Missing(crate::value::MissingKind::Dot) => {
+                                missing_char.to_string()
+                            }
                             Value::Missing(kind) => kind.display(),
                             Value::Num(f) => format_best(f, 12),
                             Value::Char(_) => unreachable!("num column decoded to char"),

@@ -755,9 +755,20 @@ fn parse_options(ts: &mut StatementStream) -> Result<GlobalStmt> {
         // Check for an `=` (value follows) or just a flag.
         if ts.peek().kind == TokenKind::Eq {
             ts.next(); // consume `=`
-            let val_tok = ts.peek().clone();
-            let value = parse_option_value(ts, &val_tok.span)?;
-            opts.push((name, Some(value)));
+            // FMTSEARCH= and MISSING= accept a parenthesised list `(a b c)`.
+            // We handle this here rather than in `parse_option_value` to avoid
+            // accepting `(` universally for all options.
+            let name_lc = name.to_ascii_lowercase();
+            if (name_lc == "fmtsearch" || name_lc == "missing")
+                && ts.peek().kind == TokenKind::LParen
+            {
+                let value = parse_paren_list(ts)?;
+                opts.push((name, Some(value)));
+            } else {
+                let val_tok = ts.peek().clone();
+                let value = parse_option_value(ts, &val_tok.span)?;
+                opts.push((name, Some(value)));
+            }
         } else {
             // Boolean flag: `nocenter`, `center`, etc.
             opts.push((name, None));
@@ -766,6 +777,43 @@ fn parse_options(ts: &mut StatementStream) -> Result<GlobalStmt> {
 
     ts.expect_semi()?;
     Ok(GlobalStmt::Options(opts))
+}
+
+/// Parse a parenthesised list of identifiers for OPTIONS values such as
+/// `FMTSEARCH=(lib1 lib2)` and `MISSING=(. .)`.
+/// The leading `(` must still be in the stream; it is consumed here.
+/// Returns the identifiers joined by spaces (e.g. `"lib1 lib2"`).
+fn parse_paren_list(ts: &mut StatementStream) -> Result<String> {
+    let lparen = ts.peek().clone();
+    ts.next(); // consume `(`
+    let mut items: Vec<String> = Vec::new();
+    loop {
+        match ts.peek().kind {
+            TokenKind::RParen | TokenKind::Semi | TokenKind::Eof => break,
+            _ => {}
+        }
+        let tok = ts.peek().clone();
+        match tok.ident() {
+            Some(s) => {
+                items.push(s.to_string());
+                ts.next();
+            }
+            None => {
+                return Err(SasError::parse(
+                    "Expected an identifier or ')' inside parenthesised OPTIONS value",
+                    tok.span,
+                ));
+            }
+        }
+    }
+    if ts.peek().kind != TokenKind::RParen {
+        return Err(SasError::parse(
+            "Expected ')' to close parenthesised OPTIONS value",
+            lparen.span,
+        ));
+    }
+    ts.next(); // consume `)`
+    Ok(items.join(" "))
 }
 
 /// Parse the value token after `=` in an OPTIONS pair.
@@ -1128,10 +1176,16 @@ mod tests {
 
     #[test]
     fn options_string_value() {
-        let stmt = parse("options fmtsearch=(mylib) notes='yes';").unwrap_err();
-        // `(` is not a valid option value — we get a parse error.
-        // This sub-test verifies we don't panic.
-        let _ = stmt;
+        // FMTSEARCH= now accepts a parenthesised list — this must parse successfully.
+        let stmt = parse("options fmtsearch=(mylib work);").unwrap();
+        assert_eq!(
+            stmt,
+            GlobalStmt::Options(vec![("fmtsearch".into(), Some("mylib work".into()))])
+        );
+
+        // `(` in any other options value (not FMTSEARCH/MISSING) is still an error.
+        let err = parse("options notes=(yes);").unwrap_err();
+        let _ = err; // just verify no panic
 
         // A proper string value:
         let stmt = parse("options label='My value';").unwrap();

@@ -24,6 +24,27 @@ pub struct SasOptions {
     /// M19.3 — SYMBOLGEN : echo each `&symbol` resolution to the log. Default
     /// OFF.
     pub symbolgen: bool,
+    /// M38.2 — PAGESIZE=/PS= : number of lines per page for the listing output.
+    /// Valid range: 15..=32767. Default 60 (SAS listing default). Currently
+    /// stored only — the listing does not yet paginate; this value is exposed for
+    /// future pagination support.
+    pub pagesize: usize,
+    /// M38.2 — MISSING= : single character displayed in the listing for an
+    /// ordinary numeric missing value (`.`). Default `'.'` (byte-identical to the
+    /// previous hard-coded behaviour). Special missings `.A`..`.Z` and `._` are
+    /// always rendered with their SAS suffix regardless of this option.
+    pub missing_char: char,
+    /// M38.2 — YEARCUTOFF= : lower bound of the 100-year sliding window used
+    /// to interpret 2-digit years. Default **1900** (NOT the SAS 9.4 default of
+    /// 1920) so that the existing DATEJUL logic `0–99 → 1900–1999` is preserved
+    /// byte-for-byte. With yearcutoff=Y, a 2-digit year `yy` maps to the
+    /// century containing Y such that `base + yy >= Y` (sliding window).
+    pub yearcutoff: u16,
+    /// M38.2 — FMTSEARCH= : ordered list of library references / format
+    /// catalogues to search when resolving user-defined formats.  Parsed and
+    /// stored here; actual multi-library resolution arrives in M39.  An empty
+    /// Vec means "use WORK only" (current behaviour).
+    pub fmtsearch: Vec<String>,
 }
 
 impl Default for SasOptions {
@@ -36,6 +57,10 @@ impl Default for SasOptions {
             mprint: false,
             mlogic: false,
             symbolgen: false,
+            pagesize: 60,
+            missing_char: '.',
+            yearcutoff: 1900,
+            fmtsearch: Vec::new(),
         }
     }
 }

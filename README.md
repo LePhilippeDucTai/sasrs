@@ -170,7 +170,7 @@ individual options of each procedure and DATA step statement. Legend:
 | Statement | State | Detail |
 | --- | :---: | --- |
 | `LIBNAME` | ✅ | assign / `CLEAR` (path resolved against the program dir; `s3://` with the `s3` feature) |
-| `OPTIONS` | 🟡 | `LINESIZE`/`LS=` applied; other options parsed with a "not yet supported" warning |
+| `OPTIONS` | 🟡 | applied: `LINESIZE`/`LS=`, `FIRSTOBS=`, `OBS=`, `NODATE`/`NONUMBER`/`NOCENTER`, `MISSING=` (numeric missing char, PROC PRINT), `YEARCUTOFF=` (2-digit year window for date functions), `MPRINT`/`MLOGIC`/`SYMBOLGEN`; stored only: `PAGESIZE`/`PS=` (no pagination yet), `FMTSEARCH=` (multi-catalog resolution pending); other options still parsed with a "not yet supported" warning |
 | `TITLE` | ✅ | `TITLE1`–`TITLE9` rendered (centered, in level order; SAS clearing semantics: `TITLEn 'x'` clears levels above, `TITLEn;` clears `n` and above) across all destinations |
 | `FOOTNOTE` | ✅ | `FOOTNOTE1`–`FOOTNOTE9` rendered (same multi-level clearing semantics as `TITLE`) |
 | `ODS` | ✅ | see Output section |

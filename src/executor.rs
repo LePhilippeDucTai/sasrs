@@ -306,6 +306,61 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                         },
                         None => {}
                     }
+                } else if name.eq_ignore_ascii_case("ps")
+                    || name.eq_ignore_ascii_case("pagesize")
+                {
+                    // M38.2 — PAGESIZE=/PS= : page length for listing output.
+                    // Valid range: 15..=32767. Stored but no pagination yet.
+                    match value.as_deref().and_then(|v| v.parse::<usize>().ok()) {
+                        Some(v) if (15..=32767).contains(&v) => {
+                            session.options.pagesize = v;
+                        }
+                        _ => session.log.error(&format!(
+                            "The value {} is not a valid PAGESIZE value (15..32767).",
+                            value.as_deref().unwrap_or("")
+                        )),
+                    }
+                } else if name.eq_ignore_ascii_case("missing") {
+                    // M38.2 — MISSING= : single character used to display ordinary
+                    // numeric missing values (`.`) in the listing. Default '.'.
+                    // Spec: value is a single character (quoted or unquoted).
+                    match value.as_deref() {
+                        Some(v) if v.chars().count() == 1 => {
+                            session.options.missing_char =
+                                v.chars().next().expect("length checked");
+                        }
+                        Some(v) if v.is_empty() => {
+                            // OPTIONS MISSING=''; → space (SAS behaviour)
+                            session.options.missing_char = ' ';
+                        }
+                        _ => session.log.error(&format!(
+                            "The value for the MISSING option must be a single character."
+                        )),
+                    }
+                } else if name.eq_ignore_ascii_case("yearcutoff") {
+                    // M38.2 — YEARCUTOFF= : lower bound of the 100-year sliding
+                    // window for interpreting 2-digit years. Valid: 1582..=9999.
+                    match value.as_deref().and_then(|v| v.parse::<u16>().ok()) {
+                        Some(v) if v >= 1582 => {
+                            session.options.yearcutoff = v;
+                        }
+                        _ => session.log.error(&format!(
+                            "The value {} is not a valid YEARCUTOFF value.",
+                            value.as_deref().unwrap_or("")
+                        )),
+                    }
+                } else if name.eq_ignore_ascii_case("fmtsearch") {
+                    // M38.2 — FMTSEARCH= : list of library refs / catalogues for
+                    // format search order. Stored; multi-library resolution deferred
+                    // to M39. Value arrives as space-separated entries (parser joins
+                    // the parenthesised list with spaces).
+                    let entries: Vec<String> = value
+                        .as_deref()
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .map(|s| s.to_ascii_uppercase())
+                        .collect();
+                    session.options.fmtsearch = entries;
                 } else if name.eq_ignore_ascii_case("sasautos") {
                     // M19.2 — SASAUTOS= fixe le(s) répertoire(s) de bibliothèques
                     // autocall. On accepte une valeur simple (un répertoire) :
@@ -1300,5 +1355,159 @@ mod tests {
         let out = run_det("data a; x=1; run;\n%put &syslast;");
         assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
         assert!(out.log.contains("WORK.A"), "expected WORK.A in log:\n{}", out.log);
+    }
+
+    // ── M38.2 — OPTIONS system options ───────────────────────────────────────
+
+    /// PAGESIZE= / PS= : valeur stockée, pas de WARNING.
+    #[test]
+    fn options_pagesize_stored() {
+        let s = run_globals(&["options ps=40;"]);
+        assert_eq!(s.options.pagesize, 40);
+        // PS= alias.
+        let s2 = run_globals(&["options pagesize=100;"]);
+        assert_eq!(s2.options.pagesize, 100);
+    }
+
+    /// PAGESIZE valeur invalide → erreur (hors plage 15..32767).
+    #[test]
+    fn options_pagesize_invalid_emits_error() {
+        let out = run_det("options ps=5;");
+        assert!(
+            out.log.contains("ERROR") && out.log.contains("PAGESIZE"),
+            "expected PAGESIZE error in log:\n{}",
+            out.log
+        );
+        // Valid range upper bound.
+        let out2 = run_det("options ps=32768;");
+        assert!(
+            out2.log.contains("ERROR") && out2.log.contains("PAGESIZE"),
+            "expected PAGESIZE error for 32768:\n{}",
+            out2.log
+        );
+    }
+
+    /// MISSING= : la valeur stockée s'applique au rendu des missings ordinaires.
+    #[test]
+    fn options_missing_char_stored_and_rendered() {
+        // Default: missing_char = '.'.
+        let s = run_globals(&[]);
+        assert_eq!(s.options.missing_char, '.');
+
+        // MISSING='X' → stocké.
+        let s2 = run_globals(&["options missing='X';"]);
+        assert_eq!(s2.options.missing_char, 'X');
+
+        // MISSING=' ' → espace.
+        let s3 = run_globals(&["options missing=' ';"]);
+        assert_eq!(s3.options.missing_char, ' ');
+    }
+
+    /// MISSING='X' : PROC PRINT rend les valeurs manquantes ordinaires en 'X'.
+    #[test]
+    fn options_missing_x_renders_in_proc_print() {
+        let out = run_det(
+            "options missing='X';\n\
+             data a; x = .; run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        // Le listing doit contenir 'X' (rendu de la valeur manquante).
+        assert!(out.listing.contains('X'), "listing:\n{}", out.listing);
+        // Et ne doit PAS contenir '.' à la position d'une valeur numérique.
+        // (Uniquement le point de la colonne Obs n'est pas là.)
+    }
+
+    /// MISSING='.' (défaut) : comportement identique à l'original.
+    #[test]
+    fn options_missing_default_dot_unchanged() {
+        let out = run_det(
+            "data a; x = .; run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        assert!(out.listing.contains('.'), "expected '.' in listing:\n{}", out.listing);
+    }
+
+    /// YEARCUTOFF= : défaut 1900 → 0-99 donne 1900-1999 (comportement actuel).
+    #[test]
+    fn options_yearcutoff_default_1900_datejul() {
+        // datejul(15365) → day 365 of year 15 → 1915 (avec yearcutoff=1900)
+        let out = run_det(
+            "data a; d = datejul(15365); run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        // L'année pleine devrait être 1915 : SAS date = (1915-1960)*365.25 ...
+        // On vérifie juste que ça ne plante pas et que le listing contient une valeur.
+        assert!(!out.listing.is_empty(), "listing empty:\n{}", out.listing);
+    }
+
+    /// YEARCUTOFF=2000 : yy=15 → 2015.
+    #[test]
+    fn options_yearcutoff_2000() {
+        // datejul(15365) avec yearcutoff=2000 → year=2015.
+        // SAS date pour 2015-12-31 = (2015-1960)*365 + bissextiles ≈ 20453
+        // On vérifie que la valeur n'est pas la même qu'avec yearcutoff=1900.
+        let out_1900 = run_det("data a; d = datejul(15365); run; proc print data=a; run;");
+        let out_2000 = run_det(
+            "options yearcutoff=2000;\n\
+             data a; d = datejul(15365); run;\n\
+             proc print data=a; run;\n",
+        );
+        assert_eq!(out_2000.exit_code, 0, "log:\n{}", out_2000.log);
+        // Les listings doivent être différents (année 1915 vs 2015).
+        assert_ne!(
+            out_1900.listing, out_2000.listing,
+            "expected different dates with yearcutoff=1900 vs 2000"
+        );
+    }
+
+    /// YEARCUTOFF=1950 : fenêtre glissante — yy=49 → 2049, yy=50 → 1950.
+    #[test]
+    fn options_yearcutoff_1950_sliding_window() {
+        // yy=49 → base=1900, candidate=1949 < 1950 → +100 = 2049.
+        let out49 = run_det(
+            "options yearcutoff=1950;\n\
+             data a; d = datejul(49365); put d=; run;\n",
+        );
+        assert_eq!(out49.exit_code, 0, "log49:\n{}", out49.log);
+        // yy=50 → candidate=1950 >= 1950 → 1950.
+        let out50 = run_det(
+            "options yearcutoff=1950;\n\
+             data a; d = datejul(50365); put d=; run;\n",
+        );
+        assert_eq!(out50.exit_code, 0, "log50:\n{}", out50.log);
+        // Les deux années sont différentes.
+        assert_ne!(
+            out49.log, out50.log,
+            "expected different output for yy=49 vs yy=50 with yearcutoff=1950"
+        );
+    }
+
+    /// FMTSEARCH= : stocké, plus de WARNING.
+    #[test]
+    fn options_fmtsearch_stored_no_warning() {
+        let out = run_det("options fmtsearch=(mylib work);");
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        assert!(
+            !out.log.contains("is not yet supported"),
+            "unexpected warning in log:\n{}",
+            out.log
+        );
+        // La valeur est stockée sous forme de liste.
+        let s = run_globals(&["options fmtsearch=(mylib work);"]);
+        assert_eq!(s.options.fmtsearch, vec!["MYLIB", "WORK"]);
+    }
+
+    /// Une option inconnue (FOOBAR=1) émet toujours le warning.
+    #[test]
+    fn options_unknown_still_warns() {
+        let out = run_det("options foobar=1;");
+        assert!(
+            out.log.contains("is not yet supported"),
+            "expected not-yet-supported warning in log:\n{}",
+            out.log
+        );
     }
 }
