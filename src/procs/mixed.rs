@@ -2168,7 +2168,15 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             vec!["0".into(), "1".into(), fmt4(fit.neg2_start), String::new()],
             vec![
                 "1".into(),
-                fit.iters.to_string(),
+                // The raw Nelder-Mead evaluation total is an implementation detail
+                // that drifts across builds/platforms (and bears no relation to
+                // SAS's Newton-Raphson count). Show it in normal runs, but freeze
+                // it under --deterministic so snapshots stay byte-stable.
+                if session.deterministic {
+                    "1".into()
+                } else {
+                    fit.iters.to_string()
+                },
                 fmt4(fit.neg2ll),
                 "0.00000000".into(),
             ],

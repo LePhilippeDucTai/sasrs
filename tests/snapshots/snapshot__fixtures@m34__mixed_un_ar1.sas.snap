@@ -91,7 +91,7 @@ NOTE: PROCEDURE MIXED used (Total process time):
                      Iteration    Evaluations    -2 Log Like     Criterion
 
                              0              1        35.6468
-                             1            377        33.7934    0.00000000
+                             1              1        33.7934    0.00000000
 
                                    Convergence criteria met.
 
@@ -163,7 +163,7 @@ NOTE: PROCEDURE MIXED used (Total process time):
                    Iteration    Evaluations    -2 Res Log Like     Criterion
 
                            0              1            33.6579
-                           1            228            31.8185    0.00000000
+                           1              1            31.8185    0.00000000
 
                                    Convergence criteria met.
 
