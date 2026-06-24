@@ -655,6 +655,13 @@ pub enum GlobalStmt {
         n: u8,
         text: Option<String>,
     },
+    /// `FOOTNOTEn 'texte';` (N=1..9) — bas-de-page multi-niveaux. Même
+    /// sémantique d'effacement que TITLE (gérée dans l'exécuteur). `text = None`
+    /// pour la forme sans texte (`FOOTNOTEn;`) qui efface.
+    Footnote {
+        n: u8,
+        text: Option<String>,
+    },
     /// Parsed OPTIONS name=value / flag list; unknown options warn.
     Options(Vec<(String, Option<String>)>),
     /// M22.2 — statement `ODS` : ouvre/ferme une destination de sortie.

@@ -72,8 +72,23 @@ pub trait OutputDestination {
     /// Émet une ligne vide.
     fn blank(&mut self);
 
+    /// Pose les titres actifs (TITLE1..TITLE9), dans l'ordre des niveaux, gaps
+    /// retirés. Vide = défaut « The SAS System ».
+    fn set_titles(&mut self, titles: &[String]);
+
+    /// Pose les footnotes actives (FOOTNOTE1..FOOTNOTE9), dans l'ordre des
+    /// niveaux, gaps retirés. Vide = aucune footnote. Implémentation par défaut
+    /// no-op (destinations qui ne rendent pas encore les footnotes).
+    fn set_footnotes(&mut self, _footnotes: &[String]) {}
+
     /// Pose le titre courant (TITLE1). `None` = défaut « The SAS System ».
-    fn set_title(&mut self, title: Option<String>);
+    /// Compatibilité : délègue à [`set_titles`](Self::set_titles).
+    fn set_title(&mut self, title: Option<String>) {
+        match title {
+            None => self.set_titles(&[]),
+            Some(t) => self.set_titles(std::slice::from_ref(&t)),
+        }
+    }
 
     /// Pose la LINESIZE (LS=) servant à centrer la sortie.
     fn set_ls(&mut self, ls: usize);
@@ -156,8 +171,12 @@ impl OutputDestination for TextListing {
         self.inner.blank();
     }
 
-    fn set_title(&mut self, title: Option<String>) {
-        self.inner.title = title;
+    fn set_titles(&mut self, titles: &[String]) {
+        self.inner.titles = titles.to_vec();
+    }
+
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.inner.footnotes = footnotes.to_vec();
     }
 
     fn set_ls(&mut self, ls: usize) {
@@ -171,11 +190,15 @@ impl OutputDestination for TextListing {
     fn into_string(&mut self) -> String {
         // Remplace le writer interne par un writer vide de même LINESIZE et
         // rend la chaîne accumulée. Équivalent à l'ancien `into_string` qui
-        // consommait `self`, mais utilisable derrière un trait object.
+        // consommait `self`, mais utilisable derrière un trait object. Les
+        // titres/footnotes actifs survivent au drain (un proc qui suit les
+        // réutilise tant qu'aucun nouveau statement TITLE/FOOTNOTE ne les change).
         let ls = self.inner.ls;
-        let title = self.inner.title.clone();
+        let titles = self.inner.titles.clone();
+        let footnotes = self.inner.footnotes.clone();
         let mut fresh = ListingWriter::new(ls);
-        fresh.title = title;
+        fresh.titles = titles;
+        fresh.footnotes = footnotes;
         let old = std::mem::replace(&mut self.inner, fresh);
         old.into_string()
     }
@@ -198,7 +221,8 @@ impl OutputDestination for TextListing {
 ///   `Some((path, html_complet))`.
 pub struct HtmlDestination {
     buf: String,
-    title: Option<String>,
+    titles: Vec<String>,
+    footnotes: Vec<String>,
     ls: usize,
     file: Option<std::path::PathBuf>,
     wrote_anything: bool,
@@ -209,7 +233,8 @@ impl HtmlDestination {
     pub fn new(ls: usize) -> Self {
         HtmlDestination {
             buf: String::new(),
-            title: None,
+            titles: Vec::new(),
+            footnotes: Vec::new(),
             ls,
             file: None,
             wrote_anything: false,
@@ -220,7 +245,8 @@ impl HtmlDestination {
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         HtmlDestination {
             buf: String::new(),
-            title: None,
+            titles: Vec::new(),
+            footnotes: Vec::new(),
             ls,
             file: Some(file),
             wrote_anything: false,
@@ -241,14 +267,19 @@ impl HtmlDestination {
 
 impl OutputDestination for HtmlDestination {
     fn page_header(&mut self) {
-        let title = self
-            .title
-            .clone()
-            .unwrap_or_else(|| "The SAS System".to_string());
-        self.buf.push_str(&format!(
-            "<h1 class=\"systitle\">{}</h1>\n",
-            Self::html_escape(&title)
-        ));
+        if self.titles.is_empty() {
+            self.buf.push_str(&format!(
+                "<h1 class=\"systitle\">{}</h1>\n",
+                Self::html_escape("The SAS System")
+            ));
+        } else {
+            for t in &self.titles {
+                self.buf.push_str(&format!(
+                    "<h1 class=\"systitle\">{}</h1>\n",
+                    Self::html_escape(t)
+                ));
+            }
+        }
         self.wrote_anything = true;
     }
 
@@ -295,8 +326,12 @@ impl OutputDestination for HtmlDestination {
         // no-op : les paragraphes HTML séparent naturellement le contenu.
     }
 
-    fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
+    fn set_titles(&mut self, titles: &[String]) {
+        self.titles = titles.to_vec();
+    }
+
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.footnotes = footnotes.to_vec();
     }
 
     fn set_ls(&mut self, ls: usize) {
@@ -315,6 +350,13 @@ impl OutputDestination for HtmlDestination {
     fn into_string(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
+        }
+        // Footnotes actives rendues en bas du document.
+        for f in &self.footnotes {
+            self.buf.push_str(&format!(
+                "<p class=\"sysfootnote\">{}</p>\n",
+                Self::html_escape(f)
+            ));
         }
         let body = std::mem::take(&mut self.buf);
         self.wrote_anything = false;
@@ -358,7 +400,8 @@ table.sas th,table.sas td{{border:1px solid #888;padding:4px;}}\
 /// tables et mise en forme de base.
 pub struct RtfDestination {
     buf: String,
-    title: Option<String>,
+    titles: Vec<String>,
+    footnotes: Vec<String>,
     ls: usize,
     file: Option<std::path::PathBuf>,
 }
@@ -366,12 +409,12 @@ pub struct RtfDestination {
 impl RtfDestination {
     /// Crée la destination RTF sans fichier cible.
     pub fn new(ls: usize) -> Self {
-        RtfDestination { buf: String::new(), title: None, ls, file: None }
+        RtfDestination { buf: String::new(), titles: Vec::new(), footnotes: Vec::new(), ls, file: None }
     }
 
     /// Crée la destination RTF avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
-        RtfDestination { buf: String::new(), title: None, ls, file: Some(file) }
+        RtfDestination { buf: String::new(), titles: Vec::new(), footnotes: Vec::new(), ls, file: Some(file) }
     }
 
     /// Échappe les caractères spéciaux RTF.
@@ -398,11 +441,19 @@ impl RtfDestination {
 
 impl OutputDestination for RtfDestination {
     fn page_header(&mut self) {
-        let title = self.title.clone().unwrap_or_else(|| "The SAS System".to_string());
-        self.buf.push_str(&format!(
-            "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
-            Self::rtf_escape(&title)
-        ));
+        if self.titles.is_empty() {
+            self.buf.push_str(&format!(
+                "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
+                Self::rtf_escape("The SAS System")
+            ));
+        } else {
+            for t in &self.titles {
+                self.buf.push_str(&format!(
+                    "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
+                    Self::rtf_escape(t)
+                ));
+            }
+        }
     }
 
     fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
@@ -466,8 +517,12 @@ impl OutputDestination for RtfDestination {
         self.buf.push_str("\\pard\\par\n");
     }
 
-    fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
+    fn set_titles(&mut self, titles: &[String]) {
+        self.titles = titles.to_vec();
+    }
+
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.footnotes = footnotes.to_vec();
     }
 
     fn set_ls(&mut self, ls: usize) {
@@ -481,6 +536,13 @@ impl OutputDestination for RtfDestination {
     fn into_string(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
+        }
+        // Footnotes actives rendues (centrées) en fin de document.
+        for f in &self.footnotes {
+            self.buf.push_str(&format!(
+                "\\pard\\qc {}\\par\n",
+                Self::rtf_escape(f)
+            ));
         }
         let body = std::mem::take(&mut self.buf);
         format!(
@@ -507,6 +569,7 @@ impl OutputDestination for RtfDestination {
 // ExcelDestination — M23.3 : destination Excel réelle (rust_xlsxwriter)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct ExcelTable {
     sheet_name: String,
     pre_lines: Vec<String>,
@@ -518,7 +581,8 @@ struct ExcelTable {
 /// un fichier `.xlsx` valide. Le contenu est accumulé en mémoire et matérialisé
 /// lors de `finalize_to_bytes()`.
 pub struct ExcelDestination {
-    title: Option<String>,
+    titles: Vec<String>,
+    footnotes: Vec<String>,
     ls: usize,
     file: Option<std::path::PathBuf>,
     tables: Vec<ExcelTable>,
@@ -529,7 +593,7 @@ impl ExcelDestination {
     /// Crée la destination Excel sans fichier cible.
     pub fn new(ls: usize) -> Self {
         ExcelDestination {
-            title: None, ls, file: None,
+            titles: Vec::new(), footnotes: Vec::new(), ls, file: None,
             tables: Vec::new(), pending_lines: Vec::new(),
         }
     }
@@ -537,7 +601,7 @@ impl ExcelDestination {
     /// Crée la destination Excel avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         ExcelDestination {
-            title: None, ls, file: Some(file),
+            titles: Vec::new(), footnotes: Vec::new(), ls, file: Some(file),
             tables: Vec::new(), pending_lines: Vec::new(),
         }
     }
@@ -567,8 +631,12 @@ impl OutputDestination for ExcelDestination {
         // no-op
     }
 
-    fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
+    fn set_titles(&mut self, titles: &[String]) {
+        self.titles = titles.to_vec();
+    }
+
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.footnotes = footnotes.to_vec();
     }
 
     fn set_ls(&mut self, ls: usize) {
@@ -588,7 +656,32 @@ impl OutputDestination for ExcelDestination {
         if self.tables.is_empty() && self.pending_lines.is_empty() {
             return None;
         }
-        let bytes = xlsx_build(&self.tables, &self.pending_lines);
+        // M38.1 : rend les titres actifs en tête (avant la 1ʳᵉ table, ou comme
+        // lignes libres s'il n'y a pas de table) et les footnotes en fin
+        // (après la dernière table, ou comme lignes libres sinon). `xlsx_build`
+        // n'affiche `pending_lines` que s'il n'y a aucune table, d'où l'ajout en
+        // ligne (cellule unique) à la dernière table quand une table existe.
+        let mut tables = self.tables.clone();
+        let mut trailing = self.pending_lines.clone();
+        if let Some(first) = tables.first_mut() {
+            if !self.titles.is_empty() {
+                let mut pre = self.titles.clone();
+                pre.extend(std::mem::take(&mut first.pre_lines));
+                first.pre_lines = pre;
+            }
+            if let Some(last) = tables.last_mut() {
+                for f in &self.footnotes {
+                    last.rows.push(vec![f.clone()]);
+                }
+            }
+        } else {
+            // Pas de table : titres puis lignes libres puis footnotes.
+            let mut lines = self.titles.clone();
+            lines.append(&mut trailing);
+            lines.extend(self.footnotes.iter().cloned());
+            trailing = lines;
+        }
+        let bytes = xlsx_build(&tables, &trailing);
         Some((path, bytes))
     }
 
@@ -843,7 +936,8 @@ enum PdfSection {
 /// Destination PDF (PDF 1.4 minimal, sans dépendance externe). Génère un
 /// fichier PDF valide avec texte et tables simples.
 pub struct PdfDestination {
-    title: Option<String>,
+    titles: Vec<String>,
+    footnotes: Vec<String>,
     ls: usize,
     file: Option<std::path::PathBuf>,
     sections: Vec<PdfSection>,
@@ -852,12 +946,12 @@ pub struct PdfDestination {
 impl PdfDestination {
     /// Crée la destination PDF sans fichier cible.
     pub fn new(ls: usize) -> Self {
-        PdfDestination { title: None, ls, file: None, sections: Vec::new() }
+        PdfDestination { titles: Vec::new(), footnotes: Vec::new(), ls, file: None, sections: Vec::new() }
     }
 
     /// Crée la destination PDF avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
-        PdfDestination { title: None, ls, file: Some(file), sections: Vec::new() }
+        PdfDestination { titles: Vec::new(), footnotes: Vec::new(), ls, file: Some(file), sections: Vec::new() }
     }
 
     fn pdf_escape(s: &str) -> String {
@@ -879,7 +973,12 @@ impl PdfDestination {
         let line_h: f32 = 14.0;
         let col_gap: f32 = 6.0;
 
-        for section in &self.sections {
+        // M38.1 : footnotes actives rendues (lignes simples) après le contenu.
+        // Construites localement pour ne pas muter `self.sections` (finalize
+        // idempotent : pas de duplication si appelé plusieurs fois).
+        let footnote_sections: Vec<PdfSection> =
+            self.footnotes.iter().cloned().map(PdfSection::Line).collect();
+        for section in self.sections.iter().chain(footnote_sections.iter()) {
             match section {
                 PdfSection::PageHeader(title) => {
                     out.push_str("/F1 14 Tf\n");
@@ -934,8 +1033,7 @@ impl PdfDestination {
         out
     }
 
-    fn build_pdf_document(title: &Option<String>, content: String) -> Vec<u8> {
-        let _t = title.as_deref().unwrap_or("SAS Output");
+    fn build_pdf_document(content: String) -> Vec<u8> {
         let content_bytes = content.as_bytes().len();
 
         let obj1 = "<<\n/Type /Catalog\n/Pages 2 0 R\n>>".to_string();
@@ -981,8 +1079,13 @@ impl PdfDestination {
 
 impl OutputDestination for PdfDestination {
     fn page_header(&mut self) {
-        let title = self.title.clone().unwrap_or_else(|| "The SAS System".to_string());
-        self.sections.push(PdfSection::PageHeader(title));
+        if self.titles.is_empty() {
+            self.sections.push(PdfSection::PageHeader("The SAS System".to_string()));
+        } else {
+            for t in self.titles.clone() {
+                self.sections.push(PdfSection::PageHeader(t));
+            }
+        }
     }
 
     fn write_table(&mut self, headers: &[String], _aligns: &[Align], rows: &[Vec<String>]) {
@@ -1000,8 +1103,12 @@ impl OutputDestination for PdfDestination {
         self.sections.push(PdfSection::Blank);
     }
 
-    fn set_title(&mut self, title: Option<String>) {
-        self.title = title;
+    fn set_titles(&mut self, titles: &[String]) {
+        self.titles = titles.to_vec();
+    }
+
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.footnotes = footnotes.to_vec();
     }
 
     fn set_ls(&mut self, ls: usize) {
@@ -1022,7 +1129,7 @@ impl OutputDestination for PdfDestination {
             return None;
         }
         let content = self.build_pdf_content();
-        let bytes = Self::build_pdf_document(&self.title, content);
+        let bytes = Self::build_pdf_document(content);
         Some((path, bytes))
     }
 
@@ -1332,5 +1439,72 @@ mod tests {
         let (path, bytes) = result.unwrap();
         assert_eq!(path, tmp);
         assert!(bytes.starts_with(b"%PDF-"), "PDF magic bytes: {:?}", &bytes[..5]);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── M38.1 : titres/footnotes multi-niveaux par destination ────────────────
+
+    #[test]
+    fn html_renders_multiple_titles_and_footnotes() {
+        let mut h = HtmlDestination::new(96);
+        h.set_titles(&["T1".to_string(), "T2".to_string()]);
+        h.set_footnotes(&["F1".to_string()]);
+        h.page_header();
+        h.write_line("body");
+        let out = h.into_string();
+        let p1 = out.find("T1").unwrap();
+        let p2 = out.find("T2").unwrap();
+        assert!(p1 < p2, "titres dans l'ordre des niveaux");
+        assert!(out.contains("sysfootnote"), "classe footnote absente : {out}");
+        assert!(out.find("F1").unwrap() > out.find("body").unwrap(), "footnote après le corps");
+    }
+
+    #[test]
+    fn rtf_renders_multiple_titles_and_footnotes() {
+        let mut r = RtfDestination::new(96);
+        r.set_titles(&["T1".to_string(), "T2".to_string()]);
+        r.set_footnotes(&["F1".to_string()]);
+        r.page_header();
+        r.write_line("body");
+        let out = r.into_string();
+        assert!(out.find("T1").unwrap() < out.find("T2").unwrap());
+        assert!(out.find("F1").unwrap() > out.find("body").unwrap());
+    }
+
+    #[test]
+    fn pdf_renders_titles_and_footnotes_idempotent() {
+        let tmp = std::env::temp_dir().join("test_ods_tf.pdf");
+        let mut p = PdfDestination::with_file(96, tmp.clone());
+        p.set_titles(&["T1".to_string(), "T2".to_string()]);
+        p.set_footnotes(&["F1".to_string()]);
+        p.page_header();
+        p.write_line("body");
+        let (_, bytes1) = p.finalize_to_bytes().unwrap();
+        let s1 = String::from_utf8_lossy(&bytes1);
+        assert!(s1.contains("(T1)") && s1.contains("(T2)") && s1.contains("(F1)"));
+        // Idempotence : un second finalize produit le même contenu (pas de
+        // duplication de footnotes dans self.sections).
+        let (_, bytes2) = p.finalize_to_bytes().unwrap();
+        assert_eq!(bytes1.len(), bytes2.len(), "finalize doit être idempotent");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn excel_renders_titles_and_footnotes_as_rows() {
+        let tmp = std::env::temp_dir().join("test_ods_tf.xlsx");
+        let mut e = ExcelDestination::with_file(96, tmp.clone());
+        e.set_titles(&["Top Title".to_string()]);
+        e.set_footnotes(&["Bottom Note".to_string()]);
+        e.write_table(
+            &["Name".into()],
+            &[Align::Left],
+            &[vec!["Alice".into()]],
+        );
+        let (_, bytes) = e.finalize_to_bytes().unwrap();
+        // XLSX = ZIP : la chaîne partagée contient titres et footnotes.
+        let blob = String::from_utf8_lossy(&bytes);
+        assert!(blob.contains("Top Title"), "titre absent du XLSX");
+        assert!(blob.contains("Bottom Note"), "footnote absente du XLSX");
+        let _ = std::fs::remove_file(&tmp);
     }
 }

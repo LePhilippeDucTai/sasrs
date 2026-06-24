@@ -259,11 +259,13 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             }
         }
         GlobalStmt::Title { n, text } => {
-            // M1 : seul TITLE1 est rendu par le listing ; les autres niveaux
-            // sont acceptés sans effet.
-            if *n == 1 {
-                session.listing.set_title(text.clone());
-            }
+            // M38.1 : TITLE1..TITLE9 multi-niveaux avec sémantique d'effacement
+            // SAS, état global de session poussé à la destination courante.
+            session.set_title_level(*n, text.clone());
+        }
+        GlobalStmt::Footnote { n, text } => {
+            // M38.1 : FOOTNOTE1..FOOTNOTE9, même sémantique que TITLE.
+            session.set_footnote_level(*n, text.clone());
         }
         GlobalStmt::Options(opts) => {
             for (name, value) in opts {
@@ -700,6 +702,68 @@ mod tests {
         let stmt = parse_global(&mut ts).unwrap();
         super::exec_global(&stmt, &mut session);
         session
+    }
+
+    // ── M38.1 : TITLE/FOOTNOTE multi-niveaux de bout en bout ──────────────────
+
+    /// Exécute une suite de statements globaux sur une même session déterministe.
+    fn run_globals(srcs: &[&str]) -> crate::session::Session {
+        use crate::parser::global::parse_global;
+        use crate::parser::StatementStream;
+        use crate::source::SourceFile;
+        let mut session =
+            crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+        for src in srcs {
+            let sf = SourceFile::new(*src);
+            let mut ts = StatementStream::new(&sf).unwrap();
+            let stmt = parse_global(&mut ts).unwrap();
+            super::exec_global(&stmt, &mut session);
+        }
+        session
+    }
+
+    #[test]
+    fn multi_title_end_to_end_renders_centered_in_order() {
+        let mut s = run_globals(&[
+            "title 'Top';",
+            "title2 'Mid';",
+            "title3 'Bottom';",
+        ]);
+        s.listing.page_header();
+        let out = s.listing.into_string();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0].trim(), "Top");
+        assert_eq!(lines[1].trim(), "Mid");
+        assert_eq!(lines[2].trim(), "Bottom");
+        assert_eq!(lines[3], "", "single trailing blank after all titles");
+    }
+
+    #[test]
+    fn title_then_title1_clears_above_end_to_end() {
+        // title/title2/title3 puis title 'X' efface 2-3.
+        let mut s = run_globals(&[
+            "title 'A';",
+            "title2 'B';",
+            "title3 'C';",
+            "title 'X';",
+        ]);
+        s.listing.page_header();
+        let out = s.listing.into_string();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0].trim(), "X");
+        assert_eq!(lines[1], "");
+    }
+
+    #[test]
+    fn footnote_end_to_end_renders_after_content() {
+        let mut s = run_globals(&["footnote 'Bye';"]);
+        s.listing.page_header();
+        s.listing.write_line("body");
+        let out = s.listing.into_string();
+        let lines: Vec<&str> = out.lines().collect();
+        let pos = lines.iter().position(|x| x.trim() == "Bye").unwrap();
+        let body = lines.iter().position(|x| x.trim() == "body").unwrap();
+        assert!(pos > body, "footnote should follow body content");
     }
 
     #[test]

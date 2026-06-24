@@ -67,8 +67,18 @@ pub enum Block {
 
 /// `title` → 1, `title3` → 3 ; `None` si ce n'est pas un mot-clé TITLEn.
 pub(crate) fn title_level(name: &str) -> Option<u8> {
+    level_after_prefix(name, "title")
+}
+
+/// `footnote` → 1, `footnote3` → 3 ; `None` si ce n'est pas un mot-clé FOOTNOTEn.
+pub(crate) fn footnote_level(name: &str) -> Option<u8> {
+    level_after_prefix(name, "footnote")
+}
+
+/// `prefix` → 1, `prefix3` → 3 (3 = chiffre 1..9) ; `None` sinon.
+fn level_after_prefix(name: &str, prefix: &str) -> Option<u8> {
     let lower = name.to_ascii_lowercase();
-    let rest = lower.strip_prefix("title")?;
+    let rest = lower.strip_prefix(prefix)?;
     match rest {
         "" => Some(1),
         _ if rest.len() == 1 && rest.as_bytes()[0].is_ascii_digit() && rest != "0" => {
@@ -81,7 +91,9 @@ pub(crate) fn title_level(name: &str) -> Option<u8> {
 /// Mot-clé qui ouvre un bloc (frontière de step implicite). Les statements
 /// globaux sont des frontières de step en SAS, au même titre que DATA/PROC.
 fn is_block_head_kw(lower: &str) -> bool {
-    matches!(lower, "data" | "proc" | "libname" | "filename" | "options" | "ods") || title_level(lower).is_some()
+    matches!(lower, "data" | "proc" | "libname" | "filename" | "options" | "ods")
+        || title_level(lower).is_some()
+        || footnote_level(lower).is_some()
 }
 
 fn validate_sas_name(name: &str, span: Span) -> Result<()> {
@@ -768,5 +780,16 @@ mod tests {
         assert_eq!(title_level("title10"), None);
         assert_eq!(title_level("titles"), None);
         assert_eq!(title_level("data"), None);
+    }
+
+    #[test]
+    fn footnote_levels() {
+        assert_eq!(footnote_level("footnote"), Some(1));
+        assert_eq!(footnote_level("FOOTNOTE3"), Some(3));
+        assert_eq!(footnote_level("footnote9"), Some(9));
+        assert_eq!(footnote_level("footnote0"), None);
+        assert_eq!(footnote_level("footnote10"), None);
+        assert_eq!(footnote_level("footnotes"), None);
+        assert_eq!(footnote_level("title"), None);
     }
 }

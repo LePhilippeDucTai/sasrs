@@ -21,7 +21,7 @@
 //!   applique `ls=` (40..=256) et ignore le reste avec WARNING
 //!   "Option XXX is not yet supported".
 
-use super::{title_level, StatementStream};
+use super::{footnote_level, title_level, StatementStream};
 use crate::ast::{DatasetRef, GlobalStmt, OdsAction};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
@@ -57,10 +57,13 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
     } else if let Some(n) = title_level(&kw) {
         ts.next(); // consume `titleN`
         parse_title(ts, n)
+    } else if let Some(n) = footnote_level(&kw) {
+        ts.next(); // consume `footnoteN`
+        parse_footnote(ts, n)
     } else {
         Err(SasError::parse(
             format!(
-                "Expected LIBNAME, FILENAME, OPTIONS, ODS, or TITLEn; got '{}'",
+                "Expected LIBNAME, FILENAME, OPTIONS, ODS, TITLEn, or FOOTNOTEn; got '{}'",
                 kw.to_uppercase()
             ),
             head.span,
@@ -692,6 +695,39 @@ fn parse_title(ts: &mut StatementStream, n: u8) -> Result<GlobalStmt> {
     }
 }
 
+// ── FOOTNOTE ───────────────────────────────────────────────────────────────
+
+/// Parse `FOOTNOTEn ['texte'];`. Même grammaire que TITLE : soit une chaîne
+/// littérale simple, soit rien (efface le niveau). Le niveau `n` (1..9) est déjà
+/// extrait par l'appelant.
+fn parse_footnote(ts: &mut StatementStream, n: u8) -> Result<GlobalStmt> {
+    // `footnote ;` or `footnoteN ;` — no text, clears the footnote.
+    if ts.peek().kind == TokenKind::Semi {
+        ts.expect_semi()?;
+        return Ok(GlobalStmt::Footnote { n, text: None });
+    }
+
+    let text_tok = ts.peek().clone();
+    match &text_tok.kind {
+        TokenKind::Str { value, suffix } => {
+            if *suffix != StrSuffix::None {
+                return Err(SasError::parse(
+                    "FOOTNOTE text must be a plain string literal (no date/time suffix)",
+                    text_tok.span,
+                ));
+            }
+            let text = value.clone();
+            ts.next(); // consume the string literal
+            ts.expect_semi()?;
+            Ok(GlobalStmt::Footnote { n, text: Some(text) })
+        }
+        _ => Err(SasError::parse(
+            "FOOTNOTE text must be a quoted string literal, e.g. footnote 'My Note';",
+            text_tok.span,
+        )),
+    }
+}
+
 // ── OPTIONS ──────────────────────────────────────────────────────────────────
 
 fn parse_options(ts: &mut StatementStream) -> Result<GlobalStmt> {
@@ -1033,6 +1069,42 @@ mod tests {
         // SAS accepts unquoted text but our M1 parser requires a quoted literal.
         // `title foo;` must return a parse error.
         let err = parse("title foo;").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.to_lowercase().contains("quoted") || msg.to_lowercase().contains("string"),
+            "expected an error about quoted string, got: {msg}"
+        );
+    }
+
+    // ── FOOTNOTE ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn footnote_simple() {
+        let stmt = parse("footnote 'My Note';").unwrap();
+        assert_eq!(stmt, GlobalStmt::Footnote { n: 1, text: Some("My Note".into()) });
+    }
+
+    #[test]
+    fn footnote3() {
+        let stmt = parse("footnote3 'Third';").unwrap();
+        assert_eq!(stmt, GlobalStmt::Footnote { n: 3, text: Some("Third".into()) });
+    }
+
+    #[test]
+    fn footnote_without_text_clears() {
+        let stmt = parse("footnote;").unwrap();
+        assert_eq!(stmt, GlobalStmt::Footnote { n: 1, text: None });
+    }
+
+    #[test]
+    fn footnote5_without_text_clears() {
+        let stmt = parse("footnote5;").unwrap();
+        assert_eq!(stmt, GlobalStmt::Footnote { n: 5, text: None });
+    }
+
+    #[test]
+    fn footnote_unquoted_text_is_error() {
+        let err = parse("footnote foo;").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.to_lowercase().contains("quoted") || msg.to_lowercase().contains("string"),

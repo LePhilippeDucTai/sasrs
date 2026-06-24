@@ -152,9 +152,62 @@ pub struct Session {
     /// `None` = destination par défaut (ListingWriter interne).
     /// v1 : stocké mais pas encore routé (routage différé à M22 ODS).
     pub printto_print: Option<std::path::PathBuf>,
+    /// M38.1 — niveaux de titres actifs (TITLE1..TITLE9). `titles[i]` = texte du
+    /// niveau `i+1` (`None` = niveau inactif). État GLOBAL de session, persistant
+    /// entre les steps. La sémantique d'effacement SAS est appliquée par
+    /// [`Session::set_title_level`] ; les niveaux actifs (compactés, gaps retirés)
+    /// sont poussés à la destination courante via `set_titles`.
+    pub titles: [Option<String>; 9],
+    /// M38.1 — niveaux de footnotes actives (FOOTNOTE1..FOOTNOTE9). Voir
+    /// [`Session::titles`] / [`Session::set_footnote_level`].
+    pub footnotes: [Option<String>; 9],
 }
 
 impl Session {
+    /// M38.1 — applique un statement `TITLEn` (texte ou effacement) avec la
+    /// sémantique SAS, puis pousse les titres actifs à la destination courante.
+    ///
+    /// Sémantique d'effacement SAS :
+    /// - avec texte : pose le niveau `n` ET efface tous les niveaux > `n` ;
+    /// - sans texte (`TITLEn;`) : efface le niveau `n` ET tous les niveaux > `n`
+    ///   (`TITLE;` ≡ `TITLE1;` efface donc tout).
+    pub fn set_title_level(&mut self, n: u8, text: Option<String>) {
+        Self::apply_level(&mut self.titles, n, text);
+        let active = Self::compact_levels(&self.titles);
+        self.listing.set_titles(&active);
+    }
+
+    /// M38.1 — applique un statement `FOOTNOTEn` (même sémantique que TITLE).
+    pub fn set_footnote_level(&mut self, n: u8, text: Option<String>) {
+        Self::apply_level(&mut self.footnotes, n, text);
+        let active = Self::compact_levels(&self.footnotes);
+        self.listing.set_footnotes(&active);
+    }
+
+    /// Sémantique d'effacement SAS partagée par TITLE et FOOTNOTE.
+    fn apply_level(levels: &mut [Option<String>; 9], n: u8, text: Option<String>) {
+        let idx = (n as usize).saturating_sub(1).min(8);
+        match text {
+            Some(t) => {
+                // Pose le niveau n, efface n+1..9.
+                levels[idx] = Some(t);
+                for slot in levels.iter_mut().skip(idx + 1) {
+                    *slot = None;
+                }
+            }
+            None => {
+                // Efface le niveau n et tous au-dessus.
+                for slot in levels.iter_mut().skip(idx) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// Liste compacte des niveaux actifs (gaps `None` retirés), en ordre.
+    fn compact_levels(levels: &[Option<String>; 9]) -> Vec<String> {
+        levels.iter().flatten().cloned().collect()
+    }
     pub fn new(
         work_dir: Option<PathBuf>,
         base_dir: PathBuf,
@@ -189,6 +242,8 @@ impl Session {
             debug_hashes: std::collections::HashMap::new(),
             printto_log: None,
             printto_print: None,
+            titles: Default::default(),
+            footnotes: Default::default(),
         })
     }
 
@@ -222,6 +277,10 @@ impl Session {
     pub fn open_destination(&mut self, name: &str, mut dest: Box<dyn OutputDestination>) {
         let key = name.to_ascii_uppercase();
         dest.set_ls(self.options.ls);
+        // M38.1 : reporte les titres/footnotes actifs sur la nouvelle destination
+        // pour que l'en-tête reste cohérent après un changement de destination.
+        dest.set_titles(&Self::compact_levels(&self.titles));
+        dest.set_footnotes(&Self::compact_levels(&self.footnotes));
         // La destination courante de la session reste toujours `self.listing` ;
         // on y installe la destination demandée et on note son nom.
         self.listing = dest;
@@ -457,5 +516,83 @@ mod tests {
 
         // Nettoyer.
         let _ = std::fs::remove_file(&tmp_file);
+    }
+
+    // ── M38.1 : sémantique d'effacement TITLE/FOOTNOTE ─────────────────────────
+
+    fn active(levels: &[Option<String>; 9]) -> Vec<String> {
+        Session::compact_levels(levels)
+    }
+
+    #[test]
+    fn title1_clears_levels_above() {
+        let mut s = new_session();
+        s.set_title_level(1, Some("A".into()));
+        s.set_title_level(2, Some("B".into()));
+        s.set_title_level(3, Some("C".into()));
+        assert_eq!(active(&s.titles), vec!["A", "B", "C"]);
+        // TITLE 'X' ≡ TITLE1 'X' : pose niveau 1, efface 2..9.
+        s.set_title_level(1, Some("X".into()));
+        assert_eq!(active(&s.titles), vec!["X"]);
+    }
+
+    #[test]
+    fn title3_keeps_below_clears_above() {
+        let mut s = new_session();
+        s.set_title_level(1, Some("A".into()));
+        s.set_title_level(2, Some("B".into()));
+        s.set_title_level(3, Some("C".into()));
+        s.set_title_level(4, Some("D".into()));
+        // TITLE3 'Y' : pose 3, conserve 1-2, efface 4..9.
+        s.set_title_level(3, Some("Y".into()));
+        assert_eq!(active(&s.titles), vec!["A", "B", "Y"]);
+    }
+
+    #[test]
+    fn title_empty_clears_everything() {
+        let mut s = new_session();
+        s.set_title_level(1, Some("A".into()));
+        s.set_title_level(2, Some("B".into()));
+        // TITLE; ≡ TITLE1; : efface tout.
+        s.set_title_level(1, None);
+        assert!(active(&s.titles).is_empty());
+    }
+
+    #[test]
+    fn title_n_empty_clears_n_and_above() {
+        let mut s = new_session();
+        for (i, t) in ["A", "B", "C", "D"].iter().enumerate() {
+            s.set_title_level((i + 1) as u8, Some((*t).into()));
+        }
+        // TITLE3; efface 3 et 4 (et au-dessus), conserve 1-2.
+        s.set_title_level(3, None);
+        assert_eq!(active(&s.titles), vec!["A", "B"]);
+    }
+
+    #[test]
+    fn footnote_multilevel_same_semantics() {
+        let mut s = new_session();
+        s.set_footnote_level(1, Some("F1".into()));
+        s.set_footnote_level(2, Some("F2".into()));
+        s.set_footnote_level(3, Some("F3".into()));
+        assert_eq!(active(&s.footnotes), vec!["F1", "F2", "F3"]);
+        // FOOTNOTE2; efface 2 et 3.
+        s.set_footnote_level(2, None);
+        assert_eq!(active(&s.footnotes), vec!["F1"]);
+        // FOOTNOTE 'X' efface tout au-dessus.
+        s.set_footnote_level(1, Some("only".into()));
+        assert_eq!(active(&s.footnotes), vec!["only"]);
+    }
+
+    #[test]
+    fn titles_pushed_to_current_destination() {
+        let mut s = new_session();
+        s.set_title_level(1, Some("Hello".into()));
+        s.set_title_level(2, Some("World".into()));
+        s.listing.page_header();
+        let out = s.listing.into_string();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0].trim(), "Hello");
+        assert_eq!(lines[1].trim(), "World");
     }
 }

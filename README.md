@@ -171,7 +171,8 @@ individual options of each procedure and DATA step statement. Legend:
 | --- | :---: | --- |
 | `LIBNAME` | ✅ | assign / `CLEAR` (path resolved against the program dir; `s3://` with the `s3` feature) |
 | `OPTIONS` | 🟡 | `LINESIZE`/`LS=` applied; other options parsed with a "not yet supported" warning |
-| `TITLE` | 🟡 | `TITLE1`–`TITLE9` parsed (only `TITLE1` rendered in the listing) |
+| `TITLE` | ✅ | `TITLE1`–`TITLE9` rendered (centered, in level order; SAS clearing semantics: `TITLEn 'x'` clears levels above, `TITLEn;` clears `n` and above) across all destinations |
+| `FOOTNOTE` | ✅ | `FOOTNOTE1`–`FOOTNOTE9` rendered (same multi-level clearing semantics as `TITLE`) |
 | `ODS` | ✅ | see Output section |
 | `%INCLUDE` | 🟡 | quoted paths, **filerefs** (via `FILENAME`), **non-quoted paths**, autocall (`SASAUTOS`); `*`/stdin deferred (NOTE) |
 | `FILENAME` | 🟡 | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device/pipe/URL forms noted & ignored |
