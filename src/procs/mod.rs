@@ -38,6 +38,7 @@ pub mod gchart;
 pub mod gplot;
 pub mod iml;
 pub mod import;
+pub mod lincom;
 pub mod means;
 pub mod mixed;
 pub mod npar1way;

@@ -1626,6 +1626,35 @@ fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Re
             crate::stat::linalg::invert_matrix(&xtx).ok()
         };
 
+        // Reference-cell coding of the fitted design (M37.1). A pure function of
+        // the factor layout — independent of β / covariance — so it is built
+        // unconditionally and shared by both the engine and the degenerate-fit
+        // fallback paths below.
+        let lincom_coding = crate::procs::lincom::Coding {
+            factors: factors
+                .iter()
+                .map(|f| (f.name.clone(), f.levels.clone()))
+                .collect(),
+            term_factor_idxs: term_factor_idxs.clone(),
+            col_specs: col_specs.clone(),
+            ncols,
+        };
+
+        // Shared linear-combination engine (M37.1): used for SOLUTION / LS-means
+        // below. Built only when both β and (X'X)^-1 are available; the engine
+        // carries the raw covariance and MSE separately so its arithmetic matches
+        // the extracted code byte-for-byte.
+        let lincom_engine = match (&beta, &xtx_inv) {
+            (Some(b), Some(inv)) => Some(crate::procs::lincom::LinCombEngine::new(
+                b.clone(),
+                inv.clone(),
+                lincom_coding.clone(),
+                df_error,
+                mse,
+            )),
+            _ => None,
+        };
+
         // --- SOLUTION (parameter estimates) ---
         if model.solution {
             centered(session, "Parameter Estimates");
@@ -1663,32 +1692,54 @@ fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Re
                 }
             }
 
-            let push_param = |rows: &mut Vec<Vec<String>>, label: String, est: f64, col: usize| {
-                let se = match &xtx_inv {
-                    Some(inv) if !mse.is_nan() && inv[col][col] >= 0.0 => {
-                        (mse * inv[col][col]).sqrt()
+            // M37.1: each parameter row is the estimable function selecting a
+            // single design column (unit vector). Routed through the shared
+            // engine — `estimate(unit_vec, 0)` is bit-identical to the previous
+            // inline `b[col]` / `mse*inv[col][col]` arithmetic (the zero-skip and
+            // unit vector collapse the quadratic form to `inv[col][col]`, and
+            // signed-zero products do not perturb the dot-product sum).
+            match (&lincom_engine, &beta) {
+                (Some(eng), _) => {
+                    for (ci, lbl) in col_labels.iter().enumerate() {
+                        let mut l = vec![0.0; ncols];
+                        l[ci] = 1.0;
+                        let r = eng.estimate(&l, 0.0);
+                        param_rows.push(vec![
+                            lbl.clone(),
+                            fmt6(r.estimate),
+                            fmt6(r.se),
+                            fmt2(r.t),
+                            fmt_p(r.p),
+                        ]);
                     }
-                    _ => f64::NAN,
-                };
-                let t = if se > 0.0 { est / se } else { f64::NAN };
-                let p = if t.is_nan() {
-                    None
-                } else {
-                    Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
-                };
-                rows.push(vec![
-                    label,
-                    fmt6(est),
-                    fmt6(se),
-                    fmt2(t),
-                    fmt_p(p),
-                ]);
-            };
-
-            if let Some(b) = &beta {
-                for (ci, lbl) in col_labels.iter().enumerate() {
-                    push_param(&mut param_rows, lbl.clone(), b[ci], ci);
                 }
+                // Singular covariance (engine unavailable) but β solvable: keep the
+                // previous inline behaviour exactly (SE = NaN for every column).
+                (None, Some(b)) => {
+                    for (ci, lbl) in col_labels.iter().enumerate() {
+                        let est = b[ci];
+                        let se = match &xtx_inv {
+                            Some(inv) if !mse.is_nan() && inv[ci][ci] >= 0.0 => {
+                                (mse * inv[ci][ci]).sqrt()
+                            }
+                            _ => f64::NAN,
+                        };
+                        let t = if se > 0.0 { est / se } else { f64::NAN };
+                        let p = if t.is_nan() {
+                            None
+                        } else {
+                            Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
+                        };
+                        param_rows.push(vec![
+                            lbl.clone(),
+                            fmt6(est),
+                            fmt6(se),
+                            fmt2(t),
+                            fmt_p(p),
+                        ]);
+                    }
+                }
+                (None, None) => {}
             }
             // Reference-level rows (estimate 0, "B"), one per main effect's last level
             // and per interaction combination touching a reference level, mirroring
@@ -1738,48 +1789,62 @@ fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Re
             // reference-cell coding and fitted β, the predicted value for a cell is
             // a linear combo of β; averaging the contrast vector over the other
             // factors' levels yields the LS-mean estimable function L·β.
-            for (li, level) in factors[fi].levels.iter().enumerate() {
-                // Build the averaged estimable coefficient vector over full_design cols.
-                let lvec = lsmean_coef_vector(
-                    fi,
-                    li,
-                    &factors,
-                    &term_factor_idxs,
-                    &col_specs,
-                    ncols,
-                );
-                let est = match &beta {
-                    Some(b) => lvec.iter().zip(b).map(|(c, bb)| c * bb).sum::<f64>(),
-                    None => f64::NAN,
-                };
-                let se = match &xtx_inv {
-                    Some(inv) if !mse.is_nan() => {
-                        // var = mse * l' (X'X)^-1 l
-                        let mut q = 0.0;
-                        for a in 0..ncols {
-                            if lvec[a] == 0.0 {
-                                continue;
-                            }
-                            for b2 in 0..ncols {
-                                q += lvec[a] * inv[a][b2] * lvec[b2];
-                            }
-                        }
-                        if q >= 0.0 { (mse * q).sqrt() } else { f64::NAN }
+            //
+            // M37.1: delegated to the shared LinCombEngine, which reproduces the
+            // exact estimable-function arithmetic (est = l·β, se = √(mse·l'·inv·l)
+            // with the same zero-skip and accumulation order). When the engine
+            // could not be built (singular fit), fall back to NaN rows in level
+            // order, identical to the previous behaviour.
+            match &lincom_engine {
+                Some(eng) => {
+                    for r in eng.lsmeans(&factors[fi].name) {
+                        lsm_rows.push(vec![
+                            r.level_label,
+                            fmt6(r.estimate),
+                            fmt6(r.se),
+                            fmt_p(r.p),
+                        ]);
                     }
-                    _ => f64::NAN,
-                };
-                let t = if se > 0.0 { est / se } else { f64::NAN };
-                let p = if t.is_nan() {
-                    None
-                } else {
-                    Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
-                };
-                lsm_rows.push(vec![
-                    level_label_value(level),
-                    fmt6(est),
-                    fmt6(se),
-                    fmt_p(p),
-                ]);
+                }
+                // Degenerate fit (engine unavailable: X'X singular ⇒ no
+                // covariance). Reproduce the original Option-aware arithmetic
+                // exactly: est = l·β when β is solvable, se = NaN (no covariance).
+                None => {
+                    for (li, level) in factors[fi].levels.iter().enumerate() {
+                        let lvec = crate::procs::lincom::lsmean_coef(&lincom_coding, fi, li);
+                        let est = match &beta {
+                            Some(b) => lvec.iter().zip(b).map(|(c, bb)| c * bb).sum::<f64>(),
+                            None => f64::NAN,
+                        };
+                        let se = match &xtx_inv {
+                            Some(inv) if !mse.is_nan() => {
+                                let mut q = 0.0;
+                                for a in 0..ncols {
+                                    if lvec[a] == 0.0 {
+                                        continue;
+                                    }
+                                    for b2 in 0..ncols {
+                                        q += lvec[a] * inv[a][b2] * lvec[b2];
+                                    }
+                                }
+                                if q >= 0.0 { (mse * q).sqrt() } else { f64::NAN }
+                            }
+                            _ => f64::NAN,
+                        };
+                        let t = if se > 0.0 { est / se } else { f64::NAN };
+                        let p = if t.is_nan() {
+                            None
+                        } else {
+                            Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
+                        };
+                        lsm_rows.push(vec![
+                            level_label_value(level),
+                            fmt6(est),
+                            fmt6(se),
+                            fmt_p(p),
+                        ]);
+                    }
+                }
             }
             session.listing.write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
             session.listing.blank();
@@ -1815,61 +1880,9 @@ fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Re
     Ok(())
 }
 
-/// Build the estimable LS-mean coefficient vector (length `ncols`) for level `li`
-/// of factor `fi`, averaging uniformly over all OTHER factors' levels. The vector
-/// is in the same column order as the full design (intercept + term columns).
-fn lsmean_coef_vector(
-    target_fi: usize,
-    target_li: usize,
-    factors: &[Factor],
-    term_factor_idxs: &[Vec<usize>],
-    col_specs: &[Vec<Vec<(usize, usize)>>],
-    ncols: usize,
-) -> Vec<f64> {
-    // Enumerate the balanced grid of all factors' levels, fixing target factor = li.
-    let dims: Vec<usize> = factors.iter().map(|f| f.levels.len()).collect();
-    let mut grid_levels: Vec<Vec<usize>> = vec![vec![]];
-    for (fi, &dim) in dims.iter().enumerate() {
-        let mut next = Vec::new();
-        for prefix in &grid_levels {
-            if fi == target_fi {
-                let mut c = prefix.clone();
-                c.push(target_li);
-                next.push(c);
-            } else {
-                for l in 0..dim {
-                    let mut c = prefix.clone();
-                    c.push(l);
-                    next.push(c);
-                }
-            }
-        }
-        grid_levels = next;
-    }
-    let ncells = grid_levels.len().max(1) as f64;
-
-    // For each cell, build its design row (intercept + term cols), then average.
-    let mut acc = vec![0.0; ncols];
-    for cell in &grid_levels {
-        let dummies = row_dummies(factors, cell);
-        let mut row = vec![1.0];
-        for (ti, specs) in col_specs.iter().enumerate() {
-            let _ = ti;
-            let _ = term_factor_idxs;
-            for spec in specs {
-                let mut prod = 1.0;
-                for &(fi, dj) in spec {
-                    prod *= dummies[fi][dj];
-                }
-                row.push(prod);
-            }
-        }
-        for (a, &v) in row.iter().enumerate() {
-            acc[a] += v / ncells;
-        }
-    }
-    acc
-}
+// NOTE (M37.1): `lsmean_coef_vector` was extracted into
+// `crate::procs::lincom::LinCombEngine` (as a private method) together with its
+// `row_dummies` helper. The multiway LSMEANS path now delegates to the engine.
 
 // ───────────────────────── Tests ─────────────────────────
 

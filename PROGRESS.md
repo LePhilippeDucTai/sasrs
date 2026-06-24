@@ -892,7 +892,7 @@ Restent 🔴 documentés : `X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYS
 
 ## M37 — Moteur linéaire partagé `lincom` + digamma/trigamma
 Infra (pas de cellule README) débloquant M52–M55. Extraction *move-only* de GLM puis ajouts testés.
-- [ ] M37.1 — Extraire de `glm.rs` un `src/procs/lincom.rs` : `LinCombEngine { beta, cov, coding, df }`
+- [x] M37.1 — Extraire de `glm.rs` un `src/procs/lincom.rs` : `LinCombEngine { beta, cov, coding, df }`
   → `estimate(L,c)`, `contrast(L,c)`, `lsmeans(effect)` ; GLM rebranché **octet-identique** (Opus, élevé)
 - [ ] M37.2 — `class_coding(levels, Param::{Ref,Effect,GLM,Poly})` générique (factorise les
   `reference_coding` de `mixed.rs`/`glimmix.rs`) ; oracle : PARAM=REF = coding actuel, somme effect=0 (Opus, moyen)
