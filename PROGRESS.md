@@ -1095,3 +1095,95 @@ Cellule README PROC SQL Not supported 🔴→✅.
 - [ ] M66.2 — MARKERATTRS=/LINEATTRS=, overlays multiples, légendes, images BY-group ; oracle sans attrs = actuel (Opus, élevé)
 - [ ] DoD M66 : fixtures m66 ; README SGPLOT → ✅ ; **fin de Phase G** : tous les tableaux README en ✅
   (résiduel hors périmètre documenté) ; passer « Jalon courant : **TERMINÉ (Phase G)** ».
+
+# Phase Q — qualité/refactor (revue de code 2026-07), jalons MQ1–MQ4
+
+Série **hors Phase G** (M37–M66 réservés), issue de la revue de code des modules importants.
+Objectif : code simple, clair, refactorisé, maintenable — déduplication inter-fichiers, scission
+des mégafichiers, découpe des mégafonctions. **Invariant hérité de M31/M32, DoD de CHAQUE case** :
+`cargo test` vert avec **zéro `.snap.new`** (sortie octet-identique), commit unique
+« move-only »/« extract-helper », `cargo clippy` sans warning nouveau. Une case = un commit.
+**Ordre dur** : MQ3 (scissions reg/mixed/glimmix/genmod/logistic) **avant M52** (BLOC 2 Phase G,
+mêmes fichiers). Écarté avec justification (voir plan de revue) : fusion des paliers d'expressions
+`sql/parser.rs`/`parser/expr.rs` ; propagation `Result` globale (MQ4.4 suffit) ; bascule de
+`t_quantile` vers `stat/dists.rs` (**algorithmes différents** — bisection 1e-12 vs inversion F —
+les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash sans profil préalable.
+
+## MQ1 — Déduplications byte-identiques (risque nul)
+- [x] MQ1.0 — Section Phase Q dans PROGRESS.md (ce commit) (Sonnet, faible)
+- [ ] MQ1.1 — `common::centered(session, text)` unique ; supprimer les 17 copies dans les procs
+  (fastclus, corr, princomp, factor, reg, distance, glm, npar1way, univariate, glimmix, genmod,
+  ttest, anova, cluster, logistic, discrim, mixed). NE PAS toucher `ListingWriter::centered`
+  (privée, autre rôle) (Sonnet, faible)
+- [ ] MQ1.2 — Supprimer de `common.rs` les distributions dupliquées verbatim dans `stat/dists.rs`
+  (`ln_gamma/betacf/betai/student_t_cdf/gser/gcf/gammq/erf/probnorm/phi_inv/ln_factorial/ln_choose`) ;
+  `pub use crate::stat::dists::{...}` préserve les imports. **Garder local** : `t_quantile`
+  (corps divergent, commentaire) et `chisq_sf` (absent de dists.rs ; déléguer à `dists::gammq`) (Sonnet, moyen)
+- [ ] MQ1.3 — Hisser `value_label` (6 fichiers), `fmt_p` (7), `two_sided_p` (2) dans `common.rs` ;
+  diff de chaque copie avant suppression (une copie divergente reste locale, noté ici) (Sonnet, faible)
+- [ ] MQ1.4 — `executor.rs` : `note_libref_assigned(...)` pour la NOTE Libref dupliquée 3× (Sonnet, faible)
+- [ ] MQ1.5 — `column_from_values` + `write_output` uniques partagés `datastep/exec.rs`⇄`fastpath.rs`
+  (4-5 + 5 copies du bloc write+last_dataset+NOTE « has N observations ») (Opus, moyen)
+- [ ] MQ1.6 — Helpers `hash`/`hash_mut` encapsulant les 22 `hashes.get(upper).expect("checked")`
+  d'`exec.rs` (perf des clones : hors périmètre, sur profil seulement) (Sonnet, faible)
+- [ ] MQ1.7 — Branche « macro facility is not yet implemented » (`parser/mod.rs`) : si morte
+  (aucun snapshot/fixture ne la contient), supprimer ; sinon différer (message user-visible) (Sonnet, faible)
+- [ ] DoD MQ1 : `cargo test` vert, zéro `.snap.new`, clippy propre ; → MQ2.
+
+## MQ2 — Extraction de helpers et tables de dispatch (risque faible)
+- [ ] MQ2.1 — Canoniser les signatures `consume_*` sur `(chars, i, kw, masked, out)` (ordre de
+  `consume_macro_fn`) entre `macros/expand.rs` et `macros/functions.rs` ; puis étendre la table de
+  dispatch d'`expand.rs` (l.247-266) aux ~27 blocs de `process_impl` (~366 l → ~80 l). L'ordre
+  d'essai des mots-clés est sémantique (`%q*` avant les nus) — l'encoder dans la table (Opus, moyen)
+- [ ] MQ2.2 — `executor.rs` : `apply_option` + `parse_bounded_usize` pour la cascade OPTIONS
+  (142 l ; chaînes d'erreur conservées à l'octet) (Sonnet, faible)
+- [ ] MQ2.3 — Combinateurs `unary_num`/`unary_num_checked` remplaçant les ~56 blocs boilerplate de
+  `datastep/functions.rs` (2-3 commits par paquets ; libellé/ordre des NOTEs inchangés) (Sonnet, moyen)
+- [ ] MQ2.4 — `formats/builtin.rs` : extraire `fit_or_stars` (motif largeur/étoiles ×21) (Sonnet, faible)
+- [ ] MQ2.5 — `common::open_input(...)` : plomberie resolve→read→forward notes→NOTE observations ;
+  migrer les 30+ procs par paquets de ~10 (ordre d'émission des NOTEs strictement identique) (Opus, moyen)
+- [ ] MQ2.6 — Codage CLASS : genmod/logistic/anova → `lincom::class_coding` + nouveau
+  `lincom::class_levels` ; comparer d'abord ordre des niveaux/référence ; un proc = un commit (Opus, moyen)
+- [ ] MQ2.7 — `build_design()` mixed⇄glimmix → `lincom::build_reference_design`, unifier
+  `DesignColumn` (même précaution) (Opus, moyen)
+- [ ] MQ2.8 — Migrer la famille modèles linéaires sur `common::parse_by`/`by_groups`
+  (un proc = un commit) (Opus, moyen)
+- [ ] DoD MQ2 : idem MQ1 ; → MQ3.
+
+## MQ3 — Scissions move-only + découpes de mégafonctions (AVANT M52)
+- [ ] MQ3.1 — `datastep/functions.rs` (6273 l) → `functions/{mod,math,char,datetime,stat,distributions,random}.rs` ;
+  `mod.rs` garde dispatch + re-exports (Sonnet, moyen)
+- [ ] MQ3.2 — `datastep/exec.rs` (8635 l) → `exec/{mod,hash,input,put,setmerge,tests}.rs`
+  (tests inline → `tests.rs`) (Sonnet, moyen)
+- [ ] MQ3.3 — `parser/datastep.rs` (4634 l) → `datastep/{mod,io,array,hash,control,attrs}.rs` (Sonnet, moyen)
+- [ ] MQ3.4 — `procs/reg.rs` (10 885 l) → `reg/{mod,parse,fit,diagnostics,matrices,influence,selection,ridge,output,tests}.rs` ;
+  `pub(super)` sur les fonctions/structs inter-sections (aucun blocage de visibilité vérifié) (Opus, moyen)
+- [ ] MQ3.5 — Scinder `format_builtin` (~760 l) par familles (num, monétaire, date/heure,
+  scientifique) après MQ2.4 (Sonnet, moyen)
+- [ ] MQ3.6 — `walk_stmt` (`datastep/mod.rs`, 672 l, 37 bras) → une méthode par famille, le match
+  ne fait plus que dispatcher (Sonnet, moyen)
+- [ ] MQ3.7 — `parse_array` (206 l) en 3 phases + extraction de la queue d'assignation du bras `_`
+  de `parse_statement` (~70 l) (Sonnet, faible)
+- [ ] MQ3.8 — Converger `execute()` sur `drain_runner_side_effects`/`write_runner_outputs` (déjà
+  factorisées pour UPDATE/MODIFY) ; diff attentif de l'ordre NOTEs/écritures des 3 boucles (Opus, moyen)
+- [ ] MQ3.9 — Découper les `execute` géantes des procs stat (genmod 961 l, glimmix 770,
+  logistic 755, glm 727/694, mixed 505, anova 488/431) en resolve/build/fit/print-par-table ;
+  un proc = un commit (Opus, élevé)
+- [ ] DoD MQ3 : idem MQ1 ; **prérequis M52 levé** ; → MQ4.
+
+## MQ4 — Regroupements de structs + changements sensibles (en dernier)
+- [ ] MQ4.1 — `MacroEngine` (20 champs) → sous-structs `TraceOptions`/`PendingOutputs`/`ControlFlow` (Sonnet, faible)
+- [ ] MQ4.2 — `Runner` (24 champs) → `TextIo`/`SetCursor`/`MergeState` ; `build_um_runner`
+  (8 params) → `RunnerConfig` (Opus, moyen)
+- [ ] MQ4.3 — reg : `fit_and_print` (15 params dont 7 Option) → struct `FitReportOptions`
+  (après MQ3.4) (Sonnet, faible)
+- [ ] MQ4.4 — `ctx.fatal: Option<String>` → `Option<SasError>` (supprime le
+  `strip_prefix("ERROR: ")` fragile) ; rendu log octet-identique, commit isolé, revue du diff
+  de log complet (Opus, moyen)
+- [ ] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,
+  normalisation unique ; diff des tables avant/après (même gagnant pour tout alias), messages
+  « unknown function » inchangés ; commit isolé (Opus, moyen)
+- [ ] MQ4.6 — Trait `Proc` + `common::parse_model_effects` (squelette MODEL recopié dans
+  mixed/glimmix/glm/anova/genmod/logistic) ; migrer les 2 match géants de `procs/mod.rs` par
+  paquets ; coordonner avec la Phase G (re-phaser après M66 si BLOC 2 démarré) (Opus, élevé)
+- [ ] DoD MQ4 : idem MQ1 ; fin de Phase Q.
