@@ -1163,11 +1163,11 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ3.3 — `parser/datastep.rs` (4634 l) → `datastep/{mod,io,array,hash,control,attrs}.rs` (Sonnet, moyen)
 - [x] MQ3.4 — `procs/reg.rs` (10 885 l) → `reg/{mod,parse,fit,diagnostics,matrices,influence,selection,ridge,output,tests}.rs` ;
   `pub(super)` sur les fonctions/structs inter-sections (aucun blocage de visibilité vérifié) (Opus, moyen)
-- [ ] MQ3.5 — Scinder `format_builtin` (~760 l) par familles (num, monétaire, date/heure,
+- [x] MQ3.5 — Scinder `format_builtin` (~760 l) par familles (num, monétaire, date/heure,
   scientifique) après MQ2.4 (Sonnet, moyen)
-- [ ] MQ3.6 — `walk_stmt` (`datastep/mod.rs`, 672 l, 37 bras) → une méthode par famille, le match
+- [x] MQ3.6 — `walk_stmt` (`datastep/mod.rs`, 672 l, 37 bras) → une méthode par famille, le match
   ne fait plus que dispatcher (Sonnet, moyen)
-- [ ] MQ3.7 — `parse_array` (206 l) en 3 phases + extraction de la queue d'assignation du bras `_`
+- [x] MQ3.7 — `parse_array` (206 l) en 3 phases + extraction de la queue d'assignation du bras `_`
   de `parse_statement` (~70 l) (Sonnet, faible)
 - [ ] MQ3.8 — Converger `execute()` sur `drain_runner_side_effects`/`write_runner_outputs` (déjà
   factorisées pour UPDATE/MODIFY) ; diff attentif de l'ordre NOTEs/écritures des 3 boucles (Opus, moyen)

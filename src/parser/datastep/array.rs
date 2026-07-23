@@ -48,6 +48,14 @@ pub(super) fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
     validate_sas_name(&name, name_tok.span)?;
     ts.next();
 
+    let dims = parse_array_dims(ts)?;
+    let char_len = parse_array_char_len(ts)?;
+    parse_array_elements(ts, name, dims, char_len)
+}
+
+/// Phase 1 de `parse_array` — dimensions : `{n}`, `{n, m, ...}`, `[n]`,
+/// `(n)` ou `{*}` (délimiteur fermant assorti). `None` ⟺ `{*}`.
+fn parse_array_dims(ts: &mut StatementStream) -> Result<Option<Vec<usize>>> {
     // ── Dimensions : `{n}`, `{n, m, ...}`, `[n]`, `(n)` ou `{*}` ─────────
     let open = ts.peek().clone();
     let closer = match open.kind {
@@ -114,7 +122,12 @@ pub(super) fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
         ));
     }
     ts.next(); // fermant
+    Ok(dims)
+}
 
+/// Phase 2 de `parse_array` — `$ [len]` optionnel : array caractère,
+/// longueur défaut 8. `None` = array numérique.
+fn parse_array_char_len(ts: &mut StatementStream) -> Result<Option<usize>> {
     // ── `$ [len]` : array caractère, longueur défaut 8 ──────────────────
     let mut char_len: Option<usize> = None;
     if ts.peek().kind == TokenKind::Dollar {
@@ -132,7 +145,19 @@ pub(super) fn parse_array(ts: &mut StatementStream) -> Result<DsStmt> {
             char_len = Some(n as usize);
         }
     }
+    Ok(char_len)
+}
 
+/// Phase 3 de `parse_array` — liste de variables (plages `x1-x3` expansées),
+/// mots-clés spéciaux (`_TEMPORARY_`, `_NUMERIC_`/`_CHARACTER_`/`_ALL_`) et
+/// valeurs initiales `(1, 2, 3)`, jusqu'au `;` (consommé) ; construit le
+/// `DsStmt::Array` final.
+fn parse_array_elements(
+    ts: &mut StatementStream,
+    name: String,
+    dims: Option<Vec<usize>>,
+    char_len: Option<usize>,
+) -> Result<DsStmt> {
     // ── Liste de variables / mots-clés spéciaux / valeurs initiales ──────
     let mut vars: Vec<String> = Vec::new();
     let mut temporary = false;

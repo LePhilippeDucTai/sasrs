@@ -329,77 +329,87 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
             "no matching DO for END.",
             tok.span,
         )),
-        _ => {
-            // Mot-clé connu de SAS mais non implémenté, assignation
-            // `ident = expr;` OU sum statement `ident + expr;`.
-            // `StatementStream` n'expose pas de peek2, donc on consomme
-            // l'ident de tête puis on inspecte le token suivant : un `=` →
-            // assignation, un `+` → sum statement ; sinon → statement non
-            // implémenté. (La forme `var - expr;` N'EXISTE PAS en SAS — un
-            // `-` après l'ident tombe dans l'erreur.) Le span d'erreur est
-            // celui de l'ident de tête (déjà cloné).
-            let var = tok
-                .ident()
-                .expect("matched an Ident head above")
-                .to_string();
-            ts.next(); // ident de tête
-            match ts.peek().kind {
-                TokenKind::Eq => {
-                    ts.next(); // `=`
-                    let expr = super::expr::parse_expr(ts)?;
-                    ts.expect_semi()?;
-                    Ok(DsStmt::Assign { var, expr })
-                }
-                TokenKind::Plus => {
-                    ts.next(); // `+`
-                    let expr = super::expr::parse_expr(ts)?;
-                    ts.expect_semi()?;
-                    Ok(DsStmt::Sum { var, expr })
-                }
-                // `arr{i} = e;` / `arr[i] = e;` / `arr{i,j} = e;` :
-                // assignation indexée (mono- ou multi-dimensionnelle).
-                TokenKind::LBrace | TokenKind::LBracket => {
-                    let Expr::Index { name, indices } = super::expr::parse_index(ts, var)?
-                    else {
-                        unreachable!("parse_index always returns Expr::Index");
-                    };
-                    parse_assign_indexed_tail(ts, name, indices)
-                }
-                // `arr(i) = e;` / `arr(i,j) = e;` : forme à parenthèses — le
-                // nom sera validé array à la COMPILATION (ici on parse les
-                // indices, séparés par des virgules).
-                TokenKind::LParen => {
-                    ts.next(); // `(`
-                    let mut indices = Vec::new();
-                    loop {
-                        indices.push(super::expr::parse_expr(ts)?);
-                        if ts.peek().kind == TokenKind::Comma {
-                            ts.next();
-                            continue;
-                        }
-                        break;
-                    }
-                    if ts.peek().kind != TokenKind::RParen {
-                        return Err(SasError::parse(
-                            format!(
-                                "expected ')' to close the array subscript of {}",
-                                var.to_uppercase()
-                            ),
-                            ts.peek().span,
-                        ));
-                    }
-                    ts.next(); // `)`
-                    parse_assign_indexed_tail(ts, var, indices)
-                }
-                _ => Err(SasError::parse(
-                    format!(
-                        "Statement {} is not yet implemented.",
-                        head.to_uppercase()
-                    ),
-                    tok.span,
-                )),
-            }
+        _ => parse_assign_or_sum_tail(ts, &tok, &head),
+    }
+}
+
+/// Queue du bras `_` de `parse_statement` : assignation `ident = expr;`,
+/// sum statement `ident + expr;`, assignation indexée (`arr{i}`/`arr[i]`/
+/// `arr(i)`), sinon « statement non implémenté ». `tok` est le token de
+/// tête (non consommé), `head` son identifiant en minuscules.
+fn parse_assign_or_sum_tail(
+    ts: &mut StatementStream,
+    tok: &crate::token::Token,
+    head: &str,
+) -> Result<DsStmt> {
+    // Mot-clé connu de SAS mais non implémenté, assignation
+    // `ident = expr;` OU sum statement `ident + expr;`.
+    // `StatementStream` n'expose pas de peek2, donc on consomme
+    // l'ident de tête puis on inspecte le token suivant : un `=` →
+    // assignation, un `+` → sum statement ; sinon → statement non
+    // implémenté. (La forme `var - expr;` N'EXISTE PAS en SAS — un
+    // `-` après l'ident tombe dans l'erreur.) Le span d'erreur est
+    // celui de l'ident de tête (déjà cloné).
+    let var = tok
+        .ident()
+        .expect("matched an Ident head above")
+        .to_string();
+    ts.next(); // ident de tête
+    match ts.peek().kind {
+        TokenKind::Eq => {
+            ts.next(); // `=`
+            let expr = super::expr::parse_expr(ts)?;
+            ts.expect_semi()?;
+            Ok(DsStmt::Assign { var, expr })
         }
+        TokenKind::Plus => {
+            ts.next(); // `+`
+            let expr = super::expr::parse_expr(ts)?;
+            ts.expect_semi()?;
+            Ok(DsStmt::Sum { var, expr })
+        }
+        // `arr{i} = e;` / `arr[i] = e;` / `arr{i,j} = e;` :
+        // assignation indexée (mono- ou multi-dimensionnelle).
+        TokenKind::LBrace | TokenKind::LBracket => {
+            let Expr::Index { name, indices } = super::expr::parse_index(ts, var)?
+            else {
+                unreachable!("parse_index always returns Expr::Index");
+            };
+            parse_assign_indexed_tail(ts, name, indices)
+        }
+        // `arr(i) = e;` / `arr(i,j) = e;` : forme à parenthèses — le
+        // nom sera validé array à la COMPILATION (ici on parse les
+        // indices, séparés par des virgules).
+        TokenKind::LParen => {
+            ts.next(); // `(`
+            let mut indices = Vec::new();
+            loop {
+                indices.push(super::expr::parse_expr(ts)?);
+                if ts.peek().kind == TokenKind::Comma {
+                    ts.next();
+                    continue;
+                }
+                break;
+            }
+            if ts.peek().kind != TokenKind::RParen {
+                return Err(SasError::parse(
+                    format!(
+                        "expected ')' to close the array subscript of {}",
+                        var.to_uppercase()
+                    ),
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // `)`
+            parse_assign_indexed_tail(ts, var, indices)
+        }
+        _ => Err(SasError::parse(
+            format!(
+                "Statement {} is not yet implemented.",
+                head.to_uppercase()
+            ),
+            tok.span,
+        )),
     }
 }
 
