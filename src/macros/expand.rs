@@ -7,14 +7,114 @@
 
 use super::*;
 
+/// Matcher d'un déclencheur `%kw` à la position `i`. Les deux formes usuelles
+/// de la table sont `STMT` (`matches_kw` : mot-clé statement borné par une
+/// frontière de mot) et `FUNC` (`matches_kw_paren` : fonction macro suivie
+/// d'une `(`) ; `%let` et les statements non supportés utilisent un wrapper
+/// ad hoc (voir leurs entrées).
+type Matcher = fn(&[char], usize, &str) -> bool;
+
+/// Consommateur homogène de la table : rend `Some(next)` si le construct a été
+/// consommé (le scan reprend à `next`), `None` pour laisser la main au candidat
+/// suivant (puis aux cas irréguliers en dur de `process_impl`).
+type Handler = fn(&mut MacroEngine, &[char], usize, &mut String) -> Option<usize>;
+
+const STMT: Matcher = MacroEngine::matches_kw;
+const FUNC: Matcher = MacroEngine::matches_kw_paren;
+
+/// Table de dispatch des déclencheurs `%` « réguliers » de `process_impl`,
+/// essayée DANS L'ORDRE. L'ordre d'essai est SÉMANTIQUE et reproduit la
+/// cascade de `if` historique : les formes `%q*` sont testées AVANT leurs
+/// versions nues — grâce à la frontière de mot des matchers il n'y a pas de
+/// collision (`%substr` ne matche pas `str`), mais l'ordre garde l'intention
+/// explicite. Les handlers à paramètre (mot-clé et/ou booléen) sont adaptés
+/// par des fermetures sans capture.
+const DISPATCH: &[(&str, Matcher, Handler)] = &[
+    // M35.4 — `%goto label;` : pose un saut vers `%label:` (résolu en tête de
+    // boucle, éventuellement après remontée hors d'une action `%then`).
+    ("goto", STMT, MacroEngine::consume_goto),
+    // M35.4 — `%return;` : sortie anticipée du corps de macro courant.
+    ("return", STMT, MacroEngine::consume_return),
+    // M35.4 — `%abort [cancel|abend|return [n]];` : terminaison propre.
+    ("abort", STMT, MacroEngine::consume_abort),
+    // M35.4 — constructions hors-périmètre (interactif/OS) : NOTE propre
+    // + consommation jusqu'au `;`. Aucune n'est exprimable dans le modèle
+    // d'expansion textuel ; on garantit l'absence de crash/boucle. Le mot-clé
+    // effectif est reconnu PAR le consommateur (table interne) : matcher
+    // « toujours vrai », mot-clé de table inutilisé.
+    ("", |_, _, _| true, MacroEngine::consume_unsupported_stmt),
+    // `%let` insensible à la casse (matcher dédié : `%let` + blanc).
+    ("let", |chars, i, _| MacroEngine::matches_let(chars, i), MacroEngine::consume_let),
+    // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
+    // n'émet RIEN dans le flux de code.
+    ("put", STMT, MacroEngine::consume_put),
+    // `%call execute(text);` (M19.3) — met en file un fragment de code
+    // SAS à exécuter APRÈS le segment courant (sémantique CALL EXECUTE).
+    ("call", STMT, MacroEngine::consume_macro_call),
+    // `%include 'chemin';` (M19.2) — charge le fichier, l'expanse
+    // récursivement et splice le résultat À LA PLACE du statement,
+    // AVANT de poursuivre le scan du segment courant.
+    ("include", STMT, MacroEngine::consume_include),
+    // `%macro name(params); body %mend;` — capture, n'émet rien.
+    ("macro", STMT, MacroEngine::consume_macro_def),
+    // `%local v1 v2;` / `%global v1 v2;`
+    ("local", STMT, |s, c, i, o| s.consume_scope_decl(c, i, true, o)),
+    ("global", STMT, |s, c, i, o| s.consume_scope_decl(c, i, false, o)),
+    // `%eval(expr)` — évalue et splice le résultat entier.
+    ("eval", FUNC, MacroEngine::consume_eval),
+    // `%sysfunc(func(args))` / `%qsysfunc(...)` — appelle la fonction
+    // DATA-step et splice le résultat formaté en texte.
+    ("sysfunc", FUNC, |s, c, i, o| s.consume_sysfunc(c, i, "sysfunc", o)),
+    ("qsysfunc", FUNC, |s, c, i, o| s.consume_sysfunc(c, i, "qsysfunc", o)),
+    // `%sysevalf(expr [, conv])` — évaluation FLOTTANTE (M19.1).
+    ("sysevalf", FUNC, MacroEngine::consume_sysevalf),
+    // `%cmpres(text)` / `%qcmpres(text)` — compression des blancs (M19.1).
+    ("qcmpres", FUNC, |s, c, i, o| s.consume_cmpres(c, i, "qcmpres", true, o)),
+    ("cmpres", FUNC, |s, c, i, o| s.consume_cmpres(c, i, "cmpres", false, o)),
+    // `%symexist(name)` / `%sysmexist(name)` / `%sysget(name)` (M19.1).
+    ("symexist", FUNC, MacroEngine::consume_symexist),
+    ("sysmexist", FUNC, MacroEngine::consume_sysmexist),
+    ("sysget", FUNC, MacroEngine::consume_sysget),
+    // `%unquote(text)` — ré-active la résolution `&`/`%` masquée (M19.1).
+    ("unquote", FUNC, MacroEngine::consume_unquote),
+    // `%superq(name)` — valeur d'une variable SANS résolution, masquée.
+    ("superq", FUNC, MacroEngine::consume_superq),
+    // `%bquote(text)` / `%nrbquote(text)` — résout puis masque.
+    ("nrbquote", FUNC, |s, c, i, o| s.consume_bquote(c, i, "nrbquote", true, o)),
+    ("bquote", FUNC, |s, c, i, o| s.consume_bquote(c, i, "bquote", false, o)),
+    // Fonctions chaîne macro simples et leurs variantes `%q*` (le booléen
+    // vaut « résultat masqué », vrai pour les `%q*`).
+    ("qupcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qupcase", true, o)),
+    ("upcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "upcase", false, o)),
+    ("qlowcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qlowcase", true, o)),
+    ("lowcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "lowcase", false, o)),
+    ("qsubstr", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qsubstr", true, o)),
+    ("substr", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "substr", false, o)),
+    ("qscan", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qscan", true, o)),
+    ("scan", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "scan", false, o)),
+    ("index", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "index", false, o)),
+    ("length", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "length", false, o)),
+    // `%str(...)` / `%nrstr(...)` — masquage des caractères spéciaux.
+    ("str", FUNC, |s, c, i, o| s.consume_quote(c, i, "str", false, o)),
+    ("nrstr", FUNC, |s, c, i, o| s.consume_quote(c, i, "nrstr", true, o)),
+    // `%if <cond> %then <action>; [%else <action>;]`
+    ("if", STMT, MacroEngine::consume_if),
+    // `%do ...` (plain group ou itératif `%do i=a %to b`).
+    ("do", STMT, MacroEngine::consume_do),
+];
+
 impl MacroEngine {
     /// Coeur de l'expansion `%let`/`&var` (une passe gauche→droite). Met à jour
     /// la table de l'engine (état conservé entre appels — donc entre segments).
+    /// Les déclencheurs `%` réguliers sont dispatchés via la table `DISPATCH`
+    /// ci-dessus ; restent en dur les cas irréguliers : marqueur d'étiquette
+    /// `%name:`, invocation `%name` d'une macro utilisateur (avec autocall) et
+    /// résolution `&var`.
     pub(super) fn process_impl(&mut self, source: &str) -> String {
         let chars: Vec<char> = source.chars().collect();
         let mut out = String::with_capacity(source.len());
         let mut i = 0;
-        while i < chars.len() {
+        'scan: while i < chars.len() {
             // M35.4 — `%return`/`%abort` posés par un statement précédent (ou par
             // une macro invoquée dont l'abort se propage) : on cesse d'expanser
             // le reste de CE corps. `expand_invocation` réinitialise
@@ -39,271 +139,32 @@ impl MacroEngine {
 
             let c = chars[i];
 
-            // M35.4 — marqueur d'étiquette `%name:` (cible de `%goto`). Il n'émet
-            // RIEN ; on le saute (jusqu'au `:` inclus). On le teste AVANT
-            // l'invocation `%name` pour ne pas confondre `%exit:` avec un appel.
             if c == '%' {
+                // M35.4 — marqueur d'étiquette `%name:` (cible de `%goto`). Il
+                // n'émet RIEN ; on le saute (jusqu'au `:` inclus). Testé AVANT
+                // toute autre forme pour ne pas confondre `%exit:` avec un appel.
                 if let Some(next) = Self::skip_label_marker(&chars, i) {
                     i = next;
                     continue;
                 }
-            }
 
-            // M35.4 — `%goto label;` : pose un saut vers `%label:` (résolu en tête
-            // de boucle, éventuellement après remontée hors d'une action `%then`).
-            if c == '%' && Self::matches_kw(&chars, i, "goto") {
-                if let Some(next) = self.consume_goto(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // M35.4 — `%return;` : sortie anticipée du corps de macro courant.
-            if c == '%' && Self::matches_kw(&chars, i, "return") {
-                if let Some(next) = self.consume_return(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // M35.4 — `%abort [cancel|abend|return [n]];` : terminaison propre.
-            if c == '%' && Self::matches_kw(&chars, i, "abort") {
-                if let Some(next) = self.consume_abort(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // M35.4 — constructions hors-périmètre (interactif/OS) : NOTE propre
-            // + consommation jusqu'au `;`. Aucune n'est exprimable dans le modèle
-            // d'expansion textuel ; on garantit l'absence de crash/boucle.
-            if c == '%' {
-                if let Some(next) = self.consume_unsupported_stmt(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%let` insensible à la casse.
-            if c == '%' && Self::matches_let(&chars, i) {
-                if let Some(next) = self.consume_let(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
-            // n'émet RIEN dans le flux de code.
-            if c == '%' && Self::matches_kw(&chars, i, "put") {
-                if let Some(next) = self.consume_put(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%call execute(text);` (M19.3) — met en file un fragment de code
-            // SAS à exécuter APRÈS le segment courant (sémantique CALL EXECUTE).
-            if c == '%' && Self::matches_kw(&chars, i, "call") {
-                if let Some(next) = self.consume_macro_call(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%include 'chemin';` (M19.2) — charge le fichier, l'expanse
-            // récursivement et splice le résultat À LA PLACE du statement,
-            // AVANT de poursuivre le scan du segment courant.
-            if c == '%' && Self::matches_kw(&chars, i, "include") {
-                if let Some(next) = self.consume_include(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%macro name(params); body %mend;` — capture, n'émet rien.
-            if c == '%' && Self::matches_kw(&chars, i, "macro") {
-                if let Some(next) = self.consume_macro_def(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%local v1 v2;` / `%global v1 v2;`
-            if c == '%' && Self::matches_kw(&chars, i, "local") {
-                if let Some(next) = self.consume_scope_decl(&chars, i, true, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw(&chars, i, "global") {
-                if let Some(next) = self.consume_scope_decl(&chars, i, false, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%eval(expr)` — évalue et splice le résultat entier.
-            if c == '%' && Self::matches_kw_paren(&chars, i, "eval") {
-                if let Some(next) = self.consume_eval(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%sysfunc(func(args))` / `%qsysfunc(...)` — appelle la fonction
-            // DATA-step et splice le résultat formaté en texte.
-            if c == '%' && Self::matches_kw_paren(&chars, i, "sysfunc") {
-                if let Some(next) = self.consume_sysfunc(&chars, "sysfunc", i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "qsysfunc") {
-                if let Some(next) = self.consume_sysfunc(&chars, "qsysfunc", i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%sysevalf(expr [, conv])` — évaluation FLOTTANTE (M19.1).
-            if c == '%' && Self::matches_kw_paren(&chars, i, "sysevalf") {
-                if let Some(next) = self.consume_sysevalf(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%cmpres(text)` / `%qcmpres(text)` — compression des blancs (M19.1).
-            if c == '%' && Self::matches_kw_paren(&chars, i, "qcmpres") {
-                if let Some(next) = self.consume_cmpres(&chars, "qcmpres", true, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "cmpres") {
-                if let Some(next) = self.consume_cmpres(&chars, "cmpres", false, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%symexist(name)` / `%sysmexist(name)` / `%sysget(name)` (M19.1).
-            if c == '%' && Self::matches_kw_paren(&chars, i, "symexist") {
-                if let Some(next) = self.consume_symexist(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "sysmexist") {
-                if let Some(next) = self.consume_sysmexist(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "sysget") {
-                if let Some(next) = self.consume_sysget(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%unquote(text)` — ré-active la résolution `&`/`%` masquée (M19.1).
-            if c == '%' && Self::matches_kw_paren(&chars, i, "unquote") {
-                if let Some(next) = self.consume_unquote(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%superq(name)` — valeur d'une variable SANS résolution, masquée.
-            if c == '%' && Self::matches_kw_paren(&chars, i, "superq") {
-                if let Some(next) = self.consume_superq(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%bquote(text)` / `%nrbquote(text)` — résout puis masque.
-            if c == '%' && Self::matches_kw_paren(&chars, i, "nrbquote") {
-                if let Some(next) = self.consume_bquote(&chars, i, "nrbquote", true, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "bquote") {
-                if let Some(next) = self.consume_bquote(&chars, i, "bquote", false, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // Fonctions chaîne macro simples et leurs variantes `%q*` (résultat
-            // masqué). On teste les `%q*` AVANT leurs versions nues : grâce à la
-            // frontière de mot de `matches_kw_paren` il n'y a pas de collision,
-            // mais l'ordre garde l'intention explicite. `consumed_macro_fn`
-            // permet de relancer la boucle `while` externe via `continue`.
-            if c == '%' {
-                let mut handled = false;
-                for (kw, masked) in [
-                    ("qupcase", true),
-                    ("upcase", false),
-                    ("qlowcase", true),
-                    ("lowcase", false),
-                    ("qsubstr", true),
-                    ("substr", false),
-                    ("qscan", true),
-                    ("scan", false),
-                    ("index", false),
-                    ("length", false),
-                ] {
-                    if Self::matches_kw_paren(&chars, i, kw) {
-                        if let Some(next) = self.consume_macro_fn(&chars, i, kw, masked, &mut out) {
+                // Déclencheurs `%` réguliers : cascade dirigée par la table
+                // `DISPATCH` (ordre d'essai SÉMANTIQUE — voir sa doc). Un
+                // handler qui rend `None` (syntaxe non conforme) laisse la main
+                // au candidat suivant, puis aux cas irréguliers ci-dessous.
+                for &(kw, matcher, handler) in DISPATCH {
+                    if matcher(&chars, i, kw) {
+                        if let Some(next) = handler(self, &chars, i, &mut out) {
                             i = next;
-                            handled = true;
-                            break;
+                            continue 'scan;
                         }
                     }
                 }
-                if handled {
-                    continue;
-                }
-            }
 
-            // `%str(...)` / `%nrstr(...)` — masquage des caractères spéciaux.
-            if c == '%' && Self::matches_kw_paren(&chars, i, "str") {
-                if let Some(next) = self.consume_quote(&chars, i, "str", false, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-            if c == '%' && Self::matches_kw_paren(&chars, i, "nrstr") {
-                if let Some(next) = self.consume_quote(&chars, i, "nrstr", true, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%if <cond> %then <action>; [%else <action>;]`
-            if c == '%' && Self::matches_kw(&chars, i, "if") {
-                if let Some(next) = self.consume_if(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // `%do ...` (plain group ou itératif `%do i=a %to b`).
-            if c == '%' && Self::matches_kw(&chars, i, "do") {
-                if let Some(next) = self.consume_do(&chars, i, &mut out) {
-                    i = next;
-                    continue;
-                }
-            }
-
-            // Invocation `%name` ou `%name(args)` d'une macro DÉFINIE — ou, à
-            // défaut, chargée paresseusement depuis une bibliothèque autocall
-            // (`SASAUTOS`, M19.2). `try_autocall` compile `nom.sas` au premier
-            // appel (idempotent via `autocall_tried`).
-            if c == '%' {
+                // Invocation `%name` ou `%name(args)` d'une macro DÉFINIE — ou,
+                // à défaut, chargée paresseusement depuis une bibliothèque
+                // autocall (`SASAUTOS`, M19.2). `try_autocall` compile `nom.sas`
+                // au premier appel (idempotent via `autocall_tried`).
                 if let Some((name, after)) = Self::read_name(&chars, i + 1) {
                     let key = name.to_uppercase();
                     if !self.macros.contains_key(&key) {

@@ -1133,7 +1133,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] DoD MQ1 : `cargo test` vert, zéro `.snap.new`, clippy propre (seul warning préexistant : `frobenius_norm` inutilisé) ; → MQ2.
 
 ## MQ2 — Extraction de helpers et tables de dispatch (risque faible)
-- [ ] MQ2.1 — Canoniser les signatures `consume_*` sur `(chars, i, kw, masked, out)` (ordre de
+- [x] MQ2.1 — Canoniser les signatures `consume_*` sur `(chars, i, kw, masked, out)` (ordre de
   `consume_macro_fn`) entre `macros/expand.rs` et `macros/functions.rs` ; puis étendre la table de
   dispatch d'`expand.rs` (l.247-266) aux ~27 blocs de `process_impl` (~366 l → ~80 l). L'ordre
   d'essai des mots-clés est sémantique (`%q*` avant les nus) — l'encoder dans la table (Opus, moyen)
