@@ -1158,7 +1158,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 ## MQ3 — Scissions move-only + découpes de mégafonctions (AVANT M52)
 - [x] MQ3.1 — `datastep/functions.rs` (6273 l) → `functions/{mod,math,char,datetime,stat,distributions,random}.rs` ;
   `mod.rs` garde dispatch + re-exports (Sonnet, moyen)
-- [ ] MQ3.2 — `datastep/exec.rs` (8635 l) → `exec/{mod,hash,input,put,setmerge,tests}.rs`
+- [x] MQ3.2 — `datastep/exec.rs` (8635 l) → `exec/{mod,hash,input,put,setmerge,tests}.rs`
   (tests inline → `tests.rs`) (Sonnet, moyen)
 - [ ] MQ3.3 — `parser/datastep.rs` (4634 l) → `datastep/{mod,io,array,hash,control,attrs}.rs` (Sonnet, moyen)
 - [ ] MQ3.4 — `procs/reg.rs` (10 885 l) → `reg/{mod,parse,fit,diagnostics,matrices,influence,selection,ridge,output,tests}.rs` ;
