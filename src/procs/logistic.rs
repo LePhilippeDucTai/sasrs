@@ -321,13 +321,7 @@ fn fmt_p_opt(p: f64) -> String {
     }
 }
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 // ───────────────────────── Value → display string ─────────────────────────
 

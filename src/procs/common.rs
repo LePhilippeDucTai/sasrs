@@ -96,6 +96,15 @@ pub fn partition_weighted(
 // truth, fold corr's private copies into these `pub(crate)` versions and run
 // the corr snapshot/tests to confirm no drift.
 
+/// Write a centered line within LINESIZE.
+pub fn centered(session: &mut Session, text: &str) {
+    let ls = session.listing.ls();
+    let pad = ls.saturating_sub(text.len()) / 2;
+    session
+        .listing
+        .write_line(&format!("{}{}", " ".repeat(pad), text));
+}
+
 /// Lanczos approximation of ln Γ(x) for x > 0. Accuracy ~1e-13.
 fn ln_gamma(x: f64) -> f64 {
     const COF: [f64; 6] = [

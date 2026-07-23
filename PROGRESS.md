@@ -1111,7 +1111,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 
 ## MQ1 — Déduplications byte-identiques (risque nul)
 - [x] MQ1.0 — Section Phase Q dans PROGRESS.md (ce commit) (Sonnet, faible)
-- [ ] MQ1.1 — `common::centered(session, text)` unique ; supprimer les 17 copies dans les procs
+- [x] MQ1.1 — `common::centered(session, text)` unique ; supprimer les 17 copies dans les procs
   (fastclus, corr, princomp, factor, reg, distance, glm, npar1way, univariate, glimmix, genmod,
   ttest, anova, cluster, logistic, discrim, mixed). NE PAS toucher `ListingWriter::centered`
   (privée, autre rôle) (Sonnet, faible)

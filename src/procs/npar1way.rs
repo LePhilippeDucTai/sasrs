@@ -836,14 +836,7 @@ fn fmt_p(p: f64) -> String {
 // ───────────────────────── execute ─────────────────────────
 
 /// Resolve `data=` or `_LAST_` into a concrete DatasetRef.
-/// Write a centered line within LINESIZE.
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 /// Execute PROC NPAR1WAY and produce the listing.
 pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {

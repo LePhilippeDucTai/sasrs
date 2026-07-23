@@ -1560,13 +1560,7 @@ fn two_sided_p(t: f64, df: f64) -> f64 {
 
 // ───────────────────────── Listing helpers ─────────────────────────
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 // ───────────────────────── VarMeta helper ─────────────────────────
 

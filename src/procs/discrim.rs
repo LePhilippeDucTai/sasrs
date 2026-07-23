@@ -194,13 +194,7 @@ fn fmt6(v: f64) -> String {
     format!("{v:.6}")
 }
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 /// Format a class-level Value for display.
 fn value_label(v: &Value) -> String {
