@@ -33,6 +33,16 @@ use super::{right_justify, FormatSpec};
 use crate::value::{format_best, Value};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 
+/// Ajuste une chaîne déjà formatée à la largeur `w` : cadrée à droite si elle
+/// tient, sinon remplie d'étoiles (débordement SAS).
+fn fit_or_stars(s: &str, w: usize) -> String {
+    if s.len() <= w {
+        right_justify(s, w)
+    } else {
+        "*".repeat(w)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,12 +306,7 @@ fn format_wd(v: f64, w: Option<u16>, d: Option<u16>) -> String {
             } else {
                 // Try BEST fallback.
                 let best = format_best(v, ww);
-                if best.len() <= ww {
-                    right_justify(&best, ww)
-                } else {
-                    // Overflow: fill with '*'.
-                    "*".repeat(ww)
-                }
+                fit_or_stars(&best, ww)
             }
         }
     }
@@ -441,11 +446,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(with_commas),
                 Some(w) => {
                     let w = w as usize;
-                    if with_commas.len() <= w {
-                        Some(right_justify(&with_commas, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&with_commas, w))
                 }
             }
         }
@@ -467,11 +468,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(formatted),
                 Some(w) => {
                     let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&formatted, w))
                 }
             }
         }
@@ -494,11 +491,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                     } else {
                         padded
                     };
-                    if full.len() <= w {
-                        Some(right_justify(&full, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&full, w))
                 }
             }
         }
@@ -515,11 +508,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(s),
                 Some(w) => {
                     let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&s, w))
                 }
             }
         }
@@ -533,11 +522,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
             } else {
                 // Try with fewer decimal digits.
                 let s2 = format!("{:.2E}", fval);
-                if s2.len() <= w {
-                    Some(right_justify(&s2, w))
-                } else {
-                    Some("*".repeat(w))
-                }
+                Some(fit_or_stars(&s2, w))
             }
         }
 
@@ -697,11 +682,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(formatted),
                 Some(w) => {
                     let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&formatted, w))
                 }
             }
         }
@@ -743,11 +724,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(formatted),
                 Some(w) => {
                     let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&formatted, w))
                 }
             }
         }
@@ -788,11 +765,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(formatted),
                 Some(w) => {
                     let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&formatted, w))
                 }
             }
         }
@@ -813,11 +786,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(formatted),
                 Some(w) => {
                     let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&formatted, w))
                 }
             }
         }
@@ -873,11 +842,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                 None => Some(s),
                 Some(w) => {
                     let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
+                    Some(fit_or_stars(&s, w))
                 }
             }
         }
@@ -946,11 +911,7 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
                     format!("{:.prec$}E-{:02}", coeff, -exp, prec = d)
                 }
             };
-            if s.len() <= w {
-                Some(right_justify(&s, w))
-            } else {
-                Some("*".repeat(w))
-            }
+            Some(fit_or_stars(&s, w))
         }
 
         // ── Date formats (M18.1 additions) ──────────────────────────────────
