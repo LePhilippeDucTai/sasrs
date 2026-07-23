@@ -1178,7 +1178,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 
 ## MQ4 — Regroupements de structs + changements sensibles (en dernier)
 - [x] MQ4.1 — `MacroEngine` (20 champs) → sous-structs `TraceOptions`/`PendingOutputs`/`ControlFlow` (Sonnet, faible)
-- [ ] MQ4.2 — `Runner` (24 champs) → `TextIo`/`SetCursor`/`MergeState` ; `build_um_runner`
+- [x] MQ4.2 — `Runner` (24 champs) → `TextIo`/`SetCursor`/`MergeState` ; `build_um_runner`
   (8 params) → `RunnerConfig` (Opus, moyen)
 - [x] MQ4.3 — reg : `fit_and_print` (15 params dont 7 Option) → struct `FitReportOptions`
   (après MQ3.4) (Sonnet, faible)

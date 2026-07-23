@@ -216,25 +216,41 @@ enum ReadOutcome {
     Stopover,
 }
 
-struct Runner {
-    pdv: Pdv,
-    input: Option<InputData>,
+/// État d'E/S TEXTE du Runner (M14/M14.2) : lecture INFILE/INPUT/DATALINES
+/// (source, curseurs, hold `@`/`@@`) et sortie FILE/PUT. Regroupé car ces
+/// champs ne servent que les statements texte (la sortie PUT reste toutefois
+/// utilisable dans tous les modes d'exécution, UPDATE/MODIFY compris).
+struct TextIo {
     /// Source d'entrée TEXTE (M14 : INFILE/INPUT/DATALINES).
-    text: Option<TextInput>,
-    /// Prochaine ligne brute (index dans `text.lines`) à charger.
-    text_line: usize,
+    src: Option<TextInput>,
+    /// Prochaine ligne brute (index dans `src.lines`) à charger.
+    next_line: usize,
     /// Nombre d'enregistrements (lignes) lus de la source texte.
-    text_read: usize,
+    read: usize,
     /// Enregistrement maintenu par `@`/`@@` : la ligne courante, le curseur
     /// (colonne 0-based) et un drapeau `double` (`@@` survit aux itérations ;
     /// `@` simple est relâché au début de l'itération suivante). `Some` quand
     /// un hold est actif.
     held: Option<HeldLine>,
-    /// Catalogue de formats/informats (clone de session) pour appliquer les
-    /// informats de l'INPUT (M14).
-    format_catalog: crate::formats::FormatCatalog,
     /// État de sortie texte des PUT (M14.2 : FILE/PUT).
     put: PutState,
+}
+
+impl TextIo {
+    fn new(src: Option<TextInput>) -> Self {
+        TextIo {
+            src,
+            next_line: 0,
+            read: 0,
+            held: None,
+            put: PutState::new(),
+        }
+    }
+}
+
+/// Curseurs du statement SET (concaténation / interclassement / POINT=).
+/// Vides/inertes hors SET.
+struct SetCursor {
     /// Mode CONCATÉNATION (sans BY) : index du dataset en cours de lecture.
     cur_ds: usize,
     /// Curseur PAR dataset : sans BY, prochaine ligne brute à charger (y
@@ -247,9 +263,51 @@ struct Runner {
     /// Clés BY de la dernière observation servie : FIRST. et détection de
     /// désordre.
     prev_keys: Option<Vec<Value>>,
+}
+
+impl SetCursor {
+    fn new(n_datasets: usize) -> Self {
+        SetCursor {
+            cur_ds: 0,
+            cursors: vec![0; n_datasets],
+            filtered: vec![Vec::new(); n_datasets],
+            prev_keys: None,
+        }
+    }
+}
+
+/// État du mode MERGE (M3) : plan pré-calculé + curseur. Vide hors MERGE.
+struct MergeState {
+    /// Séquence pré-calculée des observations de sortie (groupe par groupe).
+    plan: Vec<MergeObs>,
+    /// Curseur dans `plan` (prochaine obs à servir).
+    cursor: usize,
+}
+
+impl MergeState {
+    fn new() -> Self {
+        MergeState {
+            plan: Vec::new(),
+            cursor: 0,
+        }
+    }
+}
+
+struct Runner {
+    pdv: Pdv,
+    input: Option<InputData>,
+    /// E/S TEXTE (M14 : INFILE/INPUT/DATALINES ; M14.2 : FILE/PUT).
+    text_io: TextIo,
+    /// Catalogue de formats/informats (clone de session) pour appliquer les
+    /// informats de l'INPUT (M14) et les formats des PUT. Partagé entre les
+    /// modes — laissé à plat.
+    format_catalog: crate::formats::FormatCatalog,
+    /// Curseurs du statement SET (concaténation / interclassement / POINT=).
+    set_cursor: SetCursor,
     /// Lignes lues au sens SAS, PAR dataset : celles qui PASSENT le WHERE=.
     /// C'est ce compteur qu'affiche la NOTE "There were N observations
-    /// read".
+    /// read". Partagé par les modes SET et MERGE (`build_merge_plan` le
+    /// remplit) — laissé à plat.
     rows_read: Vec<usize>,
     ctx: EvalCtx,
     outputs: Vec<OutputSpec>,
@@ -258,11 +316,8 @@ struct Runner {
     /// Observations poussées PAR sortie (l'OUTPUT ciblé rend les comptes
     /// indépendants).
     out_rows: Vec<usize>,
-    /// MERGE (M3) : séquence pré-calculée des observations de sortie
-    /// (groupe par groupe). Vide hors MERGE.
-    merge_plan: Vec<MergeObs>,
-    /// Curseur dans `merge_plan` (prochaine obs à servir).
-    merge_cursor: usize,
+    /// MERGE (M3) : plan pré-calculé + curseur.
+    merge: MergeState,
     /// Labels des variables (nom UPPERCASE → libellé), copié depuis
     /// `StepProgram.labels`. Sert CALL LABEL(var, result) (M15.6).
     labels: HashMap<String, String>,
@@ -425,16 +480,9 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let mut r = Runner {
         pdv,
         input,
-        text: text_input,
-        text_line: 0,
-        text_read: 0,
-        held: None,
+        text_io: TextIo::new(text_input),
         format_catalog: session.format_catalog.clone(),
-        put: PutState::new(),
-        cur_ds: 0,
-        cursors: vec![0; n_datasets],
-        filtered: vec![Vec::new(); n_datasets],
-        prev_keys: None,
+        set_cursor: SetCursor::new(n_datasets),
         rows_read: vec![0; n_datasets],
         ctx: EvalCtx {
             arrays,
@@ -451,8 +499,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         outputs,
         builders,
         out_rows: vec![0; n_outputs],
-        merge_plan: Vec::new(),
-        merge_cursor: 0,
+        merge: MergeState::new(),
         labels,
         call_execute_queue: Vec::new(),
         modify_state: None,
@@ -472,7 +519,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     // détection de désordre y est faite (clé de groupe qui régresse →
     // ERROR).
     if r.input.as_ref().is_some_and(|i| i.merge) {
-        r.merge_plan = r.build_merge_plan()?;
+        r.merge.plan = r.build_merge_plan()?;
     }
 
     // Valeurs initiales (RETAIN avec init, sum statements) : posées AVANT
@@ -508,14 +555,14 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         // Hold de ligne (M14) : un `@` simple est relâché au DÉBUT de
         // l'itération suivante (le prochain INPUT lira un nouvel
         // enregistrement) ; un `@@` survit.
-        if let Some(h) = &r.held {
+        if let Some(h) = &r.text_io.held {
             if !h.double {
-                r.held = None;
+                r.text_io.held = None;
             }
         }
         // Hold de ligne PUT (M14.2) : un `@` simple relâche la ligne au DÉBUT
         // de l'itération suivante (flush + clear) ; un `@@` la conserve.
-        if r.put.hold && !r.put.hold_double {
+        if r.text_io.put.hold && !r.text_io.put.hold_double {
             r.put_release_line();
         }
 
@@ -569,13 +616,13 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     // UNIQUEMENT pour un fichier externe. Pour les données instream
     // DATALINES/CARDS, SAS n'émet aucune NOTE de ce type (elle est réservée
     // aux fichiers physiques).
-    if let Some(text) = &r.text {
+    if let Some(text) = &r.text_io.src {
         if text.is_file {
             session.log.note(&format!(
                 "{} records were read from {}.",
-                r.text_read, text.display
+                r.text_io.read, text.display
             ));
-            stats.read.push((text.display.clone(), r.text_read));
+            stats.read.push((text.display.clone(), r.text_io.read));
         }
     }
 
@@ -668,19 +715,26 @@ fn flush_hash_outputs(r: &mut Runner, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
-/// Construit un Runner « squelette » pour les boucles UPDATE/MODIFY (M16.5),
-/// avec le PDV, les arrays, les builders de sortie et l'instantané macro déjà
-/// posés. Les champs spécifiques au SET/MERGE/texte sont vides.
-fn build_um_runner(
+/// Matériel de construction d'un Runner UPDATE/MODIFY (M16.5), entièrement
+/// issu de la décomposition du `StepProgram` par l'appelant.
+struct RunnerConfig {
     pdv: Pdv,
     outputs: Vec<OutputSpec>,
     arrays: HashMap<String, super::ArrayDef>,
     labels: HashMap<String, String>,
-    by: &[ByVar],
-    macro_symbols: HashMap<String, String>,
-    format_catalog: crate::formats::FormatCatalog,
-    yearcutoff: u16,
-) -> Runner {
+}
+
+/// Construit un Runner « squelette » pour les boucles UPDATE/MODIFY (M16.5),
+/// avec le PDV, les arrays, les builders de sortie et l'instantané macro déjà
+/// posés (catalogue de formats, symboles macro et YEARCUTOFF pris sur la
+/// session). Les champs spécifiques au SET/MERGE/texte sont vides.
+fn build_um_runner(cfg: RunnerConfig, by: &[ByVar], session: &Session) -> Runner {
+    let RunnerConfig {
+        pdv,
+        outputs,
+        arrays,
+        labels,
+    } = cfg;
     let builders: Vec<Vec<ColBuilder>> = outputs
         .iter()
         .map(|o| {
@@ -698,30 +752,22 @@ fn build_um_runner(
     Runner {
         pdv,
         input: None,
-        text: None,
-        text_line: 0,
-        text_read: 0,
-        held: None,
-        format_catalog: format_catalog.clone(),
-        put: PutState::new(),
-        cur_ds: 0,
-        cursors: Vec::new(),
-        filtered: Vec::new(),
-        prev_keys: None,
+        text_io: TextIo::new(None),
+        format_catalog: session.format_catalog.clone(),
+        set_cursor: SetCursor::new(0),
         rows_read: vec![0; 1],
         ctx: EvalCtx {
             arrays,
             by_flags,
-            macro_symbols,
-            format_catalog,
-            yearcutoff,
+            macro_symbols: session.macro_engine.symbols_snapshot(),
+            format_catalog: session.format_catalog.clone(),
+            yearcutoff: session.options.yearcutoff,
             ..EvalCtx::default()
         },
         outputs,
         builders,
         out_rows: vec![0; n_outputs],
-        merge_plan: Vec::new(),
-        merge_cursor: 0,
+        merge: MergeState::new(),
         labels,
         call_execute_queue: Vec::new(),
         modify_state: None,
@@ -911,17 +957,15 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         .map(|&slot| (slot, trans.var_slots.iter().position(|&s| s == slot).unwrap()))
         .collect();
 
-    let macro_symbols = session.macro_engine.symbols_snapshot();
-    let format_catalog = session.format_catalog.clone();
     let mut r = build_um_runner(
-        pdv,
-        outputs,
-        arrays,
-        labels,
+        RunnerConfig {
+            pdv,
+            outputs,
+            arrays,
+            labels,
+        },
         &upd.by,
-        macro_symbols,
-        format_catalog,
-        session.options.yearcutoff,
+        session,
     );
 
     for (slot, v) in initial_values {
@@ -1067,9 +1111,16 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
         session.log.note(&format!("Variable {name} is uninitialized."));
     }
 
-    let macro_symbols = session.macro_engine.symbols_snapshot();
-    let format_catalog = session.format_catalog.clone();
-    let mut r = build_um_runner(pdv, outputs, arrays, labels, &[], macro_symbols, format_catalog, session.options.yearcutoff);
+    let mut r = build_um_runner(
+        RunnerConfig {
+            pdv,
+            outputs,
+            arrays,
+            labels,
+        },
+        &[],
+        session,
+    );
 
     for (slot, v) in initial_values {
         r.pdv.set(slot, v);

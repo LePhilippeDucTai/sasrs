@@ -13,13 +13,13 @@ impl Runner {
             crate::ast::PutDest::Log => PutDestKind::Log,
             crate::ast::PutDest::Print => PutDestKind::Print,
         };
-        if new_dest != self.put.dest {
+        if new_dest != self.text_io.put.dest {
             // Relâcher la ligne pendante (non maintenue) vers l'ancienne
             // destination avant de basculer.
-            if self.put.started && !self.put.hold && !self.put.hold_double {
+            if self.text_io.put.started && !self.text_io.put.hold && !self.text_io.put.hold_double {
                 self.put_release_line();
             }
-            self.put.dest = new_dest;
+            self.text_io.put.dest = new_dest;
         }
         Ok(Flow::Normal)
     }
@@ -31,44 +31,44 @@ impl Runner {
         // Un nouveau PUT efface le hold simple précédent (la ligne maintenue
         // par `@` est reprise telle quelle ; un nouveau PUT sans `@` final la
         // relâchera). Le hold est recalculé pour CE statement.
-        self.put.hold = false;
-        self.put.hold_double = false;
-        self.put.started = true;
+        self.text_io.put.hold = false;
+        self.text_io.put.hold_double = false;
+        self.text_io.put.started = true;
 
         for item in items {
             match item {
                 PutItem::ColumnPointer(n) => {
-                    self.put.cursor = n.saturating_sub(1);
+                    self.text_io.put.cursor = n.saturating_sub(1);
                 }
                 PutItem::SkipColumns(n) => {
-                    self.put.cursor += n;
+                    self.text_io.put.cursor += n;
                 }
                 PutItem::NextLine => {
                     // Saut de ligne DANS le même PUT : relâche la ligne
                     // courante et en commence une nouvelle (même destination).
                     self.put_release_line();
-                    self.put.started = true;
+                    self.text_io.put.started = true;
                 }
-                PutItem::HoldLine => self.put.hold = true,
+                PutItem::HoldLine => self.text_io.put.hold = true,
                 PutItem::HoldLineDouble => {
-                    self.put.hold = true;
-                    self.put.hold_double = true;
+                    self.text_io.put.hold = true;
+                    self.text_io.put.hold_double = true;
                 }
                 PutItem::Literal(s) => {
                     self.put_write_at(s);
                     // Un blanc sépare l'item suivant en mode liste.
-                    self.put.cursor += 1;
+                    self.text_io.put.cursor += 1;
                 }
                 PutItem::Var { name, format } => {
                     let text = self.render_put_var(name, format.as_deref())?;
                     self.put_write_at(&text);
-                    self.put.cursor += 1;
+                    self.text_io.put.cursor += 1;
                 }
                 PutItem::NamedVar(name) => {
                     let val = self.render_put_var(name, None)?;
                     let text = format!("{}={}", name, val);
                     self.put_write_at(&text);
-                    self.put.cursor += 1;
+                    self.text_io.put.cursor += 1;
                 }
                 PutItem::All => {
                     // `var=value` pour chaque variable du PDV, séparés d'un
@@ -83,14 +83,14 @@ impl Runner {
                         let val = self.render_put_slot(slot, None);
                         let text = format!("{}={}", name, val);
                         self.put_write_at(&text);
-                        self.put.cursor += 1;
+                        self.text_io.put.cursor += 1;
                     }
                 }
             }
         }
 
         // Fin du PUT : sauf hold, relâcher la ligne.
-        if !self.put.hold && !self.put.hold_double {
+        if !self.text_io.put.hold && !self.text_io.put.hold_double {
             self.put_release_line();
         }
         Ok(Flow::Normal)
@@ -100,8 +100,8 @@ impl Runner {
     /// `cursor` (0-based), en complétant de blancs si le curseur est au-delà
     /// de la longueur courante, et avance le curseur après le texte écrit.
     fn put_write_at(&mut self, text: &str) {
-        let mut chars: Vec<char> = self.put.line.chars().collect();
-        let start = self.put.cursor;
+        let mut chars: Vec<char> = self.text_io.put.line.chars().collect();
+        let start = self.text_io.put.cursor;
         // Compléter de blancs jusqu'à `start`.
         while chars.len() < start {
             chars.push(' ');
@@ -115,28 +115,28 @@ impl Runner {
                 chars.push(c);
             }
         }
-        self.put.cursor = start + text.chars().count();
-        self.put.line = chars.into_iter().collect();
+        self.text_io.put.cursor = start + text.chars().count();
+        self.text_io.put.line = chars.into_iter().collect();
     }
 
     /// Relâche (flush + clear) la ligne de sortie courante vers la
     /// destination active, et réinitialise l'état de ligne.
     pub(super) fn put_release_line(&mut self) {
-        let line = std::mem::take(&mut self.put.line);
+        let line = std::mem::take(&mut self.text_io.put.line);
         // SAS rogne les blancs de fin de la ligne PUT relâchée.
         let line = line.trim_end().to_string();
-        let dest = self.put.dest.clone();
-        self.put.out.push((dest, line));
-        self.put.cursor = 0;
-        self.put.started = false;
-        self.put.hold = false;
-        self.put.hold_double = false;
+        let dest = self.text_io.put.dest.clone();
+        self.text_io.put.out.push((dest, line));
+        self.text_io.put.cursor = 0;
+        self.text_io.put.started = false;
+        self.text_io.put.hold = false;
+        self.text_io.put.hold_double = false;
     }
 
     /// Flush de fin d'étape : une ligne encore maintenue (`@`/`@@`) ou en
     /// construction est relâchée.
     pub(super) fn put_flush_at_step_end(&mut self) {
-        if self.put.started || !self.put.line.is_empty() {
+        if self.text_io.put.started || !self.text_io.put.line.is_empty() {
             self.put_release_line();
         }
     }
@@ -149,7 +149,7 @@ impl Runner {
         // Tampon par fichier (ordre des lignes préservé).
         let mut files: HashMap<String, Vec<String>> = HashMap::new();
         let mut file_order: Vec<String> = Vec::new();
-        for (dest, line) in std::mem::take(&mut self.put.out) {
+        for (dest, line) in std::mem::take(&mut self.text_io.put.out) {
             match dest {
                 PutDestKind::Log => session.log.put_line(&line),
                 PutDestKind::Print => session.listing.write_line(&line),

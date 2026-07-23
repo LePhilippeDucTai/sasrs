@@ -17,21 +17,21 @@ impl Runner {
             let Some(input) = &self.input else {
                 return Err(SasError::runtime("SET statement without input data."));
             };
-            let Some(ds) = input.datasets.get(self.cur_ds) else {
+            let Some(ds) = input.datasets.get(self.set_cursor.cur_ds) else {
                 // Fin de TOUS les inputs : fin d'étape immédiate.
                 return Ok(Flow::EndStep);
             };
-            let row = self.cursors[self.cur_ds];
+            let row = self.set_cursor.cursors[self.set_cursor.cur_ds];
             if row >= ds.n_rows {
-                self.cur_ds += 1;
+                self.set_cursor.cur_ds += 1;
                 continue;
             }
             for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
                 self.pdv.set(*slot, col[row].clone());
             }
-            self.cursors[self.cur_ds] += 1;
+            self.set_cursor.cursors[self.set_cursor.cur_ds] += 1;
             let Some(w) = &ds.where_ else {
-                self.rows_read[self.cur_ds] += 1;
+                self.rows_read[self.set_cursor.cur_ds] += 1;
                 self.set_end_flag();
                 return Ok(Flow::Normal);
             };
@@ -47,7 +47,7 @@ impl Runner {
                 self.ctx.error_flag = false;
             }
             if v.truthy() {
-                self.rows_read[self.cur_ds] += 1;
+                self.rows_read[self.set_cursor.cur_ds] += 1;
                 self.set_end_flag();
                 return Ok(Flow::Normal);
             }
@@ -90,9 +90,9 @@ impl Runner {
             self.ctx.fatal.take(),
         );
         let mut found = false;
-        'outer: for d in self.cur_ds..input.datasets.len() {
+        'outer: for d in self.set_cursor.cur_ds..input.datasets.len() {
             let ds = &input.datasets[d];
-            let start = if d == self.cur_ds { self.cursors[d] } else { 0 };
+            let start = if d == self.set_cursor.cur_ds { self.set_cursor.cursors[d] } else { 0 };
             for row in start..ds.n_rows {
                 match &ds.where_ {
                     None => {
@@ -250,7 +250,7 @@ impl Runner {
         let Some(input) = &self.input else {
             return Err(SasError::runtime("SET statement without input data."));
         };
-        let Some((d, cur_keys)) = choose_next(input, &self.filtered, &self.cursors) else {
+        let Some((d, cur_keys)) = choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors) else {
             // Tous les datasets épuisés : fin d'étape immédiate.
             return Ok(Flow::EndStep);
         };
@@ -258,7 +258,7 @@ impl Runner {
         // Détection de désordre : l'interclassement choisit toujours la
         // plus petite clé disponible ; si elle régresse, c'est qu'un input
         // n'est pas trié selon le BY.
-        if let Some(prev) = &self.prev_keys {
+        if let Some(prev) = &self.set_cursor.prev_keys {
             if compare_keys(&cur_keys, prev, &input.by) == Ordering::Less {
                 return Err(SasError::runtime(format!(
                     "BY variables are not properly sorted on data set {}.",
@@ -266,21 +266,21 @@ impl Runner {
                 )));
             }
         }
-        let row = self.filtered[d][self.cursors[d]];
+        let row = self.set_cursor.filtered[d][self.set_cursor.cursors[d]];
         // Les variables absentes du dataset servi GARDENT leur valeur
         // précédente (RETAIN implicite des variables de SET — règle SAS,
         // pas de remise à missing).
         for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
             self.pdv.set(*slot, col[row].clone());
         }
-        self.cursors[d] += 1;
+        self.set_cursor.cursors[d] += 1;
         self.rows_read[d] += 1;
         // FIRST.var_i : première obs, ou clé j ≤ i différente de l'obs
         // précédente. LAST.var_i : dernière obs, ou clé j ≤ i différente
         // de l'obs SUIVANTE (la tête du prochain choix d'interclassement).
-        let next_keys = choose_next(input, &self.filtered, &self.cursors).map(|(_, k)| k);
+        let next_keys = choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors).map(|(_, k)| k);
         for (i, flags) in self.ctx.by_flags.iter_mut().enumerate() {
-            flags.1 = match &self.prev_keys {
+            flags.1 = match &self.set_cursor.prev_keys {
                 None => true,
                 Some(prev) => prefix_changed(&cur_keys, prev, i),
             };
@@ -289,7 +289,7 @@ impl Runner {
                 Some(next) => prefix_changed(&cur_keys, next, i),
             };
         }
-        self.prev_keys = Some(cur_keys);
+        self.set_cursor.prev_keys = Some(cur_keys);
         // END= (M16.4) : 1 si plus aucune observation à interclasser.
         if let Some((_, v)) = &mut self.ctx.end_flag {
             *v = if next_keys.is_none() { 1.0 } else { 0.0 };
@@ -306,7 +306,7 @@ impl Runner {
         let Some(input) = &self.input else {
             return Err(SasError::runtime("MERGE statement without input data."));
         };
-        let Some(obs) = self.merge_plan.get(self.merge_cursor) else {
+        let Some(obs) = self.merge.plan.get(self.merge.cursor) else {
             return Ok(Flow::EndStep);
         };
         // Emprunts disjoints : on copie les petites données nécessaires.
@@ -345,7 +345,7 @@ impl Runner {
                 *flag = in_active[*ds_idx];
             }
         }
-        self.merge_cursor += 1;
+        self.merge.cursor += 1;
         Ok(Flow::Normal)
     }
 
@@ -363,7 +363,7 @@ impl Runner {
         // les lignes RETENUES (`filtered`). Détection de désordre intra-ds.
         let mut ds_groups: Vec<Vec<(Vec<Value>, usize, usize)>> = Vec::with_capacity(n_ds);
         for (d, ds) in input.datasets.iter().enumerate() {
-            let rows = &self.filtered[d];
+            let rows = &self.set_cursor.filtered[d];
             let mut groups: Vec<(Vec<Value>, usize, usize)> = Vec::new();
             let mut prev_key: Option<Vec<Value>> = None;
             for (pos, &row) in rows.iter().enumerate() {
@@ -485,7 +485,7 @@ impl Runner {
                     if let Some((start, len)) = participate[d] {
                         if j < len {
                             // j-ème ligne du groupe dans `filtered`.
-                            let row = self.filtered[d][start + j];
+                            let row = self.set_cursor.filtered[d][start + j];
                             loads.push((d, row));
                         }
                         // j >= len : PERSISTANCE (pas de chargement).
@@ -529,7 +529,7 @@ impl Runner {
         };
         for (d, ds) in input.datasets.iter().enumerate() {
             let Some(w) = &ds.where_ else {
-                self.filtered[d] = (0..ds.n_rows).collect();
+                self.set_cursor.filtered[d] = (0..ds.n_rows).collect();
                 continue;
             };
             let mut keep = Vec::new();
@@ -547,7 +547,7 @@ impl Runner {
                     keep.push(row);
                 }
             }
-            self.filtered[d] = keep;
+            self.set_cursor.filtered[d] = keep;
         }
         // Restaurer l'état initial des slots d'input touchés par le
         // pré-filtrage.

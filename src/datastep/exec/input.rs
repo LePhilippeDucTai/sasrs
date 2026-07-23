@@ -63,7 +63,7 @@ impl Runner {
         // données après le curseur), soit la prochaine ligne de la source. Un
         // hold `@@` dont le reste de ligne n'est que des blancs est épuisé →
         // on lit un nouvel enregistrement (sémantique SAS du « double hold »).
-        let held = self.held.take().filter(|h| {
+        let held = self.text_io.held.take().filter(|h| {
             let rest: String = h.line.chars().skip(h.cursor).collect();
             !rest.trim().is_empty()
         });
@@ -75,16 +75,16 @@ impl Runner {
             },
         };
 
-        if self.text.is_none() {
+        if self.text_io.src.is_none() {
             return Err(SasError::runtime("INPUT statement without an INFILE source."));
         }
         // Items résolus en `InputAction` (slots PDV + informats parsés). On les
         // résout depuis l'AST de CE statement INPUT pour gérer plusieurs INPUT
         // par étape (chacun partage la même source mais a ses propres items).
         let items = self.resolve_input_items(ast_items)?;
-        let short = self.text.as_ref().unwrap().options.short;
-        let dsd = self.text.as_ref().unwrap().options.dsd;
-        let delim = self.text.as_ref().unwrap().options.delimiter.clone();
+        let short = self.text_io.src.as_ref().unwrap().options.short;
+        let dsd = self.text_io.src.as_ref().unwrap().options.dsd;
+        let delim = self.text_io.src.as_ref().unwrap().options.delimiter.clone();
 
         let mut hold_after = false;
         let mut hold_double = false;
@@ -143,7 +143,7 @@ impl Runner {
 
         // Hold : conserver la ligne pour le prochain INPUT.
         if hold_after {
-            self.held = Some(HeldLine {
+            self.text_io.held = Some(HeldLine {
                 line,
                 cursor,
                 double: hold_double,
@@ -153,9 +153,10 @@ impl Runner {
     }
 
     /// Lit le prochain enregistrement brut de la source texte, en respectant
-    /// FIRSTOBS=/OBS=. Incrémente `text_read`. Renvoie `None` à l'épuisement.
+    /// FIRSTOBS=/OBS=. Incrémente `text_io.read`. Renvoie `None` à
+    /// l'épuisement.
     fn next_record(&mut self) -> Result<Option<String>> {
-        let text = match &self.text {
+        let text = match &self.text_io.src {
             Some(t) => t,
             None => return Ok(None),
         };
@@ -163,22 +164,22 @@ impl Runner {
         let obs = text.options.obs;
         loop {
             // FIRSTOBS= : sauter les lignes avant firstobs (1-based).
-            if self.text_line + 1 < firstobs {
-                self.text_line += 1;
+            if self.text_io.next_line + 1 < firstobs {
+                self.text_io.next_line += 1;
                 continue;
             }
             // OBS= : borne supérieure (1-based, inclusive).
             if let Some(o) = obs {
-                if self.text_line + 1 > o {
+                if self.text_io.next_line + 1 > o {
                     return Ok(None);
                 }
             }
-            let Some(line) = text.lines.get(self.text_line) else {
+            let Some(line) = text.lines.get(self.text_io.next_line) else {
                 return Ok(None);
             };
             let line = line.clone();
-            self.text_line += 1;
-            self.text_read += 1;
+            self.text_io.next_line += 1;
+            self.text_io.read += 1;
             return Ok(Some(line));
         }
     }
