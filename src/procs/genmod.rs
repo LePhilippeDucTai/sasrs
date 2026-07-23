@@ -187,140 +187,87 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
             ts.next(); // consume "model"
 
             // Response variable
-            let response = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected response variable", ts.peek().span))?;
-            ts.next();
+            let response = common::parse_model_response(ts, "expected response variable")?;
 
             // Optional response options: (event='val' descending ...)
-            let mut event: Option<String> = None;
-            let mut descending = false;
-
-            if ts.peek().kind == TokenKind::LParen {
-                ts.next(); // consume '('
-                loop {
-                    if ts.peek().kind == TokenKind::RParen || ts.peek().kind == TokenKind::Eof {
-                        break;
-                    }
-                    if ts.peek().kind == TokenKind::Semi {
-                        break;
-                    }
-                    if ts.peek().is_kw("event") {
-                        ts.next();
-                        if ts.peek().kind == TokenKind::Eq {
-                            ts.next();
-                            if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
-                                event = Some(value.clone());
-                                ts.next();
-                            }
-                        }
-                    } else if ts.peek().is_kw("descending") {
-                        descending = true;
-                        ts.next();
-                    } else {
-                        ts.next();
-                    }
-                }
-                if ts.peek().kind == TokenKind::RParen {
-                    ts.next();
-                }
-            }
+            let (event, descending) = common::parse_response_options(ts);
 
             // Expect '='
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after response variable in MODEL",
-                    ts.peek().span,
-                ));
-            }
-            ts.next();
+            common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
 
             // Predictors until '/' or ';'
-            let mut predictors: Vec<String> = Vec::new();
+            let predictors = common::parse_effect_list(ts);
+
             let mut dist_opt: Option<Distribution> = None;
             let mut link_opt: Option<LinkFunction> = None;
             let mut noprint = false;
             let mut scale_opt: Option<f64> = None;
             let mut noscale = false;
 
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next(); // consume '/'
-                    // Parse options
-                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                        if ts.peek().is_kw("dist") {
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next(); // consume '/'
+                // Parse options
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("dist") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
                             ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
+                        }
+                        if let Some(name) = ts.peek().ident().map(str::to_string) {
+                            ts.next();
+                            match name.to_ascii_lowercase().as_str() {
+                                "poisson" => dist_opt = Some(Distribution::Poisson),
+                                "binomial" => dist_opt = Some(Distribution::Binomial),
+                                "normal" => dist_opt = Some(Distribution::Normal),
+                                "gamma" => dist_opt = Some(Distribution::Gamma),
+                                _ => {} // ignore unknown
                             }
-                            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                match name.to_ascii_lowercase().as_str() {
-                                    "poisson" => dist_opt = Some(Distribution::Poisson),
-                                    "binomial" => dist_opt = Some(Distribution::Binomial),
-                                    "normal" => dist_opt = Some(Distribution::Normal),
-                                    "gamma" => dist_opt = Some(Distribution::Gamma),
-                                    _ => {} // ignore unknown
+                        }
+                    } else if ts.peek().is_kw("link") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
+                            ts.next();
+                        }
+                        if let Some(name) = ts.peek().ident().map(str::to_string) {
+                            ts.next();
+                            match name.to_ascii_lowercase().as_str() {
+                                "log" => link_opt = Some(LinkFunction::Log),
+                                "logit" => link_opt = Some(LinkFunction::Logit),
+                                "identity" => link_opt = Some(LinkFunction::Identity),
+                                "reciprocal" | "inverse" | "power" => {
+                                    // POWER(-1) ≈ reciprocal; treat POWER as
+                                    // reciprocal here (full power family deferred).
+                                    link_opt = Some(LinkFunction::Reciprocal)
                                 }
+                                _ => {} // ignore unknown
                             }
-                        } else if ts.peek().is_kw("link") {
+                        }
+                    } else if ts.peek().is_kw("noprint") {
+                        noprint = true;
+                        ts.next();
+                    } else if ts.peek().is_kw("noscale") {
+                        noscale = true;
+                        ts.next();
+                    } else if ts.peek().is_kw("scale") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
                             ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                match name.to_ascii_lowercase().as_str() {
-                                    "log" => link_opt = Some(LinkFunction::Log),
-                                    "logit" => link_opt = Some(LinkFunction::Logit),
-                                    "identity" => link_opt = Some(LinkFunction::Identity),
-                                    "reciprocal" | "inverse" | "power" => {
-                                        // POWER(-1) ≈ reciprocal; treat POWER as
-                                        // reciprocal here (full power family deferred).
-                                        link_opt = Some(LinkFunction::Reciprocal)
-                                    }
-                                    _ => {} // ignore unknown
-                                }
-                            }
-                        } else if ts.peek().is_kw("noprint") {
-                            noprint = true;
+                        }
+                        // SCALE=<number>; accept numeric literal.
+                        if let TokenKind::Num(v) = ts.peek().kind {
+                            scale_opt = Some(v);
                             ts.next();
-                        } else if ts.peek().is_kw("noscale") {
-                            noscale = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("scale") {
-                            ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            // SCALE=<number>; accept numeric literal.
-                            if let TokenKind::Num(v) = ts.peek().kind {
+                        } else if let Some(s) = ts.peek().ident().map(str::to_string) {
+                            if let Ok(v) = s.parse::<f64>() {
                                 scale_opt = Some(v);
-                                ts.next();
-                            } else if let Some(s) = ts.peek().ident().map(str::to_string) {
-                                if let Ok(v) = s.parse::<f64>() {
-                                    scale_opt = Some(v);
-                                }
-                                ts.next();
-                            } else {
-                                ts.next();
                             }
+                            ts.next();
                         } else {
                             ts.next();
                         }
+                    } else {
+                        ts.next();
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    predictors.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
                 }
             }
             ts.expect_semi()?;

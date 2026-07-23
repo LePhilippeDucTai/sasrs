@@ -262,64 +262,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
 
 /// Parse the MODEL statement body (after `model`).
 fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
-    let response = ts
-        .peek()
-        .ident()
-        .map(str::to_string)
-        .ok_or_else(|| SasError::parse("expected response variable in MODEL", ts.peek().span))?;
-    ts.next();
+    let response = common::parse_model_response(ts, "expected response variable in MODEL")?;
 
     // Optional response options: (event='val' | descending)
-    let mut event: Option<String> = None;
-    let mut descending = false;
-    if ts.peek().kind == TokenKind::LParen {
-        ts.next();
-        loop {
-            if ts.peek().kind == TokenKind::RParen
-                || ts.peek().kind == TokenKind::Semi
-                || ts.peek().kind == TokenKind::Eof
-            {
-                break;
-            }
-            if ts.peek().is_kw("event") {
-                ts.next();
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
-                    if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
-                        event = Some(value.clone());
-                        ts.next();
-                    }
-                }
-            } else if ts.peek().is_kw("descending") {
-                descending = true;
-                ts.next();
-            } else {
-                ts.next();
-            }
-        }
-        if ts.peek().kind == TokenKind::RParen {
-            ts.next();
-        }
-    }
+    let (event, descending) = common::parse_response_options(ts);
 
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            "expected '=' in MODEL statement",
-            ts.peek().span,
-        ));
-    }
-    ts.next();
+    common::expect_model_eq(ts, "expected '=' in MODEL statement")?;
 
-    let mut fixed: Vec<String> = Vec::new();
-    while ts.peek().kind != TokenKind::Semi
-        && ts.peek().kind != TokenKind::Slash
-        && ts.peek().kind != TokenKind::Eof
-    {
-        if let Some(name) = ts.peek().ident().map(str::to_string) {
-            fixed.push(name);
-        }
-        ts.next();
-    }
+    let fixed = common::parse_effect_list(ts);
 
     let mut dist_opt: Option<Distribution> = None;
     let mut link_opt: Option<LinkFunction> = None;
@@ -386,16 +336,7 @@ fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 
 /// Parse the RANDOM statement body (after `random`).
 fn parse_random(ts: &mut StatementStream) -> RandomSpec {
-    let mut effects: Vec<String> = Vec::new();
-    while ts.peek().kind != TokenKind::Semi
-        && ts.peek().kind != TokenKind::Slash
-        && ts.peek().kind != TokenKind::Eof
-    {
-        if let Some(name) = ts.peek().ident().map(str::to_string) {
-            effects.push(name);
-        }
-        ts.next();
-    }
+    let effects = common::parse_effect_list(ts);
 
     let mut subject: Option<String> = None;
     let mut cov_type = CovType::Vc;

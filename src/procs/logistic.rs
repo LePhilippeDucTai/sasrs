@@ -145,97 +145,43 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
         } else if kw == "model" {
             ts.next(); // consume "model"
             // Parse response variable name
-            let response = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected response variable", ts.peek().span))?;
-            ts.next();
+            let response = common::parse_model_response(ts, "expected response variable")?;
 
             // Parse optional response options: (event='val' descending ...)
-            let mut event: Option<String> = None;
-            let mut descending = false;
-
-            if ts.peek().kind == TokenKind::LParen {
-                ts.next(); // consume '('
-                loop {
-                    if ts.peek().kind == TokenKind::RParen || ts.peek().kind == TokenKind::Eof {
-                        break;
-                    }
-                    if ts.peek().kind == TokenKind::Semi {
-                        break;
-                    }
-                    if ts.peek().is_kw("event") {
-                        ts.next();
-                        if ts.peek().kind == TokenKind::Eq {
-                            ts.next(); // consume '='
-                            // Accept string literal (single or double quoted)
-                            if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
-                                event = Some(value.clone());
-                                ts.next();
-                            }
-                        }
-                    } else if ts.peek().is_kw("descending") {
-                        descending = true;
-                        ts.next();
-                    } else {
-                        ts.next(); // skip unknown options
-                    }
-                }
-                if ts.peek().kind == TokenKind::RParen {
-                    ts.next(); // consume ')'
-                }
-            }
+            let (event, descending) = common::parse_response_options(ts);
 
             // Expect '='
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after response variable in MODEL",
-                    ts.peek().span,
-                ));
-            }
-            ts.next();
+            common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
 
             // Parse predictors until '/' or ';'
-            let mut predictors: Vec<String> = Vec::new();
+            let predictors = common::parse_effect_list(ts);
+
             let mut noprint = false;
             let mut link = Link::Logit;
 
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next(); // consume '/'
-                    // Parse options until ';'
-                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                        if ts.peek().is_kw("noprint") {
-                            noprint = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("link") {
-                            ts.next(); // consume "link"
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next(); // consume '='
-                                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                                    link = match name.to_lowercase().as_str() {
-                                        "cloglog" | "ccll" => Link::Cloglog,
-                                        "probit" | "normit" => Link::Probit,
-                                        _ => Link::Logit,
-                                    };
-                                    ts.next();
-                                }
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next(); // consume '/'
+                // Parse options until ';'
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("noprint") {
+                        noprint = true;
+                        ts.next();
+                    } else if ts.peek().is_kw("link") {
+                        ts.next(); // consume "link"
+                        if ts.peek().kind == TokenKind::Eq {
+                            ts.next(); // consume '='
+                            if let Some(name) = ts.peek().ident().map(str::to_string) {
+                                link = match name.to_lowercase().as_str() {
+                                    "cloglog" | "ccll" => Link::Cloglog,
+                                    "probit" | "normit" => Link::Probit,
+                                    _ => Link::Logit,
+                                };
+                                ts.next();
                             }
-                        } else {
-                            ts.next(); // skip unknown options
                         }
+                    } else {
+                        ts.next(); // skip unknown options
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    predictors.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
                 }
             }
             ts.expect_semi()?;

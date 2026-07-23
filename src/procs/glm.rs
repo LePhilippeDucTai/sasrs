@@ -135,70 +135,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
             Ok(true)
         } else if kw == "model" {
             ts.next();
-            // Read dependents: idents before `=`
-            let mut dependents: Vec<String> = Vec::new();
-            loop {
-                if ts.peek().kind == TokenKind::Semi
-                    || ts.peek().kind == TokenKind::Eof
-                    || ts.peek().kind == TokenKind::Eq
-                {
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    dependents.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
-                }
-            }
-            // Consume `=`
-            if ts.peek().kind == TokenKind::Eq {
-                ts.next();
-            }
+            // Read dependents: idents before `=` (the `=` itself is consumed).
+            let dependents = common::parse_model_lhs(ts);
             // Read effects: idents (optionally joined by `*`) after `=` until `/` or `;`.
             // Build both the legacy flat `effects` list and the structured
             // `effect_terms` (Vec of CLASS-var-name lists) for the multiway engine.
-            let mut effects: Vec<String> = Vec::new();
-            let mut effect_terms: Vec<Vec<String>> = Vec::new();
+            let (effects, effect_terms) = common::parse_effect_terms(ts);
             let mut solution = false;
             let mut noprint = false;
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next();
-                    // Parse options until semi
-                    while ts.peek().kind != TokenKind::Semi
-                        && ts.peek().kind != TokenKind::Eof
-                    {
-                        if ts.peek().is_kw("solution") {
-                            solution = true;
-                        }
-                        if ts.peek().is_kw("noprint") {
-                            noprint = true;
-                        }
-                        ts.next();
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next();
+                // Parse options until semi
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("solution") {
+                        solution = true;
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    ts.next();
-                    // Build the structured term: name, then any `* name` continuations.
-                    let mut parts: Vec<String> = vec![name];
-                    while ts.peek().kind == TokenKind::Star {
-                        ts.next();
-                        if let Some(next_name) = ts.peek().ident().map(str::to_string) {
-                            parts.push(next_name);
-                            ts.next();
-                        } else {
-                            break;
-                        }
+                    if ts.peek().is_kw("noprint") {
+                        noprint = true;
                     }
-                    // Legacy flat representation: join interaction parts with `*`.
-                    effects.push(parts.join("*"));
-                    effect_terms.push(parts);
-                } else {
                     ts.next();
                 }
             }

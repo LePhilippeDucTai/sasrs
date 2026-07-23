@@ -638,6 +638,161 @@ pub(crate) fn parse_class(ts: &mut StatementStream) -> Result<Vec<String>> {
     parse_var_list(ts)
 }
 
+// ────────────── squelette du statement MODEL (MQ4.6 — model procs) ──────────────
+//
+// Le squelette « réponse → '=' → effets jusqu'à `/` ou `;` » du statement
+// MODEL était recopié dans mixed/glimmix/genmod/logistic (mono-réponse) et
+// glm/anova (multi-réponses, termes d'interaction `a*b`). Les briques
+// ci-dessous sont extraites verbatim de ces procs. Les messages d'erreur
+// diffèrent entre familles (« expected response variable in MODEL » pour
+// MIXED/GLIMMIX vs « expected response variable » pour GENMOD/LOGISTIC…) :
+// ils restent fournis par l'appelant afin de préserver l'identité
+// octet-à-octet des logs. Les options après `/` divergent proc par proc et
+// restent locales.
+
+/// Lit le nom de la variable réponse (partie gauche mono-réponse du MODEL) et
+/// le consomme. Erreur `err_msg` (au span du token courant) si le token n'est
+/// pas un identifiant. Extrait verbatim de `mixed::parse_model`.
+pub(crate) fn parse_model_response(ts: &mut StatementStream, err_msg: &str) -> Result<String> {
+    let response = ts
+        .peek()
+        .ident()
+        .map(str::to_string)
+        .ok_or_else(|| SasError::parse(err_msg, ts.peek().span))?;
+    ts.next();
+    Ok(response)
+}
+
+/// Exige puis consomme le `=` du statement MODEL ; sinon erreur `err_msg` au
+/// span du token courant. Extrait verbatim de `mixed::parse_model`.
+pub(crate) fn expect_model_eq(ts: &mut StatementStream, err_msg: &str) -> Result<()> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(err_msg, ts.peek().span));
+    }
+    ts.next();
+    Ok(())
+}
+
+/// Options de réponse optionnelles `(event='val' descending …)` entre la
+/// réponse et le `=` (GLIMMIX/GENMOD/LOGISTIC). Sans parenthèse ouvrante, ne
+/// consomme rien. Les tokens inconnus dans la parenthèse sont ignorés.
+/// Renvoie `(event, descending)`. Extrait verbatim de `glimmix::parse_model`.
+pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String>, bool) {
+    let mut event: Option<String> = None;
+    let mut descending = false;
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next();
+        loop {
+            if ts.peek().kind == TokenKind::RParen
+                || ts.peek().kind == TokenKind::Semi
+                || ts.peek().kind == TokenKind::Eof
+            {
+                break;
+            }
+            if ts.peek().is_kw("event") {
+                ts.next();
+                if ts.peek().kind == TokenKind::Eq {
+                    ts.next();
+                    if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
+                        event = Some(value.clone());
+                        ts.next();
+                    }
+                }
+            } else if ts.peek().is_kw("descending") {
+                descending = true;
+                ts.next();
+            } else {
+                ts.next();
+            }
+        }
+        if ts.peek().kind == TokenKind::RParen {
+            ts.next();
+        }
+    }
+    (event, descending)
+}
+
+/// Liste plate d'effets : identifiants jusqu'à `/`, `;` ou Eof (le
+/// terminateur n'est PAS consommé) ; tout autre token est ignoré. Sert aux
+/// effets fixes du MODEL (MIXED/GLIMMIX), aux prédicteurs (GENMOD/LOGISTIC)
+/// et aux effets du RANDOM (MIXED/GLIMMIX). Extrait verbatim de
+/// `mixed::parse_model`.
+pub(crate) fn parse_effect_list(ts: &mut StatementStream) -> Vec<String> {
+    let mut effects: Vec<String> = Vec::new();
+    while ts.peek().kind != TokenKind::Semi
+        && ts.peek().kind != TokenKind::Slash
+        && ts.peek().kind != TokenKind::Eof
+    {
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            effects.push(name);
+        }
+        ts.next();
+    }
+    effects
+}
+
+/// Partie gauche multi-réponses de GLM/ANOVA : identifiants jusqu'à `=`, `;`
+/// ou Eof, puis consomme le `=` s'il est présent (pas d'erreur sinon —
+/// fidèle aux parsers d'origine). Extrait verbatim de `glm::parse`.
+pub(crate) fn parse_model_lhs(ts: &mut StatementStream) -> Vec<String> {
+    let mut dependents: Vec<String> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi
+            || ts.peek().kind == TokenKind::Eof
+            || ts.peek().kind == TokenKind::Eq
+        {
+            break;
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            dependents.push(name);
+            ts.next();
+        } else {
+            ts.next();
+        }
+    }
+    if ts.peek().kind == TokenKind::Eq {
+        ts.next();
+    }
+    dependents
+}
+
+/// Effets avec chaînes d'interaction `a*b*c` (GLM/ANOVA) jusqu'à `/`, `;` ou
+/// Eof (le terminateur n'est PAS consommé). Renvoie la représentation plate
+/// (parties jointes par `*`) ET les termes structurés (une liste de noms par
+/// terme) pour le moteur multiway. Extrait verbatim de `glm::parse`.
+pub(crate) fn parse_effect_terms(ts: &mut StatementStream) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut effects: Vec<String> = Vec::new();
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi
+            || ts.peek().kind == TokenKind::Eof
+            || ts.peek().kind == TokenKind::Slash
+        {
+            break;
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            ts.next();
+            // Build the structured term: name, then any `* name` continuations.
+            let mut parts: Vec<String> = vec![name];
+            while ts.peek().kind == TokenKind::Star {
+                ts.next();
+                if let Some(next_name) = ts.peek().ident().map(str::to_string) {
+                    parts.push(next_name);
+                    ts.next();
+                } else {
+                    break;
+                }
+            }
+            // Legacy flat representation: join interaction parts with `*`.
+            effects.push(parts.join("*"));
+            terms.push(parts);
+        } else {
+            ts.next();
+        }
+    }
+    (effects, terms)
+}
+
 #[cfg(test)]
 mod parsing_tests {
     use super::*;
@@ -882,5 +1037,90 @@ mod parsing_tests {
         let err = resolve_last_dataset(&None, &session).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("_LAST_") || msg.contains("undefined"), "msg: {msg}");
+    }
+
+    // ── squelette MODEL (MQ4.6) ───────────────────────────────────────────
+
+    #[test]
+    fn model_response_reads_ident_and_advances() {
+        let src = SourceFile::new("proc foo y = x; run;");
+        let mut ts = proc_stream(&src);
+        let r = parse_model_response(&mut ts, "expected response variable in MODEL").unwrap();
+        assert_eq!(r, "y");
+        assert_eq!(ts.peek().kind, TokenKind::Eq);
+    }
+
+    #[test]
+    fn model_response_non_ident_errors_with_given_message() {
+        let src = SourceFile::new("proc foo = x; run;");
+        let mut ts = proc_stream(&src);
+        let err = parse_model_response(&mut ts, "expected response variable").unwrap_err();
+        assert!(err.to_string().contains("expected response variable"));
+    }
+
+    #[test]
+    fn model_eq_consumes_or_errors() {
+        let src = SourceFile::new("proc foo = x; run;");
+        let mut ts = proc_stream(&src);
+        expect_model_eq(&mut ts, "expected '=' in MODEL statement").unwrap();
+        assert!(ts.peek().is_kw("x"));
+
+        let src2 = SourceFile::new("proc foo x; run;");
+        let mut ts2 = proc_stream(&src2);
+        let err = expect_model_eq(&mut ts2, "expected '=' in MODEL statement").unwrap_err();
+        assert!(err.to_string().contains("expected '=' in MODEL statement"));
+    }
+
+    #[test]
+    fn response_options_event_and_descending() {
+        let src = SourceFile::new("proc foo (event='1' descending) = x; run;");
+        let mut ts = proc_stream(&src);
+        let (event, descending) = parse_response_options(&mut ts);
+        assert_eq!(event.as_deref(), Some("1"));
+        assert!(descending);
+        // Positioned on `=` after the closing paren.
+        assert_eq!(ts.peek().kind, TokenKind::Eq);
+    }
+
+    #[test]
+    fn response_options_absent_consumes_nothing() {
+        let src = SourceFile::new("proc foo = x; run;");
+        let mut ts = proc_stream(&src);
+        let (event, descending) = parse_response_options(&mut ts);
+        assert_eq!(event, None);
+        assert!(!descending);
+        assert_eq!(ts.peek().kind, TokenKind::Eq);
+    }
+
+    #[test]
+    fn effect_list_stops_at_slash_without_consuming() {
+        let src = SourceFile::new("proc foo a b c / noprint; run;");
+        let mut ts = proc_stream(&src);
+        let effects = parse_effect_list(&mut ts);
+        assert_eq!(effects, vec!["a".to_string(), "b".into(), "c".into()]);
+        assert_eq!(ts.peek().kind, TokenKind::Slash);
+    }
+
+    #[test]
+    fn model_lhs_reads_dependents_and_consumes_eq() {
+        let src = SourceFile::new("proc foo y1 y2 = a; run;");
+        let mut ts = proc_stream(&src);
+        let deps = parse_model_lhs(&mut ts);
+        assert_eq!(deps, vec!["y1".to_string(), "y2".into()]);
+        // `=` consumed; positioned on the first effect.
+        assert!(ts.peek().is_kw("a"));
+    }
+
+    #[test]
+    fn effect_terms_builds_star_chains() {
+        let src = SourceFile::new("proc foo a b*c / solution; run;");
+        let mut ts = proc_stream(&src);
+        let (effects, terms) = parse_effect_terms(&mut ts);
+        assert_eq!(effects, vec!["a".to_string(), "b*c".into()]);
+        assert_eq!(
+            terms,
+            vec![vec!["a".to_string()], vec!["b".into(), "c".into()]]
+        );
+        assert_eq!(ts.peek().kind, TokenKind::Slash);
     }
 }

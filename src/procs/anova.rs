@@ -79,64 +79,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
             Ok(true)
         } else if kw == "model" {
             ts.next();
-            // Read dependents: idents before `=`
-            let mut dependents: Vec<String> = Vec::new();
-            loop {
-                if ts.peek().kind == TokenKind::Semi
-                    || ts.peek().kind == TokenKind::Eof
-                    || ts.peek().kind == TokenKind::Eq
-                {
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    dependents.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
-                }
-            }
-            // Consume `=`
-            if ts.peek().kind == TokenKind::Eq {
-                ts.next();
-            }
+            // Read dependents: idents before `=` (the `=` itself is consumed).
+            let dependents = common::parse_model_lhs(ts);
             // Read effects: idents after `=` until `/` or `;`. Idents joined by
             // `*` form a single interaction term (e.g. `a*b`).
-            let mut effects: Vec<String> = Vec::new();
-            let mut terms: Vec<Vec<String>> = Vec::new();
+            let (effects, terms) = common::parse_effect_terms(ts);
             let mut noprint = false;
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next();
-                    // Parse options until semi
-                    while ts.peek().kind != TokenKind::Semi
-                        && ts.peek().kind != TokenKind::Eof
-                    {
-                        if ts.peek().is_kw("noprint") {
-                            noprint = true;
-                        }
-                        ts.next();
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next();
+                // Parse options until semi
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("noprint") {
+                        noprint = true;
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    ts.next();
-                    // Collect the rest of an interaction chain `name*x*y...`.
-                    let mut parts = vec![name];
-                    while ts.peek().kind == TokenKind::Star {
-                        ts.next();
-                        if let Some(next_name) = ts.peek().ident().map(str::to_string) {
-                            parts.push(next_name);
-                            ts.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    effects.push(parts.join("*"));
-                    terms.push(parts);
-                } else {
                     ts.next();
                 }
             }

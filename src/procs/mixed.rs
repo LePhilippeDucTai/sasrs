@@ -248,31 +248,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
 
 /// Parse the MODEL statement body (after `model`): `response = <fixed> / opts;`.
 fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
-    let response = ts
-        .peek()
-        .ident()
-        .map(str::to_string)
-        .ok_or_else(|| SasError::parse("expected response variable in MODEL", ts.peek().span))?;
-    ts.next();
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            "expected '=' in MODEL statement",
-            ts.peek().span,
-        ));
-    }
-    ts.next();
+    let response = common::parse_model_response(ts, "expected response variable in MODEL")?;
+    common::expect_model_eq(ts, "expected '=' in MODEL statement")?;
 
-    let mut fixed: Vec<String> = Vec::new();
     // Read fixed effects until `/` or `;`.
-    while ts.peek().kind != TokenKind::Semi
-        && ts.peek().kind != TokenKind::Slash
-        && ts.peek().kind != TokenKind::Eof
-    {
-        if let Some(name) = ts.peek().ident().map(str::to_string) {
-            fixed.push(name);
-        }
-        ts.next();
-    }
+    let fixed = common::parse_effect_list(ts);
 
     let mut solution = false;
     let mut noint = false;
@@ -315,16 +295,7 @@ fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 
 /// Parse the RANDOM statement body (after `random`).
 fn parse_random(ts: &mut StatementStream) -> RandomSpec {
-    let mut effects: Vec<String> = Vec::new();
-    while ts.peek().kind != TokenKind::Semi
-        && ts.peek().kind != TokenKind::Slash
-        && ts.peek().kind != TokenKind::Eof
-    {
-        if let Some(name) = ts.peek().ident().map(str::to_string) {
-            effects.push(name);
-        }
-        ts.next();
-    }
+    let effects = common::parse_effect_list(ts);
 
     let mut subject: Option<String> = None;
     let mut cov_type = CovType::Vc;

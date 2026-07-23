@@ -1188,7 +1188,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,
   normalisation unique ; diff des tables avant/après (même gagnant pour tout alias), messages
   « unknown function » inchangés ; commit isolé (Opus, moyen)
-- [ ] MQ4.6 — Trait `Proc` + `common::parse_model_effects` (squelette MODEL recopié dans
+- [x] MQ4.6 — Trait `Proc` + `common::parse_model_effects` (squelette MODEL recopié dans
   mixed/glimmix/glm/anova/genmod/logistic) ; migrer les 2 match géants de `procs/mod.rs` par
   paquets ; coordonner avec la Phase G (re-phaser après M66 si BLOC 2 démarré) (Opus, élevé)
 - [ ] DoD MQ4 : idem MQ1 ; fin de Phase Q.
