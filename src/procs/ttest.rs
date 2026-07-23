@@ -543,10 +543,8 @@ fn two_sample(a: &[f64], b: &[f64], alpha: f64, sides: TTestSides) -> TwoSampleR
     }
 }
 
-/// Two-sided p-value for a t statistic with `df` degrees of freedom.
-fn two_sided_p(t: f64, df: f64) -> f64 {
-    (2.0 * (1.0 - student_t_cdf(t.abs(), df))).clamp(0.0, 1.0)
-}
+use crate::procs::common::two_sided_p;
+
 
 /// p-value for a t statistic honoring the requested test `sides`:
 /// - TwoTailed → Pr > |t|
@@ -619,19 +617,8 @@ fn fmt4(v: Option<f64>) -> String {
     }
 }
 
-/// Format a two-sided p-value SAS-style: `<.0001`, else 4 decimals; None → ".".
-fn fmt_p(p: Option<f64>) -> String {
-    match p {
-        None => ".".to_string(),
-        Some(v) => {
-            if v < 0.0001 {
-                "<.0001".to_string()
-            } else {
-                format!("{v:.4}")
-            }
-        }
-    }
-}
+use crate::procs::common::fmt_p;
+
 
 // ───────────────────────── execute ─────────────────────────
 

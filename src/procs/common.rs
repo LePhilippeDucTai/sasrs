@@ -165,6 +165,40 @@ pub(crate) fn chisq_sf(x: f64, df: f64) -> f64 {
     gammq(df / 2.0, x / 2.0)
 }
 
+/// Two-sided p-value Pr(|T_df| > |t|) from a t statistic.
+pub fn two_sided_p(t: f64, df: f64) -> f64 {
+    (2.0 * (1.0 - student_t_cdf(t.abs(), df))).clamp(0.0, 1.0)
+}
+
+/// Format a p-value column cell: missing → `.`, tiny → `<.0001`,
+/// otherwise 4 decimals (the layout shared by the model procs).
+pub fn fmt_p(p: Option<f64>) -> String {
+    match p {
+        None => ".".to_string(),
+        Some(v) if v < 0.0001 => "<.0001".to_string(),
+        Some(v) => format!("{v:.4}"),
+    }
+}
+
+/// `fmt_p` for a p-value that is always present.
+pub fn fmt_p_num(p: f64) -> String {
+    if p < 0.0001 {
+        "<.0001".to_string()
+    } else {
+        format!("{p:.4}")
+    }
+}
+
+/// Format a class-level / BY value for display: BESTw.-style numbers,
+/// trailing blanks trimmed on character values.
+pub fn value_label(v: &Value) -> String {
+    match v {
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(k) => k.display(),
+        Value::Char(s) => s.trim_end().to_string(),
+    }
+}
+
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
 /// and the variable name (display, original case).
 pub struct ByCol {

@@ -338,13 +338,8 @@ fn fmt6(v: f64) -> String {
     format!("{v:.6}")
 }
 
-fn fmt_p(p: Option<f64>) -> String {
-    match p {
-        None => ".".to_string(),
-        Some(v) if v < 0.0001 => "<.0001".to_string(),
-        Some(v) => format!("{v:.4}"),
-    }
-}
+use crate::procs::common::fmt_p;
+
 
 // ───────────────────────── Listing helpers ─────────────────────────
 

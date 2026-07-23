@@ -1119,7 +1119,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   (`ln_gamma/betacf/betai/student_t_cdf/gser/gcf/gammq/erf/probnorm/phi_inv/ln_factorial/ln_choose`) ;
   `pub use crate::stat::dists::{...}` préserve les imports. **Garder local** : `t_quantile`
   (corps divergent, commentaire) et `chisq_sf` (absent de dists.rs ; déléguer à `dists::gammq`) (Sonnet, moyen)
-- [ ] MQ1.3 — Hisser `value_label` (6 fichiers), `fmt_p` (7), `two_sided_p` (2) dans `common.rs` ;
+- [x] MQ1.3 — Hisser `value_label` (6 fichiers), `fmt_p` (7), `two_sided_p` (2) dans `common.rs` ;
   diff de chaque copie avant suppression (une copie divergente reste locale, noté ici) (Sonnet, faible)
 - [ ] MQ1.4 — `executor.rs` : `note_libref_assigned(...)` pour la NOTE Libref dupliquée 3× (Sonnet, faible)
 - [ ] MQ1.5 — `column_from_values` + `write_output` uniques partagés `datastep/exec.rs`⇄`fastpath.rs`

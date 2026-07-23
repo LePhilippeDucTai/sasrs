@@ -24,7 +24,7 @@ use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value};
+use crate::value::Value;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -196,14 +196,8 @@ fn fmt6(v: f64) -> String {
 
 use crate::procs::common::centered;
 
-/// Format a class-level Value for display.
-fn value_label(v: &Value) -> String {
-    match v {
-        Value::Num(f) => format_best(*f, 12),
-        Value::Missing(k) => k.display(),
-        Value::Char(s) => s.trim_end().to_string(),
-    }
-}
+use crate::procs::common::value_label;
+
 
 // ───────────────────────── Linear algebra helpers ─────────────────────────
 

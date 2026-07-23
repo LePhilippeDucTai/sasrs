@@ -903,6 +903,8 @@ fn fmt_r(r: Option<f64>) -> String {
 
 /// Format a two-sided p-value SAS-style: `<.0001`, else 4 decimals. None
 /// (undefined, e.g. on an exact-1 diagonal) → empty cell.
+// Divergence volontaire avec `common::fmt_p` : CORR affiche une cellule
+// vide (pas `.`) pour une p-value manquante.
 fn fmt_p(p: Option<f64>) -> String {
     match p {
         None => String::new(),

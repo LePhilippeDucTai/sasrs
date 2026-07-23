@@ -19,7 +19,7 @@ use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::stat::linalg;
-use crate::stat::{f_cdf, student_t_cdf, t_quantile};
+use crate::stat::{f_cdf, t_quantile};
 use crate::token::TokenKind;
 use crate::value::VarType;
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
@@ -1544,19 +1544,13 @@ fn fmt_level(v: f64) -> String {
     }
 }
 
-fn fmt_p(p: Option<f64>) -> String {
-    match p {
-        None => ".".to_string(),
-        Some(v) if v < 0.0001 => "<.0001".to_string(),
-        Some(v) => format!("{v:.4}"),
-    }
-}
+use crate::procs::common::fmt_p;
+
 
 // ───────────────────────── Stat helpers ─────────────────────────
 
-fn two_sided_p(t: f64, df: f64) -> f64 {
-    (2.0 * (1.0 - student_t_cdf(t.abs(), df))).clamp(0.0, 1.0)
-}
+use crate::procs::common::two_sided_p;
+
 
 // ───────────────────────── Listing helpers ─────────────────────────
 

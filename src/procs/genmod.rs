@@ -369,25 +369,15 @@ fn fmt4(v: f64) -> String {
     format!("{v:.4}")
 }
 
-fn fmt_p_opt(p: f64) -> String {
-    if p < 0.0001 {
-        "<.0001".to_string()
-    } else {
-        format!("{p:.4}")
-    }
-}
+use crate::procs::common::fmt_p_num as fmt_p_opt;
+
 
 use crate::procs::common::centered;
 
 // ───────────────────────── Value helpers ─────────────────────────
 
-fn value_label(v: &Value) -> String {
-    match v {
-        Value::Num(f) => format_best(*f, 12),
-        Value::Missing(k) => k.display(),
-        Value::Char(s) => s.trim_end().to_string(),
-    }
-}
+use crate::procs::common::value_label;
+
 
 fn value_matches_event(v: &Value, event: &str) -> bool {
     match v {

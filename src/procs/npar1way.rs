@@ -823,6 +823,8 @@ fn fmt4(v: f64) -> String {
 }
 
 /// Format a p-value SAS-style: `<.0001`, else 4 decimals; NaN → ".".
+// Divergence volontaire avec `common::fmt_p_num` : NPAR1WAY affiche `.`
+// pour une p-value non finie.
 fn fmt_p(p: f64) -> String {
     if !p.is_finite() {
         ".".to_string()

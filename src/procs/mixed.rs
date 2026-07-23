@@ -32,7 +32,7 @@ use crate::procs::common::decode_column;
 use crate::session::Session;
 use crate::stat::{invert_matrix, student_t_cdf};
 use crate::token::TokenKind;
-use crate::value::{format_best, Value};
+use crate::value::Value;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -442,23 +442,13 @@ fn fmt2(v: f64) -> String {
     format!("{v:.2}")
 }
 
-fn fmt_p(v: f64) -> String {
-    if v < 0.0001 {
-        "<.0001".to_string()
-    } else {
-        format!("{v:.4}")
-    }
-}
+use crate::procs::common::fmt_p_num as fmt_p;
+
 
 use crate::procs::common::centered;
 
-fn value_label(v: &Value) -> String {
-    match v {
-        Value::Num(f) => format_best(*f, 12),
-        Value::Missing(k) => k.display(),
-        Value::Char(s) => s.trim_end().to_string(),
-    }
-}
+use crate::procs::common::value_label;
+
 
 // ───────────────────────── Linear algebra helpers ─────────────────────────
 

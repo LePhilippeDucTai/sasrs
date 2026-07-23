@@ -180,13 +180,8 @@ fn fmt6(v: f64) -> String {
     format!("{v:.6}")
 }
 
-fn fmt_p(p: Option<f64>) -> String {
-    match p {
-        None => ".".to_string(),
-        Some(v) if v < 0.0001 => "<.0001".to_string(),
-        Some(v) => format!("{v:.4}"),
-    }
-}
+use crate::procs::common::fmt_p;
+
 
 // ───────────────────────── Listing helpers ─────────────────────────
 
@@ -1174,6 +1169,9 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
 }
 
 /// Render a CLASS level value the way the existing one-way path does.
+// Divergence volontaire avec `common::value_label` : ANOVA affiche les
+// niveaux numériques via `format!("{f}")`, pas BESTw. — digits imprimés
+// différents, ne pas converger sans re-valider les snapshots.
 fn value_label(v: &Value) -> String {
     match v {
         Value::Char(s) => s.trim_end().to_string(),
