@@ -69,7 +69,10 @@ pub mod fastpath;
 pub mod functions;
 pub mod pdv;
 
-use crate::ast::{BinaryOp, DataStepAst, DatasetOptions, DatasetSpec, DoListItem, DsStmt, Expr};
+use crate::ast::{
+    AttribItem, BinaryOp, DataStepAst, DatasetOptions, DatasetRef, DatasetSpec, DoListItem,
+    DsStmt, Expr, LengthSpec, SetOptions, WhenClause,
+};
 use crate::error::{Result, SasError};
 use crate::missing::num_to_value;
 use crate::session::Session;
@@ -759,76 +762,11 @@ struct PendingModify {
 impl Compiler<'_> {
     fn walk_stmt(&mut self, stmt: &DsStmt) -> Result<()> {
         match stmt {
-            DsStmt::Set { specs, options } => {
-                if self.seen_set {
-                    return Err(SasError::runtime(
-                        "Multiple SET statements are not yet implemented.",
-                    ));
-                }
-                if self.seen_merge {
-                    return Err(SasError::runtime(
-                        "A SET statement is not allowed after a MERGE statement.",
-                    ));
-                }
-                self.seen_set = true;
-                for spec in specs {
-                    // `in=` n'est pas valide sur un SET (MERGE seulement).
-                    if spec.options.in_.is_some() {
-                        return Err(SasError::runtime(
-                            "The IN= data set option is only valid on a MERGE statement.",
-                        ));
-                    }
-                    self.compile_set(spec)?;
-                }
-                // Options de niveau statement (M16.4). NOBS= crée (ou réutilise)
-                // une variable numérique au PDV maintenant (elle est affectée
-                // AVANT la boucle ⇒ doit exister) et la marque retenue (sa
-                // valeur ne doit pas être remise à missing à chaque itération) ;
-                // POINT= référence une variable numérique que l'utilisateur
-                // pilote (créée ici si absente, comme une variable assignée).
-                // END= ne crée JAMAIS de slot (variable automatique temporaire,
-                // servie par EvalCtx, jamais écrite en sortie).
-                if let Some(name) = &options.nobs {
-                    let slot = match self.pdv.slot(name) {
-                        Some(s) => s,
-                        None => self.add_var(name, VarType::Num, 8),
-                    };
-                    self.retained_slots.insert(slot);
-                    self.assigned.insert(name.to_uppercase());
-                }
-                if let Some(name) = &options.point {
-                    if self.pdv.slot(name).is_none() {
-                        self.add_var(name, VarType::Num, 8);
-                    }
-                    // La variable POINT= est pilotée par l'utilisateur : on la
-                    // considère "assignée" (pas de NOTE "uninitialized").
-                    self.assigned.insert(name.to_uppercase());
-                }
-                self.set_options = options.clone();
-                Ok(())
-            }
+            DsStmt::Set { specs, options } => self.compile_set_stmt(specs, options),
             // MERGE (M3) : comme SET multi-datasets mais en match-merge par
             // BY. Chaque dataset peut porter une option `in=`. Un SET/MERGE
             // a déjà été vu → erreur.
-            DsStmt::Merge(specs) => {
-                if self.seen_set || self.seen_merge {
-                    return Err(SasError::runtime(
-                        "A MERGE statement is not allowed after a SET or MERGE statement.",
-                    ));
-                }
-                self.seen_merge = true;
-                for spec in specs {
-                    // L'index du dataset dans `input_datasets` AVANT le push.
-                    let ds_index = self.input_datasets.len();
-                    if let Some(nm) = &spec.options.in_ {
-                        // Le nom IN= ne doit PAS entrer en collision avec une
-                        // variable du PDV (c'est une automatique temporaire).
-                        self.in_flags.push((nm.to_uppercase(), ds_index));
-                    }
-                    self.compile_set(spec)?;
-                }
-                Ok(())
-            }
+            DsStmt::Merge(specs) => self.compile_merge(specs),
             // UPDATE (M16.5) : maître + transaction, fusion par KEY=. Comme
             // SET/MERGE, exclusif (un seul SET/MERGE/UPDATE/MODIFY par étape).
             DsStmt::Update {
@@ -836,73 +774,14 @@ impl Compiler<'_> {
                 master_where,
                 transaction,
                 key_vars,
-            } => {
-                if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
-                {
-                    return Err(SasError::runtime(
-                        "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
-                    ));
-                }
-                // Le maître entre au PDV en premier (ordre de référence), puis
-                // la transaction (ses variables nouvelles s'ajoutent).
-                let master_ds = self.materialize_input(master, &DatasetOptions::default())?;
-                let transaction_ds =
-                    self.materialize_input(transaction, &DatasetOptions::default())?;
-                if let Some(w) = master_where {
-                    self.validate_where_vars(w, &master.display())?;
-                }
-                self.update = Some(PendingUpdate {
-                    master: master_ds,
-                    transaction: transaction_ds,
-                    master_display: master.display(),
-                    key_names: key_vars.clone(),
-                    master_where: master_where.clone(),
-                });
-                Ok(())
-            }
+            } => self.compile_update(master, master_where, transaction, key_vars),
             // MODIFY (M16.5) : un dataset, modification EN PLACE.
             DsStmt::Modify {
                 dataset,
                 key_vars,
                 point,
                 nobs,
-            } => {
-                if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
-                {
-                    return Err(SasError::runtime(
-                        "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
-                    ));
-                }
-                let (data, out_vars) =
-                    self.materialize_input_with_meta(dataset, &DatasetOptions::default())?;
-                // NOBS= : variable numérique affectée AVANT la boucle (doit
-                // exister, retenue). POINT= : pilotée par l'utilisateur.
-                if let Some(name) = nobs {
-                    let slot = match self.pdv.slot(name) {
-                        Some(s) => s,
-                        None => self.add_var(name, VarType::Num, 8),
-                    };
-                    self.retained_slots.insert(slot);
-                    self.assigned.insert(name.to_uppercase());
-                }
-                if let Some(name) = point {
-                    if self.pdv.slot(name).is_none() {
-                        self.add_var(name, VarType::Num, 8);
-                    }
-                    self.assigned.insert(name.to_uppercase());
-                }
-                self.modify = Some(PendingModify {
-                    libref: dataset.libref_or_work(),
-                    table: dataset.name.clone(),
-                    display: dataset.display(),
-                    data,
-                    out_vars,
-                    key_names: key_vars.clone(),
-                    point: point.clone(),
-                    nobs: nobs.clone(),
-                });
-                Ok(())
-            }
+            } => self.compile_modify(dataset, key_vars, point, nobs),
             // BY : purement déclaratif ici ; résolu en fin de compilation
             // (`build_input`). Les variables BY doivent venir des inputs —
             // on ne crée donc AUCUN slot ici.
@@ -910,30 +789,7 @@ impl Compiler<'_> {
                 self.by = Some(items.clone());
                 Ok(())
             }
-            DsStmt::Assign { var, expr } => {
-                let upper = var.to_uppercase();
-                // `arr = e;` à l'intérieur d'un `DO OVER arr` : assignation à
-                // l'élément courant (résolue à l'exécution) — ne crée PAS de
-                // variable. Hors DO OVER, un nom d'array nu est illégal.
-                if self.arrays.contains_key(&upper) {
-                    if self.do_over_arrays.contains(&upper) {
-                        self.assigned.insert(upper);
-                        self.walk_expr(expr)?;
-                        return Ok(());
-                    }
-                    return Err(SasError::runtime(format!(
-                        "Illegal reference to the array {var}."
-                    )));
-                }
-                // La cible entre au PDV en premier (ordre textuel), avec le
-                // type inféré AVANT création des variables de l'expression
-                // (les inconnues comptent comme Num, cohérent avec SAS).
-                let (ty, length) = self.infer(expr);
-                self.add_var(var, ty, length);
-                self.assigned.insert(var.to_uppercase());
-                self.walk_expr(expr)?;
-                Ok(())
-            }
+            DsStmt::Assign { var, expr } => self.compile_assign(var, expr),
             DsStmt::If {
                 cond,
                 then_branch,
@@ -960,75 +816,19 @@ impl Compiler<'_> {
                 while_,
                 until,
                 body,
-            } => {
-                // L'index entre au PDV au point du DO (ordre de première
-                // référence) : Num 8, NON retenu, et il compte comme
-                // assigné (pas de NOTE "uninitialized"). Puis les bornes
-                // et conditions en ordre textuel, puis le corps.
-                if let Some((name, from)) = index {
-                    self.add_var(name, VarType::Num, 8);
-                    self.assigned.insert(name.to_uppercase());
-                    self.walk_expr(from)?;
-                }
-                for e in [to, by, while_, until].into_iter().flatten() {
-                    self.walk_expr(e)?;
-                }
-                for s in body {
-                    self.walk_stmt(s)?;
-                }
-                Ok(())
-            }
+            } => self.compile_do_loop(index, to, by, while_, until, body),
             // DO sur liste de valeurs (M16.3) : l'index entre au PDV (Num 8,
             // assigné — pas de NOTE "uninitialized"). Le type est déduit des
             // valeurs ? SAS : numérique sauf si TOUTES les valeurs explicites
             // sont des chaînes → caractère. On infère le type/longueur de la
             // 1re valeur (suffisant pour les cas usuels).
-            DsStmt::DoList { index, items, body } => {
-                let (ty, length) = do_list_index_type(items);
-                self.add_var(index, ty, length);
-                self.assigned.insert(index.to_uppercase());
-                for item in items {
-                    match item {
-                        DoListItem::Value(e) => self.walk_expr(e)?,
-                        DoListItem::Range { from, to, by } => {
-                            self.walk_expr(from)?;
-                            self.walk_expr(to)?;
-                            if let Some(b) = by {
-                                self.walk_expr(b)?;
-                            }
-                        }
-                    }
-                }
-                for s in body {
-                    self.walk_stmt(s)?;
-                }
-                Ok(())
-            }
+            DsStmt::DoList { index, items, body } => self.compile_do_list(index, items, body),
             // DO OVER (M16.3) : itération implicite sur un array. L'array doit
             // être déclaré ; pendant le corps, une référence nue au nom de
             // l'array désigne l'élément courant (autorisée en lecture comme en
             // écriture). On installe le nom dans `do_over_arrays` le temps de
             // walker le corps.
-            DsStmt::DoOver { array, body } => {
-                let upper = array.to_uppercase();
-                if !self.arrays.contains_key(&upper) {
-                    return Err(SasError::runtime(format!(
-                        "Undeclared array referenced: {array}."
-                    )));
-                }
-                let newly = self.do_over_arrays.insert(upper.clone());
-                let mut result = Ok(());
-                for s in body {
-                    if let Err(e) = self.walk_stmt(s) {
-                        result = Err(e);
-                        break;
-                    }
-                }
-                if newly {
-                    self.do_over_arrays.remove(&upper);
-                }
-                result
-            }
+            DsStmt::DoOver { array, body } => self.compile_do_over(array, body),
             // SELECT (M16.1) : vérifie les références de variables du
             // sélecteur, de chaque valeur/condition de WHEN, et des corps
             // (WHEN + OTHERWISE), en ordre textuel.
@@ -1036,38 +836,10 @@ impl Compiler<'_> {
                 selector,
                 whens,
                 otherwise,
-            } => {
-                if let Some(sel) = selector {
-                    self.walk_expr(sel)?;
-                }
-                for when in whens {
-                    for v in &when.values {
-                        self.walk_expr(v)?;
-                    }
-                    self.walk_stmt(&when.body)?;
-                }
-                if let Some(o) = otherwise {
-                    self.walk_stmt(o)?;
-                }
-                Ok(())
-            }
+            } => self.compile_select(selector, whens, otherwise),
             // DELETE : purement exécutif, rien à compiler.
             DsStmt::Delete => Ok(()),
-            DsStmt::Output(targets) => {
-                // `has_explicit_output` dès qu'UN output (ciblé ou non)
-                // apparaît. Chaque cible doit être une sortie déclarée du
-                // statement DATA (comparaison par display "WORK.A").
-                self.has_explicit_output = true;
-                for t in targets {
-                    let disp = t.display();
-                    if !self.output_displays.contains(&disp) {
-                        return Err(SasError::runtime(format!(
-                            "Output dataset {disp} is not in the DATA statement output list."
-                        )));
-                    }
-                }
-                Ok(())
-            }
+            DsStmt::Output(targets) => self.compile_output(targets),
             DsStmt::Keep(names) => {
                 self.keeps.extend(names.iter().cloned());
                 Ok(())
@@ -1077,93 +849,8 @@ impl Compiler<'_> {
                 Ok(())
             }
             DsStmt::Stop => Ok(()),
-            DsStmt::Retain(items) => {
-                if items.is_empty() {
-                    // `retain;` seul : tout le PDV (cf. fin de compile()).
-                    self.retain_all = true;
-                    return Ok(());
-                }
-                for (name, init) in items {
-                    // RETAIN _ALL_ (M16.6) : retient TOUTES les variables
-                    // connues du PDV À CE POINT (≠ `retain;` nu qui retient le
-                    // PDV entier en fin de compilation). Les variables créées
-                    // APRÈS ce statement ne sont donc PAS retenues. Aucune
-                    // valeur initiale n'est admise sur `_all_` ; il ne crée
-                    // jamais de variable nommée `_ALL_`.
-                    if name.eq_ignore_ascii_case("_all_") {
-                        if init.is_some() {
-                            return Err(SasError::runtime(
-                                "An initial value is not allowed with RETAIN _ALL_.",
-                            ));
-                        }
-                        for slot in 0..self.pdv.vars().len() {
-                            self.retained_slots.insert(slot);
-                        }
-                        continue;
-                    }
-                    // Listes spéciales _NUMERIC_/_CHARACTER_ : retiennent les
-                    // variables du type voulu connues à ce point (mêmes règles
-                    // que _ALL_ — créées après = non retenues).
-                    if name.eq_ignore_ascii_case("_numeric_")
-                        || name.eq_ignore_ascii_case("_character_")
-                    {
-                        if init.is_some() {
-                            return Err(SasError::runtime(
-                                "An initial value is not allowed with a special RETAIN list.",
-                            ));
-                        }
-                        let want = if name.eq_ignore_ascii_case("_numeric_") {
-                            VarType::Num
-                        } else {
-                            VarType::Char
-                        };
-                        let slots: Vec<usize> = self
-                            .pdv
-                            .vars()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, v)| v.ty == want)
-                            .map(|(i, _)| i)
-                            .collect();
-                        for slot in slots {
-                            self.retained_slots.insert(slot);
-                        }
-                        continue;
-                    }
-                    match init {
-                        // AVEC init : la variable entre au PDV ICI (ordre de
-                        // première référence), type/longueur du littéral, et
-                        // sa valeur initiale part dans `initial_values`. Elle
-                        // compte comme initialisée (pas de NOTE
-                        // "uninitialized" — comme SAS).
-                        Some(expr) => {
-                            let (ty, length, value) = retain_literal(expr)?;
-                            let slot = self.add_var(name, ty, length);
-                            self.retained_slots.insert(slot);
-                            self.assigned.insert(name.to_uppercase());
-                            self.initial_values.push((slot, value));
-                        }
-                        // SANS init : ne crée PAS la variable (le type sera
-                        // figé par sa prochaine référence) — voir compile().
-                        None => self.retain_pending.push(name.clone()),
-                    }
-                }
-                Ok(())
-            }
-            DsStmt::Sum { var, expr } => {
-                // `var + expr;` : var entre au PDV (Num, 8), retenue, valeur
-                // initiale 0 — SAUF si un RETAIN avec init a déjà posé une
-                // valeur pour ce slot (le RETAIN gagne, comme SAS). La cible
-                // entre avant les variables de l'expression (ordre textuel).
-                let slot = self.add_var(var, VarType::Num, 8);
-                self.retained_slots.insert(slot);
-                self.assigned.insert(var.to_uppercase());
-                if !self.initial_values.iter().any(|(s, _)| *s == slot) {
-                    self.initial_values.push((slot, Value::Num(0.0)));
-                }
-                self.walk_expr(expr)?;
-                Ok(())
-            }
+            DsStmt::Retain(items) => self.compile_retain(items),
+            DsStmt::Sum { var, expr } => self.compile_sum(var, expr),
             DsStmt::Array {
                 name,
                 dims,
@@ -1177,130 +864,28 @@ impl Compiler<'_> {
                 array,
                 indices,
                 expr,
-            } => {
-                let upper = array.to_uppercase();
-                let Some(def) = self.arrays.get(&upper) else {
-                    return Err(SasError::runtime(format!(
-                        "Undeclared array referenced: {array}."
-                    )));
-                };
-                // Tous les éléments sont potentiellement assignés via
-                // l'indice : pas de NOTE "uninitialized" pour eux.
-                for slot in def.slots.clone() {
-                    let n = self.pdv.vars()[slot].name.to_uppercase();
-                    self.assigned.insert(n);
-                }
-                for index in indices {
-                    self.walk_expr(index)?;
-                }
-                self.walk_expr(expr)?;
-                Ok(())
-            }
-            DsStmt::Length(items) => {
-                for (name, spec) in items {
-                    // Plages SAS : char 1..=32767, num 3..=8.
-                    let (lo, hi) = if spec.char { (1, 32767) } else { (3, 8) };
-                    if spec.len < lo || spec.len > hi {
-                        return Err(SasError::runtime(format!(
-                            "The length {} specified for the variable {} is out of range ({}-{}).",
-                            spec.len, name, lo, hi
-                        )));
-                    }
-                    match self.pdv.slot(name) {
-                        // LENGTH précède la première référence : crée la
-                        // variable avec cette longueur. Pour une numérique,
-                        // la longueur (3..=8) est une simple MÉTADONNÉE en
-                        // M2 — le stockage reste f64 sur 8 octets.
-                        None => {
-                            let ty = if spec.char { VarType::Char } else { VarType::Num };
-                            self.add_var(name, ty, spec.len);
-                        }
-                        // Déjà au PDV : la longueur est figée. SAS n'émet le
-                        // WARNING que pour les variables CHAR dont la
-                        // longueur demandée diffère ; num : silencieux.
-                        Some(slot) => {
-                            let v = &self.pdv.vars()[slot];
-                            if v.ty == VarType::Char && spec.char && v.length != spec.len {
-                                let name = v.name.clone();
-                                self.session.log.warning(&format!(
-                                    "Length of character variable {name} has already been set."
-                                ));
-                            }
-                        }
-                    }
-                }
-                Ok(())
-            }
+            } => self.compile_assign_indexed(array, indices, expr),
+            DsStmt::Length(items) => self.compile_length(items),
             // FORMAT/LABEL/ATTRIB : déclarations de compilation. Le format
             // (validé via FormatSpec::parse) et le libellé sont mémorisés
             // dans des maps appliquées en fin de compilation (l'ordre
             // déclaration/référence n'importe donc pas). Une variable
             // inconnue est ignorée (SIMPLIFICATION M4 documentée : en vrai
             // SAS la variable serait créée sur le PDV).
-            DsStmt::Format(groups) => {
-                for (names, token) in groups {
-                    if crate::formats::FormatSpec::parse(token).is_none() {
-                        return Err(SasError::runtime(format!(
-                            "The format {token} is not valid."
-                        )));
-                    }
-                    for name in names {
-                        self.formats.insert(name.to_uppercase(), token.clone());
-                    }
-                }
-                Ok(())
-            }
+            DsStmt::Format(groups) => self.compile_format(groups),
             DsStmt::Label(pairs) => {
                 for (name, label) in pairs {
                     self.labels.insert(name.to_uppercase(), label.clone());
                 }
                 Ok(())
             }
-            DsStmt::Attrib(items) => {
-                for item in items {
-                    if let Some(token) = &item.format
-                        && crate::formats::FormatSpec::parse(token).is_none()
-                    {
-                        return Err(SasError::runtime(format!(
-                            "The format {token} is not valid."
-                        )));
-                    }
-                    for name in &item.vars {
-                        let upper = name.to_uppercase();
-                        if let Some(token) = &item.format {
-                            self.formats.insert(upper.clone(), token.clone());
-                        }
-                        if let Some(label) = &item.label {
-                            self.labels.insert(upper.clone(), label.clone());
-                        }
-                        // length= : parsé mais non appliqué en M4.
-                    }
-                }
-                Ok(())
-            }
+            DsStmt::Attrib(items) => self.compile_attrib(items),
             // `call <name>(args);` (M11.5) : les arguments sont des
             // expressions rvalue ordinaires (la routine ne crée pas de
             // variable PDV — `call symput` écrit dans la table macro, pas
             // dans le PDV). On parcourt donc simplement les arguments pour
             // découvrir les variables référencées.
-            DsStmt::CallRoutine { name, args } => {
-                // CALL SORTN/SORTC (M15.6) acceptent un NOM D'ARRAY entier en
-                // argument (`call sortn(arr)`) — ce n'est pas une référence de
-                // variable illégale, mais le déballage de tous ses éléments.
-                // On ne walke donc PAS un argument qui nomme un array déclaré.
-                let is_sort = name.eq_ignore_ascii_case("sortn")
-                    || name.eq_ignore_ascii_case("sortc");
-                for a in args {
-                    if is_sort
-                        && let Expr::Var(n) = a
-                        && self.arrays.contains_key(&n.to_uppercase())
-                    {
-                        continue;
-                    }
-                    self.walk_expr(a)?;
-                }
-                Ok(())
-            }
+            DsStmt::CallRoutine { name, args } => self.compile_call_routine(name, args),
             // INFILE (M14) : déclaratif. Un second INFILE écrase le premier
             // (SAS le permet — le dernier gagne). On mémorise source+options.
             DsStmt::Infile { source, options } => {
@@ -1310,25 +895,7 @@ impl Compiler<'_> {
             // INPUT (M14) : les variables nommées entrent au PDV en ordre de
             // première référence (char → longueur du `$ w`/informat, défaut
             // 8 ; num → 8). Plusieurs INPUT par étape sont autorisés.
-            DsStmt::Input(items) => {
-                self.seen_input = true;
-                for item in items {
-                    if let crate::ast::InputItem::Var {
-                        name,
-                        is_char,
-                        informat,
-                        ..
-                    } = item
-                    {
-                        let (ty, length) = input_var_type(*is_char, informat.as_deref())?;
-                        self.add_var(name, ty, length);
-                        // Une variable d'INPUT est « assignée » (pas de NOTE
-                        // uninitialized).
-                        self.assigned.insert(name.to_uppercase());
-                    }
-                }
-                Ok(())
-            }
+            DsStmt::Input(items) => self.compile_input(items),
             // DATALINES (M14) : le bloc verbatim, source inline de l'étape.
             DsStmt::Datalines(lines) => {
                 self.datalines = Some(lines.clone());
@@ -1366,61 +933,9 @@ impl Compiler<'_> {
             // DECLARE HASH (M17.1) : enregistre l'objet hash avec ses options
             // résolues. Un objet redéclaré écrase le précédent (SAS permet de
             // re-DECLARE ; le dernier gagne). Les options inconnues → erreur.
-            DsStmt::DeclareHash { name, options } => {
-                let mut obj = HashObject::default();
-                for (key, value) in options {
-                    match key.as_str() {
-                        "ordered" => obj.ordered = Some(value.trim().to_ascii_lowercase()),
-                        "duplicate" => obj.duplicate = Some(value.trim().to_ascii_lowercase()),
-                        "multidata" => {
-                            obj.multidata = matches!(
-                                value.trim().to_ascii_lowercase().as_str(),
-                                "yes" | "y" | "1"
-                            );
-                        }
-                        "dataset" | "data" => obj.dataset = Some(value.clone()),
-                        "hashexp" | "suminc" | "initialgrouptype" => {
-                            // Options de réglage/perf : acceptées et ignorées.
-                        }
-                        // Option inconnue → erreur claire.
-                        other => {
-                            return Err(SasError::runtime(format!(
-                                "Hash object option {} is not supported.",
-                                other.to_uppercase()
-                            )));
-                        }
-                    }
-                }
-                // dataset: (M17.2) — pré-lit les colonnes à la compilation
-                // (`&mut Session` disponible) et entre chaque colonne au PDV
-                // (SAS exige que les variables clé/données existent au PDV ;
-                // les charger ici les crée comme un SET implicite).
-                if let Some(dsname) = obj.dataset.clone() {
-                    let (cols, nrows) = self.preload_hash_dataset(&dsname)?;
-                    obj.dataset_cols = Some(cols);
-                    obj.dataset_nrows = nrows;
-                }
-                self.hash_objects.insert(name.to_uppercase(), obj);
-                Ok(())
-            }
+            DsStmt::DeclareHash { name, options } => self.compile_hash_decl(name, options),
             // DECLARE HITER (M17.2) : l'objet hash lié doit être déclaré.
-            DsStmt::DeclareHiter { name, hash_name } => {
-                let hupper = hash_name.to_uppercase();
-                if !self.hash_objects.contains_key(&hupper) {
-                    return Err(SasError::runtime(format!(
-                        "Hash object {hupper} bound to iterator {} has not been declared.",
-                        name.to_uppercase()
-                    )));
-                }
-                self.hash_iters.insert(
-                    name.to_uppercase(),
-                    HashIter {
-                        hash: hupper,
-                        pos: None,
-                    },
-                );
-                Ok(())
-            }
+            DsStmt::DeclareHiter { name, hash_name } => self.compile_hiter_decl(name, hash_name),
             // Appel de méthode d'objet hash (M17.1/M17.2) : l'objet doit être
             // déclaré. Pour defineKey/defineData, les arguments positionnels
             // sont des littéraux chaîne nommant des variables du PDV (validées).
@@ -1429,6 +944,589 @@ impl Compiler<'_> {
                 self.validate_hash_method(&call.object, &call.method, &call.args)
             }
         }
+    }
+
+    /// Compile un statement `SET` (bras `DsStmt::Set` de `walk_stmt`).
+    fn compile_set_stmt(&mut self, specs: &[DatasetSpec], options: &SetOptions) -> Result<()> {
+        if self.seen_set {
+            return Err(SasError::runtime(
+                "Multiple SET statements are not yet implemented.",
+            ));
+        }
+        if self.seen_merge {
+            return Err(SasError::runtime(
+                "A SET statement is not allowed after a MERGE statement.",
+            ));
+        }
+        self.seen_set = true;
+        for spec in specs {
+            // `in=` n'est pas valide sur un SET (MERGE seulement).
+            if spec.options.in_.is_some() {
+                return Err(SasError::runtime(
+                    "The IN= data set option is only valid on a MERGE statement.",
+                ));
+            }
+            self.compile_set(spec)?;
+        }
+        // Options de niveau statement (M16.4). NOBS= crée (ou réutilise)
+        // une variable numérique au PDV maintenant (elle est affectée
+        // AVANT la boucle ⇒ doit exister) et la marque retenue (sa
+        // valeur ne doit pas être remise à missing à chaque itération) ;
+        // POINT= référence une variable numérique que l'utilisateur
+        // pilote (créée ici si absente, comme une variable assignée).
+        // END= ne crée JAMAIS de slot (variable automatique temporaire,
+        // servie par EvalCtx, jamais écrite en sortie).
+        if let Some(name) = &options.nobs {
+            let slot = match self.pdv.slot(name) {
+                Some(s) => s,
+                None => self.add_var(name, VarType::Num, 8),
+            };
+            self.retained_slots.insert(slot);
+            self.assigned.insert(name.to_uppercase());
+        }
+        if let Some(name) = &options.point {
+            if self.pdv.slot(name).is_none() {
+                self.add_var(name, VarType::Num, 8);
+            }
+            // La variable POINT= est pilotée par l'utilisateur : on la
+            // considère "assignée" (pas de NOTE "uninitialized").
+            self.assigned.insert(name.to_uppercase());
+        }
+        self.set_options = options.clone();
+        Ok(())
+    }
+
+    /// Compile un statement `MERGE` (bras `DsStmt::Merge` de `walk_stmt`).
+    fn compile_merge(&mut self, specs: &[DatasetSpec]) -> Result<()> {
+        if self.seen_set || self.seen_merge {
+            return Err(SasError::runtime(
+                "A MERGE statement is not allowed after a SET or MERGE statement.",
+            ));
+        }
+        self.seen_merge = true;
+        for spec in specs {
+            // L'index du dataset dans `input_datasets` AVANT le push.
+            let ds_index = self.input_datasets.len();
+            if let Some(nm) = &spec.options.in_ {
+                // Le nom IN= ne doit PAS entrer en collision avec une
+                // variable du PDV (c'est une automatique temporaire).
+                self.in_flags.push((nm.to_uppercase(), ds_index));
+            }
+            self.compile_set(spec)?;
+        }
+        Ok(())
+    }
+
+    /// Compile un statement `UPDATE` (bras `DsStmt::Update` de `walk_stmt`).
+    fn compile_update(
+        &mut self,
+        master: &DatasetRef,
+        master_where: &Option<Expr>,
+        transaction: &DatasetRef,
+        key_vars: &Vec<String>,
+    ) -> Result<()> {
+        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
+        {
+            return Err(SasError::runtime(
+                "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
+            ));
+        }
+        // Le maître entre au PDV en premier (ordre de référence), puis
+        // la transaction (ses variables nouvelles s'ajoutent).
+        let master_ds = self.materialize_input(master, &DatasetOptions::default())?;
+        let transaction_ds =
+            self.materialize_input(transaction, &DatasetOptions::default())?;
+        if let Some(w) = master_where {
+            self.validate_where_vars(w, &master.display())?;
+        }
+        self.update = Some(PendingUpdate {
+            master: master_ds,
+            transaction: transaction_ds,
+            master_display: master.display(),
+            key_names: key_vars.clone(),
+            master_where: master_where.clone(),
+        });
+        Ok(())
+    }
+
+    /// Compile un statement `MODIFY` (bras `DsStmt::Modify` de `walk_stmt`).
+    fn compile_modify(
+        &mut self,
+        dataset: &DatasetRef,
+        key_vars: &Vec<String>,
+        point: &Option<String>,
+        nobs: &Option<String>,
+    ) -> Result<()> {
+        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
+        {
+            return Err(SasError::runtime(
+                "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
+            ));
+        }
+        let (data, out_vars) =
+            self.materialize_input_with_meta(dataset, &DatasetOptions::default())?;
+        // NOBS= : variable numérique affectée AVANT la boucle (doit
+        // exister, retenue). POINT= : pilotée par l'utilisateur.
+        if let Some(name) = nobs {
+            let slot = match self.pdv.slot(name) {
+                Some(s) => s,
+                None => self.add_var(name, VarType::Num, 8),
+            };
+            self.retained_slots.insert(slot);
+            self.assigned.insert(name.to_uppercase());
+        }
+        if let Some(name) = point {
+            if self.pdv.slot(name).is_none() {
+                self.add_var(name, VarType::Num, 8);
+            }
+            self.assigned.insert(name.to_uppercase());
+        }
+        self.modify = Some(PendingModify {
+            libref: dataset.libref_or_work(),
+            table: dataset.name.clone(),
+            display: dataset.display(),
+            data,
+            out_vars,
+            key_names: key_vars.clone(),
+            point: point.clone(),
+            nobs: nobs.clone(),
+        });
+        Ok(())
+    }
+
+    /// Compile une assignation `var = expr;` (bras `DsStmt::Assign` de `walk_stmt`).
+    fn compile_assign(&mut self, var: &str, expr: &Expr) -> Result<()> {
+        let upper = var.to_uppercase();
+        // `arr = e;` à l'intérieur d'un `DO OVER arr` : assignation à
+        // l'élément courant (résolue à l'exécution) — ne crée PAS de
+        // variable. Hors DO OVER, un nom d'array nu est illégal.
+        if self.arrays.contains_key(&upper) {
+            if self.do_over_arrays.contains(&upper) {
+                self.assigned.insert(upper);
+                self.walk_expr(expr)?;
+                return Ok(());
+            }
+            return Err(SasError::runtime(format!(
+                "Illegal reference to the array {var}."
+            )));
+        }
+        // La cible entre au PDV en premier (ordre textuel), avec le
+        // type inféré AVANT création des variables de l'expression
+        // (les inconnues comptent comme Num, cohérent avec SAS).
+        let (ty, length) = self.infer(expr);
+        self.add_var(var, ty, length);
+        self.assigned.insert(var.to_uppercase());
+        self.walk_expr(expr)?;
+        Ok(())
+    }
+
+    /// Compile un `DO` itératif/conditionnel (bras `DsStmt::DoLoop` de `walk_stmt`).
+    fn compile_do_loop(
+        &mut self,
+        index: &Option<(String, Expr)>,
+        to: &Option<Expr>,
+        by: &Option<Expr>,
+        while_: &Option<Expr>,
+        until: &Option<Expr>,
+        body: &[DsStmt],
+    ) -> Result<()> {
+        // L'index entre au PDV au point du DO (ordre de première
+        // référence) : Num 8, NON retenu, et il compte comme
+        // assigné (pas de NOTE "uninitialized"). Puis les bornes
+        // et conditions en ordre textuel, puis le corps.
+        if let Some((name, from)) = index {
+            self.add_var(name, VarType::Num, 8);
+            self.assigned.insert(name.to_uppercase());
+            self.walk_expr(from)?;
+        }
+        for e in [to, by, while_, until].into_iter().flatten() {
+            self.walk_expr(e)?;
+        }
+        for s in body {
+            self.walk_stmt(s)?;
+        }
+        Ok(())
+    }
+
+    /// Compile un `DO` sur liste de valeurs (bras `DsStmt::DoList` de `walk_stmt`).
+    fn compile_do_list(
+        &mut self,
+        index: &str,
+        items: &[DoListItem],
+        body: &[DsStmt],
+    ) -> Result<()> {
+        let (ty, length) = do_list_index_type(items);
+        self.add_var(index, ty, length);
+        self.assigned.insert(index.to_uppercase());
+        for item in items {
+            match item {
+                DoListItem::Value(e) => self.walk_expr(e)?,
+                DoListItem::Range { from, to, by } => {
+                    self.walk_expr(from)?;
+                    self.walk_expr(to)?;
+                    if let Some(b) = by {
+                        self.walk_expr(b)?;
+                    }
+                }
+            }
+        }
+        for s in body {
+            self.walk_stmt(s)?;
+        }
+        Ok(())
+    }
+
+    /// Compile un `DO OVER` (bras `DsStmt::DoOver` de `walk_stmt`).
+    fn compile_do_over(&mut self, array: &str, body: &[DsStmt]) -> Result<()> {
+        let upper = array.to_uppercase();
+        if !self.arrays.contains_key(&upper) {
+            return Err(SasError::runtime(format!(
+                "Undeclared array referenced: {array}."
+            )));
+        }
+        let newly = self.do_over_arrays.insert(upper.clone());
+        let mut result = Ok(());
+        for s in body {
+            if let Err(e) = self.walk_stmt(s) {
+                result = Err(e);
+                break;
+            }
+        }
+        if newly {
+            self.do_over_arrays.remove(&upper);
+        }
+        result
+    }
+
+    /// Compile un `SELECT` (bras `DsStmt::Select` de `walk_stmt`).
+    fn compile_select(
+        &mut self,
+        selector: &Option<Expr>,
+        whens: &[WhenClause],
+        otherwise: &Option<Box<DsStmt>>,
+    ) -> Result<()> {
+        if let Some(sel) = selector {
+            self.walk_expr(sel)?;
+        }
+        for when in whens {
+            for v in &when.values {
+                self.walk_expr(v)?;
+            }
+            self.walk_stmt(&when.body)?;
+        }
+        if let Some(o) = otherwise {
+            self.walk_stmt(o)?;
+        }
+        Ok(())
+    }
+
+    /// Compile un `OUTPUT` (bras `DsStmt::Output` de `walk_stmt`).
+    fn compile_output(&mut self, targets: &[DatasetRef]) -> Result<()> {
+        // `has_explicit_output` dès qu'UN output (ciblé ou non)
+        // apparaît. Chaque cible doit être une sortie déclarée du
+        // statement DATA (comparaison par display "WORK.A").
+        self.has_explicit_output = true;
+        for t in targets {
+            let disp = t.display();
+            if !self.output_displays.contains(&disp) {
+                return Err(SasError::runtime(format!(
+                    "Output dataset {disp} is not in the DATA statement output list."
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un `RETAIN` (bras `DsStmt::Retain` de `walk_stmt`).
+    fn compile_retain(&mut self, items: &[(String, Option<Expr>)]) -> Result<()> {
+        if items.is_empty() {
+            // `retain;` seul : tout le PDV (cf. fin de compile()).
+            self.retain_all = true;
+            return Ok(());
+        }
+        for (name, init) in items {
+            // RETAIN _ALL_ (M16.6) : retient TOUTES les variables
+            // connues du PDV À CE POINT (≠ `retain;` nu qui retient le
+            // PDV entier en fin de compilation). Les variables créées
+            // APRÈS ce statement ne sont donc PAS retenues. Aucune
+            // valeur initiale n'est admise sur `_all_` ; il ne crée
+            // jamais de variable nommée `_ALL_`.
+            if name.eq_ignore_ascii_case("_all_") {
+                if init.is_some() {
+                    return Err(SasError::runtime(
+                        "An initial value is not allowed with RETAIN _ALL_.",
+                    ));
+                }
+                for slot in 0..self.pdv.vars().len() {
+                    self.retained_slots.insert(slot);
+                }
+                continue;
+            }
+            // Listes spéciales _NUMERIC_/_CHARACTER_ : retiennent les
+            // variables du type voulu connues à ce point (mêmes règles
+            // que _ALL_ — créées après = non retenues).
+            if name.eq_ignore_ascii_case("_numeric_")
+                || name.eq_ignore_ascii_case("_character_")
+            {
+                if init.is_some() {
+                    return Err(SasError::runtime(
+                        "An initial value is not allowed with a special RETAIN list.",
+                    ));
+                }
+                let want = if name.eq_ignore_ascii_case("_numeric_") {
+                    VarType::Num
+                } else {
+                    VarType::Char
+                };
+                let slots: Vec<usize> = self
+                    .pdv
+                    .vars()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| v.ty == want)
+                    .map(|(i, _)| i)
+                    .collect();
+                for slot in slots {
+                    self.retained_slots.insert(slot);
+                }
+                continue;
+            }
+            match init {
+                // AVEC init : la variable entre au PDV ICI (ordre de
+                // première référence), type/longueur du littéral, et
+                // sa valeur initiale part dans `initial_values`. Elle
+                // compte comme initialisée (pas de NOTE
+                // "uninitialized" — comme SAS).
+                Some(expr) => {
+                    let (ty, length, value) = retain_literal(expr)?;
+                    let slot = self.add_var(name, ty, length);
+                    self.retained_slots.insert(slot);
+                    self.assigned.insert(name.to_uppercase());
+                    self.initial_values.push((slot, value));
+                }
+                // SANS init : ne crée PAS la variable (le type sera
+                // figé par sa prochaine référence) — voir compile().
+                None => self.retain_pending.push(name.clone()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un sum statement `var + expr;` (bras `DsStmt::Sum` de `walk_stmt`).
+    fn compile_sum(&mut self, var: &str, expr: &Expr) -> Result<()> {
+        // `var + expr;` : var entre au PDV (Num, 8), retenue, valeur
+        // initiale 0 — SAUF si un RETAIN avec init a déjà posé une
+        // valeur pour ce slot (le RETAIN gagne, comme SAS). La cible
+        // entre avant les variables de l'expression (ordre textuel).
+        let slot = self.add_var(var, VarType::Num, 8);
+        self.retained_slots.insert(slot);
+        self.assigned.insert(var.to_uppercase());
+        if !self.initial_values.iter().any(|(s, _)| *s == slot) {
+            self.initial_values.push((slot, Value::Num(0.0)));
+        }
+        self.walk_expr(expr)?;
+        Ok(())
+    }
+
+    /// Compile une assignation indexée `arr{i} = expr;` (bras `DsStmt::AssignIndexed` de `walk_stmt`).
+    fn compile_assign_indexed(
+        &mut self,
+        array: &str,
+        indices: &[Expr],
+        expr: &Expr,
+    ) -> Result<()> {
+        let upper = array.to_uppercase();
+        let Some(def) = self.arrays.get(&upper) else {
+            return Err(SasError::runtime(format!(
+                "Undeclared array referenced: {array}."
+            )));
+        };
+        // Tous les éléments sont potentiellement assignés via
+        // l'indice : pas de NOTE "uninitialized" pour eux.
+        for slot in def.slots.clone() {
+            let n = self.pdv.vars()[slot].name.to_uppercase();
+            self.assigned.insert(n);
+        }
+        for index in indices {
+            self.walk_expr(index)?;
+        }
+        self.walk_expr(expr)?;
+        Ok(())
+    }
+
+    /// Compile un `LENGTH` (bras `DsStmt::Length` de `walk_stmt`).
+    fn compile_length(&mut self, items: &[(String, LengthSpec)]) -> Result<()> {
+        for (name, spec) in items {
+            // Plages SAS : char 1..=32767, num 3..=8.
+            let (lo, hi) = if spec.char { (1, 32767) } else { (3, 8) };
+            if spec.len < lo || spec.len > hi {
+                return Err(SasError::runtime(format!(
+                    "The length {} specified for the variable {} is out of range ({}-{}).",
+                    spec.len, name, lo, hi
+                )));
+            }
+            match self.pdv.slot(name) {
+                // LENGTH précède la première référence : crée la
+                // variable avec cette longueur. Pour une numérique,
+                // la longueur (3..=8) est une simple MÉTADONNÉE en
+                // M2 — le stockage reste f64 sur 8 octets.
+                None => {
+                    let ty = if spec.char { VarType::Char } else { VarType::Num };
+                    self.add_var(name, ty, spec.len);
+                }
+                // Déjà au PDV : la longueur est figée. SAS n'émet le
+                // WARNING que pour les variables CHAR dont la
+                // longueur demandée diffère ; num : silencieux.
+                Some(slot) => {
+                    let v = &self.pdv.vars()[slot];
+                    if v.ty == VarType::Char && spec.char && v.length != spec.len {
+                        let name = v.name.clone();
+                        self.session.log.warning(&format!(
+                            "Length of character variable {name} has already been set."
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un `FORMAT` (bras `DsStmt::Format` de `walk_stmt`).
+    fn compile_format(&mut self, groups: &[(Vec<String>, String)]) -> Result<()> {
+        for (names, token) in groups {
+            if crate::formats::FormatSpec::parse(token).is_none() {
+                return Err(SasError::runtime(format!(
+                    "The format {token} is not valid."
+                )));
+            }
+            for name in names {
+                self.formats.insert(name.to_uppercase(), token.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un `ATTRIB` (bras `DsStmt::Attrib` de `walk_stmt`).
+    fn compile_attrib(&mut self, items: &[AttribItem]) -> Result<()> {
+        for item in items {
+            if let Some(token) = &item.format
+                && crate::formats::FormatSpec::parse(token).is_none()
+            {
+                return Err(SasError::runtime(format!(
+                    "The format {token} is not valid."
+                )));
+            }
+            for name in &item.vars {
+                let upper = name.to_uppercase();
+                if let Some(token) = &item.format {
+                    self.formats.insert(upper.clone(), token.clone());
+                }
+                if let Some(label) = &item.label {
+                    self.labels.insert(upper.clone(), label.clone());
+                }
+                // length= : parsé mais non appliqué en M4.
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un `CALL <name>(args);` (bras `DsStmt::CallRoutine` de `walk_stmt`).
+    fn compile_call_routine(&mut self, name: &str, args: &[Expr]) -> Result<()> {
+        // CALL SORTN/SORTC (M15.6) acceptent un NOM D'ARRAY entier en
+        // argument (`call sortn(arr)`) — ce n'est pas une référence de
+        // variable illégale, mais le déballage de tous ses éléments.
+        // On ne walke donc PAS un argument qui nomme un array déclaré.
+        let is_sort = name.eq_ignore_ascii_case("sortn")
+            || name.eq_ignore_ascii_case("sortc");
+        for a in args {
+            if is_sort
+                && let Expr::Var(n) = a
+                && self.arrays.contains_key(&n.to_uppercase())
+            {
+                continue;
+            }
+            self.walk_expr(a)?;
+        }
+        Ok(())
+    }
+
+    /// Compile un `INPUT` (bras `DsStmt::Input` de `walk_stmt`).
+    fn compile_input(&mut self, items: &[crate::ast::InputItem]) -> Result<()> {
+        self.seen_input = true;
+        for item in items {
+            if let crate::ast::InputItem::Var {
+                name,
+                is_char,
+                informat,
+                ..
+            } = item
+            {
+                let (ty, length) = input_var_type(*is_char, informat.as_deref())?;
+                self.add_var(name, ty, length);
+                // Une variable d'INPUT est « assignée » (pas de NOTE
+                // uninitialized).
+                self.assigned.insert(name.to_uppercase());
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile un `DECLARE HASH` (bras `DsStmt::DeclareHash` de `walk_stmt`).
+    fn compile_hash_decl(&mut self, name: &str, options: &[(String, String)]) -> Result<()> {
+        let mut obj = HashObject::default();
+        for (key, value) in options {
+            match key.as_str() {
+                "ordered" => obj.ordered = Some(value.trim().to_ascii_lowercase()),
+                "duplicate" => obj.duplicate = Some(value.trim().to_ascii_lowercase()),
+                "multidata" => {
+                    obj.multidata = matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "yes" | "y" | "1"
+                    );
+                }
+                "dataset" | "data" => obj.dataset = Some(value.clone()),
+                "hashexp" | "suminc" | "initialgrouptype" => {
+                    // Options de réglage/perf : acceptées et ignorées.
+                }
+                // Option inconnue → erreur claire.
+                other => {
+                    return Err(SasError::runtime(format!(
+                        "Hash object option {} is not supported.",
+                        other.to_uppercase()
+                    )));
+                }
+            }
+        }
+        // dataset: (M17.2) — pré-lit les colonnes à la compilation
+        // (`&mut Session` disponible) et entre chaque colonne au PDV
+        // (SAS exige que les variables clé/données existent au PDV ;
+        // les charger ici les crée comme un SET implicite).
+        if let Some(dsname) = obj.dataset.clone() {
+            let (cols, nrows) = self.preload_hash_dataset(&dsname)?;
+            obj.dataset_cols = Some(cols);
+            obj.dataset_nrows = nrows;
+        }
+        self.hash_objects.insert(name.to_uppercase(), obj);
+        Ok(())
+    }
+
+    /// Compile un `DECLARE HITER` (bras `DsStmt::DeclareHiter` de `walk_stmt`).
+    fn compile_hiter_decl(&mut self, name: &str, hash_name: &str) -> Result<()> {
+        let hupper = hash_name.to_uppercase();
+        if !self.hash_objects.contains_key(&hupper) {
+            return Err(SasError::runtime(format!(
+                "Hash object {hupper} bound to iterator {} has not been declared.",
+                name.to_uppercase()
+            )));
+        }
+        self.hash_iters.insert(
+            name.to_uppercase(),
+            HashIter {
+                hash: hupper,
+                pos: None,
+            },
+        );
+        Ok(())
     }
 
     /// Validation compile-time d'un appel de méthode hash (forme statement OU
