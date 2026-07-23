@@ -1137,7 +1137,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   `consume_macro_fn`) entre `macros/expand.rs` et `macros/functions.rs` ; puis étendre la table de
   dispatch d'`expand.rs` (l.247-266) aux ~27 blocs de `process_impl` (~366 l → ~80 l). L'ordre
   d'essai des mots-clés est sémantique (`%q*` avant les nus) — l'encoder dans la table (Opus, moyen)
-- [ ] MQ2.2 — `executor.rs` : `apply_option` + `parse_bounded_usize` pour la cascade OPTIONS
+- [x] MQ2.2 — `executor.rs` : `apply_option` + `parse_bounded_usize` pour la cascade OPTIONS
   (142 l ; chaînes d'erreur conservées à l'octet) (Sonnet, faible)
 - [ ] MQ2.3 — Combinateurs `unary_num`/`unary_num_checked` remplaçant les ~56 blocs boilerplate de
   `datastep/functions.rs` (2-3 commits par paquets ; libellé/ordre des NOTEs inchangés) (Sonnet, moyen)
