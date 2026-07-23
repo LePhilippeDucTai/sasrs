@@ -33,6 +33,7 @@
 use super::functions;
 use super::pdv::Pdv;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
+use crate::error::SasError;
 use crate::value::Value;
 use std::collections::HashMap;
 
@@ -44,8 +45,9 @@ pub struct EvalCtx {
     pub invalid_data: u32,
     pub error_flag: bool,
     /// Erreur fatale (fonction inconnue, indice d'array hors bornes...) —
-    /// stoppe l'étape.
-    pub fatal: Option<String>,
+    /// stoppe l'étape. Le message est SANS préfixe « ERROR: » : c'est
+    /// `log.error` qui l'ajoute au moment de l'affichage.
+    pub fatal: Option<SasError>,
     /// Arrays de l'étape : nom UPPERCASE → définition (slots + dimensions)
     /// (copié depuis `StepProgram.arrays` par l'exécuteur).
     pub arrays: HashMap<String, super::ArrayDef>,
@@ -241,9 +243,9 @@ pub fn eval(expr: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         // signale un fatal de garde (ne devrait jamais être atteint en
         // production — `eval_checked` intercepte d'abord).
         Expr::HashMethod(_) => {
-            ctx.fatal = Some(
-                "ERROR: Hash method calls cannot be evaluated in this context.".to_string(),
-            );
+            ctx.fatal = Some(SasError::runtime(
+                "Hash method calls cannot be evaluated in this context.",
+            ));
             Value::missing()
         }
     }
@@ -264,20 +266,22 @@ fn eval_array_ref(name: &str, indices: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) ->
         match coerce_num(&idx_val, ctx).map(f64::round) {
             Some(i) => idxs.push(i as i64),
             None => {
-                ctx.fatal = Some("ERROR: Array subscript out of range.".to_string());
+                ctx.fatal = Some(SasError::runtime("Array subscript out of range."));
                 return Value::missing();
             }
         }
     }
     let Some(def) = ctx.arrays.get(&name.to_uppercase()) else {
         // Impossible après compile() ; garde-fou.
-        ctx.fatal = Some(format!("ERROR: Undeclared array referenced: {name}."));
+        ctx.fatal = Some(SasError::runtime(format!(
+            "Undeclared array referenced: {name}."
+        )));
         return Value::missing();
     };
     match def.linear_index(&idxs) {
         Some(lin) => pdv.get(def.slots[lin]).clone(),
         None => {
-            ctx.fatal = Some("ERROR: Array subscript out of range.".to_string());
+            ctx.fatal = Some(SasError::runtime("Array subscript out of range."));
             Value::missing()
         }
     }
@@ -298,9 +302,9 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         return match ctx.by_flags.iter().find(|(n, _, _)| n == var) {
             Some((_, first, _)) => Value::Num(if *first { 1.0 } else { 0.0 }),
             None => {
-                ctx.fatal = Some(format!(
-                    "ERROR: Variable {name} is not on the program data vector."
-                ));
+                ctx.fatal = Some(SasError::runtime(format!(
+                    "Variable {name} is not on the program data vector."
+                )));
                 Value::missing()
             }
         };
@@ -309,9 +313,9 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         return match ctx.by_flags.iter().find(|(n, _, _)| n == var) {
             Some((_, _, last)) => Value::Num(if *last { 1.0 } else { 0.0 }),
             None => {
-                ctx.fatal = Some(format!(
-                    "ERROR: Variable {name} is not on the program data vector."
-                ));
+                ctx.fatal = Some(SasError::runtime(format!(
+                    "Variable {name} is not on the program data vector."
+                )));
                 Value::missing()
             }
         };
@@ -334,9 +338,9 @@ fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         None => {
             // Ne devrait pas arriver : la compilation a déjà créé toutes les
             // variables référencées au PDV. Si cela arrive, c'est fatal.
-            ctx.fatal = Some(format!(
-                "ERROR: Variable {name} is not on the program data vector."
-            ));
+            ctx.fatal = Some(SasError::runtime(format!(
+                "Variable {name} is not on the program data vector."
+            )));
             Value::missing()
         }
     }
@@ -548,10 +552,10 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
             match coerce_num(&dv, ctx).map(f64::round) {
                 Some(d) if d >= 1.0 => d as usize,
                 _ => {
-                    ctx.fatal = Some(format!(
-                        "ERROR: Invalid dimension argument to {}.",
+                    ctx.fatal = Some(SasError::runtime(format!(
+                        "Invalid dimension argument to {}.",
                         name.to_uppercase()
-                    ));
+                    )));
                     return Value::missing();
                 }
             }
@@ -559,10 +563,10 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
             1
         };
         if which > def.dims.len() {
-            ctx.fatal = Some(format!(
-                "ERROR: Invalid dimension argument to {}.",
+            ctx.fatal = Some(SasError::runtime(format!(
+                "Invalid dimension argument to {}.",
                 name.to_uppercase()
-            ));
+            )));
             return Value::missing();
         }
         if is_lbound {
@@ -595,10 +599,10 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     match functions::call(name, &arg_vals, ctx) {
         Some(v) => v,
         None => {
-            ctx.fatal = Some(format!(
-                "ERROR: Function {} is unknown.",
+            ctx.fatal = Some(SasError::runtime(format!(
+                "Function {} is unknown.",
                 name.to_uppercase()
-            ));
+            )));
             Value::missing()
         }
     }
@@ -1057,7 +1061,11 @@ mod tests {
         let (v, ctx) = ev(&var("nosuch"), &pdv);
         assert_eq!(v, Value::missing());
         assert!(ctx.fatal.is_some());
-        assert!(ctx.fatal.unwrap().contains("program data vector"));
+        assert!(ctx
+            .fatal
+            .unwrap()
+            .to_string()
+            .contains("program data vector"));
     }
 
     // ── IN ───────────────────────────────────────────────────────────────
@@ -1139,8 +1147,10 @@ mod tests {
         let (v, ctx) = ev_bare(&e);
         assert_eq!(v, Value::missing());
         assert!(ctx.fatal.is_some());
-        let msg = ctx.fatal.unwrap();
-        assert!(msg.contains("ERROR"));
+        // Le message typé est SANS préfixe « ERROR: » (ajouté par log.error
+        // à l'affichage) — on vérifie le contenu, plus le préfixe.
+        let msg = ctx.fatal.unwrap().to_string();
+        assert!(msg.contains("unknown"));
         assert!(msg.contains("NOSUCHFN"));
     }
 

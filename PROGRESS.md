@@ -1182,7 +1182,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   (8 params) → `RunnerConfig` (Opus, moyen)
 - [x] MQ4.3 — reg : `fit_and_print` (15 params dont 7 Option) → struct `FitReportOptions`
   (après MQ3.4) (Sonnet, faible)
-- [ ] MQ4.4 — `ctx.fatal: Option<String>` → `Option<SasError>` (supprime le
+- [x] MQ4.4 — `ctx.fatal: Option<String>` → `Option<SasError>` (supprime le
   `strip_prefix("ERROR: ")` fragile) ; rendu log octet-identique, commit isolé, revue du diff
   de log complet (Opus, moyen)
 - [ ] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,

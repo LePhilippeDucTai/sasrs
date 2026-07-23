@@ -38,9 +38,8 @@ impl Runner {
             // Évaluation inline (emprunts disjoints : `input` tient
             // self.input, eval n'utilise que pdv et ctx).
             let v = eval(w, &self.pdv, &mut self.ctx);
-            if let Some(msg) = self.ctx.fatal.take() {
-                let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-                return Err(SasError::runtime(msg));
+            if let Some(err) = self.ctx.fatal.take() {
+                return Err(err);
             }
             if self.ctx.error_flag {
                 self.pdv.error_ = true;
@@ -538,9 +537,8 @@ impl Runner {
                     self.pdv.set(*slot, col[row].clone());
                 }
                 let v = eval(w, &self.pdv, &mut self.ctx);
-                if let Some(msg) = self.ctx.fatal.take() {
-                    let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-                    return Err(SasError::runtime(msg));
+                if let Some(err) = self.ctx.fatal.take() {
+                    return Err(err);
                 }
                 self.ctx.error_flag = false;
                 if v.truthy() {

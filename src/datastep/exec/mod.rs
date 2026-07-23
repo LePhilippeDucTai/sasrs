@@ -999,9 +999,8 @@ fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats>
             // Charger seulement les variables maître pour évaluer le WHERE=.
             load_row(&mut r.pdv, master, m_row);
             let v = eval(w, &r.pdv, &mut r.ctx);
-            if let Some(msg) = r.ctx.fatal.take() {
-                let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-                return Err(SasError::runtime(msg));
+            if let Some(err) = r.ctx.fatal.take() {
+                return Err(err);
             }
             if !v.truthy() {
                 continue;
@@ -1701,9 +1700,8 @@ impl Runner {
         let result_slot = self.resolve_lvalue_slot(&args[2])?;
         let word = super::functions::call("SCAN", &fn_args, &mut self.ctx)
             .unwrap_or(Value::Char(String::new()));
-        if let Some(msg) = self.ctx.fatal.take() {
-            let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-            return Err(SasError::runtime(msg));
+        if let Some(err) = self.ctx.fatal.take() {
+            return Err(err);
         }
         let coerced = self.coerce_assign(word, self.pdv.vars()[result_slot].ty);
         self.pdv.set(result_slot, coerced);
@@ -2209,12 +2207,10 @@ impl Runner {
             return Ok(Value::Num(rc as f64));
         }
         let v = eval(expr, &self.pdv, &mut self.ctx);
-        if let Some(msg) = self.ctx.fatal.take() {
-            // Les fatals de l'évaluateur portent déjà le préfixe "ERROR: " ;
-            // on l'enlève pour que `log.error` (qui le rajoute) ne le double
-            // pas.
-            let msg = msg.strip_prefix("ERROR: ").unwrap_or(&msg).to_string();
-            return Err(SasError::runtime(msg));
+        if let Some(err) = self.ctx.fatal.take() {
+            // Les fatals de l'évaluateur sont déjà des `SasError` typés, sans
+            // préfixe "ERROR: " (ajouté par `log.error` à l'affichage).
+            return Err(err);
         }
         if self.ctx.error_flag {
             self.pdv.error_ = true;
