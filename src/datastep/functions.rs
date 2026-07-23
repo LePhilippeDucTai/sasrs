@@ -77,6 +77,38 @@ fn coerce_num(v: &Value, ctx: &mut EvalCtx) -> Option<f64> {
     }
 }
 
+/// Combinator for unary numeric functions: missing/absent arg propagates as
+/// missing, otherwise applies `f` to the coerced number.
+fn unary_num(args: &[Value], ctx: &mut EvalCtx, f: impl Fn(f64) -> f64) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => Value::Num(f(x)),
+        },
+    }
+}
+
+/// Combinator for unary numeric functions with a domain check: `f` returns
+/// `None` when the argument is out of domain, which yields missing with the
+/// standard error effects (`error_flag` set, then `invalid_data` bumped).
+fn unary_num_checked(args: &[Value], ctx: &mut EvalCtx, f: impl Fn(f64) -> Option<f64>) -> Value {
+    match args.first() {
+        None => Value::missing(),
+        Some(v) => match coerce_num(v, ctx) {
+            None => Value::missing(),
+            Some(x) => match f(x) {
+                None => {
+                    ctx.error_flag = true;
+                    ctx.invalid_data += 1;
+                    Value::missing()
+                }
+                Some(r) => Value::Num(r),
+            },
+        },
+    }
+}
+
 /// Coerce a Value to String.
 fn coerce_char(v: &Value) -> String {
     match v {
@@ -292,106 +324,32 @@ fn fn_missing(args: &[Value], _ctx: &mut EvalCtx) -> Value {
 // ──────────────────────────────────────────────────────────────────────────────
 
 fn fn_abs(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.abs()),
-        },
-    }
+    unary_num(args, ctx, |f| f.abs())
 }
 
 fn fn_sqrt(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f < 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.sqrt())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| if f < 0.0 { None } else { Some(f.sqrt()) })
 }
 
 fn fn_exp(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.exp()),
-        },
-    }
+    unary_num(args, ctx, |f| f.exp())
 }
 
 fn fn_log(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f <= 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.ln())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| if f <= 0.0 { None } else { Some(f.ln()) })
 }
 
 fn fn_log2(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f <= 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.log2())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| if f <= 0.0 { None } else { Some(f.log2()) })
 }
 
 fn fn_log10(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f <= 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.log10())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| if f <= 0.0 { None } else { Some(f.log10()) })
 }
 
 fn fn_int(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            // INT truncates toward zero (like Rust's `as i64` cast for in-range values).
-            Some(f) => Value::Num(f.trunc()),
-        },
-    }
+    // INT truncates toward zero (like Rust's `as i64` cast for in-range values).
+    unary_num(args, ctx, |f| f.trunc())
 }
 
 fn fn_round(args: &[Value], ctx: &mut EvalCtx) -> Value {
@@ -444,126 +402,59 @@ fn fn_mod(args: &[Value], ctx: &mut EvalCtx) -> Value {
 
 /// CEIL(x): smallest integer ≥ x.
 fn fn_ceil(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.ceil()),
-        },
-    }
+    unary_num(args, ctx, |f| f.ceil())
 }
 
 /// FLOOR(x): largest integer ≤ x.
 fn fn_floor(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.floor()),
-        },
-    }
+    unary_num(args, ctx, |f| f.floor())
 }
 
 /// SIGN(x): return -1.0 for negative, 0.0 for zero, 1.0 for positive.
 fn fn_sign(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                let sign = if f < 0.0 {
-                    -1.0
-                } else if f > 0.0 {
-                    1.0
-                } else {
-                    0.0
-                };
-                Value::Num(sign)
-            }
-        },
-    }
+    unary_num(args, ctx, |f| {
+        if f < 0.0 {
+            -1.0
+        } else if f > 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    })
 }
 
 /// SIN(x): sine (x in radians).
 fn fn_sin(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.sin()),
-        },
-    }
+    unary_num(args, ctx, |f| f.sin())
 }
 
 /// COS(x): cosine (x in radians).
 fn fn_cos(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.cos()),
-        },
-    }
+    unary_num(args, ctx, |f| f.cos())
 }
 
 /// TAN(x): tangent (x in radians).
 fn fn_tan(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.tan()),
-        },
-    }
+    unary_num(args, ctx, |f| f.tan())
 }
 
 /// ARSIN(x): arcsine (domain -1 to +1, result in radians).
 fn fn_arsin(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f < -1.0 || f > 1.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.asin())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| {
+        if f < -1.0 || f > 1.0 { None } else { Some(f.asin()) }
+    })
 }
 
 /// ARCOS(x): arccosine (domain -1 to +1, result in radians).
 fn fn_arcos(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                if f < -1.0 || f > 1.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    Value::missing()
-                } else {
-                    Value::Num(f.acos())
-                }
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |f| {
+        if f < -1.0 || f > 1.0 { None } else { Some(f.acos()) }
+    })
 }
 
 /// ATAN(x): arctangent (result in radians).
 fn fn_atan(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.atan()),
-        },
-    }
+    unary_num(args, ctx, |f| f.atan())
 }
 
 /// ATAN2(y, x): two-argument arctangent (atan(y/x) with quadrant correction).
@@ -579,35 +470,17 @@ fn fn_atan2(args: &[Value], ctx: &mut EvalCtx) -> Value {
 
 /// SINH(x): hyperbolic sine.
 fn fn_sinh(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.sinh()),
-        },
-    }
+    unary_num(args, ctx, |f| f.sinh())
 }
 
 /// COSH(x): hyperbolic cosine.
 fn fn_cosh(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.cosh()),
-        },
-    }
+    unary_num(args, ctx, |f| f.cosh())
 }
 
 /// TANH(x): hyperbolic tangent.
 fn fn_tanh(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(f.tanh()),
-        },
-    }
+    unary_num(args, ctx, |f| f.tanh())
 }
 
 /// FACT(n): factorial (n! where n ≥ 0 integer).
@@ -738,91 +611,43 @@ fn fn_perm(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// x ≤ 0 integer → missing + error.
 /// x > 170 → infinity.
 fn fn_gamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(x) => {
-                // Check if x <= 0 and integer
-                if x <= 0.0 && x.fract() == 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    return Value::missing();
-                }
-                // For x > 170, Gamma(x) overflows; return infinity
-                if x > 170.0 {
-                    return Value::Num(f64::INFINITY);
-                }
-                // Use Stirling's approximation for large x
-                // For small x, use the recurrence relation or direct computation
-                let result = gamma_approx(x);
-                Value::Num(result)
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |x| {
+        // x <= 0 integer is a pole → out of domain
+        if x <= 0.0 && x.fract() == 0.0 {
+            None
+        } else if x > 170.0 {
+            // For x > 170, Gamma(x) overflows; return infinity
+            Some(f64::INFINITY)
+        } else {
+            // Use Stirling's approximation for large x
+            // For small x, use the recurrence relation or direct computation
+            Some(gamma_approx(x))
+        }
+    })
 }
 
 /// LGAMMA(x): log-gamma log|Γ(x)|.
 /// x ≤ 0 integer → missing + error.
 fn fn_lgamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(x) => {
-                // Check if x <= 0 and integer
-                if x <= 0.0 && x.fract() == 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    return Value::missing();
-                }
-                let result = lgamma_approx(x);
-                Value::Num(result)
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |x| {
+        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(lgamma_approx(x)) }
+    })
 }
 
 /// DIGAMMA(x): digamma ψ(x) = d/dx log Γ(x).
 /// x ≤ 0 integer → missing + error.
 fn fn_digamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(x) => {
-                // Check if x <= 0 and integer
-                if x <= 0.0 && x.fract() == 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    return Value::missing();
-                }
-                let result = crate::stat::digamma(x);
-                Value::Num(result)
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |x| {
+        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(crate::stat::digamma(x)) }
+    })
 }
 
 /// TRIGAMMA(x): trigamma ψ′(x) = d²/dx² log Γ(x).
 /// x ≤ 0 integer → missing + error (mirrors DIGAMMA's pole handling).
 fn fn_trigamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(x) => {
-                // Check if x <= 0 and integer
-                if x <= 0.0 && x.fract() == 0.0 {
-                    ctx.error_flag = true;
-                    ctx.invalid_data += 1;
-                    return Value::missing();
-                }
-                let result = crate::stat::trigamma(x);
-                Value::Num(result)
-            }
-        },
-    }
+    unary_num_checked(args, ctx, |x| {
+        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(crate::stat::trigamma(x)) }
+    })
 }
 
 /// BETA(a, b): beta function B(a,b) = Γ(a)Γ(b) / Γ(a+b).
@@ -2206,52 +2031,19 @@ fn fn_mdy(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 fn fn_year(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                let (year, _, _) = sas_date_to_ymd(f as i64);
-                Value::Num(year as f64)
-            }
-        },
-    }
+    unary_num(args, ctx, |f| sas_date_to_ymd(f as i64).0 as f64)
 }
 
 fn fn_month(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                let (_, month, _) = sas_date_to_ymd(f as i64);
-                Value::Num(month as f64)
-            }
-        },
-    }
+    unary_num(args, ctx, |f| sas_date_to_ymd(f as i64).1 as f64)
 }
 
 fn fn_day(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                let (_, _, day) = sas_date_to_ymd(f as i64);
-                Value::Num(day as f64)
-            }
-        },
-    }
+    unary_num(args, ctx, |f| sas_date_to_ymd(f as i64).2 as f64)
 }
 
 fn fn_weekday(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => Value::Num(sas_weekday(f as i64) as f64),
-        },
-    }
+    unary_num(args, ctx, |f| sas_weekday(f as i64) as f64)
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2279,29 +2071,11 @@ fn split_datetime(dt: f64) -> (f64, f64) {
 }
 
 fn fn_datepart(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(dt) => {
-                let (days, _) = split_datetime(dt);
-                Value::Num(days)
-            }
-        },
-    }
+    unary_num(args, ctx, |dt| split_datetime(dt).0)
 }
 
 fn fn_timepart(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(dt) => {
-                let (_, secs) = split_datetime(dt);
-                Value::Num(secs.trunc())
-            }
-        },
-    }
+    unary_num(args, ctx, |dt| split_datetime(dt).1.trunc())
 }
 
 fn fn_datetime_combine(args: &[Value], ctx: &mut EvalCtx) -> Value {
@@ -2529,18 +2303,11 @@ fn fn_datdif(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 fn fn_juldate(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(f) => {
-                let (year, _, _) = sas_date_to_ymd(f as i64);
-                let jan1 = ymd_to_sas_date(year, 1, 1);
-                let doy = (f.trunc() - jan1) as i64 + 1; // 1-based
-                Value::Num(doy as f64)
-            }
-        },
-    }
+    unary_num(args, ctx, |f| {
+        let (year, _, _) = sas_date_to_ymd(f as i64);
+        let jan1 = ymd_to_sas_date(year, 1, 1);
+        ((f.trunc() - jan1) as i64 + 1) as f64 // 1-based
+    })
 }
 
 fn fn_datejul(args: &[Value], ctx: &mut EvalCtx) -> Value {
@@ -2589,42 +2356,15 @@ fn fn_datejul(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 fn fn_hour(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(dt) => {
-                let (_, secs) = split_datetime(dt);
-                Value::Num((secs / 3600.0).floor())
-            }
-        },
-    }
+    unary_num(args, ctx, |dt| (split_datetime(dt).1 / 3600.0).floor())
 }
 
 fn fn_minute(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(dt) => {
-                let (_, secs) = split_datetime(dt);
-                Value::Num(((secs % 3600.0) / 60.0).floor())
-            }
-        },
-    }
+    unary_num(args, ctx, |dt| ((split_datetime(dt).1 % 3600.0) / 60.0).floor())
 }
 
 fn fn_second(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(dt) => {
-                let (_, secs) = split_datetime(dt);
-                Value::Num((secs % 60.0).trunc())
-            }
-        },
-    }
+    unary_num(args, ctx, |dt| (split_datetime(dt).1 % 60.0).trunc())
 }
 
 /// Formate une date SAS en "DDMMMYYYY" (ex. "01JAN2020").
@@ -2947,13 +2687,7 @@ fn fn_symget(args: &[Value], ctx: &mut EvalCtx) -> Value {
 
 /// PROBNORM(x): standard normal CDF Φ(x).
 fn fn_probnorm(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    match args.first() {
-        None => Value::missing(),
-        Some(v) => match coerce_num(v, ctx) {
-            None => Value::missing(),
-            Some(x) => Value::Num(normal_cdf_std(x)),
-        },
-    }
+    unary_num(args, ctx, normal_cdf_std)
 }
 
 /// PROBT(t, df): Student's t CDF P(T <= t). df must be > 0.
