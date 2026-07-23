@@ -1160,7 +1160,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   `mod.rs` garde dispatch + re-exports (Sonnet, moyen)
 - [x] MQ3.2 — `datastep/exec.rs` (8635 l) → `exec/{mod,hash,input,put,setmerge,tests}.rs`
   (tests inline → `tests.rs`) (Sonnet, moyen)
-- [ ] MQ3.3 — `parser/datastep.rs` (4634 l) → `datastep/{mod,io,array,hash,control,attrs}.rs` (Sonnet, moyen)
+- [x] MQ3.3 — `parser/datastep.rs` (4634 l) → `datastep/{mod,io,array,hash,control,attrs}.rs` (Sonnet, moyen)
 - [ ] MQ3.4 — `procs/reg.rs` (10 885 l) → `reg/{mod,parse,fit,diagnostics,matrices,influence,selection,ridge,output,tests}.rs` ;
   `pub(super)` sur les fonctions/structs inter-sections (aucun blocage de visibilité vérifié) (Opus, moyen)
 - [ ] MQ3.5 — Scinder `format_builtin` (~760 l) par familles (num, monétaire, date/heure,
