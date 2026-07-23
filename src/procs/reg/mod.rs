@@ -862,7 +862,18 @@ fn run_model(
                 // responses, move on to the next dependent (`continue`); with a
                 // single response this ends the only iteration just as the prior
                 // `return Ok(())` did, so the output is unchanged.
-                fit_and_print_empty(model, dep_name, n_read, n, model_label, by_heading, session);
+                fit_and_print_empty(
+                    model,
+                    dep_name,
+                    &FitReportOptions {
+                        n_read,
+                        n,
+                        model_label,
+                        by_heading,
+                        ..Default::default()
+                    },
+                    session,
+                );
                 continue;
             }
         }
@@ -1011,6 +1022,20 @@ fn run_model(
     let ridge_ipc_active = want_ridge || want_ipc;
     // Back-transformed ridge/IPC rows to attach to this model's OUTEST entry.
     let mut ridge_ipc_rows: Vec<RidgeIpcRow> = Vec::new();
+    // Report context + optional statistics shared by both printers (the
+    // ridge/IPC one only reads the header context).
+    let fit_opts = FitReportOptions {
+        n_read,
+        n,
+        intercept,
+        model_label,
+        restricted: restricted.as_ref(),
+        tolvif: tolvif.as_ref(),
+        seqstats: seqstats.as_ref(),
+        press_stat,
+        weighting: weighting.as_ref(),
+        by_heading,
+    };
     if ridge_ipc_active {
         if !intercept {
             session.log.note(
@@ -1024,31 +1049,12 @@ fn run_model(
                 &sel_reg_names,
                 &sel_cols,
                 &y_vec,
-                n_read,
-                n,
-                model_label,
-                by_heading,
+                &fit_opts,
                 session,
             );
         }
     } else {
-        fit_and_print(
-            model,
-            dep_name,
-            &sel_reg_names,
-            &fit,
-            restricted.as_ref(),
-            n_read,
-            n,
-            intercept,
-            model_label,
-            tolvif.as_ref(),
-            seqstats.as_ref(),
-            press_stat,
-            weighting.as_ref(),
-            by_heading,
-            session,
-        );
+        fit_and_print(model, dep_name, &sel_reg_names, &fit, &fit_opts, session);
     }
 
     // --- OUTEST= (M36.8): record this fit for the per-PROC parameter-estimates

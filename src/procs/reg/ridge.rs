@@ -148,12 +148,18 @@ pub(super) fn fit_and_print_ridge_ipc(
     reg_names: &[String],
     cols: &[Vec<f64>],
     y: &[f64],
-    n_read: usize,
-    n: usize,
-    model_label: &str,
-    by_heading: Option<&str>,
+    opts: &FitReportOptions,
     session: &mut Session,
 ) -> Vec<RidgeIpcRow> {
+    // Header context shared with `fit_and_print`; the optional statistics
+    // blocks in `opts` do not apply to the ridge/IPC report.
+    let &FitReportOptions {
+        n_read,
+        n,
+        model_label,
+        by_heading,
+        ..
+    } = opts;
     let std = standardize_for_ridge(cols, y);
     let p = reg_names.len();
     let want_ridge = !ast.data_options.ridge.is_empty();

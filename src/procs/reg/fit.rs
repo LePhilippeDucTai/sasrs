@@ -336,42 +336,70 @@ pub(super) fn sample_sd(v: &[f64]) -> f64 {
     (ss / (n as f64 - 1.0)).sqrt()
 }
 
+/// Context + optional statistics for the model-report printers
+/// (`fit_and_print`, `fit_and_print_empty`, `fit_and_print_ridge_ipc`).
+/// Groups the header context and the per-milestone optional blocks that had
+/// accreted as positional parameters (M36.x). `Default` gives the plain
+/// no-option path (all `None`), so partial call sites can use
+/// `..Default::default()`.
+#[derive(Default)]
+pub(super) struct FitReportOptions<'a> {
+    /// Number of observations read (header "Number of Observations Read").
+    pub(super) n_read: usize,
+    /// Number of complete-case rows used in the fit.
+    pub(super) n: usize,
+    /// Whether the model includes an intercept (i.e. not NOINT).
+    pub(super) intercept: bool,
+    /// "Model: MODELn" heading line.
+    pub(super) model_label: &'a str,
+    /// RESTRICT re-estimate (M36.1). `Some` ⇒ the printed model (ANOVA, R², F,
+    /// parameter estimates) reflects the restricted fit.
+    pub(super) restricted: Option<&'a Restricted>,
+    /// Optional (tolerance, vif) per regressor (no intercept), in `reg_names`
+    /// order. `Some` when MODEL VIF and/or TOL is requested (M36.4).
+    pub(super) tolvif: Option<&'a (Vec<f64>, Vec<f64>)>,
+    /// Optional partial-SS / correlation statistics (M36.5), indexed by design
+    /// column (intercept first when present). `Some` when any of
+    /// SS1/SS2/STB/PCORR1/PCORR2/SCORR1/SCORR2/SEQB is requested.
+    pub(super) seqstats: Option<&'a SeqStats>,
+    /// PRESS = Σ (resid_i/(1−h_i))² (M36.5). `Some` when MODEL PRESS is
+    /// requested; printed as a fit statistic.
+    pub(super) press_stat: Option<f64>,
+    /// M36.7 WLS/FREQ context. `Some` ⇒ weighted ANOVA (weighted mean/SST, df
+    /// from Σf_i, weighted-SSE-based MSE). `None` ⇒ plain OLS (byte-identical
+    /// default path).
+    pub(super) weighting: Option<&'a Weighting>,
+    /// M36.7: BY-group heading, emitted right after "The REG Procedure" line.
+    /// `None` ⇒ header block byte-identical to the prior (no-BY) path.
+    pub(super) by_heading: Option<&'a str>,
+}
+
 /// Fit-and-print the full output block for a model (ANOVA + fit statistics +
 /// parameter estimates). This is the SINGLE printer shared by the default,
 /// NOINT, and SELECTION-final paths, guaranteeing byte-identical output for the
 /// default case. `reg_names` are the regressor names actually in the model (no
 /// intercept entry); `fit` was computed on a design matrix whose column order
 /// matches: [intercept?] then `reg_names`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn fit_and_print(
     model: &RegModel,
     dep_name: &str,
     reg_names: &[String],
     fit: &OlsFit,
-    restricted: Option<&Restricted>,
-    n_read: usize,
-    n: usize,
-    intercept: bool,
-    model_label: &str,
-    // `tolvif`: optional (tolerance, vif) per regressor (no intercept), in
-    // `reg_names` order. `Some` when MODEL VIF and/or TOL is requested (M36.4).
-    tolvif: Option<&(Vec<f64>, Vec<f64>)>,
-    // `seqstats`: optional partial-SS / correlation statistics (M36.5), indexed
-    // by design column (intercept first when present). `Some` when any of
-    // SS1/SS2/STB/PCORR1/PCORR2/SCORR1/SCORR2/SEQB is requested.
-    seqstats: Option<&SeqStats>,
-    // `press_stat`: PRESS = Σ (resid_i/(1−h_i))² (M36.5). `Some` when MODEL PRESS
-    // is requested; printed as a fit statistic.
-    press_stat: Option<f64>,
-    // `weighting`: M36.7 WLS/FREQ context. `Some` ⇒ weighted ANOVA (weighted
-    // mean/SST, df from Σf_i, weighted-SSE-based MSE). `None` ⇒ plain OLS
-    // (byte-identical default path).
-    weighting: Option<&Weighting>,
-    // M36.7: BY-group heading, emitted right after "The REG Procedure" line.
-    // `None` ⇒ header block byte-identical to the prior (no-BY) path.
-    by_heading: Option<&str>,
+    opts: &FitReportOptions,
     session: &mut Session,
 ) {
+    let &FitReportOptions {
+        n_read,
+        n,
+        intercept,
+        model_label,
+        restricted,
+        tolvif,
+        seqstats,
+        press_stat,
+        weighting,
+        by_heading,
+    } = opts;
     // When a restricted fit is present, the printed model (ANOVA, R², F, and
     // parameter estimates) reflects the RESTRICTed estimates β_r / SSE_r / df_r.
     let beta: &[f64] = match restricted {
@@ -835,10 +863,7 @@ pub(super) fn fit_and_print(
 pub(super) fn fit_and_print_empty(
     model: &RegModel,
     dep_name: &str,
-    _n_read: usize,
-    _n: usize,
-    model_label: &str,
-    by_heading: Option<&str>,
+    opts: &FitReportOptions,
     session: &mut Session,
 ) {
     if model.noprint {
@@ -846,10 +871,10 @@ pub(super) fn fit_and_print_empty(
     }
     session.listing.page_header();
     centered(session, "The REG Procedure");
-    if let Some(h) = by_heading {
+    if let Some(h) = opts.by_heading {
         centered(session, h);
     }
-    centered(session, model_label);
+    centered(session, opts.model_label);
     centered(session, &format!("Dependent Variable: {}", dep_name));
     session.listing.blank();
     if model.noint {
