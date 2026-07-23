@@ -33,6 +33,16 @@ use super::{right_justify, FormatSpec};
 use crate::value::{format_best, Value};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 
+/// Ajuste une chaîne déjà formatée à la largeur `w` : cadrée à droite si elle
+/// tient, sinon remplie d'étoiles (débordement SAS).
+fn fit_or_stars(s: &str, w: usize) -> String {
+    if s.len() <= w {
+        right_justify(s, w)
+    } else {
+        "*".repeat(w)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,12 +306,7 @@ fn format_wd(v: f64, w: Option<u16>, d: Option<u16>) -> String {
             } else {
                 // Try BEST fallback.
                 let best = format_best(v, ww);
-                if best.len() <= ww {
-                    right_justify(&best, ww)
-                } else {
-                    // Overflow: fill with '*'.
-                    "*".repeat(ww)
-                }
+                fit_or_stars(&best, ww)
             }
         }
     }
@@ -320,7 +325,149 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
     let name = spec.name.to_uppercase();
 
     // ── Character formats ────────────────────────────────────────────────────
+    if let Some(s) = format_char_family(v, spec, &name) {
+        return Some(s);
+    }
+
+    // ── Numeric formats — require a numeric value ────────────────────────────
+    let fval = match v {
+        Value::Num(n) => *n,
+        // Missing handled by catalog; if we somehow get here, return the char.
+        Value::Missing(k) => {
+            let ch = k.display();
+            let w = spec.w.unwrap_or(1) as usize;
+            return Some(right_justify(&ch, w));
+        }
+        Value::Char(_) => return None, // numeric format on char → unknown
+    };
+
     match name.as_str() {
+        // ── w.d (plain numeric) ──────────────────────────────────────────────
+        "" => Some(format_wd(fval, spec.w, spec.d)),
+
+        // ── BESTw. ───────────────────────────────────────────────────────────
+        "BEST" => fmt_best(fval, spec),
+
+        // ── COMMAw.d ─────────────────────────────────────────────────────────
+        "COMMA" => fmt_comma(fval, spec),
+
+        // ── DOLLARw.d ────────────────────────────────────────────────────────
+        "DOLLAR" => fmt_dollar(fval, spec),
+
+        // ── Zw.d (zero-padded) ───────────────────────────────────────────────
+        "Z" => fmt_z(fval, spec),
+
+        // ── PERCENTw.d ───────────────────────────────────────────────────────
+        // SAS behavior: multiply by 100, append %. For negative, SAS uses
+        // parentheses like DOLLAR: (1.23%) — we implement the simpler -1.23%
+        // (documented simplification).
+        "PERCENT" => fmt_percent(fval, spec),
+
+        // ── Ew. (scientific notation) ────────────────────────────────────────
+        "E" => fmt_e(fval, spec),
+
+        // ── Date formats ─────────────────────────────────────────────────────
+
+        // DATE9. → 01JAN2020, DATE7. → 01JAN20
+        "DATE" => fmt_date(fval, spec),
+
+        // DDMMYYw.: w=8 → ddmmyy (no sep), w=10 → dd/mm/yyyy
+        "DDMMYY" => fmt_ddmmyy(fval, spec),
+
+        // MMDDYYw.: w=8 → mmddyy, w=10 → mm/dd/yyyy
+        "MMDDYY" => fmt_mmddyy(fval, spec),
+
+        // YYMMDDw.: w=8 → yymmdd, w=10 → yyyy/mm/dd
+        "YYMMDD" => fmt_yymmdd(fval, spec),
+
+        // MONYY7. → JAN2020
+        "MONYY" => fmt_monyy(fval, spec),
+
+        // WORDDATEw. → January 1, 2020
+        "WORDDATE" => fmt_worddate(fval, spec),
+
+        // DATETIMEw.d → 01JAN2020:12:34:56
+        "DATETIME" => fmt_datetime(fval, spec),
+
+        // TIMEw.d → hh:mm:ss
+        "TIME" => fmt_time(fval, spec),
+
+        // ── COMMAX: like COMMA but with period as thousands sep and comma as decimal
+        // European-style: 1.234,56
+        "COMMAX" => fmt_commax(fval, spec),
+
+        // ── DOLLARX: like DOLLAR but European-decimal style ($1.234,56)
+        "DOLLARX" => fmt_dollarx(fval, spec),
+
+        // ── EURO: European style with € prefix (€1.234,56)
+        "EURO" | "EUROX" => fmt_euro(fval, spec),
+
+        // ── NEGPAREN: negative numbers in parentheses; positives as-is
+        "NEGPAREN" => fmt_negparen(fval, spec),
+
+        // ── HEX: integer to hexadecimal uppercase
+        "HEX" => fmt_hex(fval, spec),
+
+        // ── BINARY: integer to binary representation
+        "BINARY" => fmt_binary(fval, spec),
+
+        // ── OCTAL: integer to octal
+        "OCTAL" => fmt_octal(fval, spec),
+
+        // ── ROMAN: Roman numeral notation (1–3999)
+        "ROMAN" => fmt_roman(fval, spec),
+
+        // ── WORDS: English words representation
+        "WORDS" => fmt_words(fval, spec),
+
+        // ── FRACT: fractional notation (0.5 → 1/2)
+        "FRACT" => fmt_fract(fval, spec),
+
+        // ── SCIENTIFIC: scientific notation (SAS-style: 1.23E+02)
+        "SCIENTIFIC" => fmt_scientific(fval, spec),
+
+        // ── Date formats (M18.1 additions) ──────────────────────────────────
+
+        // WEEKDATE: abbreviated day of week (MON, TUE, etc.)
+        "WEEKDATE" => fmt_weekdate(fval, spec),
+
+        // DOWNAME: full day name (Monday, Tuesday, etc.)
+        "DOWNAME" => fmt_downame(fval, spec),
+
+        // MONNAME: full month name (January, February, etc.)
+        "MONNAME" => fmt_monname(fval, spec),
+
+        // QTR: quarter number Q1–Q4
+        "QTR" | "QTRR" => fmt_qtr(fval, spec),
+
+        // YYQ: year + quarter (2024Q1)
+        "YYQ" => fmt_yyq(fval, spec),
+
+        // JULIAN: Julian day format YYYYDDD (day-of-year)
+        "JULIAN" => fmt_julian(fval, spec),
+
+        // B8601DA / B8601DT / B8601TM — ISO 8601 basic (no separators)
+        "B8601DA" => fmt_b8601da(fval, spec),
+
+        "B8601DT" => fmt_b8601dt(fval, spec),
+
+        "B8601TM" => fmt_b8601tm(fval, spec),
+
+        // E8601DA / E8601DT / E8601TM — ISO 8601 extended (with separators)
+        "E8601DA" => fmt_e8601da(fval, spec),
+
+        "E8601DT" => fmt_e8601dt(fval, spec),
+
+        "E8601TM" => fmt_e8601tm(fval, spec),
+
+        _ => None,
+    }
+}
+
+/// Character formats ($, $CHAR, $F, $QUOTE, $HEX, $UPCASE).
+/// Returns `None` when `name` is not a character format.
+fn format_char_family(v: &Value, spec: &FormatSpec, name: &str) -> Option<String> {
+    match name {
         "$" | "$CHAR" | "$F" => {
             let s = match v {
                 Value::Char(c) => c.clone(),
@@ -408,668 +555,602 @@ pub fn format_builtin(v: &Value, spec: &FormatSpec) -> Option<String> {
 
         _ => {}
     }
+    None
+}
 
-    // ── Numeric formats — require a numeric value ────────────────────────────
-    let fval = match v {
-        Value::Num(n) => *n,
-        // Missing handled by catalog; if we somehow get here, return the char.
-        Value::Missing(k) => {
-            let ch = k.display();
-            let w = spec.w.unwrap_or(1) as usize;
-            return Some(right_justify(&ch, w));
+/// "BEST" arm of `format_builtin`.
+fn fmt_best(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let w = spec.w.unwrap_or(12) as usize;
+    let s = format_best(fval, w);
+    Some(right_justify(&s, w))
+}
+
+/// "COMMA" arm of `format_builtin`.
+fn fmt_comma(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let s = format_decimal(fval, d);
+    let with_commas = add_commas(&s);
+    match spec.w {
+        None => Some(with_commas),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&with_commas, w))
         }
-        Value::Char(_) => return None, // numeric format on char → unknown
-    };
-
-    match name.as_str() {
-        // ── w.d (plain numeric) ──────────────────────────────────────────────
-        "" => Some(format_wd(fval, spec.w, spec.d)),
-
-        // ── BESTw. ───────────────────────────────────────────────────────────
-        "BEST" => {
-            let w = spec.w.unwrap_or(12) as usize;
-            let s = format_best(fval, w);
-            Some(right_justify(&s, w))
-        }
-
-        // ── COMMAw.d ─────────────────────────────────────────────────────────
-        "COMMA" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let s = format_decimal(fval, d);
-            let with_commas = add_commas(&s);
-            match spec.w {
-                None => Some(with_commas),
-                Some(w) => {
-                    let w = w as usize;
-                    if with_commas.len() <= w {
-                        Some(right_justify(&with_commas, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── DOLLARw.d ────────────────────────────────────────────────────────
-        "DOLLAR" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            // Dollar sign goes before sign for negatives in SAS: -$1,234 → handle below.
-            let negative = fval < 0.0;
-            let abs_val = fval.abs();
-            let s = format_decimal(abs_val, d);
-            let with_commas = add_commas(&s);
-            let formatted = if negative {
-                format!("-${}", with_commas)
-            } else {
-                format!("${}", with_commas)
-            };
-            match spec.w {
-                None => Some(formatted),
-                Some(w) => {
-                    let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── Zw.d (zero-padded) ───────────────────────────────────────────────
-        "Z" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let negative = fval < 0.0;
-            let abs_val = fval.abs();
-            let s = format_decimal(abs_val, d);
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    // Sign takes 1 char if negative.
-                    let pad_target = if negative { w.saturating_sub(1) } else { w };
-                    let padded = format!("{:0>width$}", s, width = pad_target);
-                    let full = if negative {
-                        format!("-{}", padded)
-                    } else {
-                        padded
-                    };
-                    if full.len() <= w {
-                        Some(right_justify(&full, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── PERCENTw.d ───────────────────────────────────────────────────────
-        // SAS behavior: multiply by 100, append %. For negative, SAS uses
-        // parentheses like DOLLAR: (1.23%) — we implement the simpler -1.23%
-        // (documented simplification).
-        "PERCENT" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let pct = fval * 100.0;
-            let s = format!("{:.prec$}%", pct, prec = d);
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── Ew. (scientific notation) ────────────────────────────────────────
-        "E" => {
-            let w = spec.w.unwrap_or(12) as usize;
-            let s = format!("{:E}", fval);
-            if s.len() <= w {
-                Some(right_justify(&s, w))
-            } else {
-                // Try with fewer decimal digits.
-                let s2 = format!("{:.2E}", fval);
-                if s2.len() <= w {
-                    Some(right_justify(&s2, w))
-                } else {
-                    Some("*".repeat(w))
-                }
-            }
-        }
-
-        // ── Date formats ─────────────────────────────────────────────────────
-
-        // DATE9. → 01JAN2020, DATE7. → 01JAN20
-        "DATE" => {
-            let date = days_to_date(fval)?;
-            let day = date.day();
-            let mon = MONTHS[(date.month() - 1) as usize];
-            let year = date.year();
-            let w = spec.w.unwrap_or(9) as usize;
-            let s = if w >= 9 {
-                format!("{:02}{}{:04}", day, mon, year)
-            } else {
-                // DATE7 or smaller: 2-digit year
-                let yr2 = year.abs() % 100;
-                format!("{:02}{}{:02}", day, mon, yr2)
-            };
-            Some(right_justify(&s, w))
-        }
-
-        // DDMMYYw.: w=8 → ddmmyy (no sep), w=10 → dd/mm/yyyy
-        "DDMMYY" => {
-            let date = days_to_date(fval)?;
-            let dd = date.day();
-            let mm = date.month();
-            let yyyy = date.year();
-            let w = spec.w.unwrap_or(8) as usize;
-            let s = if w >= 10 {
-                format!("{:02}/{:02}/{:04}", dd, mm, yyyy)
-            } else {
-                let yy = yyyy.abs() % 100;
-                format!("{:02}{:02}{:02}", dd, mm, yy)
-            };
-            Some(right_justify(&s, w))
-        }
-
-        // MMDDYYw.: w=8 → mmddyy, w=10 → mm/dd/yyyy
-        "MMDDYY" => {
-            let date = days_to_date(fval)?;
-            let dd = date.day();
-            let mm = date.month();
-            let yyyy = date.year();
-            let w = spec.w.unwrap_or(8) as usize;
-            let s = if w >= 10 {
-                format!("{:02}/{:02}/{:04}", mm, dd, yyyy)
-            } else {
-                let yy = yyyy.abs() % 100;
-                format!("{:02}{:02}{:02}", mm, dd, yy)
-            };
-            Some(right_justify(&s, w))
-        }
-
-        // YYMMDDw.: w=8 → yymmdd, w=10 → yyyy/mm/dd
-        "YYMMDD" => {
-            let date = days_to_date(fval)?;
-            let dd = date.day();
-            let mm = date.month();
-            let yyyy = date.year();
-            let w = spec.w.unwrap_or(8) as usize;
-            let s = if w >= 10 {
-                format!("{:04}/{:02}/{:02}", yyyy, mm, dd)
-            } else {
-                let yy = yyyy.abs() % 100;
-                format!("{:02}{:02}{:02}", yy, mm, dd)
-            };
-            Some(right_justify(&s, w))
-        }
-
-        // MONYY7. → JAN2020
-        "MONYY" => {
-            let date = days_to_date(fval)?;
-            let mon = MONTHS[(date.month() - 1) as usize];
-            let yyyy = date.year();
-            let s = format!("{}{:04}", mon, yyyy);
-            let w = spec.w.unwrap_or(7) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // WORDDATEw. → January 1, 2020
-        "WORDDATE" => {
-            let date = days_to_date(fval)?;
-            let mon = MONTHS_FULL[(date.month() - 1) as usize];
-            let day = date.day();
-            let year = date.year();
-            let s = format!("{} {}, {}", mon, day, year);
-            match spec.w {
-                None => Some(s),
-                Some(w) => Some(right_justify(&s, w as usize)),
-            }
-        }
-
-        // DATETIMEw.d → 01JAN2020:12:34:56
-        "DATETIME" => {
-            let dt = secs_to_datetime(fval)?;
-            let day = dt.day();
-            let mon = MONTHS[(dt.month() - 1) as usize];
-            let year = dt.year();
-            let hh = dt.hour();
-            let mm = dt.minute();
-            let ss = dt.second();
-            let s = format!("{:02}{}{:04}:{:02}:{:02}:{:02}", day, mon, year, hh, mm, ss);
-            let w = spec.w.unwrap_or(19) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // TIMEw.d → hh:mm:ss
-        "TIME" => {
-            let (hh, mm, ss) = secs_to_time(fval);
-            let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
-            let w = spec.w.unwrap_or(8) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // ── COMMAX: like COMMA but with period as thousands sep and comma as decimal
-        // European-style: 1.234,56
-        "COMMAX" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let negative = fval < 0.0;
-            let abs_val = fval.abs();
-            // Format with d decimals
-            let s = format!("{:.prec$}", abs_val, prec = d);
-            // Split on '.' (Rust decimal point)
-            let (int_part, dec_part) = match s.find('.') {
-                Some(p) => (&s[..p], &s[p + 1..]),
-                None => (s.as_str(), ""),
-            };
-            // Add periods as thousands separators
-            let rev: String = int_part
-                .chars()
-                .rev()
-                .enumerate()
-                .flat_map(|(i, c)| {
-                    if i > 0 && i % 3 == 0 {
-                        vec!['.', c]
-                    } else {
-                        vec![c]
-                    }
-                })
-                .collect();
-            let int_with_sep: String = rev.chars().rev().collect();
-            let formatted = if d > 0 {
-                if negative {
-                    format!("-{},{}", int_with_sep, dec_part)
-                } else {
-                    format!("{},{}", int_with_sep, dec_part)
-                }
-            } else {
-                if negative {
-                    format!("-{}", int_with_sep)
-                } else {
-                    int_with_sep
-                }
-            };
-            match spec.w {
-                None => Some(formatted),
-                Some(w) => {
-                    let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── DOLLARX: like DOLLAR but European-decimal style ($1.234,56)
-        "DOLLARX" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let negative = fval < 0.0;
-            let abs_val = fval.abs();
-            let s = format!("{:.prec$}", abs_val, prec = d);
-            let (int_part, dec_part) = match s.find('.') {
-                Some(p) => (&s[..p], &s[p + 1..]),
-                None => (s.as_str(), ""),
-            };
-            // Thousands with periods
-            let rev: String = int_part
-                .chars()
-                .rev()
-                .enumerate()
-                .flat_map(|(i, c)| {
-                    if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
-                })
-                .collect();
-            let int_with_sep: String = rev.chars().rev().collect();
-            let formatted = if d > 0 {
-                if negative {
-                    format!("-${},{}", int_with_sep, dec_part)
-                } else {
-                    format!("${},{}", int_with_sep, dec_part)
-                }
-            } else {
-                if negative {
-                    format!("-${}", int_with_sep)
-                } else {
-                    format!("${}", int_with_sep)
-                }
-            };
-            match spec.w {
-                None => Some(formatted),
-                Some(w) => {
-                    let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── EURO: European style with € prefix (€1.234,56)
-        "EURO" | "EUROX" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let negative = fval < 0.0;
-            let abs_val = fval.abs();
-            let s = format!("{:.prec$}", abs_val, prec = d);
-            let (int_part, dec_part) = match s.find('.') {
-                Some(p) => (&s[..p], &s[p + 1..]),
-                None => (s.as_str(), ""),
-            };
-            let rev: String = int_part
-                .chars()
-                .rev()
-                .enumerate()
-                .flat_map(|(i, c)| {
-                    if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
-                })
-                .collect();
-            let int_with_sep: String = rev.chars().rev().collect();
-            let formatted = if d > 0 {
-                if negative {
-                    format!("-€{},{}", int_with_sep, dec_part)
-                } else {
-                    format!("€{},{}", int_with_sep, dec_part)
-                }
-            } else {
-                if negative {
-                    format!("-€{}", int_with_sep)
-                } else {
-                    format!("€{}", int_with_sep)
-                }
-            };
-            match spec.w {
-                None => Some(formatted),
-                Some(w) => {
-                    let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── NEGPAREN: negative numbers in parentheses; positives as-is
-        "NEGPAREN" => {
-            let d = spec.d.unwrap_or(0) as usize;
-            let formatted = if fval < 0.0 {
-                let abs_val = fval.abs();
-                let s = format!("{:.prec$}", abs_val, prec = d);
-                let with_commas = add_commas(&s);
-                format!("({})", with_commas)
-            } else {
-                let s = format!("{:.prec$}", fval, prec = d);
-                add_commas(&s)
-            };
-            match spec.w {
-                None => Some(formatted),
-                Some(w) => {
-                    let w = w as usize;
-                    if formatted.len() <= w {
-                        Some(right_justify(&formatted, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── HEX: integer to hexadecimal uppercase
-        "HEX" => {
-            let n = fval.round() as i64;
-            let s = if n < 0 {
-                // SAS HEX format renders negative as two's complement in 16 hex digits
-                format!("{:016X}", n as u64)
-            } else {
-                format!("{:X}", n)
-            };
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some(s[s.len() - w..].to_string()) // keep rightmost
-                    }
-                }
-            }
-        }
-
-        // ── BINARY: integer to binary representation
-        "BINARY" => {
-            let n = fval.round() as i64;
-            let s = if n < 0 {
-                format!("{:064b}", n as u64)
-            } else {
-                format!("{:b}", n)
-            };
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some(s[s.len() - w..].to_string())
-                    }
-                }
-            }
-        }
-
-        // ── OCTAL: integer to octal
-        "OCTAL" => {
-            let n = fval.round() as u64;
-            let s = format!("{:o}", n);
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    if s.len() <= w {
-                        Some(right_justify(&s, w))
-                    } else {
-                        Some("*".repeat(w))
-                    }
-                }
-            }
-        }
-
-        // ── ROMAN: Roman numeral notation (1–3999)
-        "ROMAN" => {
-            let n = fval.round() as u32;
-            let s = to_roman(n);
-            if s.is_empty() {
-                // out of range → use numeric fallback
-                let fallback = format!("{}", fval.round() as i64);
-                return Some(match spec.w {
-                    None => fallback,
-                    Some(w) => right_justify(&fallback, w as usize),
-                });
-            }
-            match spec.w {
-                None => Some(s),
-                Some(w) => Some(right_justify(&s, w as usize)),
-            }
-        }
-
-        // ── WORDS: English words representation
-        "WORDS" => {
-            let n = fval.round() as i64;
-            let s = to_words(n);
-            match spec.w {
-                None => Some(s),
-                Some(w) => {
-                    let w = w as usize;
-                    let mut out = s;
-                    if out.len() > w {
-                        out.truncate(w);
-                    } else {
-                        while out.len() < w {
-                            out.push(' ');
-                        }
-                    }
-                    Some(out)
-                }
-            }
-        }
-
-        // ── FRACT: fractional notation (0.5 → 1/2)
-        "FRACT" => {
-            let s = to_fract(fval);
-            match spec.w {
-                None => Some(s),
-                Some(w) => Some(right_justify(&s, w as usize)),
-            }
-        }
-
-        // ── SCIENTIFIC: scientific notation (SAS-style: 1.23E+02)
-        "SCIENTIFIC" => {
-            let d = spec.d.unwrap_or(2) as usize;
-            let w = spec.w.unwrap_or(12) as usize;
-            // Format as xExx style: coefficient with d decimals, exponent with sign and 2 digits
-            let s = if fval == 0.0 {
-                format!("{:.prec$}E+00", 0.0, prec = d)
-            } else {
-                let exp = fval.abs().log10().floor() as i32;
-                let coeff = fval / 10f64.powi(exp);
-                if exp >= 0 {
-                    format!("{:.prec$}E+{:02}", coeff, exp, prec = d)
-                } else {
-                    format!("{:.prec$}E-{:02}", coeff, -exp, prec = d)
-                }
-            };
-            if s.len() <= w {
-                Some(right_justify(&s, w))
-            } else {
-                Some("*".repeat(w))
-            }
-        }
-
-        // ── Date formats (M18.1 additions) ──────────────────────────────────
-
-        // WEEKDATE: abbreviated day of week (MON, TUE, etc.)
-        "WEEKDATE" => {
-            let date = days_to_date(fval)?;
-            // chrono weekday: Monday=0 in num_days_from_monday(); Sunday=6
-            // We need Sunday=0 for our DOW_SHORT array
-            let dow = date.weekday().num_days_from_sunday() as usize;
-            let s = DOW_SHORT[dow];
-            let w = spec.w.unwrap_or(3) as usize;
-            Some(right_justify(s, w))
-        }
-
-        // DOWNAME: full day name (Monday, Tuesday, etc.)
-        "DOWNAME" => {
-            let date = days_to_date(fval)?;
-            let dow = date.weekday().num_days_from_sunday() as usize;
-            let s = DOW_FULL[dow];
-            let w = spec.w.unwrap_or(9) as usize; // "Wednesday" = 9 chars
-            Some(right_justify(s, w))
-        }
-
-        // MONNAME: full month name (January, February, etc.)
-        "MONNAME" => {
-            let date = days_to_date(fval)?;
-            let s = MONTHS_FULL[(date.month() - 1) as usize];
-            let w = spec.w.unwrap_or(9) as usize; // "September" = 9 chars
-            Some(right_justify(s, w))
-        }
-
-        // QTR: quarter number Q1–Q4
-        "QTR" | "QTRR" => {
-            let date = days_to_date(fval)?;
-            let q = ((date.month() - 1) / 3) + 1;
-            let s = format!("{}", q);
-            let w = spec.w.unwrap_or(1) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // YYQ: year + quarter (2024Q1)
-        "YYQ" => {
-            let date = days_to_date(fval)?;
-            let q = ((date.month() - 1) / 3) + 1;
-            let s = format!("{}Q{}", date.year(), q);
-            let w = spec.w.unwrap_or(6) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // JULIAN: Julian day format YYYYDDD (day-of-year)
-        "JULIAN" => {
-            let date = days_to_date(fval)?;
-            let doy = date.ordinal(); // 1-based day of year
-            let s = format!("{:04}{:03}", date.year(), doy);
-            let w = spec.w.unwrap_or(7) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // B8601DA / B8601DT / B8601TM — ISO 8601 basic (no separators)
-        "B8601DA" => {
-            // YYYYMMDD
-            let date = days_to_date(fval)?;
-            let s = format!("{:04}{:02}{:02}", date.year(), date.month(), date.day());
-            let w = spec.w.unwrap_or(8) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        "B8601DT" => {
-            // YYYYMMDDTHHmmss
-            let dt = secs_to_datetime(fval)?;
-            let s = format!(
-                "{:04}{:02}{:02}T{:02}{:02}{:02}",
-                dt.year(), dt.month(), dt.day(),
-                dt.hour(), dt.minute(), dt.second()
-            );
-            let w = spec.w.unwrap_or(15) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        "B8601TM" => {
-            // HHmmss
-            let (hh, mm, ss) = secs_to_time(fval);
-            let s = format!("{:02}{:02}{:02}", hh, mm, ss);
-            let w = spec.w.unwrap_or(6) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        // E8601DA / E8601DT / E8601TM — ISO 8601 extended (with separators)
-        "E8601DA" => {
-            // YYYY-MM-DD
-            let date = days_to_date(fval)?;
-            let s = format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
-            let w = spec.w.unwrap_or(10) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        "E8601DT" => {
-            // YYYY-MM-DDTHH:mm:ss
-            let dt = secs_to_datetime(fval)?;
-            let s = format!(
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                dt.year(), dt.month(), dt.day(),
-                dt.hour(), dt.minute(), dt.second()
-            );
-            let w = spec.w.unwrap_or(19) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        "E8601TM" => {
-            // HH:mm:ss
-            let (hh, mm, ss) = secs_to_time(fval);
-            let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
-            let w = spec.w.unwrap_or(8) as usize;
-            Some(right_justify(&s, w))
-        }
-
-        _ => None,
     }
+}
+
+/// "DOLLAR" arm of `format_builtin`.
+fn fmt_dollar(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    // Dollar sign goes before sign for negatives in SAS: -$1,234 → handle below.
+    let negative = fval < 0.0;
+    let abs_val = fval.abs();
+    let s = format_decimal(abs_val, d);
+    let with_commas = add_commas(&s);
+    let formatted = if negative {
+        format!("-${}", with_commas)
+    } else {
+        format!("${}", with_commas)
+    };
+    match spec.w {
+        None => Some(formatted),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&formatted, w))
+        }
+    }
+}
+
+/// "Z" arm of `format_builtin`.
+fn fmt_z(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let negative = fval < 0.0;
+    let abs_val = fval.abs();
+    let s = format_decimal(abs_val, d);
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            // Sign takes 1 char if negative.
+            let pad_target = if negative { w.saturating_sub(1) } else { w };
+            let padded = format!("{:0>width$}", s, width = pad_target);
+            let full = if negative {
+                format!("-{}", padded)
+            } else {
+                padded
+            };
+            Some(fit_or_stars(&full, w))
+        }
+    }
+}
+
+/// "PERCENT" arm of `format_builtin`.
+fn fmt_percent(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let pct = fval * 100.0;
+    let s = format!("{:.prec$}%", pct, prec = d);
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&s, w))
+        }
+    }
+}
+
+/// "E" arm of `format_builtin`.
+fn fmt_e(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let w = spec.w.unwrap_or(12) as usize;
+    let s = format!("{:E}", fval);
+    if s.len() <= w {
+        Some(right_justify(&s, w))
+    } else {
+        // Try with fewer decimal digits.
+        let s2 = format!("{:.2E}", fval);
+        Some(fit_or_stars(&s2, w))
+    }
+}
+
+/// "DATE" arm of `format_builtin`.
+fn fmt_date(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let day = date.day();
+    let mon = MONTHS[(date.month() - 1) as usize];
+    let year = date.year();
+    let w = spec.w.unwrap_or(9) as usize;
+    let s = if w >= 9 {
+        format!("{:02}{}{:04}", day, mon, year)
+    } else {
+        // DATE7 or smaller: 2-digit year
+        let yr2 = year.abs() % 100;
+        format!("{:02}{}{:02}", day, mon, yr2)
+    };
+    Some(right_justify(&s, w))
+}
+
+/// "DDMMYY" arm of `format_builtin`.
+fn fmt_ddmmyy(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let dd = date.day();
+    let mm = date.month();
+    let yyyy = date.year();
+    let w = spec.w.unwrap_or(8) as usize;
+    let s = if w >= 10 {
+        format!("{:02}/{:02}/{:04}", dd, mm, yyyy)
+    } else {
+        let yy = yyyy.abs() % 100;
+        format!("{:02}{:02}{:02}", dd, mm, yy)
+    };
+    Some(right_justify(&s, w))
+}
+
+/// "MMDDYY" arm of `format_builtin`.
+fn fmt_mmddyy(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let dd = date.day();
+    let mm = date.month();
+    let yyyy = date.year();
+    let w = spec.w.unwrap_or(8) as usize;
+    let s = if w >= 10 {
+        format!("{:02}/{:02}/{:04}", mm, dd, yyyy)
+    } else {
+        let yy = yyyy.abs() % 100;
+        format!("{:02}{:02}{:02}", mm, dd, yy)
+    };
+    Some(right_justify(&s, w))
+}
+
+/// "YYMMDD" arm of `format_builtin`.
+fn fmt_yymmdd(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let dd = date.day();
+    let mm = date.month();
+    let yyyy = date.year();
+    let w = spec.w.unwrap_or(8) as usize;
+    let s = if w >= 10 {
+        format!("{:04}/{:02}/{:02}", yyyy, mm, dd)
+    } else {
+        let yy = yyyy.abs() % 100;
+        format!("{:02}{:02}{:02}", yy, mm, dd)
+    };
+    Some(right_justify(&s, w))
+}
+
+/// "MONYY" arm of `format_builtin`.
+fn fmt_monyy(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let mon = MONTHS[(date.month() - 1) as usize];
+    let yyyy = date.year();
+    let s = format!("{}{:04}", mon, yyyy);
+    let w = spec.w.unwrap_or(7) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "WORDDATE" arm of `format_builtin`.
+fn fmt_worddate(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let mon = MONTHS_FULL[(date.month() - 1) as usize];
+    let day = date.day();
+    let year = date.year();
+    let s = format!("{} {}, {}", mon, day, year);
+    match spec.w {
+        None => Some(s),
+        Some(w) => Some(right_justify(&s, w as usize)),
+    }
+}
+
+/// "DATETIME" arm of `format_builtin`.
+fn fmt_datetime(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let dt = secs_to_datetime(fval)?;
+    let day = dt.day();
+    let mon = MONTHS[(dt.month() - 1) as usize];
+    let year = dt.year();
+    let hh = dt.hour();
+    let mm = dt.minute();
+    let ss = dt.second();
+    let s = format!("{:02}{}{:04}:{:02}:{:02}:{:02}", day, mon, year, hh, mm, ss);
+    let w = spec.w.unwrap_or(19) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "TIME" arm of `format_builtin`.
+fn fmt_time(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let (hh, mm, ss) = secs_to_time(fval);
+    let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
+    let w = spec.w.unwrap_or(8) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "COMMAX" arm of `format_builtin`.
+fn fmt_commax(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let negative = fval < 0.0;
+    let abs_val = fval.abs();
+    // Format with d decimals
+    let s = format!("{:.prec$}", abs_val, prec = d);
+    // Split on '.' (Rust decimal point)
+    let (int_part, dec_part) = match s.find('.') {
+        Some(p) => (&s[..p], &s[p + 1..]),
+        None => (s.as_str(), ""),
+    };
+    // Add periods as thousands separators
+    let rev: String = int_part
+        .chars()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 {
+                vec!['.', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect();
+    let int_with_sep: String = rev.chars().rev().collect();
+    let formatted = if d > 0 {
+        if negative {
+            format!("-{},{}", int_with_sep, dec_part)
+        } else {
+            format!("{},{}", int_with_sep, dec_part)
+        }
+    } else {
+        if negative {
+            format!("-{}", int_with_sep)
+        } else {
+            int_with_sep
+        }
+    };
+    match spec.w {
+        None => Some(formatted),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&formatted, w))
+        }
+    }
+}
+
+/// "DOLLARX" arm of `format_builtin`.
+fn fmt_dollarx(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let negative = fval < 0.0;
+    let abs_val = fval.abs();
+    let s = format!("{:.prec$}", abs_val, prec = d);
+    let (int_part, dec_part) = match s.find('.') {
+        Some(p) => (&s[..p], &s[p + 1..]),
+        None => (s.as_str(), ""),
+    };
+    // Thousands with periods
+    let rev: String = int_part
+        .chars()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+        })
+        .collect();
+    let int_with_sep: String = rev.chars().rev().collect();
+    let formatted = if d > 0 {
+        if negative {
+            format!("-${},{}", int_with_sep, dec_part)
+        } else {
+            format!("${},{}", int_with_sep, dec_part)
+        }
+    } else {
+        if negative {
+            format!("-${}", int_with_sep)
+        } else {
+            format!("${}", int_with_sep)
+        }
+    };
+    match spec.w {
+        None => Some(formatted),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&formatted, w))
+        }
+    }
+}
+
+/// "EURO" | "EUROX" arm of `format_builtin`.
+fn fmt_euro(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let negative = fval < 0.0;
+    let abs_val = fval.abs();
+    let s = format!("{:.prec$}", abs_val, prec = d);
+    let (int_part, dec_part) = match s.find('.') {
+        Some(p) => (&s[..p], &s[p + 1..]),
+        None => (s.as_str(), ""),
+    };
+    let rev: String = int_part
+        .chars()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+        })
+        .collect();
+    let int_with_sep: String = rev.chars().rev().collect();
+    let formatted = if d > 0 {
+        if negative {
+            format!("-€{},{}", int_with_sep, dec_part)
+        } else {
+            format!("€{},{}", int_with_sep, dec_part)
+        }
+    } else {
+        if negative {
+            format!("-€{}", int_with_sep)
+        } else {
+            format!("€{}", int_with_sep)
+        }
+    };
+    match spec.w {
+        None => Some(formatted),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&formatted, w))
+        }
+    }
+}
+
+/// "NEGPAREN" arm of `format_builtin`.
+fn fmt_negparen(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(0) as usize;
+    let formatted = if fval < 0.0 {
+        let abs_val = fval.abs();
+        let s = format!("{:.prec$}", abs_val, prec = d);
+        let with_commas = add_commas(&s);
+        format!("({})", with_commas)
+    } else {
+        let s = format!("{:.prec$}", fval, prec = d);
+        add_commas(&s)
+    };
+    match spec.w {
+        None => Some(formatted),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&formatted, w))
+        }
+    }
+}
+
+/// "HEX" arm of `format_builtin`.
+fn fmt_hex(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let n = fval.round() as i64;
+    let s = if n < 0 {
+        // SAS HEX format renders negative as two's complement in 16 hex digits
+        format!("{:016X}", n as u64)
+    } else {
+        format!("{:X}", n)
+    };
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            if s.len() <= w {
+                Some(right_justify(&s, w))
+            } else {
+                Some(s[s.len() - w..].to_string()) // keep rightmost
+            }
+        }
+    }
+}
+
+/// "BINARY" arm of `format_builtin`.
+fn fmt_binary(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let n = fval.round() as i64;
+    let s = if n < 0 {
+        format!("{:064b}", n as u64)
+    } else {
+        format!("{:b}", n)
+    };
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            if s.len() <= w {
+                Some(right_justify(&s, w))
+            } else {
+                Some(s[s.len() - w..].to_string())
+            }
+        }
+    }
+}
+
+/// "OCTAL" arm of `format_builtin`.
+fn fmt_octal(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let n = fval.round() as u64;
+    let s = format!("{:o}", n);
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            Some(fit_or_stars(&s, w))
+        }
+    }
+}
+
+/// "ROMAN" arm of `format_builtin`.
+fn fmt_roman(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let n = fval.round() as u32;
+    let s = to_roman(n);
+    if s.is_empty() {
+        // out of range → use numeric fallback
+        let fallback = format!("{}", fval.round() as i64);
+        return Some(match spec.w {
+            None => fallback,
+            Some(w) => right_justify(&fallback, w as usize),
+        });
+    }
+    match spec.w {
+        None => Some(s),
+        Some(w) => Some(right_justify(&s, w as usize)),
+    }
+}
+
+/// "WORDS" arm of `format_builtin`.
+fn fmt_words(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let n = fval.round() as i64;
+    let s = to_words(n);
+    match spec.w {
+        None => Some(s),
+        Some(w) => {
+            let w = w as usize;
+            let mut out = s;
+            if out.len() > w {
+                out.truncate(w);
+            } else {
+                while out.len() < w {
+                    out.push(' ');
+                }
+            }
+            Some(out)
+        }
+    }
+}
+
+/// "FRACT" arm of `format_builtin`.
+fn fmt_fract(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let s = to_fract(fval);
+    match spec.w {
+        None => Some(s),
+        Some(w) => Some(right_justify(&s, w as usize)),
+    }
+}
+
+/// "SCIENTIFIC" arm of `format_builtin`.
+fn fmt_scientific(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let d = spec.d.unwrap_or(2) as usize;
+    let w = spec.w.unwrap_or(12) as usize;
+    // Format as xExx style: coefficient with d decimals, exponent with sign and 2 digits
+    let s = if fval == 0.0 {
+        format!("{:.prec$}E+00", 0.0, prec = d)
+    } else {
+        let exp = fval.abs().log10().floor() as i32;
+        let coeff = fval / 10f64.powi(exp);
+        if exp >= 0 {
+            format!("{:.prec$}E+{:02}", coeff, exp, prec = d)
+        } else {
+            format!("{:.prec$}E-{:02}", coeff, -exp, prec = d)
+        }
+    };
+    Some(fit_or_stars(&s, w))
+}
+
+/// "WEEKDATE" arm of `format_builtin`.
+fn fmt_weekdate(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    // chrono weekday: Monday=0 in num_days_from_monday(); Sunday=6
+    // We need Sunday=0 for our DOW_SHORT array
+    let dow = date.weekday().num_days_from_sunday() as usize;
+    let s = DOW_SHORT[dow];
+    let w = spec.w.unwrap_or(3) as usize;
+    Some(right_justify(s, w))
+}
+
+/// "DOWNAME" arm of `format_builtin`.
+fn fmt_downame(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let dow = date.weekday().num_days_from_sunday() as usize;
+    let s = DOW_FULL[dow];
+    let w = spec.w.unwrap_or(9) as usize; // "Wednesday" = 9 chars
+    Some(right_justify(s, w))
+}
+
+/// "MONNAME" arm of `format_builtin`.
+fn fmt_monname(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let s = MONTHS_FULL[(date.month() - 1) as usize];
+    let w = spec.w.unwrap_or(9) as usize; // "September" = 9 chars
+    Some(right_justify(s, w))
+}
+
+/// "QTR" | "QTRR" arm of `format_builtin`.
+fn fmt_qtr(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let q = ((date.month() - 1) / 3) + 1;
+    let s = format!("{}", q);
+    let w = spec.w.unwrap_or(1) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "YYQ" arm of `format_builtin`.
+fn fmt_yyq(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let q = ((date.month() - 1) / 3) + 1;
+    let s = format!("{}Q{}", date.year(), q);
+    let w = spec.w.unwrap_or(6) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "JULIAN" arm of `format_builtin`.
+fn fmt_julian(fval: f64, spec: &FormatSpec) -> Option<String> {
+    let date = days_to_date(fval)?;
+    let doy = date.ordinal(); // 1-based day of year
+    let s = format!("{:04}{:03}", date.year(), doy);
+    let w = spec.w.unwrap_or(7) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "B8601DA" arm of `format_builtin`.
+fn fmt_b8601da(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // YYYYMMDD
+    let date = days_to_date(fval)?;
+    let s = format!("{:04}{:02}{:02}", date.year(), date.month(), date.day());
+    let w = spec.w.unwrap_or(8) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "B8601DT" arm of `format_builtin`.
+fn fmt_b8601dt(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // YYYYMMDDTHHmmss
+    let dt = secs_to_datetime(fval)?;
+    let s = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}",
+        dt.year(), dt.month(), dt.day(),
+        dt.hour(), dt.minute(), dt.second()
+    );
+    let w = spec.w.unwrap_or(15) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "B8601TM" arm of `format_builtin`.
+fn fmt_b8601tm(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // HHmmss
+    let (hh, mm, ss) = secs_to_time(fval);
+    let s = format!("{:02}{:02}{:02}", hh, mm, ss);
+    let w = spec.w.unwrap_or(6) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "E8601DA" arm of `format_builtin`.
+fn fmt_e8601da(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // YYYY-MM-DD
+    let date = days_to_date(fval)?;
+    let s = format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
+    let w = spec.w.unwrap_or(10) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "E8601DT" arm of `format_builtin`.
+fn fmt_e8601dt(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // YYYY-MM-DDTHH:mm:ss
+    let dt = secs_to_datetime(fval)?;
+    let s = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        dt.year(), dt.month(), dt.day(),
+        dt.hour(), dt.minute(), dt.second()
+    );
+    let w = spec.w.unwrap_or(19) as usize;
+    Some(right_justify(&s, w))
+}
+
+/// "E8601TM" arm of `format_builtin`.
+fn fmt_e8601tm(fval: f64, spec: &FormatSpec) -> Option<String> {
+    // HH:mm:ss
+    let (hh, mm, ss) = secs_to_time(fval);
+    let s = format!("{:02}:{:02}:{:02}", hh, mm, ss);
+    let w = spec.w.unwrap_or(8) as usize;
+    Some(right_justify(&s, w))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

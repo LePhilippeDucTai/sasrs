@@ -24,7 +24,7 @@ use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value};
+use crate::value::Value;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -194,22 +194,10 @@ fn fmt6(v: f64) -> String {
     format!("{v:.6}")
 }
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
-/// Format a class-level Value for display.
-fn value_label(v: &Value) -> String {
-    match v {
-        Value::Num(f) => format_best(*f, 12),
-        Value::Missing(k) => k.display(),
-        Value::Char(s) => s.trim_end().to_string(),
-    }
-}
+use crate::procs::common::value_label;
+
 
 // ───────────────────────── Linear algebra helpers ─────────────────────────
 
@@ -456,15 +444,7 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
 
     let n_read = ds.n_obs();
     session.log.note(&format!(

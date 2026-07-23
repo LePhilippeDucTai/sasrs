@@ -1147,14 +1147,7 @@ fn num_var_meta(name: &str) -> VarMeta {
     }
 }
 
-/// Write a centered line within LINESIZE.
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 /// Emit the full report for a single analysis variable. `data` holds the
 /// non-missing (value, obs_number) pairs in original observation order.

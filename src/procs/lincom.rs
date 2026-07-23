@@ -29,6 +29,8 @@
 //! The `coding` describes the reference-cell dummy layout of the fitted design
 //! so that LS-means estimable functions can be rebuilt the same way GLM did.
 
+use crate::error::{Result, SasError};
+use crate::procs::common::value_label;
 use crate::stat::{chisq_cdf, f_cdf, student_t_cdf};
 use crate::stat::linalg::invert_matrix;
 use crate::value::Value;
@@ -485,6 +487,129 @@ pub fn class_coding(levels: &[Value], param: Param) -> Vec<Vec<f64>> {
         }
         Param::Poly => poly_coding(l),
     }
+}
+
+/// Collect the distinct non-missing CLASS levels of a column, in `sas_cmp` order.
+///
+/// This is the canonical SAS level-collection idiom shared by the modeling
+/// procs (GENMOD/LOGISTIC/ANOVA/…): walk the values in row order, skip missing
+/// values ([`Value::is_missing`] — numeric missings and blank character values),
+/// dedup by `sas_cmp == Equal` (first occurrence kept), then sort by `sas_cmp`.
+/// The result is ready to feed [`class_coding`] (reference cell = LAST level).
+///
+/// Takes any iterator of `&Value` so call sites can pre-filter rows (e.g.
+/// `col.iter().take(n_read)` or an iteration over usable-row indices).
+pub fn class_levels<'a, I>(vals: I) -> Vec<Value>
+where
+    I: IntoIterator<Item = &'a Value>,
+{
+    let mut levels: Vec<Value> = Vec::new();
+    for v in vals {
+        if v.is_missing() {
+            continue;
+        }
+        if !levels
+            .iter()
+            .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+        {
+            levels.push(v.clone());
+        }
+    }
+    levels.sort_by(|a, b| a.sas_cmp(b));
+    levels
+}
+
+/// A fixed-effects design column together with its parameter label.
+pub struct DesignColumn {
+    pub label: String,
+    pub values: Vec<f64>,
+}
+
+/// Build the fixed-effects design matrix from the MODEL effects (shared by
+/// PROC MIXED and PROC GLIMMIX).
+///
+/// Columns (in order): intercept (unless NOINT), then for each MODEL effect a
+/// continuous column (if the variable is not in CLASS) or reference-cell coded
+/// indicator columns (L−1, last level = reference per `sas_cmp` order) for a
+/// CLASS variable. Returns the design columns (each with its parameter label).
+/// Continuous values come pre-extracted as f64 (already validated as
+/// non-missing by the caller's listwise deletion).
+pub fn build_design(
+    cols: &[(String, Vec<Value>)],
+    class_vars: &[String],
+    fixed: &[String],
+    noint: bool,
+    n: usize,
+) -> Result<Vec<DesignColumn>> {
+    let mut design: Vec<DesignColumn> = Vec::new();
+    if !noint {
+        design.push(DesignColumn {
+            label: "Intercept".to_string(),
+            values: vec![1.0; n],
+        });
+    }
+
+    let find = |nm: &str| -> Option<&(String, Vec<Value>)> {
+        cols.iter().find(|(name, _)| name.eq_ignore_ascii_case(nm))
+    };
+    let is_class = |nm: &str| class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
+
+    for eff in fixed {
+        let col = find(eff).ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
+        })?;
+        if is_class(eff) {
+            // Reference-cell coding: levels sorted by sas_cmp, last is reference.
+            // NOTE: unlike `class_levels`, missing values are NOT skipped here —
+            // the caller's listwise deletion guarantees none remain, and the
+            // historical (byte-identity) code path did not filter them.
+            let mut levels: Vec<Value> = Vec::new();
+            for v in &col.1 {
+                if !levels
+                    .iter()
+                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+                {
+                    levels.push(v.clone());
+                }
+            }
+            levels.sort_by(|a, b| a.sas_cmp(b));
+            // PARAM=REFERENCE coding (last level = reference, dropped).
+            // `coding[li]` is the coding row of level `li`; column `j` is the
+            // indicator of `levels[j]` (j < L−1), so for a data value `v` whose
+            // level index is `li`, the column-`j` value is `coding[li][j]`.
+            let coding = class_coding(&levels, Param::Ref);
+            for (j, lvl) in levels.iter().take(levels.len().saturating_sub(1)).enumerate() {
+                let label = format!("{} {}", eff, value_label(lvl));
+                let values: Vec<f64> = col
+                    .1
+                    .iter()
+                    .map(|v| {
+                        let li = levels
+                            .iter()
+                            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+                            .expect("data value must match a deduped level");
+                        coding[li][j]
+                    })
+                    .collect();
+                design.push(DesignColumn { label, values });
+            }
+        } else {
+            // Continuous column.
+            let values: Vec<f64> = col
+                .1
+                .iter()
+                .map(|v| match v {
+                    Value::Num(f) => *f,
+                    _ => f64::NAN,
+                })
+                .collect();
+            design.push(DesignColumn {
+                label: eff.clone(),
+                values,
+            });
+        }
+    }
+    Ok(design)
 }
 
 /// Orthogonal-polynomial coding on equally-spaced integer scores `1..=L`.

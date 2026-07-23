@@ -62,82 +62,128 @@ use crate::log::StepTimer;
 use crate::parser::StatementStream;
 use crate::session::Session;
 
-pub enum ProcAst {
-    Print(print::PrintAst),
-    Sort(sort::SortAst),
-    Means(means::MeansAst),
-    Freq(freq::FreqAst),
-    Transpose(transpose::TransposeAst),
-    Univariate(univariate::UnivariateAst),
-    Contents(contents::ContentsAst),
-    Corr(corr::CorrAst),
-    Rank(rank::RankAst),
-    Datasets(datasets::DatasetsAst),
-    Append(append::AppendAst),
-    Format(format::FormatAst),
-    Tabulate(tabulate::TabulateAst),
-    Report(report::ReportAst),
-    Sql(crate::sql::ast::SqlProgram),
-    Import(import::ImportAst),
-    Export(export::ExportAst),
-    Compare(compare::CompareAst),
-    Printto(printto::PrinttoAst),
-    Options(options::OptionsAst),
-    Catalog(catalog::CatalogAst),
-    TTest(ttest::TTestAst),
-    Npar1way(npar1way::NparAst),
-    Reg(reg::RegAst),
-    Anova(anova::AnovaAst),
-    Glm(glm::GlmAst),
-    Genmod(genmod::GenmodAst),
-    Logistic(logistic::LogisticAst),
-    Princomp(princomp::PrincompAst),
-    Factor(factor::FactorAst),
-    Distance(distance::DistanceAst),
-    Cluster(cluster::ClusterAst),
-    Fastclus(fastclus::FastclusAst),
-    Discrim(discrim::DiscrimAst),
-    Mixed(mixed::MixedAst),
-    Glimmix(glimmix::GlimmixAst),
-    Iml(iml::ImlProgram),
-    Sgplot(sgplot::SgplotAst),
-    Plot(plot::PlotAst),
-    Gplot(gplot::GplotAst),
-    Gchart(gchart::GchartAst),
+/// Registre déclaratif des PROCs (MQ4.6). Une invocation unique génère les
+/// trois artefacts jusqu'ici maintenus à la main :
+///
+/// - l'enum `ProcAst` (un variant par proc) ;
+/// - `parse_proc` : dispatch du nom de proc vers `module::parse(ts)` ;
+/// - `execute_proc` : dispatch du variant vers `module::execute(a, session)`,
+///   entouré du `StepTimer` et de la NOTE de fin.
+///
+/// Une proc RÉGULIÈRE tient en une ligne de la section `regular` :
+/// `"mot_clé" => Variant(module::AstType),`. Les cas irréguliers (alias
+/// MEANS/SUMMARY avec post-traitement, SQL dont parser/exécuteur vivent dans
+/// `crate::sql`) passent par les sections `special_*`, écrites en clair dans
+/// l'invocation. Les identifiants passés à `params:` nomment les paramètres
+/// des fonctions générées, si bien que les bras `special_*` (côté invocation)
+/// peuvent y faire référence malgré l'hygiène des macros.
+macro_rules! procs_registry {
+    (
+        params: ($name:ident, $ts:ident, $ast:ident, $session:ident);
+        regular: { $( $kw:literal => $variant:ident($module:ident :: $asty:ident), )* }
+        special_variants: { $( $svariant:ident($sty:ty), )* }
+        special_parse: { $( $spat:pat => $sbody:block )* }
+        special_execute: { $( $epat:pat => $ebody:expr, )* }
+    ) => {
+        pub enum ProcAst {
+            $( $variant($module::$asty), )*
+            $( $svariant($sty), )*
+        }
+
+        /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
+        /// Dispatches to the appropriate sub-parser by proc name.
+        ///
+        /// - PRINT (M1): fully implemented.
+        /// - Known procs not yet implemented: skip to step boundary, return Err.
+        /// - Unknown proc name: return Err "Procedure XXX not found."
+        pub fn parse_proc($name: &str, $ts: &mut StatementStream) -> Result<ProcAst> {
+            match $name.to_ascii_lowercase().as_str() {
+                $( $kw => Ok(ProcAst::$variant($module::parse($ts)?)), )*
+                $( $spat => $sbody )*
+                _ => {
+                    // Proc inconnue : finir le statement courant ; le caller
+                    // (parser::parse_block) saute ensuite jusqu'à la frontière.
+                    $ts.skip_to_semi();
+                    Err(SasError::runtime(format!(
+                        "Procedure {} not found.",
+                        $name.to_uppercase()
+                    )))
+                }
+            }
+        }
+
+        /// Execute a previously parsed PROC AST. Wraps with a StepTimer and writes
+        /// the "NOTE: PROCEDURE XXX used (Total process time):" note.
+        pub fn execute_proc($name: &str, $ast: &ProcAst, $session: &mut Session) -> Result<()> {
+            let timer = StepTimer::start();
+
+            let result = match $ast {
+                $( ProcAst::$variant(a) => $module::execute(a, $session), )*
+                $( $epat => $ebody, )*
+            };
+
+            // Write timing NOTE even on success (SAS always prints this).
+            // On error the caller may still want the timing, but we follow SAS: only
+            // write it on success.
+            if result.is_ok() {
+                $session
+                    .log
+                    .step_used(&format!("PROCEDURE {}", $name.to_uppercase()), &timer);
+            }
+
+            result
+        }
+    };
 }
 
-/// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
-/// Dispatches to the appropriate sub-parser by proc name.
-///
-/// - PRINT (M1): fully implemented.
-/// - Known procs not yet implemented: skip to step boundary, return Err.
-/// - Unknown proc name: return Err "Procedure XXX not found."
-pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
-    match name.to_ascii_lowercase().as_str() {
-        "print" => {
-            let ast = print::parse(ts)?;
-            Ok(ProcAst::Print(ast))
-        }
-        "sort" => {
-            let ast = sort::parse(ts)?;
-            Ok(ProcAst::Sort(ast))
-        }
-        "format" => {
-            let ast = format::parse(ts)?;
-            Ok(ProcAst::Format(ast))
-        }
-        "contents" => {
-            let ast = contents::parse(ts)?;
-            Ok(ProcAst::Contents(ast))
-        }
-        "corr" => {
-            let ast = corr::parse(ts)?;
-            Ok(ProcAst::Corr(ast))
-        }
-        "rank" => {
-            let ast = rank::parse(ts)?;
-            Ok(ProcAst::Rank(ast))
-        }
+procs_registry! {
+    params: (name, ts, ast, session);
+    regular: {
+        "print" => Print(print::PrintAst),
+        "sort" => Sort(sort::SortAst),
+        "freq" => Freq(freq::FreqAst),
+        "transpose" => Transpose(transpose::TransposeAst),
+        "univariate" => Univariate(univariate::UnivariateAst),
+        "contents" => Contents(contents::ContentsAst),
+        "corr" => Corr(corr::CorrAst),
+        "rank" => Rank(rank::RankAst),
+        "datasets" => Datasets(datasets::DatasetsAst),
+        "append" => Append(append::AppendAst),
+        "format" => Format(format::FormatAst),
+        "tabulate" => Tabulate(tabulate::TabulateAst),
+        "report" => Report(report::ReportAst),
+        "import" => Import(import::ImportAst),
+        "export" => Export(export::ExportAst),
+        "compare" => Compare(compare::CompareAst),
+        "printto" => Printto(printto::PrinttoAst),
+        "options" => Options(options::OptionsAst),
+        "catalog" => Catalog(catalog::CatalogAst),
+        "ttest" => TTest(ttest::TTestAst),
+        "npar1way" => Npar1way(npar1way::NparAst),
+        "reg" => Reg(reg::RegAst),
+        "anova" => Anova(anova::AnovaAst),
+        "glm" => Glm(glm::GlmAst),
+        "genmod" => Genmod(genmod::GenmodAst),
+        "logistic" => Logistic(logistic::LogisticAst),
+        "princomp" => Princomp(princomp::PrincompAst),
+        "factor" => Factor(factor::FactorAst),
+        "distance" => Distance(distance::DistanceAst),
+        "cluster" => Cluster(cluster::ClusterAst),
+        "fastclus" => Fastclus(fastclus::FastclusAst),
+        "discrim" => Discrim(discrim::DiscrimAst),
+        "mixed" => Mixed(mixed::MixedAst),
+        "glimmix" => Glimmix(glimmix::GlimmixAst),
+        "iml" => Iml(iml::ImlProgram),
+        "sgplot" => Sgplot(sgplot::SgplotAst),
+        "plot" => Plot(plot::PlotAst),
+        "gplot" => Gplot(gplot::GplotAst),
+        "gchart" => Gchart(gchart::GchartAst),
+    }
+    special_variants: {
+        Means(means::MeansAst),
+        Sql(crate::sql::ast::SqlProgram),
+    }
+    special_parse: {
         // PROC MEANS / PROC SUMMARY share a parser/executor. PROC SUMMARY is
         // PROC MEANS with NOPRINT defaulted to true: it suppresses the report
         // and is normally paired with an OUTPUT statement. (Simplification:
@@ -151,218 +197,17 @@ pub fn parse_proc(name: &str, ts: &mut StatementStream) -> Result<ProcAst> {
             }
             Ok(ProcAst::Means(ast))
         }
-        // Procs connues du périmètre, pas encore implémentées : consommer
-        // le bloc pour rester synchronisé, puis ERROR. Finir d'abord le
-        // statement courant (on est au MILIEU du statement PROC : un ident
-        // comme `data` dans `proc sort data=x;` serait sinon pris pour une
-        // frontière par skip_to_step_boundary).
-        "freq" => {
-            let ast = freq::parse(ts)?;
-            Ok(ProcAst::Freq(ast))
-        }
-        "univariate" => {
-            let ast = univariate::parse(ts)?;
-            Ok(ProcAst::Univariate(ast))
-        }
+        // PROC SQL : parser et exécuteur vivent dans `crate::sql`, pas dans un
+        // module de `procs/`.
         "sql" => {
             let prog = crate::sql::parser::parse_sql_program(ts)?;
             Ok(ProcAst::Sql(prog))
         }
-        "transpose" => {
-            let ast = transpose::parse(ts)?;
-            Ok(ProcAst::Transpose(ast))
-        }
-        "tabulate" => {
-            let ast = tabulate::parse(ts)?;
-            Ok(ProcAst::Tabulate(ast))
-        }
-        "report" => {
-            let ast = report::parse(ts)?;
-            Ok(ProcAst::Report(ast))
-        }
-        "append" => {
-            let ast = append::parse(ts)?;
-            Ok(ProcAst::Append(ast))
-        }
-        "datasets" => {
-            let ast = datasets::parse(ts)?;
-            Ok(ProcAst::Datasets(ast))
-        }
-        "import" => {
-            let ast = import::parse(ts)?;
-            Ok(ProcAst::Import(ast))
-        }
-        "export" => {
-            let ast = export::parse(ts)?;
-            Ok(ProcAst::Export(ast))
-        }
-        "compare" => {
-            let ast = compare::parse(ts)?;
-            Ok(ProcAst::Compare(ast))
-        }
-        "printto" => {
-            let ast = printto::parse(ts)?;
-            Ok(ProcAst::Printto(ast))
-        }
-        "options" => {
-            let ast = options::parse(ts)?;
-            Ok(ProcAst::Options(ast))
-        }
-        "catalog" => {
-            let ast = catalog::parse(ts)?;
-            Ok(ProcAst::Catalog(ast))
-        }
-        "ttest" => {
-            let ast = ttest::parse(ts)?;
-            Ok(ProcAst::TTest(ast))
-        }
-        "npar1way" => {
-            let ast = npar1way::parse(ts)?;
-            Ok(ProcAst::Npar1way(ast))
-        }
-        "reg" => {
-            let ast = reg::parse(ts)?;
-            Ok(ProcAst::Reg(ast))
-        }
-        "anova" => {
-            let ast = anova::parse(ts)?;
-            Ok(ProcAst::Anova(ast))
-        }
-        "glm" => {
-            let ast = glm::parse(ts)?;
-            Ok(ProcAst::Glm(ast))
-        }
-        "genmod" => {
-            let ast = genmod::parse(ts)?;
-            Ok(ProcAst::Genmod(ast))
-        }
-        "logistic" => {
-            let ast = logistic::parse(ts)?;
-            Ok(ProcAst::Logistic(ast))
-        }
-        "princomp" => {
-            let ast = princomp::parse(ts)?;
-            Ok(ProcAst::Princomp(ast))
-        }
-        "factor" => {
-            let ast = factor::parse(ts)?;
-            Ok(ProcAst::Factor(ast))
-        }
-        "distance" => {
-            let ast = distance::parse(ts)?;
-            Ok(ProcAst::Distance(ast))
-        }
-        "cluster" => {
-            let ast = cluster::parse(ts)?;
-            Ok(ProcAst::Cluster(ast))
-        }
-        "fastclus" => {
-            let ast = fastclus::parse(ts)?;
-            Ok(ProcAst::Fastclus(ast))
-        }
-        "discrim" => {
-            let ast = discrim::parse(ts)?;
-            Ok(ProcAst::Discrim(ast))
-        }
-        "mixed" => {
-            let ast = mixed::parse(ts)?;
-            Ok(ProcAst::Mixed(ast))
-        }
-        "glimmix" => {
-            let ast = glimmix::parse(ts)?;
-            Ok(ProcAst::Glimmix(ast))
-        }
-        "iml" => {
-            let prog = iml::parse(ts)?;
-            Ok(ProcAst::Iml(prog))
-        }
-        "sgplot" => {
-            let ast = sgplot::parse(ts)?;
-            Ok(ProcAst::Sgplot(ast))
-        }
-        "plot" => {
-            let ast = plot::parse(ts)?;
-            Ok(ProcAst::Plot(ast))
-        }
-        "gplot" => {
-            let ast = gplot::parse(ts)?;
-            Ok(ProcAst::Gplot(ast))
-        }
-        "gchart" => {
-            let ast = gchart::parse(ts)?;
-            Ok(ProcAst::Gchart(ast))
-        }
-        _ => {
-            // Proc inconnue : finir le statement courant ; le caller
-            // (parser::parse_block) saute ensuite jusqu'à la frontière.
-            ts.skip_to_semi();
-            Err(SasError::runtime(format!(
-                "Procedure {} not found.",
-                name.to_uppercase()
-            )))
-        }
     }
-}
-
-/// Execute a previously parsed PROC AST. Wraps with a StepTimer and writes
-/// the "NOTE: PROCEDURE XXX used (Total process time):" note.
-pub fn execute_proc(name: &str, ast: &ProcAst, session: &mut Session) -> Result<()> {
-    let timer = StepTimer::start();
-
-    let result = match ast {
-        ProcAst::Print(a) => print::execute(a, session),
-        ProcAst::Sort(a) => sort::execute(a, session),
+    special_execute: {
         ProcAst::Means(a) => means::execute(a, session),
-        ProcAst::Freq(a) => freq::execute(a, session),
-        ProcAst::Transpose(a) => transpose::execute(a, session),
-        ProcAst::Univariate(a) => univariate::execute(a, session),
-        ProcAst::Contents(a) => contents::execute(a, session),
-        ProcAst::Corr(a) => corr::execute(a, session),
-        ProcAst::Rank(a) => rank::execute(a, session),
-        ProcAst::Datasets(a) => datasets::execute(a, session),
-        ProcAst::Append(a) => append::execute(a, session),
-        ProcAst::Format(a) => format::execute(a, session),
-        ProcAst::Tabulate(a) => tabulate::execute(a, session),
-        ProcAst::Report(a) => report::execute(a, session),
         ProcAst::Sql(a) => crate::sql::execute(a, session),
-        ProcAst::Import(a) => import::execute(a, session),
-        ProcAst::Export(a) => export::execute(a, session),
-        ProcAst::Compare(a) => compare::execute(a, session),
-        ProcAst::Printto(a) => printto::execute(a, session),
-        ProcAst::Options(a) => options::execute(a, session),
-        ProcAst::Catalog(a) => catalog::execute(a, session),
-        ProcAst::TTest(a) => ttest::execute(a, session),
-        ProcAst::Npar1way(a) => npar1way::execute(a, session),
-        ProcAst::Reg(a) => reg::execute(a, session),
-        ProcAst::Anova(a) => anova::execute(a, session),
-        ProcAst::Glm(a) => glm::execute(a, session),
-        ProcAst::Genmod(a) => genmod::execute(a, session),
-        ProcAst::Logistic(a) => logistic::execute(a, session),
-        ProcAst::Princomp(a) => princomp::execute(a, session),
-        ProcAst::Factor(a) => factor::execute(a, session),
-        ProcAst::Distance(a) => distance::execute(a, session),
-        ProcAst::Cluster(a) => cluster::execute(a, session),
-        ProcAst::Fastclus(a) => fastclus::execute(a, session),
-        ProcAst::Discrim(a) => discrim::execute(a, session),
-        ProcAst::Mixed(a) => mixed::execute(a, session),
-        ProcAst::Glimmix(a) => glimmix::execute(a, session),
-        ProcAst::Iml(a) => iml::execute(a, session),
-        ProcAst::Sgplot(a) => sgplot::execute(a, session),
-        ProcAst::Plot(a) => plot::execute(a, session),
-        ProcAst::Gplot(a) => gplot::execute(a, session),
-        ProcAst::Gchart(a) => gchart::execute(a, session),
-    };
-
-    // Write timing NOTE even on success (SAS always prints this).
-    // On error the caller may still want the timing, but we follow SAS: only
-    // write it on success.
-    if result.is_ok() {
-        session
-            .log
-            .step_used(&format!("PROCEDURE {}", name.to_uppercase()), &timer);
     }
-
-    result
 }
 
 #[cfg(test)]

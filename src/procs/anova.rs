@@ -79,64 +79,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
             Ok(true)
         } else if kw == "model" {
             ts.next();
-            // Read dependents: idents before `=`
-            let mut dependents: Vec<String> = Vec::new();
-            loop {
-                if ts.peek().kind == TokenKind::Semi
-                    || ts.peek().kind == TokenKind::Eof
-                    || ts.peek().kind == TokenKind::Eq
-                {
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    dependents.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
-                }
-            }
-            // Consume `=`
-            if ts.peek().kind == TokenKind::Eq {
-                ts.next();
-            }
+            // Read dependents: idents before `=` (the `=` itself is consumed).
+            let dependents = common::parse_model_lhs(ts);
             // Read effects: idents after `=` until `/` or `;`. Idents joined by
             // `*` form a single interaction term (e.g. `a*b`).
-            let mut effects: Vec<String> = Vec::new();
-            let mut terms: Vec<Vec<String>> = Vec::new();
+            let (effects, terms) = common::parse_effect_terms(ts);
             let mut noprint = false;
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next();
-                    // Parse options until semi
-                    while ts.peek().kind != TokenKind::Semi
-                        && ts.peek().kind != TokenKind::Eof
-                    {
-                        if ts.peek().is_kw("noprint") {
-                            noprint = true;
-                        }
-                        ts.next();
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next();
+                // Parse options until semi
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("noprint") {
+                        noprint = true;
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    ts.next();
-                    // Collect the rest of an interaction chain `name*x*y...`.
-                    let mut parts = vec![name];
-                    while ts.peek().kind == TokenKind::Star {
-                        ts.next();
-                        if let Some(next_name) = ts.peek().ident().map(str::to_string) {
-                            parts.push(next_name);
-                            ts.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    effects.push(parts.join("*"));
-                    terms.push(parts);
-                } else {
                     ts.next();
                 }
             }
@@ -180,23 +135,12 @@ fn fmt6(v: f64) -> String {
     format!("{v:.6}")
 }
 
-fn fmt_p(p: Option<f64>) -> String {
-    match p {
-        None => ".".to_string(),
-        Some(v) if v < 0.0001 => "<.0001".to_string(),
-        Some(v) => format!("{v:.4}"),
-    }
-}
+use crate::procs::common::fmt_p;
+
 
 // ───────────────────────── Listing helpers ─────────────────────────
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 // ───────────────────────── Execute ─────────────────────────
 
@@ -250,15 +194,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
     }
 
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(
@@ -280,12 +216,51 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // --- 3. Listing header ---
+    // --- 3-4. Listing header + Class Level Information ---
+    print_class_level_info_oneway(session, ast, &ds, n_obs)?;
+
+    // --- 5. Per-dependent variable loop ---
+    for dep_var in &model.dependents {
+        // For one-way ANOVA, use the first effect as the CLASS grouping variable
+        let eff = &model.effects[0];
+
+        let stats = compute_oneway_stats(session, &ds, dep_var, eff, n_obs)?;
+
+        // Listing — Dependent Variable header
+        centered(session, &format!("Dependent Variable: {}", dep_var));
+        session.listing.blank();
+
+        print_oneway_anova_and_fit(session, dep_var, eff, &stats);
+
+        // MEANS section — only if means_vars contains `eff`
+        let show_means = !ast.means_vars.is_empty()
+            && ast
+                .means_vars
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(eff));
+
+        if show_means {
+            print_oneway_means(session, eff, &stats);
+        }
+    }
+
+    Ok(())
+}
+
+// ───────────────────── One-way execute helpers ─────────────────────
+
+/// Print the listing page header, the Class Level Information table and the
+/// observation count for the one-way path.
+fn print_class_level_info_oneway(
+    session: &mut Session,
+    ast: &AnovaAst,
+    ds: &crate::dataset::SasDataset,
+    n_obs: usize,
+) -> Result<()> {
     session.listing.page_header();
     centered(session, "The ANOVA Procedure");
     session.listing.blank();
 
-    // --- 4. Class Level Information (once, before per-dep loop) ---
     centered(session, "Class Level Information");
     session.listing.blank();
 
@@ -301,23 +276,10 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
             .iter()
             .position(|m| m.name.eq_ignore_ascii_case(class_var))
             .unwrap(); // already validated above
-        let col = decode_column(&ds, col_idx)?;
+        let col = decode_column(ds, col_idx)?;
 
         // Collect distinct non-missing values, sorted by sas_cmp
-        let mut levels: Vec<Value> = Vec::new();
-        for i in 0..n_obs {
-            let v = &col[i];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(col.iter().take(n_obs));
 
         let values_str: Vec<String> = levels
             .iter()
@@ -348,143 +310,271 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
     session.listing.blank();
     session.listing.blank();
 
-    // --- 5. Per-dependent variable loop ---
-    for dep_var in &model.dependents {
-        // Find dependent column
-        let dep_idx = ds
-            .vars
+    Ok(())
+}
+
+/// One-way ANOVA statistics for a single dependent variable.
+struct OneWayStats {
+    levels: Vec<Value>,
+    groups: Vec<Vec<f64>>,
+    y_bar: f64,
+    ssm: f64,
+    sse: f64,
+    sst: f64,
+    df_model: f64,
+    df_error: f64,
+    df_total: f64,
+    msm: f64,
+    mse: f64,
+    f_stat: f64,
+    p_f: Option<f64>,
+    r2: f64,
+    root_mse: f64,
+    cv: f64,
+}
+
+/// Resolve the dependent/CLASS columns, apply listwise deletion, group by
+/// CLASS level and compute the one-way ANOVA statistics.
+fn compute_oneway_stats(
+    session: &mut Session,
+    ds: &crate::dataset::SasDataset,
+    dep_var: &str,
+    eff: &str,
+    n_obs: usize,
+) -> Result<OneWayStats> {
+    // Find dependent column
+    let dep_idx = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(dep_var))
+        .ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", dep_var.to_uppercase()))
+        })?;
+    if ds.vars[dep_idx].ty != VarType::Num {
+        return Err(SasError::runtime(format!(
+            "Dependent variable {} must be numeric.",
+            dep_var.to_uppercase()
+        )));
+    }
+    let dep_col = decode_column(ds, dep_idx)?;
+
+    // Find the CLASS column for this effect
+    let class_col_idx = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(eff))
+        .ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
+        })?;
+    let class_col = decode_column(ds, class_col_idx)?;
+
+    // Listwise deletion: keep rows where both dep_var and class_var are non-missing
+    let mut usable_rows: Vec<usize> = Vec::new();
+    for i in 0..n_obs {
+        let dep_ok = match value_to_num(&dep_col[i]) {
+            Some(v) if !v.is_nan() => true,
+            _ => false,
+        };
+        let cls_ok = !class_col[i].is_missing();
+        if dep_ok && cls_ok {
+            usable_rows.push(i);
+        }
+    }
+    let n = usable_rows.len();
+
+    // Group by CLASS levels (usable rows are non-missing by construction).
+    let levels =
+        crate::procs::lincom::class_levels(usable_rows.iter().map(|&r| &class_col[r]));
+    let k = levels.len();
+
+    // Collect values per group
+    let mut groups: Vec<Vec<f64>> = vec![Vec::new(); k];
+    for &r in &usable_rows {
+        let v = &class_col[r];
+        let yi = value_to_num(&dep_col[r]).unwrap();
+        let gi = levels
             .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(dep_var))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", dep_var.to_uppercase()))
-            })?;
-        if ds.vars[dep_idx].ty != VarType::Num {
-            return Err(SasError::runtime(format!(
-                "Dependent variable {} must be numeric.",
-                dep_var.to_uppercase()
-            )));
-        }
-        let dep_col = decode_column(&ds, dep_idx)?;
+            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            .unwrap();
+        groups[gi].push(yi);
+    }
 
-        // For one-way ANOVA, use the first effect as the CLASS grouping variable
-        let eff = &model.effects[0];
+    // Compute statistics
+    let y_bar = if n > 0 {
+        groups.iter().flat_map(|g| g.iter()).sum::<f64>() / n as f64
+    } else {
+        f64::NAN
+    };
 
-        // Find the CLASS column for this effect
-        let class_col_idx = ds
-            .vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(eff))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
-            })?;
-        let class_col = decode_column(&ds, class_col_idx)?;
-
-        // Listwise deletion: keep rows where both dep_var and class_var are non-missing
-        let mut usable_rows: Vec<usize> = Vec::new();
-        for i in 0..n_obs {
-            let dep_ok = match value_to_num(&dep_col[i]) {
-                Some(v) if !v.is_nan() => true,
-                _ => false,
-            };
-            let cls_ok = !class_col[i].is_missing();
-            if dep_ok && cls_ok {
-                usable_rows.push(i);
-            }
-        }
-        let n = usable_rows.len();
-
-        // Group by CLASS levels
-        let mut levels: Vec<Value> = Vec::new();
-        for &r in &usable_rows {
-            let v = &class_col[r];
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
-        let k = levels.len();
-
-        // Collect values per group
-        let mut groups: Vec<Vec<f64>> = vec![Vec::new(); k];
-        for &r in &usable_rows {
-            let v = &class_col[r];
-            let yi = value_to_num(&dep_col[r]).unwrap();
-            let gi = levels
-                .iter()
-                .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-                .unwrap();
-            groups[gi].push(yi);
-        }
-
-        // Compute statistics
-        let y_bar = if n > 0 {
-            groups.iter().flat_map(|g| g.iter()).sum::<f64>() / n as f64
+    let mut ssm = 0.0_f64;
+    let mut sse = 0.0_f64;
+    let mut group_means: Vec<f64> = Vec::with_capacity(k);
+    for g in &groups {
+        let ni = g.len();
+        let y_bar_i = if ni > 0 {
+            g.iter().sum::<f64>() / ni as f64
         } else {
             f64::NAN
         };
+        group_means.push(y_bar_i);
+        ssm += ni as f64 * (y_bar_i - y_bar).powi(2);
+        sse += g.iter().map(|&y| (y - y_bar_i).powi(2)).sum::<f64>();
+    }
+    let sst = ssm + sse;
 
-        let mut ssm = 0.0_f64;
-        let mut sse = 0.0_f64;
-        let mut group_means: Vec<f64> = Vec::with_capacity(k);
-        for g in &groups {
-            let ni = g.len();
-            let y_bar_i = if ni > 0 {
-                g.iter().sum::<f64>() / ni as f64
-            } else {
-                f64::NAN
-            };
-            group_means.push(y_bar_i);
-            ssm += ni as f64 * (y_bar_i - y_bar).powi(2);
-            sse += g.iter().map(|&y| (y - y_bar_i).powi(2)).sum::<f64>();
-        }
-        let sst = ssm + sse;
+    let df_model = (k as f64 - 1.0).max(0.0);
+    let df_error = (n as f64 - k as f64).max(0.0);
+    let df_total = (n as f64 - 1.0).max(0.0);
 
-        let df_model = (k as f64 - 1.0).max(0.0);
-        let df_error = (n as f64 - k as f64).max(0.0);
-        let df_total = (n as f64 - 1.0).max(0.0);
+    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
+    let mse = if df_error > 0.0 { sse / df_error } else { f64::NAN };
+    let f_stat = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let p_f = if f_stat.is_nan() {
+        None
+    } else {
+        Some((1.0 - f_cdf(f_stat, df_model, df_error)).clamp(0.0, 1.0))
+    };
 
-        let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-        let mse = if df_error > 0.0 { sse / df_error } else { f64::NAN };
-        let f_stat = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
-        let p_f = if f_stat.is_nan() {
-            None
-        } else {
-            Some((1.0 - f_cdf(f_stat, df_model, df_error)).clamp(0.0, 1.0))
-        };
+    let r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
+    let root_mse = if !mse.is_nan() { mse.sqrt() } else { f64::NAN };
+    let cv = if y_bar.abs() > 1e-15 && !root_mse.is_nan() {
+        root_mse / y_bar.abs() * 100.0
+    } else {
+        f64::NAN
+    };
 
-        let r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
-        let root_mse = if !mse.is_nan() { mse.sqrt() } else { f64::NAN };
-        let cv = if y_bar.abs() > 1e-15 && !root_mse.is_nan() {
-            root_mse / y_bar.abs() * 100.0
-        } else {
-            f64::NAN
-        };
+    session.log.note(&format!(
+        "There were {} observations used.",
+        n
+    ));
 
-        session.log.note(&format!(
-            "There were {} observations used.",
-            n
-        ));
+    Ok(OneWayStats {
+        levels,
+        groups,
+        y_bar,
+        ssm,
+        sse,
+        sst,
+        df_model,
+        df_error,
+        df_total,
+        msm,
+        mse,
+        f_stat,
+        p_f,
+        r2,
+        root_mse,
+        cv,
+    })
+}
 
-        // Listing — Dependent Variable header
-        centered(session, &format!("Dependent Variable: {}", dep_var));
-        session.listing.blank();
+/// Print the Analysis of Variance table, the fit statistics table, and the
+/// Type I / Type III SS tables (identical for one-way).
+fn print_oneway_anova_and_fit(
+    session: &mut Session,
+    dep_var: &str,
+    eff: &str,
+    stats: &OneWayStats,
+) {
+    let &OneWayStats {
+        y_bar,
+        ssm,
+        sse,
+        sst,
+        df_model,
+        df_error,
+        df_total,
+        msm,
+        mse,
+        f_stat,
+        p_f,
+        r2,
+        root_mse,
+        cv,
+        ..
+    } = stats;
 
-        // ANOVA table
-        centered(session, "Analysis of Variance");
-        session.listing.blank();
+    // ANOVA table
+    centered(session, "Analysis of Variance");
+    session.listing.blank();
 
-        let anova_headers: Vec<String> = vec![
+    let anova_headers: Vec<String> = vec![
+        "Source".into(),
+        "DF".into(),
+        "Sum of Squares".into(),
+        "Mean Square".into(),
+        "F Value".into(),
+        "Pr > F".into(),
+    ];
+    let anova_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let f_str = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+    let anova_rows: Vec<Vec<String>> = vec![
+        vec![
+            "Model".into(),
+            format!("{}", df_model as usize),
+            fmt5(ssm),
+            if msm.is_nan() { ".".into() } else { fmt5(msm) },
+            f_str,
+            fmt_p(p_f),
+        ],
+        vec![
+            "Error".into(),
+            format!("{}", df_error as usize),
+            fmt5(sse),
+            if mse.is_nan() { ".".into() } else { fmt5(mse) },
+            "".into(),
+            "".into(),
+        ],
+        vec![
+            "Corrected Total".into(),
+            format!("{}", df_total as usize),
+            fmt5(sst),
+            "".into(),
+            "".into(),
+            "".into(),
+        ],
+    ];
+    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session.listing.blank();
+    session.listing.blank();
+
+    // Fit statistics table
+    let dep_mean_header = format!("{} Mean", dep_var);
+    let fit_headers: Vec<String> = vec![
+        "R-Square".into(),
+        "Coeff Var".into(),
+        "Root MSE".into(),
+        dep_mean_header,
+    ];
+    let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+    let fit_rows: Vec<Vec<String>> = vec![vec![
+        fmt6(r2),
+        fmt6(cv),
+        fmt6(root_mse),
+        fmt6(y_bar),
+    ]];
+    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    session.listing.blank();
+    session.listing.blank();
+
+    // Type I SS and Type III SS (identical for one-way)
+    for (ss_label, _is_type3) in [("Type I SS", false), ("Type III SS", true)] {
+        let t_headers: Vec<String> = vec![
             "Source".into(),
             "DF".into(),
-            "Sum of Squares".into(),
+            ss_label.into(),
             "Mean Square".into(),
             "F Value".into(),
             "Pr > F".into(),
         ];
-        let anova_aligns = vec![
+        let t_aligns = vec![
             Align::Left,
             Align::Right,
             Align::Right,
@@ -492,139 +582,65 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
             Align::Right,
             Align::Right,
         ];
-        let f_str = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
-        let anova_rows: Vec<Vec<String>> = vec![
-            vec![
-                "Model".into(),
-                format!("{}", df_model as usize),
-                fmt5(ssm),
-                if msm.is_nan() { ".".into() } else { fmt5(msm) },
-                f_str,
-                fmt_p(p_f),
-            ],
-            vec![
-                "Error".into(),
-                format!("{}", df_error as usize),
-                fmt5(sse),
-                if mse.is_nan() { ".".into() } else { fmt5(mse) },
-                "".into(),
-                "".into(),
-            ],
-            vec![
-                "Corrected Total".into(),
-                format!("{}", df_total as usize),
-                fmt5(sst),
-                "".into(),
-                "".into(),
-                "".into(),
-            ],
-        ];
-        session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
-        session.listing.blank();
-        session.listing.blank();
-
-        // Fit statistics table
-        let dep_mean_header = format!("{} Mean", dep_var);
-        let fit_headers: Vec<String> = vec![
-            "R-Square".into(),
-            "Coeff Var".into(),
-            "Root MSE".into(),
-            dep_mean_header,
-        ];
-        let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-        let fit_rows: Vec<Vec<String>> = vec![vec![
-            fmt6(r2),
-            fmt6(cv),
-            fmt6(root_mse),
-            fmt6(y_bar),
+        let f_str2 = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+        let t_rows: Vec<Vec<String>> = vec![vec![
+            eff.to_string(),
+            format!("{}", df_model as usize),
+            if msm.is_nan() { ".".into() } else { fmt5(ssm) },
+            if msm.is_nan() { ".".into() } else { fmt5(msm) },
+            f_str2,
+            fmt_p(p_f),
         ]];
-        session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+        session.listing.write_table(&t_headers, &t_aligns, &t_rows);
         session.listing.blank();
         session.listing.blank();
+    }
+}
 
-        // Type I SS and Type III SS (identical for one-way)
-        for (ss_label, _is_type3) in [("Type I SS", false), ("Type III SS", true)] {
-            let t_headers: Vec<String> = vec![
-                "Source".into(),
-                "DF".into(),
-                ss_label.into(),
-                "Mean Square".into(),
-                "F Value".into(),
-                "Pr > F".into(),
-            ];
-            let t_aligns = vec![
-                Align::Left,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-            ];
-            let f_str2 = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
-            let t_rows: Vec<Vec<String>> = vec![vec![
-                eff.clone(),
-                format!("{}", df_model as usize),
-                if msm.is_nan() { ".".into() } else { fmt5(ssm) },
-                if msm.is_nan() { ".".into() } else { fmt5(msm) },
-                f_str2,
-                fmt_p(p_f),
-            ]];
-            session.listing.write_table(&t_headers, &t_aligns, &t_rows);
-            session.listing.blank();
-            session.listing.blank();
-        }
+/// Print the MEANS section (Level of ... table) for the one-way path.
+fn print_oneway_means(session: &mut Session, eff: &str, stats: &OneWayStats) {
+    let levels = &stats.levels;
+    let groups = &stats.groups;
 
-        // MEANS section — only if means_vars contains `eff`
-        let show_means = !ast.means_vars.is_empty()
-            && ast
-                .means_vars
-                .iter()
-                .any(|m| m.eq_ignore_ascii_case(eff));
+    centered(session, &format!("Level of {}", eff));
+    session.listing.blank();
 
-        if show_means {
-            centered(session, &format!("Level of {}", eff));
-            session.listing.blank();
+    let means_headers: Vec<String> = vec![
+        eff.to_string(),
+        "N".into(),
+        "Mean".into(),
+        "Std Dev".into(),
+    ];
+    let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
+    let mut means_rows: Vec<Vec<String>> = Vec::new();
 
-            let means_headers: Vec<String> = vec![
-                eff.clone(),
-                "N".into(),
-                "Mean".into(),
-                "Std Dev".into(),
-            ];
-            let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
-            let mut means_rows: Vec<Vec<String>> = Vec::new();
-
-            for (gi, level) in levels.iter().enumerate() {
-                let level_label = match level {
-                    Value::Char(s) => s.trim_end().to_string(),
-                    Value::Num(f) => format!("{f}"),
-                    Value::Missing(k) => k.display(),
-                };
-                let n_i = groups[gi].len();
-                let mean_i = if n_i > 0 {
-                    groups[gi].iter().sum::<f64>() / n_i as f64
-                } else {
-                    f64::NAN
-                };
-                let std_i = sample_std(&groups[gi]);
-                means_rows.push(vec![
-                    level_label,
-                    format!("{}", n_i),
-                    fmt6(mean_i),
-                    match std_i {
-                        Some(s) => fmt6(s),
-                        None => ".".to_string(),
-                    },
-                ]);
-            }
-
-            session.listing.write_table(&means_headers, &means_aligns, &means_rows);
-            session.listing.blank();
-            session.listing.blank();
-        }
+    for (gi, level) in levels.iter().enumerate() {
+        let level_label = match level {
+            Value::Char(s) => s.trim_end().to_string(),
+            Value::Num(f) => format!("{f}"),
+            Value::Missing(k) => k.display(),
+        };
+        let n_i = groups[gi].len();
+        let mean_i = if n_i > 0 {
+            groups[gi].iter().sum::<f64>() / n_i as f64
+        } else {
+            f64::NAN
+        };
+        let std_i = sample_std(&groups[gi]);
+        means_rows.push(vec![
+            level_label,
+            format!("{}", n_i),
+            fmt6(mean_i),
+            match std_i {
+                Some(s) => fmt6(s),
+                None => ".".to_string(),
+            },
+        ]);
     }
 
-    Ok(())
+    session.listing.write_table(&means_headers, &means_aligns, &means_rows);
+    session.listing.blank();
+    session.listing.blank();
 }
 
 // ───────────────────────── Multi-way engine ─────────────────────────
@@ -694,15 +710,7 @@ fn main_effect_effect_coded(codes: &[usize], n_levels: usize, n: usize) -> Vec<V
 /// coding with Type I (sequential) and Type III (partial) sums of squares.
 fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -> Result<()> {
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(
@@ -740,49 +748,8 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
         );
     }
 
-    // --- 3. Listing header ---
-    session.listing.page_header();
-    centered(session, "The ANOVA Procedure");
-    session.listing.blank();
-
-    // --- 4. Class Level Information ---
-    centered(session, "Class Level Information");
-    session.listing.blank();
-
-    let cli_headers: Vec<String> = vec!["Class".into(), "Levels".into(), "Values".into()];
-    let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
-    let mut cli_rows: Vec<Vec<String>> = Vec::new();
-
-    for class_var in &ast.class_vars {
-        let (disp_name, col) = &class_cols[&class_var.to_uppercase()];
-        let mut levels: Vec<Value> = Vec::new();
-        for v in col.iter().take(n_obs) {
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
-        let values_str: Vec<String> = levels.iter().map(value_label).collect();
-        cli_rows.push(vec![
-            disp_name.clone(),
-            format!("{}", levels.len()),
-            values_str.join(" "),
-        ]);
-    }
-    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
-    session.listing.blank();
-    session.listing.write_line(&format!(
-        "               Number of Observations Read     {}",
-        n_obs
-    ));
-    session.listing.blank();
-    session.listing.blank();
+    // --- 3-4. Listing header + Class Level Information ---
+    print_class_level_info_multiway(session, ast, &class_cols, n_obs);
 
     // Distinct CLASS vars referenced by the model, uppercased.
     let used_classes: Vec<String> = {
@@ -798,230 +765,450 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
 
     // --- 5. Per-dependent loop ---
     for dep_var in &model.dependents {
-        let dep_idx = ds
-            .vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(dep_var))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", dep_var.to_uppercase()))
-            })?;
-        if ds.vars[dep_idx].ty != VarType::Num {
-            return Err(SasError::runtime(format!(
-                "Dependent variable {} must be numeric.",
-                dep_var.to_uppercase()
-            )));
-        }
-        let dep_col = decode_column(&ds, dep_idx)?;
-
-        // Listwise deletion: drop rows where dep or ANY used CLASS var missing.
-        let mut usable: Vec<usize> = Vec::new();
-        for i in 0..n_obs {
-            let dep_ok = matches!(value_to_num(&dep_col[i]), Some(v) if !v.is_nan());
-            if !dep_ok {
-                continue;
-            }
-            let cls_ok = used_classes
-                .iter()
-                .all(|c| !class_cols[c].1[i].is_missing());
-            if cls_ok {
-                usable.push(i);
-            }
-        }
-        let n = usable.len();
-
-        // y vector and corrected total.
-        let y: Vec<f64> = usable.iter().map(|&r| value_to_num(&dep_col[r]).unwrap()).collect();
-        let y_bar = if n > 0 { y.iter().sum::<f64>() / n as f64 } else { f64::NAN };
-        let sst: f64 = y.iter().map(|&v| (v - y_bar).powi(2)).sum();
-
-        // Levels per used CLASS var (sas_cmp order over usable rows).
-        let mut var_levels: std::collections::HashMap<String, Vec<Value>> =
-            std::collections::HashMap::new();
-        for c in &used_classes {
-            let col = &class_cols[c].1;
-            let mut levels: Vec<Value> = Vec::new();
-            for &r in &usable {
-                let v = &col[r];
-                if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
-                    levels.push(v.clone());
-                }
-            }
-            levels.sort_by(|a, b| a.sas_cmp(b));
-            var_levels.insert(c.clone(), levels);
-        }
-
-        // Per-CLASS-var level codes for each usable observation.
-        let mut var_codes: std::collections::HashMap<String, Vec<usize>> =
-            std::collections::HashMap::new();
-        for c in &used_classes {
-            let col = &class_cols[c].1;
-            let levels = &var_levels[c];
-            let codes: Vec<usize> = usable
-                .iter()
-                .map(|&r| {
-                    levels
-                        .iter()
-                        .position(|l| l.sas_cmp(&col[r]) == std::cmp::Ordering::Equal)
-                        .unwrap()
-                })
-                .collect();
-            var_codes.insert(c.clone(), codes);
-        }
-
-        // Per-CLASS-var main-effect dummy columns (reference-cell), used for the
-        // Type I sequential pass.
-        let mut var_dummies: std::collections::HashMap<String, Vec<Vec<f64>>> =
-            std::collections::HashMap::new();
-        // Per-CLASS-var sum-to-zero (effect) coded columns, used for Type III.
-        let mut var_effect: std::collections::HashMap<String, Vec<Vec<f64>>> =
-            std::collections::HashMap::new();
-        for c in &used_classes {
-            let l = var_levels[c].len();
-            var_dummies.insert(c.clone(), main_effect_dummies(&var_codes[c], l, n));
-            var_effect.insert(c.clone(), main_effect_effect_coded(&var_codes[c], l, n));
-        }
-
-        // Build the column block for each model term from a per-var coding map.
-        // A main effect contributes its columns; an interaction term contributes
-        // the elementwise products (Cartesian) across its parents' columns.
-        let build_term_blocks =
-            |coding: &std::collections::HashMap<String, Vec<Vec<f64>>>| -> Vec<Vec<Vec<f64>>> {
-                let mut blocks: Vec<Vec<Vec<f64>>> = Vec::new();
-                for term in &model.terms {
-                    let parents: Vec<&Vec<Vec<f64>>> =
-                        term.iter().map(|p| &coding[&p.to_uppercase()]).collect();
-                    let mut block: Vec<Vec<f64>> = vec![vec![1.0; n]];
-                    for parent in &parents {
-                        let mut next: Vec<Vec<f64>> = Vec::new();
-                        for existing in &block {
-                            for pcol in parent.iter() {
-                                let prod: Vec<f64> =
-                                    existing.iter().zip(pcol).map(|(&a, &b)| a * b).collect();
-                                next.push(prod);
-                            }
-                        }
-                        block = next;
-                    }
-                    blocks.push(block);
-                }
-                blocks
-            };
-
-        // Reference-cell term blocks (Type I + Model SS) and effect-coded term
-        // blocks (Type III). Both span the same column space, so SSE_full is
-        // identical between them.
-        let term_blocks = build_term_blocks(&var_dummies);
-        let term_blocks_eff = build_term_blocks(&var_effect);
-
-        // Per-term DF = product of (levels − 1).
-        let term_dfs: Vec<usize> = model
-            .terms
-            .iter()
-            .map(|term| {
-                term.iter()
-                    .map(|p| var_levels[&p.to_uppercase()].len().saturating_sub(1))
-                    .product()
-            })
-            .collect();
-
-        // Assemble a design matrix from a set of term blocks: intercept + the
-        // included term blocks.
-        let build_from = |blocks: &[Vec<Vec<f64>>], include: &[bool]| -> Vec<Vec<f64>> {
-            let mut x = vec![vec![1.0]; n]; // intercept column
-            for (t, block) in blocks.iter().enumerate() {
-                if include[t] {
-                    for (i, row) in x.iter_mut().enumerate() {
-                        for col in block {
-                            row.push(col[i]);
-                        }
-                    }
-                }
-            }
-            x
-        };
-        let build_design = |include: &[bool]| -> Vec<Vec<f64>> {
-            build_from(&term_blocks, include)
-        };
-
-        let n_terms = model.terms.len();
-        let all_true = vec![true; n_terms];
-        let full_x = build_design(&all_true);
-        let full_cols = full_x[0].len();
-        let sse_full = fit_sse(&full_x, &y);
-        let ssm = sst - sse_full;
-        let df_model = (full_cols - 1) as f64;
-        let df_error = (n as f64 - full_cols as f64).max(0.0);
-        let df_total = (n as f64 - 1.0).max(0.0);
-        let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-        let mse = if df_error > 0.0 { sse_full / df_error } else { f64::NAN };
-        let f_model = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
-        let p_model = if f_model.is_nan() {
-            None
-        } else {
-            Some((1.0 - f_cdf(f_model, df_model, df_error)).clamp(0.0, 1.0))
-        };
-
-        let r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
-        let root_mse = if !mse.is_nan() { mse.sqrt() } else { f64::NAN };
-        let cv = if y_bar.abs() > 1e-15 && !root_mse.is_nan() {
-            root_mse / y_bar.abs() * 100.0
-        } else {
-            f64::NAN
-        };
-
-        // Type I (sequential): SS_t = SSE(0..t) − SSE(0..=t).
-        let mut type1: Vec<f64> = Vec::with_capacity(n_terms);
-        {
-            let mut prev_sse = sst; // model with intercept only
-            for t in 0..n_terms {
-                let mut include = vec![false; n_terms];
-                for inc in include.iter_mut().take(t + 1) {
-                    *inc = true;
-                }
-                let x = build_design(&include);
-                let sse = fit_sse(&x, &y);
-                type1.push(prev_sse - sse);
-                prev_sse = sse;
-            }
-        }
-
-        // Type III (partial), computed with sum-to-zero EFFECT coding so the
-        // partial SS matches SAS Type III on unbalanced data. The effect-coded
-        // full model spans the same column space as the reference-cell full
-        // model, so its SSE equals `sse_full` (asserted in debug builds).
-        let full_x_eff = build_from(&term_blocks_eff, &all_true);
-        let sse_full_eff = fit_sse(&full_x_eff, &y);
-        debug_assert!(
-            (sse_full_eff - sse_full).abs() <= 1e-6 * (1.0 + sse_full.abs()),
-            "effect-coded SSE_full {sse_full_eff} != reference-cell SSE_full {sse_full}"
-        );
-        let mut type3: Vec<f64> = Vec::with_capacity(n_terms);
-        for t in 0..n_terms {
-            let mut include = vec![true; n_terms];
-            include[t] = false;
-            let x = build_from(&term_blocks_eff, &include);
-            let sse = fit_sse(&x, &y);
-            type3.push(sse - sse_full_eff);
-        }
-
-        session.log.note(&format!("There were {} observations used.", n));
+        let fit = fit_multiway(
+            session,
+            &ds,
+            dep_var,
+            &class_cols,
+            &used_classes,
+            model,
+            n_obs,
+        )?;
 
         // --- Listing: Dependent Variable header ---
         centered(session, &format!("Dependent Variable: {}", dep_var));
         session.listing.blank();
 
-        // ANOVA table (Model / Error / Corrected Total).
-        centered(session, "Analysis of Variance");
-        session.listing.blank();
-        let anova_headers: Vec<String> = vec![
+        print_multiway_anova_and_fit(session, dep_var, model, &fit);
+
+        // MEANS: main-effect marginal cell means for each requested CLASS var.
+        print_multiway_means(session, ast, &fit, &class_cols, &used_classes);
+    }
+
+    Ok(())
+}
+
+// ───────────────────── Multiway execute helpers ─────────────────────
+
+/// Print the listing page header, the Class Level Information table and the
+/// observation count for the multiway path.
+fn print_class_level_info_multiway(
+    session: &mut Session,
+    ast: &AnovaAst,
+    class_cols: &std::collections::HashMap<String, (String, Vec<Value>)>,
+    n_obs: usize,
+) {
+    session.listing.page_header();
+    centered(session, "The ANOVA Procedure");
+    session.listing.blank();
+
+    centered(session, "Class Level Information");
+    session.listing.blank();
+
+    let cli_headers: Vec<String> = vec!["Class".into(), "Levels".into(), "Values".into()];
+    let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
+    let mut cli_rows: Vec<Vec<String>> = Vec::new();
+
+    for class_var in &ast.class_vars {
+        let (disp_name, col) = &class_cols[&class_var.to_uppercase()];
+        let levels = crate::procs::lincom::class_levels(col.iter().take(n_obs));
+        let values_str: Vec<String> = levels.iter().map(value_label).collect();
+        cli_rows.push(vec![
+            disp_name.clone(),
+            format!("{}", levels.len()),
+            values_str.join(" "),
+        ]);
+    }
+    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session.listing.blank();
+    session.listing.write_line(&format!(
+        "               Number of Observations Read     {}",
+        n_obs
+    ));
+    session.listing.blank();
+    session.listing.blank();
+}
+
+/// Multiway fit results for one dependent variable.
+struct MultiwayFit {
+    y: Vec<f64>,
+    /// Levels per used CLASS var (sas_cmp order over usable rows).
+    var_levels: std::collections::HashMap<String, Vec<Value>>,
+    /// Per-CLASS-var level codes for each usable observation.
+    var_codes: std::collections::HashMap<String, Vec<usize>>,
+    term_dfs: Vec<usize>,
+    y_bar: f64,
+    sst: f64,
+    sse_full: f64,
+    ssm: f64,
+    df_model: f64,
+    df_error: f64,
+    df_total: f64,
+    msm: f64,
+    mse: f64,
+    f_model: f64,
+    p_model: Option<f64>,
+    r2: f64,
+    root_mse: f64,
+    cv: f64,
+    type1: Vec<f64>,
+    type3: Vec<f64>,
+}
+
+/// Resolve the dependent column, apply listwise deletion, build the term
+/// blocks, fit the full model and compute the Type I / Type III SS per term.
+#[allow(clippy::too_many_arguments)]
+fn fit_multiway(
+    session: &mut Session,
+    ds: &crate::dataset::SasDataset,
+    dep_var: &str,
+    class_cols: &std::collections::HashMap<String, (String, Vec<Value>)>,
+    used_classes: &[String],
+    model: &AnovaModel,
+    n_obs: usize,
+) -> Result<MultiwayFit> {
+    let dep_idx = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(dep_var))
+        .ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", dep_var.to_uppercase()))
+        })?;
+    if ds.vars[dep_idx].ty != VarType::Num {
+        return Err(SasError::runtime(format!(
+            "Dependent variable {} must be numeric.",
+            dep_var.to_uppercase()
+        )));
+    }
+    let dep_col = decode_column(ds, dep_idx)?;
+
+    // Listwise deletion: drop rows where dep or ANY used CLASS var missing.
+    let mut usable: Vec<usize> = Vec::new();
+    for i in 0..n_obs {
+        let dep_ok = matches!(value_to_num(&dep_col[i]), Some(v) if !v.is_nan());
+        if !dep_ok {
+            continue;
+        }
+        let cls_ok = used_classes
+            .iter()
+            .all(|c| !class_cols[c].1[i].is_missing());
+        if cls_ok {
+            usable.push(i);
+        }
+    }
+    let n = usable.len();
+
+    // y vector and corrected total.
+    let y: Vec<f64> = usable.iter().map(|&r| value_to_num(&dep_col[r]).unwrap()).collect();
+    let y_bar = if n > 0 { y.iter().sum::<f64>() / n as f64 } else { f64::NAN };
+    let sst: f64 = y.iter().map(|&v| (v - y_bar).powi(2)).sum();
+
+    // Levels per used CLASS var (sas_cmp order over usable rows).
+    let mut var_levels: std::collections::HashMap<String, Vec<Value>> =
+        std::collections::HashMap::new();
+    for c in used_classes {
+        let col = &class_cols[c].1;
+        // Usable rows are non-missing by construction (listwise deletion).
+        let levels =
+            crate::procs::lincom::class_levels(usable.iter().map(|&r| &col[r]));
+        var_levels.insert(c.clone(), levels);
+    }
+
+    // Per-CLASS-var level codes for each usable observation.
+    let mut var_codes: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for c in used_classes {
+        let col = &class_cols[c].1;
+        let levels = &var_levels[c];
+        let codes: Vec<usize> = usable
+            .iter()
+            .map(|&r| {
+                levels
+                    .iter()
+                    .position(|l| l.sas_cmp(&col[r]) == std::cmp::Ordering::Equal)
+                    .unwrap()
+            })
+            .collect();
+        var_codes.insert(c.clone(), codes);
+    }
+
+    // Per-CLASS-var main-effect dummy columns (reference-cell), used for the
+    // Type I sequential pass.
+    let mut var_dummies: std::collections::HashMap<String, Vec<Vec<f64>>> =
+        std::collections::HashMap::new();
+    // Per-CLASS-var sum-to-zero (effect) coded columns, used for Type III.
+    let mut var_effect: std::collections::HashMap<String, Vec<Vec<f64>>> =
+        std::collections::HashMap::new();
+    for c in used_classes {
+        let l = var_levels[c].len();
+        var_dummies.insert(c.clone(), main_effect_dummies(&var_codes[c], l, n));
+        var_effect.insert(c.clone(), main_effect_effect_coded(&var_codes[c], l, n));
+    }
+
+    // Build the column block for each model term from a per-var coding map.
+    // A main effect contributes its columns; an interaction term contributes
+    // the elementwise products (Cartesian) across its parents' columns.
+    let build_term_blocks =
+        |coding: &std::collections::HashMap<String, Vec<Vec<f64>>>| -> Vec<Vec<Vec<f64>>> {
+            let mut blocks: Vec<Vec<Vec<f64>>> = Vec::new();
+            for term in &model.terms {
+                let parents: Vec<&Vec<Vec<f64>>> =
+                    term.iter().map(|p| &coding[&p.to_uppercase()]).collect();
+                let mut block: Vec<Vec<f64>> = vec![vec![1.0; n]];
+                for parent in &parents {
+                    let mut next: Vec<Vec<f64>> = Vec::new();
+                    for existing in &block {
+                        for pcol in parent.iter() {
+                            let prod: Vec<f64> =
+                                existing.iter().zip(pcol).map(|(&a, &b)| a * b).collect();
+                            next.push(prod);
+                        }
+                    }
+                    block = next;
+                }
+                blocks.push(block);
+            }
+            blocks
+        };
+
+    // Reference-cell term blocks (Type I + Model SS) and effect-coded term
+    // blocks (Type III). Both span the same column space, so SSE_full is
+    // identical between them.
+    let term_blocks = build_term_blocks(&var_dummies);
+    let term_blocks_eff = build_term_blocks(&var_effect);
+
+    // Per-term DF = product of (levels − 1).
+    let term_dfs: Vec<usize> = model
+        .terms
+        .iter()
+        .map(|term| {
+            term.iter()
+                .map(|p| var_levels[&p.to_uppercase()].len().saturating_sub(1))
+                .product()
+        })
+        .collect();
+
+    // Assemble a design matrix from a set of term blocks: intercept + the
+    // included term blocks.
+    let build_from = |blocks: &[Vec<Vec<f64>>], include: &[bool]| -> Vec<Vec<f64>> {
+        let mut x = vec![vec![1.0]; n]; // intercept column
+        for (t, block) in blocks.iter().enumerate() {
+            if include[t] {
+                for (i, row) in x.iter_mut().enumerate() {
+                    for col in block {
+                        row.push(col[i]);
+                    }
+                }
+            }
+        }
+        x
+    };
+    let build_design = |include: &[bool]| -> Vec<Vec<f64>> {
+        build_from(&term_blocks, include)
+    };
+
+    let n_terms = model.terms.len();
+    let all_true = vec![true; n_terms];
+    let full_x = build_design(&all_true);
+    let full_cols = full_x[0].len();
+    let sse_full = fit_sse(&full_x, &y);
+    let ssm = sst - sse_full;
+    let df_model = (full_cols - 1) as f64;
+    let df_error = (n as f64 - full_cols as f64).max(0.0);
+    let df_total = (n as f64 - 1.0).max(0.0);
+    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
+    let mse = if df_error > 0.0 { sse_full / df_error } else { f64::NAN };
+    let f_model = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let p_model = if f_model.is_nan() {
+        None
+    } else {
+        Some((1.0 - f_cdf(f_model, df_model, df_error)).clamp(0.0, 1.0))
+    };
+
+    let r2 = if sst > 0.0 { ssm / sst } else { f64::NAN };
+    let root_mse = if !mse.is_nan() { mse.sqrt() } else { f64::NAN };
+    let cv = if y_bar.abs() > 1e-15 && !root_mse.is_nan() {
+        root_mse / y_bar.abs() * 100.0
+    } else {
+        f64::NAN
+    };
+
+    // Type I (sequential): SS_t = SSE(0..t) − SSE(0..=t).
+    let mut type1: Vec<f64> = Vec::with_capacity(n_terms);
+    {
+        let mut prev_sse = sst; // model with intercept only
+        for t in 0..n_terms {
+            let mut include = vec![false; n_terms];
+            for inc in include.iter_mut().take(t + 1) {
+                *inc = true;
+            }
+            let x = build_design(&include);
+            let sse = fit_sse(&x, &y);
+            type1.push(prev_sse - sse);
+            prev_sse = sse;
+        }
+    }
+
+    // Type III (partial), computed with sum-to-zero EFFECT coding so the
+    // partial SS matches SAS Type III on unbalanced data. The effect-coded
+    // full model spans the same column space as the reference-cell full
+    // model, so its SSE equals `sse_full` (asserted in debug builds).
+    let full_x_eff = build_from(&term_blocks_eff, &all_true);
+    let sse_full_eff = fit_sse(&full_x_eff, &y);
+    debug_assert!(
+        (sse_full_eff - sse_full).abs() <= 1e-6 * (1.0 + sse_full.abs()),
+        "effect-coded SSE_full {sse_full_eff} != reference-cell SSE_full {sse_full}"
+    );
+    let mut type3: Vec<f64> = Vec::with_capacity(n_terms);
+    for t in 0..n_terms {
+        let mut include = vec![true; n_terms];
+        include[t] = false;
+        let x = build_from(&term_blocks_eff, &include);
+        let sse = fit_sse(&x, &y);
+        type3.push(sse - sse_full_eff);
+    }
+
+    session.log.note(&format!("There were {} observations used.", n));
+
+    Ok(MultiwayFit {
+        y,
+        var_levels,
+        var_codes,
+        term_dfs,
+        y_bar,
+        sst,
+        sse_full,
+        ssm,
+        df_model,
+        df_error,
+        df_total,
+        msm,
+        mse,
+        f_model,
+        p_model,
+        r2,
+        root_mse,
+        cv,
+        type1,
+        type3,
+    })
+}
+
+/// Print the Analysis of Variance, fit statistics, and Type I / Type III SS
+/// tables for the multiway path.
+fn print_multiway_anova_and_fit(
+    session: &mut Session,
+    dep_var: &str,
+    model: &AnovaModel,
+    fit: &MultiwayFit,
+) {
+    let &MultiwayFit {
+        y_bar,
+        sst,
+        sse_full,
+        ssm,
+        df_model,
+        df_error,
+        df_total,
+        msm,
+        mse,
+        f_model,
+        p_model,
+        r2,
+        root_mse,
+        cv,
+        ..
+    } = fit;
+    let term_dfs = &fit.term_dfs;
+    let type1 = &fit.type1;
+    let type3 = &fit.type3;
+    let n_terms = model.terms.len();
+
+    // ANOVA table (Model / Error / Corrected Total).
+    centered(session, "Analysis of Variance");
+    session.listing.blank();
+    let anova_headers: Vec<String> = vec![
+        "Source".into(),
+        "DF".into(),
+        "Sum of Squares".into(),
+        "Mean Square".into(),
+        "F Value".into(),
+        "Pr > F".into(),
+    ];
+    let anova_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let f_str = if f_model.is_nan() { ".".to_string() } else { fmt2(f_model) };
+    let anova_rows: Vec<Vec<String>> = vec![
+        vec![
+            "Model".into(),
+            format!("{}", df_model as usize),
+            fmt5(ssm),
+            if msm.is_nan() { ".".into() } else { fmt5(msm) },
+            f_str,
+            fmt_p(p_model),
+        ],
+        vec![
+            "Error".into(),
+            format!("{}", df_error as usize),
+            fmt5(sse_full),
+            if mse.is_nan() { ".".into() } else { fmt5(mse) },
+            "".into(),
+            "".into(),
+        ],
+        vec![
+            "Corrected Total".into(),
+            format!("{}", df_total as usize),
+            fmt5(sst),
+            "".into(),
+            "".into(),
+            "".into(),
+        ],
+    ];
+    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session.listing.blank();
+    session.listing.blank();
+
+    // Fit statistics.
+    let dep_mean_header = format!("{} Mean", dep_var);
+    let fit_headers: Vec<String> = vec![
+        "R-Square".into(),
+        "Coeff Var".into(),
+        "Root MSE".into(),
+        dep_mean_header,
+    ];
+    let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+    let fit_rows: Vec<Vec<String>> = vec![vec![
+        fmt6(r2),
+        fmt6(cv),
+        fmt6(root_mse),
+        fmt6(y_bar),
+    ]];
+    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    session.listing.blank();
+    session.listing.blank();
+
+    // Term labels with `*` join.
+    let term_labels: Vec<String> = model.terms.iter().map(|t| t.join("*")).collect();
+
+    // Type I SS and Type III SS tables, one row per term.
+    for (ss_label, ss_vals) in
+        [("Type I SS", &type1), ("Type III SS", &type3)]
+    {
+        let t_headers: Vec<String> = vec![
             "Source".into(),
             "DF".into(),
-            "Sum of Squares".into(),
+            ss_label.into(),
             "Mean Square".into(),
             "F Value".into(),
             "Pr > F".into(),
         ];
-        let anova_aligns = vec![
+        let t_aligns = vec![
             Align::Left,
             Align::Right,
             Align::Right,
@@ -1029,157 +1216,98 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
             Align::Right,
             Align::Right,
         ];
-        let f_str = if f_model.is_nan() { ".".to_string() } else { fmt2(f_model) };
-        let anova_rows: Vec<Vec<String>> = vec![
-            vec![
-                "Model".into(),
-                format!("{}", df_model as usize),
-                fmt5(ssm),
-                if msm.is_nan() { ".".into() } else { fmt5(msm) },
-                f_str,
-                fmt_p(p_model),
-            ],
-            vec![
-                "Error".into(),
-                format!("{}", df_error as usize),
-                fmt5(sse_full),
-                if mse.is_nan() { ".".into() } else { fmt5(mse) },
-                "".into(),
-                "".into(),
-            ],
-            vec![
-                "Corrected Total".into(),
-                format!("{}", df_total as usize),
-                fmt5(sst),
-                "".into(),
-                "".into(),
-                "".into(),
-            ],
-        ];
-        session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
-        session.listing.blank();
-        session.listing.blank();
-
-        // Fit statistics.
-        let dep_mean_header = format!("{} Mean", dep_var);
-        let fit_headers: Vec<String> = vec![
-            "R-Square".into(),
-            "Coeff Var".into(),
-            "Root MSE".into(),
-            dep_mean_header,
-        ];
-        let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-        let fit_rows: Vec<Vec<String>> = vec![vec![
-            fmt6(r2),
-            fmt6(cv),
-            fmt6(root_mse),
-            fmt6(y_bar),
-        ]];
-        session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
-        session.listing.blank();
-        session.listing.blank();
-
-        // Term labels with `*` join.
-        let term_labels: Vec<String> = model.terms.iter().map(|t| t.join("*")).collect();
-
-        // Type I SS and Type III SS tables, one row per term.
-        for (ss_label, ss_vals) in
-            [("Type I SS", &type1), ("Type III SS", &type3)]
-        {
-            let t_headers: Vec<String> = vec![
-                "Source".into(),
-                "DF".into(),
-                ss_label.into(),
-                "Mean Square".into(),
-                "F Value".into(),
-                "Pr > F".into(),
-            ];
-            let t_aligns = vec![
-                Align::Left,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-            ];
-            let mut t_rows: Vec<Vec<String>> = Vec::new();
-            for t in 0..n_terms {
-                let df = term_dfs[t] as f64;
-                let ss = ss_vals[t];
-                let ms = if df > 0.0 { ss / df } else { f64::NAN };
-                let f = if mse > 0.0 && !mse.is_nan() && !ms.is_nan() {
-                    ms / mse
-                } else {
-                    f64::NAN
-                };
-                let p = if f.is_nan() || df <= 0.0 || df_error <= 0.0 {
-                    None
-                } else {
-                    Some((1.0 - f_cdf(f, df, df_error)).clamp(0.0, 1.0))
-                };
-                t_rows.push(vec![
-                    term_labels[t].clone(),
-                    format!("{}", term_dfs[t]),
-                    fmt5(ss),
-                    if ms.is_nan() { ".".into() } else { fmt5(ms) },
-                    if f.is_nan() { ".".into() } else { fmt2(f) },
-                    fmt_p(p),
-                ]);
-            }
-            session.listing.write_table(&t_headers, &t_aligns, &t_rows);
-            session.listing.blank();
-            session.listing.blank();
+        let mut t_rows: Vec<Vec<String>> = Vec::new();
+        for t in 0..n_terms {
+            let df = term_dfs[t] as f64;
+            let ss = ss_vals[t];
+            let ms = if df > 0.0 { ss / df } else { f64::NAN };
+            let f = if mse > 0.0 && !mse.is_nan() && !ms.is_nan() {
+                ms / mse
+            } else {
+                f64::NAN
+            };
+            let p = if f.is_nan() || df <= 0.0 || df_error <= 0.0 {
+                None
+            } else {
+                Some((1.0 - f_cdf(f, df, df_error)).clamp(0.0, 1.0))
+            };
+            t_rows.push(vec![
+                term_labels[t].clone(),
+                format!("{}", term_dfs[t]),
+                fmt5(ss),
+                if ms.is_nan() { ".".into() } else { fmt5(ms) },
+                if f.is_nan() { ".".into() } else { fmt2(f) },
+                fmt_p(p),
+            ]);
         }
-
-        // MEANS: main-effect marginal cell means for each requested CLASS var.
-        for mvar in &ast.means_vars {
-            let up = mvar.to_uppercase();
-            if !used_classes.contains(&up) {
-                continue;
-            }
-            let levels = &var_levels[&up];
-            let codes = &var_codes[&up];
-            let disp = &class_cols[&up].0;
-
-            centered(session, &format!("Level of {}", disp));
-            session.listing.blank();
-
-            let means_headers: Vec<String> = vec![
-                disp.clone(),
-                "N".into(),
-                "Mean".into(),
-                "Std Dev".into(),
-            ];
-            let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
-            let mut means_rows: Vec<Vec<String>> = Vec::new();
-            for (li, level) in levels.iter().enumerate() {
-                let vals: Vec<f64> = (0..n)
-                    .filter(|&i| codes[i] == li)
-                    .map(|i| y[i])
-                    .collect();
-                let ni = vals.len();
-                let mean_i = if ni > 0 { vals.iter().sum::<f64>() / ni as f64 } else { f64::NAN };
-                let std_i = sample_std(&vals);
-                means_rows.push(vec![
-                    value_label(level),
-                    format!("{}", ni),
-                    fmt6(mean_i),
-                    match std_i {
-                        Some(s) => fmt6(s),
-                        None => ".".to_string(),
-                    },
-                ]);
-            }
-            session.listing.write_table(&means_headers, &means_aligns, &means_rows);
-            session.listing.blank();
-            session.listing.blank();
-        }
+        session.listing.write_table(&t_headers, &t_aligns, &t_rows);
+        session.listing.blank();
+        session.listing.blank();
     }
+}
 
-    Ok(())
+/// Print the MEANS tables: main-effect marginal cell means for each requested
+/// CLASS var.
+fn print_multiway_means(
+    session: &mut Session,
+    ast: &AnovaAst,
+    fit: &MultiwayFit,
+    class_cols: &std::collections::HashMap<String, (String, Vec<Value>)>,
+    used_classes: &[String],
+) {
+    let y = &fit.y;
+    let n = y.len();
+    let var_levels = &fit.var_levels;
+    let var_codes = &fit.var_codes;
+
+    for mvar in &ast.means_vars {
+        let up = mvar.to_uppercase();
+        if !used_classes.contains(&up) {
+            continue;
+        }
+        let levels = &var_levels[&up];
+        let codes = &var_codes[&up];
+        let disp = &class_cols[&up].0;
+
+        centered(session, &format!("Level of {}", disp));
+        session.listing.blank();
+
+        let means_headers: Vec<String> = vec![
+            disp.clone(),
+            "N".into(),
+            "Mean".into(),
+            "Std Dev".into(),
+        ];
+        let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
+        let mut means_rows: Vec<Vec<String>> = Vec::new();
+        for (li, level) in levels.iter().enumerate() {
+            let vals: Vec<f64> = (0..n)
+                .filter(|&i| codes[i] == li)
+                .map(|i| y[i])
+                .collect();
+            let ni = vals.len();
+            let mean_i = if ni > 0 { vals.iter().sum::<f64>() / ni as f64 } else { f64::NAN };
+            let std_i = sample_std(&vals);
+            means_rows.push(vec![
+                value_label(level),
+                format!("{}", ni),
+                fmt6(mean_i),
+                match std_i {
+                    Some(s) => fmt6(s),
+                    None => ".".to_string(),
+                },
+            ]);
+        }
+        session.listing.write_table(&means_headers, &means_aligns, &means_rows);
+        session.listing.blank();
+        session.listing.blank();
+    }
 }
 
 /// Render a CLASS level value the way the existing one-way path does.
+// Divergence volontaire avec `common::value_label` : ANOVA affiche les
+// niveaux numériques via `format!("{f}")`, pas BESTw. — digits imprimés
+// différents, ne pas converger sans re-valider les snapshots.
 fn value_label(v: &Value) -> String {
     match v {
         Value::Char(s) => s.trim_end().to_string(),

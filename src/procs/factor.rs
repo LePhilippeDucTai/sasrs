@@ -993,14 +993,7 @@ fn write_out_dataset(
     Ok(())
 }
 
-/// Write a centered line within LINESIZE.
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+use crate::procs::common::centered;
 
 #[cfg(test)]
 mod tests {

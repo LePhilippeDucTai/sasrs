@@ -120,53 +120,81 @@ pub struct MacroEngine {
     /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
     /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
     autocall_tried: std::collections::HashSet<String>,
-    /// M19.3 — option `MPRINT` : si vrai, chaque ligne de code produite par
-    /// l'expansion d'une macro est écho­tée au log (préfixe `MPRINT(nom):`).
-    /// OFF par défaut.
-    mprint: bool,
-    /// M19.3 — option `MLOGIC` : si vrai, les décisions d'exécution du
-    /// processeur macro (entrée/sortie de macro, conditions `%if`, itérations
-    /// `%do`) sont écho­tées au log (préfixe `MLOGIC(nom):`). OFF par défaut.
-    mlogic: bool,
-    /// M19.3 — option `SYMBOLGEN` : si vrai, chaque résolution `&symbol` est
-    /// écho­tée au log (`SYMBOLGEN:  Macro variable X resolves to ...`). OFF par
-    /// défaut.
-    symbolgen: bool,
-    /// M19.3 — tampon de lignes de log produites pendant l'expansion (écho
-    /// MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`). L'engine n'a pas accès au
-    /// `LogWriter` (emprunté ailleurs) ; il accumule ici et l'exécuteur draine
-    /// après chaque `expand_open_code` via `take_pending_log_lines`.
-    pending_log_lines: Vec<String>,
-    /// M19.3 — file de fragments de code SAS produits par `%call execute(...)`
-    /// en code macro, à exécuter APRÈS l'étape/segment courant (même sémantique
-    /// que le `CALL EXECUTE` côté DATA step). Drainé par l'exécuteur via
-    /// `take_pending_call_execute`.
-    pending_call_execute: Vec<String>,
+    /// M19.3 — options de trace du processeur macro (`MPRINT`/`MLOGIC`/
+    /// `SYMBOLGEN`). Voir [`TraceOptions`].
+    trace: TraceOptions,
+    /// M19.3 — tampons de sortie vers la session (lignes de log, fragments
+    /// `%call execute`), drainés par l'exécuteur. Voir [`PendingOutputs`].
+    pending: PendingOutputs,
     /// M19.3 — pile des noms de macros en cours d'expansion, pour étiqueter les
-    /// lignes `MPRINT(nom):` / `MLOGIC(nom):`. La macro la plus interne est en
-    /// fin de pile. Vide en code ouvert.
+    /// lignes `MPRINT(nom):` / `MLOGIC(nom):` et détecter qu'on est dans un
+    /// corps de macro (`%return`/`%goto`). La macro la plus interne est en fin
+    /// de pile. Vide en code ouvert. Laissée à plat à côté de `depth` : c'est
+    /// de l'état d'imbrication d'invocation, consulté à la fois par la trace et
+    /// par le contrôle de flux.
     macro_stack: Vec<String>,
-    /// M35.4 — `%return` demandé : interrompt l'expansion du corps de macro
-    /// COURANT (revient à l'appelant). Posé par `consume_return`, testé en tête
-    /// de la boucle `process_impl`, et RÉINITIALISÉ par `expand_invocation`
-    /// après l'expansion du corps (ré-entrance : ne fuit jamais vers
-    /// l'appelant ni l'open code).
+    /// M35.4 — état de contrôle de flux macro (`%return`/`%abort`/`%goto`),
+    /// dont le cycle de vie est couplé. Voir [`ControlFlow`].
+    flow: ControlFlow,
+}
+
+/// M19.3 — options de trace du processeur macro (statement global `OPTIONS`).
+/// Toutes OFF par défaut.
+#[derive(Default)]
+struct TraceOptions {
+    /// Option `MPRINT` : si vrai, chaque ligne de code produite par
+    /// l'expansion d'une macro est écho­tée au log (préfixe `MPRINT(nom):`).
+    mprint: bool,
+    /// Option `MLOGIC` : si vrai, les décisions d'exécution du processeur
+    /// macro (entrée/sortie de macro, conditions `%if`, itérations `%do`) sont
+    /// écho­tées au log (préfixe `MLOGIC(nom):`).
+    mlogic: bool,
+    /// Option `SYMBOLGEN` : si vrai, chaque résolution `&symbol` est écho­tée
+    /// au log (`SYMBOLGEN:  Macro variable X resolves to ...`).
+    symbolgen: bool,
+}
+
+/// M19.3 — tampons de sortie de l'engine vers la session. L'engine n'a pas
+/// accès au `LogWriter` (emprunté ailleurs) : il accumule ici et l'exécuteur
+/// draine après chaque `expand_open_code`.
+#[derive(Default)]
+struct PendingOutputs {
+    /// Lignes de log produites pendant l'expansion (écho MPRINT/MLOGIC/
+    /// SYMBOLGEN et sortie de `%put`). Drainées via `take_pending_log_lines`.
+    log_lines: Vec<String>,
+    /// File de fragments de code SAS produits par `%call execute(...)` en code
+    /// macro, à exécuter APRÈS l'étape/segment courant (même sémantique que le
+    /// `CALL EXECUTE` côté DATA step). Drainée via `take_pending_call_execute`.
+    call_execute: Vec<String>,
+}
+
+/// M35.4 — drapeaux de contrôle de flux du processeur macro
+/// (`%return`/`%abort`/`%goto`). Leur cycle de vie est couplé : posés pendant
+/// l'expansion d'un corps, testés en tête de `process_impl`, puis
+/// réinitialisés/drainés ensemble (cf. docs de champ).
+#[derive(Default)]
+struct ControlFlow {
+    /// `%return` demandé : interrompt l'expansion du corps de macro COURANT
+    /// (revient à l'appelant). Posé par `consume_return`, testé en tête de la
+    /// boucle `process_impl`, et RÉINITIALISÉ par `expand_invocation` après
+    /// l'expansion du corps (ré-entrance : ne fuit jamais vers l'appelant ni
+    /// l'open code).
     return_requested: bool,
-    /// M35.4 — `%abort` demandé : interrompt l'expansion comme `%return` mais
-    /// se PROPAGE vers le haut (l'appelant l'observe). `expand_invocation` ne le
+    /// `%abort` demandé : interrompt l'expansion comme `%return` mais se
+    /// PROPAGE vers le haut (l'appelant l'observe). `expand_invocation` ne le
     /// réinitialise PAS ; il est drainé par l'exécuteur via
     /// `take_abort_request` après l'expansion d'un segment d'open code.
     abort_requested: bool,
-    /// M35.4 — variante du `%abort` en cours (forme/option et code retour).
+    /// Variante du `%abort` en cours (forme/option et code retour).
     abort_kind: Option<AbortKind>,
-    /// M35.4 — saut `%goto` en attente : nom (MAJUSCULES) de l'étiquette cible.
+    /// Saut `%goto` en attente : nom (MAJUSCULES) de l'étiquette cible.
     /// Posé par `consume_goto`, il « remonte » : chaque niveau de `process_impl`
     /// (corps de macro, action de `%if`/`%do`) tente de trouver `%label:` dans
     /// SON propre texte ; s'il y parvient il réinitialise le drapeau et saute,
     /// sinon il laisse remonter au niveau parent. Au niveau le PLUS externe du
     /// corps, un drapeau encore posé = étiquette introuvable → NOTE.
     goto_requested: Option<String>,
-    /// M35.4 — budget de sauts `%goto` partagé sur toute l'expansion d'un corps
+    /// Budget de sauts `%goto` partagé sur toute l'expansion d'un corps
     /// (garde anti-boucle ; voir `MAX_GOTO_JUMPS`). `None` = pas d'expansion de
     /// corps en cours (réinitialisé à l'entrée de l'invocation).
     goto_budget: i64,
@@ -242,43 +270,43 @@ impl MacroEngine {
     /// M19.3 — active/désactive l'option de trace `MPRINT` (écho du code
     /// produit par l'expansion macro). OFF par défaut.
     pub fn set_mprint(&mut self, on: bool) {
-        self.mprint = on;
+        self.trace.mprint = on;
     }
 
     /// M19.3 — active/désactive l'option de trace `MLOGIC` (écho des décisions
     /// d'exécution du processeur macro). OFF par défaut.
     pub fn set_mlogic(&mut self, on: bool) {
-        self.mlogic = on;
+        self.trace.mlogic = on;
     }
 
     /// M19.3 — active/désactive l'option de trace `SYMBOLGEN` (écho de chaque
     /// résolution `&symbol`). OFF par défaut.
     pub fn set_symbolgen(&mut self, on: bool) {
-        self.symbolgen = on;
+        self.trace.symbolgen = on;
     }
 
     /// M19.3 — état courant des options de trace (lecture).
     pub fn mprint(&self) -> bool {
-        self.mprint
+        self.trace.mprint
     }
     pub fn mlogic(&self) -> bool {
-        self.mlogic
+        self.trace.mlogic
     }
     pub fn symbolgen(&self) -> bool {
-        self.symbolgen
+        self.trace.symbolgen
     }
 
     /// M19.3 — draine les lignes de log accumulées pendant l'expansion (écho
     /// MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`). L'exécuteur les transfère
     /// vers le `LogWriter` après chaque `expand_open_code`.
     pub fn take_pending_log_lines(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_log_lines)
+        std::mem::take(&mut self.pending.log_lines)
     }
 
     /// M19.3 — draine les fragments de code mis en file par `%call execute(...)`
     /// en code macro, à exécuter après le segment courant.
     pub fn take_pending_call_execute(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pending_call_execute)
+        std::mem::take(&mut self.pending.call_execute)
     }
 
     /// M35.4 — draine une éventuelle demande d'`%abort` rencontrée pendant
@@ -286,14 +314,14 @@ impl MacroEngine {
     /// peut consulter ce résultat après chaque `expand_open_code` pour arrêter
     /// proprement la soumission. Rend `None` si aucun `%abort` n'a été vu.
     pub fn take_abort_request(&mut self) -> Option<AbortKind> {
-        self.abort_requested = false;
-        self.abort_kind.take()
+        self.flow.abort_requested = false;
+        self.flow.abort_kind.take()
     }
 
     /// M19.3 — écho d'une ligne de log (helper interne). On la pousse dans le
     /// tampon ; l'exécuteur la relaiera au `LogWriter`.
     fn log_line(&mut self, line: impl Into<String>) {
-        self.pending_log_lines.push(line.into());
+        self.pending.log_lines.push(line.into());
     }
 
     /// M19.3 — étiquette de macro courante pour MPRINT/MLOGIC : nom de la macro

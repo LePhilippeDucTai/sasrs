@@ -187,140 +187,87 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
             ts.next(); // consume "model"
 
             // Response variable
-            let response = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected response variable", ts.peek().span))?;
-            ts.next();
+            let response = common::parse_model_response(ts, "expected response variable")?;
 
             // Optional response options: (event='val' descending ...)
-            let mut event: Option<String> = None;
-            let mut descending = false;
-
-            if ts.peek().kind == TokenKind::LParen {
-                ts.next(); // consume '('
-                loop {
-                    if ts.peek().kind == TokenKind::RParen || ts.peek().kind == TokenKind::Eof {
-                        break;
-                    }
-                    if ts.peek().kind == TokenKind::Semi {
-                        break;
-                    }
-                    if ts.peek().is_kw("event") {
-                        ts.next();
-                        if ts.peek().kind == TokenKind::Eq {
-                            ts.next();
-                            if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
-                                event = Some(value.clone());
-                                ts.next();
-                            }
-                        }
-                    } else if ts.peek().is_kw("descending") {
-                        descending = true;
-                        ts.next();
-                    } else {
-                        ts.next();
-                    }
-                }
-                if ts.peek().kind == TokenKind::RParen {
-                    ts.next();
-                }
-            }
+            let (event, descending) = common::parse_response_options(ts);
 
             // Expect '='
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after response variable in MODEL",
-                    ts.peek().span,
-                ));
-            }
-            ts.next();
+            common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
 
             // Predictors until '/' or ';'
-            let mut predictors: Vec<String> = Vec::new();
+            let predictors = common::parse_effect_list(ts);
+
             let mut dist_opt: Option<Distribution> = None;
             let mut link_opt: Option<LinkFunction> = None;
             let mut noprint = false;
             let mut scale_opt: Option<f64> = None;
             let mut noscale = false;
 
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next(); // consume '/'
-                    // Parse options
-                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                        if ts.peek().is_kw("dist") {
+            if ts.peek().kind == TokenKind::Slash {
+                ts.next(); // consume '/'
+                // Parse options
+                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                    if ts.peek().is_kw("dist") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
                             ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
+                        }
+                        if let Some(name) = ts.peek().ident().map(str::to_string) {
+                            ts.next();
+                            match name.to_ascii_lowercase().as_str() {
+                                "poisson" => dist_opt = Some(Distribution::Poisson),
+                                "binomial" => dist_opt = Some(Distribution::Binomial),
+                                "normal" => dist_opt = Some(Distribution::Normal),
+                                "gamma" => dist_opt = Some(Distribution::Gamma),
+                                _ => {} // ignore unknown
                             }
-                            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                match name.to_ascii_lowercase().as_str() {
-                                    "poisson" => dist_opt = Some(Distribution::Poisson),
-                                    "binomial" => dist_opt = Some(Distribution::Binomial),
-                                    "normal" => dist_opt = Some(Distribution::Normal),
-                                    "gamma" => dist_opt = Some(Distribution::Gamma),
-                                    _ => {} // ignore unknown
+                        }
+                    } else if ts.peek().is_kw("link") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
+                            ts.next();
+                        }
+                        if let Some(name) = ts.peek().ident().map(str::to_string) {
+                            ts.next();
+                            match name.to_ascii_lowercase().as_str() {
+                                "log" => link_opt = Some(LinkFunction::Log),
+                                "logit" => link_opt = Some(LinkFunction::Logit),
+                                "identity" => link_opt = Some(LinkFunction::Identity),
+                                "reciprocal" | "inverse" | "power" => {
+                                    // POWER(-1) ≈ reciprocal; treat POWER as
+                                    // reciprocal here (full power family deferred).
+                                    link_opt = Some(LinkFunction::Reciprocal)
                                 }
+                                _ => {} // ignore unknown
                             }
-                        } else if ts.peek().is_kw("link") {
+                        }
+                    } else if ts.peek().is_kw("noprint") {
+                        noprint = true;
+                        ts.next();
+                    } else if ts.peek().is_kw("noscale") {
+                        noscale = true;
+                        ts.next();
+                    } else if ts.peek().is_kw("scale") {
+                        ts.next();
+                        if ts.peek().kind == TokenKind::Eq {
                             ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                match name.to_ascii_lowercase().as_str() {
-                                    "log" => link_opt = Some(LinkFunction::Log),
-                                    "logit" => link_opt = Some(LinkFunction::Logit),
-                                    "identity" => link_opt = Some(LinkFunction::Identity),
-                                    "reciprocal" | "inverse" | "power" => {
-                                        // POWER(-1) ≈ reciprocal; treat POWER as
-                                        // reciprocal here (full power family deferred).
-                                        link_opt = Some(LinkFunction::Reciprocal)
-                                    }
-                                    _ => {} // ignore unknown
-                                }
-                            }
-                        } else if ts.peek().is_kw("noprint") {
-                            noprint = true;
+                        }
+                        // SCALE=<number>; accept numeric literal.
+                        if let TokenKind::Num(v) = ts.peek().kind {
+                            scale_opt = Some(v);
                             ts.next();
-                        } else if ts.peek().is_kw("noscale") {
-                            noscale = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("scale") {
-                            ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            // SCALE=<number>; accept numeric literal.
-                            if let TokenKind::Num(v) = ts.peek().kind {
+                        } else if let Some(s) = ts.peek().ident().map(str::to_string) {
+                            if let Ok(v) = s.parse::<f64>() {
                                 scale_opt = Some(v);
-                                ts.next();
-                            } else if let Some(s) = ts.peek().ident().map(str::to_string) {
-                                if let Ok(v) = s.parse::<f64>() {
-                                    scale_opt = Some(v);
-                                }
-                                ts.next();
-                            } else {
-                                ts.next();
                             }
+                            ts.next();
                         } else {
                             ts.next();
                         }
+                    } else {
+                        ts.next();
                     }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    predictors.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
                 }
             }
             ts.expect_semi()?;
@@ -369,31 +316,15 @@ fn fmt4(v: f64) -> String {
     format!("{v:.4}")
 }
 
-fn fmt_p_opt(p: f64) -> String {
-    if p < 0.0001 {
-        "<.0001".to_string()
-    } else {
-        format!("{p:.4}")
-    }
-}
+use crate::procs::common::fmt_p_num as fmt_p_opt;
 
-fn centered(session: &mut Session, text: &str) {
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
+
+use crate::procs::common::centered;
 
 // ───────────────────────── Value helpers ─────────────────────────
 
-fn value_label(v: &Value) -> String {
-    match v {
-        Value::Num(f) => format_best(*f, 12),
-        Value::Missing(k) => k.display(),
-        Value::Char(s) => s.trim_end().to_string(),
-    }
-}
+use crate::procs::common::value_label;
+
 
 fn value_matches_event(v: &Value, event: &str) -> bool {
     match v {
@@ -468,74 +399,21 @@ fn class_level_label(v: &Value) -> String {
     }
 }
 
-// ───────────────────────── Execute ─────────────────────────
+// ───────────────────────── Execute helpers ─────────────────────────
 
-pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
-    // ── 1. Guards ──────────────────────────────────────────────────────────
-    let model = ast.model.as_ref().ok_or_else(|| {
-        SasError::runtime("MODEL statement required for PROC GENMOD")
-    })?;
-
-    // ── 2. Read dataset ────────────────────────────────────────────────────
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
-
-    let n_read = ds.n_obs();
-    session.log.note(&format!(
-        "There were {} observations read from the data set {}.{}.",
-        n_read, in_libref, in_table
-    ));
-
-    let resp_name = &model.response;
-    let predictors = &model.predictors;
+/// Build the design terms for the MODEL right-hand side.
+///
+/// Each predictor is either continuous (1 column) or a CLASS factor (L−1
+/// indicator columns). CLASS levels are the distinct non-missing values in
+/// `Value::sas_cmp` order; the last level is the reference cell.
+fn build_design_terms(
+    ast: &GenmodAst,
+    ds: &crate::dataset::SasDataset,
+    predictors: &[String],
+    pred_idxs: &[usize],
+    pred_cols: &[Vec<Value>],
+) -> Result<Vec<DesignTerm>> {
     let nb_preds = predictors.len();
-    let dist = &model.dist;
-    let lf = &model.link;
-
-    // ── Find column indices ────────────────────────────────────────────────
-    let find_col = |nm: &str| -> Result<usize> {
-        ds.vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
-            })
-    };
-
-    let resp_idx = find_col(resp_name)?;
-    let mut pred_idxs: Vec<usize> = Vec::with_capacity(nb_preds);
-    for nm in predictors {
-        pred_idxs.push(find_col(nm)?);
-    }
-    let freq_idx: Option<usize> = if let Some(fv) = &ast.freq_var {
-        Some(find_col(fv)?)
-    } else {
-        None
-    };
-
-    // ── Decode columns ─────────────────────────────────────────────────────
-    let resp_col = decode_column(&ds, resp_idx)?;
-    let mut pred_cols: Vec<Vec<Value>> = Vec::with_capacity(nb_preds);
-    for &idx in &pred_idxs {
-        pred_cols.push(decode_column(&ds, idx)?);
-    }
-    let freq_col: Option<Vec<Value>> = if let Some(fi) = freq_idx {
-        Some(decode_column(&ds, fi)?)
-    } else {
-        None
-    };
-
-    // ── Build design terms (CLASS reference-cell coding, ref = last level) ──
-    // Each predictor is either continuous (1 column) or a CLASS factor (L−1
-    // indicator columns). CLASS levels are the distinct non-missing values in
-    // `Value::sas_cmp` order; the last level is the reference cell.
     let mut design_terms: Vec<DesignTerm> = Vec::with_capacity(nb_preds);
     for (pi, nm) in predictors.iter().enumerate() {
         let is_class = ast
@@ -544,19 +422,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             .any(|c| c.eq_ignore_ascii_case(nm));
         if is_class {
             let col = &pred_cols[pi];
-            let mut levels: Vec<Value> = Vec::new();
-            for v in col.iter() {
-                if v.is_missing() {
-                    continue;
-                }
-                if !levels
-                    .iter()
-                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-                {
-                    levels.push(v.clone());
-                }
-            }
-            levels.sort_by(|a, b| a.sas_cmp(b));
+            let levels = crate::procs::lincom::class_levels(col.iter());
             if levels.len() < 2 {
                 return Err(SasError::runtime(format!(
                     "CLASS variable {} must have at least 2 levels.",
@@ -575,11 +441,32 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             });
         }
     }
-    let n_design: usize = design_terms.iter().map(|t| t.n_cols()).sum();
+    Ok(design_terms)
+}
 
-    // ── 3. Prepare response for Binomial (determine event level) ──────────
-    // For non-binomial, collect distinct levels for reference but encode y
-    // numerically. For Binomial, reproduce LOGISTIC's level-determination.
+/// Binomial response information: event level plus the Response Profile
+/// labels and totals. All fields are `None`/0 for non-binomial distributions.
+struct BinomialResponse {
+    event_level: Option<Value>,
+    event_label: Option<String>,
+    nonevent_label: Option<String>,
+    n_event_total: f64,
+    n_nonevent_total: f64,
+}
+
+/// Determine the Binomial event level (EVENT= / DESCENDING / default) and
+/// pre-compute the event/non-event totals for the Response Profile.
+///
+/// For non-binomial, collect distinct levels for reference but encode y
+/// numerically. For Binomial, reproduce LOGISTIC's level-determination.
+fn prepare_binomial_response(
+    model: &GenmodModel,
+    resp_col: &[Value],
+    freq_col: &Option<Vec<Value>>,
+    n_read: usize,
+    resp_name: &str,
+) -> Result<BinomialResponse> {
+    let dist = &model.dist;
     let binomial_event_level: Option<Value>;
     let binomial_event_label: Option<String>;
     let binomial_nonevent_label: Option<String>;
@@ -588,17 +475,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
     if *dist == Distribution::Binomial {
         // Collect distinct non-missing levels
-        let mut levels: Vec<Value> = Vec::new();
-        for i in 0..n_read {
-            let v = &resp_col[i];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels.iter().any(|lv| lv.sas_cmp(v) == std::cmp::Ordering::Equal) {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(resp_col.iter().take(n_read));
 
         if levels.len() != 2 {
             return Err(SasError::runtime(format!(
@@ -668,7 +545,26 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         binomial_n_nonevent_total = 0.0;
     }
 
-    // ── 4. Listwise deletion + encoding ───────────────────────────────────
+    Ok(BinomialResponse {
+        event_level: binomial_event_level,
+        event_label: binomial_event_label,
+        nonevent_label: binomial_nonevent_label,
+        n_event_total: binomial_n_event_total,
+        n_nonevent_total: binomial_n_nonevent_total,
+    })
+}
+
+/// Listwise deletion + encoding: build the response vector, the design matrix
+/// (with leading intercept column) and the frequency vector.
+fn build_model_matrices(
+    design_terms: &[DesignTerm],
+    pred_cols: &[Vec<Value>],
+    resp_col: &[Value],
+    freq_col: &Option<Vec<Value>>,
+    dist: &Distribution,
+    binomial_event_level: &Option<Value>,
+    n_read: usize,
+) -> (Vec<f64>, Vec<Vec<f64>>, Vec<f64>) {
     let mut y_vec: Vec<f64> = Vec::new();
     let mut x_mat: Vec<Vec<f64>> = Vec::new();
     let mut freq_vec: Vec<f64> = Vec::new();
@@ -689,7 +585,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
         let mut row = vec![1.0_f64]; // intercept
         let mut ok = true;
-        for term in &design_terms {
+        for term in design_terms {
             match term {
                 DesignTerm::Continuous { col, .. } => {
                     match value_to_num(&pred_cols[*col][i]) {
@@ -751,134 +647,149 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         freq_vec.push(w);
     }
 
-    let n_total: f64 = freq_vec.iter().sum();
+    (y_vec, x_mat, freq_vec)
+}
+
+/// Print the listing page header and the Model Information table.
+fn print_model_information(
+    session: &mut Session,
+    in_libref: &str,
+    in_table: &str,
+    resp_name: &str,
+    dist: &Distribution,
+    lf: &LinkFunction,
+    n_total: f64,
+) {
+    session.listing.page_header();
+    centered(session, "The GENMOD Procedure");
+    session.listing.blank();
+
+    centered(session, "Model Information");
+    session.listing.blank();
+
+    let ds_display = format!("{}.{}", in_libref, in_table);
+    let dist_name = match dist {
+        Distribution::Poisson => "Poisson",
+        Distribution::Binomial => "Binomial",
+        Distribution::Normal => "Normal",
+        Distribution::Gamma => "Gamma",
+    };
+    let link_name = match lf {
+        LinkFunction::Log => "Log",
+        LinkFunction::Logit => "Logit",
+        LinkFunction::Identity => "Identity",
+        LinkFunction::Reciprocal => "Reciprocal",
+    };
+
+    let info_headers: Vec<String> = vec!["".into(), "".into()];
+    let info_aligns = vec![Align::Left, Align::Left];
+    let info_rows: Vec<Vec<String>> = vec![
+        vec!["Data Set".into(), ds_display],
+        vec!["Response Variable".into(), resp_name.to_string()],
+        vec!["Distribution".into(), dist_name.into()],
+        vec!["Link Function".into(), link_name.into()],
+        vec!["Dependent Variable".into(), resp_name.to_string()],
+        vec!["Observations Used".into(), (n_total as i64).to_string()],
+    ];
+    session
+        .listing
+        .write_table(&info_headers, &info_aligns, &info_rows);
+    session.listing.blank();
+}
+
+/// Print the Class Level Information table (CLASS variables present).
+fn print_class_level_information(session: &mut Session, design_terms: &[DesignTerm]) {
+    centered(session, "Class Level Information");
+    session.listing.blank();
+
+    let cli_headers: Vec<String> =
+        vec!["Class".into(), "Levels".into(), "Values".into()];
+    let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
+    let mut cli_rows: Vec<Vec<String>> = Vec::new();
+    for term in design_terms {
+        if let DesignTerm::Class { name, levels, .. } = term {
+            let values_str: Vec<String> =
+                levels.iter().map(class_level_label).collect();
+            cli_rows.push(vec![
+                name.clone(),
+                format!("{}", levels.len()),
+                values_str.join(" "),
+            ]);
+        }
+    }
+    session
+        .listing
+        .write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session.listing.blank();
+}
+
+/// Print the Response Profile table (Binomial only).
+fn print_response_profile(
+    session: &mut Session,
+    resp_name: &str,
+    binomial_event_label: &Option<String>,
+    binomial_nonevent_label: &Option<String>,
+    binomial_n_event_total: f64,
+    binomial_n_nonevent_total: f64,
+) {
+    centered(session, "Response Profile");
+    session.listing.blank();
+
+    let el = binomial_event_label.as_deref().unwrap_or("");
+    let nel = binomial_nonevent_label.as_deref().unwrap_or("");
+
+    let rp_headers: Vec<String> = vec![
+        "Ordered Value".into(),
+        resp_name.to_string(),
+        "Total Frequency".into(),
+    ];
+    let rp_aligns = vec![Align::Right, Align::Left, Align::Right];
+    let rp_rows: Vec<Vec<String>> = vec![
+        vec![
+            "1".into(),
+            el.to_string(),
+            (binomial_n_event_total as i64).to_string(),
+        ],
+        vec![
+            "2".into(),
+            nel.to_string(),
+            (binomial_n_nonevent_total as i64).to_string(),
+        ],
+    ];
+    session
+        .listing
+        .write_table(&rp_headers, &rp_aligns, &rp_rows);
+    session.listing.blank();
+    session.listing.write_line(&format!(
+        "PROC GENMOD is modeling the probability that {}={}.",
+        resp_name, el
+    ));
+    session.listing.blank();
+}
+
+/// Print the Model Convergence Status block.
+fn print_convergence_status(session: &mut Session) {
+    centered(session, "Model Convergence Status");
+    session.listing.blank();
+    session
+        .listing
+        .write_line("     Convergence criterion (GCONV=1E-8) satisfied.");
+    session.listing.blank();
+}
+
+/// IRLS / Newton-Raphson fit. Returns `(β, (X'WX)⁻¹ at convergence, fitted μ)`.
+fn fit_irls(
+    session: &mut Session,
+    y_vec: &[f64],
+    x_mat: &[Vec<f64>],
+    freq_vec: &[f64],
+    dist: &Distribution,
+    lf: &LinkFunction,
+    n_total: f64,
+    p_param: usize,
+) -> Result<(Vec<f64>, Vec<Vec<f64>>, Vec<f64>)> {
     let n_obs = y_vec.len();
 
-    session.log.note(&format!(
-        "There were {} observations used.",
-        n_total as i64
-    ));
-
-    let p_param = 1 + n_design; // intercept + design columns
-
-    if n_obs <= n_design {
-        return Err(SasError::runtime(
-            "Not enough observations for PROC GENMOD",
-        ));
-    }
-
-    // ── 5. Listing header ─────────────────────────────────────────────────
-    if !model.noprint {
-        session.listing.page_header();
-        centered(session, "The GENMOD Procedure");
-        session.listing.blank();
-
-        // ── 6. Model Information ──────────────────────────────────────────
-        centered(session, "Model Information");
-        session.listing.blank();
-
-        let ds_display = format!("{}.{}", in_libref, in_table);
-        let dist_name = match dist {
-            Distribution::Poisson => "Poisson",
-            Distribution::Binomial => "Binomial",
-            Distribution::Normal => "Normal",
-            Distribution::Gamma => "Gamma",
-        };
-        let link_name = match lf {
-            LinkFunction::Log => "Log",
-            LinkFunction::Logit => "Logit",
-            LinkFunction::Identity => "Identity",
-            LinkFunction::Reciprocal => "Reciprocal",
-        };
-
-        let info_headers: Vec<String> = vec!["".into(), "".into()];
-        let info_aligns = vec![Align::Left, Align::Left];
-        let info_rows: Vec<Vec<String>> = vec![
-            vec!["Data Set".into(), ds_display],
-            vec!["Response Variable".into(), resp_name.clone()],
-            vec!["Distribution".into(), dist_name.into()],
-            vec!["Link Function".into(), link_name.into()],
-            vec!["Dependent Variable".into(), resp_name.clone()],
-            vec!["Observations Used".into(), (n_total as i64).to_string()],
-        ];
-        session
-            .listing
-            .write_table(&info_headers, &info_aligns, &info_rows);
-        session.listing.blank();
-
-        // ── Class Level Information (only when CLASS variables present) ────
-        if !ast.class_vars.is_empty() {
-            centered(session, "Class Level Information");
-            session.listing.blank();
-
-            let cli_headers: Vec<String> =
-                vec!["Class".into(), "Levels".into(), "Values".into()];
-            let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
-            let mut cli_rows: Vec<Vec<String>> = Vec::new();
-            for term in &design_terms {
-                if let DesignTerm::Class { name, levels, .. } = term {
-                    let values_str: Vec<String> =
-                        levels.iter().map(class_level_label).collect();
-                    cli_rows.push(vec![
-                        name.clone(),
-                        format!("{}", levels.len()),
-                        values_str.join(" "),
-                    ]);
-                }
-            }
-            session
-                .listing
-                .write_table(&cli_headers, &cli_aligns, &cli_rows);
-            session.listing.blank();
-        }
-
-        // ── 7. Response Profile (Binomial only) ───────────────────────────
-        if *dist == Distribution::Binomial {
-            centered(session, "Response Profile");
-            session.listing.blank();
-
-            let el = binomial_event_label.as_deref().unwrap_or("");
-            let nel = binomial_nonevent_label.as_deref().unwrap_or("");
-
-            let rp_headers: Vec<String> = vec![
-                "Ordered Value".into(),
-                resp_name.clone(),
-                "Total Frequency".into(),
-            ];
-            let rp_aligns = vec![Align::Right, Align::Left, Align::Right];
-            let rp_rows: Vec<Vec<String>> = vec![
-                vec![
-                    "1".into(),
-                    el.to_string(),
-                    (binomial_n_event_total as i64).to_string(),
-                ],
-                vec![
-                    "2".into(),
-                    nel.to_string(),
-                    (binomial_n_nonevent_total as i64).to_string(),
-                ],
-            ];
-            session
-                .listing
-                .write_table(&rp_headers, &rp_aligns, &rp_rows);
-            session.listing.blank();
-            session.listing.write_line(&format!(
-                "PROC GENMOD is modeling the probability that {}={}.",
-                resp_name, el
-            ));
-            session.listing.blank();
-        }
-
-        // ── 8. Convergence status ─────────────────────────────────────────
-        centered(session, "Model Convergence Status");
-        session.listing.blank();
-        session
-            .listing
-            .write_line("     Convergence criterion (GCONV=1E-8) satisfied.");
-        session.listing.blank();
-    }
-
-    // ── 9. IRLS / Newton-Raphson ──────────────────────────────────────────
     // Initialize β
     let y_mean: f64 = {
         let sum_wy: f64 = y_vec.iter().zip(freq_vec.iter()).map(|(y, w)| y * w).sum();
@@ -1008,22 +919,48 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
     let h_inv = invert_matrix(&final_hessian)?;
 
-    // ── 10. Scale / Dispersion ────────────────────────────────────────────
-    // Poisson, Binomial: scale=1 (fixed, DF=0).
-    // Normal: φ̂ = MSE = SSE/(n−p); reported Scale = √φ̂ = σ̂, DF=n−p.
-    // Gamma:  Pearson dispersion φ̂ = (1/(n−p)) Σ (y−μ)²/μ²; reported Scale is
-    //         the estimate of 1/φ (SAS GENMOD reports the Gamma "Scale" in the
-    //         1/φ form). The exact SAS default uses the ML (digamma) scale; we
-    //         approximate it by the moment-based Pearson dispersion — the two
-    //         agree asymptotically but differ in finite samples. DF=n−p.
-    //
-    // NOSCALE / SCALE=: when NOSCALE, the dispersion is held FIXED rather than
-    // estimated (φ=1 by default, or derived from SCALE=); when SCALE=v is given
-    // the reported Scale is fixed at v (for Normal v=σ ⇒ φ=v²; for Gamma the
-    // value is the 1/φ form ⇒ φ=1/v). A fixed scale carries DF=0.
-    //
-    // `disp_phi` is the dispersion φ used to scale Var(β̂)=φ·H⁻¹ and the scaled
-    // criteria. `scale_est` is the value printed on the Scale row.
+    Ok((beta, h_inv, final_mu))
+}
+
+/// Scale/dispersion estimate: printed Scale row value, its DF and SE, the
+/// dispersion φ, and Var(β̂) = φ·H⁻¹.
+struct ScaleInfo {
+    scale_est: f64,
+    scale_df: i64,
+    disp_phi: f64,
+    se_scale: f64,
+    var_beta: Vec<Vec<f64>>,
+}
+
+/// Estimate (or fix) the scale/dispersion parameter.
+///
+/// Poisson, Binomial: scale=1 (fixed, DF=0).
+/// Normal: φ̂ = MSE = SSE/(n−p); reported Scale = √φ̂ = σ̂, DF=n−p.
+/// Gamma:  Pearson dispersion φ̂ = (1/(n−p)) Σ (y−μ)²/μ²; reported Scale is
+///         the estimate of 1/φ (SAS GENMOD reports the Gamma "Scale" in the
+///         1/φ form). The exact SAS default uses the ML (digamma) scale; we
+///         approximate it by the moment-based Pearson dispersion — the two
+///         agree asymptotically but differ in finite samples. DF=n−p.
+///
+/// NOSCALE / SCALE=: when NOSCALE, the dispersion is held FIXED rather than
+/// estimated (φ=1 by default, or derived from SCALE=); when SCALE=v is given
+/// the reported Scale is fixed at v (for Normal v=σ ⇒ φ=v²; for Gamma the
+/// value is the 1/φ form ⇒ φ=1/v). A fixed scale carries DF=0.
+///
+/// `disp_phi` is the dispersion φ used to scale Var(β̂)=φ·H⁻¹ and the scaled
+/// criteria. `scale_est` is the value printed on the Scale row.
+fn compute_scale(
+    model: &GenmodModel,
+    dist: &Distribution,
+    y_vec: &[f64],
+    final_mu: &[f64],
+    freq_vec: &[f64],
+    h_inv: Vec<Vec<f64>>,
+    n_total: f64,
+    p_param: usize,
+) -> ScaleInfo {
+    let n_obs = y_vec.len();
+
     let scale_est: f64;
     let scale_df: i64;
     let disp_phi: f64;
@@ -1101,14 +1038,53 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // ── 11. SE, Wald chi², CI ─────────────────────────────────────────────
-    let se_beta: Vec<f64> = (0..p_param).map(|j| var_beta[j][j].sqrt()).collect();
-    let wald_chi2: Vec<f64> = (0..p_param)
-        .map(|j| (beta[j] / se_beta[j]).powi(2))
-        .collect();
-    let wald_p: Vec<f64> = wald_chi2.iter().map(|&w| chisq_sf(w, 1.0)).collect();
+    // Scale SE (Normal/Gamma, when estimated): SE(scale) ≈ scale / sqrt(2·df).
+    let se_scale: f64 = if (*dist == Distribution::Normal
+        || *dist == Distribution::Gamma)
+        && scale_df > 0
+    {
+        scale_est / (2.0 * scale_df as f64).sqrt()
+    } else {
+        0.0
+    };
 
-    // ── 12. Log-likelihood, GOF ───────────────────────────────────────────
+    ScaleInfo {
+        scale_est,
+        scale_df,
+        disp_phi,
+        se_scale,
+        var_beta,
+    }
+}
+
+/// Goodness-of-fit criteria: log-likelihood, deviance, Pearson χ², their
+/// scaled forms, and the information criteria.
+struct FitCriteria {
+    log_lik: f64,
+    deviance: f64,
+    pearson: f64,
+    scaled_deviance: f64,
+    scaled_pearson: f64,
+    df_gof: i64,
+    aic: f64,
+    aicc: f64,
+    bic: f64,
+}
+
+/// Compute the Criteria For Assessing Goodness Of Fit values.
+fn compute_fit_criteria(
+    dist: &Distribution,
+    y_vec: &[f64],
+    final_mu: &[f64],
+    freq_vec: &[f64],
+    scale: &ScaleInfo,
+    n_total: f64,
+    p_param: usize,
+) -> FitCriteria {
+    let n_obs = y_vec.len();
+    let scale_est = scale.scale_est;
+    let disp_phi = scale.disp_phi;
+
     let log_lik: f64 = match dist {
         Distribution::Poisson => (0..n_obs)
             .map(|i| {
@@ -1221,126 +1197,177 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             / (n_total - n_params as f64 - 1.0);
     let bic = -2.0 * log_lik + (n_params as f64) * n_total.ln();
 
-    // Scale SE (Normal/Gamma, when estimated): SE(scale) ≈ scale / sqrt(2·df).
-    let se_scale: f64 = if (*dist == Distribution::Normal
-        || *dist == Distribution::Gamma)
-        && scale_df > 0
+    FitCriteria {
+        log_lik,
+        deviance,
+        pearson,
+        scaled_deviance,
+        scaled_pearson,
+        df_gof,
+        aic,
+        aicc,
+        bic,
+    }
+}
+
+/// Print the Criteria For Assessing Goodness Of Fit table.
+fn print_gof(session: &mut Session, crit: &FitCriteria) {
+    let &FitCriteria {
+        log_lik,
+        deviance,
+        pearson,
+        scaled_deviance,
+        scaled_pearson,
+        df_gof,
+        aic,
+        aicc,
+        bic,
+    } = crit;
+
+    centered(session, "Criteria For Assessing Goodness Of Fit");
+    session.listing.blank();
+
+    let gof_headers: Vec<String> = vec![
+        "Criterion".into(),
+        "DF".into(),
+        "Value".into(),
+        "Value/DF".into(),
+    ];
+    let gof_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
+
+    let df_str = df_gof.to_string();
+    let blank = "".to_string();
+
+    let gof_rows: Vec<Vec<String>> = vec![
+        vec![
+            "Deviance".into(),
+            df_str.clone(),
+            fmt4(deviance),
+            fmt4(deviance / df_gof as f64),
+        ],
+        vec![
+            "Scaled Deviance".into(),
+            df_str.clone(),
+            fmt4(scaled_deviance),
+            fmt4(scaled_deviance / df_gof as f64),
+        ],
+        vec![
+            "Pearson Chi-Square".into(),
+            df_str.clone(),
+            fmt4(pearson),
+            fmt4(pearson / df_gof as f64),
+        ],
+        vec![
+            "Scaled Pearson X2".into(),
+            df_str.clone(),
+            fmt4(scaled_pearson),
+            fmt4(scaled_pearson / df_gof as f64),
+        ],
+        vec!["Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
+        vec!["Full Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
+        vec!["AIC (smaller is better)".into(), blank.clone(), fmt4(aic), blank.clone()],
+        vec!["AICC (smaller is better)".into(), blank.clone(), fmt4(aicc), blank.clone()],
+        vec!["BIC (smaller is better)".into(), blank.clone(), fmt4(bic), blank.clone()],
+    ];
+
+    session
+        .listing
+        .write_table(&gof_headers, &gof_aligns, &gof_rows);
+    session.listing.blank();
+}
+
+/// Print the Analysis Of Maximum Likelihood Parameter Estimates table.
+#[allow(clippy::too_many_arguments)]
+fn print_parameter_estimates(
+    session: &mut Session,
+    design_terms: &[DesignTerm],
+    beta: &[f64],
+    se_beta: &[f64],
+    wald_chi2: &[f64],
+    wald_p: &[f64],
+    dist: &Distribution,
+    scale: &ScaleInfo,
+) {
+    let p_param = beta.len();
+    let scale_est = scale.scale_est;
+    let scale_df = scale.scale_df;
+    let se_scale = scale.se_scale;
+
+    centered(session, "Analysis Of Maximum Likelihood Parameter Estimates");
+    session.listing.blank();
+
+    let amle_headers: Vec<String> = vec![
+        "Parameter".into(),
+        "DF".into(),
+        "Estimate".into(),
+        "Standard Error".into(),
+        "Wald 95% Confidence Limits Lower".into(),
+        "Wald 95% Confidence Limits Upper".into(),
+        "Wald Chi-Square".into(),
+        "Pr > ChiSq".into(),
+    ];
+    let amle_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    let mut amle_rows: Vec<Vec<String>> = Vec::with_capacity(p_param + 1);
+
+    // Intercept row.
     {
-        scale_est / (2.0 * scale_df as f64).sqrt()
-    } else {
-        0.0
-    };
+        let ci_lower = beta[0] - 1.96 * se_beta[0];
+        let ci_upper = beta[0] + 1.96 * se_beta[0];
+        amle_rows.push(vec![
+            "Intercept".to_string(),
+            "1".into(),
+            fmt4(beta[0]),
+            fmt4(se_beta[0]),
+            fmt4(ci_lower),
+            fmt4(ci_upper),
+            fmt4(wald_chi2[0]),
+            fmt_p_opt(wald_p[0]),
+        ]);
+    }
 
-    // ── 13. Listing — GOF table ───────────────────────────────────────────
-    if !model.noprint {
-        centered(session, "Criteria For Assessing Goodness Of Fit");
-        session.listing.blank();
-
-        let gof_headers: Vec<String> = vec![
-            "Criterion".into(),
-            "DF".into(),
-            "Value".into(),
-            "Value/DF".into(),
-        ];
-        let gof_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
-
-        let df_str = df_gof.to_string();
-        let blank = "".to_string();
-
-        let gof_rows: Vec<Vec<String>> = vec![
-            vec![
-                "Deviance".into(),
-                df_str.clone(),
-                fmt4(deviance),
-                fmt4(deviance / df_gof as f64),
-            ],
-            vec![
-                "Scaled Deviance".into(),
-                df_str.clone(),
-                fmt4(scaled_deviance),
-                fmt4(scaled_deviance / df_gof as f64),
-            ],
-            vec![
-                "Pearson Chi-Square".into(),
-                df_str.clone(),
-                fmt4(pearson),
-                fmt4(pearson / df_gof as f64),
-            ],
-            vec![
-                "Scaled Pearson X2".into(),
-                df_str.clone(),
-                fmt4(scaled_pearson),
-                fmt4(scaled_pearson / df_gof as f64),
-            ],
-            vec!["Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
-            vec!["Full Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
-            vec!["AIC (smaller is better)".into(), blank.clone(), fmt4(aic), blank.clone()],
-            vec!["AICC (smaller is better)".into(), blank.clone(), fmt4(aicc), blank.clone()],
-            vec!["BIC (smaller is better)".into(), blank.clone(), fmt4(bic), blank.clone()],
-        ];
-
-        session
-            .listing
-            .write_table(&gof_headers, &gof_aligns, &gof_rows);
-        session.listing.blank();
-
-        // ── 14. Analysis of ML Parameter Estimates ────────────────────────
-        centered(session, "Analysis Of Maximum Likelihood Parameter Estimates");
-        session.listing.blank();
-
-        let amle_headers: Vec<String> = vec![
-            "Parameter".into(),
-            "DF".into(),
-            "Estimate".into(),
-            "Standard Error".into(),
-            "Wald 95% Confidence Limits Lower".into(),
-            "Wald 95% Confidence Limits Upper".into(),
-            "Wald Chi-Square".into(),
-            "Pr > ChiSq".into(),
-        ];
-        let amle_aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-
-        let mut amle_rows: Vec<Vec<String>> = Vec::with_capacity(p_param + 1);
-
-        // Intercept row.
-        {
-            let ci_lower = beta[0] - 1.96 * se_beta[0];
-            let ci_upper = beta[0] + 1.96 * se_beta[0];
-            amle_rows.push(vec![
-                "Intercept".to_string(),
-                "1".into(),
-                fmt4(beta[0]),
-                fmt4(se_beta[0]),
-                fmt4(ci_lower),
-                fmt4(ci_upper),
-                fmt4(wald_chi2[0]),
-                fmt_p_opt(wald_p[0]),
-            ]);
-        }
-
-        // Predictor / CLASS rows. `col` walks the β vector starting after the
-        // intercept; CLASS factors emit one row per non-reference level (label
-        // "classvar level") followed by a reference-level row (estimate 0, DF 0,
-        // ref = last level). Continuous predictors emit a single row labelled by
-        // the variable name (byte-identical to the pre-CLASS layout).
-        let mut col = 1usize;
-        for term in &design_terms {
-            match term {
-                DesignTerm::Continuous { name, .. } => {
-                    let j = col;
+    // Predictor / CLASS rows. `col` walks the β vector starting after the
+    // intercept; CLASS factors emit one row per non-reference level (label
+    // "classvar level") followed by a reference-level row (estimate 0, DF 0,
+    // ref = last level). Continuous predictors emit a single row labelled by
+    // the variable name (byte-identical to the pre-CLASS layout).
+    let mut col = 1usize;
+    for term in design_terms {
+        match term {
+            DesignTerm::Continuous { name, .. } => {
+                let j = col;
+                let ci_lower = beta[j] - 1.96 * se_beta[j];
+                let ci_upper = beta[j] + 1.96 * se_beta[j];
+                amle_rows.push(vec![
+                    name.clone(),
+                    "1".into(),
+                    fmt4(beta[j]),
+                    fmt4(se_beta[j]),
+                    fmt4(ci_lower),
+                    fmt4(ci_upper),
+                    fmt4(wald_chi2[j]),
+                    fmt_p_opt(wald_p[j]),
+                ]);
+                col += 1;
+            }
+            DesignTerm::Class { name, levels, .. } => {
+                let nref = levels.len() - 1;
+                for li in 0..nref {
+                    let j = col + li;
+                    let lbl = format!("{} {}", name, class_level_label(&levels[li]));
                     let ci_lower = beta[j] - 1.96 * se_beta[j];
                     let ci_upper = beta[j] + 1.96 * se_beta[j];
                     amle_rows.push(vec![
-                        name.clone(),
+                        lbl,
                         "1".into(),
                         fmt4(beta[j]),
                         fmt4(se_beta[j]),
@@ -1349,71 +1376,200 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
                         fmt4(wald_chi2[j]),
                         fmt_p_opt(wald_p[j]),
                     ]);
-                    col += 1;
                 }
-                DesignTerm::Class { name, levels, .. } => {
-                    let nref = levels.len() - 1;
-                    for li in 0..nref {
-                        let j = col + li;
-                        let lbl = format!("{} {}", name, class_level_label(&levels[li]));
-                        let ci_lower = beta[j] - 1.96 * se_beta[j];
-                        let ci_upper = beta[j] + 1.96 * se_beta[j];
-                        amle_rows.push(vec![
-                            lbl,
-                            "1".into(),
-                            fmt4(beta[j]),
-                            fmt4(se_beta[j]),
-                            fmt4(ci_lower),
-                            fmt4(ci_upper),
-                            fmt4(wald_chi2[j]),
-                            fmt_p_opt(wald_p[j]),
-                        ]);
-                    }
-                    // Reference level row (last level): estimate 0, DF 0.
-                    let ref_lbl =
-                        format!("{} {}", name, class_level_label(&levels[nref]));
-                    amle_rows.push(vec![
-                        ref_lbl,
-                        "0".into(),
-                        fmt4(0.0),
-                        fmt4(0.0),
-                        fmt4(0.0),
-                        fmt4(0.0),
-                        ".".into(),
-                        ".".into(),
-                    ]);
-                    col += nref;
-                }
+                // Reference level row (last level): estimate 0, DF 0.
+                let ref_lbl =
+                    format!("{} {}", name, class_level_label(&levels[nref]));
+                amle_rows.push(vec![
+                    ref_lbl,
+                    "0".into(),
+                    fmt4(0.0),
+                    fmt4(0.0),
+                    fmt4(0.0),
+                    fmt4(0.0),
+                    ".".into(),
+                    ".".into(),
+                ]);
+                col += nref;
             }
         }
+    }
 
-        // Scale row. Normal: Scale=σ̂ with a Wald CI from se_scale. Gamma: Scale
-        // is the 1/φ estimate (Pearson-based); we report the estimate and its CI
-        // from se_scale (≈ Scale/√(2·df)). Poisson/Binomial: fixed at 1.
-        let (scale_ci_lower, scale_ci_upper) =
-            if *dist == Distribution::Normal || *dist == Distribution::Gamma {
-                (
-                    fmt4((scale_est - 1.96 * se_scale).max(0.0)),
-                    fmt4(scale_est + 1.96 * se_scale),
-                )
-            } else {
-                (fmt4(1.0), fmt4(1.0))
-            };
+    // Scale row. Normal: Scale=σ̂ with a Wald CI from se_scale. Gamma: Scale
+    // is the 1/φ estimate (Pearson-based); we report the estimate and its CI
+    // from se_scale (≈ Scale/√(2·df)). Poisson/Binomial: fixed at 1.
+    let (scale_ci_lower, scale_ci_upper) =
+        if *dist == Distribution::Normal || *dist == Distribution::Gamma {
+            (
+                fmt4((scale_est - 1.96 * se_scale).max(0.0)),
+                fmt4(scale_est + 1.96 * se_scale),
+            )
+        } else {
+            (fmt4(1.0), fmt4(1.0))
+        };
 
-        amle_rows.push(vec![
-            "Scale".into(),
-            scale_df.to_string(),
-            fmt4(scale_est),
-            fmt4(se_scale),
-            scale_ci_lower,
-            scale_ci_upper,
-            ".".into(), // no Wald for scale row
-            ".".into(),
-        ]);
+    amle_rows.push(vec![
+        "Scale".into(),
+        scale_df.to_string(),
+        fmt4(scale_est),
+        fmt4(se_scale),
+        scale_ci_lower,
+        scale_ci_upper,
+        ".".into(), // no Wald for scale row
+        ".".into(),
+    ]);
 
-        session
-            .listing
-            .write_table(&amle_headers, &amle_aligns, &amle_rows);
+    session
+        .listing
+        .write_table(&amle_headers, &amle_aligns, &amle_rows);
+}
+
+// ───────────────────────── Execute ─────────────────────────
+
+pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
+    // ── 1. Guards ──────────────────────────────────────────────────────────
+    let model = ast.model.as_ref().ok_or_else(|| {
+        SasError::runtime("MODEL statement required for PROC GENMOD")
+    })?;
+
+    // ── 2. Read dataset ────────────────────────────────────────────────────
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
+
+    let n_read = ds.n_obs();
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.{}.",
+        n_read, in_libref, in_table
+    ));
+
+    let resp_name = &model.response;
+    let predictors = &model.predictors;
+    let nb_preds = predictors.len();
+    let dist = &model.dist;
+    let lf = &model.link;
+
+    // ── Find column indices ────────────────────────────────────────────────
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| {
+                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
+            })
+    };
+
+    let resp_idx = find_col(resp_name)?;
+    let mut pred_idxs: Vec<usize> = Vec::with_capacity(nb_preds);
+    for nm in predictors {
+        pred_idxs.push(find_col(nm)?);
+    }
+    let freq_idx: Option<usize> = if let Some(fv) = &ast.freq_var {
+        Some(find_col(fv)?)
+    } else {
+        None
+    };
+
+    // ── Decode columns ─────────────────────────────────────────────────────
+    let resp_col = decode_column(&ds, resp_idx)?;
+    let mut pred_cols: Vec<Vec<Value>> = Vec::with_capacity(nb_preds);
+    for &idx in &pred_idxs {
+        pred_cols.push(decode_column(&ds, idx)?);
+    }
+    let freq_col: Option<Vec<Value>> = if let Some(fi) = freq_idx {
+        Some(decode_column(&ds, fi)?)
+    } else {
+        None
+    };
+
+    // ── Build design terms (CLASS reference-cell coding, ref = last level) ──
+    let design_terms = build_design_terms(ast, &ds, predictors, &pred_idxs, &pred_cols)?;
+    let n_design: usize = design_terms.iter().map(|t| t.n_cols()).sum();
+
+    // ── 3. Prepare response for Binomial (determine event level) ──────────
+    let BinomialResponse {
+        event_level: binomial_event_level,
+        event_label: binomial_event_label,
+        nonevent_label: binomial_nonevent_label,
+        n_event_total: binomial_n_event_total,
+        n_nonevent_total: binomial_n_nonevent_total,
+    } = prepare_binomial_response(model, &resp_col, &freq_col, n_read, resp_name)?;
+
+    // ── 4. Listwise deletion + encoding ───────────────────────────────────
+    let (y_vec, x_mat, freq_vec) = build_model_matrices(
+        &design_terms,
+        &pred_cols,
+        &resp_col,
+        &freq_col,
+        dist,
+        &binomial_event_level,
+        n_read,
+    );
+
+    let n_total: f64 = freq_vec.iter().sum();
+    let n_obs = y_vec.len();
+
+    session.log.note(&format!(
+        "There were {} observations used.",
+        n_total as i64
+    ));
+
+    let p_param = 1 + n_design; // intercept + design columns
+
+    if n_obs <= n_design {
+        return Err(SasError::runtime(
+            "Not enough observations for PROC GENMOD",
+        ));
+    }
+
+    // ── 5-8. Listing: header, model info, class levels, response profile ──
+    if !model.noprint {
+        print_model_information(session, &in_libref, &in_table, resp_name, dist, lf, n_total);
+        if !ast.class_vars.is_empty() {
+            print_class_level_information(session, &design_terms);
+        }
+        if *dist == Distribution::Binomial {
+            print_response_profile(
+                session,
+                resp_name,
+                &binomial_event_label,
+                &binomial_nonevent_label,
+                binomial_n_event_total,
+                binomial_n_nonevent_total,
+            );
+        }
+        print_convergence_status(session);
+    }
+
+    // ── 9. IRLS / Newton-Raphson ──────────────────────────────────────────
+    let (beta, h_inv, final_mu) =
+        fit_irls(session, &y_vec, &x_mat, &freq_vec, dist, lf, n_total, p_param)?;
+
+    // ── 10. Scale / Dispersion ────────────────────────────────────────────
+    let scale = compute_scale(model, dist, &y_vec, &final_mu, &freq_vec, h_inv, n_total, p_param);
+
+    // ── 11. SE, Wald chi², CI ─────────────────────────────────────────────
+    let var_beta = &scale.var_beta;
+    let se_beta: Vec<f64> = (0..p_param).map(|j| var_beta[j][j].sqrt()).collect();
+    let wald_chi2: Vec<f64> = (0..p_param)
+        .map(|j| (beta[j] / se_beta[j]).powi(2))
+        .collect();
+    let wald_p: Vec<f64> = wald_chi2.iter().map(|&w| chisq_sf(w, 1.0)).collect();
+
+    // ── 12. Log-likelihood, GOF ───────────────────────────────────────────
+    let crit = compute_fit_criteria(dist, &y_vec, &final_mu, &freq_vec, &scale, n_total, p_param);
+
+    // ── 13-14. Listing: GOF table + parameter estimates ───────────────────
+    if !model.noprint {
+        print_gof(session, &crit);
+        print_parameter_estimates(
+            session,
+            &design_terms,
+            &beta,
+            &se_beta,
+            &wald_chi2,
+            &wald_p,
+            dist,
+            &scale,
+        );
     }
 
     Ok(())
