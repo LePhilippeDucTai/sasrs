@@ -150,6 +150,23 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
     }
 }
 
+/// NOTE de succès (ou ERROR) commune aux trois moteurs de LIBNAME.
+fn log_libref_assignment(
+    session: &mut Session,
+    libref: &str,
+    engine: &str,
+    physical: &str,
+    result: crate::error::Result<()>,
+) {
+    match result {
+        Ok(()) => session.log.note(&format!(
+            "Libref {} was successfully assigned as follows:\n      Engine:        {engine}\n      Physical Name: {physical}",
+            libref.to_uppercase()
+        )),
+        Err(e) => session.log.error(&e.to_string()),
+    }
+}
+
 fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     match stmt {
         GlobalStmt::Libname { libref, engine, path } => {
@@ -164,18 +181,15 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             // M13 : routage cloud s3://.
             #[cfg(feature = "s3")]
             if path.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("s3://")) {
-                match session.libs.assign_uri(libref, path) {
-                    Ok(()) => session.log.note(&format!(
-                        "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {path}",
-                        libref.to_uppercase()
-                    )),
-                    Err(e) => session.log.error(&e.to_string()),
-                }
+                let result = session.libs.assign_uri(libref, path);
+                log_libref_assignment(session, libref, "PARQUET", path, result);
                 return;
             }
 
+            let engine_up = engine.as_deref().map(|e| e.to_ascii_uppercase());
+
             // M14.4 : XLSX engine deferral — emit an error and return.
-            match engine.as_deref().map(|e| e.to_ascii_uppercase()).as_deref() {
+            match engine_up.as_deref() {
                 Some("XLSX") | Some("EXCEL") | Some("XLS") => {
                     session.log.error(
                         "LIBNAME engine XLSX is not yet implemented in this build \
@@ -201,27 +215,12 @@ fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             };
 
             // M14.4 : branch on engine.
-            match engine.as_deref().map(|e| e.to_ascii_uppercase()).as_deref() {
-                Some("CSV") => {
-                    match session.libs.assign_csv(libref, abs) {
-                        Ok(()) => session.log.note(&format!(
-                            "Libref {} was successfully assigned as follows:\n      Engine:        CSV\n      Physical Name: {shown}",
-                            libref.to_uppercase()
-                        )),
-                        Err(e) => session.log.error(&e.to_string()),
-                    }
-                }
-                // None | Some("PARQUET") | Some("BASE") | Some("V9") | _ → parquet path
-                _ => {
-                    match session.libs.assign(libref, abs) {
-                        Ok(()) => session.log.note(&format!(
-                            "Libref {} was successfully assigned as follows:\n      Engine:        PARQUET\n      Physical Name: {shown}",
-                            libref.to_uppercase()
-                        )),
-                        Err(e) => session.log.error(&e.to_string()),
-                    }
-                }
-            }
+            // None | Some("PARQUET") | Some("BASE") | Some("V9") | _ → parquet path
+            let (engine_name, result) = match engine_up.as_deref() {
+                Some("CSV") => ("CSV", session.libs.assign_csv(libref, abs)),
+                _ => ("PARQUET", session.libs.assign(libref, abs)),
+            };
+            log_libref_assignment(session, libref, engine_name, &shown, result);
         }
         GlobalStmt::LibnameClear { libref } => match session.libs.clear(libref) {
             Ok(()) => session.log.note(&format!(
