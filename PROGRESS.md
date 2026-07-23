@@ -1169,7 +1169,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   ne fait plus que dispatcher (Sonnet, moyen)
 - [x] MQ3.7 — `parse_array` (206 l) en 3 phases + extraction de la queue d'assignation du bras `_`
   de `parse_statement` (~70 l) (Sonnet, faible)
-- [ ] MQ3.8 — Converger `execute()` sur `drain_runner_side_effects`/`write_runner_outputs` (déjà
+- [x] MQ3.8 — Converger `execute()` sur `drain_runner_side_effects`/`write_runner_outputs` (déjà
   factorisées pour UPDATE/MODIFY) ; diff attentif de l'ordre NOTEs/écritures des 3 boucles (Opus, moyen)
 - [ ] MQ3.9 — Découper les `execute` géantes des procs stat (genmod 961 l, glimmix 770,
   logistic 755, glm 727/694, mixed 505, anova 488/431) en resolve/build/fit/print-par-table ;

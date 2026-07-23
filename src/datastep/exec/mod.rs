@@ -545,56 +545,9 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         session.debug_hashes = r.ctx.hashes.clone();
     }
 
-    // CALL SYMPUT (M11.5) : drain des écritures différées vers la table
-    // macro APRÈS le RUN de l'étape (règle de visibilité SAS — le symbole
-    // n'est pas visible dans la même étape). Sous le build par défaut,
-    // `set_symbol_global` est un no-op (l'engine identité n'a pas de table) :
-    // `call symput` parse et s'exécute mais n'a aucun effet macro.
-    for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
-        session.macro_engine.set_symbol_global(&name, value);
-    }
-
-    // Hash output (M17.2) : drain des `h.output(dataset:)` accumulés vers les
-    // providers de bibliothèque (où `&mut Session` est disponible).
-    flush_hash_outputs(&mut r, session)?;
-
-    // CALL EXECUTE (M15.6) : drain de la file de code généré pendant l'étape
-    // vers la session. L'exécuteur le rejoue APRÈS le RUN de l'étape (fidèle à
-    // SAS : les pas mis en file par CALL EXECUTE s'exécutent une fois l'étape
-    // courante terminée). On préserve l'ordre d'accumulation.
-    session
-        .call_execute_queue
-        .extend(std::mem::take(&mut r.call_execute_queue));
-
-    // PUT (M14.2) : flush de la ligne maintenue en fin d'étape, puis rejeu
-    // des lignes produites vers leurs destinations. Le rejeu a lieu AVANT les
-    // NOTEs de fin d'étape (la sortie PUT « pendant » l'étape précède la NOTE
-    // « N records were read »/« data set has N obs » dans le log SAS).
-    r.put_flush_at_step_end();
-    r.put_replay(session)?;
-
-    // NOTEs d'erreurs/conversions collectées par l'évaluateur.
-    if r.ctx.note_num_to_char {
-        session
-            .log
-            .note("Numeric values have been converted to character values.");
-    }
-    if r.ctx.note_char_to_num {
-        session
-            .log
-            .note("Character values have been converted to numeric values.");
-    }
-    if r.ctx.division_by_zero > 0 {
-        session.log.note("Division by zero detected.");
-    }
-    if r.ctx.invalid_data > 0 {
-        session.log.note("Invalid numeric data.");
-    }
-    if r.ctx.missing_generated > 0 {
-        session.log.note(
-            "Missing values were generated as a result of performing an operation on missing values.",
-        );
-    }
+    // Drains post-boucle (symput, hash outputs, call execute, PUT) + NOTEs
+    // d'erreurs/conversions — partagés avec les boucles UPDATE/MODIFY.
+    drain_runner_side_effects(&mut r, session)?;
 
     let mut stats = StepStats {
         read: Vec::new(),
@@ -627,41 +580,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).
-    for ((spec, bset), n_out) in r.outputs.iter().zip(r.builders).zip(&r.out_rows) {
-        let mut columns: Vec<Column> = Vec::with_capacity(spec.kept_slots.len());
-        let mut vars: Vec<VarMeta> = Vec::with_capacity(spec.kept_slots.len());
-        for ((slot, b), out_name) in spec.kept_slots.iter().zip(bset).zip(&spec.out_names) {
-            let v = &r.pdv.vars()[*slot];
-            // RENAME= de sortie : la colonne écrite porte `out_name` (le
-            // slot PDV garde son nom).
-            let series = match b {
-                ColBuilder::Num(vals) => Series::new(out_name.as_str().into(), vals),
-                ColBuilder::Char(vals) => Series::new(out_name.as_str().into(), vals),
-            };
-            columns.push(series.into());
-            // Le libellé suit la variable (par son nom de PDV, pas le
-            // nom renommé en sortie).
-            let label = r.labels.get(&v.name.to_uppercase()).cloned();
-            vars.push(VarMeta {
-                name: out_name.clone(),
-                ty: v.ty,
-                length: v.length,
-                format: v.format.clone(),
-                label,
-            });
-        }
-        let df = DataFrame::new(columns)?;
-        let ds = SasDataset { df, vars };
-        write_dataset_with_note(
-            session,
-            &spec.libref,
-            &spec.table,
-            &spec.display,
-            &ds,
-            *n_out,
-            Some(&mut stats),
-        )?;
-    }
+    write_runner_outputs(&mut r, session, &mut stats)?;
 
     Ok(stats)
 }
@@ -845,16 +764,37 @@ fn key_string(values: &[Value]) -> String {
 }
 
 /// Émet les NOTEs d'erreurs/conversions accumulées par l'évaluateur + draine
-/// CALL SYMPUT / CALL EXECUTE / PUT (partagé entre les boucles UPDATE/MODIFY).
+/// CALL SYMPUT / hash outputs / CALL EXECUTE / PUT. Partagé par les trois
+/// boucles d'exécution (principale, UPDATE, MODIFY) ; les ordres relatifs sont
+/// sémantiques (le rejeu PUT précède les NOTEs de fin d'étape, cf. SAS).
 fn drain_runner_side_effects(r: &mut Runner, session: &mut Session) -> Result<()> {
+    // CALL SYMPUT (M11.5) : drain des écritures différées vers la table
+    // macro APRÈS le RUN de l'étape (règle de visibilité SAS — le symbole
+    // n'est pas visible dans la même étape). Sous le build par défaut,
+    // `set_symbol_global` est un no-op (l'engine identité n'a pas de table) :
+    // `call symput` parse et s'exécute mais n'a aucun effet macro.
     for (name, value) in std::mem::take(&mut r.ctx.symput_writes) {
         session.macro_engine.set_symbol_global(&name, value);
     }
+    // Hash output (M17.2) : drain des `h.output(dataset:)` accumulés vers les
+    // providers de bibliothèque (où `&mut Session` est disponible). No-op sur
+    // les chemins UPDATE/MODIFY (leur `EvalCtx` n'a pas d'objets hash, donc
+    // `hash_outputs` y est toujours vide).
+    flush_hash_outputs(r, session)?;
+    // CALL EXECUTE (M15.6) : drain de la file de code généré pendant l'étape
+    // vers la session. L'exécuteur le rejoue APRÈS le RUN de l'étape (fidèle à
+    // SAS : les pas mis en file par CALL EXECUTE s'exécutent une fois l'étape
+    // courante terminée). On préserve l'ordre d'accumulation.
     session
         .call_execute_queue
         .extend(std::mem::take(&mut r.call_execute_queue));
+    // PUT (M14.2) : flush de la ligne maintenue en fin d'étape, puis rejeu
+    // des lignes produites vers leurs destinations. Le rejeu a lieu AVANT les
+    // NOTEs de fin d'étape (la sortie PUT « pendant » l'étape précède la NOTE
+    // « N records were read »/« data set has N obs » dans le log SAS).
     r.put_flush_at_step_end();
     r.put_replay(session)?;
+    // NOTEs d'erreurs/conversions collectées par l'évaluateur.
     if r.ctx.note_num_to_char {
         session
             .log
@@ -879,8 +819,9 @@ fn drain_runner_side_effects(r: &mut Runner, session: &mut Session) -> Result<()
     Ok(())
 }
 
-/// Écrit les sorties DATA additionnelles (ordre du statement DATA) à partir des
-/// builders du Runner. Partagé par les boucles UPDATE/MODIFY.
+/// Écrit les sorties DATA (ordre du statement DATA ; _LAST_ = la dernière) à
+/// partir des builders du Runner. Partagé par les trois boucles d'exécution
+/// (principale, UPDATE, MODIFY). Consomme `outputs`/`builders` (mem::take).
 fn write_runner_outputs(r: &mut Runner, session: &mut Session, stats: &mut StepStats) -> Result<()> {
     let outputs = std::mem::take(&mut r.outputs);
     let builders = std::mem::take(&mut r.builders);
@@ -889,6 +830,8 @@ fn write_runner_outputs(r: &mut Runner, session: &mut Session, stats: &mut StepS
         let mut vars: Vec<VarMeta> = Vec::with_capacity(spec.kept_slots.len());
         for ((slot, b), out_name) in spec.kept_slots.iter().zip(bset).zip(&spec.out_names) {
             let v = &r.pdv.vars()[*slot];
+            // RENAME= de sortie : la colonne écrite porte `out_name` (le
+            // slot PDV garde son nom).
             let series = match b {
                 ColBuilder::Num(vals) => Series::new(out_name.as_str().into(), vals),
                 ColBuilder::Char(vals) => Series::new(out_name.as_str().into(), vals),
