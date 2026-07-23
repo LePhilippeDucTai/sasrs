@@ -1174,7 +1174,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ3.9 — Découper les `execute` géantes des procs stat (genmod 961 l, glimmix 770,
   logistic 755, glm 727/694, mixed 505, anova 488/431) en resolve/build/fit/print-par-table ;
   un proc = un commit (Opus, élevé)
-- [ ] DoD MQ3 : idem MQ1 ; **prérequis M52 levé** ; → MQ4.
+- [x] DoD MQ3 : cargo test vert, zéro `.snap.new`, clippy sans type de warning nouveau vs base ; **prérequis M52 levé** ; → MQ4.
 
 ## MQ4 — Regroupements de structs + changements sensibles (en dernier)
 - [ ] MQ4.1 — `MacroEngine` (20 champs) → sous-structs `TraceOptions`/`PendingOutputs`/`ControlFlow` (Sonnet, faible)

@@ -1023,7 +1023,7 @@ impl Compiler<'_> {
         master: &DatasetRef,
         master_where: &Option<Expr>,
         transaction: &DatasetRef,
-        key_vars: &Vec<String>,
+        key_vars: &[String],
     ) -> Result<()> {
         if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
         {
@@ -1043,7 +1043,7 @@ impl Compiler<'_> {
             master: master_ds,
             transaction: transaction_ds,
             master_display: master.display(),
-            key_names: key_vars.clone(),
+            key_names: key_vars.to_vec(),
             master_where: master_where.clone(),
         });
         Ok(())
@@ -1053,7 +1053,7 @@ impl Compiler<'_> {
     fn compile_modify(
         &mut self,
         dataset: &DatasetRef,
-        key_vars: &Vec<String>,
+        key_vars: &[String],
         point: &Option<String>,
         nobs: &Option<String>,
     ) -> Result<()> {
@@ -1087,7 +1087,7 @@ impl Compiler<'_> {
             display: dataset.display(),
             data,
             out_vars,
-            key_names: key_vars.clone(),
+            key_names: key_vars.to_vec(),
             point: point.clone(),
             nobs: nobs.clone(),
         });

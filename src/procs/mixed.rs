@@ -1669,7 +1669,6 @@ fn fit_gen(
 
 // ═════════════════════ General execute path ═════════════════════
 
-#[allow(clippy::too_many_lines)]
 // ───────────────────── General-path execute helpers ─────────────────────
 
 /// Covariance-model plan for the general path.

@@ -1867,6 +1867,7 @@ fn print_ordinal_odds_ratios(
         .write_table(&ore_headers, &ore_aligns, &ore_rows);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_ordinal(
     ast: &LogisticAst,
     session: &mut Session,
