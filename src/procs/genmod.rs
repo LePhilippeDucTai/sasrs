@@ -520,19 +520,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
             .any(|c| c.eq_ignore_ascii_case(nm));
         if is_class {
             let col = &pred_cols[pi];
-            let mut levels: Vec<Value> = Vec::new();
-            for v in col.iter() {
-                if v.is_missing() {
-                    continue;
-                }
-                if !levels
-                    .iter()
-                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-                {
-                    levels.push(v.clone());
-                }
-            }
-            levels.sort_by(|a, b| a.sas_cmp(b));
+            let levels = crate::procs::lincom::class_levels(col.iter());
             if levels.len() < 2 {
                 return Err(SasError::runtime(format!(
                     "CLASS variable {} must have at least 2 levels.",
@@ -564,17 +552,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
 
     if *dist == Distribution::Binomial {
         // Collect distinct non-missing levels
-        let mut levels: Vec<Value> = Vec::new();
-        for i in 0..n_read {
-            let v = &resp_col[i];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels.iter().any(|lv| lv.sas_cmp(v) == std::cmp::Ordering::Equal) {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(resp_col.iter().take(n_read));
 
         if levels.len() != 2 {
             return Err(SasError::runtime(format!(

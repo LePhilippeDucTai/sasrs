@@ -285,20 +285,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
         let col = decode_column(&ds, col_idx)?;
 
         // Collect distinct non-missing values, sorted by sas_cmp
-        let mut levels: Vec<Value> = Vec::new();
-        for i in 0..n_obs {
-            let v = &col[i];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(col.iter().take(n_obs));
 
         let values_str: Vec<String> = levels
             .iter()
@@ -374,18 +361,9 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
         }
         let n = usable_rows.len();
 
-        // Group by CLASS levels
-        let mut levels: Vec<Value> = Vec::new();
-        for &r in &usable_rows {
-            let v = &class_col[r];
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        // Group by CLASS levels (usable rows are non-missing by construction).
+        let levels =
+            crate::procs::lincom::class_levels(usable_rows.iter().map(|&r| &class_col[r]));
         let k = levels.len();
 
         // Collect values per group
@@ -728,19 +706,7 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
 
     for class_var in &ast.class_vars {
         let (disp_name, col) = &class_cols[&class_var.to_uppercase()];
-        let mut levels: Vec<Value> = Vec::new();
-        for v in col.iter().take(n_obs) {
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(col.iter().take(n_obs));
         let values_str: Vec<String> = levels.iter().map(value_label).collect();
         cli_rows.push(vec![
             disp_name.clone(),
@@ -812,14 +778,9 @@ fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -
             std::collections::HashMap::new();
         for c in &used_classes {
             let col = &class_cols[c].1;
-            let mut levels: Vec<Value> = Vec::new();
-            for &r in &usable {
-                let v = &col[r];
-                if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
-                    levels.push(v.clone());
-                }
-            }
-            levels.sort_by(|a, b| a.sas_cmp(b));
+            // Usable rows are non-missing by construction (listwise deletion).
+            let levels =
+                crate::procs::lincom::class_levels(usable.iter().map(|&r| &col[r]));
             var_levels.insert(c.clone(), levels);
         }
 

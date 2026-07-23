@@ -1211,92 +1211,9 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
 
 // ═════════════════════ General fixed-effects design ═════════════════════
 
-/// A fixed-effects design column together with its parameter label.
-struct DesignColumn {
-    label: String,
-    values: Vec<f64>,
-}
-
-/// Build the fixed-effects design matrix from the MODEL effects.
-///
-/// Columns (in order): intercept (unless NOINT), then for each MODEL effect a
-/// continuous column (if the variable is not in CLASS) or reference-cell coded
-/// indicator columns (L−1, last level = reference per `sas_cmp` order) for a
-/// CLASS variable. Returns the design columns (each with its parameter label).
-fn build_design(
-    cols: &[(String, Vec<Value>)],
-    class_vars: &[String],
-    fixed: &[String],
-    noint: bool,
-    n: usize,
-) -> Result<Vec<DesignColumn>> {
-    let mut design: Vec<DesignColumn> = Vec::new();
-    if !noint {
-        design.push(DesignColumn {
-            label: "Intercept".to_string(),
-            values: vec![1.0; n],
-        });
-    }
-
-    let find = |nm: &str| -> Option<&(String, Vec<Value>)> {
-        cols.iter().find(|(name, _)| name.eq_ignore_ascii_case(nm))
-    };
-    let is_class = |nm: &str| class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
-
-    for eff in fixed {
-        let col = find(eff).ok_or_else(|| {
-            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
-        })?;
-        if is_class(eff) {
-            // Reference-cell coding: levels sorted by sas_cmp, last is reference.
-            let mut levels: Vec<Value> = Vec::new();
-            for v in &col.1 {
-                if !levels
-                    .iter()
-                    .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-                {
-                    levels.push(v.clone());
-                }
-            }
-            levels.sort_by(|a, b| a.sas_cmp(b));
-            // PARAM=REFERENCE coding (last level = reference, dropped).
-            // `coding[li]` is the coding row of level `li`; column `j` is the
-            // indicator of `levels[j]` (j < L−1), so for a data value `v` whose
-            // level index is `li`, the column-`j` value is `coding[li][j]`.
-            let coding = crate::procs::lincom::class_coding(&levels, crate::procs::lincom::Param::Ref);
-            for (j, lvl) in levels.iter().take(levels.len().saturating_sub(1)).enumerate() {
-                let label = format!("{} {}", eff, value_label(lvl));
-                let values: Vec<f64> = col
-                    .1
-                    .iter()
-                    .map(|v| {
-                        let li = levels
-                            .iter()
-                            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-                            .expect("data value must match a deduped level");
-                        coding[li][j]
-                    })
-                    .collect();
-                design.push(DesignColumn { label, values });
-            }
-        } else {
-            // Continuous column.
-            let values: Vec<f64> = col
-                .1
-                .iter()
-                .map(|v| match v {
-                    Value::Num(f) => *f,
-                    _ => f64::NAN,
-                })
-                .collect();
-            design.push(DesignColumn {
-                label: eff.clone(),
-                values,
-            });
-        }
-    }
-    Ok(design)
-}
+// The fixed-effects design builder (reference-cell coding) is shared with
+// PROC GLIMMIX; see `crate::procs::lincom::build_design`.
+use crate::procs::lincom::build_design;
 
 // ═════════════════════ General covariance V(θ) + REML ═════════════════════
 

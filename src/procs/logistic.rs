@@ -464,16 +464,7 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
         if is_class_var(nm) {
             // Collect distinct non-missing levels of this CLASS column.
             let col = &pred_cols[pi];
-            let mut levs: Vec<Value> = Vec::new();
-            for v in col.iter().take(n_read) {
-                if v.is_missing() {
-                    continue;
-                }
-                if !levs.iter().any(|lv| lv.sas_cmp(v) == std::cmp::Ordering::Equal) {
-                    levs.push(v.clone());
-                }
-            }
-            levs.sort_by(|a, b| a.sas_cmp(b));
+            let levs = crate::procs::lincom::class_levels(col.iter().take(n_read));
             if levs.len() < 2 {
                 return Err(SasError::runtime(format!(
                     "CLASS variable {} must have at least 2 levels.",
@@ -509,17 +500,7 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     };
 
     // ── 3. Determine response levels (sorted by sas_cmp) ───────────────────
-    let mut levels: Vec<Value> = Vec::new();
-    for i in 0..n_read {
-        let v = &resp_col[i];
-        if v.is_missing() {
-            continue;
-        }
-        if !levels.iter().any(|lv| lv.sas_cmp(v) == std::cmp::Ordering::Equal) {
-            levels.push(v.clone());
-        }
-    }
-    levels.sort_by(|a, b| a.sas_cmp(b));
+    let levels = crate::procs::lincom::class_levels(resp_col.iter().take(n_read));
 
     if levels.len() < 2 {
         return Err(SasError::runtime(format!(

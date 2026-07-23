@@ -1144,9 +1144,9 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ2.4 — `formats/builtin.rs` : extraire `fit_or_stars` (motif largeur/étoiles ×21) (Sonnet, faible)
 - [x] MQ2.5 — `common::open_input(...)` : plomberie resolve→read→forward notes→NOTE observations ;
   migrer les 30+ procs par paquets de ~10 (ordre d'émission des NOTEs strictement identique) (Opus, moyen)
-- [ ] MQ2.6 — Codage CLASS : genmod/logistic/anova → `lincom::class_coding` + nouveau
+- [x] MQ2.6 — Codage CLASS : genmod/logistic/anova → `lincom::class_coding` + nouveau
   `lincom::class_levels` ; comparer d'abord ordre des niveaux/référence ; un proc = un commit (Opus, moyen)
-- [ ] MQ2.7 — `build_design()` mixed⇄glimmix → `lincom::build_reference_design`, unifier
+- [x] MQ2.7 — `build_design()` mixed⇄glimmix → `lincom::build_reference_design`, unifier
   `DesignColumn` (même précaution) (Opus, moyen)
 - [ ] MQ2.8 — Migrer la famille modèles linéaires sur `common::parse_by`/`by_groups`
   (un proc = un commit) (Opus, moyen)
