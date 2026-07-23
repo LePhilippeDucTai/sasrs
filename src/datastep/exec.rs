@@ -1239,6 +1239,18 @@ fn capture_modify_state(state: &mut ModifyState, pdv: &Pdv) {
 }
 
 impl Runner {
+    /// Objet hash déjà validé par l'appelant (nom en MAJUSCULES) : les
+    /// méthodes hash vérifient l'existence en tête puis re-consultent la
+    /// table sans re-tester.
+    fn hash(&self, upper: &str) -> &super::HashObject {
+        self.ctx.hashes.get(upper).expect("checked hash exists")
+    }
+
+    /// Variante mutable de [`Self::hash`].
+    fn hash_mut(&mut self, upper: &str) -> &mut super::HashObject {
+        self.ctx.hashes.get_mut(upper).expect("checked hash exists")
+    }
+
     fn exec_stmt(&mut self, stmt: &DsStmt) -> Result<Flow> {
         match stmt {
             DsStmt::Set { .. } => {
@@ -2145,7 +2157,7 @@ impl Runner {
                     };
                     names.push(varname.to_uppercase());
                 }
-                let obj = self.ctx.hashes.get_mut(&upper).expect("checked above");
+                let obj = self.hash_mut(&upper);
                 if m == "definekey" {
                     obj.keys = names;
                 } else {
@@ -2160,7 +2172,7 @@ impl Runner {
             "check" => self.hash_find(&upper, args, false),
             "remove" => self.hash_remove(&upper, args),
             "clear" => {
-                let obj = self.ctx.hashes.get_mut(&upper).expect("checked above");
+                let obj = self.hash_mut(&upper);
                 obj.rows.clear();
                 obj.insertion_order.clear();
                 Ok(0)
@@ -2168,7 +2180,7 @@ impl Runner {
             "find_next" => self.hash_find_next(&upper, 1),
             "find_prev" => self.hash_find_next(&upper, -1),
             "num_items" | "item_size" => {
-                let obj = self.ctx.hashes.get(&upper).expect("checked above");
+                let obj = self.hash(&upper);
                 let n: usize = obj.rows.values().map(|v| v.len()).sum();
                 Ok(n as i64)
             }
@@ -2184,7 +2196,7 @@ impl Runner {
     /// `defineDone()` (M17.2) : finalise l'objet (idempotent) et, si une option
     /// `dataset:` était posée, charge ses lignes pré-lues dans le hash.
     fn hash_define_done(&mut self, upper: &str) -> Result<i64> {
-        let obj = self.ctx.hashes.get(upper).expect("checked above");
+        let obj = self.hash(upper);
         if obj.defined {
             return Ok(0);
         }
@@ -2207,7 +2219,7 @@ impl Runner {
                 self.hash_insert(upper, key_vals, data_vals, multidata, &duplicate, false)?;
             }
         }
-        let obj = self.ctx.hashes.get_mut(upper).expect("checked above");
+        let obj = self.hash_mut(upper);
         obj.defined = true;
         Ok(0)
     }
@@ -2219,7 +2231,7 @@ impl Runner {
         upper: &str,
         named: &std::collections::HashMap<String, Value>,
     ) -> Result<Vec<Value>> {
-        let keys = self.ctx.hashes.get(upper).expect("checked").keys.clone();
+        let keys = self.hash(upper).keys.clone();
         let mut vals = Vec::with_capacity(keys.len());
         for k in &keys {
             // `key:` nommé n'est supporté que pour une clé unique (cas courant).
@@ -2242,7 +2254,7 @@ impl Runner {
         upper: &str,
         named: &std::collections::HashMap<String, Value>,
     ) -> Result<Vec<Value>> {
-        let data_vars = self.ctx.hashes.get(upper).expect("checked").data_vars.clone();
+        let data_vars = self.hash(upper).data_vars.clone();
         let mut vals = Vec::with_capacity(data_vars.len());
         for d in &data_vars {
             if let (1, Some(v)) = (data_vars.len(), named.get("data")) {
@@ -2286,7 +2298,7 @@ impl Runner {
         from_replace: bool,
     ) -> Result<i64> {
         let key = super::hash_key(&key_vals);
-        let obj = self.ctx.hashes.get_mut(upper).expect("checked");
+        let obj = self.hash_mut(upper);
         if let Some(existing) = obj.rows.get_mut(&key) {
             if from_replace {
                 // replace : écrase la 1re entrée (ou ajoute si multidata vide).
@@ -2323,7 +2335,7 @@ impl Runner {
         let key_vals = self.hash_key_values(upper, &named)?;
         let data_vals = self.hash_data_values(upper, &named)?;
         let (multidata, duplicate) = {
-            let o = self.ctx.hashes.get(upper).expect("checked");
+            let o = self.hash(upper);
             (o.multidata, o.duplicate.clone())
         };
         self.hash_insert(upper, key_vals, data_vals, multidata, &duplicate, false)
@@ -2335,8 +2347,8 @@ impl Runner {
         let key_vals = self.hash_key_values(upper, &named)?;
         let data_vals = self.hash_data_values(upper, &named)?;
         let key = super::hash_key(&key_vals);
-        let multidata = self.ctx.hashes.get(upper).expect("checked").multidata;
-        if self.ctx.hashes.get(upper).expect("checked").rows.contains_key(&key) {
+        let multidata = self.hash(upper).multidata;
+        if self.hash(upper).rows.contains_key(&key) {
             self.hash_insert(upper, key_vals, data_vals, multidata, &None, true)
         } else {
             // Pas d'entrée : replace se comporte comme add.
@@ -2357,7 +2369,7 @@ impl Runner {
         let key_vals = self.hash_key_values(upper, &named)?;
         let key = super::hash_key(&key_vals);
         let found = {
-            let o = self.ctx.hashes.get(upper).expect("checked");
+            let o = self.hash(upper);
             o.rows.get(&key).map(|entries| entries[0].clone())
         };
         match found {
@@ -2381,7 +2393,7 @@ impl Runner {
     /// l'entrée multidata courante de `step` (+1 / −1) et copie ses données.
     fn hash_find_next(&mut self, upper: &str, step: i64) -> Result<i64> {
         let next = {
-            let o = self.ctx.hashes.get(upper).expect("checked");
+            let o = self.hash(upper);
             let Some((key, idx)) = o.find_cursor.clone() else {
                 return Ok(1);
             };
@@ -2417,7 +2429,7 @@ impl Runner {
         let named = self.hash_named_args(args)?;
         let key_vals = self.hash_key_values(upper, &named)?;
         let key = super::hash_key(&key_vals);
-        let obj = self.ctx.hashes.get_mut(upper).expect("checked");
+        let obj = self.hash_mut(upper);
         if obj.rows.remove(&key).is_some() {
             obj.insertion_order.retain(|k| k != &key);
             Ok(0)
@@ -2429,7 +2441,7 @@ impl Runner {
     /// Copie une liste de valeurs de données dans les slots PDV des variables
     /// données du hash (avec coercition de type au besoin).
     fn hash_copy_data(&mut self, upper: &str, data_vals: &[Value]) -> Result<()> {
-        let data_vars = self.ctx.hashes.get(upper).expect("checked").data_vars.clone();
+        let data_vars = self.hash(upper).data_vars.clone();
         for (d, val) in data_vars.iter().zip(data_vals) {
             if let Some(slot) = self.pdv.slot(d) {
                 let coerced = self.coerce_assign(val.clone(), self.pdv.vars()[slot].ty);
@@ -2459,7 +2471,7 @@ impl Runner {
         };
         let display = format!("{libref}.{}", table.to_uppercase());
         // Métadonnées des colonnes : clés puis données, depuis le PDV.
-        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let obj = self.hash(upper);
         let col_names: Vec<String> = obj.keys.iter().chain(&obj.data_vars).cloned().collect();
         let order = self.hash_visit_order(upper);
         let mut vars = Vec::with_capacity(col_names.len());
@@ -2477,7 +2489,7 @@ impl Runner {
             });
         }
         // Lignes : pour chaque clé (ordre de visite), chaque entrée de données.
-        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let obj = self.hash(upper);
         let n_keys = obj.keys.len();
         let mut rows: Vec<Vec<Value>> = Vec::new();
         for key in &order {
@@ -2513,7 +2525,7 @@ impl Runner {
     /// si `ordered:` (yes/ascending → croissant, descending → décroissant),
     /// sinon ordre d'insertion.
     fn hash_visit_order(&self, upper: &str) -> Vec<String> {
-        let obj = self.ctx.hashes.get(upper).expect("checked");
+        let obj = self.hash(upper);
         let mut order = obj.insertion_order.clone();
         if let Some(ord) = &obj.ordered {
             let descending = ord == "descending" || ord == "d";
@@ -2562,7 +2574,7 @@ impl Runner {
         let order = self.hash_visit_order(&hash);
         let mut flat: Vec<(String, usize)> = Vec::new();
         {
-            let obj = self.ctx.hashes.get(&hash).expect("bound hash exists");
+            let obj = self.hash(&hash);
             for key in &order {
                 if let Some(entries) = obj.rows.get(key) {
                     for i in 0..entries.len() {
@@ -2602,14 +2614,14 @@ impl Runner {
                 self.ctx.hash_iters.get_mut(iter_upper).expect("checked").pos = Some(p);
                 let (key, idx) = flat[p].clone();
                 let (key_vals, data_vals) = {
-                    let obj = self.ctx.hashes.get(&hash).expect("bound hash exists");
+                    let obj = self.hash(&hash);
                     (
                         obj.key_values.get(&key).cloned().unwrap_or_default(),
                         obj.rows.get(&key).map(|e| e[idx].clone()).unwrap_or_default(),
                     )
                 };
                 // Copie des clés puis des données dans le PDV.
-                let keys = self.ctx.hashes.get(&hash).expect("bound").keys.clone();
+                let keys = self.hash(&hash).keys.clone();
                 for (k, v) in keys.iter().zip(&key_vals) {
                     if let Some(slot) = self.pdv.slot(k) {
                         let coerced = self.coerce_assign(v.clone(), self.pdv.vars()[slot].ty);

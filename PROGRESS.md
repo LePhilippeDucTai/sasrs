@@ -1124,7 +1124,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ1.4 — `executor.rs` : `note_libref_assigned(...)` pour la NOTE Libref dupliquée 3× (Sonnet, faible)
 - [x] MQ1.5 — `column_from_values` + `write_output` uniques partagés `datastep/exec.rs`⇄`fastpath.rs`
   (4-5 + 5 copies du bloc write+last_dataset+NOTE « has N observations ») (Opus, moyen)
-- [ ] MQ1.6 — Helpers `hash`/`hash_mut` encapsulant les 22 `hashes.get(upper).expect("checked")`
+- [x] MQ1.6 — Helpers `hash`/`hash_mut` encapsulant les 22 `hashes.get(upper).expect("checked")`
   d'`exec.rs` (perf des clones : hors périmètre, sur profil seulement) (Sonnet, faible)
 - [ ] MQ1.7 — Branche « macro facility is not yet implemented » (`parser/mod.rs`) : si morte
   (aucun snapshot/fixture ne la contient), supprimer ; sinon différer (message user-visible) (Sonnet, faible)
