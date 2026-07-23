@@ -1177,7 +1177,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] DoD MQ3 : cargo test vert, zéro `.snap.new`, clippy sans type de warning nouveau vs base ; **prérequis M52 levé** ; → MQ4.
 
 ## MQ4 — Regroupements de structs + changements sensibles (en dernier)
-- [ ] MQ4.1 — `MacroEngine` (20 champs) → sous-structs `TraceOptions`/`PendingOutputs`/`ControlFlow` (Sonnet, faible)
+- [x] MQ4.1 — `MacroEngine` (20 champs) → sous-structs `TraceOptions`/`PendingOutputs`/`ControlFlow` (Sonnet, faible)
 - [ ] MQ4.2 — `Runner` (24 champs) → `TextIo`/`SetCursor`/`MergeState` ; `build_um_runner`
   (8 params) → `RunnerConfig` (Opus, moyen)
 - [x] MQ4.3 — reg : `fit_and_print` (15 params dont 7 Option) → struct `FitReportOptions`

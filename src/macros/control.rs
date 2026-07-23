@@ -39,7 +39,7 @@ impl MacroEngine {
             }
         };
         // M19.3 — MLOGIC : décision de la condition `%if`.
-        if self.mlogic {
+        if self.trace.mlogic {
             let label = self.current_macro_label();
             self.log_line(format!(
                 "MLOGIC({}):  %IF condition {} is {}",
@@ -354,7 +354,7 @@ impl MacroEngine {
             // Open code : pas de corps à interrompre.
             out.push_str("/* NOTE: %RETURN is not valid in open code; statement ignored */");
         } else {
-            self.return_requested = true;
+            self.flow.return_requested = true;
         }
         Some(Self::skip_trailing_newline(chars, j, out))
     }
@@ -403,8 +403,8 @@ impl MacroEngine {
         out.push_str(&format!(
             "/* NOTE: %ABORT{detail} encountered; macro expansion stopped */"
         ));
-        self.abort_requested = true;
-        self.abort_kind = Some(kind);
+        self.flow.abort_requested = true;
+        self.flow.abort_kind = Some(kind);
         Some(Self::skip_trailing_newline(chars, j, out))
     }
 
@@ -434,7 +434,7 @@ impl MacroEngine {
             out.push_str("/* NOTE: %GOTO is not valid in open code; statement ignored */");
             return Some(after_stmt);
         }
-        if self.goto_budget <= 0 {
+        if self.flow.goto_budget <= 0 {
             Self::emit_error(
                 out,
                 &MacroError::new(format!(
@@ -444,10 +444,10 @@ impl MacroEngine {
             );
             return Some(after_stmt);
         }
-        self.goto_budget -= 1;
+        self.flow.goto_budget -= 1;
         // Poser la demande : la boucle `process_impl` la résoudra (ici ou au
         // niveau parent). On cesse d'émettre la suite de CE fragment.
-        self.goto_requested = Some(label.to_uppercase());
+        self.flow.goto_requested = Some(label.to_uppercase());
         Some(after_stmt)
     }
 

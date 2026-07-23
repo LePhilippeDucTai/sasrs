@@ -303,7 +303,7 @@ impl MacroEngine {
         let scope = Self::bind_params(&def.params, &pos_args, &kw_args);
         let label = name.to_uppercase();
         // M19.3 — MLOGIC : décision d'entrée de macro.
-        if self.mlogic {
+        if self.trace.mlogic {
             self.log_line(format!("MLOGIC({label}):  Beginning execution."));
             // Écho de la valeur reçue par chaque paramètre (façon SAS).
             for param in &def.params {
@@ -326,33 +326,33 @@ impl MacroEngine {
         // pour les appels imbriqués). Un `%goto` posé par une macro plus interne
         // ne doit pas franchir la frontière de macro : on capture l'état avant le
         // corps et on le restaure après.
-        let saved_goto_budget = self.goto_budget;
-        let saved_goto_requested = self.goto_requested.take();
-        self.goto_budget = Self::MAX_GOTO_JUMPS;
+        let saved_goto_budget = self.flow.goto_budget;
+        let saved_goto_requested = self.flow.goto_requested.take();
+        self.flow.goto_budget = Self::MAX_GOTO_JUMPS;
         let mut expanded = self.process_impl(&def.body);
         // Un `%goto` non résolu remonté jusqu'ici = étiquette introuvable dans CE
         // corps : NOTE propre (et on ne propage pas hors de la macro).
-        if let Some(missing) = self.goto_requested.take() {
+        if let Some(missing) = self.flow.goto_requested.take() {
             expanded.push_str(&format!(
                 "/* NOTE: %GOTO target label %{}: not found; statement ignored */",
                 missing.to_lowercase()
             ));
         }
-        self.goto_budget = saved_goto_budget;
-        self.goto_requested = saved_goto_requested;
+        self.flow.goto_budget = saved_goto_budget;
+        self.flow.goto_requested = saved_goto_requested;
         // M35.4 — `%return` est local à CE corps : on réinitialise le drapeau
         // après l'expansion afin qu'il ne fuie ni vers l'appelant ni vers l'open
         // code (garantie de ré-entrance : un 2ᵉ appel de la même macro se comporte
         // à l'identique). `%abort`, lui, se PROPAGE (drapeau laissé tel quel) :
         // l'expansion de l'appelant l'observera en tête de sa boucle.
-        self.return_requested = false;
+        self.flow.return_requested = false;
         self.depth -= 1;
         self.macro_stack.pop();
         self.scopes.pop();
         // M19.3 — MPRINT : écho du code produit par la macro, ligne à ligne.
         // Chaque ligne NON VIDE (après trim) du texte expansé est écho­tée
         // avec le préfixe `MPRINT(nom):`.
-        if self.mprint {
+        if self.trace.mprint {
             for line in expanded.lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
@@ -361,7 +361,7 @@ impl MacroEngine {
             }
         }
         // M19.3 — MLOGIC : décision de sortie de macro.
-        if self.mlogic {
+        if self.trace.mlogic {
             self.log_line(format!("MLOGIC({label}):  Ending execution."));
         }
         out.push_str(&expanded);
@@ -533,7 +533,7 @@ impl MacroEngine {
             } else {
                 Self::unmask(&inner)
             };
-            self.pending_call_execute.push(code);
+            self.pending.call_execute.push(code);
         } else {
             out.push_str(&format!(
                 "/* %call {}: only EXECUTE is supported in macro code */",

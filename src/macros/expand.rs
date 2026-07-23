@@ -119,7 +119,7 @@ impl MacroEngine {
             // une macro invoquée dont l'abort se propage) : on cesse d'expanser
             // le reste de CE corps. `expand_invocation` réinitialise
             // `return_requested` après le corps ; `abort_requested` se propage.
-            if self.return_requested || self.abort_requested {
+            if self.flow.return_requested || self.flow.abort_requested {
                 break;
             }
 
@@ -127,9 +127,9 @@ impl MacroEngine {
             // CE texte. Trouvé → on saute (drapeau réinitialisé) ; introuvable →
             // on laisse remonter au niveau parent (on cesse d'expanser ici). Cela
             // gère le `%goto` posé dans une action `%then`/`%do` imbriquée.
-            if let Some(label) = self.goto_requested.clone() {
+            if let Some(label) = self.flow.goto_requested.clone() {
                 if let Some(target) = Self::find_label(&chars, &label) {
-                    self.goto_requested = None;
+                    self.flow.goto_requested = None;
                     i = target;
                     continue;
                 } else {
@@ -216,7 +216,7 @@ impl MacroEngine {
                     // On trace la résolution finale au point fixe de la chaîne
                     // (pour `&&v&i` l'indirection est résolue avant l'écho :
                     // SAS trace alors la variable réellement consultée).
-                    if self.symbolgen {
+                    if self.trace.symbolgen {
                         self.symbolgen_trace(&run);
                     }
                     let resolved = self.resolve_value(&run);
