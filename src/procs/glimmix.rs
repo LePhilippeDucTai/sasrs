@@ -1893,13 +1893,11 @@ fn fit_rspl_rep(
 
 // ───────────────────────── Execute ─────────────────────────
 
-pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
-    // ── 1. Guards ────────────────────────────────────────────────────────────
-    let model = ast
-        .model
-        .as_ref()
-        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC GLIMMIX."))?;
+// ───────────────────────── Execute helpers ─────────────────────────
 
+/// METHOD / DIST / LINK / RANDOM guards plus NOTEs for parse-accepted but
+/// deferred features.
+fn check_guards(ast: &GlimmixAst, model: &ModelSpec, session: &mut Session) -> Result<()> {
     // METHOD guards. LAPLACE is supported for a single VC random intercept;
     // QUAD remains deferred (documented NOTE).
     match ast.method {
@@ -2000,42 +1998,16 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
             .note("WEIGHT statement is parse-accepted but not implemented in PROC GLIMMIX.");
     }
 
-    // ── 2. Read dataset ──────────────────────────────────────────────────────
-    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
-    let n_read = ds.n_obs();
+    Ok(())
+}
 
-    let find_col = |nm: &str| -> Result<usize> {
-        ds.vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
-    };
-
-    let resp_idx = find_col(&model.response)?;
-    let resp_col = decode_column(&ds, resp_idx)?;
-
-    let mut fixed_cols_full: Vec<(String, Vec<Value>)> = Vec::new();
-    for nm in &model.fixed {
-        let idx = find_col(nm)?;
-        fixed_cols_full.push((nm.clone(), decode_column(&ds, idx)?));
-    }
-    // Which fixed effects are CLASS variables (decoded char/num levels) vs.
-    // continuous (must be numeric).
-    let is_class_var = |nm: &str| ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
-
-    let freq_col: Option<Vec<Value>> = match &ast.freq_var {
-        Some(fv) => Some(decode_column(&ds, find_col(fv)?)?),
-        None => None,
-    };
-
-    let random = ast.random.as_ref();
-    let subject = random.and_then(|r| r.subject.clone());
-    let subj_col: Option<Vec<Value>> = match &subject {
-        Some(s) => Some(decode_column(&ds, find_col(s)?)?),
-        None => None,
-    };
-
-    // ── 3. Determine binomial event level ────────────────────────────────────
+/// Determine the binomial event level (EVENT= / DESCENDING / default).
+/// Returns `None` for non-binary distributions.
+fn determine_event_level(
+    model: &ModelSpec,
+    resp_col: &[Value],
+    n_read: usize,
+) -> Result<Option<Value>> {
     let mut event_level: Option<Value> = None;
     if model.dist == Distribution::Binary {
         let levels = crate::procs::lincom::class_levels(resp_col.iter().take(n_read));
@@ -2065,8 +2037,34 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         };
         event_level = Some(lvl);
     }
+    Ok(event_level)
+}
 
-    // ── 4. Build observations (listwise deletion + encoding) ──────────────────
+/// Observations kept after listwise deletion, with the encoded response.
+struct KeptObs {
+    y: Vec<f64>,
+    freq: Vec<f64>,
+    subj_values: Vec<Value>,
+    kept_fixed: Vec<(String, Vec<Value>)>,
+    n_not_used: usize,
+}
+
+/// Listwise deletion + response encoding over the raw decoded columns.
+#[allow(clippy::too_many_arguments)]
+fn build_observations(
+    model: &ModelSpec,
+    class_vars: &[String],
+    resp_col: &[Value],
+    fixed_cols_full: &[(String, Vec<Value>)],
+    freq_col: &Option<Vec<Value>>,
+    subj_col: &Option<Vec<Value>>,
+    event_level: &Option<Value>,
+    n_read: usize,
+) -> KeptObs {
+    // Which fixed effects are CLASS variables (decoded char/num levels) vs.
+    // continuous (must be numeric).
+    let is_class_var = |nm: &str| class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
+
     let mut y: Vec<f64> = Vec::new();
     let mut freq: Vec<f64> = Vec::new();
     let mut subj_values: Vec<Value> = Vec::new();
@@ -2095,7 +2093,7 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         // Validate fixed-effect predictors: CLASS vars just need non-missing,
         // continuous vars must be numeric & non-missing.
         let mut ok = true;
-        for (nm, col) in &fixed_cols_full {
+        for (nm, col) in fixed_cols_full {
             let v = &col[i];
             if is_class_var(nm) {
                 if v.is_missing() {
@@ -2151,37 +2149,20 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    let n_used = y.len();
-    if n_used == 0 {
-        return Err(SasError::runtime(
-            "No complete observations available for PROC GLIMMIX.",
-        ));
+    KeptObs {
+        y,
+        freq,
+        subj_values,
+        kept_fixed,
+        n_not_used,
     }
-    let n_total: f64 = freq.iter().sum();
+}
 
-    // Build the labeled fixed-effects design.
-    let design = build_design(
-        &kept_fixed,
-        &ast.class_vars,
-        &model.fixed,
-        model.noint,
-        n_used,
-    )?;
-    if design.is_empty() {
-        return Err(SasError::runtime(
-            "MODEL has no effects (NOINT with no fixed effects) in PROC GLIMMIX.",
-        ));
-    }
-    let param_labels: Vec<String> = design.iter().map(|d| d.label.clone()).collect();
-    let x: Vec<Vec<f64>> = (0..n_used)
-        .map(|i| design.iter().map(|c| c.values[i]).collect())
-        .collect();
-    let p = x[0].len();
-
-    // Subject levels.
-    let (subj_of, levels): (Vec<usize>, Vec<Value>) = if subj_col.is_some() {
+/// Map subject values to 0-based level indices (levels in `sas_cmp` order).
+fn index_subjects(subj_values: &[Value], has_subject: bool) -> (Vec<usize>, Vec<Value>) {
+    if has_subject {
         let mut levels: Vec<Value> = Vec::new();
-        for v in &subj_values {
+        for v in subj_values {
             if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
                 levels.push(v.clone());
             }
@@ -2199,44 +2180,44 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         (idx, levels)
     } else {
         (Vec::new(), Vec::new())
-    };
-    let n_subjects = levels.len();
-
-    let has_random = random.is_some();
-    if has_random && n_subjects < 2 {
-        return Err(SasError::runtime(
-            "PROC GLIMMIX requires at least 2 subjects when a RANDOM statement is used.",
-        ));
     }
+}
 
-    // Within-subject position index (0-based, in order of appearance), used by
-    // the AR(1)/UN repeated covariance structure.
-    let within_idx: Vec<usize> = {
-        let mut counters = vec![0usize; n_subjects.max(1)];
-        let mut wi = Vec::with_capacity(n_used);
-        for &s in &subj_of {
-            wi.push(counters[s]);
-            counters[s] += 1;
-        }
-        wi
-    };
-    // The (selected) covariance type, when a RANDOM statement is present.
-    let cov_type = random.map(|r| r.cov_type).unwrap_or(CovType::Vc);
-    let rep_cov: Option<RepCov> = match cov_type {
-        CovType::Ar1 => Some(RepCov::Ar1),
-        CovType::Un => {
-            let t = within_idx.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-            Some(RepCov::Un { t })
-        }
-        _ => None,
-    };
+/// Shared inputs of the estimation dispatch.
+struct FitContext<'a> {
+    y: &'a [f64],
+    x: &'a [Vec<f64>],
+    freq: &'a [f64],
+    subj_of: &'a [usize],
+    within_idx: &'a [usize],
+    n_subjects: usize,
+    n_total: f64,
+}
 
-    let use_laplace = ast.method == Method::Laplace && has_random;
+/// Estimation dispatch: GLM (no random), Laplace ML, repeated AR(1)/UN,
+/// Normal REML, or the PQL loop.
+fn compute_fit(
+    model: &ModelSpec,
+    ctx: &FitContext,
+    rep_cov: Option<RepCov>,
+    use_laplace: bool,
+    has_random: bool,
+) -> Result<GlimmixFit> {
+    let &FitContext {
+        y,
+        x,
+        freq,
+        subj_of,
+        within_idx,
+        n_subjects,
+        n_total,
+    } = ctx;
+    let n_used = y.len();
+    let p = x[0].len();
 
-    // ── 5. Fit dispatch ──────────────────────────────────────────────────────
     let fit: GlimmixFit = if !has_random {
         // No random effects → IRLS GLM (≡ ordinary GLM MLE under any METHOD).
-        let g = fit_glm(&y, &x, &freq, model.dist, model.link)?;
+        let g = fit_glm(y, x, freq, model.dist, model.link)?;
         let sigma2_e = if model.dist == Distribution::Normal {
             // residual variance = MSE.
             let sse: f64 = (0..n_used).map(|i| freq[i] * (y[i] - g.mu[i]).powi(2)).sum();
@@ -2257,7 +2238,7 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
     } else if use_laplace {
         // METHOD=LAPLACE single random intercept → true ML by Laplace.
         let lf = fit_laplace(
-            &y, &x, &freq, &subj_of, n_subjects, model.dist, model.link,
+            y, x, freq, subj_of, n_subjects, model.dist, model.link,
         )?;
         GlimmixFit {
             beta: lf.beta,
@@ -2275,12 +2256,12 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         // is the exact REML (no PQL iteration); for non-normal links we run the
         // RSPL working-variate loop with R as the working covariance.
         fit_rspl_rep(
-            &y, &x, &freq, &subj_of, &within_idx, rep, model.dist, model.link,
+            y, x, freq, subj_of, within_idx, rep, model.dist, model.link,
         )?
     } else if model.dist == Distribution::Normal {
         // Normal + random → PQL == REML, closed-form / profile.
         let (s2u, s2e, beta, cov, neg2) =
-            fit_vc(&y, &x, &subj_of, n_subjects, None)?;
+            fit_vc(y, x, subj_of, n_subjects, None)?;
         let mu = (0..n_used).map(|i| dot(&x[i], &beta)).collect();
         GlimmixFit {
             beta,
@@ -2294,37 +2275,20 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         }
     } else {
         // Non-normal + random → full PQL loop (VC).
-        fit_pql(&y, &x, &freq, &subj_of, n_subjects, model.dist, model.link)?
+        fit_pql(y, x, freq, subj_of, n_subjects, model.dist, model.link)?
     };
 
-    // Generalized Chi-Square: Σ freq * (y - μ)² / V(μ).
-    let gen_chisq: f64 = (0..n_used)
-        .map(|i| {
-            let v = variance(fit.mu[i], model.dist);
-            freq[i] * (y[i] - fit.mu[i]).powi(2) / v
-        })
-        .sum();
+    Ok(fit)
+}
 
-    // DF for fixed-effects tests (ddfm=Contain).
-    let den_df: f64 = if has_random {
-        (n_subjects as f64 - p as f64).max(1.0)
-    } else {
-        (n_total - p as f64).max(1.0)
-    };
-    let gen_chisq_df = (n_total - p as f64).max(1.0);
-
-    // Max obs per subject.
-    let max_obs = if has_random {
-        let mut counts = vec![0usize; n_subjects];
-        for &s in &subj_of {
-            counts[s] += 1;
-        }
-        *counts.iter().max().unwrap_or(&0)
-    } else {
-        0
-    };
-
-    // ── 6. Listing ───────────────────────────────────────────────────────────
+/// Print the page header and the Model Information table.
+fn print_model_information(
+    session: &mut Session,
+    model: &ModelSpec,
+    in_libref: &str,
+    in_table: &str,
+    laplace: bool,
+) {
     let dist_name = match model.dist {
         Distribution::Normal => "Normal",
         Distribution::Poisson => "Poisson",
@@ -2343,12 +2307,10 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
     centered(session, "The GLIMMIX Procedure");
     session.listing.blank();
 
-    // Model Information.
     centered(session, "Model Information");
     session.listing.blank();
     {
         let aligns = vec![Align::Left, Align::Left];
-        let laplace = ast.method == Method::Laplace && has_random;
         let mut rows: Vec<Vec<String>> = vec![
             vec!["Data Set".into(), format!("{}.{}", in_libref, in_table)],
             vec!["Response Variable".into(), model.response.clone()],
@@ -2368,50 +2330,70 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Class Level Information (subject CLASS only).
-    if has_random {
-        centered(session, "Class Level Information");
-        session.listing.blank();
-        let headers = vec!["Class".into(), "Levels".into(), "Values".into()];
-        let aligns = vec![Align::Left, Align::Right, Align::Left];
-        let values_str = levels
-            .iter()
-            .map(value_label)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let rows = vec![vec![
-            subject.clone().unwrap_or_default(),
-            n_subjects.to_string(),
-            values_str,
-        ]];
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
+/// Print the Class Level Information table (subject CLASS only).
+fn print_class_level_information(
+    session: &mut Session,
+    subject: &Option<String>,
+    levels: &[Value],
+    n_subjects: usize,
+) {
+    centered(session, "Class Level Information");
+    session.listing.blank();
+    let headers = vec!["Class".into(), "Levels".into(), "Values".into()];
+    let aligns = vec![Align::Left, Align::Right, Align::Left];
+    let values_str = levels
+        .iter()
+        .map(value_label)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let rows = vec![vec![
+        subject.clone().unwrap_or_default(),
+        n_subjects.to_string(),
+        values_str,
+    ]];
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Dimensions (random only).
-    if has_random {
-        centered(session, "Dimensions");
-        session.listing.blank();
-        let aligns = vec![Align::Left, Align::Right];
-        let n_cov_parm = fit.cov_parms.as_ref().map(|c| c.len()).unwrap_or(2);
-        // Z-side columns per subject: 1 for a VC random intercept, 0 for an
-        // R-side (AR(1)/UN) repeated structure.
-        let z_cols = if fit.cov_parms.is_some() { 0 } else { 1 };
-        let rows: Vec<Vec<String>> = vec![
-            vec!["Covariance Parameters".into(), n_cov_parm.to_string()],
-            vec!["Columns in X".into(), p.to_string()],
-            vec!["Columns in Z Per Subject".into(), z_cols.to_string()],
-            vec!["Subjects".into(), n_subjects.to_string()],
-            vec!["Max Obs Per Subject".into(), max_obs.to_string()],
-        ];
-        session
-            .listing
-            .write_table(&[String::new(), String::new()], &aligns, &rows);
-        session.listing.blank();
-    }
+/// Print the Dimensions table (random only).
+fn print_dimensions(
+    session: &mut Session,
+    fit: &GlimmixFit,
+    p: usize,
+    n_subjects: usize,
+    max_obs: usize,
+) {
+    centered(session, "Dimensions");
+    session.listing.blank();
+    let aligns = vec![Align::Left, Align::Right];
+    let n_cov_parm = fit.cov_parms.as_ref().map(|c| c.len()).unwrap_or(2);
+    // Z-side columns per subject: 1 for a VC random intercept, 0 for an
+    // R-side (AR(1)/UN) repeated structure.
+    let z_cols = if fit.cov_parms.is_some() { 0 } else { 1 };
+    let rows: Vec<Vec<String>> = vec![
+        vec!["Covariance Parameters".into(), n_cov_parm.to_string()],
+        vec!["Columns in X".into(), p.to_string()],
+        vec!["Columns in Z Per Subject".into(), z_cols.to_string()],
+        vec!["Subjects".into(), n_subjects.to_string()],
+        vec!["Max Obs Per Subject".into(), max_obs.to_string()],
+    ];
+    session
+        .listing
+        .write_table(&[String::new(), String::new()], &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Number of Observations.
+/// Print the Number of Observations table.
+fn print_number_of_observations(
+    session: &mut Session,
+    ast: &GlimmixAst,
+    n_read: usize,
+    n_used: usize,
+    n_total: f64,
+    n_not_used: usize,
+) {
     centered(session, "Number of Observations");
     session.listing.blank();
     {
@@ -2435,8 +2417,16 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Iteration History (compact, stable: starting + converged objective).
+/// Print the Iteration History table (compact, stable: starting + converged
+/// objective).
+fn print_iteration_history(
+    session: &mut Session,
+    fit: &GlimmixFit,
+    has_random: bool,
+    gen_chisq: f64,
+) {
     centered(session, "Iteration History");
     session.listing.blank();
     {
@@ -2476,52 +2466,64 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Convergence note.
-    centered(session, "Convergence criterion (GCONV=1E-8) satisfied.");
+/// Print the Covariance Parameter Estimates table (random only).
+fn print_covariance_parameter_estimates(
+    session: &mut Session,
+    fit: &GlimmixFit,
+    subject: &Option<String>,
+) {
+    centered(session, "Covariance Parameter Estimates");
     session.listing.blank();
-
-    // Covariance Parameter Estimates (random only).
-    if has_random {
-        centered(session, "Covariance Parameter Estimates");
-        session.listing.blank();
-        let headers = vec!["Cov Parm".into(), "Subject".into(), "Estimate".into()];
-        let aligns = vec![Align::Left, Align::Left, Align::Right];
-        let subj_disp = subject.clone().unwrap_or_default();
-        let rows: Vec<Vec<String>> = match &fit.cov_parms {
-            Some(parms) => parms
-                .iter()
-                .map(|cp| {
-                    vec![
-                        cp.name.clone(),
-                        if cp.show_subject {
-                            subj_disp.clone()
-                        } else {
-                            String::new()
-                        },
-                        fmt4(cp.estimate),
-                    ]
-                })
-                .collect(),
-            None => vec![
+    let headers = vec!["Cov Parm".into(), "Subject".into(), "Estimate".into()];
+    let aligns = vec![Align::Left, Align::Left, Align::Right];
+    let subj_disp = subject.clone().unwrap_or_default();
+    let rows: Vec<Vec<String>> = match &fit.cov_parms {
+        Some(parms) => parms
+            .iter()
+            .map(|cp| {
                 vec![
-                    "Intercept".into(),
-                    subj_disp.clone(),
-                    fmt4(fit.sigma2_u.unwrap_or(0.0)),
-                ],
-                vec!["Residual".into(), String::new(), fmt4(fit.sigma2_e)],
+                    cp.name.clone(),
+                    if cp.show_subject {
+                        subj_disp.clone()
+                    } else {
+                        String::new()
+                    },
+                    fmt4(cp.estimate),
+                ]
+            })
+            .collect(),
+        None => vec![
+            vec![
+                "Intercept".into(),
+                subj_disp.clone(),
+                fmt4(fit.sigma2_u.unwrap_or(0.0)),
             ],
-        };
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
+            vec!["Residual".into(), String::new(), fmt4(fit.sigma2_e)],
+        ],
+    };
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Fit Statistics.
+/// Print the Fit Statistics table.
+#[allow(clippy::too_many_arguments)]
+fn print_fit_statistics(
+    session: &mut Session,
+    model: &ModelSpec,
+    fit: &GlimmixFit,
+    p: usize,
+    n_subjects: usize,
+    gen_chisq: f64,
+    gen_chisq_df: f64,
+    laplace: bool,
+    has_random: bool,
+) {
     centered(session, "Fit Statistics");
     session.listing.blank();
     {
         let aligns = vec![Align::Left, Align::Right];
-        let laplace = ast.method == Method::Laplace && has_random;
         let mut rows: Vec<Vec<String>> = Vec::new();
         if laplace {
             // True-ML fit statistics: -2 Log Likelihood plus information criteria.
@@ -2559,8 +2561,15 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Type III Tests of Fixed Effects.
+/// Print the Type III Tests of Fixed Effects table.
+fn print_type3_tests(
+    session: &mut Session,
+    param_labels: &[String],
+    fit: &GlimmixFit,
+    den_df: f64,
+) {
     centered(session, "Type III Tests of Fixed Effects");
     session.listing.blank();
     {
@@ -2599,45 +2608,252 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Solutions for Fixed Effects.
-    if model.solution {
-        centered(session, "Solutions for Fixed Effects");
-        session.listing.blank();
-        let headers = vec![
-            "Effect".into(),
-            "Estimate".into(),
-            "Standard Error".into(),
-            "DF".into(),
-            "t Value".into(),
-            "Pr > |t|".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let cov = &fit.cov_beta;
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        for (idx, nm) in param_labels.iter().enumerate() {
-            let est = fit.beta[idx];
-            let se = cov[idx][idx].max(0.0).sqrt();
-            let t = if se > 0.0 { est / se } else { 0.0 };
-            let p_val = 2.0 * (1.0 - student_t_cdf(t.abs(), den_df));
-            rows.push(vec![
-                nm.clone(),
-                fmt4(est),
-                fmt4(se),
-                fmt_df(den_df),
-                fmt2(t),
-                fmt_p(p_val),
-            ]);
+/// Print the Solutions for Fixed Effects table.
+fn print_fixed_solutions(
+    session: &mut Session,
+    param_labels: &[String],
+    fit: &GlimmixFit,
+    den_df: f64,
+) {
+    centered(session, "Solutions for Fixed Effects");
+    session.listing.blank();
+    let headers = vec![
+        "Effect".into(),
+        "Estimate".into(),
+        "Standard Error".into(),
+        "DF".into(),
+        "t Value".into(),
+        "Pr > |t|".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let cov = &fit.cov_beta;
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (idx, nm) in param_labels.iter().enumerate() {
+        let est = fit.beta[idx];
+        let se = cov[idx][idx].max(0.0).sqrt();
+        let t = if se > 0.0 { est / se } else { 0.0 };
+        let p_val = 2.0 * (1.0 - student_t_cdf(t.abs(), den_df));
+        rows.push(vec![
+            nm.clone(),
+            fmt4(est),
+            fmt4(se),
+            fmt_df(den_df),
+            fmt2(t),
+            fmt_p(p_val),
+        ]);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
+
+pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
+    // ── 1. Guards ────────────────────────────────────────────────────────────
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC GLIMMIX."))?;
+
+    check_guards(ast, model, session)?;
+
+    // ── 2. Read dataset ──────────────────────────────────────────────────────
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
+    let n_read = ds.n_obs();
+
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    let resp_idx = find_col(&model.response)?;
+    let resp_col = decode_column(&ds, resp_idx)?;
+
+    let mut fixed_cols_full: Vec<(String, Vec<Value>)> = Vec::new();
+    for nm in &model.fixed {
+        let idx = find_col(nm)?;
+        fixed_cols_full.push((nm.clone(), decode_column(&ds, idx)?));
+    }
+    let freq_col: Option<Vec<Value>> = match &ast.freq_var {
+        Some(fv) => Some(decode_column(&ds, find_col(fv)?)?),
+        None => None,
+    };
+
+    let random = ast.random.as_ref();
+    let subject = random.and_then(|r| r.subject.clone());
+    let subj_col: Option<Vec<Value>> = match &subject {
+        Some(s) => Some(decode_column(&ds, find_col(s)?)?),
+        None => None,
+    };
+
+    // ── 3. Determine binomial event level ────────────────────────────────────
+    let event_level = determine_event_level(model, &resp_col, n_read)?;
+
+    // ── 4. Build observations (listwise deletion + encoding) ──────────────────
+    let KeptObs {
+        y,
+        freq,
+        subj_values,
+        kept_fixed,
+        n_not_used,
+    } = build_observations(
+        model,
+        &ast.class_vars,
+        &resp_col,
+        &fixed_cols_full,
+        &freq_col,
+        &subj_col,
+        &event_level,
+        n_read,
+    );
+
+    let n_used = y.len();
+    if n_used == 0 {
+        return Err(SasError::runtime(
+            "No complete observations available for PROC GLIMMIX.",
+        ));
+    }
+    let n_total: f64 = freq.iter().sum();
+
+    // Build the labeled fixed-effects design.
+    let design = build_design(
+        &kept_fixed,
+        &ast.class_vars,
+        &model.fixed,
+        model.noint,
+        n_used,
+    )?;
+    if design.is_empty() {
+        return Err(SasError::runtime(
+            "MODEL has no effects (NOINT with no fixed effects) in PROC GLIMMIX.",
+        ));
+    }
+    let param_labels: Vec<String> = design.iter().map(|d| d.label.clone()).collect();
+    let x: Vec<Vec<f64>> = (0..n_used)
+        .map(|i| design.iter().map(|c| c.values[i]).collect())
+        .collect();
+    let p = x[0].len();
+
+    // Subject levels.
+    let (subj_of, levels) = index_subjects(&subj_values, subj_col.is_some());
+    let n_subjects = levels.len();
+
+    let has_random = random.is_some();
+    if has_random && n_subjects < 2 {
+        return Err(SasError::runtime(
+            "PROC GLIMMIX requires at least 2 subjects when a RANDOM statement is used.",
+        ));
+    }
+
+    // Within-subject position index (0-based, in order of appearance), used by
+    // the AR(1)/UN repeated covariance structure.
+    let within_idx: Vec<usize> = {
+        let mut counters = vec![0usize; n_subjects.max(1)];
+        let mut wi = Vec::with_capacity(n_used);
+        for &s in &subj_of {
+            wi.push(counters[s]);
+            counters[s] += 1;
         }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+        wi
+    };
+    // The (selected) covariance type, when a RANDOM statement is present.
+    let cov_type = random.map(|r| r.cov_type).unwrap_or(CovType::Vc);
+    let rep_cov: Option<RepCov> = match cov_type {
+        CovType::Ar1 => Some(RepCov::Ar1),
+        CovType::Un => {
+            let t = within_idx.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+            Some(RepCov::Un { t })
+        }
+        _ => None,
+    };
+
+    let use_laplace = ast.method == Method::Laplace && has_random;
+
+    // ── 5. Fit dispatch ──────────────────────────────────────────────────────
+    let fit: GlimmixFit = compute_fit(
+        model,
+        &FitContext {
+            y: &y,
+            x: &x,
+            freq: &freq,
+            subj_of: &subj_of,
+            within_idx: &within_idx,
+            n_subjects,
+            n_total,
+        },
+        rep_cov,
+        use_laplace,
+        has_random,
+    )?;
+
+    // Generalized Chi-Square: Σ freq * (y - μ)² / V(μ).
+    let gen_chisq: f64 = (0..n_used)
+        .map(|i| {
+            let v = variance(fit.mu[i], model.dist);
+            freq[i] * (y[i] - fit.mu[i]).powi(2) / v
+        })
+        .sum();
+
+    // DF for fixed-effects tests (ddfm=Contain).
+    let den_df: f64 = if has_random {
+        (n_subjects as f64 - p as f64).max(1.0)
+    } else {
+        (n_total - p as f64).max(1.0)
+    };
+    let gen_chisq_df = (n_total - p as f64).max(1.0);
+
+    // Max obs per subject.
+    let max_obs = if has_random {
+        let mut counts = vec![0usize; n_subjects];
+        for &s in &subj_of {
+            counts[s] += 1;
+        }
+        *counts.iter().max().unwrap_or(&0)
+    } else {
+        0
+    };
+
+    // ── 6. Listing ───────────────────────────────────────────────────────────
+    let laplace = ast.method == Method::Laplace && has_random;
+
+    print_model_information(session, model, &in_libref, &in_table, laplace);
+    if has_random {
+        print_class_level_information(session, &subject, &levels, n_subjects);
+        print_dimensions(session, &fit, p, n_subjects, max_obs);
+    }
+    print_number_of_observations(session, ast, n_read, n_used, n_total, n_not_used);
+    print_iteration_history(session, &fit, has_random, gen_chisq);
+
+    // Convergence note.
+    centered(session, "Convergence criterion (GCONV=1E-8) satisfied.");
+    session.listing.blank();
+
+    if has_random {
+        print_covariance_parameter_estimates(session, &fit, &subject);
+    }
+    print_fit_statistics(
+        session,
+        model,
+        &fit,
+        p,
+        n_subjects,
+        gen_chisq,
+        gen_chisq_df,
+        laplace,
+        has_random,
+    );
+    print_type3_tests(session, &param_labels, &fit, den_df);
+    if model.solution {
+        print_fixed_solutions(session, &param_labels, &fit, den_df);
     }
 
     let _ = fit.iterations;
