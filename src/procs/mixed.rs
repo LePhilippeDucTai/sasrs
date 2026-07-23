@@ -1670,21 +1670,19 @@ fn fit_gen(
 // ═════════════════════ General execute path ═════════════════════
 
 #[allow(clippy::too_many_lines)]
-fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
-    let model = ast
-        .model
-        .as_ref()
-        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC MIXED."))?;
+// ───────────────────── General-path execute helpers ─────────────────────
 
-    // Determine the covariance model.
-    // Priority: a REPEATED AR(1)/UN structure, else a RANDOM intercept VC/CS.
+/// Covariance-model plan for the general path.
+enum Plan {
+    Repeated(CovType, String),
+    RandomVc(String, CovType),
+}
+
+/// Determine the covariance model.
+/// Priority: a REPEATED AR(1)/UN structure, else a RANDOM intercept VC/CS.
+fn determine_plan(ast: &MixedAst) -> Result<Plan> {
     let repeated = ast.repeated.as_ref();
     let random = ast.random.as_ref();
-
-    enum Plan {
-        Repeated(CovType, String),
-        RandomVc(String, CovType),
-    }
 
     let plan = if let Some(rep) = repeated {
         match rep.cov_type {
@@ -1726,7 +1724,11 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
         ));
     };
 
-    // Common deferred-feature NOTEs.
+    Ok(plan)
+}
+
+/// Emit NOTEs for parse-accepted but deferred features.
+fn note_deferred_features(ast: &MixedAst, model: &ModelSpec, session: &mut Session) {
     if ast.covtest {
         session
             .log
@@ -1767,36 +1769,27 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .log
             .note("LSMEANS is parse-accepted but not implemented in PROC MIXED.");
     }
+}
 
-    // ── Read dataset ────────────────────────────────────────────────────────
-    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
-    let n_read = ds.n_obs();
+/// Complete observations after listwise deletion, with subject indexing.
+struct GenObs {
+    y: Vec<f64>,
+    kept_fixed: Vec<(String, Vec<Value>)>,
+    /// Subject levels (sas_cmp order).
+    levels: Vec<Value>,
+    subj_of: Vec<usize>,
+    within_idx: Vec<usize>,
+    max_obs: usize,
+    n_not_used: usize,
+}
 
-    let find_col = |nm: &str| -> Result<usize> {
-        ds.vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
-    };
-
-    let resp_idx = find_col(&model.response)?;
-    let resp_col = decode_column(&ds, resp_idx)?;
-
-    let subject = match &plan {
-        Plan::Repeated(_, s) => s.clone(),
-        Plan::RandomVc(s, _) => s.clone(),
-    };
-    let subj_idx = find_col(&subject)?;
-    let subj_col = decode_column(&ds, subj_idx)?;
-
-    // Decode all variables referenced by the fixed effects.
-    let mut fixed_cols: Vec<(String, Vec<Value>)> = Vec::new();
-    for eff in &model.fixed {
-        let idx = find_col(eff)?;
-        fixed_cols.push((eff.clone(), decode_column(&ds, idx)?));
-    }
-
-    // ── Build complete observations (listwise deletion) ─────────────────────
+/// Listwise deletion + subject-level indexing over the decoded columns.
+fn build_observations_gen(
+    resp_col: &[Value],
+    subj_col: &[Value],
+    fixed_cols: &[(String, Vec<Value>)],
+    n_read: usize,
+) -> Result<GenObs> {
     let mut keep: Vec<usize> = Vec::new();
     let mut n_not_used = 0usize;
     for i in 0..n_read {
@@ -1862,27 +1855,21 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
     let max_obs = *counts.iter().max().unwrap_or(&0);
 
-    // ── Fixed-effects design ────────────────────────────────────────────────
-    let design = build_design(
-        &kept_fixed,
-        &ast.class_vars,
-        &model.fixed,
-        model.noint,
-        n_used,
-    )?;
-    if design.is_empty() {
-        return Err(SasError::runtime(
-            "PROC MIXED MODEL has no fixed-effects columns (NOINT with no effects).",
-        ));
-    }
-    let p = design.len();
-    let labels: Vec<String> = design.iter().map(|d| d.label.clone()).collect();
-    let x: Vec<Vec<f64>> = (0..n_used)
-        .map(|i| design.iter().map(|c| c.values[i]).collect())
-        .collect();
+    Ok(GenObs {
+        y,
+        kept_fixed,
+        levels,
+        subj_of,
+        within_idx,
+        max_obs,
+        n_not_used,
+    })
+}
 
-    // ── Determine covariance model + initial unconstrained params ───────────
-    let (cov, u0): (GenCov, Vec<f64>) = match &plan {
+/// Covariance model + initial unconstrained parameters for the optimizer.
+fn initial_cov_params(plan: &Plan, y: &[f64], max_obs: usize) -> (GenCov, Vec<f64>) {
+    let n_used = y.len();
+    match plan {
         Plan::RandomVc(_, _) => {
             // Use the variance of y as a scale.
             let mean = y.iter().sum::<f64>() / n_used as f64;
@@ -1918,17 +1905,20 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             (GenCov::RepeatedUn { t }, u)
         }
         Plan::Repeated(_, _) => unreachable!(),
-    };
-
-    // ── Optimize ────────────────────────────────────────────────────────────
-    let fit = fit_gen(&y, &x, cov, &subj_of, &within_idx, ast.method, &u0)?;
-    if !fit.converged {
-        session
-            .log
-            .note("PROC MIXED optimization did not converge within the iteration limit.");
     }
+}
 
-    // ── Listing ─────────────────────────────────────────────────────────────
+/// Print the page header and the Model Information table.
+#[allow(clippy::too_many_arguments)]
+fn print_model_information_gen(
+    session: &mut Session,
+    ast: &MixedAst,
+    model: &ModelSpec,
+    plan: &Plan,
+    cov: GenCov,
+    in_libref: &str,
+    in_table: &str,
+) {
     let method_name = match ast.method {
         Method::Reml => "REML",
         Method::Ml => "ML",
@@ -1964,8 +1954,17 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Class Level Information (subject + any class fixed effects).
+/// Print the Class Level Information table (subject + any class fixed effects).
+fn print_class_level_information_gen(
+    session: &mut Session,
+    ast: &MixedAst,
+    subject: &str,
+    levels: &[Value],
+    n_subjects: usize,
+    kept_fixed: &[(String, Vec<Value>)],
+) {
     centered(session, "Class Level Information");
     session.listing.blank();
     {
@@ -1978,11 +1977,11 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .map(value_label)
             .collect::<Vec<_>>()
             .join(" ");
-        rows.push(vec![subject.clone(), n_subjects.to_string(), values_str]);
+        rows.push(vec![subject.to_string(), n_subjects.to_string(), values_str]);
         // Fixed CLASS variables.
-        for (nm, col) in &kept_fixed {
+        for (nm, col) in kept_fixed {
             if ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm))
-                && !nm.eq_ignore_ascii_case(&subject)
+                && !nm.eq_ignore_ascii_case(subject)
             {
                 let mut lv: Vec<Value> = Vec::new();
                 for v in col {
@@ -1998,9 +1997,17 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Dimensions.
-    let n_cov = n_cov_params(cov);
+/// Print the Dimensions table.
+fn print_dimensions_gen(
+    session: &mut Session,
+    cov: GenCov,
+    n_cov: usize,
+    p: usize,
+    n_subjects: usize,
+    max_obs: usize,
+) {
     centered(session, "Dimensions");
     session.listing.blank();
     {
@@ -2019,8 +2026,15 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Number of Observations.
+/// Print the Number of Observations table.
+fn print_number_of_observations_gen(
+    session: &mut Session,
+    n_read: usize,
+    n_used: usize,
+    n_not_used: usize,
+) {
     centered(session, "Number of Observations");
     session.listing.blank();
     {
@@ -2038,8 +2052,10 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Iteration History.
+/// Print the Iteration History table and the convergence note.
+fn print_iteration_history_gen(session: &mut Session, ast: &MixedAst, fit: &GenFit) {
     let res_label = match ast.method {
         Method::Reml => "-2 Res Log Like",
         Method::Ml => "-2 Log Like",
@@ -2076,20 +2092,37 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
     centered(session, "Convergence criteria met.");
     session.listing.blank();
+}
 
-    // Covariance Parameter Estimates.
+/// Print the Covariance Parameter Estimates table.
+fn print_covariance_parameter_estimates_gen(
+    session: &mut Session,
+    cov: GenCov,
+    fit: &GenFit,
+    subject: &str,
+    is_cs: bool,
+) {
     centered(session, "Covariance Parameter Estimates");
     session.listing.blank();
     {
         let headers = vec!["Cov Parm".into(), "Subject".into(), "Estimate".into()];
         let aligns = vec![Align::Left, Align::Left, Align::Right];
-        let is_cs = matches!(&plan, Plan::RandomVc(_, CovType::Cs));
-        let rows = cov_parm_rows(cov, &fit.theta, &subject, is_cs);
+        let rows = cov_parm_rows(cov, &fit.theta, subject, is_cs);
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Fit Statistics.
+/// Print the Fit Statistics table (AIC/AICC/BIC).
+fn print_fit_statistics_gen(
+    session: &mut Session,
+    ast: &MixedAst,
+    fit: &GenFit,
+    n_cov: usize,
+    n_used: usize,
+    p: usize,
+    n_subjects: usize,
+) {
     let neg2 = fit.neg2ll;
     let nc = n_cov as f64;
     let aic = neg2 + 2.0 * nc;
@@ -2122,46 +2155,156 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
+
+/// Print the Solution for Fixed Effects table.
+fn print_fixed_solutions_gen(
+    session: &mut Session,
+    fit: &GenFit,
+    labels: &[String],
+    p: usize,
+    n_subjects: usize,
+) {
+    centered(session, "Solution for Fixed Effects");
+    session.listing.blank();
+    let headers = vec![
+        "Effect".into(),
+        "Estimate".into(),
+        "Standard Error".into(),
+        "DF".into(),
+        "t Value".into(),
+        "Pr > |t|".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    // Containment df: subjects − fixed parameters (approximate).
+    let df = (n_subjects as i64 - p as i64).max(1);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for a in 0..p {
+        let est = fit.beta[a];
+        let se = fit.cov_beta[a][a].max(0.0).sqrt();
+        let t = if se > 0.0 { est / se } else { 0.0 };
+        let pv = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
+        rows.push(vec![
+            labels[a].clone(),
+            fmt4(est),
+            fmt4(se),
+            df.to_string(),
+            fmt2(t),
+            fmt_p(pv),
+        ]);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
+
+fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC MIXED."))?;
+
+    // Determine the covariance model.
+    let plan = determine_plan(ast)?;
+
+    // Common deferred-feature NOTEs.
+    note_deferred_features(ast, model, session);
+
+    // ── Read dataset ────────────────────────────────────────────────────────
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
+    let n_read = ds.n_obs();
+
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    let resp_idx = find_col(&model.response)?;
+    let resp_col = decode_column(&ds, resp_idx)?;
+
+    let subject = match &plan {
+        Plan::Repeated(_, s) => s.clone(),
+        Plan::RandomVc(s, _) => s.clone(),
+    };
+    let subj_idx = find_col(&subject)?;
+    let subj_col = decode_column(&ds, subj_idx)?;
+
+    // Decode all variables referenced by the fixed effects.
+    let mut fixed_cols: Vec<(String, Vec<Value>)> = Vec::new();
+    for eff in &model.fixed {
+        let idx = find_col(eff)?;
+        fixed_cols.push((eff.clone(), decode_column(&ds, idx)?));
+    }
+
+    // ── Build complete observations (listwise deletion) ─────────────────────
+    let GenObs {
+        y,
+        kept_fixed,
+        levels,
+        subj_of,
+        within_idx,
+        max_obs,
+        n_not_used,
+    } = build_observations_gen(&resp_col, &subj_col, &fixed_cols, n_read)?;
+    let n_used = y.len();
+    let n_subjects = levels.len();
+
+    // ── Fixed-effects design ────────────────────────────────────────────────
+    let design = build_design(
+        &kept_fixed,
+        &ast.class_vars,
+        &model.fixed,
+        model.noint,
+        n_used,
+    )?;
+    if design.is_empty() {
+        return Err(SasError::runtime(
+            "PROC MIXED MODEL has no fixed-effects columns (NOINT with no effects).",
+        ));
+    }
+    let p = design.len();
+    let labels: Vec<String> = design.iter().map(|d| d.label.clone()).collect();
+    let x: Vec<Vec<f64>> = (0..n_used)
+        .map(|i| design.iter().map(|c| c.values[i]).collect())
+        .collect();
+
+    // ── Determine covariance model + initial unconstrained params ───────────
+    let (cov, u0): (GenCov, Vec<f64>) = initial_cov_params(&plan, &y, max_obs);
+
+    // ── Optimize ────────────────────────────────────────────────────────────
+    let fit = fit_gen(&y, &x, cov, &subj_of, &within_idx, ast.method, &u0)?;
+    if !fit.converged {
+        session
+            .log
+            .note("PROC MIXED optimization did not converge within the iteration limit.");
+    }
+
+    // ── Listing ─────────────────────────────────────────────────────────────
+    print_model_information_gen(session, ast, model, &plan, cov, &in_libref, &in_table);
+    print_class_level_information_gen(session, ast, &subject, &levels, n_subjects, &kept_fixed);
+
+    let n_cov = n_cov_params(cov);
+    print_dimensions_gen(session, cov, n_cov, p, n_subjects, max_obs);
+    print_number_of_observations_gen(session, n_read, n_used, n_not_used);
+    print_iteration_history_gen(session, ast, &fit);
+
+    // Covariance Parameter Estimates.
+    let is_cs = matches!(&plan, Plan::RandomVc(_, CovType::Cs));
+    print_covariance_parameter_estimates_gen(session, cov, &fit, &subject, is_cs);
+
+    print_fit_statistics_gen(session, ast, &fit, n_cov, n_used, p, n_subjects);
 
     // Solution for Fixed Effects.
     if model.solution {
-        centered(session, "Solution for Fixed Effects");
-        session.listing.blank();
-        let headers = vec![
-            "Effect".into(),
-            "Estimate".into(),
-            "Standard Error".into(),
-            "DF".into(),
-            "t Value".into(),
-            "Pr > |t|".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        // Containment df: subjects − fixed parameters (approximate).
-        let df = (n_subjects as i64 - p as i64).max(1);
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        for a in 0..p {
-            let est = fit.beta[a];
-            let se = fit.cov_beta[a][a].max(0.0).sqrt();
-            let t = if se > 0.0 { est / se } else { 0.0 };
-            let pv = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
-            rows.push(vec![
-                labels[a].clone(),
-                fmt4(est),
-                fmt4(se),
-                df.to_string(),
-                fmt2(t),
-                fmt_p(pv),
-            ]);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+        print_fixed_solutions_gen(session, &fit, &labels, p, n_subjects);
     }
 
     Ok(())
