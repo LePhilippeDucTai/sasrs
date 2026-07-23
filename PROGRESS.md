@@ -1115,7 +1115,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   (fastclus, corr, princomp, factor, reg, distance, glm, npar1way, univariate, glimmix, genmod,
   ttest, anova, cluster, logistic, discrim, mixed). NE PAS toucher `ListingWriter::centered`
   (privée, autre rôle) (Sonnet, faible)
-- [ ] MQ1.2 — Supprimer de `common.rs` les distributions dupliquées verbatim dans `stat/dists.rs`
+- [x] MQ1.2 — Supprimer de `common.rs` les distributions dupliquées verbatim dans `stat/dists.rs`
   (`ln_gamma/betacf/betai/student_t_cdf/gser/gcf/gammq/erf/probnorm/phi_inv/ln_factorial/ln_choose`) ;
   `pub use crate::stat::dists::{...}` préserve les imports. **Garder local** : `t_quantile`
   (corps divergent, commentaire) et `chisq_sf` (absent de dists.rs ; déléguer à `dists::gammq`) (Sonnet, moyen)

@@ -85,16 +85,17 @@ pub fn partition_weighted(
     (pairs, excluded)
 }
 
-// ───────────────────────── Student-t quantile ─────────────────────────
+// ───────────────────────── shared distributions ─────────────────────────
 //
-// Self-contained Student-t inverse CDF (quantile), added for confidence-
-// interval statistics in PROC MEANS (CLM/LCLM/UCLM). This intentionally
-// duplicates the betai / ln_gamma machinery already present privately in
-// `corr.rs` rather than refactoring corr's copies: keeping corr untouched
-// guarantees its listing output stays byte-identical. The duplication is
-// small and documented here. If a future increment wants a single source of
-// truth, fold corr's private copies into these `pub(crate)` versions and run
-// the corr snapshot/tests to confirm no drift.
+// The distribution machinery (ln_gamma / betai / incomplete gamma / normal
+// CDF and probit / log-combinatorics) lives in `crate::stat::dists`; the
+// re-exports below keep the historical `procs::common::{...}` paths working.
+// The private copies in `corr.rs` and `datastep/functions.rs` are NOT folded
+// here on purpose: their algorithms differ (constants, iteration counts) and
+// the printed digits in their listings depend on them.
+
+use crate::stat::dists::{gammq, student_t_cdf};
+pub use crate::stat::dists::{ln_choose, ln_factorial, phi_inv, probnorm};
 
 /// Write a centered line within LINESIZE.
 pub fn centered(session: &mut Session, text: &str) {
@@ -103,106 +104,6 @@ pub fn centered(session: &mut Session, text: &str) {
     session
         .listing
         .write_line(&format!("{}{}", " ".repeat(pad), text));
-}
-
-/// Lanczos approximation of ln Γ(x) for x > 0. Accuracy ~1e-13.
-fn ln_gamma(x: f64) -> f64 {
-    const COF: [f64; 6] = [
-        76.18009172947146,
-        -86.50532032941677,
-        24.01409824083091,
-        -1.231739572450155,
-        0.1208650973866179e-2,
-        -0.5395239384953e-5,
-    ];
-    let mut y = x;
-    let tmp = x + 5.5 - (x + 0.5) * (x + 5.5).ln();
-    let mut ser = 1.000000000190015;
-    for c in COF.iter() {
-        y += 1.0;
-        ser += c / y;
-    }
-    -tmp + (2.5066282746310005 * ser / x).ln()
-}
-
-/// Continued fraction for the incomplete beta function (Lentz's algorithm).
-fn betacf(a: f64, b: f64, x: f64) -> f64 {
-    const MAXIT: usize = 300;
-    const EPS: f64 = 3.0e-15;
-    const FPMIN: f64 = 1.0e-300;
-
-    let qab = a + b;
-    let qap = a + 1.0;
-    let qam = a - 1.0;
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < FPMIN {
-        d = FPMIN;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for m in 1..=MAXIT {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < FPMIN {
-            d = FPMIN;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < FPMIN {
-            c = FPMIN;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-        let aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + aa * d;
-        if d.abs() < FPMIN {
-            d = FPMIN;
-        }
-        c = 1.0 + aa / c;
-        if c.abs() < FPMIN {
-            c = FPMIN;
-        }
-        d = 1.0 / d;
-        let del = d * c;
-        h *= del;
-        if (del - 1.0).abs() < EPS {
-            break;
-        }
-    }
-    h
-}
-
-/// Regularized incomplete beta function I_x(a, b), x in [0,1].
-fn betai(a: f64, b: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let ln_beta = ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b);
-    let front = (a * x.ln() + b * (1.0 - x).ln() + ln_beta).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        front * betacf(a, b, x) / a
-    } else {
-        1.0 - front * betacf(b, a, 1.0 - x) / b
-    }
-}
-
-/// Cumulative distribution function of Student's t with `df` degrees of
-/// freedom evaluated at `t`: P(T_df <= t). Uses the regularized incomplete
-/// beta identity. Symmetric around 0.
-fn student_t_cdf(t: f64, df: f64) -> f64 {
-    // P(T <= t) = 1 - 0.5 * I_{df/(df+t^2)}(df/2, 1/2) for t >= 0, mirrored.
-    let x = df / (df + t * t);
-    let ib = betai(df / 2.0, 0.5, x);
-    if t >= 0.0 {
-        1.0 - 0.5 * ib
-    } else {
-        0.5 * ib
-    }
 }
 
 /// Student-t quantile (inverse CDF): the value `q` such that
@@ -251,84 +152,6 @@ pub fn t_quantile(p: f64, df: f64) -> f64 {
     }
 }
 
-// ───────────────────────── chi-square survival ─────────────────────────
-//
-// Upper-tail (survival) probability of the chi-square distribution, used by
-// PROC FREQ for the CHISQ statistics. Implemented via the regularized upper
-// incomplete gamma function Q(a, x) = gammq, following Numerical Recipes
-// (series `gser` for x < a+1, continued fraction `gcf` otherwise). Reuses the
-// `ln_gamma` already defined above. Accuracy ~1e-10 on the useful range.
-
-/// Series representation of the lower regularized incomplete gamma P(a, x),
-/// valid (convergent) for x < a + 1.
-fn gser(a: f64, x: f64) -> f64 {
-    const ITMAX: usize = 300;
-    const EPS: f64 = 3.0e-15;
-    if x <= 0.0 {
-        return 0.0;
-    }
-    let gln = ln_gamma(a);
-    let mut ap = a;
-    let mut sum = 1.0 / a;
-    let mut del = sum;
-    for _ in 0..ITMAX {
-        ap += 1.0;
-        del *= x / ap;
-        sum += del;
-        if del.abs() < sum.abs() * EPS {
-            break;
-        }
-    }
-    sum * (-x + a * x.ln() - gln).exp()
-}
-
-/// Continued-fraction representation of the upper regularized incomplete gamma
-/// Q(a, x) (Lentz's algorithm), valid (convergent) for x >= a + 1.
-fn gcf(a: f64, x: f64) -> f64 {
-    const ITMAX: usize = 300;
-    const EPS: f64 = 3.0e-15;
-    const FPMIN: f64 = 1.0e-300;
-    let gln = ln_gamma(a);
-    let mut b = x + 1.0 - a;
-    let mut c = 1.0 / FPMIN;
-    let mut d = 1.0 / b;
-    let mut h = d;
-    for i in 1..=ITMAX {
-        let an = -(i as f64) * (i as f64 - a);
-        b += 2.0;
-        d = an * d + b;
-        if d.abs() < FPMIN {
-            d = FPMIN;
-        }
-        c = b + an / c;
-        if c.abs() < FPMIN {
-            c = FPMIN;
-        }
-        d = 1.0 / d;
-        let del = d * c;
-        h *= del;
-        if (del - 1.0).abs() < EPS {
-            break;
-        }
-    }
-    (-x + a * x.ln() - gln).exp() * h
-}
-
-/// Regularized upper incomplete gamma function Q(a, x) = 1 - P(a, x).
-fn gammq(a: f64, x: f64) -> f64 {
-    if x < 0.0 || a <= 0.0 {
-        return f64::NAN;
-    }
-    if x == 0.0 {
-        return 1.0;
-    }
-    if x < a + 1.0 {
-        1.0 - gser(a, x)
-    } else {
-        gcf(a, x)
-    }
-}
-
 /// Upper-tail (survival) probability of the chi-square distribution with `df`
 /// degrees of freedom evaluated at `x`: P(X²_df > x) = Q(df/2, x/2). Returns
 /// 1.0 at x <= 0 and ~0 for large x. Accuracy ~1e-10.
@@ -340,122 +163,6 @@ pub(crate) fn chisq_sf(x: f64, df: f64) -> f64 {
         return 1.0;
     }
     gammq(df / 2.0, x / 2.0)
-}
-
-// ───────────────────────── normal CDF / combinatorics ─────────────────────
-//
-// Helpers used by PROC FREQ's advanced statistics (Fisher exact test via
-// hypergeometric probabilities, Cochran-Armitage trend test via the standard
-// normal CDF). All numeric, no external crate.
-
-/// Error function erf(x), via the regularized lower incomplete gamma
-/// P(1/2, x²). Reuses the `ln_gamma`-based `gser`/`gcf` machinery above.
-fn erf(x: f64) -> f64 {
-    if x == 0.0 {
-        return 0.0;
-    }
-    // P(1/2, x²) = lower regularized incomplete gamma = 1 - Q(1/2, x²).
-    let p = 1.0 - gammq(0.5, x * x);
-    if x > 0.0 {
-        p
-    } else {
-        -p
-    }
-}
-
-/// Standard normal CDF Φ(z) = P(Z <= z), matching SAS PROBNORM. Accuracy
-/// ~1e-10 over the useful range.
-pub fn probnorm(z: f64) -> f64 {
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
-}
-
-/// Inverse standard normal CDF (probit / quantile), Φ⁻¹(p), for `0 < p < 1`.
-/// Returns the value `z` such that `probnorm(z) == p`.
-///
-/// Uses Peter Acklam's rational approximation (relative error < 1.15e-9),
-/// then refines with one Halley step against `probnorm` for full double
-/// precision. `p <= 0` → −∞, `p >= 1` → +∞ (SAS returns a large magnitude;
-/// callers must guard the degenerate tails themselves).
-pub fn phi_inv(p: f64) -> f64 {
-    if p <= 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if p >= 1.0 {
-        return f64::INFINITY;
-    }
-
-    // Rational approximation coefficients (Acklam).
-    const A: [f64; 6] = [
-        -3.969683028665376e+01,
-        2.209460984245205e+02,
-        -2.759285104469687e+02,
-        1.383577518672690e+02,
-        -3.066479806614716e+01,
-        2.506628277459239e+00,
-    ];
-    const B: [f64; 5] = [
-        -5.447609879822406e+01,
-        1.615858368580409e+02,
-        -1.556989798598866e+02,
-        6.680131188771972e+01,
-        -1.328068155288572e+01,
-    ];
-    const C: [f64; 6] = [
-        -7.784894002430293e-03,
-        -3.223964580411365e-01,
-        -2.400758277161838e+00,
-        -2.549732539343734e+00,
-        4.374664141464968e+00,
-        2.938163982698783e+00,
-    ];
-    const D: [f64; 4] = [
-        7.784695709041462e-03,
-        3.224671290700398e-01,
-        2.445134137142996e+00,
-        3.754408661907416e+00,
-    ];
-
-    // Break-points for the central / tail regions.
-    const P_LOW: f64 = 0.02425;
-    const P_HIGH: f64 = 1.0 - P_LOW;
-
-    let mut x = if p < P_LOW {
-        // Lower tail.
-        let q = (-2.0 * p.ln()).sqrt();
-        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
-            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
-    } else if p <= P_HIGH {
-        // Central region.
-        let q = p - 0.5;
-        let r = q * q;
-        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
-            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
-    } else {
-        // Upper tail.
-        let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
-            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
-    };
-
-    // One Halley refinement step: e = Φ(x) − p, u = e·√(2π)·exp(x²/2).
-    let e = probnorm(x) - p;
-    let u = e * (2.0 * std::f64::consts::PI).sqrt() * (0.5 * x * x).exp();
-    x -= u / (1.0 + 0.5 * x * u);
-    x
-}
-
-/// Natural log of n! = ln Γ(n+1), for n >= 0.
-pub fn ln_factorial(n: u64) -> f64 {
-    ln_gamma(n as f64 + 1.0)
-}
-
-/// Natural log of the binomial coefficient C(n, k). Returns -inf when
-/// k > n (coefficient 0).
-pub fn ln_choose(n: u64, k: u64) -> f64 {
-    if k > n {
-        return f64::NEG_INFINITY;
-    }
-    ln_factorial(n) - ln_factorial(k) - ln_factorial(n - k)
 }
 
 /// A resolved BY variable: dataset column index, declared DESCENDING flag,
