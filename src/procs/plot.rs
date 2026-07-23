@@ -382,14 +382,7 @@ pub fn execute(ast: &PlotAst, session: &mut Session) -> Result<()> {
     }
 
     // Read the input dataset once.
-    let in_ref = common::resolve_last_dataset(&ast.data_ref, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, _, _) = common::open_input(&ast.data_ref, session)?;
 
     for stmt in &ast.plots {
         let PlotStmt::Plot {

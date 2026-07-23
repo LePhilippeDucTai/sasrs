@@ -376,15 +376,7 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
     }
 
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(
@@ -1161,15 +1153,7 @@ fn term_column_specs(
 /// General multi-way / interaction GLM engine.
 fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Result<()> {
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(

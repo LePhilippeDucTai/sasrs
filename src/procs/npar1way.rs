@@ -842,15 +842,7 @@ use crate::procs::common::centered;
 
 /// Execute PROC NPAR1WAY and produce the listing.
 pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     let all_rows: Vec<usize> = (0..n_obs).collect();

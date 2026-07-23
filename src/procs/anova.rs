@@ -239,15 +239,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
     }
 
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(
@@ -683,15 +675,7 @@ fn main_effect_effect_coded(codes: &[usize], n_levels: usize, n: usize) -> Vec<V
 /// coding with Type I (sequential) and Type III (partial) sums of squares.
 fn execute_multiway(ast: &AnovaAst, model: &AnovaModel, session: &mut Session) -> Result<()> {
     // --- 1. Resolve dataset ---
-    let in_ref = common::resolve_last_dataset(&ast.data_options.input, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
 
     let n_obs = ds.n_obs();
     session.log.note(&format!(

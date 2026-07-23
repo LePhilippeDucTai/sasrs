@@ -903,15 +903,7 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 2. Read dataset ─────────────────────────────────────────────────────
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
 
     let n_read = ds.n_obs();
 
@@ -1860,14 +1852,7 @@ fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
 
     // ── Read dataset ────────────────────────────────────────────────────────
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
     let n_read = ds.n_obs();
 
     let find_col = |nm: &str| -> Result<usize> {

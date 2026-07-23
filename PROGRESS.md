@@ -1142,7 +1142,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ2.3 — Combinateurs `unary_num`/`unary_num_checked` remplaçant les ~56 blocs boilerplate de
   `datastep/functions.rs` (2-3 commits par paquets ; libellé/ordre des NOTEs inchangés) (Sonnet, moyen)
 - [x] MQ2.4 — `formats/builtin.rs` : extraire `fit_or_stars` (motif largeur/étoiles ×21) (Sonnet, faible)
-- [ ] MQ2.5 — `common::open_input(...)` : plomberie resolve→read→forward notes→NOTE observations ;
+- [x] MQ2.5 — `common::open_input(...)` : plomberie resolve→read→forward notes→NOTE observations ;
   migrer les 30+ procs par paquets de ~10 (ordre d'émission des NOTEs strictement identique) (Opus, moyen)
 - [ ] MQ2.6 — Codage CLASS : genmod/logistic/anova → `lincom::class_coding` + nouveau
   `lincom::class_levels` ; comparer d'abord ordre des niveaux/référence ; un proc = un commit (Opus, moyen)
