@@ -1156,7 +1156,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] DoD MQ2 : cargo test vert, zéro `.snap.new`, clippy 280 warnings (316 sur la base, aucun type nouveau) ; → MQ3.
 
 ## MQ3 — Scissions move-only + découpes de mégafonctions (AVANT M52)
-- [ ] MQ3.1 — `datastep/functions.rs` (6273 l) → `functions/{mod,math,char,datetime,stat,distributions,random}.rs` ;
+- [x] MQ3.1 — `datastep/functions.rs` (6273 l) → `functions/{mod,math,char,datetime,stat,distributions,random}.rs` ;
   `mod.rs` garde dispatch + re-exports (Sonnet, moyen)
 - [ ] MQ3.2 — `datastep/exec.rs` (8635 l) → `exec/{mod,hash,input,put,setmerge,tests}.rs`
   (tests inline → `tests.rs`) (Sonnet, moyen)
