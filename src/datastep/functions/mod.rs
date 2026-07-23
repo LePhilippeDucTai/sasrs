@@ -45,6 +45,9 @@
 //! Table-driven : (nom, args, résultat attendu) — une trentaine de cas,
 //! dont missings : `SUM(., .)` → `.`, `SUM(., 1)` → 1, `MEAN(1,.,3)` → 2.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use super::eval::EvalCtx;
 use crate::value::Value;
 
@@ -337,13 +340,27 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("RANBIN", fn_ranbin),
 ];
 
+/// Index O(1) construit depuis `DISPATCH`. En cas de clé dupliquée dans la
+/// table source, la PREMIÈRE occurrence gagne (`entry().or_insert`), comme
+/// avec le scan linéaire historique — voir le test
+/// `dispatch_map_matches_linear_scan`.
+static DISPATCH_MAP: LazyLock<HashMap<&'static str, SasFn>> = LazyLock::new(|| {
+    let mut map = HashMap::with_capacity(DISPATCH.len());
+    for (name, f) in DISPATCH {
+        map.entry(*name).or_insert(*f);
+    }
+    map
+});
+
 /// Renvoie None si la fonction est inconnue.
 pub fn call(name: &str, args: &[Value], ctx: &mut EvalCtx) -> Option<Value> {
-    let upper = name.to_uppercase();
-    for (fn_name, f) in DISPATCH {
-        if *fn_name == upper.as_str() {
-            return Some(f(args, ctx));
-        }
-    }
-    None
+    // Une seule normalisation, et AUCUNE allocation quand le nom est déjà
+    // en majuscules (pour un nom ASCII sans minuscule, `to_uppercase` est
+    // l'identité) — cas des appelants qui passent un nom pré-normalisé.
+    let f = if name.is_ascii() && !name.bytes().any(|b| b.is_ascii_lowercase()) {
+        DISPATCH_MAP.get(name)?
+    } else {
+        DISPATCH_MAP.get(name.to_uppercase().as_str())?
+    };
+    Some(f(args, ctx))
 }

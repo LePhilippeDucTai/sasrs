@@ -1185,7 +1185,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ4.4 — `ctx.fatal: Option<String>` → `Option<SasError>` (supprime le
   `strip_prefix("ERROR: ")` fragile) ; rendu log octet-identique, commit isolé, revue du diff
   de log complet (Opus, moyen)
-- [ ] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,
+- [x] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,
   normalisation unique ; diff des tables avant/après (même gagnant pour tout alias), messages
   « unknown function » inchangés ; commit isolé (Opus, moyen)
 - [ ] MQ4.6 — Trait `Proc` + `common::parse_model_effects` (squelette MODEL recopié dans

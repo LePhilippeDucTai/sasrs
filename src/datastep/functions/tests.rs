@@ -2558,3 +2558,28 @@ fn streaminit_seed_fn_zero_uses_default() {
     let s = streaminit_seed(0);
     assert_ne!(s, 0);
 }
+
+// ── Dispatch map ≡ scan linéaire (anti-régression du gagnant) ─────────────
+
+/// La `DISPATCH_MAP` doit résoudre chaque clé de la table source vers le
+/// MÊME pointeur de fonction qu'un scan linéaire de référence (première
+/// occurrence gagnante) — protège le remplacement du scan O(n) par la map.
+#[test]
+fn dispatch_map_matches_linear_scan() {
+    assert!(!DISPATCH.is_empty());
+    for (name, _) in DISPATCH {
+        // Gagnant du scan linéaire : la PREMIÈRE occurrence de la clé.
+        let linear: SasFn = DISPATCH
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, f)| *f)
+            .expect("key present in source table");
+        let mapped: SasFn = *DISPATCH_MAP
+            .get(name)
+            .unwrap_or_else(|| panic!("key {name} missing from DISPATCH_MAP"));
+        assert!(
+            std::ptr::fn_addr_eq(linear, mapped),
+            "dispatch winner mismatch for {name}"
+        );
+    }
+}

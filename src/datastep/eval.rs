@@ -532,6 +532,9 @@ fn eval_in(expr: &Expr, list: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
 /// une variable du PDV) ; sinon déléguer à `functions::call`. Fonction
 /// inconnue → ERROR fatal.
 fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+    // Nom normalisé UNE seule fois (lookups d'arrays, dispatch, messages) —
+    // évite les `to_uppercase()` répétés à chaque appel de fonction.
+    let upper = name.to_uppercase();
     // `dim(arr)` / `hbound(arr[, n])` / `lbound(arr[, n])` : le 1er argument
     // nomme un array déclaré → fonctions de bornes. DIM/HBOUND renvoient la
     // borne supérieure de la dimension n (défaut 1) ; LBOUND = 1 (SAS).
@@ -553,8 +556,7 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
                 Some(d) if d >= 1.0 => d as usize,
                 _ => {
                     ctx.fatal = Some(SasError::runtime(format!(
-                        "Invalid dimension argument to {}.",
-                        name.to_uppercase()
+                        "Invalid dimension argument to {upper}."
                     )));
                     return Value::missing();
                 }
@@ -564,8 +566,7 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         };
         if which > def.dims.len() {
             ctx.fatal = Some(SasError::runtime(format!(
-                "Invalid dimension argument to {}.",
-                name.to_uppercase()
+                "Invalid dimension argument to {upper}."
             )));
             return Value::missing();
         }
@@ -576,7 +577,7 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         return Value::Num(def.dims[which - 1] as f64);
     }
     // `arr(i)` / `arr(i,j)` : l'array masque la fonction homonyme (SAS).
-    if !args.is_empty() && ctx.arrays.contains_key(&name.to_uppercase()) {
+    if !args.is_empty() && ctx.arrays.contains_key(&upper) {
         return eval_array_ref(name, args, pdv, ctx);
     }
     // LAGn / DIFn : NE PEUVENT PAS être de simples fonctions car elles ont
@@ -596,13 +597,11 @@ fn eval_call(name: &str, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
         }
         arg_vals.push(v);
     }
-    match functions::call(name, &arg_vals, ctx) {
+    // `upper` est déjà normalisé : `functions::call` ne ré-alloue pas.
+    match functions::call(&upper, &arg_vals, ctx) {
         Some(v) => v,
         None => {
-            ctx.fatal = Some(SasError::runtime(format!(
-                "Function {} is unknown.",
-                name.to_uppercase()
-            )));
+            ctx.fatal = Some(SasError::runtime(format!("Function {upper} is unknown.")));
             Value::missing()
         }
     }
