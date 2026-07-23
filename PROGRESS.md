@@ -1126,9 +1126,11 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   (4-5 + 5 copies du bloc write+last_dataset+NOTE « has N observations ») (Opus, moyen)
 - [x] MQ1.6 — Helpers `hash`/`hash_mut` encapsulant les 22 `hashes.get(upper).expect("checked")`
   d'`exec.rs` (perf des clones : hors périmètre, sur profil seulement) (Sonnet, faible)
-- [ ] MQ1.7 — Branche « macro facility is not yet implemented » (`parser/mod.rs`) : si morte
-  (aucun snapshot/fixture ne la contient), supprimer ; sinon différer (message user-visible) (Sonnet, faible)
-- [ ] DoD MQ1 : `cargo test` vert, zéro `.snap.new`, clippy propre ; → MQ2.
+- [x] MQ1.7 — Branche « macro facility is not yet implemented » (`parser/mod.rs`) : **vérifié
+  atteignable** (une invocation `%macro_inconnue;` non résolue traverse l'expansion et tombe sur
+  cette branche ; aucun snapshot ne contient le message). Reformulation différée à un jalon de
+  comportement — cible SAS : « WARNING: Apparent invocation of macro X not resolved. » (Sonnet, faible)
+- [x] DoD MQ1 : `cargo test` vert, zéro `.snap.new`, clippy propre (seul warning préexistant : `frobenius_norm` inutilisé) ; → MQ2.
 
 ## MQ2 — Extraction de helpers et tables de dispatch (risque faible)
 - [ ] MQ2.1 — Canoniser les signatures `consume_*` sur `(chars, i, kw, masked, out)` (ordre de
