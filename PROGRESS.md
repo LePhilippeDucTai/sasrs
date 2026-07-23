@@ -1148,9 +1148,12 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   `lincom::class_levels` ; comparer d'abord ordre des niveaux/référence ; un proc = un commit (Opus, moyen)
 - [x] MQ2.7 — `build_design()` mixed⇄glimmix → `lincom::build_reference_design`, unifier
   `DesignColumn` (même précaution) (Opus, moyen)
-- [ ] MQ2.8 — Migrer la famille modèles linéaires sur `common::parse_by`/`by_groups`
-  (un proc = un commit) (Opus, moyen)
-- [ ] DoD MQ2 : idem MQ1 ; → MQ3.
+- [x] MQ2.8 — **Constat corrigé, rien à migrer** : dans la famille modèles linéaires, seul REG
+  supporte BY et il passe déjà par `common::resolve_by_cols`/`by_groups` (M36.7) ; glm/anova/
+  mixed/glimmix/genmod/logistic n'ont pas de statement BY (manque fonctionnel couvert par la
+  Phase G M52+, pas une duplication). Écart résiduel assumé : REG parse BY inline en ignorant
+  DESCENDING par conception (même analyse par groupe). (—)
+- [x] DoD MQ2 : cargo test vert, zéro `.snap.new`, clippy 280 warnings (316 sur la base, aucun type nouveau) ; → MQ3.
 
 ## MQ3 — Scissions move-only + découpes de mégafonctions (AVANT M52)
 - [ ] MQ3.1 — `datastep/functions.rs` (6273 l) → `functions/{mod,math,char,datetime,stat,distributions,random}.rs` ;
