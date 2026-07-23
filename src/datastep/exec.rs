@@ -643,20 +643,69 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         }
         let df = DataFrame::new(columns)?;
         let ds = SasDataset { df, vars };
-        session.libs.get(&spec.libref)?.write(&spec.table, &ds)?;
-        session.last_dataset = Some(spec.display.clone());
-        session.log.note(&format!(
-            "The data set {} has {} observations and {} variables.",
-            spec.display,
-            n_out,
-            spec.kept_slots.len()
-        ));
-        stats
-            .written
-            .push((spec.display.clone(), *n_out, spec.kept_slots.len()));
+        write_dataset_with_note(
+            session,
+            &spec.libref,
+            &spec.table,
+            &spec.display,
+            &ds,
+            *n_out,
+            Some(&mut stats),
+        )?;
     }
 
     Ok(stats)
+}
+
+/// Colonne Polars construite depuis des `Value` selon le type SAS déclaré :
+/// numérique via `value_to_num` (missings → null), caractère tel quel (toute
+/// cellule non-Char devient chaîne vide).
+pub(crate) fn column_from_values<'a>(
+    name: &str,
+    ty: VarType,
+    vals: impl Iterator<Item = &'a Value>,
+) -> Column {
+    match ty {
+        VarType::Num => {
+            let nums: Vec<Option<f64>> = vals.map(value_to_num).collect();
+            Series::new(name.into(), nums).into()
+        }
+        VarType::Char => {
+            let strs: Vec<String> = vals
+                .map(|v| match v {
+                    Value::Char(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            Series::new(name.into(), strs).into()
+        }
+    }
+}
+
+/// Écrit `ds` dans sa bibliothèque, met à jour `_LAST_` et émet la NOTE
+/// « The data set X has N observations and M variables. » ; enregistre la
+/// ligne dans `stats.written` quand un `StepStats` est fourni.
+pub(crate) fn write_dataset_with_note(
+    session: &mut Session,
+    libref: &str,
+    table: &str,
+    display: &str,
+    ds: &SasDataset,
+    n_obs: usize,
+    stats: Option<&mut StepStats>,
+) -> Result<()> {
+    session.libs.get(libref)?.write(table, ds)?;
+    session.last_dataset = Some(display.to_string());
+    session.log.note(&format!(
+        "The data set {} has {} observations and {} variables.",
+        display,
+        n_obs,
+        ds.vars.len()
+    ));
+    if let Some(stats) = stats {
+        stats.written.push((display.to_string(), n_obs, ds.vars.len()));
+    }
+    Ok(())
 }
 
 /// Écrit les sorties de hash en attente (M17.2) accumulées par
@@ -665,41 +714,28 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
 /// dataset (clés puis données, dans l'ordre de l'objet hash).
 fn flush_hash_outputs(r: &mut Runner, session: &mut Session) -> Result<()> {
     for out in std::mem::take(&mut r.ctx.hash_outputs) {
-        let mut columns: Vec<Column> = Vec::with_capacity(out.vars.len());
-        for (c, meta) in out.vars.iter().enumerate() {
-            let series = match meta.ty {
-                VarType::Num => {
-                    let vals: Vec<Option<f64>> =
-                        out.rows.iter().map(|row| value_to_num(&row[c])).collect();
-                    Series::new(meta.name.as_str().into(), vals)
-                }
-                VarType::Char => {
-                    let vals: Vec<String> = out
-                        .rows
-                        .iter()
-                        .map(|row| match &row[c] {
-                            Value::Char(s) => s.clone(),
-                            _ => String::new(),
-                        })
-                        .collect();
-                    Series::new(meta.name.as_str().into(), vals)
-                }
-            };
-            columns.push(series.into());
-        }
+        let columns: Vec<Column> = out
+            .vars
+            .iter()
+            .enumerate()
+            .map(|(c, meta)| {
+                column_from_values(&meta.name, meta.ty, out.rows.iter().map(|row| &row[c]))
+            })
+            .collect();
         let df = DataFrame::new(columns)?;
         let ds = SasDataset {
             df,
             vars: out.vars.clone(),
         };
-        session.libs.get(&out.libref)?.write(&out.table, &ds)?;
-        session.last_dataset = Some(out.display.clone());
-        session.log.note(&format!(
-            "The data set {} has {} observations and {} variables.",
-            out.display,
+        write_dataset_with_note(
+            session,
+            &out.libref,
+            &out.table,
+            &out.display,
+            &ds,
             out.rows.len(),
-            out.vars.len()
-        ));
+            None,
+        )?;
     }
     Ok(())
 }
@@ -860,17 +896,15 @@ fn write_runner_outputs(r: &mut Runner, session: &mut Session, stats: &mut StepS
         }
         let df = DataFrame::new(columns)?;
         let ds = SasDataset { df, vars };
-        session.libs.get(&spec.libref)?.write(&spec.table, &ds)?;
-        session.last_dataset = Some(spec.display.clone());
-        session.log.note(&format!(
-            "The data set {} has {} observations and {} variables.",
-            spec.display,
-            n_out,
-            spec.kept_slots.len()
-        ));
-        stats
-            .written
-            .push((spec.display.clone(), *n_out, spec.kept_slots.len()));
+        write_dataset_with_note(
+            session,
+            &spec.libref,
+            &spec.table,
+            &spec.display,
+            &ds,
+            *n_out,
+            Some(stats),
+        )?;
     }
     Ok(())
 }
@@ -1151,26 +1185,12 @@ fn execute_modify(prog: StepProgram, session: &mut Session) -> Result<StepStats>
 
     drain_runner_side_effects(&mut r, session)?;
 
-    let mut columns: Vec<Column> = Vec::with_capacity(m.out_vars.len());
-    for (pos, meta) in m.out_vars.iter().enumerate() {
-        let series = match meta.ty {
-            VarType::Num => {
-                let vals: Vec<Option<f64>> = buffer[pos].iter().map(value_to_num).collect();
-                Series::new(meta.name.as_str().into(), vals)
-            }
-            VarType::Char => {
-                let vals: Vec<String> = buffer[pos]
-                    .iter()
-                    .map(|v| match v {
-                        Value::Char(s) => s.clone(),
-                        _ => String::new(),
-                    })
-                    .collect();
-                Series::new(meta.name.as_str().into(), vals)
-            }
-        };
-        columns.push(series.into());
-    }
+    let columns: Vec<Column> = m
+        .out_vars
+        .iter()
+        .enumerate()
+        .map(|(pos, meta)| column_from_values(&meta.name, meta.ty, buffer[pos].iter()))
+        .collect();
     let df = DataFrame::new(columns)?;
     let ds = SasDataset {
         df,

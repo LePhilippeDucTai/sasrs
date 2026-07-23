@@ -34,13 +34,12 @@
 
 use super::pdv::Pdv;
 use super::StepProgram;
-use super::exec::StepStats;
+use super::exec::{self, StepStats};
 use crate::ast::{BinaryOp, DsStmt, Expr};
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
-use crate::missing::value_to_num;
 use crate::session::Session;
-use crate::value::{Value, VarType};
+use crate::value::VarType;
 use polars::prelude::*;
 
 /// Vrai si l'étape compilée est dans le périmètre du fast-path (cf. en-tête).
@@ -197,25 +196,12 @@ pub fn run(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let mut columns: Vec<Column> = Vec::with_capacity(pdv.vars().len());
     for (ci, &slot) in ds0.var_slots.iter().enumerate() {
         from_input[slot] = true;
-        let name = pdv.vars()[slot].name.as_str();
-        let series = match pdv.vars()[slot].ty {
-            VarType::Num => {
-                let vals: Vec<Option<f64>> =
-                    ds0.columns[ci].iter().map(value_to_num).collect();
-                Series::new(name.into(), vals)
-            }
-            VarType::Char => {
-                let vals: Vec<String> = ds0.columns[ci]
-                    .iter()
-                    .map(|v| match v {
-                        Value::Char(s) => s.clone(),
-                        _ => String::new(),
-                    })
-                    .collect();
-                Series::new(name.into(), vals)
-            }
-        };
-        columns.push(series.into());
+        let v = &pdv.vars()[slot];
+        columns.push(exec::column_from_values(
+            &v.name,
+            v.ty,
+            ds0.columns[ci].iter(),
+        ));
     }
     // Variables créées par assignation (jamais en entrée) : colonne null f64.
     // (eligible() garantit qu'elles sont numériques et qu'il n'y a pas de
@@ -307,17 +293,15 @@ pub fn run(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let n_out = out_cols.first().map_or(n_rows, |c| c.len());
     let df = DataFrame::new(out_cols)?;
     let ds = SasDataset { df, vars };
-    session.libs.get(&spec.libref)?.write(&spec.table, &ds)?;
-    session.last_dataset = Some(spec.display.clone());
-    session.log.note(&format!(
-        "The data set {} has {} observations and {} variables.",
-        spec.display,
+    exec::write_dataset_with_note(
+        session,
+        &spec.libref,
+        &spec.table,
+        &spec.display,
+        &ds,
         n_out,
-        spec.kept_slots.len()
-    ));
-    stats
-        .written
-        .push((spec.display.clone(), n_out, spec.kept_slots.len()));
+        Some(&mut stats),
+    )?;
 
     Ok(stats)
 }

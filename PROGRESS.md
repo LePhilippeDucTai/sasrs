@@ -1122,7 +1122,7 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ1.3 — Hisser `value_label` (6 fichiers), `fmt_p` (7), `two_sided_p` (2) dans `common.rs` ;
   diff de chaque copie avant suppression (une copie divergente reste locale, noté ici) (Sonnet, faible)
 - [x] MQ1.4 — `executor.rs` : `note_libref_assigned(...)` pour la NOTE Libref dupliquée 3× (Sonnet, faible)
-- [ ] MQ1.5 — `column_from_values` + `write_output` uniques partagés `datastep/exec.rs`⇄`fastpath.rs`
+- [x] MQ1.5 — `column_from_values` + `write_output` uniques partagés `datastep/exec.rs`⇄`fastpath.rs`
   (4-5 + 5 copies du bloc write+last_dataset+NOTE « has N observations ») (Opus, moyen)
 - [ ] MQ1.6 — Helpers `hash`/`hash_mut` encapsulant les 22 `hashes.get(upper).expect("checked")`
   d'`exec.rs` (perf des clones : hors périmètre, sur profil seulement) (Sonnet, faible)
