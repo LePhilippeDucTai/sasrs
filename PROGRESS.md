@@ -1218,6 +1218,6 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
   substitue proprement (Sonnet, moyen)
 - [x] MQ6.2 — `lincom::class_levels` : migrer les candidats sûrs notés en MQ2.6 —
   glm.rs (~l.425/1215), npar1way.rs (~l.924) (Sonnet, faible)
-- [ ] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
+- [x] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
   univariate, corr, freq) en modules `tests` dédiés (move-only, multiset) (Sonnet, moyen)
 - [ ] DoD MQ6 : idem MQ5 ; **fin de Phase Q2**.
