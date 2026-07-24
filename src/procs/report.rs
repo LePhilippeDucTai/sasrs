@@ -772,13 +772,97 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     }
     let n_obs_total = ds.n_obs();
 
-    // --- Resolve the column list (display order). ---
+    // --- Build the per-column plan, applying DEFINEs and type defaults. ---
+    let plan = build_col_plan(ast, &ds)?;
+
+    // --- Decode, apply WHERE, and project onto surviving rows. ---
+    let (decoded, n_obs) = decode_and_filter(ast, &ds, &plan, n_obs_total)?;
+
+    // --- ACROSS branch: distinct values of the across var become columns. ---
+    let has_across = plan.iter().any(|c| matches!(c.usage, Usage::Across));
+    if has_across {
+        return execute_across(ast, session, &ds, &plan, &decoded, n_obs, &display_name);
+    }
+
+    // Determine whether this is a summary report.
+    let group_positions: Vec<usize> = plan
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches!(c.usage, Usage::Group | Usage::Order))
+        .map(|(i, _)| i)
+        .collect();
+    let is_summary = !group_positions.is_empty();
+
+    // --- Headers & alignments ---
+    let (headers, aligns) = build_headers(&plan, &ds);
+
+    // Output value rows (typed) — used both for the listing and for OUT=.
+    // Each entry is (kind, values), where `kind` distinguishes detail/group
+    // rows from BREAK/RBREAK summary rows (RBREAK is not written to OUT=).
+    let mut value_rows: Vec<RowOut> = if !is_summary {
+        build_detail_rows(&plan, &decoded, n_obs)
+    } else {
+        build_summary_rows(ast, &ds, &plan, &decoded, &group_positions, n_obs)
+    };
+
+    // --- COMPUTE: apply simple `<col> = <expr>;` assignments per row. ---
+    apply_row_computes(ast, &plan, &mut value_rows);
+
+    // --- Render the listing. ---
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
+    let rows: Vec<Vec<String>> = value_rows
+        .iter()
+        .map(|ro| {
+            ro.vals
+                .iter()
+                .enumerate()
+                .map(|(ci, v)| fmt_cell_fmt(v, plan[ci].format.as_deref(), &catalog))
+                .collect()
+        })
+        .collect();
+
+    // Whether any DEFINE carried WIDTH=/SPACING= (M33.5). When none do, we keep
+    // the exact historical rendering path (byte-identical default).
+    let has_layout = plan.iter().any(|c| c.width.is_some() || c.spacing.is_some());
+
+    session.listing.page_header();
+    if has_layout {
+        write_table_layout(session, &headers, &aligns, &rows, &plan, ast.noheader);
+    } else if ast.noheader {
+        write_table_noheader(session, &aligns, &rows);
+    } else {
+        session.listing.write_table(&headers, &aligns, &rows);
+    }
+
+    // --- COMPUTE AFTER / LINE: free-text lines below the report. ---
+    render_after_lines(ast, session, &plan, &value_rows, &catalog);
+
+    // --- OUT=: write the report rows (excluding RBREAK grand total) as data. ---
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(session, out_ref, &plan, &ds, &value_rows)?;
+    }
+
+    // NOTE — observations read (plural invariable, as in PRINT). After a WHERE,
+    // SAS reports the count actually read (the filtered count).
+    session.log.note(&format!(
+        "There were {} observations read from the data set {}.",
+        n_obs, display_name
+    ));
+
+    Ok(())
+}
+
+/// Resolve the column list (display order) and build the per-column plan,
+/// applying DEFINEs and type defaults.
+fn build_col_plan(ast: &ReportAst, ds: &crate::dataset::SasDataset) -> Result<Vec<ColPlan>> {
     let col_names: Vec<String> = match &ast.columns {
         Some(list) => list.clone(),
         None => ds.vars.iter().map(|m| m.name.clone()).collect(),
     };
 
-    // --- Build the per-column plan, applying DEFINEs and type defaults. ---
     let mut plan: Vec<ColPlan> = Vec::with_capacity(col_names.len());
     for cname in &col_names {
         let def = ast
@@ -833,24 +917,34 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
             spacing: def.and_then(|d| d.spacing),
         });
     }
+    Ok(plan)
+}
 
-    // Decode every planned column once (COMPUTED columns decode to all-missing).
+/// Decode every planned column once (COMPUTED columns decode to all-missing),
+/// apply the WHERE predicate, and project the columns onto the surviving rows
+/// so downstream code indexes 0..n_obs contiguously.
+fn decode_and_filter(
+    ast: &ReportAst,
+    ds: &crate::dataset::SasDataset,
+    plan: &[ColPlan],
+    n_obs_total: usize,
+) -> Result<(Vec<Vec<Value>>, usize)> {
     let decoded_all: Vec<Vec<Value>> = plan
         .iter()
         .map(|c| {
             if c.idx == usize::MAX {
                 Ok(vec![Value::missing(); n_obs_total])
             } else {
-                decode_column(&ds, c.idx)
+                decode_column(ds, c.idx)
             }
         })
         .collect::<Result<_>>()?;
 
-    // --- WHERE: build the surviving-rows index. ---
+    // WHERE: build the surviving-rows index.
     let live_rows: Vec<usize> = if let Some(cond) = &ast.where_ {
         // Build a name→decoded-column lookup over ALL dataset variables (not
         // just the planned columns) so the predicate can reference any var.
-        let where_cols = decode_named_columns(&ds)?;
+        let where_cols = decode_named_columns(ds)?;
         (0..n_obs_total)
             .filter(|&r| {
                 let v = eval_row_expr(cond, &where_cols, r);
@@ -862,29 +956,15 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     };
     let n_obs = live_rows.len();
 
-    // Project the decoded columns onto the surviving rows so downstream code
-    // indexes 0..n_obs contiguously.
     let decoded: Vec<Vec<Value>> = decoded_all
         .iter()
         .map(|col| live_rows.iter().map(|&r| col[r].clone()).collect())
         .collect();
+    Ok((decoded, n_obs))
+}
 
-    // --- ACROSS branch: distinct values of the across var become columns. ---
-    let has_across = plan.iter().any(|c| matches!(c.usage, Usage::Across));
-    if has_across {
-        return execute_across(ast, session, &ds, &plan, &decoded, n_obs, &display_name);
-    }
-
-    // Determine whether this is a summary report.
-    let group_positions: Vec<usize> = plan
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| matches!(c.usage, Usage::Group | Usage::Order))
-        .map(|(i, _)| i)
-        .collect();
-    let is_summary = !group_positions.is_empty();
-
-    // --- Headers & alignments ---
+/// Headers + per-column alignments for the listing.
+fn build_headers(plan: &[ColPlan], ds: &crate::dataset::SasDataset) -> (Vec<String>, Vec<Align>) {
     let headers: Vec<String> = plan.iter().map(|c| c.header.clone()).collect();
     let aligns: Vec<Align> = plan
         .iter()
@@ -898,147 +978,109 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
             },
         })
         .collect();
+    (headers, aligns)
+}
 
-    // Output value rows (typed) — used both for the listing and for OUT=.
-    // Each entry is (kind, values), where `kind` distinguishes detail/group
-    // rows from BREAK/RBREAK summary rows (RBREAK is not written to OUT=).
+/// Detail report: one listing row per (surviving) observation.
+fn build_detail_rows(plan: &[ColPlan], decoded: &[Vec<Value>], n_obs: usize) -> Vec<RowOut> {
+    let mut value_rows: Vec<RowOut> = Vec::new();
+    for r in 0..n_obs {
+        let vals: Vec<Value> = (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect();
+        value_rows.push(RowOut {
+            kind: RowKind::Detail,
+            vals,
+        });
+    }
+    value_rows
+}
+
+/// Summary report: group by GROUP+ORDER key columns and emit one row per
+/// group, plus BREAK sub-totals and the RBREAK grand total.
+fn build_summary_rows(
+    ast: &ReportAst,
+    ds: &crate::dataset::SasDataset,
+    plan: &[ColPlan],
+    decoded: &[Vec<Value>],
+    group_positions: &[usize],
+    n_obs: usize,
+) -> Vec<RowOut> {
     let mut value_rows: Vec<RowOut> = Vec::new();
 
-    if !is_summary {
-        // ── Detail report: one listing row per (surviving) observation. ──
-        for r in 0..n_obs {
-            let vals: Vec<Value> = (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect();
-            value_rows.push(RowOut {
-                kind: RowKind::Detail,
-                vals,
-            });
-        }
-    } else {
-        // ── Summary report: group by GROUP+ORDER key columns. ──
-        let key_refs: Vec<&Vec<Value>> = group_positions.iter().map(|&p| &decoded[p]).collect();
-        let mut groups = group_by_keys(&key_refs, n_obs);
+    let key_refs: Vec<&Vec<Value>> = group_positions.iter().map(|&p| &decoded[p]).collect();
+    let mut groups = group_by_keys(&key_refs, n_obs);
 
-        // Apply DESCENDING direction lexicographically over the key tuple.
-        let dirs: Vec<OrderDir> = group_positions.iter().map(|&p| plan[p].dir).collect();
-        groups.sort_by(|(a, _), (b, _)| {
-            for ((x, y), dir) in a.iter().zip(b).zip(&dirs) {
-                let mut c = x.sas_cmp(y);
-                if *dir == OrderDir::Descending {
-                    c = c.reverse();
-                }
-                if c != Ordering::Equal {
-                    return c;
-                }
+    // Apply DESCENDING direction lexicographically over the key tuple.
+    let dirs: Vec<OrderDir> = group_positions.iter().map(|&p| plan[p].dir).collect();
+    groups.sort_by(|(a, _), (b, _)| {
+        for ((x, y), dir) in a.iter().zip(b).zip(&dirs) {
+            let mut c = x.sas_cmp(y);
+            if *dir == OrderDir::Descending {
+                c = c.reverse();
             }
-            Ordering::Equal
+            if c != Ordering::Equal {
+                return c;
+            }
+        }
+        Ordering::Equal
+    });
+
+    // Which group var(s) trigger a BREAK? Map a break's var to its position
+    // in `group_positions` (the deepest matching group level).
+    let break_after: Vec<(usize, &Break)> = ast
+        .breaks
+        .iter()
+        .filter_map(|b| {
+            let vn = b.var.as_ref()?;
+            group_positions
+                .iter()
+                .position(|&p| {
+                    plan[p].idx != usize::MAX
+                        && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
+                })
+                .map(|pos| (pos, b))
+        })
+        .collect();
+
+    for (gi, (key, grp_rows)) in groups.iter().enumerate() {
+        let vals = summary_row_values(plan, decoded, grp_rows);
+        value_rows.push(RowOut {
+            kind: RowKind::Group,
+            vals,
         });
 
-        // Which group var(s) trigger a BREAK? Map a break's var to its position
-        // in `group_positions` (the deepest matching group level).
-        let break_after: Vec<(usize, &Break)> = ast
-            .breaks
-            .iter()
-            .filter_map(|b| {
-                let vn = b.var.as_ref()?;
-                group_positions
-                    .iter()
-                    .position(|&p| {
-                        plan[p].idx != usize::MAX
-                            && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
-                    })
-                    .map(|pos| (pos, b))
-            })
-            .collect();
-
-        for (gi, (key, grp_rows)) in groups.iter().enumerate() {
-            let vals = summary_row_values(&plan, &decoded, grp_rows);
-            value_rows.push(RowOut {
-                kind: RowKind::Group,
-                vals,
-            });
-
-            // BREAK AFTER <var>: emit a sub-total line when the key value for
-            // that level changes (or at the last group).
-            for &(level_pos, brk) in &break_after {
-                let is_last = gi + 1 == groups.len();
-                let changes = is_last
-                    || groups[gi + 1].0.get(level_pos).map(|nv| {
-                        key[level_pos].sas_cmp(nv) != Ordering::Equal
-                    }) != Some(false);
-                if changes && brk.summarize {
-                    // Range = all original rows whose key matches up to and
-                    // including `level_pos`. Collect across the contiguous run.
-                    let range = break_range_rows(&groups, gi, level_pos, key);
-                    let bvals = break_row_values(&plan, &decoded, &range, level_pos);
-                    value_rows.push(RowOut {
-                        kind: RowKind::Break,
-                        vals: bvals,
-                    });
-                }
-            }
-        }
-
-        // RBREAK AFTER / SUMMARIZE: grand-total line over all surviving rows.
-        if let Some(rb) = &ast.rbreak {
-            if rb.summarize {
-                let all: Vec<usize> = (0..n_obs).collect();
-                let rvals = break_row_values(&plan, &decoded, &all, usize::MAX);
+        // BREAK AFTER <var>: emit a sub-total line when the key value for
+        // that level changes (or at the last group).
+        for &(level_pos, brk) in &break_after {
+            let is_last = gi + 1 == groups.len();
+            let changes = is_last
+                || groups[gi + 1].0.get(level_pos).map(|nv| {
+                    key[level_pos].sas_cmp(nv) != Ordering::Equal
+                }) != Some(false);
+            if changes && brk.summarize {
+                // Range = all original rows whose key matches up to and
+                // including `level_pos`. Collect across the contiguous run.
+                let range = break_range_rows(&groups, gi, level_pos, key);
+                let bvals = break_row_values(plan, decoded, &range, level_pos);
                 value_rows.push(RowOut {
-                    kind: RowKind::Rbreak,
-                    vals: rvals,
+                    kind: RowKind::Break,
+                    vals: bvals,
                 });
             }
         }
     }
 
-    // --- COMPUTE: apply simple `<col> = <expr>;` assignments per row. ---
-    apply_row_computes(ast, &plan, &mut value_rows);
-
-    // --- Render the listing. ---
-    // Clone the user-format catalog once so cell formatting (which borrows it)
-    // does not clash with the mutable `session.listing` borrow below. Empty on
-    // the default path → no behaviour change.
-    let catalog = session.format_catalog.clone();
-    let rows: Vec<Vec<String>> = value_rows
-        .iter()
-        .map(|ro| {
-            ro.vals
-                .iter()
-                .enumerate()
-                .map(|(ci, v)| fmt_cell_fmt(v, plan[ci].format.as_deref(), &catalog))
-                .collect()
-        })
-        .collect();
-
-    // Whether any DEFINE carried WIDTH=/SPACING= (M33.5). When none do, we keep
-    // the exact historical rendering path (byte-identical default).
-    let has_layout = plan.iter().any(|c| c.width.is_some() || c.spacing.is_some());
-
-    session.listing.page_header();
-    if has_layout {
-        write_table_layout(session, &headers, &aligns, &rows, &plan, ast.noheader);
-    } else if ast.noheader {
-        write_table_noheader(session, &aligns, &rows);
-    } else {
-        session.listing.write_table(&headers, &aligns, &rows);
+    // RBREAK AFTER / SUMMARIZE: grand-total line over all surviving rows.
+    if let Some(rb) = &ast.rbreak {
+        if rb.summarize {
+            let all: Vec<usize> = (0..n_obs).collect();
+            let rvals = break_row_values(plan, decoded, &all, usize::MAX);
+            value_rows.push(RowOut {
+                kind: RowKind::Rbreak,
+                vals: rvals,
+            });
+        }
     }
-
-    // --- COMPUTE AFTER / LINE: free-text lines below the report. ---
-    render_after_lines(ast, session, &plan, &value_rows, &catalog);
-
-    // --- OUT=: write the report rows (excluding RBREAK grand total) as data. ---
-    if let Some(out_ref) = &ast.out {
-        write_out_dataset(session, out_ref, &plan, &ds, &value_rows)?;
-    }
-
-    // NOTE — observations read (plural invariable, as in PRINT). After a WHERE,
-    // SAS reports the count actually read (the filtered count).
-    session.log.note(&format!(
-        "There were {} observations read from the data set {}.",
-        n_obs, display_name
-    ));
-
-    Ok(())
+    value_rows
 }
 
 /// A produced report row (typed values) and what kind of row it is.
