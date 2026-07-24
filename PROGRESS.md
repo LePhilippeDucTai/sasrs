@@ -1200,8 +1200,8 @@ règles : une case = un commit, `cargo test` vert, **zéro `.snap.new`**, clippy
 nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/discrim/princomp).
 
 ## MQ5 — dernières mégafonctions (méthode MQ3.9)
-- [ ] MQ5.1 — `procs/reg/parse.rs::parse` (764 l) → scinder par statement (Opus, moyen)
-- [ ] MQ5.2 — `procs/reg/mod.rs::run_model` (607 l) → extraire les phases ; poursuivre la
+- [x] MQ5.1 — `procs/reg/parse.rs::parse` (764 l) → scinder par statement (Opus, moyen)
+- [x] MQ5.2 — `procs/reg/mod.rs::run_model` (607 l) → extraire les phases ; poursuivre la
   découpe de `fit_and_print` (469 l restantes) par table (Opus, moyen)
 - [ ] MQ5.3 — `execute` restantes : factor (523 l), compare (517), discrim (418),
   princomp (316), print (297), report (280), mixed::execute_legacy (371),

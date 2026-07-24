@@ -673,24 +673,8 @@ fn run_model(
 ) -> Result<()> {
     let _ = (in_libref, in_table);
     let model = &entry.model;
-    // M36.10 run-group editing: ADD/DELETE adjust the regressor set for the
-    // final fit. With neither present this is byte-identical to `model.regressors`
-    // (we borrow it directly). ADD appends not-already-present names (MODEL order
-    // preserved, additions last); DELETE removes matching names.
-    let regressors_owned: Option<Vec<String>> = if entry.add.is_empty() && entry.delete.is_empty() {
-        None
-    } else {
-        let mut regs: Vec<String> = model.regressors.clone();
-        for a in &entry.add {
-            if !regs.iter().any(|r| r.eq_ignore_ascii_case(a)) {
-                regs.push(a.clone());
-            }
-        }
-        if !entry.delete.is_empty() {
-            regs.retain(|r| !entry.delete.iter().any(|d| d.eq_ignore_ascii_case(r)));
-        }
-        Some(regs)
-    };
+    // M36.10 run-group editing (ADD/DELETE) — see `effective_regressors`.
+    let regressors_owned: Option<Vec<String>> = effective_regressors(entry);
     let regressors: &[String] = match &regressors_owned {
         Some(v) => v.as_slice(),
         None => &model.regressors,
@@ -698,34 +682,8 @@ fn run_model(
     let p = regressors.len();
     let n_read = rows.len();
 
-    // --- Find column indices ---
-    let find_col = |nm: &str| -> Result<usize> {
-        ds.vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
-    };
-
-    // Regressor resolution + decode is shared across all responses (the design
-    // is common to every dependent on the MODEL LHS), so it is hoisted above the
-    // per-response loop below.
-    let mut reg_idxs: Vec<usize> = Vec::with_capacity(p);
-    for nm in regressors {
-        let idx = find_col(nm)?;
-        if ds.vars[idx].ty != VarType::Num {
-            return Err(SasError::runtime(format!(
-                "Regressor {} must be numeric.",
-                nm.to_uppercase()
-            )));
-        }
-        reg_idxs.push(idx);
-    }
-
-    // --- Decode regressor columns (shared) ---
-    let mut reg_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(p);
-    for &idx in &reg_idxs {
-        reg_cols.push(decode_column(ds, idx)?);
-    }
+    // --- Resolve + decode the regressor columns (shared across responses) ---
+    let reg_cols = decode_regressor_columns(ds, regressors)?;
 
     // M36.10 multi-response MODEL (`model y1 y2 = x;`): SAS PROC REG prints a
     // SEPARATE univariate regression analysis for EACH dependent, in MODEL
@@ -748,7 +706,7 @@ fn run_model(
     let mut mtest_inputs: Option<(Vec<usize>, Vec<String>, bool)> = None;
     for (resp_i, dep_name) in model.dependents.iter().enumerate() {
         let dep_name: &str = dep_name.as_str();
-        let dep_idx = find_col(dep_name)?;
+        let dep_idx = find_col(ds, dep_name)?;
         if ds.vars[dep_idx].ty != VarType::Num {
             return Err(SasError::runtime(format!(
                 "Dependent variable {} must be numeric.",
@@ -757,88 +715,17 @@ fn run_model(
         }
         let dep_col = decode_column(ds, dep_idx)?;
 
-    // --- M36.7 weighting bookkeeping. `wf` accumulates the effective SS weight
-    // w_i·f_i for each complete-case row; `total_n` accumulates Σf_i (FREQ
-    // inflates the observation count / df, WEIGHT does not). `id_used` carries
-    // the first ID variable's per-row display value when ID is given. When no
-    // WEIGHT and no FREQ are present, `weighting` stays inactive and the whole
-    // analysis is byte-identical to the prior OLS path.
-    let has_weight = weight_col.is_some();
-    let has_freq = freq_col.is_some();
-    let mut wf: Vec<f64> = Vec::new();
-    let mut total_n: f64 = 0.0;
-    let mut id_used: Vec<String> = Vec::new();
-
-    // --- Build regressor columns (numeric) and y vector (listwise deletion) ---
-    // xcols[c] is the c-th regressor over the complete-case rows.
-    let mut xcols: Vec<Vec<f64>> = vec![Vec::new(); p];
-    let mut y_vec: Vec<f64> = Vec::new();
-    let mut complete_mask: Vec<bool> = vec![false; ds.n_obs()];
-
-    for &i in rows {
-        // FREQ: truncate to integer; exclude obs with f_i < 1 or missing.
-        let fi: f64 = match freq_col {
-            Some(col) => match value_to_num(&col[i]) {
-                Some(v) if !v.is_nan() => {
-                    let t = v.trunc();
-                    if t < 1.0 {
-                        continue;
-                    }
-                    t
-                }
-                _ => continue,
-            },
-            None => 1.0,
-        };
-        // WEIGHT: exclude obs with w_i ≤ 0 or missing weight.
-        let wi: f64 = match weight_col {
-            Some(col) => match value_to_num(&col[i]) {
-                Some(v) if !v.is_nan() && v > 0.0 => v,
-                _ => continue,
-            },
-            None => 1.0,
-        };
-        let yi = match value_to_num(&dep_col[i]) {
-            Some(v) if !v.is_nan() => v,
-            _ => continue,
-        };
-        let mut row_vals = Vec::with_capacity(p);
-        let mut ok = true;
-        for rc in &reg_cols {
-            match value_to_num(&rc[i]) {
-                Some(v) if !v.is_nan() => row_vals.push(v),
-                _ => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok {
-            for (c, v) in row_vals.into_iter().enumerate() {
-                xcols[c].push(v);
-            }
-            y_vec.push(yi);
-            wf.push(wi * fi);
-            total_n += fi;
-            if let Some((_, col)) = id_cols.first() {
-                id_used.push(id_value_cell(&col[i]));
-            }
-            complete_mask[i] = true;
-        }
-    }
-
-    // Effective weighting context. Active when WEIGHT or FREQ is present. When
-    // inactive the OLS path runs exactly as before (byte-identical). `total_n`
-    // (Σf_i) is the observation count that drives df / n bookkeeping: FREQ
-    // changes n and df, WEIGHT does not.
-    let weighting = if has_weight || has_freq {
-        Some(Weighting {
-            wf: wf.clone(),
-            total_n,
-        })
-    } else {
-        None
-    };
+    // --- M36.7 WEIGHT/FREQ bookkeeping + listwise deletion — see
+    // `gather_complete_cases`. When no WEIGHT and no FREQ are present,
+    // `weighting` stays inactive and the whole analysis is byte-identical to
+    // the prior OLS path.
+    let CaseData {
+        xcols,
+        y_vec,
+        complete_mask,
+        weighting,
+        id_used,
+    } = gather_complete_cases(ds, rows, weight_col, freq_col, id_cols, &dep_col, &reg_cols);
     let id_first: Option<&[String]> = if id_cols.is_empty() {
         None
     } else {
@@ -977,40 +864,8 @@ fn run_model(
         None
     };
 
-    // PRESS statistic (M36.5): Σ wf_i·(resid_i/(1−h_i))². With WEIGHT/FREQ active
-    // (M36.7) the leverage is the WEIGHTED one (h_i·w_i) and each term carries
-    // wf_i, matching the weighted PRESS in the MODEL R residual summary and
-    // STUDENT/Cook's D (which already use the weighted leverage). With no
-    // weighting `wf` is all-ones and h is the plain OLS leverage, so this is
-    // byte-identical to before.
-    let press_stat = if model.press_opt && !model.noprint {
-        let h0 = leverages(&x_mat, &fit.xtx_inv);
-        let ones = vec![1.0; h0.len()];
-        let wf: &[f64] = weighting.as_ref().map(|w| w.wf.as_slice()).unwrap_or(&ones);
-        let h: Vec<f64> = h0
-            .iter()
-            .zip(wf.iter())
-            .map(|(&hi, &wi)| hi * wi)
-            .collect();
-        let press: f64 = fit
-            .resid
-            .iter()
-            .zip(h.iter())
-            .zip(wf.iter())
-            .map(|((e, &hi), &wi)| {
-                let d = 1.0 - hi;
-                if d != 0.0 {
-                    let p = e / d;
-                    wi * p * p
-                } else {
-                    0.0
-                }
-            })
-            .sum();
-        Some(press)
-    } else {
-        None
-    };
+    // PRESS statistic (M36.5) — see `compute_press_stat`.
+    let press_stat = compute_press_stat(model, &x_mat, &fit, weighting.as_ref());
 
     // --- RIDGE= / PCOMIT= (M36.9): when requested, SAS replaces the ordinary
     // parameter-estimates analysis with the ridge / incomplete-principal-
@@ -1081,6 +936,325 @@ fn run_model(
         accum.push(entry);
     }
 
+    // MQ5.2 — shared per-response context for the post-fit option sections.
+    let rf = RespFit {
+        model,
+        dep_name,
+        x_mat: &x_mat,
+        y_vec: &y_vec,
+        sel_cols: &sel_cols,
+        sel_reg_names: &sel_reg_names,
+        fit: &fit,
+        intercept,
+        n,
+        p_eff,
+        weighting: weighting.as_ref(),
+        id_first,
+    };
+    // --- Printed matrices (M36.8): XPX / I / COVB / CORRB — see
+    // `print_matrix_options`.
+    print_matrix_options(&rf, session);
+
+    // --- Diagnostics / observation statistics (M36.2-M36.4) — see
+    // `print_diagnostic_options`.
+    print_diagnostic_options(&rf, session);
+
+    // --- TEST (M36.1): operate on the model as fitted (restricted if present).
+    run_test_section(entry, &rf, restricted.as_ref(), session)?;
+
+    // --- OUTPUT dataset(s) for this model (complete cases only) ---
+    write_outputs(
+        entry,
+        ds,
+        &complete_mask,
+        n,
+        &fit,
+        &x_mat,
+        p_eff,
+        model.alpha,
+        &sel_reg_names,
+        intercept,
+        weighting.as_ref(),
+        session,
+    )?;
+
+    // --- Diagnostics / PLOTS rendering (M29.3, M36.11) — see
+    // `render_model_plots`.
+    render_model_plots(ast, &rf, session);
+    } // end per-response loop
+
+    // --- MTEST (M36.10): multivariate hypothesis tests across all responses.
+    // Self-contained: gathers a fresh multivariate response/design matrix with
+    // listwise deletion across every response + the selected regressors, fits
+    // the multivariate coefficient matrix, and prints the four MANOVA statistics
+    // per MTEST. Printed ONCE, after every per-response univariate block. Only
+    // entered when MTEST statements are present, so the single-response /
+    // no-MTEST path is byte-identical.
+    let run_mtest = !entry.mtests.is_empty() && !model.noprint;
+    if let Some((selected, sel_reg_names, intercept)) = mtest_inputs.as_ref().filter(|_| run_mtest)
+    {
+        run_mtests(
+            &entry.mtests,
+            model,
+            ds,
+            rows,
+            selected,
+            sel_reg_names,
+            *intercept,
+            session,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// M36.10 run-group editing: ADD/DELETE adjust the regressor set for the
+/// final fit. With neither present this returns `None` and the caller borrows
+/// `model.regressors` directly (byte-identical). ADD appends
+/// not-already-present names (MODEL order preserved, additions last); DELETE
+/// removes matching names.
+fn effective_regressors(entry: &RegModelEntry) -> Option<Vec<String>> {
+    let model = &entry.model;
+    if entry.add.is_empty() && entry.delete.is_empty() {
+        None
+    } else {
+        let mut regs: Vec<String> = model.regressors.clone();
+        for a in &entry.add {
+            if !regs.iter().any(|r| r.eq_ignore_ascii_case(a)) {
+                regs.push(a.clone());
+            }
+        }
+        if !entry.delete.is_empty() {
+            regs.retain(|r| !entry.delete.iter().any(|d| d.eq_ignore_ascii_case(r)));
+        }
+        Some(regs)
+    }
+}
+
+/// Find a dataset column by (case-insensitive) name.
+fn find_col(ds: &SasDataset, nm: &str) -> Result<usize> {
+    ds.vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(nm))
+        .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+}
+
+/// Regressor resolution + decode is shared across all responses (the design
+/// is common to every dependent on the MODEL LHS), so it is hoisted above the
+/// per-response loop of `run_model`.
+fn decode_regressor_columns(
+    ds: &SasDataset,
+    regressors: &[String],
+) -> Result<Vec<Vec<crate::value::Value>>> {
+    let p = regressors.len();
+    let mut reg_idxs: Vec<usize> = Vec::with_capacity(p);
+    for nm in regressors {
+        let idx = find_col(ds, nm)?;
+        if ds.vars[idx].ty != VarType::Num {
+            return Err(SasError::runtime(format!(
+                "Regressor {} must be numeric.",
+                nm.to_uppercase()
+            )));
+        }
+        reg_idxs.push(idx);
+    }
+    // --- Decode regressor columns (shared) ---
+    let mut reg_cols: Vec<Vec<crate::value::Value>> = Vec::with_capacity(p);
+    for &idx in &reg_idxs {
+        reg_cols.push(decode_column(ds, idx)?);
+    }
+    Ok(reg_cols)
+}
+
+/// MQ5.2 — one response's complete-case data: the listwise-deleted regressor
+/// columns and response vector, the complete-row mask, the M36.7 weighting
+/// context, and the first ID variable's per-row display values.
+struct CaseData {
+    xcols: Vec<Vec<f64>>,
+    y_vec: Vec<f64>,
+    complete_mask: Vec<bool>,
+    weighting: Option<Weighting>,
+    id_used: Vec<String>,
+}
+
+/// MQ5.2 — gather one response's complete cases (M36.7 WEIGHT/FREQ/ID
+/// bookkeeping + listwise deletion over the regressors and the response).
+fn gather_complete_cases(
+    ds: &SasDataset,
+    rows: &[usize],
+    weight_col: Option<&[crate::value::Value]>,
+    freq_col: Option<&[crate::value::Value]>,
+    id_cols: &[(String, Vec<crate::value::Value>)],
+    dep_col: &[crate::value::Value],
+    reg_cols: &[Vec<crate::value::Value>],
+) -> CaseData {
+    let p = reg_cols.len();
+    // --- M36.7 weighting bookkeeping. `wf` accumulates the effective SS weight
+    // w_i·f_i for each complete-case row; `total_n` accumulates Σf_i (FREQ
+    // inflates the observation count / df, WEIGHT does not). `id_used` carries
+    // the first ID variable's per-row display value when ID is given. When no
+    // WEIGHT and no FREQ are present, `weighting` stays inactive and the whole
+    // analysis is byte-identical to the prior OLS path.
+    let has_weight = weight_col.is_some();
+    let has_freq = freq_col.is_some();
+    let mut wf: Vec<f64> = Vec::new();
+    let mut total_n: f64 = 0.0;
+    let mut id_used: Vec<String> = Vec::new();
+
+    // --- Build regressor columns (numeric) and y vector (listwise deletion) ---
+    // xcols[c] is the c-th regressor over the complete-case rows.
+    let mut xcols: Vec<Vec<f64>> = vec![Vec::new(); p];
+    let mut y_vec: Vec<f64> = Vec::new();
+    let mut complete_mask: Vec<bool> = vec![false; ds.n_obs()];
+
+    for &i in rows {
+        // FREQ: truncate to integer; exclude obs with f_i < 1 or missing.
+        let fi: f64 = match freq_col {
+            Some(col) => match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() => {
+                    let t = v.trunc();
+                    if t < 1.0 {
+                        continue;
+                    }
+                    t
+                }
+                _ => continue,
+            },
+            None => 1.0,
+        };
+        // WEIGHT: exclude obs with w_i ≤ 0 or missing weight.
+        let wi: f64 = match weight_col {
+            Some(col) => match value_to_num(&col[i]) {
+                Some(v) if !v.is_nan() && v > 0.0 => v,
+                _ => continue,
+            },
+            None => 1.0,
+        };
+        let yi = match value_to_num(&dep_col[i]) {
+            Some(v) if !v.is_nan() => v,
+            _ => continue,
+        };
+        let mut row_vals = Vec::with_capacity(p);
+        let mut ok = true;
+        for rc in reg_cols {
+            match value_to_num(&rc[i]) {
+                Some(v) if !v.is_nan() => row_vals.push(v),
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            for (c, v) in row_vals.into_iter().enumerate() {
+                xcols[c].push(v);
+            }
+            y_vec.push(yi);
+            wf.push(wi * fi);
+            total_n += fi;
+            if let Some((_, col)) = id_cols.first() {
+                id_used.push(id_value_cell(&col[i]));
+            }
+            complete_mask[i] = true;
+        }
+    }
+
+    // Effective weighting context. Active when WEIGHT or FREQ is present. When
+    // inactive the OLS path runs exactly as before (byte-identical). `total_n`
+    // (Σf_i) is the observation count that drives df / n bookkeeping: FREQ
+    // changes n and df, WEIGHT does not.
+    let weighting = if has_weight || has_freq {
+        Some(Weighting {
+            wf: wf.clone(),
+            total_n,
+        })
+    } else {
+        None
+    };
+    CaseData {
+        xcols,
+        y_vec,
+        complete_mask,
+        weighting,
+        id_used,
+    }
+}
+
+/// PRESS statistic (M36.5): Σ wf_i·(resid_i/(1−h_i))². With WEIGHT/FREQ active
+/// (M36.7) the leverage is the WEIGHTED one (h_i·w_i) and each term carries
+/// wf_i, matching the weighted PRESS in the MODEL R residual summary and
+/// STUDENT/Cook's D (which already use the weighted leverage). With no
+/// weighting `wf` is all-ones and h is the plain OLS leverage, so this is
+/// byte-identical to before.
+fn compute_press_stat(
+    model: &RegModel,
+    x_mat: &[Vec<f64>],
+    fit: &OlsFit,
+    weighting: Option<&Weighting>,
+) -> Option<f64> {
+    if model.press_opt && !model.noprint {
+        let h0 = leverages(&x_mat, &fit.xtx_inv);
+        let ones = vec![1.0; h0.len()];
+        let wf: &[f64] = weighting.as_ref().map(|w| w.wf.as_slice()).unwrap_or(&ones);
+        let h: Vec<f64> = h0
+            .iter()
+            .zip(wf.iter())
+            .map(|(&hi, &wi)| hi * wi)
+            .collect();
+        let press: f64 = fit
+            .resid
+            .iter()
+            .zip(h.iter())
+            .zip(wf.iter())
+            .map(|((e, &hi), &wi)| {
+                let d = 1.0 - hi;
+                if d != 0.0 {
+                    let p = e / d;
+                    wi * p * p
+                } else {
+                    0.0
+                }
+            })
+            .sum();
+        Some(press)
+    } else {
+        None
+    }
+}
+
+/// MQ5.2 — one response's fitted-model context, shared by the post-fit
+/// option sections (printed matrices, diagnostics, TEST, plots).
+struct RespFit<'a> {
+    model: &'a RegModel,
+    dep_name: &'a str,
+    x_mat: &'a [Vec<f64>],
+    y_vec: &'a [f64],
+    sel_cols: &'a [Vec<f64>],
+    sel_reg_names: &'a [String],
+    fit: &'a OlsFit,
+    intercept: bool,
+    n: usize,
+    p_eff: usize,
+    weighting: Option<&'a Weighting>,
+    id_first: Option<&'a [String]>,
+}
+
+/// MQ5.2 — the XPX / I / COVB / CORRB printed-matrices section of one
+/// response's report.
+fn print_matrix_options(rf: &RespFit, session: &mut Session) {
+    let &RespFit {
+        model,
+        dep_name,
+        x_mat,
+        y_vec,
+        sel_reg_names,
+        fit,
+        intercept,
+        n,
+        p_eff,
+        weighting,
+        ..
+    } = rf;
     // --- Printed matrices (M36.8): XPX / I / COVB / CORRB. Each is gated on its
     // MODEL option (and !noprint), computed from the existing fit (no refit), so
     // a MODEL without any of these options is byte-identical to before. MSE uses
@@ -1115,7 +1289,25 @@ fn run_model(
             );
         }
     }
+}
 
+/// MQ5.2 — the collinearity / SPEC / DW / ACOV diagnostics and the CLM/CLI /
+/// R / INFLUENCE observation-statistics sections of one response's report.
+fn print_diagnostic_options(rf: &RespFit, session: &mut Session) {
+    let &RespFit {
+        model,
+        dep_name,
+        x_mat,
+        y_vec,
+        sel_cols,
+        sel_reg_names,
+        fit,
+        intercept,
+        n,
+        p_eff,
+        weighting,
+        id_first,
+    } = rf;
     // --- Collinearity / specification / autocorrelation diagnostics (M36.4).
     // All gated on the corresponding flags (and !noprint), so a MODEL without
     // any of these options is byte-identical to before.
@@ -1154,7 +1346,7 @@ fn run_model(
     // off the (unrestricted) OLS fit, gated on the CLM/CLI model options.
     if (model.clm || model.cli) && !model.noprint {
         print_output_statistics(
-            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting.as_ref(), id_first,
+            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting, id_first,
             session,
         );
     }
@@ -1162,16 +1354,33 @@ fn run_model(
     // --- Residual / influence diagnostics (M36.3): MODEL R and INFLUENCE.
     // Computed lazily once off the OLS fit, shared by both listings.
     if (model.r || model.influence) && !model.noprint {
-        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff, weighting.as_ref());
+        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff, weighting);
         if model.r {
-            print_r_statistics(model, &infl, id_first, weighting.as_ref(), session);
+            print_r_statistics(model, &infl, id_first, weighting, session);
         }
         if model.influence {
             print_influence_statistics(&infl, &sel_reg_names, intercept, id_first, session);
         }
     }
+}
 
-    // --- TEST (M36.1): operate on the model as fitted (restricted if present).
+/// MQ5.2 — the TEST section of one response's report: operates on the model
+/// as fitted (restricted if present).
+fn run_test_section(
+    entry: &RegModelEntry,
+    rf: &RespFit,
+    restricted: Option<&Restricted>,
+    session: &mut Session,
+) -> Result<()> {
+    let &RespFit {
+        dep_name,
+        x_mat,
+        sel_reg_names,
+        fit,
+        intercept,
+        n,
+        ..
+    } = rf;
     if !entry.tests.is_empty() {
         let (t_beta, t_xtx, t_sse, t_dfe) = match &restricted {
             Some(r) => (&r.beta_r, &fit.xtx_inv, r.sse_r, r.df_r),
@@ -1195,23 +1404,25 @@ fn run_model(
             session,
         )?;
     }
+    Ok(())
+}
 
-    // --- OUTPUT dataset(s) for this model (complete cases only) ---
-    write_outputs(
-        entry,
-        ds,
-        &complete_mask,
-        n,
-        &fit,
-        &x_mat,
-        p_eff,
-        model.alpha,
-        &sel_reg_names,
+/// MQ5.2 — the diagnostics / PLOTS rendering section of one response's
+/// report (M29.3 deferral NOTE, M36.11 request set + PLOT statements).
+fn render_model_plots(ast: &RegAst, rf: &RespFit, session: &mut Session) {
+    let &RespFit {
+        model,
+        dep_name,
+        x_mat,
+        y_vec,
+        sel_reg_names,
+        fit,
         intercept,
-        weighting.as_ref(),
-        session,
-    )?;
-
+        n,
+        p_eff,
+        weighting,
+        ..
+    } = rf;
     // --- Diagnostics (M29.3) ---
     if ast.plots_requested {
         session.log.note("PLOTS options deferred in PROC REG.");
@@ -1237,7 +1448,7 @@ fn run_model(
             model.alpha,
             &sel_reg_names,
             intercept,
-            weighting.as_ref(),
+            weighting,
             session,
         );
     }
@@ -1252,31 +1463,6 @@ fn run_model(
             session,
         );
     }
-    } // end per-response loop
-
-    // --- MTEST (M36.10): multivariate hypothesis tests across all responses.
-    // Self-contained: gathers a fresh multivariate response/design matrix with
-    // listwise deletion across every response + the selected regressors, fits
-    // the multivariate coefficient matrix, and prints the four MANOVA statistics
-    // per MTEST. Printed ONCE, after every per-response univariate block. Only
-    // entered when MTEST statements are present, so the single-response /
-    // no-MTEST path is byte-identical.
-    let run_mtest = !entry.mtests.is_empty() && !model.noprint;
-    if let Some((selected, sel_reg_names, intercept)) = mtest_inputs.as_ref().filter(|_| run_mtest)
-    {
-        run_mtests(
-            &entry.mtests,
-            model,
-            ds,
-            rows,
-            selected,
-            sel_reg_names,
-            *intercept,
-            session,
-        )?;
-    }
-
-    Ok(())
 }
 
 // ───────────────────────── Tests ─────────────────────────
