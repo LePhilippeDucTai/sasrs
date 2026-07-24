@@ -1220,4 +1220,4 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
   glm.rs (~l.425/1215), npar1way.rs (~l.924) (Sonnet, faible)
 - [x] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
   univariate, corr, freq) en modules `tests` dédiés (move-only, multiset) (Sonnet, moyen)
-- [ ] DoD MQ6 : idem MQ5 ; **fin de Phase Q2**.
+- [x] DoD MQ6 : cargo test vert (2669), zéro `.snap.new`, clippy 313 warnings sans type nouveau vs base ; **fin de Phase Q2**.
