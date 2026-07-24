@@ -1209,7 +1209,7 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
 - [x] MQ5.4 — `iml.rs` : **vérifié sain** — lexer + méthodes de parsing courtes + petites
   fonctions d'éval ; l'alerte 1 522 l sur `parse_var_list` était un artefact du scanner
   (méthode de ~15 l). Rien à faire. (—)
-- [ ] DoD MQ5 : cargo test vert, zéro `.snap.new`, clippy sans type nouveau ; → MQ6.
+- [x] DoD MQ5 : cargo test vert (2669), zéro `.snap.new`, clippy sans type nouveau (1 needless_range_loop introduit par la découpe FACTOR, corrigé) ; → MQ6.
 
 ## MQ6 — extensions des helpers Phase Q
 - [ ] MQ6.1 — variante `common::open_input_display` (renvoie aussi le display) ; migrer les

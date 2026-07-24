@@ -783,8 +783,8 @@ fn print_factor_pattern(
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
     for i in 0..p {
         let mut row = vec![names[i].clone()];
-        for j in 0..k {
-            row.push(format!("{:.4}", pattern[i][j]));
+        for v in &pattern[i][..k] {
+            row.push(format!("{v:.4}"));
         }
         rows.push(row);
     }
