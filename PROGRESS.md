@@ -1216,7 +1216,7 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
   procs restées inline : cluster, distance, factor, fastclus, princomp, univariate
   (display intercalé) ; sort/rank/print/contents/report seulement si `in_ref` s'y
   substitue proprement (Sonnet, moyen)
-- [ ] MQ6.2 — `lincom::class_levels` : migrer les candidats sûrs notés en MQ2.6 —
+- [x] MQ6.2 — `lincom::class_levels` : migrer les candidats sûrs notés en MQ2.6 —
   glm.rs (~l.425/1215), npar1way.rs (~l.924) (Sonnet, faible)
 - [ ] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
   univariate, corr, freq) en modules `tests` dédiés (move-only, multiset) (Sonnet, moyen)

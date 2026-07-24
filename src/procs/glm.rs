@@ -432,20 +432,7 @@ fn print_class_level_info_oneway(
             .unwrap();
         let col = decode_column(ds, col_idx)?;
 
-        let mut levels: Vec<Value> = Vec::new();
-        for i in 0..n_obs {
-            let v = &col[i];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(col.iter().take(n_obs));
 
         let values_str: Vec<String> = levels
             .iter()
@@ -1284,19 +1271,7 @@ fn print_class_level_info_multiway(
     let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
     let mut cli_rows: Vec<Vec<String>> = Vec::new();
     for (name, col) in class_cols {
-        let mut levels: Vec<Value> = Vec::new();
-        for v in col.iter() {
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels = crate::procs::lincom::class_levels(col.iter());
         let values_str: Vec<String> = levels.iter().map(level_label_value).collect();
         cli_rows.push(vec![
             name.clone(),

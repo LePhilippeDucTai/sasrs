@@ -919,20 +919,8 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
         }
 
         // Distinct non-missing CLASS levels within this BY group (sas_cmp order).
-        let mut levels: Vec<Value> = Vec::new();
-        for &r in grp_rows {
-            let v = &class_vals[r];
-            if v.is_missing() {
-                continue;
-            }
-            if !levels
-                .iter()
-                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
-            {
-                levels.push(v.clone());
-            }
-        }
-        levels.sort_by(|a, b| a.sas_cmp(b));
+        let levels =
+            crate::procs::lincom::class_levels(grp_rows.iter().map(|&r| &class_vals[r]));
         if levels.len() < 2 {
             return Err(SasError::runtime(format!(
                 "The CLASS variable {} must have at least 2 levels.",
