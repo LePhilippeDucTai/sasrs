@@ -1192,3 +1192,32 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
   mixed/glimmix/glm/anova/genmod/logistic) ; migrer les 2 match géants de `procs/mod.rs` par
   paquets ; coordonner avec la Phase G (re-phaser après M66 si BLOC 2 démarré) (Opus, élevé)
 - [x] DoD MQ4 : cargo test vert (2669 tests), zéro `.snap.new`, clippy 285 warnings (316 en base, aucun type nouveau) ; **fin de Phase Q**.
+
+# Phase Q2 — reliquat qualité (post-revue), jalons MQ5–MQ6
+
+Reliquat mesuré après clôture de la Phase Q (scan des fonctions >250 l hors tests). Mêmes
+règles : une case = un commit, `cargo test` vert, **zéro `.snap.new`**, clippy sans type
+nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/discrim/princomp).
+
+## MQ5 — dernières mégafonctions (méthode MQ3.9)
+- [ ] MQ5.1 — `procs/reg/parse.rs::parse` (764 l) → scinder par statement (Opus, moyen)
+- [ ] MQ5.2 — `procs/reg/mod.rs::run_model` (607 l) → extraire les phases ; poursuivre la
+  découpe de `fit_and_print` (469 l restantes) par table (Opus, moyen)
+- [ ] MQ5.3 — `execute` restantes : factor (523 l), compare (517), discrim (418),
+  princomp (316), print (297), report (280), mixed::execute_legacy (371),
+  datasets::parse (353) — un fichier = un commit (Opus, moyen)
+- [x] MQ5.4 — `iml.rs` : **vérifié sain** — lexer + méthodes de parsing courtes + petites
+  fonctions d'éval ; l'alerte 1 522 l sur `parse_var_list` était un artefact du scanner
+  (méthode de ~15 l). Rien à faire. (—)
+- [ ] DoD MQ5 : cargo test vert, zéro `.snap.new`, clippy sans type nouveau ; → MQ6.
+
+## MQ6 — extensions des helpers Phase Q
+- [ ] MQ6.1 — variante `common::open_input_display` (renvoie aussi le display) ; migrer les
+  procs restées inline : cluster, distance, factor, fastclus, princomp, univariate
+  (display intercalé) ; sort/rank/print/contents/report seulement si `in_ref` s'y
+  substitue proprement (Sonnet, moyen)
+- [ ] MQ6.2 — `lincom::class_levels` : migrer les candidats sûrs notés en MQ2.6 —
+  glm.rs (~l.425/1215), npar1way.rs (~l.924) (Sonnet, faible)
+- [ ] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
+  univariate, corr, freq) en modules `tests` dédiés (move-only, multiset) (Sonnet, moyen)
+- [ ] DoD MQ6 : idem MQ5 ; **fin de Phase Q2**.
