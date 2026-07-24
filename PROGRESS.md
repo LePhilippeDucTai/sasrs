@@ -1203,7 +1203,7 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
 - [x] MQ5.1 — `procs/reg/parse.rs::parse` (764 l) → scinder par statement (Opus, moyen)
 - [x] MQ5.2 — `procs/reg/mod.rs::run_model` (607 l) → extraire les phases ; poursuivre la
   découpe de `fit_and_print` (469 l restantes) par table (Opus, moyen)
-- [ ] MQ5.3 — `execute` restantes : factor (523 l), compare (517), discrim (418),
+- [x] MQ5.3 — `execute` restantes : factor (523 l), compare (517), discrim (418),
   princomp (316), print (297), report (280), mixed::execute_legacy (371),
   datasets::parse (353) — un fichier = un commit (Opus, moyen)
 - [x] MQ5.4 — `iml.rs` : **vérifié sain** — lexer + méthodes de parsing courtes + petites
