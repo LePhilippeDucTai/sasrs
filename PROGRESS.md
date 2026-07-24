@@ -1212,7 +1212,7 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
 - [x] DoD MQ5 : cargo test vert (2669), zéro `.snap.new`, clippy sans type nouveau (1 needless_range_loop introduit par la découpe FACTOR, corrigé) ; → MQ6.
 
 ## MQ6 — extensions des helpers Phase Q
-- [ ] MQ6.1 — variante `common::open_input_display` (renvoie aussi le display) ; migrer les
+- [x] MQ6.1 — variante `common::open_input_display` (renvoie aussi le display) ; migrer les
   procs restées inline : cluster, distance, factor, fastclus, princomp, univariate
   (display intercalé) ; sort/rank/print/contents/report seulement si `in_ref` s'y
   substitue proprement (Sonnet, moyen)

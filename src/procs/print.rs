@@ -139,19 +139,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrintAst> {
 
 /// Execute PROC PRINT. Called by `procs::execute_proc` which wraps with timing.
 pub fn execute(ast: &PrintAst, session: &mut Session) -> Result<()> {
-    // Resolve dataset reference: data= or _LAST_ (combinateur partagé M31).
-    let ds_ref: DatasetRef = common::resolve_last_dataset(&ast.data, session)?;
-
-    let libref = ds_ref.libref_or_work();
-    let table_name = ds_ref.name.to_uppercase();
-    let display_name = ds_ref.display(); // e.g. "WORK.MYDATA"
-
-    // Read the dataset
-    let provider = session.libs.get(&libref)?;
-    let (ds, notes) = provider.read(&table_name)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    // Resolve dataset reference (data= or _LAST_) and read it (MQ6.1).
+    let (ds, display_name) = common::open_input_display(&ast.data, session)?;
 
     let n_obs = ds.n_obs();
 

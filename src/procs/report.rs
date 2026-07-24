@@ -760,16 +760,7 @@ fn fmt_cell_fmt(
 
 /// Execute PROC REPORT. Called by `procs::execute_proc`.
 pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-    let display_name = in_ref.display();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, display_name) = common::open_input_display(&ast.data, session)?;
     let n_obs_total = ds.n_obs();
 
     // --- Build the per-column plan, applying DEFINEs and type defaults. ---

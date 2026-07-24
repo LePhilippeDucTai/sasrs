@@ -550,16 +550,7 @@ fn fmt_opt(v: Option<f64>) -> String {
 // ─────────────────────────────── execute ──────────────────────────────────
 
 pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-    let display_name = format!("{in_libref}.{in_table}");
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, display_name) = common::open_input_display(&ast.data, session)?;
 
     let n_obs = ds.n_obs();
 
