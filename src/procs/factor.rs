@@ -381,33 +381,7 @@ pub fn promax(l_varimax: &[Vec<f64>], power: i32) -> Result<PromaxResult> {
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
-    // Validate method.
-    if ast.method != "principal" {
-        return Err(SasError::runtime(format!(
-            "PROC FACTOR METHOD={} is not supported. Only METHOD=PRINCIPAL is implemented.",
-            ast.method.to_uppercase()
-        )));
-    }
-
-    // Validate rotate.
-    if ast.rotate == "oblimin" {
-        return Err(SasError::runtime(
-            "PROC FACTOR ROTATE=OBLIMIN is not yet implemented. Use ROTATE=PROMAX, VARIMAX or NONE.",
-        ));
-    }
-    if ast.rotate != "none" && ast.rotate != "varimax" && ast.rotate != "promax" {
-        return Err(SasError::runtime(format!(
-            "PROC FACTOR ROTATE={} is not supported. Use ROTATE=PROMAX, VARIMAX or NONE.",
-            ast.rotate.to_uppercase()
-        )));
-    }
-
-    // At least 2 variables required.
-    if ast.var.len() < 2 {
-        return Err(SasError::runtime(
-            "PROC FACTOR requires at least 2 variables.",
-        ));
-    }
+    validate_options(ast)?;
 
     let in_ref = common::resolve_last_dataset(&ast.data, session)?;
     let in_libref = in_ref.libref_or_work();
@@ -425,27 +399,7 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         n_read, display
     ));
 
-    // Resolve VAR columns (user order preserved), validating existence + type.
-    let mut cols: Vec<usize> = Vec::with_capacity(ast.var.len());
-    for nm in &ast.var {
-        match ds.vars.iter().position(|m| m.name.eq_ignore_ascii_case(nm)) {
-            Some(i) => {
-                if ds.vars[i].ty != VarType::Num {
-                    return Err(SasError::runtime(format!(
-                        "Variable '{}' not found in dataset '{}'.",
-                        nm, display
-                    )));
-                }
-                cols.push(i);
-            }
-            None => {
-                return Err(SasError::runtime(format!(
-                    "Variable '{}' not found in dataset '{}'.",
-                    nm, display
-                )));
-            }
-        }
-    }
+    let cols = resolve_var_columns(&ds, ast, &display)?;
     let p = cols.len();
     let names: Vec<String> = cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
 
@@ -461,105 +415,17 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Complete-case rows.
-    let mut data_rows: Vec<Vec<f64>> = Vec::new();
-    for r in 0..n_read {
-        let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
-        if row.iter().all(|v| v.is_finite()) {
-            data_rows.push(row);
-        }
-    }
+    let data_rows = complete_case_rows(&decoded, n_read);
     let n = data_rows.len();
     if n == 0 {
         return Err(SasError::runtime("No observations with complete data."));
     }
 
-    // Means and sample std (n-1).
-    let nf = n as f64;
-    let mut means = vec![0.0_f64; p];
-    for row in &data_rows {
-        for j in 0..p {
-            means[j] += row[j];
-        }
-    }
-    for m in &mut means {
-        *m /= nf;
-    }
-    let mut ss = vec![0.0_f64; p];
-    for row in &data_rows {
-        for j in 0..p {
-            let d = row[j] - means[j];
-            ss[j] += d * d;
-        }
-    }
-    let denom = if n > 1 { nf - 1.0 } else { 1.0 };
-    let stds: Vec<f64> = ss.iter().map(|s| (s / denom).sqrt()).collect();
-
-    // Covariance matrix (n-1).
-    let mut covm = vec![vec![0.0_f64; p]; p];
-    for row in &data_rows {
-        for i in 0..p {
-            let di = row[i] - means[i];
-            for j in 0..p {
-                let dj = row[j] - means[j];
-                covm[i][j] += di * dj;
-            }
-        }
-    }
-    for i in 0..p {
-        for j in 0..p {
-            covm[i][j] /= denom;
-        }
-    }
-
-    // Analysis matrix: covariance if cov, else correlation.
-    let mut amat = vec![vec![0.0_f64; p]; p];
-    if ast.cov {
-        amat = covm.clone();
-    } else {
-        for i in 0..p {
-            for j in 0..p {
-                let denom_ij = stds[i] * stds[j];
-                amat[i][j] = if denom_ij > 0.0 {
-                    (covm[i][j] / denom_ij).clamp(-1.0, 1.0)
-                } else {
-                    0.0
-                };
-            }
-        }
-        for i in 0..p {
-            amat[i][i] = 1.0;
-        }
-    }
-    // Enforce exact symmetry before Jacobi.
-    for i in 0..p {
-        for j in (i + 1)..p {
-            let avg = 0.5 * (amat[i][j] + amat[j][i]);
-            amat[i][j] = avg;
-            amat[j][i] = avg;
-        }
-    }
+    let (means, stds, amat) = compute_analysis_matrix(&data_rows, p, ast.cov);
 
     // Eigen-decomposition: V columns = eigenvectors, lambda descending.
     let (mut v, lambda) = eigenvectors_jacobi(&amat)?;
-
-    // Sign convention: per column, if the abs-max element is negative, flip.
-    for col in 0..p {
-        let mut max_abs = 0.0_f64;
-        let mut max_val = 0.0_f64;
-        for row in 0..p {
-            let a = v[row][col].abs();
-            if a > max_abs {
-                max_abs = a;
-                max_val = v[row][col];
-            }
-        }
-        if max_val < 0.0 {
-            for row in 0..p {
-                v[row][col] = -v[row][col];
-            }
-        }
-    }
+    apply_sign_convention(&mut v, p);
 
     let trace: f64 = lambda.iter().sum();
 
@@ -613,269 +479,32 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
     centered(session, "Prior Communality Estimates: ONE");
     session.listing.blank();
 
-    // Eigenvalues table (all p eigenvalues).
-    let eig_title = if ast.cov {
-        "Eigenvalues of the Covariance Matrix"
-    } else {
-        "Eigenvalues of the Correlation Matrix"
-    };
-    let total_label = if ast.cov {
-        let avg = if p > 0 { trace / p as f64 } else { 0.0 };
-        format!("Total = {:.4}   Average = {:.4}", trace, avg)
-    } else {
-        format!("Total = {:.0}   Average = 1", p)
-    };
-    centered(session, eig_title);
-    centered(session, &total_label);
-    session.listing.blank();
-    {
-        let headers: Vec<String> = vec![
-            String::new(),
-            "Eigenvalue".into(),
-            "Difference".into(),
-            "Proportion".into(),
-            "Cumulative".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-        let mut cumulative = 0.0_f64;
-        for i in 0..p {
-            cumulative += lambda[i];
-            let diff = if i + 1 < p {
-                format!("{:.4}", lambda[i] - lambda[i + 1])
-            } else {
-                ".".to_string()
-            };
-            let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
-            let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
-            rows.push(vec![
-                format!("{}", i + 1),
-                format!("{:.4}", lambda[i]),
-                diff,
-                format!("{:.4}", proportion),
-                format!("{:.4}", cumul),
-            ]);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
+    print_eigenvalue_table(session, &lambda, trace, p, ast.cov);
 
     // Retention criterion message.
     centered(session, &retention_msg);
     session.listing.blank();
 
     // Factor Pattern (initial loadings).
-    centered(session, "Factor Pattern");
-    session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for j in 0..k {
-            headers.push(format!("Factor{}", j + 1));
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-        for i in 0..p {
-            let mut row = vec![names[i].clone()];
-            for j in 0..k {
-                row.push(format!("{:.4}", loadings[i][j]));
-            }
-            rows.push(row);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
+    print_factor_pattern(session, "Factor Pattern", &names, &loadings, k);
 
     // Variance Explained by Each Factor.
-    centered(session, "Variance Explained by Each Factor");
-    session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for j in 0..k {
-            headers.push(format!("Factor{}", j + 1));
-            aligns.push(Align::Right);
-        }
-        let mut weighted_row = vec!["Weighted".to_string()];
-        let mut unweighted_row = vec!["Unweighted".to_string()];
-        for j in 0..k {
-            weighted_row.push(format!("{:.4}", factor_variance[j]));
-            unweighted_row.push(format!("{:.4}", factor_variance[j]));
-        }
-        session
-            .listing
-            .write_table(&headers, &aligns, &[weighted_row, unweighted_row]);
-        session.listing.blank();
-    }
+    print_variance_explained(session, &factor_variance, k);
 
     // Final Communality Estimates (before rotation).
-    let total_communality: f64 = communalities.iter().sum();
-    centered(
-        session,
-        &format!(
-            "Final Communality Estimates: Total = {:.4}",
-            total_communality
-        ),
-    );
-    session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for nm in &names {
-            headers.push(nm.clone());
-            aligns.push(Align::Right);
-        }
-        let mut row: Vec<String> = vec![String::new()];
-        for &h2 in &communalities {
-            row.push(format!("{:.4}", h2));
-        }
-        session.listing.write_table(&headers, &aligns, &[row]);
-        session.listing.blank();
-    }
+    print_final_communalities(session, &names, &communalities);
 
     // Pattern used for OUT= factor scoring (rotated when a rotation applies).
     let mut final_pattern: Vec<Vec<f64>> = loadings.clone();
 
     // ───── VARIMAX rotation (if requested and k >= 2) ─────
     if ast.rotate == "varimax" && k >= 2 {
-        let (l_rot, _rot_matrix) = varimax(&loadings);
-        final_pattern = l_rot.clone();
-
-        // Rotated variance by factor.
-        let rot_variance: Vec<f64> = (0..k)
-            .map(|j| l_rot.iter().map(|row| row[j] * row[j]).sum::<f64>())
-            .collect();
-
-        centered(session, "Rotation Method: Varimax");
-        session.listing.blank();
-
-        centered(session, "Rotated Factor Pattern");
-        session.listing.blank();
-        {
-            let mut headers: Vec<String> = vec![String::new()];
-            let mut aligns: Vec<Align> = vec![Align::Left];
-            for j in 0..k {
-                headers.push(format!("Factor{}", j + 1));
-                aligns.push(Align::Right);
-            }
-            let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-            for i in 0..p {
-                let mut row = vec![names[i].clone()];
-                for j in 0..k {
-                    row.push(format!("{:.4}", l_rot[i][j]));
-                }
-                rows.push(row);
-            }
-            session.listing.write_table(&headers, &aligns, &rows);
-            session.listing.blank();
-        }
-
-        centered(session, "Variance Explained by Each Rotated Factor");
-        session.listing.blank();
-        {
-            let mut headers: Vec<String> = vec![String::new()];
-            let mut aligns: Vec<Align> = vec![Align::Left];
-            for j in 0..k {
-                headers.push(format!("Factor{}", j + 1));
-                aligns.push(Align::Right);
-            }
-            let mut rot_row: Vec<String> = vec![String::new()];
-            for j in 0..k {
-                rot_row.push(format!("{:.4}", rot_variance[j]));
-            }
-            session.listing.write_table(&headers, &aligns, &[rot_row]);
-            session.listing.blank();
-        }
-
-        // Final communalities (invariant under orthogonal rotation).
-        let rot_communalities: Vec<f64> = l_rot
-            .iter()
-            .map(|row| row.iter().map(|&x| x * x).sum())
-            .collect();
-        let total_rot_comm: f64 = rot_communalities.iter().sum();
-        centered(
-            session,
-            &format!(
-                "Final Communality Estimates: Total = {:.4}",
-                total_rot_comm
-            ),
-        );
-        session.listing.blank();
-        {
-            let mut headers: Vec<String> = vec![String::new()];
-            let mut aligns: Vec<Align> = vec![Align::Left];
-            for nm in &names {
-                headers.push(nm.clone());
-                aligns.push(Align::Right);
-            }
-            let mut row: Vec<String> = vec![String::new()];
-            for &h2 in &rot_communalities {
-                row.push(format!("{:.4}", h2));
-            }
-            session.listing.write_table(&headers, &aligns, &[row]);
-            session.listing.blank();
-        }
+        final_pattern = print_varimax_section(session, &names, &loadings, k);
     }
 
     // ───── PROMAX oblique rotation (if requested and k >= 2) ─────
     if ast.rotate == "promax" && k >= 2 {
-        // Promax starts from the orthogonal VARIMAX solution.
-        let (l_varimax, _rot_matrix) = varimax(&loadings);
-        let pm = promax(&l_varimax, 4)?;
-        final_pattern = pm.pattern.clone();
-
-        centered(session, "Rotation Method: Promax (power = 4)");
-        session.listing.blank();
-
-        // Oblique Rotated Factor Pattern (Standardized Regression Coefficients).
-        centered(session, "Rotated Factor Pattern (Standardized Regression Coefficients)");
-        session.listing.blank();
-        {
-            let mut headers: Vec<String> = vec![String::new()];
-            let mut aligns: Vec<Align> = vec![Align::Left];
-            for j in 0..k {
-                headers.push(format!("Factor{}", j + 1));
-                aligns.push(Align::Right);
-            }
-            let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-            for i in 0..p {
-                let mut row = vec![names[i].clone()];
-                for j in 0..k {
-                    row.push(format!("{:.4}", pm.pattern[i][j]));
-                }
-                rows.push(row);
-            }
-            session.listing.write_table(&headers, &aligns, &rows);
-            session.listing.blank();
-        }
-
-        // Inter-Factor Correlations.
-        centered(session, "Inter-Factor Correlations");
-        session.listing.blank();
-        {
-            let mut headers: Vec<String> = vec![String::new()];
-            let mut aligns: Vec<Align> = vec![Align::Left];
-            for j in 0..k {
-                headers.push(format!("Factor{}", j + 1));
-                aligns.push(Align::Right);
-            }
-            let mut rows: Vec<Vec<String>> = Vec::with_capacity(k);
-            for i in 0..k {
-                let mut row = vec![format!("Factor{}", i + 1)];
-                for j in 0..k {
-                    row.push(format!("{:.4}", pm.phi[i][j]));
-                }
-                rows.push(row);
-            }
-            session.listing.write_table(&headers, &aligns, &rows);
-            session.listing.blank();
-        }
+        final_pattern = print_promax_section(session, &names, &loadings, k)?;
     }
 
     // OUT= : write input columns + Factor1..Factorm regression factor scores.
@@ -903,6 +532,406 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Validate METHOD=, ROTATE= and the VAR list arity before any data access.
+fn validate_options(ast: &FactorAst) -> Result<()> {
+    // Validate method.
+    if ast.method != "principal" {
+        return Err(SasError::runtime(format!(
+            "PROC FACTOR METHOD={} is not supported. Only METHOD=PRINCIPAL is implemented.",
+            ast.method.to_uppercase()
+        )));
+    }
+
+    // Validate rotate.
+    if ast.rotate == "oblimin" {
+        return Err(SasError::runtime(
+            "PROC FACTOR ROTATE=OBLIMIN is not yet implemented. Use ROTATE=PROMAX, VARIMAX or NONE.",
+        ));
+    }
+    if ast.rotate != "none" && ast.rotate != "varimax" && ast.rotate != "promax" {
+        return Err(SasError::runtime(format!(
+            "PROC FACTOR ROTATE={} is not supported. Use ROTATE=PROMAX, VARIMAX or NONE.",
+            ast.rotate.to_uppercase()
+        )));
+    }
+
+    // At least 2 variables required.
+    if ast.var.len() < 2 {
+        return Err(SasError::runtime(
+            "PROC FACTOR requires at least 2 variables.",
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve VAR columns (user order preserved), validating existence + type.
+fn resolve_var_columns(
+    ds: &crate::dataset::SasDataset,
+    ast: &FactorAst,
+    display: &str,
+) -> Result<Vec<usize>> {
+    let mut cols: Vec<usize> = Vec::with_capacity(ast.var.len());
+    for nm in &ast.var {
+        match ds.vars.iter().position(|m| m.name.eq_ignore_ascii_case(nm)) {
+            Some(i) => {
+                if ds.vars[i].ty != VarType::Num {
+                    return Err(SasError::runtime(format!(
+                        "Variable '{}' not found in dataset '{}'.",
+                        nm, display
+                    )));
+                }
+                cols.push(i);
+            }
+            None => {
+                return Err(SasError::runtime(format!(
+                    "Variable '{}' not found in dataset '{}'.",
+                    nm, display
+                )));
+            }
+        }
+    }
+    Ok(cols)
+}
+
+/// Complete-case rows (all analysis values finite), input order preserved.
+fn complete_case_rows(decoded: &[Vec<f64>], n_read: usize) -> Vec<Vec<f64>> {
+    let mut data_rows: Vec<Vec<f64>> = Vec::new();
+    for r in 0..n_read {
+        let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
+        if row.iter().all(|v| v.is_finite()) {
+            data_rows.push(row);
+        }
+    }
+    data_rows
+}
+
+/// Means, sample stds (n-1) and the analysis matrix — covariance if `cov`,
+/// else correlation — symmetrized exactly before the Jacobi eigen-solver.
+fn compute_analysis_matrix(
+    data_rows: &[Vec<f64>],
+    p: usize,
+    cov: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
+    let n = data_rows.len();
+    // Means and sample std (n-1).
+    let nf = n as f64;
+    let mut means = vec![0.0_f64; p];
+    for row in data_rows {
+        for j in 0..p {
+            means[j] += row[j];
+        }
+    }
+    for m in &mut means {
+        *m /= nf;
+    }
+    let mut ss = vec![0.0_f64; p];
+    for row in data_rows {
+        for j in 0..p {
+            let d = row[j] - means[j];
+            ss[j] += d * d;
+        }
+    }
+    let denom = if n > 1 { nf - 1.0 } else { 1.0 };
+    let stds: Vec<f64> = ss.iter().map(|s| (s / denom).sqrt()).collect();
+
+    // Covariance matrix (n-1).
+    let mut covm = vec![vec![0.0_f64; p]; p];
+    for row in data_rows {
+        for i in 0..p {
+            let di = row[i] - means[i];
+            for j in 0..p {
+                let dj = row[j] - means[j];
+                covm[i][j] += di * dj;
+            }
+        }
+    }
+    for i in 0..p {
+        for j in 0..p {
+            covm[i][j] /= denom;
+        }
+    }
+
+    // Analysis matrix: covariance if cov, else correlation.
+    let mut amat = vec![vec![0.0_f64; p]; p];
+    if cov {
+        amat = covm.clone();
+    } else {
+        for i in 0..p {
+            for j in 0..p {
+                let denom_ij = stds[i] * stds[j];
+                amat[i][j] = if denom_ij > 0.0 {
+                    (covm[i][j] / denom_ij).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                };
+            }
+        }
+        for i in 0..p {
+            amat[i][i] = 1.0;
+        }
+    }
+    // Enforce exact symmetry before Jacobi.
+    for i in 0..p {
+        for j in (i + 1)..p {
+            let avg = 0.5 * (amat[i][j] + amat[j][i]);
+            amat[i][j] = avg;
+            amat[j][i] = avg;
+        }
+    }
+    (means, stds, amat)
+}
+
+/// Sign convention: per column, if the abs-max element is negative, flip.
+fn apply_sign_convention(v: &mut [Vec<f64>], p: usize) {
+    for col in 0..p {
+        let mut max_abs = 0.0_f64;
+        let mut max_val = 0.0_f64;
+        for row in 0..p {
+            let a = v[row][col].abs();
+            if a > max_abs {
+                max_abs = a;
+                max_val = v[row][col];
+            }
+        }
+        if max_val < 0.0 {
+            for row in 0..p {
+                v[row][col] = -v[row][col];
+            }
+        }
+    }
+}
+
+/// Eigenvalues table (all p eigenvalues), with its title lines.
+fn print_eigenvalue_table(
+    session: &mut Session,
+    lambda: &[f64],
+    trace: f64,
+    p: usize,
+    cov: bool,
+) {
+    let eig_title = if cov {
+        "Eigenvalues of the Covariance Matrix"
+    } else {
+        "Eigenvalues of the Correlation Matrix"
+    };
+    let total_label = if cov {
+        let avg = if p > 0 { trace / p as f64 } else { 0.0 };
+        format!("Total = {:.4}   Average = {:.4}", trace, avg)
+    } else {
+        format!("Total = {:.0}   Average = 1", p)
+    };
+    centered(session, eig_title);
+    centered(session, &total_label);
+    session.listing.blank();
+    let headers: Vec<String> = vec![
+        String::new(),
+        "Eigenvalue".into(),
+        "Difference".into(),
+        "Proportion".into(),
+        "Cumulative".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
+    let mut cumulative = 0.0_f64;
+    for i in 0..p {
+        cumulative += lambda[i];
+        let diff = if i + 1 < p {
+            format!("{:.4}", lambda[i] - lambda[i + 1])
+        } else {
+            ".".to_string()
+        };
+        let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
+        let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
+        rows.push(vec![
+            format!("{}", i + 1),
+            format!("{:.4}", lambda[i]),
+            diff,
+            format!("{:.4}", proportion),
+            format!("{:.4}", cumul),
+        ]);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
+
+/// Print a `p × k` factor-pattern table under `title` (shared by the initial,
+/// varimax-rotated and promax-rotated patterns).
+fn print_factor_pattern(
+    session: &mut Session,
+    title: &str,
+    names: &[String],
+    pattern: &[Vec<f64>],
+    k: usize,
+) {
+    let p = names.len();
+    centered(session, title);
+    session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for j in 0..k {
+        headers.push(format!("Factor{}", j + 1));
+        aligns.push(Align::Right);
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
+    for i in 0..p {
+        let mut row = vec![names[i].clone()];
+        for j in 0..k {
+            row.push(format!("{:.4}", pattern[i][j]));
+        }
+        rows.push(row);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
+
+/// "Variance Explained by Each Factor" (Weighted/Unweighted rows).
+fn print_variance_explained(session: &mut Session, factor_variance: &[f64], k: usize) {
+    centered(session, "Variance Explained by Each Factor");
+    session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for j in 0..k {
+        headers.push(format!("Factor{}", j + 1));
+        aligns.push(Align::Right);
+    }
+    let mut weighted_row = vec!["Weighted".to_string()];
+    let mut unweighted_row = vec!["Unweighted".to_string()];
+    for j in 0..k {
+        weighted_row.push(format!("{:.4}", factor_variance[j]));
+        unweighted_row.push(format!("{:.4}", factor_variance[j]));
+    }
+    session
+        .listing
+        .write_table(&headers, &aligns, &[weighted_row, unweighted_row]);
+    session.listing.blank();
+}
+
+/// "Final Communality Estimates: Total = …" plus the per-variable table.
+fn print_final_communalities(session: &mut Session, names: &[String], communalities: &[f64]) {
+    let total_communality: f64 = communalities.iter().sum();
+    centered(
+        session,
+        &format!(
+            "Final Communality Estimates: Total = {:.4}",
+            total_communality
+        ),
+    );
+    session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for nm in names {
+        headers.push(nm.clone());
+        aligns.push(Align::Right);
+    }
+    let mut row: Vec<String> = vec![String::new()];
+    for &h2 in communalities {
+        row.push(format!("{:.4}", h2));
+    }
+    session.listing.write_table(&headers, &aligns, &[row]);
+    session.listing.blank();
+}
+
+/// VARIMAX branch: rotate, print the rotated pattern, rotated variances and
+/// communalities. Returns the rotated pattern (used for OUT= scoring).
+fn print_varimax_section(
+    session: &mut Session,
+    names: &[String],
+    loadings: &[Vec<f64>],
+    k: usize,
+) -> Vec<Vec<f64>> {
+    let (l_rot, _rot_matrix) = varimax(loadings);
+
+    // Rotated variance by factor.
+    let rot_variance: Vec<f64> = (0..k)
+        .map(|j| l_rot.iter().map(|row| row[j] * row[j]).sum::<f64>())
+        .collect();
+
+    centered(session, "Rotation Method: Varimax");
+    session.listing.blank();
+
+    print_factor_pattern(session, "Rotated Factor Pattern", names, &l_rot, k);
+
+    centered(session, "Variance Explained by Each Rotated Factor");
+    session.listing.blank();
+    {
+        let mut headers: Vec<String> = vec![String::new()];
+        let mut aligns: Vec<Align> = vec![Align::Left];
+        for j in 0..k {
+            headers.push(format!("Factor{}", j + 1));
+            aligns.push(Align::Right);
+        }
+        let mut rot_row: Vec<String> = vec![String::new()];
+        for j in 0..k {
+            rot_row.push(format!("{:.4}", rot_variance[j]));
+        }
+        session.listing.write_table(&headers, &aligns, &[rot_row]);
+        session.listing.blank();
+    }
+
+    // Final communalities (invariant under orthogonal rotation).
+    let rot_communalities: Vec<f64> = l_rot
+        .iter()
+        .map(|row| row.iter().map(|&x| x * x).sum())
+        .collect();
+    print_final_communalities(session, names, &rot_communalities);
+
+    l_rot
+}
+
+/// PROMAX branch: varimax pre-rotation, promax(4), oblique pattern and
+/// inter-factor correlations. Returns the oblique pattern for OUT= scoring.
+fn print_promax_section(
+    session: &mut Session,
+    names: &[String],
+    loadings: &[Vec<f64>],
+    k: usize,
+) -> Result<Vec<Vec<f64>>> {
+    // Promax starts from the orthogonal VARIMAX solution.
+    let (l_varimax, _rot_matrix) = varimax(loadings);
+    let pm = promax(&l_varimax, 4)?;
+
+    centered(session, "Rotation Method: Promax (power = 4)");
+    session.listing.blank();
+
+    // Oblique Rotated Factor Pattern (Standardized Regression Coefficients).
+    print_factor_pattern(
+        session,
+        "Rotated Factor Pattern (Standardized Regression Coefficients)",
+        names,
+        &pm.pattern,
+        k,
+    );
+
+    // Inter-Factor Correlations.
+    centered(session, "Inter-Factor Correlations");
+    session.listing.blank();
+    {
+        let mut headers: Vec<String> = vec![String::new()];
+        let mut aligns: Vec<Align> = vec![Align::Left];
+        for j in 0..k {
+            headers.push(format!("Factor{}", j + 1));
+            aligns.push(Align::Right);
+        }
+        let mut rows: Vec<Vec<String>> = Vec::with_capacity(k);
+        for i in 0..k {
+            let mut row = vec![format!("Factor{}", i + 1)];
+            for j in 0..k {
+                row.push(format!("{:.4}", pm.phi[i][j]));
+            }
+            rows.push(row);
+        }
+        session.listing.write_table(&headers, &aligns, &rows);
+        session.listing.blank();
+    }
+    Ok(pm.pattern)
 }
 
 /// Build and write the FACTOR OUT= dataset: every input column plus
