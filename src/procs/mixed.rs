@@ -822,6 +822,67 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     })?;
 
     // NOTEs for parse-accepted / deferred features.
+    note_deferred_features_legacy(ast, model, session);
+
+    // ── 2. Read dataset ─────────────────────────────────────────────────────
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
+
+    let n_read = ds.n_obs();
+
+    let find_col = |nm: &str| -> Result<usize> {
+        ds.vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(nm))
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
+    };
+
+    let resp_idx = find_col(&model.response)?;
+    let subj_idx = find_col(subject)?;
+
+    let resp_col = decode_column(&ds, resp_idx)?;
+    let subj_col = decode_column(&ds, subj_idx)?;
+
+    // ── 3. Build complete observations ──────────────────────────────────────
+    let (y, subj_of, levels, n_not_used) =
+        build_observations_legacy(&resp_col, &subj_col, n_read)?;
+    let n_used = y.len();
+    let n_subjects = levels.len();
+
+    // Design matrix X: intercept-only.
+    let x: Vec<Vec<f64>> = vec![vec![1.0]; n_used];
+
+    // ── 4. Fit ──────────────────────────────────────────────────────────────
+    let fit = fit_mixed(&y, &x, &subj_of, n_subjects, ast.method, ast.nobound)?;
+
+    // Max observations per subject.
+    let mut counts = vec![0usize; n_subjects];
+    for &s in &subj_of {
+        counts[s] += 1;
+    }
+    let max_obs = *counts.iter().max().unwrap_or(&0);
+
+    // ── 5. Listing ──────────────────────────────────────────────────────────
+    print_model_information_legacy(session, ast, model, random, &in_libref, &in_table);
+    print_class_level_information_legacy(session, subject, &levels);
+    print_dimensions_legacy(session, &fit, n_subjects, max_obs);
+    print_number_of_observations_legacy(session, n_read, n_used, n_not_used);
+    print_iteration_history_legacy(session, &fit);
+    print_covariance_parameter_estimates_legacy(session, random, subject, &fit);
+    print_fit_statistics_legacy(session, ast, &fit, n_subjects);
+
+    // Solution for Fixed Effects.
+    if model.solution {
+        print_fixed_solution_legacy(session, &fit, n_subjects);
+    }
+
+    // Final NOTE if a fall-back unbalanced fit was used.
+    let _ = fit.balanced;
+
+    Ok(())
+}
+
+/// NOTEs for parse-accepted / deferred features (legacy path).
+fn note_deferred_features_legacy(ast: &MixedAst, model: &ModelSpec, session: &mut Session) {
     if ast.covtest {
         session
             .log
@@ -872,26 +933,16 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .log
             .note("LSMEANS is parse-accepted but not implemented in PROC MIXED.");
     }
+}
 
-    // ── 2. Read dataset ─────────────────────────────────────────────────────
-    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
-
-    let n_read = ds.n_obs();
-
-    let find_col = |nm: &str| -> Result<usize> {
-        ds.vars
-            .iter()
-            .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
-    };
-
-    let resp_idx = find_col(&model.response)?;
-    let subj_idx = find_col(subject)?;
-
-    let resp_col = decode_column(&ds, resp_idx)?;
-    let subj_col = decode_column(&ds, subj_idx)?;
-
-    // ── 3. Build complete observations ──────────────────────────────────────
+/// Complete observations for the legacy path: y, subject index per obs and
+/// sorted subject levels (SAS comparison order). Guards: at least one complete
+/// observation and at least 2 subjects.
+fn build_observations_legacy(
+    resp_col: &[Value],
+    subj_col: &[Value],
+    n_read: usize,
+) -> Result<(Vec<f64>, Vec<usize>, Vec<Value>, usize)> {
     let mut y: Vec<f64> = Vec::new();
     let mut subj_values: Vec<Value> = Vec::new();
     let mut n_not_used = 0usize;
@@ -911,8 +962,7 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
         subj_values.push(subj_col[i].clone());
     }
 
-    let n_used = y.len();
-    if n_used == 0 {
+    if y.is_empty() {
         return Err(SasError::runtime(
             "No complete observations available for PROC MIXED.",
         ));
@@ -926,7 +976,6 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
         }
     }
     levels.sort_by(|a, b| a.sas_cmp(b));
-    let n_subjects = levels.len();
     let level_index = |v: &Value| -> usize {
         levels
             .iter()
@@ -935,26 +984,23 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     };
     let subj_of: Vec<usize> = subj_values.iter().map(|v| level_index(v)).collect();
 
-    if n_subjects < 2 {
+    if levels.len() < 2 {
         return Err(SasError::runtime(
             "PROC MIXED requires at least 2 subjects.",
         ));
     }
+    Ok((y, subj_of, levels, n_not_used))
+}
 
-    // Design matrix X: intercept-only.
-    let x: Vec<Vec<f64>> = vec![vec![1.0]; n_used];
-
-    // ── 4. Fit ──────────────────────────────────────────────────────────────
-    let fit = fit_mixed(&y, &x, &subj_of, n_subjects, ast.method, ast.nobound)?;
-
-    // Max observations per subject.
-    let mut counts = vec![0usize; n_subjects];
-    for &s in &subj_of {
-        counts[s] += 1;
-    }
-    let max_obs = *counts.iter().max().unwrap_or(&0);
-
-    // ── 5. Listing ──────────────────────────────────────────────────────────
+/// Page header + Model Information table (legacy path).
+fn print_model_information_legacy(
+    session: &mut Session,
+    ast: &MixedAst,
+    model: &ModelSpec,
+    random: &RandomSpec,
+    in_libref: &str,
+    in_table: &str,
+) {
     let method_name = match ast.method {
         Method::Reml => "REML",
         Method::Ml => "ML",
@@ -968,7 +1014,6 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     centered(session, "The Mixed Procedure");
     session.listing.blank();
 
-    // Model Information.
     centered(session, "Model Information");
     session.listing.blank();
     {
@@ -990,8 +1035,10 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Class Level Information.
+/// Class Level Information table (legacy path: the SUBJECT= class only).
+fn print_class_level_information_legacy(session: &mut Session, subject: &str, levels: &[Value]) {
     centered(session, "Class Level Information");
     session.listing.blank();
     {
@@ -1003,15 +1050,17 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         let rows = vec![vec![
-            subject.clone(),
-            n_subjects.to_string(),
+            subject.to_string(),
+            levels.len().to_string(),
             values_str,
         ]];
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Dimensions.
+/// Dimensions table (legacy path).
+fn print_dimensions_legacy(session: &mut Session, fit: &MixedFit, n_subjects: usize, max_obs: usize) {
     centered(session, "Dimensions");
     session.listing.blank();
     {
@@ -1028,8 +1077,15 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Number of Observations.
+/// Number of Observations table (legacy path).
+fn print_number_of_observations_legacy(
+    session: &mut Session,
+    n_read: usize,
+    n_used: usize,
+    n_not_used: usize,
+) {
     centered(session, "Number of Observations");
     session.listing.blank();
     {
@@ -1047,8 +1103,10 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Iteration History (minimal, stable).
+/// Iteration History (minimal, stable) + convergence message (legacy path).
+fn print_iteration_history_legacy(session: &mut Session, fit: &MixedFit) {
     centered(session, "Iteration History");
     session.listing.blank();
     {
@@ -1078,8 +1136,15 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     }
     centered(session, "Convergence criteria met.");
     session.listing.blank();
+}
 
-    // Covariance Parameter Estimates.
+/// Covariance Parameter Estimates table (legacy path).
+fn print_covariance_parameter_estimates_legacy(
+    session: &mut Session,
+    random: &RandomSpec,
+    subject: &str,
+    fit: &MixedFit,
+) {
     centered(session, "Covariance Parameter Estimates");
     session.listing.blank();
     {
@@ -1092,7 +1157,7 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
         let rows: Vec<Vec<String>> = vec![
             vec![
                 cov_parm_name.into(),
-                subject.clone(),
+                subject.to_string(),
                 fmt4(fit.sigma2_u),
             ],
             vec!["Residual".into(), String::new(), fmt4(fit.sigma2_e)],
@@ -1100,8 +1165,15 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Fit Statistics.
+/// Fit Statistics table (-2LL, AIC, AICC, BIC) for the legacy path.
+fn print_fit_statistics_legacy(
+    session: &mut Session,
+    ast: &MixedAst,
+    fit: &MixedFit,
+    n_subjects: usize,
+) {
     let neg2 = fit.neg2ll;
     let n_cov = 2.0_f64;
     let aic = neg2 + 2.0 * n_cov;
@@ -1134,50 +1206,45 @@ fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
             .write_table(&[String::new(), String::new()], &aligns, &rows);
         session.listing.blank();
     }
+}
 
-    // Solution for Fixed Effects.
-    if model.solution {
-        centered(session, "Solution for Fixed Effects");
-        session.listing.blank();
-        let headers = vec![
-            "Effect".into(),
-            "Estimate".into(),
-            "Standard Error".into(),
-            "DF".into(),
-            "t Value".into(),
-            "Pr > |t|".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        // Intercept-only: single row.
-        let est = fit.beta[0];
-        let se = fit.cov_beta[0][0].max(0.0).sqrt();
-        // ddfm=contain: DF = number of subjects - number of fixed parameters.
-        let df = (n_subjects as i64 - fit.p as i64).max(1);
-        let t = if se > 0.0 { est / se } else { 0.0 };
-        let p = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
-        let rows = vec![vec![
-            "Intercept".into(),
-            fmt4(est),
-            fmt4(se),
-            df.to_string(),
-            fmt2(t),
-            fmt_p(p),
-        ]];
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
-
-    // Final NOTE if a fall-back unbalanced fit was used.
-    let _ = fit.balanced;
-
-    Ok(())
+/// Solution for Fixed Effects (intercept-only, ddfm=contain) — legacy path.
+fn print_fixed_solution_legacy(session: &mut Session, fit: &MixedFit, n_subjects: usize) {
+    centered(session, "Solution for Fixed Effects");
+    session.listing.blank();
+    let headers = vec![
+        "Effect".into(),
+        "Estimate".into(),
+        "Standard Error".into(),
+        "DF".into(),
+        "t Value".into(),
+        "Pr > |t|".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    // Intercept-only: single row.
+    let est = fit.beta[0];
+    let se = fit.cov_beta[0][0].max(0.0).sqrt();
+    // ddfm=contain: DF = number of subjects - number of fixed parameters.
+    let df = (n_subjects as i64 - fit.p as i64).max(1);
+    let t = if se > 0.0 { est / se } else { 0.0 };
+    let p = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
+    let rows = vec![vec![
+        "Intercept".into(),
+        fmt4(est),
+        fmt4(se),
+        df.to_string(),
+        fmt2(t),
+        fmt_p(p),
+    ]];
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
 }
 
 // ═════════════════════ General fixed-effects design ═════════════════════
