@@ -392,8 +392,23 @@ fn fit_lda(
 
 // ───────────────────────── Execute ─────────────────────────
 
-pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
-    // ── 1. Guards ──────────────────────────────────────────────────────────
+/// One kept (complete) observation: original row, class value, x-vector.
+struct Obs {
+    orig_row: usize,
+    class: Value,
+    x: Vec<f64>,
+}
+
+/// Position of a class value in the class list (sas_cmp equality).
+fn class_index_of(cls: &[Value], v: &Value) -> usize {
+    cls.iter()
+        .position(|c| c.sas_cmp(v) == std::cmp::Ordering::Equal)
+        .unwrap()
+}
+
+/// Guards (CLASS/VAR required) + NOTEs for parse-accepted, unimplemented
+/// options. Returns the CLASS variable name.
+fn check_options<'a>(ast: &'a DiscrimAst, session: &mut Session) -> Result<&'a String> {
     let class_name = ast.class_var.as_ref().ok_or_else(|| {
         SasError::runtime("CLASS statement required in PROC DISCRIM")
     })?;
@@ -442,6 +457,12 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
             .log
             .note("SHORT is parse-accepted but not implemented in PROC DISCRIM.");
     }
+    Ok(class_name)
+}
+
+pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
+    // ── 1. Guards ──────────────────────────────────────────────────────────
+    let class_name = check_options(ast, session)?;
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
@@ -454,7 +475,60 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
 
     let p = ast.var_vars.len();
 
-    // ── Find column indices ────────────────────────────────────────────────
+    // ── Find column indices + decode ───────────────────────────────────────
+    let (class_col, var_cols, id_col) = resolve_and_decode(&ds, ast, class_name)?;
+
+    // ── 3. Build complete observations grouped by class ────────────────────
+    let (classes, kept) = collect_complete_obs(&class_col, &var_cols, n_read, p)?;
+    let n_groups = classes.len();
+
+    // Group rows per class.
+    let mut class_obs: Vec<Vec<Vec<f64>>> = vec![Vec::new(); n_groups];
+    for obs in &kept {
+        class_obs[class_index_of(&classes, &obs.class)].push(obs.x.clone());
+    }
+
+    let n_used = kept.len();
+    session
+        .log
+        .note(&format!("There were {} observations used.", n_used));
+
+    // ── 4. Fit ─────────────────────────────────────────────────────────────
+    let model = fit_lda(classes, &class_obs, &ast.priors, p)?;
+
+    // ── 5. Listing ─────────────────────────────────────────────────────────
+    session.listing.page_header();
+    centered(session, "The DISCRIMINANT Procedure");
+    session.listing.blank();
+
+    print_counts_header(session, &model, p);
+    print_class_level_info(session, class_name, &model);
+    print_covariance_matrices(session, &ast.var_vars, &model);
+    print_pairwise_distances(session, &model);
+    print_discrim_coefficients(session, &ast.var_vars, &model);
+
+    // ── 6. Classification ──────────────────────────────────────────────────
+    let error_count = print_classification_results(session, ast, &model, &kept, &id_col);
+
+    // ── 7. Error Count Estimates ───────────────────────────────────────────
+    print_error_estimates(session, &model, &error_count);
+
+    // ── 8. OUT= dataset ────────────────────────────────────────────────────
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(ast, session, &ds, &model, &var_cols, &class_col, out_ref, n_read)?;
+    }
+
+    Ok(())
+}
+
+/// Find CLASS/VAR/ID column indices and decode the columns.
+fn resolve_and_decode(
+    ds: &crate::dataset::SasDataset,
+    ast: &DiscrimAst,
+    class_name: &str,
+) -> Result<(Vec<Value>, Vec<Vec<Value>>, Option<Vec<Value>>)> {
+    let p = ast.var_vars.len();
+
     let find_col = |nm: &str| -> Result<usize> {
         ds.vars
             .iter()
@@ -474,27 +548,28 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
         None => None,
     };
 
-    // ── Decode columns ─────────────────────────────────────────────────────
-    let class_col = decode_column(&ds, class_idx)?;
+    let class_col = decode_column(ds, class_idx)?;
     let mut var_cols: Vec<Vec<Value>> = Vec::with_capacity(p);
     for &idx in &var_idxs {
-        var_cols.push(decode_column(&ds, idx)?);
+        var_cols.push(decode_column(ds, idx)?);
     }
     let id_col: Option<Vec<Value>> = match id_idx {
-        Some(i) => Some(decode_column(&ds, i)?),
+        Some(i) => Some(decode_column(ds, i)?),
         None => None,
     };
+    Ok((class_col, var_cols, id_col))
+}
 
-    // ── 3. Build complete observations grouped by class ────────────────────
-    // Preserve first-seen order? SAS sorts classes by formatted value. Use
-    // sas_cmp ordering for deterministic class order.
+/// Complete observations + sorted class list. SAS sorts classes by formatted
+/// value; sas_cmp ordering gives a deterministic class order. Errors if fewer
+/// than 2 classes remain.
+fn collect_complete_obs(
+    class_col: &[Value],
+    var_cols: &[Vec<Value>],
+    n_read: usize,
+    p: usize,
+) -> Result<(Vec<Value>, Vec<Obs>)> {
     let mut classes: Vec<Value> = Vec::new();
-    // Keep, per kept observation: (row index in original, class index, x-vec)
-    struct Obs {
-        orig_row: usize,
-        class: Value,
-        x: Vec<f64>,
-    }
     let mut kept: Vec<Obs> = Vec::new();
 
     for i in 0..n_read {
@@ -503,7 +578,7 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
         }
         let mut x = Vec::with_capacity(p);
         let mut ok = true;
-        for vc in &var_cols {
+        for vc in var_cols {
             match value_to_num(&vc[i]) {
                 Some(v) if !v.is_nan() => x.push(v),
                 _ => {
@@ -530,105 +605,84 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
     }
 
     classes.sort_by(|a, b| a.sas_cmp(b));
-    let n_groups = classes.len();
 
-    if n_groups < 2 {
+    if classes.len() < 2 {
         return Err(SasError::runtime(
             "PROC DISCRIM requires at least 2 classes with complete observations.",
         ));
     }
+    Ok((classes, kept))
+}
 
-    // Pre-fit class lookup (classes is moved into the model after fitting; use
-    // model.classes via the closure below for post-fit work).
-    let class_index_of = |cls: &[Value], v: &Value| -> usize {
-        cls.iter()
-            .position(|c| c.sas_cmp(v) == std::cmp::Ordering::Equal)
-            .unwrap()
-    };
-
-    // Group rows per class.
-    let mut class_obs: Vec<Vec<Vec<f64>>> = vec![Vec::new(); n_groups];
-    for obs in &kept {
-        class_obs[class_index_of(&classes, &obs.class)].push(obs.x.clone());
-    }
-
-    let n_used = kept.len();
-    session
-        .log
-        .note(&format!("There were {} observations used.", n_used));
-
-    // ── 4. Fit ─────────────────────────────────────────────────────────────
-    let model = fit_lda(classes, &class_obs, &ast.priors, p)?;
-    let class_index = |v: &Value| -> usize { class_index_of(&model.classes, v) };
-
-    // ── 5. Listing ─────────────────────────────────────────────────────────
+/// Header counts table (Observations/Variables/DF/Classes).
+fn print_counts_header(session: &mut Session, model: &LdaModel, p: usize) {
     let n = model.n_total;
     let g = model.n_groups;
-
-    session.listing.page_header();
-    centered(session, "The DISCRIMINANT Procedure");
+    let headers: Vec<String> = vec![String::new(), String::new(), String::new(), String::new()];
+    let aligns = vec![Align::Left, Align::Right, Align::Left, Align::Right];
+    let rows: Vec<Vec<String>> = vec![
+        vec![
+            "Observations".into(),
+            n.to_string(),
+            "Variables".into(),
+            p.to_string(),
+        ],
+        vec![
+            "DF Total".into(),
+            (n as i64 - 1).to_string(),
+            "Classes".into(),
+            g.to_string(),
+        ],
+        vec![
+            "DF Within Classes".into(),
+            (n as i64 - g as i64).to_string(),
+            "DF Between Classes".into(),
+            (g as i64 - 1).to_string(),
+        ],
+    ];
+    session.listing.write_table(&headers, &aligns, &rows);
     session.listing.blank();
+}
 
-    // Header counts table.
-    {
-        let headers: Vec<String> = vec![String::new(), String::new(), String::new(), String::new()];
-        let aligns = vec![Align::Left, Align::Right, Align::Left, Align::Right];
-        let rows: Vec<Vec<String>> = vec![
-            vec![
-                "Observations".into(),
-                n.to_string(),
-                "Variables".into(),
-                p.to_string(),
-            ],
-            vec![
-                "DF Total".into(),
-                (n as i64 - 1).to_string(),
-                "Classes".into(),
-                g.to_string(),
-            ],
-            vec![
-                "DF Within Classes".into(),
-                (n as i64 - g as i64).to_string(),
-                "DF Between Classes".into(),
-                (g as i64 - 1).to_string(),
-            ],
-        ];
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
-
-    // Class Level Information.
+/// "Class Level Information" table.
+fn print_class_level_info(session: &mut Session, class_name: &str, model: &LdaModel) {
+    let n = model.n_total;
+    let g = model.n_groups;
     centered(session, "Class Level Information");
     session.listing.blank();
-    {
-        let headers: Vec<String> = vec![
-            class_name.clone(),
-            "Variable".into(),
-            "Frequency".into(),
-            "Weight".into(),
-            "Proportion".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(g);
-        for k in 0..g {
-            let prop = model.counts[k] as f64 / n as f64;
-            rows.push(vec![
-                model.class_labels[k].clone(),
-                make_class_var_name(&model.class_labels[k]),
-                model.counts[k].to_string(),
-                format!("{:.4}", model.counts[k] as f64),
-                fmt6(prop),
-            ]);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let headers: Vec<String> = vec![
+        class_name.to_string(),
+        "Variable".into(),
+        "Frequency".into(),
+        "Weight".into(),
+        "Proportion".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(g);
+    for k in 0..g {
+        let prop = model.counts[k] as f64 / n as f64;
+        rows.push(vec![
+            model.class_labels[k].clone(),
+            make_class_var_name(&model.class_labels[k]),
+            model.counts[k].to_string(),
+            format!("{:.4}", model.counts[k] as f64),
+            fmt6(prop),
+        ]);
     }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
+
+/// Per-class Within-Class covariance matrices + the pooled matrix.
+fn print_covariance_matrices(session: &mut Session, var_vars: &[String], model: &LdaModel) {
+    let n = model.n_total;
+    let g = model.n_groups;
 
     // Within-Class Covariance Matrix (per class).
     centered(session, "Within-Class Covariance Matrix");
@@ -640,7 +694,7 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
             model.counts[k] as i64 - 1
         ));
         session.listing.blank();
-        write_matrix(session, &ast.var_vars, &model.within_cov[k]);
+        write_matrix(session, var_vars, &model.within_cov[k]);
         session.listing.blank();
     }
 
@@ -651,165 +705,171 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
         .listing
         .write_line(&format!("DF = {}", n as i64 - g as i64));
     session.listing.blank();
-    write_matrix(session, &ast.var_vars, &model.pooled);
+    write_matrix(session, var_vars, &model.pooled);
     session.listing.blank();
+}
 
-    // Pairwise Squared Distances Between Groups.
+/// "Pairwise Squared Distances Between Groups" table.
+fn print_pairwise_distances(session: &mut Session, model: &LdaModel) {
+    let g = model.n_groups;
     centered(session, "Pairwise Squared Distances Between Groups");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for k in 0..g {
-            headers.push(model.class_labels[k].clone());
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(g);
-        for i in 0..g {
-            let mut row = vec![model.class_labels[i].clone()];
-            for j in 0..g {
-                row.push(fmt4(model.group_distance(i, j)));
-            }
-            rows.push(row);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for k in 0..g {
+        headers.push(model.class_labels[k].clone());
+        aligns.push(Align::Right);
     }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(g);
+    for i in 0..g {
+        let mut row = vec![model.class_labels[i].clone()];
+        for j in 0..g {
+            row.push(fmt4(model.group_distance(i, j)));
+        }
+        rows.push(row);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Linear Discriminant Function Coefficients.
+/// "Linear Discriminant Function Coefficients" table.
+fn print_discrim_coefficients(session: &mut Session, var_vars: &[String], model: &LdaModel) {
+    let g = model.n_groups;
     centered(session, "Linear Discriminant Function Coefficients");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec!["Variable".into()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for k in 0..g {
-            headers.push(model.class_labels[k].clone());
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        // Constant row.
-        let mut crow = vec!["Constant".to_string()];
-        for k in 0..g {
-            crow.push(fmt4(model.constants[k]));
-        }
-        rows.push(crow);
-        // One row per variable.
-        for (d, vname) in ast.var_vars.iter().enumerate() {
-            let mut vrow = vec![vname.clone()];
-            for k in 0..g {
-                vrow.push(fmt4(model.coefs[k][d]));
-            }
-            rows.push(vrow);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec!["Variable".into()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for k in 0..g {
+        headers.push(model.class_labels[k].clone());
+        aligns.push(Align::Right);
     }
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    // Constant row.
+    let mut crow = vec!["Constant".to_string()];
+    for k in 0..g {
+        crow.push(fmt4(model.constants[k]));
+    }
+    rows.push(crow);
+    // One row per variable.
+    for (d, vname) in var_vars.iter().enumerate() {
+        let mut vrow = vec![vname.clone()];
+        for k in 0..g {
+            vrow.push(fmt4(model.coefs[k][d]));
+        }
+        rows.push(vrow);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // ── 6. Classification ──────────────────────────────────────────────────
-    // For each kept observation, compute classification + posteriors.
+/// "Classification Results for Training Data": classify each kept observation,
+/// print posteriors, and return per-class error counts.
+fn print_classification_results(
+    session: &mut Session,
+    ast: &DiscrimAst,
+    model: &LdaModel,
+    kept: &[Obs],
+    id_col: &Option<Vec<Value>>,
+) -> Vec<usize> {
+    let g = model.n_groups;
+    let n_used = kept.len();
     let mut error_count: Vec<usize> = vec![0; g];
 
     centered(session, "Classification Results for Training Data");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![
-            if id_col.is_some() {
-                ast.id_var.clone().unwrap()
-            } else {
-                "Obs".into()
-            },
-            "From CLASS".into(),
-            "Classified Into CLASS".into(),
-        ];
-        let mut aligns: Vec<Align> = vec![Align::Right, Align::Left, Align::Left];
-        for k in 0..g {
-            headers.push(model.class_labels[k].clone());
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(n_used);
-        for (n_obs_idx, obs) in kept.iter().enumerate() {
-            let from = class_index(&obs.class);
-            let into = model.classify(&obs.x);
-            if from != into {
-                error_count[from] += 1;
-            }
-            let post = model.posteriors(&obs.x);
-            let label = if let Some(ic) = &id_col {
-                value_label(&ic[obs.orig_row])
-            } else {
-                (n_obs_idx + 1).to_string()
-            };
-            let mut row = vec![
-                label,
-                model.class_labels[from].clone(),
-                model.class_labels[into].clone(),
-            ];
-            for k in 0..g {
-                row.push(fmt4(post[k]));
-            }
-            rows.push(row);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec![
+        if id_col.is_some() {
+            ast.id_var.clone().unwrap()
+        } else {
+            "Obs".into()
+        },
+        "From CLASS".into(),
+        "Classified Into CLASS".into(),
+    ];
+    let mut aligns: Vec<Align> = vec![Align::Right, Align::Left, Align::Left];
+    for k in 0..g {
+        headers.push(model.class_labels[k].clone());
+        aligns.push(Align::Right);
     }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(n_used);
+    for (n_obs_idx, obs) in kept.iter().enumerate() {
+        let from = class_index_of(&model.classes, &obs.class);
+        let into = model.classify(&obs.x);
+        if from != into {
+            error_count[from] += 1;
+        }
+        let post = model.posteriors(&obs.x);
+        let label = if let Some(ic) = &id_col {
+            value_label(&ic[obs.orig_row])
+        } else {
+            (n_obs_idx + 1).to_string()
+        };
+        let mut row = vec![
+            label,
+            model.class_labels[from].clone(),
+            model.class_labels[into].clone(),
+        ];
+        for k in 0..g {
+            row.push(fmt4(post[k]));
+        }
+        rows.push(row);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
 
-    // ── 7. Error Count Estimates ───────────────────────────────────────────
+    error_count
+}
+
+/// "Error Count Estimates for Training Data" (Rate/Priors rows).
+fn print_error_estimates(session: &mut Session, model: &LdaModel, error_count: &[usize]) {
+    let g = model.n_groups;
     centered(session, "Error Count Estimates for Training Data");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for k in 0..g {
-            headers.push(model.class_labels[k].clone());
-            aligns.push(Align::Right);
-        }
-        headers.push("Total".into());
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for k in 0..g {
+        headers.push(model.class_labels[k].clone());
         aligns.push(Align::Right);
+    }
+    headers.push("Total".into());
+    aligns.push(Align::Right);
 
-        // Rate row.
-        let mut rate_row = vec!["Rate".to_string()];
-        let mut total_err = 0usize;
-        for k in 0..g {
+    // Rate row.
+    let mut rate_row = vec!["Rate".to_string()];
+    let mut total_err = 0usize;
+    for k in 0..g {
+        let rate = if model.counts[k] > 0 {
+            error_count[k] as f64 / model.counts[k] as f64
+        } else {
+            0.0
+        };
+        rate_row.push(fmt4(rate));
+        total_err += error_count[k];
+    }
+    // Total rate = Σ priors_k * rate_k (SAS weights error rates by priors).
+    let total_rate: f64 = (0..g)
+        .map(|k| {
             let rate = if model.counts[k] > 0 {
                 error_count[k] as f64 / model.counts[k] as f64
             } else {
                 0.0
             };
-            rate_row.push(fmt4(rate));
-            total_err += error_count[k];
-        }
-        // Total rate = Σ priors_k * rate_k (SAS weights error rates by priors).
-        let total_rate: f64 = (0..g)
-            .map(|k| {
-                let rate = if model.counts[k] > 0 {
-                    error_count[k] as f64 / model.counts[k] as f64
-                } else {
-                    0.0
-                };
-                model.priors[k] * rate
-            })
-            .sum();
-        let _ = total_err;
-        rate_row.push(fmt4(total_rate));
-        // Priors row.
-        let mut priors_row = vec!["Priors".to_string()];
-        for k in 0..g {
-            priors_row.push(fmt4(model.priors[k]));
-        }
-        priors_row.push(String::new());
-
-        session
-            .listing
-            .write_table(&headers, &aligns, &[rate_row, priors_row]);
-        session.listing.blank();
+            model.priors[k] * rate
+        })
+        .sum();
+    let _ = total_err;
+    rate_row.push(fmt4(total_rate));
+    // Priors row.
+    let mut priors_row = vec!["Priors".to_string()];
+    for k in 0..g {
+        priors_row.push(fmt4(model.priors[k]));
     }
+    priors_row.push(String::new());
 
-    // ── 8. OUT= dataset ────────────────────────────────────────────────────
-    if let Some(out_ref) = &ast.out {
-        write_out_dataset(ast, session, &ds, &model, &var_cols, &class_col, out_ref, n_read)?;
-    }
-
-    Ok(())
+    session
+        .listing
+        .write_table(&headers, &aligns, &[rate_row, priors_row]);
+    session.listing.blank();
 }
 
 /// SAS shows the class level value as the "Variable" column in Class Level

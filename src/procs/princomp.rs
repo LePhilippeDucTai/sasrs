@@ -141,23 +141,95 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
         ));
     }
 
-    let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-    let display = format!("{in_libref}.{in_table}");
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let (ds, display) = common::open_input_display(&ast.data, session)?;
     let n_read = ds.n_obs();
     session.log.note(&format!(
         "There were {} observations read from the data set {}.",
         n_read, display
     ));
 
-    // Resolve VAR columns (user order preserved), validating existence + type.
+    let cols = resolve_var_columns(&ds, ast, &display)?;
+    let p = cols.len();
+    let names: Vec<String> = cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+
+    // Decode each analysis column once.
+    let decoded: Vec<Vec<f64>> = cols
+        .iter()
+        .map(|&c| {
+            decode_column(&ds, c).map(|vals| {
+                vals.iter()
+                    .map(|v| value_to_num(v).unwrap_or(f64::NAN))
+                    .collect::<Vec<f64>>()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let data_rows = complete_case_rows(&decoded, n_read);
+    let n = data_rows.len();
+    if n == 0 {
+        return Err(SasError::runtime("No observations with complete data."));
+    }
+
+    let (means, stds, amat) = compute_analysis_matrix(&data_rows, p, ast.cov);
+
+    // Eigen-decomposition: V columns = eigenvectors, lambda descending.
+    let (mut v, lambda) = eigenvectors_jacobi(&amat)?;
+    apply_sign_convention(&mut v, p);
+
+    let trace: f64 = lambda.iter().sum();
+
+    // Number of components to display.
+    let k = ast.n.map(|k| k.min(p)).unwrap_or(p).max(1).min(p);
+
+    // ───────────────────────── listing ─────────────────────────
+    session.listing.page_header();
+    centered(session, "The PRINCOMP Procedure");
+    session.listing.blank();
+
+    session
+        .listing
+        .write_line(&format!(" Observations    {:>10}", n));
+    session
+        .listing
+        .write_line(&format!(" Variables       {:>10}", p));
+    session.listing.blank();
+
+    // Simple Statistics: rows Mean / StdDev, columns = variables.
+    print_simple_statistics(session, &names, &means, &stds);
+
+    // Correlation / Covariance Matrix.
+    print_analysis_matrix(session, ast.cov, &names, &amat);
+
+    // Eigenvalues table.
+    print_eigenvalue_table(session, ast.cov, &lambda, trace, p, k);
+
+    // Eigenvectors table (6 decimals).
+    print_eigenvectors(session, &names, &v, k);
+
+    // OUT= : write input columns + Prin1..Prink component scores.
+    //
+    // Scoring method: for each complete-case observation, the score on
+    // component j is the (standardized — or only centered, if COV) data vector
+    // dotted with eigenvector column j (the SAME eigenvectors, with the SAME
+    // sign convention, used for the Eigenvectors listing above). For
+    // correlation-based PCA each variable is standardized by its sample mean
+    // and std; for COV the variable is only centered by its mean. With this
+    // convention the score on component j has sample variance equal to
+    // eigenvalue_j. Observations with any missing analysis variable receive
+    // missing scores (rows are kept in input order, mirroring SAS).
+    if let Some(out_ref) = &ast.out {
+        write_out_dataset(session, &ds, &decoded, &means, &stds, &v, ast.cov, p, k, out_ref)?;
+    }
+
+    Ok(())
+}
+
+/// Resolve VAR columns (user order preserved), validating existence + type.
+fn resolve_var_columns(
+    ds: &crate::dataset::SasDataset,
+    ast: &PrincompAst,
+    display: &str,
+) -> Result<Vec<usize>> {
     let mut cols: Vec<usize> = Vec::with_capacity(ast.var.len());
     for nm in &ast.var {
         match ds.vars.iter().position(|m| m.name.eq_ignore_ascii_case(nm)) {
@@ -178,22 +250,11 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
             }
         }
     }
-    let p = cols.len();
-    let names: Vec<String> = cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+    Ok(cols)
+}
 
-    // Decode each analysis column once.
-    let decoded: Vec<Vec<f64>> = cols
-        .iter()
-        .map(|&c| {
-            decode_column(&ds, c).map(|vals| {
-                vals.iter()
-                    .map(|v| value_to_num(v).unwrap_or(f64::NAN))
-                    .collect::<Vec<f64>>()
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // Complete-case rows: keep a row only if ALL selected vars are non-missing.
+/// Complete-case rows: keep a row only if ALL selected vars are non-missing.
+fn complete_case_rows(decoded: &[Vec<f64>], n_read: usize) -> Vec<Vec<f64>> {
     let mut data_rows: Vec<Vec<f64>> = Vec::new();
     for r in 0..n_read {
         let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
@@ -201,15 +262,21 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
             data_rows.push(row);
         }
     }
-    let n = data_rows.len();
-    if n == 0 {
-        return Err(SasError::runtime("No observations with complete data."));
-    }
+    data_rows
+}
 
+/// Means, sample stds (n-1) and the analysis matrix — covariance if `cov`,
+/// else correlation — symmetrized exactly before the Jacobi eigen-solver.
+fn compute_analysis_matrix(
+    data_rows: &[Vec<f64>],
+    p: usize,
+    cov: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<Vec<f64>>) {
+    let n = data_rows.len();
     // Means and sample std (n-1).
     let nf = n as f64;
     let mut means = vec![0.0_f64; p];
-    for row in &data_rows {
+    for row in data_rows {
         for j in 0..p {
             means[j] += row[j];
         }
@@ -219,7 +286,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
     }
     // Sum of squares of deviations per variable; sample std = sqrt(SS/(n-1)).
     let mut ss = vec![0.0_f64; p];
-    for row in &data_rows {
+    for row in data_rows {
         for j in 0..p {
             let d = row[j] - means[j];
             ss[j] += d * d;
@@ -230,7 +297,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
 
     // Covariance matrix (n-1).
     let mut covm = vec![vec![0.0_f64; p]; p];
-    for row in &data_rows {
+    for row in data_rows {
         for i in 0..p {
             let di = row[i] - means[i];
             for j in 0..p {
@@ -247,7 +314,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
 
     // Analysis matrix: covariance if COV, else correlation.
     let mut amat = vec![vec![0.0_f64; p]; p];
-    if ast.cov {
+    if cov {
         amat = covm.clone();
     } else {
         for i in 0..p {
@@ -273,12 +340,12 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
             amat[j][i] = avg;
         }
     }
+    (means, stds, amat)
+}
 
-    // Eigen-decomposition: V columns = eigenvectors, lambda descending.
-    let (mut v, lambda) = eigenvectors_jacobi(&amat)?;
-
-    // Sign convention: per column, if the abs-max element (first-index tie
-    // break) is negative, flip the whole column.
+/// Sign convention: per column, if the abs-max element (first-index tie
+/// break) is negative, flip the whole column.
+fn apply_sign_convention(v: &mut [Vec<f64>], p: usize) {
     for col in 0..p {
         let mut max_abs = 0.0_f64;
         let mut max_val = 0.0_f64;
@@ -295,160 +362,135 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
             }
         }
     }
+}
 
-    let trace: f64 = lambda.iter().sum();
-
-    // Number of components to display.
-    let k = ast.n.map(|k| k.min(p)).unwrap_or(p).max(1).min(p);
-
-    // ───────────────────────── listing ─────────────────────────
-    session.listing.page_header();
-    centered(session, "The PRINCOMP Procedure");
-    session.listing.blank();
-
-    session
-        .listing
-        .write_line(&format!(" Observations    {:>10}", n));
-    session
-        .listing
-        .write_line(&format!(" Variables       {:>10}", p));
-    session.listing.blank();
-
-    // Simple Statistics: rows Mean / StdDev, columns = variables.
+/// "Simple Statistics" table: rows Mean / StdDev, columns = variables.
+fn print_simple_statistics(session: &mut Session, names: &[String], means: &[f64], stds: &[f64]) {
+    let p = names.len();
     centered(session, "Simple Statistics");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for nm in &names {
-            headers.push(nm.clone());
-            aligns.push(Align::Right);
-        }
-        let mut mean_row = vec!["Mean".to_string()];
-        for j in 0..p {
-            mean_row.push(format!("{:.4}", means[j]));
-        }
-        let mut std_row = vec!["StdDev".to_string()];
-        for j in 0..p {
-            std_row.push(format!("{:.4}", stds[j]));
-        }
-        session
-            .listing
-            .write_table(&headers, &aligns, &[mean_row, std_row]);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for nm in names {
+        headers.push(nm.clone());
+        aligns.push(Align::Right);
     }
+    let mut mean_row = vec!["Mean".to_string()];
+    for j in 0..p {
+        mean_row.push(format!("{:.4}", means[j]));
+    }
+    let mut std_row = vec!["StdDev".to_string()];
+    for j in 0..p {
+        std_row.push(format!("{:.4}", stds[j]));
+    }
+    session
+        .listing
+        .write_table(&headers, &aligns, &[mean_row, std_row]);
+    session.listing.blank();
+}
 
-    // Correlation / Covariance Matrix.
-    let matrix_title = if ast.cov {
+/// Correlation / Covariance Matrix table.
+fn print_analysis_matrix(session: &mut Session, cov: bool, names: &[String], amat: &[Vec<f64>]) {
+    let p = names.len();
+    let matrix_title = if cov {
         "Covariance Matrix"
     } else {
         "Correlation Matrix"
     };
     centered(session, matrix_title);
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for nm in &names {
-            headers.push(nm.clone());
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-        for i in 0..p {
-            let mut row = vec![names[i].clone()];
-            for j in 0..p {
-                row.push(format!("{:.4}", amat[i][j]));
-            }
-            rows.push(row);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for nm in names {
+        headers.push(nm.clone());
+        aligns.push(Align::Right);
     }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
+    for i in 0..p {
+        let mut row = vec![names[i].clone()];
+        for j in 0..p {
+            row.push(format!("{:.4}", amat[i][j]));
+        }
+        rows.push(row);
+    }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Eigenvalues table.
-    let eig_title = if ast.cov {
+/// Eigenvalues table (first k of p, PRIN1..PRINk rows).
+fn print_eigenvalue_table(
+    session: &mut Session,
+    cov: bool,
+    lambda: &[f64],
+    trace: f64,
+    p: usize,
+    k: usize,
+) {
+    let eig_title = if cov {
         "Eigenvalues of the Covariance Matrix"
     } else {
         "Eigenvalues of the Correlation Matrix"
     };
     centered(session, eig_title);
     session.listing.blank();
-    {
-        let headers: Vec<String> = vec![
-            String::new(),
-            "Eigenvalue".into(),
-            "Difference".into(),
-            "Proportion".into(),
-            "Cumulative".into(),
-        ];
-        let aligns = vec![
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(k);
-        let mut cumulative = 0.0_f64;
-        for i in 0..k {
-            cumulative += lambda[i];
-            let diff = if i + 1 < p {
-                format!("{:.4}", lambda[i] - lambda[i + 1])
-            } else {
-                ".".to_string()
-            };
-            let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
-            let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
-            rows.push(vec![
-                format!("PRIN{}", i + 1),
-                format!("{:.4}", lambda[i]),
-                diff,
-                format!("{:.4}", proportion),
-                format!("{:.4}", cumul),
-            ]);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let headers: Vec<String> = vec![
+        String::new(),
+        "Eigenvalue".into(),
+        "Difference".into(),
+        "Proportion".into(),
+        "Cumulative".into(),
+    ];
+    let aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(k);
+    let mut cumulative = 0.0_f64;
+    for i in 0..k {
+        cumulative += lambda[i];
+        let diff = if i + 1 < p {
+            format!("{:.4}", lambda[i] - lambda[i + 1])
+        } else {
+            ".".to_string()
+        };
+        let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
+        let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
+        rows.push(vec![
+            format!("PRIN{}", i + 1),
+            format!("{:.4}", lambda[i]),
+            diff,
+            format!("{:.4}", proportion),
+            format!("{:.4}", cumul),
+        ]);
     }
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
+}
 
-    // Eigenvectors table (6 decimals).
+/// Eigenvectors table (6 decimals, first k columns).
+fn print_eigenvectors(session: &mut Session, names: &[String], v: &[Vec<f64>], k: usize) {
+    let p = names.len();
     centered(session, "Eigenvectors");
     session.listing.blank();
-    {
-        let mut headers: Vec<String> = vec![String::new()];
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        for i in 0..k {
-            headers.push(format!("PRIN{}", i + 1));
-            aligns.push(Align::Right);
-        }
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
-        for row in 0..p {
-            let mut r = vec![names[row].clone()];
-            for col in 0..k {
-                r.push(format!("{:.6}", v[row][col]));
-            }
-            rows.push(r);
-        }
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+    let mut headers: Vec<String> = vec![String::new()];
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    for i in 0..k {
+        headers.push(format!("PRIN{}", i + 1));
+        aligns.push(Align::Right);
     }
-
-    // OUT= : write input columns + Prin1..Prink component scores.
-    //
-    // Scoring method: for each complete-case observation, the score on
-    // component j is the (standardized — or only centered, if COV) data vector
-    // dotted with eigenvector column j (the SAME eigenvectors, with the SAME
-    // sign convention, used for the Eigenvectors listing above). For
-    // correlation-based PCA each variable is standardized by its sample mean
-    // and std; for COV the variable is only centered by its mean. With this
-    // convention the score on component j has sample variance equal to
-    // eigenvalue_j. Observations with any missing analysis variable receive
-    // missing scores (rows are kept in input order, mirroring SAS).
-    if let Some(out_ref) = &ast.out {
-        write_out_dataset(session, &ds, &decoded, &means, &stds, &v, ast.cov, p, k, out_ref)?;
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
+    for row in 0..p {
+        let mut r = vec![names[row].clone()];
+        for col in 0..k {
+            r.push(format!("{:.6}", v[row][col]));
+        }
+        rows.push(r);
     }
-
-    Ok(())
+    session.listing.write_table(&headers, &aligns, &rows);
+    session.listing.blank();
 }
 
 /// Build and write the PRINCOMP OUT= dataset: every input column plus

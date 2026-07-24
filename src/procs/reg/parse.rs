@@ -6,96 +6,18 @@ use super::*;
 
 /// Parse PROC REG. Called AFTER `proc reg` has been consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
-    let mut input: Option<DatasetRef> = None;
-    // M36.8 — PROC-statement flags / output-dataset requests.
-    let mut simple = false;
-    let mut corr = false;
-    let mut proc_all = false;
-    let mut outest: Option<DatasetRef> = None;
-    let mut covout = false;
-    let mut outseb = false;
-    let mut edf = false;
-    let mut tableout = false;
-    let mut outsscp: Option<DatasetRef> = None;
-    // M36.9 — ridge / IPC regression PROC options.
-    let mut ridge: Vec<f64> = Vec::new();
-    let mut pcomit: Vec<f64> = Vec::new();
-    let mut outvif = false;
-    // M36.11 — PLOTS= may appear as a PROC-statement option as well as a
-    // sub-statement; accumulate into one request set.
-    let mut plot_requests = PlotRequests::default();
-
-    // PROC REG statement options, until `;`
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            input = Some(common::parse_dataset_opt(ts, "DATA")?);
-        } else if ts.peek().is_kw("outest") {
-            outest = Some(common::parse_dataset_opt(ts, "OUTEST")?);
-        } else if ts.peek().is_kw("outsscp") {
-            outsscp = Some(common::parse_dataset_opt(ts, "OUTSSCP")?);
-        } else if ts.peek().is_kw("covout") {
-            covout = true;
-            ts.next();
-        } else if ts.peek().is_kw("outseb") {
-            outseb = true;
-            ts.next();
-        } else if ts.peek().is_kw("edf") {
-            edf = true;
-            ts.next();
-        } else if ts.peek().is_kw("tableout") {
-            tableout = true;
-            ts.next();
-        } else if ts.peek().is_kw("ridge") {
-            // RIDGE=value-list (M36.9): a list of ridge constants k, accepting
-            // both an explicit list (`ridge=0 0.01 0.1`) and a SAS numeric range
-            // (`ridge=0 to 0.1 by 0.02`).
-            common::expect_eq(ts, "RIDGE")?;
-            ridge = parse_value_list(ts)?;
-        } else if ts.peek().is_kw("pcomit") {
-            // PCOMIT=value-list (M36.9): principal-component drop counts m.
-            common::expect_eq(ts, "PCOMIT")?;
-            pcomit = parse_value_list(ts)?;
-        } else if ts.peek().is_kw("outvif") {
-            outvif = true;
-            ts.next();
-        } else if ts.peek().is_kw("simple") {
-            simple = true;
-            ts.next();
-        } else if ts.peek().is_kw("corr") {
-            corr = true;
-            ts.next();
-        } else if ts.peek().is_kw("plots") {
-            // M36.11 — PROC-level PLOTS=(…) / PLOTS(UNPACK)=… diagnostic request.
-            parse_plots_option(ts, &mut plot_requests);
-        } else if ts.peek().is_kw("all") {
-            proc_all = true;
-            ts.next();
-        } else {
-            // Skip unknown proc-level options
-            ts.next();
-        }
-    }
-
-    // ALL implies SIMPLE + CORR at PROC level (and the MODEL matrix options,
-    // applied per-model below).
-    if proc_all {
-        simple = true;
-        corr = true;
-    }
-    let outest = outest.map(|out| OutEst {
-        out,
-        covout,
-        outseb,
-        edf,
-        tableout,
-    });
+    let ProcOptions {
+        input,
+        simple,
+        corr,
+        proc_all,
+        outest,
+        outsscp,
+        ridge,
+        pcomit,
+        outvif,
+        mut plot_requests,
+    } = parse_proc_options(ts)?;
 
     // Sub-statements until run;/quit;
     let mut models: Vec<RegModelEntry> = Vec::new();
@@ -113,429 +35,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
 
     common::parse_proc_body(ts, |ts, kw| {
         if kw == "model" {
-            ts.next(); // consume "model"
-            // SAS allows MULTIPLE responses on the LHS (`model y1 y2 = x …;`),
-            // consumed up to the `=`. At least one is required.
-            let mut dependents: Vec<String> = Vec::new();
-            while let Some(name) = ts.peek().ident().map(str::to_string) {
-                dependents.push(name);
-                ts.next();
-            }
-            if dependents.is_empty() {
-                return Err(SasError::parse(
-                    "expected dependent variable",
-                    ts.peek().span,
-                ));
-            }
-            if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after dependent variable in MODEL",
-                    ts.peek().span,
-                ));
-            }
-            ts.next();
-            let mut regressors = vec![];
-            let mut noint = false;
-            let mut noprint = false;
-            let mut selection: Option<Selection> = None;
-            let mut alpha = 0.05_f64;
-            let mut clb = false;
-            let mut clm = false;
-            let mut cli = false;
-            let mut r = false;
-            let mut influence = false;
-            let mut vif = false;
-            let mut tol = false;
-            let mut collin = false;
-            let mut collinoint = false;
-            let mut spec = false;
-            let mut dw = false;
-            let mut dwprob = false;
-            let mut acov = false;
-            let mut ss1 = false;
-            let mut ss2 = false;
-            let mut stb = false;
-            let mut pcorr1 = false;
-            let mut pcorr2 = false;
-            let mut scorr1 = false;
-            let mut scorr2 = false;
-            let mut seqb = false;
-            let mut press_opt = false;
-            let mut xpx = false;
-            let mut inv = false;
-            let mut covb = false;
-            let mut corrb = false;
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.next();
-                    // Parse options until semi
-                    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                        if ts.peek().is_kw("noint") {
-                            noint = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("noprint") {
-                            noprint = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("selection") {
-                            common::expect_eq(ts, "SELECTION")?;
-                            let method_name = ts
-                                .peek()
-                                .ident()
-                                .map(str::to_string)
-                                .ok_or_else(|| {
-                                    SasError::parse(
-                                        "expected selection method after SELECTION=",
-                                        ts.peek().span,
-                                    )
-                                })?;
-                            ts.next();
-                            let method = match method_name.to_ascii_lowercase().as_str() {
-                                "forward" => SelMethod::Forward,
-                                "backward" => SelMethod::Backward,
-                                "stepwise" => SelMethod::Stepwise,
-                                "rsquare" => SelMethod::RSquare,
-                                "adjrsq" => SelMethod::AdjRsq,
-                                "cp" => SelMethod::Cp,
-                                "maxr" => SelMethod::MaxR,
-                                "minr" => SelMethod::MinR,
-                                "none" => SelMethod::None,
-                                other => {
-                                    return Err(SasError::parse(
-                                        format!("unsupported SELECTION method '{}'", other),
-                                        ts.peek().span,
-                                    ));
-                                }
-                            };
-                            // Defaults depend on the method. The all-subsets and
-                            // R²-improvement methods don't use SLE/SLS; keep
-                            // harmless defaults so the struct is always valid.
-                            let (def_sle, def_sls) = match method {
-                                SelMethod::Forward => (0.50, 0.10),
-                                SelMethod::Backward => (0.50, 0.10),
-                                SelMethod::Stepwise => (0.15, 0.15),
-                                _ => (0.50, 0.10),
-                            };
-                            selection = Some(Selection {
-                                method,
-                                slentry: def_sle,
-                                slstay: def_sls,
-                                best: None,
-                                include: 0,
-                                start: None,
-                                stop: None,
-                                details: false,
-                                stb: false,
-                            });
-                        } else if ts.peek().is_kw("slentry") || ts.peek().is_kw("sle") {
-                            common::expect_eq(ts, "SLENTRY")?;
-                            let v = read_float(ts)?;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.slentry = v;
-                            }
-                        } else if ts.peek().is_kw("slstay") || ts.peek().is_kw("sls") {
-                            common::expect_eq(ts, "SLSTAY")?;
-                            let v = read_float(ts)?;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.slstay = v;
-                            }
-                        } else if ts.peek().is_kw("best") {
-                            common::expect_eq(ts, "BEST")?;
-                            let v = read_float(ts)? as usize;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.best = Some(v);
-                            }
-                        } else if ts.peek().is_kw("include") {
-                            common::expect_eq(ts, "INCLUDE")?;
-                            let v = read_float(ts)? as usize;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.include = v;
-                            }
-                        } else if ts.peek().is_kw("start") {
-                            common::expect_eq(ts, "START")?;
-                            let v = read_float(ts)? as usize;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.start = Some(v);
-                            }
-                        } else if ts.peek().is_kw("stop") {
-                            common::expect_eq(ts, "STOP")?;
-                            let v = read_float(ts)? as usize;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.stop = Some(v);
-                            }
-                        } else if ts.peek().is_kw("groupnames") {
-                            // GROUPNAMES="g1" "g2" ... — parsed and ignored
-                            // (used by SAS only to label grouped regressors in
-                            // the selection display). Consume the `=` and the
-                            // following string/ident list.
-                            common::expect_eq(ts, "GROUPNAMES")?;
-                            while matches!(
-                                ts.peek().kind,
-                                TokenKind::Str { .. } | TokenKind::Ident(_)
-                            ) {
-                                ts.next();
-                            }
-                        } else if ts.peek().is_kw("details") {
-                            if let Some(sel) = selection.as_mut() {
-                                sel.details = true;
-                            }
-                            ts.next();
-                        } else if ts.peek().is_kw("alpha") {
-                            common::expect_eq(ts, "ALPHA")?;
-                            alpha = read_float(ts)?;
-                        } else if ts.peek().is_kw("clb") {
-                            clb = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("clm") {
-                            clm = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("cli") {
-                            cli = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("influence") {
-                            influence = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("r") {
-                            r = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("vif") {
-                            vif = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("tol") {
-                            tol = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("collinoint") {
-                            collinoint = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("collin") {
-                            collin = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("spec") {
-                            spec = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("dwprob") {
-                            dwprob = true;
-                            dw = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("dw") {
-                            dw = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("acov") || ts.peek().is_kw("hcc") {
-                            // ACOV and HCC are synonyms for the same
-                            // heteroscedasticity-consistent covariance request.
-                            acov = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("ss1") {
-                            ss1 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("ss2") {
-                            ss2 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("stb") {
-                            stb = true;
-                            if let Some(sel) = selection.as_mut() {
-                                sel.stb = true;
-                            }
-                            ts.next();
-                        } else if ts.peek().is_kw("pcorr1") {
-                            pcorr1 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("pcorr2") {
-                            pcorr2 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("scorr1") {
-                            scorr1 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("scorr2") {
-                            scorr2 = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("seqb") {
-                            seqb = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("press") {
-                            press_opt = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("xpx") {
-                            xpx = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("i") {
-                            inv = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("covb") {
-                            covb = true;
-                            ts.next();
-                        } else if ts.peek().is_kw("corrb") {
-                            corrb = true;
-                            ts.next();
-                        } else {
-                            ts.next(); // skip unknown options
-                        }
-                    }
-                    break;
-                }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    regressors.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
-                }
-            }
-            ts.expect_semi()?;
-            // PROC-level ALL turns on the MODEL matrix options (and CLM/CLI) on
-            // every model, as SAS does. Other ALL-implied displays (SIMPLE/CORR)
-            // are handled at the PROC level.
-            if proc_all {
-                xpx = true;
-                inv = true;
-                covb = true;
-                corrb = true;
-                clm = true;
-                cli = true;
-            }
-            models.push(RegModelEntry {
-                model: RegModel {
-                    dependents,
-                    regressors,
-                    noint,
-                    noprint,
-                    selection,
-                    alpha,
-                    clb,
-                    clm,
-                    cli,
-                    r,
-                    influence,
-                    vif,
-                    tol,
-                    collin,
-                    collinoint,
-                    spec,
-                    dw,
-                    dwprob,
-                    acov,
-                    ss1,
-                    ss2,
-                    stb,
-                    pcorr1,
-                    pcorr2,
-                    scorr1,
-                    scorr2,
-                    seqb,
-                    press_opt,
-                    xpx,
-                    inv,
-                    covb,
-                    corrb,
-                },
-                outputs: Vec::new(),
-                tests: Vec::new(),
-                restricts: Vec::new(),
-                mtests: Vec::new(),
-                add: Vec::new(),
-                delete: Vec::new(),
-            });
+            models.push(parse_model_stmt(ts, proc_all)?);
             Ok(true)
         } else if kw == "output" {
-            ts.next();
-            let mut out: Option<DatasetRef> = None;
-            let mut predicted: Option<String> = None;
-            let mut residual: Option<String> = None;
-            let mut stdp: Option<String> = None;
-            let mut stdi: Option<String> = None;
-            let mut stdr: Option<String> = None;
-            let mut lcl: Option<String> = None;
-            let mut ucl: Option<String> = None;
-            let mut lclm: Option<String> = None;
-            let mut uclm: Option<String> = None;
-            let mut student: Option<String> = None;
-            let mut rstudent: Option<String> = None;
-            let mut cookd: Option<String> = None;
-            let mut h: Option<String> = None;
-            let mut press: Option<String> = None;
-            let mut dffits: Option<String> = None;
-            let mut covratio: Option<String> = None;
-            let mut dfbetas: Option<String> = None;
-            // Read the value name for a `KEYWORD=name` OUTPUT option.
-            let read_name = |ts: &mut StatementStream, kw: &str| -> Result<Option<String>> {
-                common::expect_eq(ts, kw)?;
-                let name = ts.peek().ident().map(str::to_string);
-                if name.is_some() {
-                    ts.next();
-                }
-                Ok(name)
-            };
-            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                if ts.peek().is_kw("out") {
-                    out = Some(common::parse_out_opt(ts)?);
-                } else if ts.peek().is_kw("predicted") || ts.peek().is_kw("p") {
-                    predicted = read_name(ts, "PREDICTED")?;
-                } else if ts.peek().is_kw("residual") || ts.peek().is_kw("r") {
-                    residual = read_name(ts, "RESIDUAL")?;
-                } else if ts.peek().is_kw("stdp") {
-                    stdp = read_name(ts, "STDP")?;
-                } else if ts.peek().is_kw("stdi") {
-                    stdi = read_name(ts, "STDI")?;
-                } else if ts.peek().is_kw("stdr") {
-                    stdr = read_name(ts, "STDR")?;
-                } else if ts.peek().is_kw("lclm") {
-                    lclm = read_name(ts, "LCLM")?;
-                } else if ts.peek().is_kw("uclm") {
-                    uclm = read_name(ts, "UCLM")?;
-                } else if ts.peek().is_kw("lcl") {
-                    lcl = read_name(ts, "LCL")?;
-                } else if ts.peek().is_kw("ucl") {
-                    ucl = read_name(ts, "UCL")?;
-                } else if ts.peek().is_kw("student") {
-                    student = read_name(ts, "STUDENT")?;
-                } else if ts.peek().is_kw("rstudent") {
-                    rstudent = read_name(ts, "RSTUDENT")?;
-                } else if ts.peek().is_kw("cookd") {
-                    cookd = read_name(ts, "COOKD")?;
-                } else if ts.peek().is_kw("h") {
-                    h = read_name(ts, "H")?;
-                } else if ts.peek().is_kw("press") {
-                    press = read_name(ts, "PRESS")?;
-                } else if ts.peek().is_kw("dffits") {
-                    dffits = read_name(ts, "DFFITS")?;
-                } else if ts.peek().is_kw("covratio") {
-                    covratio = read_name(ts, "COVRATIO")?;
-                } else if ts.peek().is_kw("dfbetas") {
-                    dfbetas = read_name(ts, "DFBETAS")?;
-                } else {
-                    ts.next();
-                }
-            }
-            ts.expect_semi()?;
-            if let Some(out_ref) = out {
-                // Associate this OUTPUT with the MODEL it follows (the last one
-                // seen). If no MODEL has been seen yet, SAS would error; we drop
-                // it silently here, matching the prior "only emit if out present"
-                // behaviour as closely as possible.
-                if let Some(entry) = models.last_mut() {
-                    entry.outputs.push(RegOutput {
-                        out: out_ref,
-                        predicted,
-                        residual,
-                        stdp,
-                        stdi,
-                        stdr,
-                        lcl,
-                        ucl,
-                        lclm,
-                        uclm,
-                        student,
-                        rstudent,
-                        cookd,
-                        h,
-                        press,
-                        dffits,
-                        covratio,
-                        dfbetas,
-                    });
-                }
-            }
+            parse_output_stmt(ts, &mut models)?;
             Ok(true)
         } else if kw == "plots" {
             // M29.3 / M36.11 — PLOTS request. Two surface forms:
@@ -769,6 +272,569 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
         refit_seen,
         paint_seen,
     })
+}
+
+/// PROC-statement options of PROC REG (MQ5.1) — everything parsed from the
+/// `PROC REG …;` statement itself, before the sub-statements.
+struct ProcOptions {
+    input: Option<DatasetRef>,
+    simple: bool,
+    corr: bool,
+    proc_all: bool,
+    outest: Option<OutEst>,
+    outsscp: Option<DatasetRef>,
+    ridge: Vec<f64>,
+    pcomit: Vec<f64>,
+    outvif: bool,
+    plot_requests: PlotRequests,
+}
+
+/// MQ5.1 — parse the options of the `PROC REG …;` statement itself, up to
+/// and including its terminating `;`.
+fn parse_proc_options(ts: &mut StatementStream) -> Result<ProcOptions> {
+    let mut input: Option<DatasetRef> = None;
+    // M36.8 — PROC-statement flags / output-dataset requests.
+    let mut simple = false;
+    let mut corr = false;
+    let mut proc_all = false;
+    let mut outest: Option<DatasetRef> = None;
+    let mut covout = false;
+    let mut outseb = false;
+    let mut edf = false;
+    let mut tableout = false;
+    let mut outsscp: Option<DatasetRef> = None;
+    // M36.9 — ridge / IPC regression PROC options.
+    let mut ridge: Vec<f64> = Vec::new();
+    let mut pcomit: Vec<f64> = Vec::new();
+    let mut outvif = false;
+    // M36.11 — PLOTS= may appear as a PROC-statement option as well as a
+    // sub-statement; accumulate into one request set.
+    let mut plot_requests = PlotRequests::default();
+
+    // PROC REG statement options, until `;`
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().is_kw("data") {
+            input = Some(common::parse_dataset_opt(ts, "DATA")?);
+        } else if ts.peek().is_kw("outest") {
+            outest = Some(common::parse_dataset_opt(ts, "OUTEST")?);
+        } else if ts.peek().is_kw("outsscp") {
+            outsscp = Some(common::parse_dataset_opt(ts, "OUTSSCP")?);
+        } else if ts.peek().is_kw("covout") {
+            covout = true;
+            ts.next();
+        } else if ts.peek().is_kw("outseb") {
+            outseb = true;
+            ts.next();
+        } else if ts.peek().is_kw("edf") {
+            edf = true;
+            ts.next();
+        } else if ts.peek().is_kw("tableout") {
+            tableout = true;
+            ts.next();
+        } else if ts.peek().is_kw("ridge") {
+            // RIDGE=value-list (M36.9): a list of ridge constants k, accepting
+            // both an explicit list (`ridge=0 0.01 0.1`) and a SAS numeric range
+            // (`ridge=0 to 0.1 by 0.02`).
+            common::expect_eq(ts, "RIDGE")?;
+            ridge = parse_value_list(ts)?;
+        } else if ts.peek().is_kw("pcomit") {
+            // PCOMIT=value-list (M36.9): principal-component drop counts m.
+            common::expect_eq(ts, "PCOMIT")?;
+            pcomit = parse_value_list(ts)?;
+        } else if ts.peek().is_kw("outvif") {
+            outvif = true;
+            ts.next();
+        } else if ts.peek().is_kw("simple") {
+            simple = true;
+            ts.next();
+        } else if ts.peek().is_kw("corr") {
+            corr = true;
+            ts.next();
+        } else if ts.peek().is_kw("plots") {
+            // M36.11 — PROC-level PLOTS=(…) / PLOTS(UNPACK)=… diagnostic request.
+            parse_plots_option(ts, &mut plot_requests);
+        } else if ts.peek().is_kw("all") {
+            proc_all = true;
+            ts.next();
+        } else {
+            // Skip unknown proc-level options
+            ts.next();
+        }
+    }
+
+    // ALL implies SIMPLE + CORR at PROC level (and the MODEL matrix options,
+    // applied per-model below).
+    if proc_all {
+        simple = true;
+        corr = true;
+    }
+    let outest = outest.map(|out| OutEst {
+        out,
+        covout,
+        outseb,
+        edf,
+        tableout,
+    });
+    Ok(ProcOptions {
+        input,
+        simple,
+        corr,
+        proc_all,
+        outest,
+        outsscp,
+        ridge,
+        pcomit,
+        outvif,
+        plot_requests,
+    })
+}
+
+/// MQ5.1 — parse a `MODEL y1 [y2 …] = x1 x2 … [/ options];` statement (the
+/// `model` keyword has not been consumed yet). `proc_all` mirrors the
+/// PROC-level ALL option, which forces the matrix/CL options on every model.
+fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Result<RegModelEntry> {
+    ts.next(); // consume "model"
+    // SAS allows MULTIPLE responses on the LHS (`model y1 y2 = x …;`),
+    // consumed up to the `=`. At least one is required.
+    let mut dependents: Vec<String> = Vec::new();
+    while let Some(name) = ts.peek().ident().map(str::to_string) {
+        dependents.push(name);
+        ts.next();
+    }
+    if dependents.is_empty() {
+        return Err(SasError::parse(
+            "expected dependent variable",
+            ts.peek().span,
+        ));
+    }
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            "expected '=' after dependent variable in MODEL",
+            ts.peek().span,
+        ));
+    }
+    ts.next();
+    let mut regressors = vec![];
+    let mut noint = false;
+    let mut noprint = false;
+    let mut selection: Option<Selection> = None;
+    let mut alpha = 0.05_f64;
+    let mut clb = false;
+    let mut clm = false;
+    let mut cli = false;
+    let mut r = false;
+    let mut influence = false;
+    let mut vif = false;
+    let mut tol = false;
+    let mut collin = false;
+    let mut collinoint = false;
+    let mut spec = false;
+    let mut dw = false;
+    let mut dwprob = false;
+    let mut acov = false;
+    let mut ss1 = false;
+    let mut ss2 = false;
+    let mut stb = false;
+    let mut pcorr1 = false;
+    let mut pcorr2 = false;
+    let mut scorr1 = false;
+    let mut scorr2 = false;
+    let mut seqb = false;
+    let mut press_opt = false;
+    let mut xpx = false;
+    let mut inv = false;
+    let mut covb = false;
+    let mut corrb = false;
+    loop {
+        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        if ts.peek().kind == TokenKind::Slash {
+            ts.next();
+            // Parse options until semi
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                if ts.peek().is_kw("noint") {
+                    noint = true;
+                    ts.next();
+                } else if ts.peek().is_kw("noprint") {
+                    noprint = true;
+                    ts.next();
+                } else if ts.peek().is_kw("selection") {
+                    selection = Some(parse_selection_value(ts)?);
+                } else if ts.peek().is_kw("slentry") || ts.peek().is_kw("sle") {
+                    common::expect_eq(ts, "SLENTRY")?;
+                    let v = read_float(ts)?;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.slentry = v;
+                    }
+                } else if ts.peek().is_kw("slstay") || ts.peek().is_kw("sls") {
+                    common::expect_eq(ts, "SLSTAY")?;
+                    let v = read_float(ts)?;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.slstay = v;
+                    }
+                } else if ts.peek().is_kw("best") {
+                    common::expect_eq(ts, "BEST")?;
+                    let v = read_float(ts)? as usize;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.best = Some(v);
+                    }
+                } else if ts.peek().is_kw("include") {
+                    common::expect_eq(ts, "INCLUDE")?;
+                    let v = read_float(ts)? as usize;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.include = v;
+                    }
+                } else if ts.peek().is_kw("start") {
+                    common::expect_eq(ts, "START")?;
+                    let v = read_float(ts)? as usize;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.start = Some(v);
+                    }
+                } else if ts.peek().is_kw("stop") {
+                    common::expect_eq(ts, "STOP")?;
+                    let v = read_float(ts)? as usize;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.stop = Some(v);
+                    }
+                } else if ts.peek().is_kw("groupnames") {
+                    // GROUPNAMES="g1" "g2" ... — parsed and ignored
+                    // (used by SAS only to label grouped regressors in
+                    // the selection display). Consume the `=` and the
+                    // following string/ident list.
+                    common::expect_eq(ts, "GROUPNAMES")?;
+                    while matches!(
+                        ts.peek().kind,
+                        TokenKind::Str { .. } | TokenKind::Ident(_)
+                    ) {
+                        ts.next();
+                    }
+                } else if ts.peek().is_kw("details") {
+                    if let Some(sel) = selection.as_mut() {
+                        sel.details = true;
+                    }
+                    ts.next();
+                } else if ts.peek().is_kw("alpha") {
+                    common::expect_eq(ts, "ALPHA")?;
+                    alpha = read_float(ts)?;
+                } else if ts.peek().is_kw("clb") {
+                    clb = true;
+                    ts.next();
+                } else if ts.peek().is_kw("clm") {
+                    clm = true;
+                    ts.next();
+                } else if ts.peek().is_kw("cli") {
+                    cli = true;
+                    ts.next();
+                } else if ts.peek().is_kw("influence") {
+                    influence = true;
+                    ts.next();
+                } else if ts.peek().is_kw("r") {
+                    r = true;
+                    ts.next();
+                } else if ts.peek().is_kw("vif") {
+                    vif = true;
+                    ts.next();
+                } else if ts.peek().is_kw("tol") {
+                    tol = true;
+                    ts.next();
+                } else if ts.peek().is_kw("collinoint") {
+                    collinoint = true;
+                    ts.next();
+                } else if ts.peek().is_kw("collin") {
+                    collin = true;
+                    ts.next();
+                } else if ts.peek().is_kw("spec") {
+                    spec = true;
+                    ts.next();
+                } else if ts.peek().is_kw("dwprob") {
+                    dwprob = true;
+                    dw = true;
+                    ts.next();
+                } else if ts.peek().is_kw("dw") {
+                    dw = true;
+                    ts.next();
+                } else if ts.peek().is_kw("acov") || ts.peek().is_kw("hcc") {
+                    // ACOV and HCC are synonyms for the same
+                    // heteroscedasticity-consistent covariance request.
+                    acov = true;
+                    ts.next();
+                } else if ts.peek().is_kw("ss1") {
+                    ss1 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("ss2") {
+                    ss2 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("stb") {
+                    stb = true;
+                    if let Some(sel) = selection.as_mut() {
+                        sel.stb = true;
+                    }
+                    ts.next();
+                } else if ts.peek().is_kw("pcorr1") {
+                    pcorr1 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("pcorr2") {
+                    pcorr2 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("scorr1") {
+                    scorr1 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("scorr2") {
+                    scorr2 = true;
+                    ts.next();
+                } else if ts.peek().is_kw("seqb") {
+                    seqb = true;
+                    ts.next();
+                } else if ts.peek().is_kw("press") {
+                    press_opt = true;
+                    ts.next();
+                } else if ts.peek().is_kw("xpx") {
+                    xpx = true;
+                    ts.next();
+                } else if ts.peek().is_kw("i") {
+                    inv = true;
+                    ts.next();
+                } else if ts.peek().is_kw("covb") {
+                    covb = true;
+                    ts.next();
+                } else if ts.peek().is_kw("corrb") {
+                    corrb = true;
+                    ts.next();
+                } else {
+                    ts.next(); // skip unknown options
+                }
+            }
+            break;
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            regressors.push(name);
+            ts.next();
+        } else {
+            ts.next();
+        }
+    }
+    ts.expect_semi()?;
+    // PROC-level ALL turns on the MODEL matrix options (and CLM/CLI) on
+    // every model, as SAS does. Other ALL-implied displays (SIMPLE/CORR)
+    // are handled at the PROC level.
+    if proc_all {
+        xpx = true;
+        inv = true;
+        covb = true;
+        corrb = true;
+        clm = true;
+        cli = true;
+    }
+    Ok(RegModelEntry {
+        model: RegModel {
+            dependents,
+            regressors,
+            noint,
+            noprint,
+            selection,
+            alpha,
+            clb,
+            clm,
+            cli,
+            r,
+            influence,
+            vif,
+            tol,
+            collin,
+            collinoint,
+            spec,
+            dw,
+            dwprob,
+            acov,
+            ss1,
+            ss2,
+            stb,
+            pcorr1,
+            pcorr2,
+            scorr1,
+            scorr2,
+            seqb,
+            press_opt,
+            xpx,
+            inv,
+            covb,
+            corrb,
+        },
+        outputs: Vec::new(),
+        tests: Vec::new(),
+        restricts: Vec::new(),
+        mtests: Vec::new(),
+        add: Vec::new(),
+        delete: Vec::new(),
+    })
+}
+
+/// MQ5.1 — parse an `OUTPUT OUT=… keyword=name …;` statement (the `output`
+/// keyword has not been consumed yet) and attach the result to the last
+/// MODEL seen, if any.
+
+/// MQ5.1 — parse the value of a `SELECTION=method` MODEL option (the
+/// `selection` keyword has not been consumed yet) and build the initial
+/// `Selection` request with the method's default SLE/SLS.
+fn parse_selection_value(ts: &mut StatementStream) -> Result<Selection> {
+    common::expect_eq(ts, "SELECTION")?;
+    let method_name = ts
+        .peek()
+        .ident()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            SasError::parse(
+                "expected selection method after SELECTION=",
+                ts.peek().span,
+            )
+        })?;
+    ts.next();
+    let method = match method_name.to_ascii_lowercase().as_str() {
+        "forward" => SelMethod::Forward,
+        "backward" => SelMethod::Backward,
+        "stepwise" => SelMethod::Stepwise,
+        "rsquare" => SelMethod::RSquare,
+        "adjrsq" => SelMethod::AdjRsq,
+        "cp" => SelMethod::Cp,
+        "maxr" => SelMethod::MaxR,
+        "minr" => SelMethod::MinR,
+        "none" => SelMethod::None,
+        other => {
+            return Err(SasError::parse(
+                format!("unsupported SELECTION method '{}'", other),
+                ts.peek().span,
+            ));
+        }
+    };
+    // Defaults depend on the method. The all-subsets and
+    // R²-improvement methods don't use SLE/SLS; keep
+    // harmless defaults so the struct is always valid.
+    let (def_sle, def_sls) = match method {
+        SelMethod::Forward => (0.50, 0.10),
+        SelMethod::Backward => (0.50, 0.10),
+        SelMethod::Stepwise => (0.15, 0.15),
+        _ => (0.50, 0.10),
+    };
+    Ok(Selection {
+        method,
+        slentry: def_sle,
+        slstay: def_sls,
+        best: None,
+        include: 0,
+        start: None,
+        stop: None,
+        details: false,
+        stb: false,
+    })
+}
+fn parse_output_stmt(ts: &mut StatementStream, models: &mut [RegModelEntry]) -> Result<()> {
+    ts.next();
+    let mut out: Option<DatasetRef> = None;
+    let mut predicted: Option<String> = None;
+    let mut residual: Option<String> = None;
+    let mut stdp: Option<String> = None;
+    let mut stdi: Option<String> = None;
+    let mut stdr: Option<String> = None;
+    let mut lcl: Option<String> = None;
+    let mut ucl: Option<String> = None;
+    let mut lclm: Option<String> = None;
+    let mut uclm: Option<String> = None;
+    let mut student: Option<String> = None;
+    let mut rstudent: Option<String> = None;
+    let mut cookd: Option<String> = None;
+    let mut h: Option<String> = None;
+    let mut press: Option<String> = None;
+    let mut dffits: Option<String> = None;
+    let mut covratio: Option<String> = None;
+    let mut dfbetas: Option<String> = None;
+    // Read the value name for a `KEYWORD=name` OUTPUT option.
+    let read_name = |ts: &mut StatementStream, kw: &str| -> Result<Option<String>> {
+        common::expect_eq(ts, kw)?;
+        let name = ts.peek().ident().map(str::to_string);
+        if name.is_some() {
+            ts.next();
+        }
+        Ok(name)
+    };
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        if ts.peek().is_kw("out") {
+            out = Some(common::parse_out_opt(ts)?);
+        } else if ts.peek().is_kw("predicted") || ts.peek().is_kw("p") {
+            predicted = read_name(ts, "PREDICTED")?;
+        } else if ts.peek().is_kw("residual") || ts.peek().is_kw("r") {
+            residual = read_name(ts, "RESIDUAL")?;
+        } else if ts.peek().is_kw("stdp") {
+            stdp = read_name(ts, "STDP")?;
+        } else if ts.peek().is_kw("stdi") {
+            stdi = read_name(ts, "STDI")?;
+        } else if ts.peek().is_kw("stdr") {
+            stdr = read_name(ts, "STDR")?;
+        } else if ts.peek().is_kw("lclm") {
+            lclm = read_name(ts, "LCLM")?;
+        } else if ts.peek().is_kw("uclm") {
+            uclm = read_name(ts, "UCLM")?;
+        } else if ts.peek().is_kw("lcl") {
+            lcl = read_name(ts, "LCL")?;
+        } else if ts.peek().is_kw("ucl") {
+            ucl = read_name(ts, "UCL")?;
+        } else if ts.peek().is_kw("student") {
+            student = read_name(ts, "STUDENT")?;
+        } else if ts.peek().is_kw("rstudent") {
+            rstudent = read_name(ts, "RSTUDENT")?;
+        } else if ts.peek().is_kw("cookd") {
+            cookd = read_name(ts, "COOKD")?;
+        } else if ts.peek().is_kw("h") {
+            h = read_name(ts, "H")?;
+        } else if ts.peek().is_kw("press") {
+            press = read_name(ts, "PRESS")?;
+        } else if ts.peek().is_kw("dffits") {
+            dffits = read_name(ts, "DFFITS")?;
+        } else if ts.peek().is_kw("covratio") {
+            covratio = read_name(ts, "COVRATIO")?;
+        } else if ts.peek().is_kw("dfbetas") {
+            dfbetas = read_name(ts, "DFBETAS")?;
+        } else {
+            ts.next();
+        }
+    }
+    ts.expect_semi()?;
+    if let Some(out_ref) = out {
+        // Associate this OUTPUT with the MODEL it follows (the last one
+        // seen). If no MODEL has been seen yet, SAS would error; we drop
+        // it silently here, matching the prior "only emit if out present"
+        // behaviour as closely as possible.
+        if let Some(entry) = models.last_mut() {
+            entry.outputs.push(RegOutput {
+                out: out_ref,
+                predicted,
+                residual,
+                stdp,
+                stdi,
+                stdr,
+                lcl,
+                ucl,
+                lclm,
+                uclm,
+                student,
+                rstudent,
+                cookd,
+                h,
+                press,
+                dffits,
+                covratio,
+                dfbetas,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// M36.11 — parse a `PLOTS` request: `PLOTS[(global-opts)]=keyword | (kw …)`.

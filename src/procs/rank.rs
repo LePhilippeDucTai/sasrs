@@ -465,14 +465,7 @@ fn transform_rank(r: f64, k: usize, method: Method) -> f64 {
 
 pub fn execute(ast: &RankAst, session: &mut Session) -> Result<()> {
     let in_ref = common::resolve_last_dataset(&ast.data, session)?;
-    let in_libref = in_ref.libref_or_work();
-    let in_table = in_ref.name.to_uppercase();
-
-    let provider = session.libs.get(&in_libref)?;
-    let (ds, notes) = provider.read(&in_table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let ds = common::open_resolved(&in_ref, session)?;
 
     // Resolve VAR list: explicit, else all numeric vars in dataset order.
     let var_cols: Vec<usize> = if !ast.var.is_empty() {
@@ -523,7 +516,7 @@ pub fn execute(ast: &RankAst, session: &mut Session) -> Result<()> {
     // input must be sorted by the BY key). Without BY → a single group of all
     // rows in input order.
     let n_obs = ds.n_obs();
-    let in_display = format!("{in_libref}.{in_table}");
+    let in_display = in_ref.display();
     let by_cols = resolve_by_cols(&ds, &ast.by)?;
     let groups_rows: Vec<Vec<usize>> = if by_cols.is_empty() {
         vec![(0..n_obs).collect()]

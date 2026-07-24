@@ -434,6 +434,83 @@ pub(super) fn fit_and_print(
         Some(w) => w.total_n,
         None => n as f64,
     };
+
+    let p = reg_names.len();
+    let p_eff = p + intercept as usize;
+    // Restricted error df = (n−p_eff)+qr; this raises the Error-line DF and
+    // lowers the Model DF by the number of restrictions.
+    let restrict_q = restricted.map(|r| r.lambda_rows.len()).unwrap_or(0);
+
+    // --- ANOVA decomposition + fit statistics — see `compute_anova_stats`.
+    let stats = compute_anova_stats(intercept, &y, wts, y_hat, sse, p, restrict_q, n_used);
+    let AnovaStats { error_df, mse, .. } = stats;
+
+    // --- Standard errors / t / p for each beta — see `compute_beta_tests`.
+    let (se_beta, t_beta, p_beta) = compute_beta_tests(restricted, fit, beta, mse, p_eff, error_df);
+
+    if model.noprint {
+        return;
+    }
+
+    print_report_header(n_read, n_used, model_label, by_heading, dep_name, session);
+    print_anova_table(&stats, sse, session);
+    print_fit_stats(&stats, press_stat, session);
+    // Parameter estimates table — see `print_parameter_estimates`.
+    print_parameter_estimates(
+        model,
+        reg_names,
+        intercept,
+        &PeTableCtx {
+            beta,
+            se_beta: &se_beta,
+            t_beta: &t_beta,
+            p_beta: &p_beta,
+            error_df,
+            p_eff,
+            restricted,
+            tolvif,
+            seqstats,
+        },
+        session,
+    );
+}
+
+/// MQ5.2 — one model's ANOVA / fit-statistics numbers, computed once and
+/// shared by the ANOVA-table and fit-statistics printers.
+#[derive(Clone, Copy)]
+struct AnovaStats {
+    y_mean: f64,
+    ssm: f64,
+    sst: f64,
+    model_df: f64,
+    error_df: f64,
+    total_df: f64,
+    total_label: &'static str,
+    r2: f64,
+    adj_r2: f64,
+    msm: f64,
+    mse: f64,
+    f_stat: f64,
+    p_f: f64,
+    root_mse: f64,
+    cv: f64,
+}
+
+/// MQ5.2 — the ANOVA decomposition (corrected with an intercept, uncorrected
+/// for NOINT), the derived F test, and the fit statistics.
+#[allow(clippy::too_many_arguments)]
+fn compute_anova_stats(
+    intercept: bool,
+    y: &[f64],
+    wts: &[f64],
+    y_hat: &[f64],
+    sse: f64,
+    p: usize,
+    restrict_q: usize,
+    n_used: f64,
+) -> AnovaStats {
+    let n = y.len();
+    let p_eff = p + intercept as usize;
     let sum_w: f64 = wts.iter().sum();
     // Weighted ("Dependent") mean ȳ_w = Σw_iy_i/Σw_i.
     let y_mean = {
@@ -444,12 +521,6 @@ pub(super) fn fit_and_print(
             y.iter().sum::<f64>() / n as f64
         }
     };
-
-    let p = reg_names.len();
-    let p_eff = p + intercept as usize;
-    // Restricted error df = (n−p_eff)+qr; this raises the Error-line DF and
-    // lowers the Model DF by the number of restrictions.
-    let restrict_q = restricted.map(|r| r.lambda_rows.len()).unwrap_or(0);
 
     // --- ANOVA decomposition ---
     let (ssm, sst, model_df, error_df, total_df, total_label, r2, adj_r2);
@@ -509,10 +580,37 @@ pub(super) fn fit_and_print(
         f64::NAN
     };
 
+    AnovaStats {
+        y_mean,
+        ssm,
+        sst,
+        model_df,
+        error_df,
+        total_df,
+        total_label,
+        r2,
+        adj_r2,
+        msm,
+        mse,
+        f_stat,
+        p_f,
+        root_mse,
+        cv,
+    }
+}
+
     // --- Standard errors / t / p for each beta ---
     // For the restricted fit these come from the constrained covariance matrix
     // computed in compute_restricted; otherwise from the usual MSE·(X'X)⁻¹.
-    let (se_beta, t_beta, p_beta): (Vec<f64>, Vec<f64>, Vec<f64>) = match restricted {
+fn compute_beta_tests(
+    restricted: Option<&Restricted>,
+    fit: &OlsFit,
+    beta: &[f64],
+    mse: f64,
+    p_eff: usize,
+    error_df: f64,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    match restricted {
         Some(r) => (r.se_r.clone(), r.t_r.clone(), r.p_r.clone()),
         None => {
             let mut se_beta = Vec::with_capacity(p_eff);
@@ -528,12 +626,19 @@ pub(super) fn fit_and_print(
             }
             (se_beta, t_beta, p_beta)
         }
-    };
-
-    if model.noprint {
-        return;
     }
+}
 
+/// MQ5.2 — the per-model report header block (procedure / BY / model /
+/// dependent headings and the observation counts).
+fn print_report_header(
+    n_read: usize,
+    n_used: f64,
+    model_label: &str,
+    by_heading: Option<&str>,
+    dep_name: &str,
+    session: &mut Session,
+) {
     session.listing.page_header();
     centered(session, "The REG Procedure");
     if let Some(h) = by_heading {
@@ -553,7 +658,23 @@ pub(super) fn fit_and_print(
     ));
     session.listing.blank();
     session.listing.blank();
+}
 
+/// MQ5.2 — the printed Analysis of Variance table.
+fn print_anova_table(stats: &AnovaStats, sse: f64, session: &mut Session) {
+    let &AnovaStats {
+        ssm,
+        sst,
+        model_df,
+        error_df,
+        total_df,
+        total_label,
+        msm,
+        mse,
+        f_stat,
+        p_f,
+        ..
+    } = stats;
     centered(session, "Analysis of Variance");
     session.listing.blank();
 
@@ -604,7 +725,18 @@ pub(super) fn fit_and_print(
         .write_table(&anova_headers, &anova_aligns, &anova_rows);
     session.listing.blank();
     session.listing.blank();
+}
 
+/// MQ5.2 — the printed fit-statistics block (Root MSE / R-Square / …).
+fn print_fit_stats(stats: &AnovaStats, press_stat: Option<f64>, session: &mut Session) {
+    let &AnovaStats {
+        y_mean,
+        r2,
+        adj_r2,
+        root_mse,
+        cv,
+        ..
+    } = stats;
     // Fit statistics (written manually)
     session.listing.write_line(&format!(
         "Root MSE             {}    R-Square     {}",
@@ -630,7 +762,43 @@ pub(super) fn fit_and_print(
     }
     session.listing.blank();
     session.listing.blank();
+}
 
+/// MQ5.2 — everything the parameter-estimates table prints for one model
+/// beyond the model/regressor context: the estimates, their tests, and the
+/// optional RESTRICT / VIF-TOL / partial-SS blocks.
+struct PeTableCtx<'a> {
+    beta: &'a [f64],
+    se_beta: &'a [f64],
+    t_beta: &'a [f64],
+    p_beta: &'a [f64],
+    error_df: f64,
+    p_eff: usize,
+    restricted: Option<&'a Restricted>,
+    tolvif: Option<&'a (Vec<f64>, Vec<f64>)>,
+    seqstats: Option<&'a SeqStats>,
+}
+
+/// MQ5.2 — the printed Parameter Estimates table (with the optional CLB /
+/// Tolerance-VIF / partial-SS / RESTRICT columns and rows).
+fn print_parameter_estimates(
+    model: &RegModel,
+    reg_names: &[String],
+    intercept: bool,
+    pe: &PeTableCtx,
+    session: &mut Session,
+) {
+    let &PeTableCtx {
+        beta,
+        se_beta,
+        t_beta,
+        p_beta,
+        error_df,
+        p_eff,
+        restricted,
+        tolvif,
+        seqstats,
+    } = pe;
     // Parameter estimates table. With RESTRICT statements a trailing Label
     // column carries the restriction expression; the unrestricted path keeps
     // the original 6-column layout byte-identical.
@@ -639,84 +807,12 @@ pub(super) fn fit_and_print(
     let with_clb = model.clb;
     let clb_level = 100.0 * (1.0 - model.alpha);
     let t_crit = t_quantile(1.0 - model.alpha / 2.0, error_df);
-    let mut pe_headers: Vec<String> = vec![
-        "Variable".into(),
-        "DF".into(),
-        "Parameter Estimate".into(),
-        "Standard Error".into(),
-        "t Value".into(),
-        "Pr > |t|".into(),
-    ];
-    let mut pe_aligns = vec![
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
-    if with_clb {
-        pe_headers.push(format!("{}% Confidence Limits", fmt_level(clb_level)));
-        pe_aligns.push(Align::Right);
-        // The interval prints as two value columns under one spanning header;
-        // emit a second (blank-titled) column to carry the upper limit.
-        pe_headers.push(String::new());
-        pe_aligns.push(Align::Right);
-    }
     // VIF / TOL columns (M36.4). SAS orders Tolerance before Variance Inflation.
     let with_tol = model.tol && tolvif.is_some();
     let with_vif = model.vif && tolvif.is_some();
-    if with_tol {
-        pe_headers.push("Tolerance".into());
-        pe_aligns.push(Align::Right);
-    }
-    if with_vif {
-        pe_headers.push("Variance Inflation".into());
-        pe_aligns.push(Align::Right);
-    }
-    // M36.5 partial-SS / correlation columns. SAS appends them in this order:
-    // Type I SS, Type II SS, Standardized Estimate, Squared Partial Corr Type I,
-    // Squared Partial Corr Type II, Squared Semi-partial Corr Type I, Squared
-    // Semi-partial Corr Type II, Sequential Parameter Estimate.
     let with_seq = seqstats.is_some();
-    if with_seq {
-        if model.ss1 {
-            pe_headers.push("Type I SS".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.ss2 {
-            pe_headers.push("Type II SS".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.stb {
-            pe_headers.push("Standardized Estimate".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.pcorr1 {
-            pe_headers.push("Squared Partial Corr Type I".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.pcorr2 {
-            pe_headers.push("Squared Partial Corr Type II".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.scorr1 {
-            pe_headers.push("Squared Semi-partial Corr Type I".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.scorr2 {
-            pe_headers.push("Squared Semi-partial Corr Type II".into());
-            pe_aligns.push(Align::Right);
-        }
-        if model.seqb {
-            pe_headers.push("Sequential Parameter Estimate".into());
-            pe_aligns.push(Align::Right);
-        }
-    }
-    if with_label {
-        pe_headers.push("Label".into());
-        pe_aligns.push(Align::Left);
-    }
+    let (pe_headers, pe_aligns) =
+        pe_table_columns(model, with_label, with_clb, clb_level, with_tol, with_vif, with_seq);
     let mut pe_rows: Vec<Vec<String>> = Vec::with_capacity(p_eff);
     for j in 0..p_eff {
         let var_name = if intercept {
@@ -808,8 +904,113 @@ pub(super) fn fit_and_print(
         }
         pe_rows.push(row);
     }
+    // Append RESTRICT rows — see `append_restrict_rows`.
+    append_restrict_rows(model, restricted, with_clb, with_tol, with_vif, with_seq, &mut pe_rows);
+    session
+        .listing
+        .write_table(&pe_headers, &pe_aligns, &pe_rows);
+}
+
+/// MQ5.2 — build the Parameter Estimates table's headers and alignments from
+/// the requested optional columns.
+fn pe_table_columns(
+    model: &RegModel,
+    with_label: bool,
+    with_clb: bool,
+    clb_level: f64,
+    with_tol: bool,
+    with_vif: bool,
+    with_seq: bool,
+) -> (Vec<String>, Vec<Align>) {
+    let mut pe_headers: Vec<String> = vec![
+        "Variable".into(),
+        "DF".into(),
+        "Parameter Estimate".into(),
+        "Standard Error".into(),
+        "t Value".into(),
+        "Pr > |t|".into(),
+    ];
+    let mut pe_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    if with_clb {
+        pe_headers.push(format!("{}% Confidence Limits", fmt_level(clb_level)));
+        pe_aligns.push(Align::Right);
+        // The interval prints as two value columns under one spanning header;
+        // emit a second (blank-titled) column to carry the upper limit.
+        pe_headers.push(String::new());
+        pe_aligns.push(Align::Right);
+    }
+    if with_tol {
+        pe_headers.push("Tolerance".into());
+        pe_aligns.push(Align::Right);
+    }
+    if with_vif {
+        pe_headers.push("Variance Inflation".into());
+        pe_aligns.push(Align::Right);
+    }
+    // M36.5 partial-SS / correlation columns. SAS appends them in this order:
+    // Type I SS, Type II SS, Standardized Estimate, Squared Partial Corr Type I,
+    // Squared Partial Corr Type II, Squared Semi-partial Corr Type I, Squared
+    // Semi-partial Corr Type II, Sequential Parameter Estimate.
+    if with_seq {
+        if model.ss1 {
+            pe_headers.push("Type I SS".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.ss2 {
+            pe_headers.push("Type II SS".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.stb {
+            pe_headers.push("Standardized Estimate".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.pcorr1 {
+            pe_headers.push("Squared Partial Corr Type I".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.pcorr2 {
+            pe_headers.push("Squared Partial Corr Type II".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.scorr1 {
+            pe_headers.push("Squared Semi-partial Corr Type I".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.scorr2 {
+            pe_headers.push("Squared Semi-partial Corr Type II".into());
+            pe_aligns.push(Align::Right);
+        }
+        if model.seqb {
+            pe_headers.push("Sequential Parameter Estimate".into());
+            pe_aligns.push(Align::Right);
+        }
+    }
+    if with_label {
+        pe_headers.push("Label".into());
+        pe_aligns.push(Align::Left);
+    }
+    (pe_headers, pe_aligns)
+}
+
     // Append RESTRICT rows: Variable="RESTRICT", DF=-1 (negative per SAS),
     // Estimate=λ_i, with the restriction expression in the Label column.
+#[allow(clippy::too_many_arguments)]
+fn append_restrict_rows(
+    model: &RegModel,
+    restricted: Option<&Restricted>,
+    with_clb: bool,
+    with_tol: bool,
+    with_vif: bool,
+    with_seq: bool,
+    pe_rows: &mut Vec<Vec<String>>,
+) {
     if let Some(r) = restricted {
         for (label, lam, se, t, pv) in &r.lambda_rows {
             let mut row = vec![
@@ -853,9 +1054,6 @@ pub(super) fn fit_and_print(
             pe_rows.push(row);
         }
     }
-    session
-        .listing
-        .write_table(&pe_headers, &pe_aligns, &pe_rows);
 }
 
 /// Print the degenerate "no variables entered" case for SELECTION when the

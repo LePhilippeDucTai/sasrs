@@ -139,27 +139,59 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
     })
 }
 
+/// Common variable (by name, case-insensitive), with type match analysis.
+struct CommonVar {
+    name: String,
+    base_idx: usize,
+    comp_idx: usize,
+    type_match: bool,
+    base_type: VarType,
+    comp_type: VarType,
+}
+
+/// For each common var that has matching types: track max abs diff (numeric)
+/// and whether any diffs occurred (char).
+struct VarDiffSummary {
+    name: String,
+    var_type: VarType,
+    n_diffs: usize,
+    max_diff: f64, // only for numeric
+}
+
+/// OUT= accumulation: rows where differences occur.
+/// _TYPE_: "BASE" / "COMPARE" / "DIF" rows for each obs with diffs.
+struct OutRow {
+    obs: usize,
+    row_type: &'static str,
+    values: Vec<Option<Value>>, // one per common-var with type match
+}
+
+/// Everything the listing report needs (grouped to keep signatures short).
+struct ReportCtx<'a> {
+    base_display: &'a str,
+    comp_display: &'a str,
+    base_nobs: usize,
+    base_nvars: usize,
+    comp_nobs: usize,
+    comp_nvars: usize,
+    only_base: &'a [String],
+    only_comp: &'a [String],
+    common_vars: &'a [CommonVar],
+    n_matching: usize,
+    n_compared: usize,
+    n_with_diffs: usize,
+    var_diffs: &'a [VarDiffSummary],
+}
+
 /// Execute PROC COMPARE.
 pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
     // ── Load BASE dataset ────────────────────────────────────────────────────
-    let base_libref = ast.base.libref_or_work();
-    let base_name = ast.base.name.to_uppercase();
     let base_display = ast.base.display();
-    let base_provider = session.libs.get(&base_libref)?;
-    let (base_ds, base_notes) = base_provider.read(&base_name)?;
-    for note in base_notes {
-        session.log.forward(&note);
-    }
+    let base_ds = read_input(session, &ast.base)?;
 
     // ── Load COMPARE dataset ─────────────────────────────────────────────────
-    let comp_libref = ast.compare.libref_or_work();
-    let comp_name = ast.compare.name.to_uppercase();
     let comp_display = ast.compare.display();
-    let comp_provider = session.libs.get(&comp_libref)?;
-    let (comp_ds, comp_notes) = comp_provider.read(&comp_name)?;
-    for note in comp_notes {
-        session.log.forward(&note);
-    }
+    let comp_ds = read_input(session, &ast.compare)?;
 
     let base_nobs = base_ds.n_obs();
     let base_nvars = base_ds.n_vars();
@@ -167,6 +199,76 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
     let comp_nvars = comp_ds.n_vars();
 
     // ── Variable analysis ────────────────────────────────────────────────────
+    let (only_base, only_comp, common_vars) = analyze_variables(&base_ds, &comp_ds);
+    let matching_vars: Vec<&CommonVar> = common_vars.iter().filter(|cv| cv.type_match).collect();
+
+    // ── Observation comparison ───────────────────────────────────────────────
+    let n_compared = base_nobs.min(comp_nobs);
+    let need_out = ast.out.is_some();
+    let (n_with_diffs, var_diffs, out_rows) =
+        compare_observations(&base_ds, &comp_ds, &matching_vars, n_compared, need_out);
+
+    // ── Render listing ───────────────────────────────────────────────────────
+    session.listing.page_header();
+    let ctx = ReportCtx {
+        base_display: &base_display,
+        comp_display: &comp_display,
+        base_nobs,
+        base_nvars,
+        comp_nobs,
+        comp_nvars,
+        only_base: &only_base,
+        only_comp: &only_comp,
+        common_vars: &common_vars,
+        n_matching: matching_vars.len(),
+        n_compared,
+        n_with_diffs,
+        var_diffs: &var_diffs,
+    };
+    if !ast.briefsummary {
+        print_full_report(session, ast, &ctx);
+    } else {
+        print_brief_report(session, &ctx);
+    }
+
+    // ── NOTE log ────────────────────────────────────────────────────────────
+    if n_with_diffs == 0 {
+        session.log.note(&format!(
+            "No unequal values were found. All values compared are exactly equal."
+        ));
+    } else {
+        session.log.note(&format!(
+            "There were {} observations with at least one unequal value.",
+            n_with_diffs
+        ));
+    }
+
+    // ── Write OUT= dataset ───────────────────────────────────────────────────
+    if let Some(ref out_ref) = ast.out {
+        write_out_dataset(session, out_ref, &out_rows, &matching_vars, &base_ds)?;
+    }
+
+    Ok(())
+}
+
+/// Read one input dataset (BASE= or COMPARE=), forwarding provider notes.
+fn read_input(session: &mut Session, dsref: &DatasetRef) -> Result<SasDataset> {
+    let libref = dsref.libref_or_work();
+    let name = dsref.name.to_uppercase();
+    let provider = session.libs.get(&libref)?;
+    let (ds, notes) = provider.read(&name)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+    Ok(ds)
+}
+
+/// Variable analysis: names only in BASE, only in COMPARE, and the sorted
+/// common-variable list (with per-variable type match).
+fn analyze_variables(
+    base_ds: &SasDataset,
+    comp_ds: &SasDataset,
+) -> (Vec<String>, Vec<String>, Vec<CommonVar>) {
     // Build maps: name → (index, VarMeta) for each dataset
     let base_var_map: HashMap<String, usize> = base_ds
         .vars
@@ -199,16 +301,6 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
         .collect();
     only_comp.sort();
 
-    // Common variables (by name, case-insensitive), with type match analysis
-    struct CommonVar {
-        name: String,
-        base_idx: usize,
-        comp_idx: usize,
-        type_match: bool,
-        base_type: VarType,
-        comp_type: VarType,
-    }
-
     let mut common_vars: Vec<CommonVar> = base_ds
         .vars
         .iter()
@@ -227,22 +319,23 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
         .collect();
     common_vars.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // ── Observation comparison ───────────────────────────────────────────────
-    let n_compared = base_nobs.min(comp_nobs);
+    (only_base, only_comp, common_vars)
+}
+
+/// Row-by-row value comparison over the type-matched common variables.
+/// Returns (nb obs with differences, per-variable diff summaries, OUT= rows —
+/// empty unless `need_out`).
+fn compare_observations(
+    base_ds: &SasDataset,
+    comp_ds: &SasDataset,
+    matching_vars: &[&CommonVar],
+    n_compared: usize,
+    need_out: bool,
+) -> (usize, Vec<VarDiffSummary>, Vec<OutRow>) {
     let mut n_with_diffs: usize = 0;
 
-    // For each common var that has matching types: track max abs diff (numeric)
-    // and whether any diffs occurred (char).
-    struct VarDiffSummary {
-        name: String,
-        var_type: VarType,
-        n_diffs: usize,
-        max_diff: f64, // only for numeric
-    }
-
-    let mut var_diffs: Vec<VarDiffSummary> = common_vars
+    let mut var_diffs: Vec<VarDiffSummary> = matching_vars
         .iter()
-        .filter(|cv| cv.type_match)
         .map(|cv| VarDiffSummary {
             name: cv.name.clone(),
             var_type: cv.base_type,
@@ -251,16 +344,7 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
         })
         .collect();
 
-    // OUT= accumulation: rows where differences occur
-    // _TYPE_: "BASE" / "COMPARE" / "DIF" rows for each obs with diffs
-    struct OutRow {
-        obs: usize,
-        row_type: &'static str,
-        values: Vec<Option<Value>>, // one per common-var with type match
-    }
-
     let mut out_rows: Vec<OutRow> = Vec::new();
-    let need_out = ast.out.is_some();
 
     // Build column iterators for the comparison
     // We'll do row-by-row comparison using the Polars Series
@@ -275,8 +359,6 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
         base_col_idx: usize,
         comp_col_idx: usize,
     }
-
-    let matching_vars: Vec<&CommonVar> = common_vars.iter().filter(|cv| cv.type_match).collect();
 
     let col_pairs: Vec<ColPair> = matching_vars
         .iter()
@@ -354,308 +436,307 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // ── Render listing ───────────────────────────────────────────────────────
-    session.listing.page_header();
+    (n_with_diffs, var_diffs, out_rows)
+}
 
-    if !ast.briefsummary {
-        // === Data Set Summary ===
-        session.listing.write_line("The COMPARE Procedure");
-        session.listing.blank();
-        session.listing.write_line("Data Set Summary");
-        session.listing.blank();
+/// Full listing report: Data Set Summary, Variables Summary, Observation
+/// Summary and (unless NOVALUES) the Values Comparison Summary.
+fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &ReportCtx<'_>) {
+    // === Data Set Summary ===
+    session.listing.write_line("The COMPARE Procedure");
+    session.listing.blank();
+    session.listing.write_line("Data Set Summary");
+    session.listing.blank();
 
-        let ds_headers = vec![
-            "Dataset".to_string(),
-            "Role".to_string(),
-            "Label".to_string(),
-            "Observations".to_string(),
-            "Variables".to_string(),
-        ];
-        let ds_aligns = vec![
-            Align::Left,
-            Align::Left,
-            Align::Left,
-            Align::Right,
-            Align::Right,
-        ];
-        let ds_rows = vec![
-            vec![
-                base_display.clone(),
-                "BASE".to_string(),
-                String::new(),
-                base_nobs.to_string(),
-                base_nvars.to_string(),
-            ],
-            vec![
-                comp_display.clone(),
-                "COMPARE".to_string(),
-                String::new(),
-                comp_nobs.to_string(),
-                comp_nvars.to_string(),
-            ],
-        ];
-        session.listing.write_table(&ds_headers, &ds_aligns, &ds_rows);
-        session.listing.blank();
+    let ds_headers = vec![
+        "Dataset".to_string(),
+        "Role".to_string(),
+        "Label".to_string(),
+        "Observations".to_string(),
+        "Variables".to_string(),
+    ];
+    let ds_aligns = vec![
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+    ];
+    let ds_rows = vec![
+        vec![
+            ctx.base_display.to_string(),
+            "BASE".to_string(),
+            String::new(),
+            ctx.base_nobs.to_string(),
+            ctx.base_nvars.to_string(),
+        ],
+        vec![
+            ctx.comp_display.to_string(),
+            "COMPARE".to_string(),
+            String::new(),
+            ctx.comp_nobs.to_string(),
+            ctx.comp_nvars.to_string(),
+        ],
+    ];
+    session.listing.write_table(&ds_headers, &ds_aligns, &ds_rows);
+    session.listing.blank();
 
-        // === Variables Summary ===
-        session.listing.write_line("Variables Summary");
-        session.listing.blank();
-        let n_common = matching_vars.len();
-        let n_type_mismatch = common_vars.iter().filter(|cv| !cv.type_match).count();
+    // === Variables Summary ===
+    session.listing.write_line("Variables Summary");
+    session.listing.blank();
+    let n_common = ctx.n_matching;
+    let n_type_mismatch = ctx.common_vars.iter().filter(|cv| !cv.type_match).count();
+    session.listing.write_line(&format!(
+        "Number of Variables in Common: {}",
+        ctx.common_vars.len()
+    ));
+    if n_type_mismatch > 0 {
         session.listing.write_line(&format!(
-            "Number of Variables in Common: {}",
-            common_vars.len()
+            "Number of Variables with Different Types: {}",
+            n_type_mismatch
         ));
-        if n_type_mismatch > 0 {
+        for cv in ctx.common_vars.iter().filter(|cv| !cv.type_match) {
             session.listing.write_line(&format!(
-                "Number of Variables with Different Types: {}",
-                n_type_mismatch
-            ));
-            for cv in common_vars.iter().filter(|cv| !cv.type_match) {
-                session.listing.write_line(&format!(
-                    "  Variable {}: BASE type={}, COMPARE type={}",
-                    cv.name,
-                    type_str(cv.base_type),
-                    type_str(cv.comp_type)
-                ));
-            }
-        }
-        if !only_base.is_empty() {
-            session.listing.write_line(&format!(
-                "Variables in BASE only ({}): {}",
-                only_base.len(),
-                only_base.join(", ")
+                "  Variable {}: BASE type={}, COMPARE type={}",
+                cv.name,
+                type_str(cv.base_type),
+                type_str(cv.comp_type)
             ));
         }
-        if !only_comp.is_empty() {
-            session.listing.write_line(&format!(
-                "Variables in COMPARE only ({}): {}",
-                only_comp.len(),
-                only_comp.join(", ")
-            ));
-        }
-        session.listing.blank();
-
-        // === Observation Summary ===
-        session.listing.write_line("Observation Summary");
-        session.listing.blank();
-        let n_uncompared =
-            (base_nobs as isize - comp_nobs as isize).unsigned_abs();
+    }
+    if !ctx.only_base.is_empty() {
         session.listing.write_line(&format!(
-            "Number of Observations in Common: {}",
-            n_compared
-        ));
-        if n_compared < base_nobs.max(comp_nobs) {
-            session.listing.write_line(&format!(
-                "Number of Observations Not Compared (different N): {}",
-                n_uncompared
-            ));
-        }
-        session.listing.write_line(&format!(
-            "Number of Observations with Differences: {}",
-            n_with_diffs
-        ));
-        session.listing.write_line(&format!(
-            "Number of Observations in Agreement: {}",
-            n_compared - n_with_diffs
-        ));
-        session.listing.blank();
-
-        // === Values Comparison ===
-        if !ast.novalues && n_common > 0 {
-            session.listing.write_line("Values Comparison Summary");
-            session.listing.blank();
-
-            let val_headers = vec![
-                "Variable".to_string(),
-                "Type".to_string(),
-                "N Diffs".to_string(),
-                "Max Diff".to_string(),
-            ];
-            let val_aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
-            let val_rows: Vec<Vec<String>> = var_diffs
-                .iter()
-                .map(|vd| {
-                    let max_diff_str = if vd.var_type == VarType::Num && vd.n_diffs > 0 {
-                        format!("{:.6}", vd.max_diff)
-                    } else if vd.var_type == VarType::Char {
-                        String::new()
-                    } else {
-                        "0".to_string()
-                    };
-                    vec![
-                        vd.name.clone(),
-                        type_str(vd.var_type).to_string(),
-                        vd.n_diffs.to_string(),
-                        max_diff_str,
-                    ]
-                })
-                .collect();
-            session.listing.write_table(&val_headers, &val_aligns, &val_rows);
-        }
-    } else {
-        // BRIEFSUMMARY: condensed
-        session.listing.write_line("The COMPARE Procedure - Brief Summary");
-        session.listing.blank();
-        session.listing.write_line(&format!(
-            "BASE:    {} ({} obs, {} vars)",
-            base_display, base_nobs, base_nvars
-        ));
-        session.listing.write_line(&format!(
-            "COMPARE: {} ({} obs, {} vars)",
-            comp_display, comp_nobs, comp_nvars
-        ));
-        session.listing.write_line(&format!(
-            "Observations compared: {}  with differences: {}",
-            n_compared, n_with_diffs
+            "Variables in BASE only ({}): {}",
+            ctx.only_base.len(),
+            ctx.only_base.join(", ")
         ));
     }
-
-    // ── NOTE log ────────────────────────────────────────────────────────────
-    if n_with_diffs == 0 {
-        session.log.note(&format!(
-            "No unequal values were found. All values compared are exactly equal."
-        ));
-    } else {
-        session.log.note(&format!(
-            "There were {} observations with at least one unequal value.",
-            n_with_diffs
+    if !ctx.only_comp.is_empty() {
+        session.listing.write_line(&format!(
+            "Variables in COMPARE only ({}): {}",
+            ctx.only_comp.len(),
+            ctx.only_comp.join(", ")
         ));
     }
+    session.listing.blank();
 
-    // ── Write OUT= dataset ───────────────────────────────────────────────────
-    if let Some(ref out_ref) = ast.out {
-        if !out_rows.is_empty() && !matching_vars.is_empty() {
-            let out_libref = out_ref.libref_or_work();
-            let out_name = out_ref.name.to_uppercase();
+    // === Observation Summary ===
+    session.listing.write_line("Observation Summary");
+    session.listing.blank();
+    let n_uncompared =
+        (ctx.base_nobs as isize - ctx.comp_nobs as isize).unsigned_abs();
+    session.listing.write_line(&format!(
+        "Number of Observations in Common: {}",
+        ctx.n_compared
+    ));
+    if ctx.n_compared < ctx.base_nobs.max(ctx.comp_nobs) {
+        session.listing.write_line(&format!(
+            "Number of Observations Not Compared (different N): {}",
+            n_uncompared
+        ));
+    }
+    session.listing.write_line(&format!(
+        "Number of Observations with Differences: {}",
+        ctx.n_with_diffs
+    ));
+    session.listing.write_line(&format!(
+        "Number of Observations in Agreement: {}",
+        ctx.n_compared - ctx.n_with_diffs
+    ));
+    session.listing.blank();
 
-            // Build DataFrame for OUT= dataset
-            // Columns: _TYPE_, _OBS_, <common vars matching type>
-            let n_rows = out_rows.len();
+    // === Values Comparison ===
+    if !ast.novalues && n_common > 0 {
+        session.listing.write_line("Values Comparison Summary");
+        session.listing.blank();
 
-            let type_col: StringChunked = out_rows
-                .iter()
-                .map(|r| Some(r.row_type))
-                .collect();
-            let obs_col: Float64Chunked = out_rows
-                .iter()
-                .map(|r| Some(r.obs as f64))
-                .collect();
+        let val_headers = vec![
+            "Variable".to_string(),
+            "Type".to_string(),
+            "N Diffs".to_string(),
+            "Max Diff".to_string(),
+        ];
+        let val_aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
+        let val_rows: Vec<Vec<String>> = ctx
+            .var_diffs
+            .iter()
+            .map(|vd| {
+                let max_diff_str = if vd.var_type == VarType::Num && vd.n_diffs > 0 {
+                    format!("{:.6}", vd.max_diff)
+                } else if vd.var_type == VarType::Char {
+                    String::new()
+                } else {
+                    "0".to_string()
+                };
+                vec![
+                    vd.name.clone(),
+                    type_str(vd.var_type).to_string(),
+                    vd.n_diffs.to_string(),
+                    max_diff_str,
+                ]
+            })
+            .collect();
+        session.listing.write_table(&val_headers, &val_aligns, &val_rows);
+    }
+}
 
-            let mut columns: Vec<Column> = vec![
-                Series::new("_TYPE_".into(), type_col).into(),
-                Series::new("_OBS_".into(), obs_col).into(),
-            ];
+/// BRIEFSUMMARY: condensed report (totals only).
+fn print_brief_report(session: &mut Session, ctx: &ReportCtx<'_>) {
+    session.listing.write_line("The COMPARE Procedure - Brief Summary");
+    session.listing.blank();
+    session.listing.write_line(&format!(
+        "BASE:    {} ({} obs, {} vars)",
+        ctx.base_display, ctx.base_nobs, ctx.base_nvars
+    ));
+    session.listing.write_line(&format!(
+        "COMPARE: {} ({} obs, {} vars)",
+        ctx.comp_display, ctx.comp_nobs, ctx.comp_nvars
+    ));
+    session.listing.write_line(&format!(
+        "Observations compared: {}  with differences: {}",
+        ctx.n_compared, ctx.n_with_diffs
+    ));
+}
 
-            let mut vars: Vec<VarMeta> = vec![
-                VarMeta {
-                    name: "_TYPE_".to_string(),
-                    ty: VarType::Char,
-                    length: 7,
-                    format: None,
-                    label: None,
-                },
-                VarMeta {
-                    name: "_OBS_".to_string(),
-                    ty: VarType::Num,
-                    length: 8,
-                    format: None,
-                    label: None,
-                },
-            ];
+/// Write the OUT= differences dataset: `_TYPE_`, `_OBS_` plus the type-matched
+/// common variables (BASE/COMPARE/DIF rows per differing obs). With no
+/// differences, an empty dataset with just `_TYPE_`/`_OBS_` is created.
+fn write_out_dataset(
+    session: &mut Session,
+    out_ref: &DatasetRef,
+    out_rows: &[OutRow],
+    matching_vars: &[&CommonVar],
+    base_ds: &SasDataset,
+) -> Result<()> {
+    if !out_rows.is_empty() && !matching_vars.is_empty() {
+        let out_libref = out_ref.libref_or_work();
+        let out_name = out_ref.name.to_uppercase();
 
-            for (vi, mv) in matching_vars.iter().enumerate() {
-                let base_meta = &base_ds.vars[mv.base_idx];
-                match mv.base_type {
-                    VarType::Num => {
-                        let col_vals: Float64Chunked = out_rows
-                            .iter()
-                            .map(|r| {
-                                r.values[vi].as_ref().and_then(|v| match v {
-                                    Value::Num(f) => Some(*f),
-                                    _ => None,
-                                })
+        // Build DataFrame for OUT= dataset
+        // Columns: _TYPE_, _OBS_, <common vars matching type>
+        let n_rows = out_rows.len();
+
+        let type_col: StringChunked = out_rows
+            .iter()
+            .map(|r| Some(r.row_type))
+            .collect();
+        let obs_col: Float64Chunked = out_rows
+            .iter()
+            .map(|r| Some(r.obs as f64))
+            .collect();
+
+        let mut columns: Vec<Column> = vec![
+            Series::new("_TYPE_".into(), type_col).into(),
+            Series::new("_OBS_".into(), obs_col).into(),
+        ];
+
+        let mut vars: Vec<VarMeta> = vec![
+            VarMeta {
+                name: "_TYPE_".to_string(),
+                ty: VarType::Char,
+                length: 7,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "_OBS_".to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ];
+
+        for (vi, mv) in matching_vars.iter().enumerate() {
+            let base_meta = &base_ds.vars[mv.base_idx];
+            match mv.base_type {
+                VarType::Num => {
+                    let col_vals: Float64Chunked = out_rows
+                        .iter()
+                        .map(|r| {
+                            r.values[vi].as_ref().and_then(|v| match v {
+                                Value::Num(f) => Some(*f),
+                                _ => None,
                             })
-                            .collect();
-                        columns.push(
-                            Series::new(mv.name.as_str().into(), col_vals).into(),
-                        );
-                    }
-                    VarType::Char => {
-                        let col_vals: StringChunked = out_rows
-                            .iter()
-                            .map(|r| {
-                                r.values[vi].as_ref().and_then(|v| match v {
-                                    Value::Char(s) => Some(s.as_str()),
-                                    _ => None,
-                                })
-                            })
-                            .collect();
-                        columns.push(
-                            Series::new(mv.name.as_str().into(), col_vals).into(),
-                        );
-                    }
+                        })
+                        .collect();
+                    columns.push(
+                        Series::new(mv.name.as_str().into(), col_vals).into(),
+                    );
                 }
-                vars.push(VarMeta {
-                    name: mv.name.clone(),
-                    ty: mv.base_type,
-                    length: base_meta.length,
-                    format: base_meta.format.clone(),
-                    label: base_meta.label.clone(),
-                });
+                VarType::Char => {
+                    let col_vals: StringChunked = out_rows
+                        .iter()
+                        .map(|r| {
+                            r.values[vi].as_ref().and_then(|v| match v {
+                                Value::Char(s) => Some(s.as_str()),
+                                _ => None,
+                            })
+                        })
+                        .collect();
+                    columns.push(
+                        Series::new(mv.name.as_str().into(), col_vals).into(),
+                    );
+                }
             }
-
-            let df = DataFrame::new(columns)
-                .map_err(|e| SasError::runtime(format!("COMPARE OUT= build error: {e}")))?;
-            let out_ds = SasDataset { df, vars };
-            let out_provider = session.libs.get(&out_libref)?;
-            out_provider.write(&out_name, &out_ds)?;
-            session.log.note(&format!(
-                "Output data set: {}.{} ({} observations).",
-                out_libref,
-                out_name,
-                n_rows
-            ));
-            session.last_dataset = Some(format!("{}.{}", out_libref, out_name));
-        } else if out_rows.is_empty() {
-            // No diffs — create empty OUT= dataset with just _TYPE_, _OBS_
-            let type_col: StringChunked = std::iter::empty::<Option<&str>>().collect();
-            let obs_col: Float64Chunked = std::iter::empty::<Option<f64>>().collect();
-            let columns: Vec<Column> = vec![
-                Series::new("_TYPE_".into(), type_col).into(),
-                Series::new("_OBS_".into(), obs_col).into(),
-            ];
-            let vars = vec![
-                VarMeta {
-                    name: "_TYPE_".to_string(),
-                    ty: VarType::Char,
-                    length: 7,
-                    format: None,
-                    label: None,
-                },
-                VarMeta {
-                    name: "_OBS_".to_string(),
-                    ty: VarType::Num,
-                    length: 8,
-                    format: None,
-                    label: None,
-                },
-            ];
-            let df = DataFrame::new(columns)
-                .map_err(|e| SasError::runtime(format!("COMPARE OUT= build error: {e}")))?;
-            let out_ds = SasDataset { df, vars };
-            let out_libref = out_ref.libref_or_work();
-            let out_name = out_ref.name.to_uppercase();
-            let out_provider = session.libs.get(&out_libref)?;
-            out_provider.write(&out_name, &out_ds)?;
-            session.log.note(&format!(
-                "Output data set: {}.{} (0 observations).",
-                out_libref, out_name
-            ));
-            session.last_dataset = Some(format!("{}.{}", out_libref, out_name));
+            vars.push(VarMeta {
+                name: mv.name.clone(),
+                ty: mv.base_type,
+                length: base_meta.length,
+                format: base_meta.format.clone(),
+                label: base_meta.label.clone(),
+            });
         }
-    }
 
+        let df = DataFrame::new(columns)
+            .map_err(|e| SasError::runtime(format!("COMPARE OUT= build error: {e}")))?;
+        let out_ds = SasDataset { df, vars };
+        let out_provider = session.libs.get(&out_libref)?;
+        out_provider.write(&out_name, &out_ds)?;
+        session.log.note(&format!(
+            "Output data set: {}.{} ({} observations).",
+            out_libref,
+            out_name,
+            n_rows
+        ));
+        session.last_dataset = Some(format!("{}.{}", out_libref, out_name));
+    } else if out_rows.is_empty() {
+        // No diffs — create empty OUT= dataset with just _TYPE_, _OBS_
+        let type_col: StringChunked = std::iter::empty::<Option<&str>>().collect();
+        let obs_col: Float64Chunked = std::iter::empty::<Option<f64>>().collect();
+        let columns: Vec<Column> = vec![
+            Series::new("_TYPE_".into(), type_col).into(),
+            Series::new("_OBS_".into(), obs_col).into(),
+        ];
+        let vars = vec![
+            VarMeta {
+                name: "_TYPE_".to_string(),
+                ty: VarType::Char,
+                length: 7,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "_OBS_".to_string(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ];
+        let df = DataFrame::new(columns)
+            .map_err(|e| SasError::runtime(format!("COMPARE OUT= build error: {e}")))?;
+        let out_ds = SasDataset { df, vars };
+        let out_libref = out_ref.libref_or_work();
+        let out_name = out_ref.name.to_uppercase();
+        let out_provider = session.libs.get(&out_libref)?;
+        out_provider.write(&out_name, &out_ds)?;
+        session.log.note(&format!(
+            "Output data set: {}.{} (0 observations).",
+            out_libref, out_name
+        ));
+        session.last_dataset = Some(format!("{}.{}", out_libref, out_name));
+    }
     Ok(())
 }
 
