@@ -1,0 +1,156 @@
+use super::*;
+
+// ────────────── squelette du statement MODEL (MQ4.6 — model procs) ──────────────
+//
+// Le squelette « réponse → '=' → effets jusqu'à `/` ou `;` » du statement
+// MODEL était recopié dans mixed/glimmix/genmod/logistic (mono-réponse) et
+// glm/anova (multi-réponses, termes d'interaction `a*b`). Les briques
+// ci-dessous sont extraites verbatim de ces procs. Les messages d'erreur
+// diffèrent entre familles (« expected response variable in MODEL » pour
+// MIXED/GLIMMIX vs « expected response variable » pour GENMOD/LOGISTIC…) :
+// ils restent fournis par l'appelant afin de préserver l'identité
+// octet-à-octet des logs. Les options après `/` divergent proc par proc et
+// restent locales.
+
+/// Lit le nom de la variable réponse (partie gauche mono-réponse du MODEL) et
+/// le consomme. Erreur `err_msg` (au span du token courant) si le token n'est
+/// pas un identifiant. Extrait verbatim de `mixed::parse_model`.
+pub(crate) fn parse_model_response(ts: &mut StatementStream, err_msg: &str) -> Result<String> {
+    let response = ts
+        .peek()
+        .ident()
+        .map(str::to_string)
+        .ok_or_else(|| SasError::parse(err_msg, ts.peek().span))?;
+    ts.next();
+    Ok(response)
+}
+
+/// Exige puis consomme le `=` du statement MODEL ; sinon erreur `err_msg` au
+/// span du token courant. Extrait verbatim de `mixed::parse_model`.
+pub(crate) fn expect_model_eq(ts: &mut StatementStream, err_msg: &str) -> Result<()> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(err_msg, ts.peek().span));
+    }
+    ts.next();
+    Ok(())
+}
+
+/// Options de réponse optionnelles `(event='val' descending …)` entre la
+/// réponse et le `=` (GLIMMIX/GENMOD/LOGISTIC). Sans parenthèse ouvrante, ne
+/// consomme rien. Les tokens inconnus dans la parenthèse sont ignorés.
+/// Renvoie `(event, descending)`. Extrait verbatim de `glimmix::parse_model`.
+pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String>, bool) {
+    let mut event: Option<String> = None;
+    let mut descending = false;
+    if ts.peek().kind == TokenKind::LParen {
+        ts.next();
+        loop {
+            if ts.peek().kind == TokenKind::RParen
+                || ts.peek().kind == TokenKind::Semi
+                || ts.peek().kind == TokenKind::Eof
+            {
+                break;
+            }
+            if ts.peek().is_kw("event") {
+                ts.next();
+                if ts.peek().kind == TokenKind::Eq {
+                    ts.next();
+                    if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
+                        event = Some(value.clone());
+                        ts.next();
+                    }
+                }
+            } else if ts.peek().is_kw("descending") {
+                descending = true;
+                ts.next();
+            } else {
+                ts.next();
+            }
+        }
+        if ts.peek().kind == TokenKind::RParen {
+            ts.next();
+        }
+    }
+    (event, descending)
+}
+
+/// Liste plate d'effets : identifiants jusqu'à `/`, `;` ou Eof (le
+/// terminateur n'est PAS consommé) ; tout autre token est ignoré. Sert aux
+/// effets fixes du MODEL (MIXED/GLIMMIX), aux prédicteurs (GENMOD/LOGISTIC)
+/// et aux effets du RANDOM (MIXED/GLIMMIX). Extrait verbatim de
+/// `mixed::parse_model`.
+pub(crate) fn parse_effect_list(ts: &mut StatementStream) -> Vec<String> {
+    let mut effects: Vec<String> = Vec::new();
+    while ts.peek().kind != TokenKind::Semi
+        && ts.peek().kind != TokenKind::Slash
+        && ts.peek().kind != TokenKind::Eof
+    {
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            effects.push(name);
+        }
+        ts.next();
+    }
+    effects
+}
+
+/// Partie gauche multi-réponses de GLM/ANOVA : identifiants jusqu'à `=`, `;`
+/// ou Eof, puis consomme le `=` s'il est présent (pas d'erreur sinon —
+/// fidèle aux parsers d'origine). Extrait verbatim de `glm::parse`.
+pub(crate) fn parse_model_lhs(ts: &mut StatementStream) -> Vec<String> {
+    let mut dependents: Vec<String> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi
+            || ts.peek().kind == TokenKind::Eof
+            || ts.peek().kind == TokenKind::Eq
+        {
+            break;
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            dependents.push(name);
+            ts.next();
+        } else {
+            ts.next();
+        }
+    }
+    if ts.peek().kind == TokenKind::Eq {
+        ts.next();
+    }
+    dependents
+}
+
+/// Effets avec chaînes d'interaction `a*b*c` (GLM/ANOVA) jusqu'à `/`, `;` ou
+/// Eof (le terminateur n'est PAS consommé). Renvoie la représentation plate
+/// (parties jointes par `*`) ET les termes structurés (une liste de noms par
+/// terme) pour le moteur multiway. Extrait verbatim de `glm::parse`.
+pub(crate) fn parse_effect_terms(ts: &mut StatementStream) -> (Vec<String>, Vec<Vec<String>>) {
+    let mut effects: Vec<String> = Vec::new();
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    loop {
+        if ts.peek().kind == TokenKind::Semi
+            || ts.peek().kind == TokenKind::Eof
+            || ts.peek().kind == TokenKind::Slash
+        {
+            break;
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            ts.next();
+            // Build the structured term: name, then any `* name` continuations.
+            let mut parts: Vec<String> = vec![name];
+            while ts.peek().kind == TokenKind::Star {
+                ts.next();
+                if let Some(next_name) = ts.peek().ident().map(str::to_string) {
+                    parts.push(next_name);
+                    ts.next();
+                } else {
+                    break;
+                }
+            }
+            // Legacy flat representation: join interaction parts with `*`.
+            effects.push(parts.join("*"));
+            terms.push(parts);
+        } else {
+            ts.next();
+        }
+    }
+    (effects, terms)
+}

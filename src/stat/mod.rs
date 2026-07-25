@@ -33,6 +33,7 @@
 
 pub mod dists;
 pub mod linalg;
+pub mod optim;
 
 // Re-export fréquent vers l'extérieur
 pub use dists::{
