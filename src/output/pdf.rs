@@ -17,9 +17,7 @@ pub(super) enum PdfSection {
 /// Destination PDF (PDF 1.4 minimal, sans dépendance externe). Génère un
 /// fichier PDF valide avec texte et tables simples.
 pub struct PdfDestination {
-    titles: Vec<String>,
-    footnotes: Vec<String>,
-    ls: usize,
+    page: PageState,
     file: Option<std::path::PathBuf>,
     sections: Vec<PdfSection>,
 }
@@ -28,9 +26,10 @@ impl PdfDestination {
     /// Crée la destination PDF sans fichier cible.
     pub fn new(ls: usize) -> Self {
         PdfDestination {
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: None,
             sections: Vec::new(),
         }
@@ -39,9 +38,10 @@ impl PdfDestination {
     /// Crée la destination PDF avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         PdfDestination {
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: Some(file),
             sections: Vec::new(),
         }
@@ -72,6 +72,7 @@ impl PdfDestination {
         // Construites localement pour ne pas muter `self.sections` (finalize
         // idempotent : pas de duplication si appelé plusieurs fois).
         let footnote_sections: Vec<PdfSection> = self
+            .page
             .footnotes
             .iter()
             .cloned()
@@ -187,12 +188,20 @@ impl PdfDestination {
 }
 
 impl OutputDestination for PdfDestination {
+    fn page_state(&self) -> &PageState {
+        &self.page
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        &mut self.page
+    }
+
     fn page_header(&mut self) {
-        if self.titles.is_empty() {
+        if self.page.titles.is_empty() {
             self.sections
                 .push(PdfSection::PageHeader("The SAS System".to_string()));
         } else {
-            for t in self.titles.clone() {
+            for t in self.page.titles.clone() {
                 self.sections.push(PdfSection::PageHeader(t));
             }
         }
@@ -211,22 +220,6 @@ impl OutputDestination for PdfDestination {
 
     fn blank(&mut self) {
         self.sections.push(PdfSection::Blank);
-    }
-
-    fn set_titles(&mut self, titles: &[String]) {
-        self.titles = titles.to_vec();
-    }
-
-    fn set_footnotes(&mut self, footnotes: &[String]) {
-        self.footnotes = footnotes.to_vec();
-    }
-
-    fn set_ls(&mut self, ls: usize) {
-        self.ls = ls;
-    }
-
-    fn ls(&self) -> usize {
-        self.ls
     }
 
     fn take_string(&mut self) -> String {

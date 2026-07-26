@@ -8,9 +8,7 @@ use super::*;
 /// tables et mise en forme de base.
 pub struct RtfDestination {
     buf: String,
-    titles: Vec<String>,
-    footnotes: Vec<String>,
-    ls: usize,
+    page: PageState,
     file: Option<std::path::PathBuf>,
 }
 
@@ -19,9 +17,10 @@ impl RtfDestination {
     pub fn new(ls: usize) -> Self {
         RtfDestination {
             buf: String::new(),
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: None,
         }
     }
@@ -30,9 +29,10 @@ impl RtfDestination {
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         RtfDestination {
             buf: String::new(),
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: Some(file),
         }
     }
@@ -59,14 +59,22 @@ impl RtfDestination {
 }
 
 impl OutputDestination for RtfDestination {
+    fn page_state(&self) -> &PageState {
+        &self.page
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        &mut self.page
+    }
+
     fn page_header(&mut self) {
-        if self.titles.is_empty() {
+        if self.page.titles.is_empty() {
             self.buf.push_str(&format!(
                 "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
                 Self::rtf_escape("The SAS System")
             ));
         } else {
-            for t in &self.titles {
+            for t in &self.page.titles {
                 self.buf.push_str(&format!(
                     "\\pard\\sb200\\sa100\\b {}\\b0\\par\n",
                     Self::rtf_escape(t)
@@ -143,28 +151,12 @@ impl OutputDestination for RtfDestination {
         self.buf.push_str("\\pard\\par\n");
     }
 
-    fn set_titles(&mut self, titles: &[String]) {
-        self.titles = titles.to_vec();
-    }
-
-    fn set_footnotes(&mut self, footnotes: &[String]) {
-        self.footnotes = footnotes.to_vec();
-    }
-
-    fn set_ls(&mut self, ls: usize) {
-        self.ls = ls;
-    }
-
-    fn ls(&self) -> usize {
-        self.ls
-    }
-
     fn take_string(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
         }
         // Footnotes actives rendues (centrées) en fin de document.
-        for f in &self.footnotes {
+        for f in &self.page.footnotes {
             self.buf
                 .push_str(&format!("\\pard\\qc {}\\par\n", Self::rtf_escape(f)));
         }

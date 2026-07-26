@@ -23,7 +23,7 @@ fn table_layout() {
 #[test]
 fn single_title_byte_identical() {
     let mut l = ListingWriter::new(40);
-    l.titles = vec!["My Report".into()];
+    l.page.titles = vec!["My Report".into()];
     l.page_header();
     // pad = (40 - 9) / 2 = 15 spaces, then text, then blank line.
     assert_eq!(l.into_string(), format!("{}My Report\n\n", " ".repeat(15)));
@@ -33,7 +33,7 @@ fn single_title_byte_identical() {
 #[test]
 fn three_titles_centered_in_order() {
     let mut l = ListingWriter::new(20);
-    l.titles = vec!["A".into(), "BB".into(), "CCC".into()];
+    l.page.titles = vec!["A".into(), "BB".into(), "CCC".into()];
     l.page_header();
     let s = l.into_string();
     let lines: Vec<&str> = s.lines().collect();
@@ -53,7 +53,7 @@ fn three_titles_centered_in_order() {
 #[test]
 fn footnotes_centered_on_drain() {
     let mut l = ListingWriter::new(20);
-    l.footnotes = vec!["Note1".into(), "Note2".into()];
+    l.page.footnotes = vec!["Note1".into(), "Note2".into()];
     l.page_header();
     l.write_line("body");
     let s = l.into_string();

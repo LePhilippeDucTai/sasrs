@@ -14,14 +14,9 @@ pub enum Align {
 
 pub struct ListingWriter {
     buf: String,
-    /// LINESIZE: width used to center output.
-    pub ls: usize,
-    /// Active title levels (TITLE1..TITLE9), in level order, gaps removed.
-    /// Empty = default "The SAS System".
-    pub titles: Vec<String>,
-    /// Active footnote levels (FOOTNOTE1..FOOTNOTE9), in level order, gaps
-    /// removed. Empty = no footnotes.
-    pub footnotes: Vec<String>,
+    /// Titres, footnotes et LINESIZE — l'état de page partagé avec les
+    /// destinations ODS (MQ8.8).
+    pub page: crate::output::PageState,
     wrote_anything: bool,
 }
 
@@ -29,9 +24,10 @@ impl ListingWriter {
     pub fn new(ls: usize) -> Self {
         ListingWriter {
             buf: String::new(),
-            ls,
-            titles: Vec::new(),
-            footnotes: Vec::new(),
+            page: crate::output::PageState {
+                ls,
+                ..Default::default()
+            },
             wrote_anything: false,
         }
     }
@@ -52,7 +48,7 @@ impl ListingWriter {
     }
 
     fn centered(&mut self, text: &str) {
-        let pad = self.ls.saturating_sub(text.len()) / 2;
+        let pad = self.page.ls.saturating_sub(text.len()) / 2;
         self.raw(&format!("{}{}", " ".repeat(pad), text));
     }
 
@@ -79,10 +75,10 @@ impl ListingWriter {
             self.raw("");
         }
         self.wrote_anything = true;
-        if self.titles.is_empty() {
+        if self.page.titles.is_empty() {
             self.centered("The SAS System");
         } else {
-            for t in self.titles.clone() {
+            for t in self.page.titles.clone() {
                 self.centered(&t);
             }
         }
@@ -94,11 +90,11 @@ impl ListingWriter {
     /// inter-proc separator (so footnotes follow their proc's content) and at
     /// drain time so the last proc's footnotes are emitted.
     pub fn flush_footnotes(&mut self) {
-        if self.footnotes.is_empty() {
+        if self.page.footnotes.is_empty() {
             return;
         }
         self.raw("");
-        for f in self.footnotes.clone() {
+        for f in self.page.footnotes.clone() {
             self.centered(&f);
         }
     }
@@ -115,7 +111,7 @@ impl ListingWriter {
         }
         let gap = "    ";
         let total: usize = widths.iter().sum::<usize>() + gap.len() * ncol.saturating_sub(1);
-        let left_pad = " ".repeat(self.ls.saturating_sub(total) / 2);
+        let left_pad = " ".repeat(self.page.ls.saturating_sub(total) / 2);
 
         let fmt_row = |cells: &[String], widths: &[usize]| -> String {
             let mut parts = Vec::with_capacity(ncol);
@@ -166,7 +162,7 @@ impl ListingWriter {
         }
         let gap = "    ";
         let total: usize = widths.iter().sum::<usize>() + gap.len() * ncol.saturating_sub(1);
-        let left_pad = " ".repeat(self.ls.saturating_sub(total) / 2);
+        let left_pad = " ".repeat(self.page.ls.saturating_sub(total) / 2);
 
         let fmt_row = |cells: &[String], widths: &[usize]| -> String {
             let mut parts = Vec::with_capacity(ncol);

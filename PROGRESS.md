@@ -1331,8 +1331,13 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   `mod.rs`, alors que `FloatParser` était déclaré et implémenté dans `parser.rs`. L'`impl`
   rejoint sa struct (mod.rs 495 → 298, parser.rs 212 → 416) : les deux analyseurs sont
   désormais côte à côte, l'écart est visible et commenté.
-- [ ] MQ8.8 — `output/{html,rtf,pdf,excel}.rs` : `set_titles`/`set_footnotes`/`set_ls`/`ls`
-  (16 fonctions de 3 l) → méthodes par défaut du trait `OutputDestination` (Sonnet, faible)
+- [x] MQ8.8 — `output/{html,rtf,pdf,excel}.rs` : `set_titles`/`set_footnotes`/`set_ls`/`ls`
+  (16 fonctions de 3 l) → méthodes par défaut du trait `OutputDestination` (Sonnet, faible) :
+  les défauts ne pouvant pas atteindre les champs, les trois champs recopiés dans les
+  5 destinations (`titles`, `footnotes`, `ls`) sont regroupés dans une struct `PageState`
+  (`output/mod.rs`), portée aussi par `ListingWriter`. Une destination n'expose plus que
+  `page_state()`/`page_state_mut()` et hérite des quatre accesseurs : 20 méthodes → 10, et
+  une nouvelle destination n'a plus 4 fonctions de boilerplate à recopier.
 - [ ] MQ8.9 — `factor/analysis.rs` ≈ `princomp/analysis.rs` (`complete_case_rows`,
   `apply_sign_convention`) → `common` ; `procs/corr/special.rs::betai` : fusionné avec
   `stat/dists/special.rs` OU commentaire justifiant l'écart d'algorithme — pas de troisième

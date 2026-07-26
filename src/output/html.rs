@@ -17,9 +17,7 @@ use super::*;
 ///   `Some((path, html_complet))`.
 pub struct HtmlDestination {
     buf: String,
-    titles: Vec<String>,
-    footnotes: Vec<String>,
-    ls: usize,
+    page: PageState,
     file: Option<std::path::PathBuf>,
     wrote_anything: bool,
 }
@@ -29,9 +27,10 @@ impl HtmlDestination {
     pub fn new(ls: usize) -> Self {
         HtmlDestination {
             buf: String::new(),
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: None,
             wrote_anything: false,
         }
@@ -41,9 +40,10 @@ impl HtmlDestination {
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         HtmlDestination {
             buf: String::new(),
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: Some(file),
             wrote_anything: false,
         }
@@ -62,14 +62,22 @@ impl HtmlDestination {
 }
 
 impl OutputDestination for HtmlDestination {
+    fn page_state(&self) -> &PageState {
+        &self.page
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        &mut self.page
+    }
+
     fn page_header(&mut self) {
-        if self.titles.is_empty() {
+        if self.page.titles.is_empty() {
             self.buf.push_str(&format!(
                 "<h1 class=\"systitle\">{}</h1>\n",
                 Self::html_escape("The SAS System")
             ));
         } else {
-            for t in &self.titles {
+            for t in &self.page.titles {
                 self.buf.push_str(&format!(
                     "<h1 class=\"systitle\">{}</h1>\n",
                     Self::html_escape(t)
@@ -122,22 +130,6 @@ impl OutputDestination for HtmlDestination {
         // no-op : les paragraphes HTML séparent naturellement le contenu.
     }
 
-    fn set_titles(&mut self, titles: &[String]) {
-        self.titles = titles.to_vec();
-    }
-
-    fn set_footnotes(&mut self, footnotes: &[String]) {
-        self.footnotes = footnotes.to_vec();
-    }
-
-    fn set_ls(&mut self, ls: usize) {
-        self.ls = ls;
-    }
-
-    fn ls(&self) -> usize {
-        self.ls
-    }
-
     /// Draine la sortie accumulée sous forme de document HTML complet.
     ///
     /// Si `buf` est vide (rien n'a été écrit), renvoie une chaîne vide
@@ -148,7 +140,7 @@ impl OutputDestination for HtmlDestination {
             return String::new();
         }
         // Footnotes actives rendues en bas du document.
-        for f in &self.footnotes {
+        for f in &self.page.footnotes {
             self.buf.push_str(&format!(
                 "<p class=\"sysfootnote\">{}</p>\n",
                 Self::html_escape(f)

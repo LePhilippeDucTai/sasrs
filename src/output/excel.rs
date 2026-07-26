@@ -16,9 +16,7 @@ pub(super) struct ExcelTable {
 /// un fichier `.xlsx` valide. Le contenu est accumulé en mémoire et matérialisé
 /// lors de `finalize_to_bytes()`.
 pub struct ExcelDestination {
-    titles: Vec<String>,
-    footnotes: Vec<String>,
-    ls: usize,
+    page: PageState,
     file: Option<std::path::PathBuf>,
     tables: Vec<ExcelTable>,
     pending_lines: Vec<String>,
@@ -28,9 +26,10 @@ impl ExcelDestination {
     /// Crée la destination Excel sans fichier cible.
     pub fn new(ls: usize) -> Self {
         ExcelDestination {
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: None,
             tables: Vec::new(),
             pending_lines: Vec::new(),
@@ -40,9 +39,10 @@ impl ExcelDestination {
     /// Crée la destination Excel avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         ExcelDestination {
-            titles: Vec::new(),
-            footnotes: Vec::new(),
-            ls,
+            page: PageState {
+                ls,
+                ..Default::default()
+            },
             file: Some(file),
             tables: Vec::new(),
             pending_lines: Vec::new(),
@@ -51,6 +51,14 @@ impl ExcelDestination {
 }
 
 impl OutputDestination for ExcelDestination {
+    fn page_state(&self) -> &PageState {
+        &self.page
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        &mut self.page
+    }
+
     fn page_header(&mut self) {
         // no-op : le titre/en-tête est géré par table
     }
@@ -74,22 +82,6 @@ impl OutputDestination for ExcelDestination {
         // no-op
     }
 
-    fn set_titles(&mut self, titles: &[String]) {
-        self.titles = titles.to_vec();
-    }
-
-    fn set_footnotes(&mut self, footnotes: &[String]) {
-        self.footnotes = footnotes.to_vec();
-    }
-
-    fn set_ls(&mut self, ls: usize) {
-        self.ls = ls;
-    }
-
-    fn ls(&self) -> usize {
-        self.ls
-    }
-
     fn take_string(&mut self) -> String {
         String::new()
     }
@@ -107,21 +99,21 @@ impl OutputDestination for ExcelDestination {
         let mut tables = self.tables.clone();
         let mut trailing = self.pending_lines.clone();
         if let Some(first) = tables.first_mut() {
-            if !self.titles.is_empty() {
-                let mut pre = self.titles.clone();
+            if !self.page.titles.is_empty() {
+                let mut pre = self.page.titles.clone();
                 pre.extend(std::mem::take(&mut first.pre_lines));
                 first.pre_lines = pre;
             }
             if let Some(last) = tables.last_mut() {
-                for f in &self.footnotes {
+                for f in &self.page.footnotes {
                     last.rows.push(vec![f.clone()]);
                 }
             }
         } else {
             // Pas de table : titres puis lignes libres puis footnotes.
-            let mut lines = self.titles.clone();
+            let mut lines = self.page.titles.clone();
             lines.append(&mut trailing);
-            lines.extend(self.footnotes.iter().cloned());
+            lines.extend(self.page.footnotes.iter().cloned());
             trailing = lines;
         }
         let bytes = xlsx_build(&tables, &trailing);

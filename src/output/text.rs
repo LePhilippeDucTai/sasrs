@@ -18,6 +18,14 @@ impl TextListing {
 }
 
 impl OutputDestination for TextListing {
+    fn page_state(&self) -> &PageState {
+        &self.inner.page
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        &mut self.inner.page
+    }
+
     fn page_header(&mut self) {
         self.inner.page_header();
     }
@@ -46,34 +54,15 @@ impl OutputDestination for TextListing {
         self.inner.blank();
     }
 
-    fn set_titles(&mut self, titles: &[String]) {
-        self.inner.titles = titles.to_vec();
-    }
-
-    fn set_footnotes(&mut self, footnotes: &[String]) {
-        self.inner.footnotes = footnotes.to_vec();
-    }
-
-    fn set_ls(&mut self, ls: usize) {
-        self.inner.ls = ls;
-    }
-
-    fn ls(&self) -> usize {
-        self.inner.ls
-    }
-
     fn take_string(&mut self) -> String {
         // Remplace le writer interne par un writer vide de même LINESIZE et
         // rend la chaîne accumulée. Équivalent à l'ancien `into_string` qui
         // consommait `self`, mais utilisable derrière un trait object. Les
         // titres/footnotes actifs survivent au drain (un proc qui suit les
         // réutilise tant qu'aucun nouveau statement TITLE/FOOTNOTE ne les change).
-        let ls = self.inner.ls;
-        let titles = self.inner.titles.clone();
-        let footnotes = self.inner.footnotes.clone();
-        let mut fresh = ListingWriter::new(ls);
-        fresh.titles = titles;
-        fresh.footnotes = footnotes;
+        let page = self.inner.page.clone();
+        let mut fresh = ListingWriter::new(page.ls);
+        fresh.page = page;
         let old = std::mem::replace(&mut self.inner, fresh);
         old.into_string()
     }

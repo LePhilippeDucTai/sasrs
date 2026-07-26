@@ -42,6 +42,25 @@ pub use crate::listing::Align;
 
 use crate::listing::ListingWriter;
 
+/// État de page commun à toutes les destinations : titres actifs, footnotes
+/// actives et LINESIZE. Les quatre accesseurs correspondants du trait
+/// ([`set_titles`](OutputDestination::set_titles),
+/// [`set_footnotes`](OutputDestination::set_footnotes),
+/// [`set_ls`](OutputDestination::set_ls), [`ls`](OutputDestination::ls))
+/// deviennent ainsi des méthodes PAR DÉFAUT : une destination n'a plus qu'à
+/// exposer son `PageState` (MQ8.8 — ces quatre méthodes étaient recopiées à
+/// l'identique dans excel/html/pdf/rtf, soit 16 fonctions de trois lignes).
+#[derive(Debug, Default, Clone)]
+pub struct PageState {
+    /// Titres actifs (TITLE1..TITLE9), dans l'ordre des niveaux, gaps retirés.
+    /// Vide = défaut « The SAS System ».
+    pub titles: Vec<String>,
+    /// Footnotes actives (FOOTNOTE1..FOOTNOTE9), même convention. Vide = aucune.
+    pub footnotes: Vec<String>,
+    /// LINESIZE (LS=) servant à centrer la sortie.
+    pub ls: usize,
+}
+
 /// Une destination de sortie ODS. Reçoit les résultats déjà mis en forme
 /// (cellules de table, lignes de texte) et les matérialise selon son format.
 ///
@@ -85,14 +104,25 @@ pub trait OutputDestination {
     /// Émet une ligne vide.
     fn blank(&mut self);
 
+    /// L'état de page de cette destination (titres / footnotes / LINESIZE).
+    /// C'est la SEULE chose à fournir pour hériter des quatre accesseurs
+    /// ci-dessous.
+    fn page_state(&self) -> &PageState;
+
+    /// Variante mutable de [`page_state`](Self::page_state).
+    fn page_state_mut(&mut self) -> &mut PageState;
+
     /// Pose les titres actifs (TITLE1..TITLE9), dans l'ordre des niveaux, gaps
     /// retirés. Vide = défaut « The SAS System ».
-    fn set_titles(&mut self, titles: &[String]);
+    fn set_titles(&mut self, titles: &[String]) {
+        self.page_state_mut().titles = titles.to_vec();
+    }
 
     /// Pose les footnotes actives (FOOTNOTE1..FOOTNOTE9), dans l'ordre des
-    /// niveaux, gaps retirés. Vide = aucune footnote. Implémentation par défaut
-    /// no-op (destinations qui ne rendent pas encore les footnotes).
-    fn set_footnotes(&mut self, _footnotes: &[String]) {}
+    /// niveaux, gaps retirés. Vide = aucune footnote.
+    fn set_footnotes(&mut self, footnotes: &[String]) {
+        self.page_state_mut().footnotes = footnotes.to_vec();
+    }
 
     /// Pose le titre courant (TITLE1). `None` = défaut « The SAS System ».
     /// Compatibilité : délègue à [`set_titles`](Self::set_titles).
@@ -104,11 +134,15 @@ pub trait OutputDestination {
     }
 
     /// Pose la LINESIZE (LS=) servant à centrer la sortie.
-    fn set_ls(&mut self, ls: usize);
+    fn set_ls(&mut self, ls: usize) {
+        self.page_state_mut().ls = ls;
+    }
 
     /// Lit la LINESIZE courante (certains procs en ont besoin pour leur propre
     /// mise en page).
-    fn ls(&self) -> usize;
+    fn ls(&self) -> usize {
+        self.page_state().ls
+    }
 
     /// Draine la sortie accumulée sous forme de chaîne, laissant la destination
     /// vide. Pour le listing texte c'est le contenu rendu ; pour les
