@@ -6,7 +6,14 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
-Jalon courant : **M38 (Phase G)**. M1–M37 terminés (Phase G M37 : moteur linéaire partagé
+Jalon courant : **M38 (Phase G)**. **Phase Q3 (MQ7–MQ9) TERMINÉE** — revue de code sur les
+axes DRY et robustesse : clippy 357 → **0** (`-D warnings` vert), `cargo fmt --check` vert
+(453 fichiers reformatés, `rustfmt.toml` posé), ~60 helpers dupliqués supprimés (≈ −1 500
+lignes), 3 crashs atteignables depuis un script SAS corrigés, le piège `expect_eq`
+(deux contrats sous un même nom) levé, 3 doc-comments orphelins remis sur leur fonction.
+Quatre constats de la revue ont été **invalidés après vérification** et documentés comme
+tels plutôt que « corrigés » : `sql/convert.rs`, `run_program`, `SasError`, et le `Cow` du
+chemin chaud (mesuré 10 % PLUS lent). M1–M37 terminés (Phase G M37 : moteur linéaire partagé
 `lincom` — `LinCombEngine`, `class_coding(Param)`, `score_test`, digamma/trigamma). M1–M36 (Phase F M35–M36 : complétion du langage macro +
 `PROC REG` totale ; Phase E M31–M34 :
 refactor fonctionnel, modules macros, complétion des procs Base/descriptifs et
