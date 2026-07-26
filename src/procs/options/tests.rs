@@ -1,11 +1,6 @@
 use super::*;
-use crate::session::Session;
 use crate::source::SourceFile;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
+use crate::testkit::*;
 
 fn parse_options_src(src: &str) -> crate::error::Result<OptionsAst> {
     let source = SourceFile::new(src);

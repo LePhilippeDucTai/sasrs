@@ -16,7 +16,7 @@ fn test_class_two_level_equals_manual_dummy() {
     .unwrap();
     let ds_c = SasDataset {
         df: frame_c,
-        vars: vec![num_meta("y"), char_meta("g")],
+        vars: vec![num_meta("y"), char_meta("g", 8)],
     };
     session
         .libs

@@ -2,11 +2,7 @@ use super::*;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::session::Session;
 use crate::source::SourceFile;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
+use crate::testkit::*;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 

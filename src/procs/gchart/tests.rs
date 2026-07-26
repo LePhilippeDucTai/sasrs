@@ -1,5 +1,6 @@
 use super::*;
 use crate::source::SourceFile;
+use crate::testkit::*;
 
 fn parse_gchart(src: &str) -> Result<GchartAst> {
     let source = SourceFile::new(src);
@@ -10,12 +11,7 @@ fn parse_gchart(src: &str) -> Result<GchartAst> {
 }
 
 #[allow(dead_code)]
-fn make_session() -> Session {
-    Session::new(None, std::env::temp_dir(), true).unwrap()
-}
-
 // ── Parse tests ──────────────────────────────────────────────────────
-
 #[test]
 fn parse_vbar_freq() {
     let ast = parse_gchart("proc gchart data=a; vbar category; run;").unwrap();
@@ -93,7 +89,7 @@ fn parse_pie_sumvar_implies_sum() {
 
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     let ast = parse_gchart("proc gchart data=a; vbar category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -106,7 +102,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_pie_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_gchart("proc gchart data=a; pie category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -120,7 +116,7 @@ fn execute_pie_defers() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_vbar_with_ods_on_no_feature_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_gchart("proc gchart data=a; vbar category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -163,7 +159,7 @@ fn write_cats(session: &mut Session, table: &str) {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_vbar_with_graphics_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("gcharttest_single".into());
@@ -182,7 +178,7 @@ fn execute_vbar_with_graphics_writes_image() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_pie_with_graphics_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("gcharttest_pie".into());

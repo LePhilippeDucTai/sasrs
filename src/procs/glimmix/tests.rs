@@ -1,33 +1,8 @@
 use super::*;
-use crate::dataset::{SasDataset, VarMeta};
-use crate::session::Session;
+use crate::dataset::SasDataset;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-fn char_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Char,
-        length: 1,
-        format: None,
-        label: None,
-    }
-}
 
 fn parse_glimmix(src: &str) -> Result<GlimmixAst> {
     let source = SourceFile::new(src);
@@ -100,7 +75,7 @@ fn test_ar1_fits_and_names() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("subj"), num_meta("t"), num_meta("y")],
+        vars: vec![char_meta("subj", 1), num_meta("t"), num_meta("y")],
     };
     session.libs.get("WORK").unwrap().write("B", &ds).unwrap();
     session.last_dataset = Some("WORK.B".to_string());
@@ -359,7 +334,7 @@ fn test_execute_laplace_listing() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("subj"), num_meta("y"), num_meta("x")],
+        vars: vec![char_meta("subj", 1), num_meta("y"), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("LP", &ds).unwrap();
     session.last_dataset = Some("WORK.LP".to_string());
@@ -383,7 +358,7 @@ fn test_laplace_ar1_rejected() {
     let frame = df!["subj" => ["A","A","B","B"], "y" => [1.0_f64,3.0,5.0,7.0]].unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("subj"), num_meta("y")],
+        vars: vec![char_meta("subj", 1), num_meta("y")],
     };
     session.libs.get("WORK").unwrap().write("BX", &ds).unwrap();
     session.last_dataset = Some("WORK.BX".to_string());

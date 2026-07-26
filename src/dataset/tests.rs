@@ -1,17 +1,8 @@
 use super::*;
 use crate::missing::{decode_nan, encode_special};
+use crate::testkit::*;
 use crate::value::MissingKind;
 use polars::df;
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 /// Garantie centrale des missings spéciaux : le NaN-payload survit
 /// BIT À BIT à write_parquet → read_parquet (parquet stocke les

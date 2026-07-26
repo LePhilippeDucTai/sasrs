@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 // ── M34.5: Type I vs Type III on an UNBALANCED two-way design ───────────
@@ -20,7 +21,7 @@ fn test_type1_vs_type3_unbalanced() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("a"), char_meta("b"), num_meta("y")],
+        vars: vec![char_meta("a", 1), char_meta("b", 1), num_meta("y")],
     };
     session.libs.get("WORK").unwrap().write("UB", &ds).unwrap();
 

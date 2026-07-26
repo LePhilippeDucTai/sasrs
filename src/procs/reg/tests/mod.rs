@@ -1,23 +1,8 @@
 use super::*;
-use crate::dataset::VarMeta;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
 use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 fn parse_reg(src: &str) -> Result<RegAst> {
     let source = SourceFile::new(src);

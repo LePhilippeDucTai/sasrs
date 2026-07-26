@@ -3,6 +3,7 @@ use super::*;
 use crate::parser::StatementStream;
 use crate::source::SourceFile;
 use crate::sql::parser::parse_sql_program;
+use crate::testkit::*;
 use crate::value::VarType;
 use polars::df;
 

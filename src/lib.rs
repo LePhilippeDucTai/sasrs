@@ -26,6 +26,8 @@ pub mod session;
 pub mod source;
 pub mod sql;
 pub mod stat;
+#[cfg(test)]
+pub mod testkit;
 pub mod token;
 pub mod value;
 

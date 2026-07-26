@@ -7,11 +7,6 @@ use crate::sql::ast::{SelectStmt, SqlStmt};
 use crate::sql::parser::parse_sql_program;
 use crate::value::VarType;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn first_select(src: &str) -> SelectStmt {
     let file = SourceFile::new(src);

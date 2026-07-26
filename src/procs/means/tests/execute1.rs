@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 #[test]
@@ -15,7 +16,7 @@ fn execute_ways_restricts_output_rows() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("h"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("h"), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -133,7 +134,7 @@ fn execute_output_k1() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -203,7 +204,7 @@ fn execute_output_k2_type_set_and_rowcount() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("h"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("h"), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -452,7 +453,7 @@ fn execute_by_per_group_report_and_headings() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("sex"), num_meta("x")],
+        vars: vec![char_meta("sex", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 

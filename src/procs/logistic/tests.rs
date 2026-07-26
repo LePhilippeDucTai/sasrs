@@ -1,24 +1,9 @@
 use super::*;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::session::Session;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 fn parse_logistic(src: &str) -> Result<LogisticAst> {
     let source = SourceFile::new(src);
@@ -166,16 +151,6 @@ fn test_execute_lr_test() {
     );
 }
 
-fn char_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Char,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
 // CLASS x (numeric 0/1) must reproduce the continuous-x fit: OR = 10,
 // log-odds-ratio ln(10) ≈ 2.3026 (ref = last level = 1, so the modeled
 // dummy is for level 0). With ref=last, the non-reference dummy is level 0,
@@ -193,7 +168,7 @@ fn test_execute_class_reproduces_binary_or() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![num_meta("y"), char_meta("x"), num_meta("count")],
+        vars: vec![num_meta("y"), char_meta("x", 8), num_meta("count")],
     };
     session
         .libs

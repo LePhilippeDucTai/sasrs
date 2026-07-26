@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::missing::encode_special;
+use crate::testkit::*;
 use crate::value::{MissingKind, VarType};
 use polars::df;
 

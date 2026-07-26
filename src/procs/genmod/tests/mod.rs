@@ -1,24 +1,9 @@
 use super::*;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::session::Session;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 fn parse_genmod(src: &str) -> Result<GenmodAst> {
     let source = SourceFile::new(src);
@@ -124,16 +109,6 @@ fn make_normal_session() -> (Session, GenmodAst) {
 }
 
 // ── Gamma + CLASS + SCALE tests (M34.7) ──────────────────────────────
-
-fn char_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Char,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 /// Intercept-only Gamma; y has mean ȳ. `link` selects LOG or RECIPROCAL.
 fn make_gamma_intercept_session(link: LinkFunction) -> (Session, GenmodAst) {

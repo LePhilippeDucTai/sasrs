@@ -1,14 +1,9 @@
 use super::*;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::session::Session;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_univ(src: &str) -> Result<UnivariateAst> {
     let source = SourceFile::new(src);
@@ -16,16 +11,6 @@ fn parse_univ(src: &str) -> Result<UnivariateAst> {
     ts.next(); // "proc"
     ts.next(); // "univariate"
     parse(&mut ts)
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
 }
 
 // ───────────────────────────── parse tests ─────────────────────────────
@@ -107,22 +92,7 @@ fn q(xs: &[f64], p: f64) -> f64 {
 
 // ───────────────────────────── execute tests ───────────────────────────
 
-fn write_dataset(session: &mut Session, table: &str, ds: SasDataset) {
-    session.libs.get("WORK").unwrap().write(table, &ds).unwrap();
-    session.last_dataset = Some(format!("WORK.{}", table.to_uppercase()));
-}
-
 // ─────────────────────────── BY / OUTPUT tests ─────────────────────────
-
-fn char_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length: 4,
-        format: None,
-        label: None,
-    }
-}
 
 fn read_num_col(session: &Session, table: &str, col: &str) -> Vec<Value> {
     let (ds, _) = session.libs.get("WORK").unwrap().read(table).unwrap();

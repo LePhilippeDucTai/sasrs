@@ -16,7 +16,7 @@ fn default_usages_numeric_analysis_char_display() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("name"), num_meta("n")],
+        vars: vec![char_meta("name", 8), num_meta("n")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -49,7 +49,7 @@ fn missing_values_excluded_from_group_mean() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 8), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -280,7 +280,11 @@ fn across_makes_columns_from_distinct_values() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), char_meta("sex"), num_meta("sales")],
+        vars: vec![
+            char_meta("region", 8),
+            char_meta("sex", 8),
+            num_meta("sales"),
+        ],
     };
     write_dataset(&mut session, "X", ds);
     let ast = ReportAst {
@@ -339,7 +343,7 @@ fn across_with_descending_direction() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("k"), num_meta("v")],
+        vars: vec![char_meta("g", 8), num_meta("k"), num_meta("v")],
     };
     write_dataset(&mut session, "AD", ds);
     let ast = ReportAst {
@@ -396,7 +400,11 @@ fn break_after_group_summary_line() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), char_meta("sub"), num_meta("sales")],
+        vars: vec![
+            char_meta("region", 8),
+            char_meta("sub", 8),
+            num_meta("sales"),
+        ],
     };
     write_dataset(&mut session, "B", ds);
     let ast = ReportAst {

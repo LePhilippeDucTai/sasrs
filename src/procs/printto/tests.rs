@@ -1,11 +1,7 @@
 use super::*;
-use crate::session::Session;
 use crate::source::SourceFile;
+use crate::testkit::*;
 use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_printto_src(src: &str) -> Result<PrinttoAst> {
     let source = SourceFile::new(src);

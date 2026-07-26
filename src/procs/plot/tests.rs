@@ -1,12 +1,9 @@
 use super::*;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::source::SourceFile;
+use crate::testkit::*;
 use crate::value::VarType;
 use polars::df;
-
-fn make_session() -> Session {
-    Session::new(None, std::env::temp_dir(), true).unwrap()
-}
 
 fn parse_plot(src: &str) -> Result<PlotAst> {
     let source = SourceFile::new(src);
@@ -97,7 +94,7 @@ fn parse_plot_with_group() {
 
 #[test]
 fn render_ascii_contains_title() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     write_xy(&mut session, "XY");
     let ast = parse_plot("proc plot data=work.xy; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -107,7 +104,7 @@ fn render_ascii_contains_title() {
 
 #[test]
 fn render_ascii_contains_min_max() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     write_xy(&mut session, "XY");
     let ast = parse_plot("proc plot data=work.xy; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -124,7 +121,7 @@ fn render_ascii_contains_min_max() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_with_ods_on_no_feature_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     write_xy(&mut session, "XY");
     let ast = parse_plot("proc plot data=work.xy; plot y*x; run;").unwrap();
@@ -136,7 +133,7 @@ fn execute_with_ods_on_no_feature_defers() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_with_ods_on_feature_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("plottest_img".into());

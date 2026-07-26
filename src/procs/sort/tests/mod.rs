@@ -4,11 +4,6 @@ use crate::session::Session;
 use crate::source::SourceFile;
 use crate::value::VarType;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_sort(src: &str) -> Result<SortAst> {
     let source = SourceFile::new(src);

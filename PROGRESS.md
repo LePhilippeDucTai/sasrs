@@ -1348,9 +1348,19 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   dans `corr/special.rs` diffère RÉELLEMENT et est maintenant documenté comme tel : `erfc`
   y est l'approximation rationnelle de Numerical Recipes, là où `stat::dists::erf` passe par
   la gamma incomplète.
-- [ ] MQ8.10 — `#[cfg(test)] pub mod testkit` : `make_session` ×41, `num_meta` ×23,
-  `char_meta` ×17, `write_dataset` ×14 → foyer unique (Sonnet, moyen)
-- [ ] DoD MQ8 : cargo test vert, zéro `.snap.new`, clippy `-D warnings` vert ; → MQ9.
+- [x] MQ8.10 — `#[cfg(test)] pub mod testkit` : `make_session` ×41, `num_meta` ×23,
+  `char_meta` ×17, `write_dataset` ×14 → foyer unique (Sonnet, moyen) : `src/testkit.rs`
+  (`#[cfg(test)]`), −640 lignes nettes sur 71 fichiers. Trois décisions :
+  `num_meta`/`char_meta` DÉLÈGUENT aux constructeurs de production
+  (`common::{num_var_meta, char_var_meta}`) — les tests ne peuvent plus diverger de ce que
+  les procs écrivent ; `char_meta` prend sa longueur en PARAMÈTRE car les copies locales la
+  fixaient tacitement à 1, 4 ou 8 selon le fichier alors qu'elle porte la sémantique de
+  troncature SAS (les 17 modules ont donc leur longueur désormais écrite au site d'appel) ;
+  `make_session_in_temp` isole les 4 tests qui résolvent depuis le tempdir. **Trois copies
+  de production ratées par MQ8.1** trouvées au passage (`contents.rs`, `reg/output/outest.rs`)
+  : elles s'appelaient `num_meta`/`char_meta` et non `*_var_meta`.
+- [x] DoD MQ8 : cargo test vert (2670), zéro `.snap.new`, `cargo fmt --check` vert, clippy 4
+  (les 4 `too_many_arguments` restants sont traités par MQ9.5) ; **fin de MQ8** ; → MQ9.
 
 ## MQ9 — robustesse, conception, docs
 - [ ] MQ9.1 — crashs atteignables depuis un `.sas` (sortie inchangée) : borner `REPEAT`

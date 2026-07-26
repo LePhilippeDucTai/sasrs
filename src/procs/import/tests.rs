@@ -1,12 +1,9 @@
 use super::*;
 use crate::session::Session;
 use crate::source::SourceFile;
+use crate::testkit::*;
 use std::io::Write;
 use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_import_src(src: &str) -> Result<ImportAst> {
     let source = SourceFile::new(src);

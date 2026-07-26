@@ -19,7 +19,7 @@ fn list_layout_rows() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("r"), num_meta("c")],
+        vars: vec![char_meta("r", 4), num_meta("c")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -56,7 +56,7 @@ fn n_way_stratified() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("s"), char_meta("r"), num_meta("c")],
+        vars: vec![char_meta("s", 4), char_meta("r", 4), num_meta("c")],
     };
     write_dataset(&mut session, "T", ds);
 

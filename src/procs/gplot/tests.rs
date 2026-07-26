@@ -1,5 +1,6 @@
 use super::*;
 use crate::source::SourceFile;
+use crate::testkit::*;
 
 fn parse_gplot(src: &str) -> Result<GplotAst> {
     let source = SourceFile::new(src);
@@ -10,12 +11,7 @@ fn parse_gplot(src: &str) -> Result<GplotAst> {
 }
 
 #[allow(dead_code)]
-fn make_session() -> Session {
-    Session::new(None, std::env::temp_dir(), true).unwrap()
-}
-
 // ── Parse tests ──────────────────────────────────────────────────────
-
 #[test]
 fn parse_plot_simple() {
     let ast = parse_gplot("proc gplot data=a; plot y*x; run;").unwrap();
@@ -74,7 +70,7 @@ fn parse_symbol_axis_ignored() {
 
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     let ast = parse_gplot("proc gplot data=a; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -87,7 +83,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_with_ods_on_no_feature_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_gplot("proc gplot data=a; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -130,7 +126,7 @@ fn write_xy(session: &mut Session, table: &str) {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_with_graphics_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("gplottest_single".into());
@@ -264,7 +260,7 @@ fn symbol_interpol_join_makes_line() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_multi_series_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("gplottest_multi".into());

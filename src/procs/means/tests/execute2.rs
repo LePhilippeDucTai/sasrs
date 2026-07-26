@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use crate::value::VarType;
 use polars::df;
 
@@ -15,7 +16,7 @@ fn execute_by_unsorted_errors() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("sex"), num_meta("x")],
+        vars: vec![char_meta("sex", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -59,7 +60,7 @@ fn execute_by_output_dataset_rows() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("sex"), num_meta("x")],
+        vars: vec![char_meta("sex", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -177,7 +178,7 @@ fn execute_weight_with_by() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x"), num_meta("w")],
+        vars: vec![char_meta("g", 4), num_meta("x"), num_meta("w")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -231,7 +232,7 @@ fn execute_weight_with_class() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x"), num_meta("w")],
+        vars: vec![char_meta("g", 4), num_meta("x"), num_meta("w")],
     };
     write_dataset(&mut session, "T", ds);
 

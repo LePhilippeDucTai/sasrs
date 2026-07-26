@@ -137,7 +137,7 @@ fn execute_by_per_group_sections() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -181,7 +181,7 @@ fn execute_by_unsorted_errors() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -264,7 +264,7 @@ fn execute_output_with_by() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 

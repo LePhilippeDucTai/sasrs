@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 // ── Test 1: one-way GLM parameter estimates ────────────────────────────
@@ -102,7 +103,7 @@ fn test_execute_lsmeans() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("sex"), num_meta("height")],
+        vars: vec![char_meta("sex", 1), num_meta("height")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
@@ -152,7 +153,7 @@ fn test_execute_estimate_correct() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("sex"), num_meta("height")],
+        vars: vec![char_meta("sex", 1), num_meta("height")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
@@ -212,7 +213,7 @@ fn test_execute_contrast_f_eq_t_squared() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("sex"), num_meta("height")],
+        vars: vec![char_meta("sex", 1), num_meta("height")],
     };
     session.libs.get("WORK").unwrap().write("T2", &ds).unwrap();
 
@@ -318,7 +319,7 @@ fn test_reference_cell_betas_2x2() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("a"), char_meta("b"), num_meta("y")],
+        vars: vec![char_meta("a", 1), char_meta("b", 1), num_meta("y")],
     };
     session.libs.get("WORK").unwrap().write("TW", &ds).unwrap();
 

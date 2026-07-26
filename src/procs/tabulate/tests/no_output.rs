@@ -9,7 +9,7 @@ fn no_output_dataset_set() {
     let df = df!["region" => ["E", "W"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region")],
+        vars: vec![char_meta("region", 8)],
     };
     write_dataset(&mut session, "T", ds);
     let before = session.last_dataset.clone();
@@ -49,7 +49,7 @@ fn stored_varmeta_label_is_default_header() {
     hmeta.label = Some("Height (in)".to_string());
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("sex"), hmeta],
+        vars: vec![char_meta("sex", 8), hmeta],
     };
     write_dataset(&mut session, "T", ds);
     // No explicit label on `height`, but its stored LABEL is the default.
@@ -122,7 +122,7 @@ fn out_dataset_shape_and_values() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -165,7 +165,7 @@ fn out_dataset_frequency_stat_name() {
     let df = df!["region" => ["E", "E", "W"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region")],
+        vars: vec![char_meta("region", 8)],
     };
     write_dataset(&mut session, "T", ds);
 

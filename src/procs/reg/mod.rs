@@ -16,6 +16,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::char_var_meta;
 use crate::procs::common::decode_column;
 use crate::procs::common::num_var_meta;
 use crate::procs::common::{fmt2, fmt5, fmt8};

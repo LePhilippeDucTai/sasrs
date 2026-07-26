@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::dataset::{SasDataset, VarMeta};
+use crate::testkit::*;
 use crate::value::VarType;
 
 // --- parse tests ---

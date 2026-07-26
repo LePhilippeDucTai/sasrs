@@ -65,7 +65,7 @@ fn crosstab_chisq_2x2_hand_computed() {
     let df = df!["r" => r, "c" => c].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("r"), num_meta("c")],
+        vars: vec![char_meta("r", 4), num_meta("c")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -384,7 +384,7 @@ fn weighted_two_way_chisq() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("r"), num_meta("c"), num_meta("w")],
+        vars: vec![char_meta("r", 4), num_meta("c"), num_meta("w")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -420,7 +420,7 @@ fn by_groups_split_one_way() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -453,7 +453,7 @@ fn by_unsorted_errors() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
     let mut ast = fast(

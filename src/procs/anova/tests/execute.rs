@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 // ── Test 4: execute listing checks ───────────────────────────────────
@@ -16,7 +17,7 @@ fn test_execute_listing() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("sex"), num_meta("height")],
+        vars: vec![char_meta("sex", 1), num_meta("height")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
@@ -60,7 +61,7 @@ fn test_execute_means() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("sex"), num_meta("weight")],
+        vars: vec![char_meta("sex", 1), num_meta("weight")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
@@ -107,7 +108,7 @@ fn test_execute_multiway_listing() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![char_meta("a"), char_meta("b"), num_meta("y")],
+        vars: vec![char_meta("a", 1), char_meta("b", 1), num_meta("y")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 

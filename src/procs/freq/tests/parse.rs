@@ -204,7 +204,7 @@ fn execute_out_dataset() {
     let df = df!["x" => ["a", "a", "b"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("x")],
+        vars: vec![char_meta("x", 4)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -260,7 +260,7 @@ fn execute_crosstab_counts_and_total() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("r"), num_meta("c")],
+        vars: vec![char_meta("r", 4), num_meta("c")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -312,7 +312,7 @@ fn execute_fisher_measures_agree_end_to_end() {
     let df = df!["r" => r, "c" => c].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("r"), num_meta("c")],
+        vars: vec![char_meta("r", 4), num_meta("c")],
     };
     write_dataset(&mut session, "T", ds);
 

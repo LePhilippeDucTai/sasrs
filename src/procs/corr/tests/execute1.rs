@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 // ───────────── execute tests ─────────────
@@ -244,7 +245,7 @@ fn execute_default_var_all_numeric() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![num_meta("x"), char_meta("g"), num_meta("y")],
+        vars: vec![num_meta("x"), char_meta("g", 4), num_meta("y")],
     };
     write_dataset(&mut session, "T", ds);
 

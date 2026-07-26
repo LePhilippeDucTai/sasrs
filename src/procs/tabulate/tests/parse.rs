@@ -36,7 +36,7 @@ fn one_dimension_frequency() {
     let df = df!["region" => ["E", "E", "W"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region")],
+        vars: vec![char_meta("region", 8)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -64,7 +64,7 @@ fn row_classvar_col_var_mean() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -93,7 +93,7 @@ fn class_cross_class() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("a"), char_meta("b")],
+        vars: vec![char_meta("a", 8), char_meta("b", 8)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -119,7 +119,7 @@ fn multistat_list_with_group() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -147,7 +147,7 @@ fn missing_in_var_excluded_from_mean_counted_in_nmiss() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -172,7 +172,7 @@ fn unsupported_construct_clean_error() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("a"), num_meta("b")],
+        vars: vec![char_meta("region", 8), num_meta("a"), num_meta("b")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -194,7 +194,7 @@ fn unknown_name_clean_error() {
     let df = df!["region" => ["E", "W"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region")],
+        vars: vec![char_meta("region", 8)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -217,7 +217,7 @@ fn third_dimension_now_supported() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("a"), char_meta("b"), char_meta("c")],
+        vars: vec![char_meta("a", 8), char_meta("b", 8), char_meta("c", 8)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -243,7 +243,11 @@ fn page_dimension_renders_per_page_subtables() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("grp"), char_meta("region"), num_meta("sales")],
+        vars: vec![
+            char_meta("grp", 8),
+            char_meta("region", 8),
+            num_meta("sales"),
+        ],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -277,10 +281,10 @@ fn four_dimensions_clean_error() {
     let ds = SasDataset {
         df,
         vars: vec![
-            char_meta("a"),
-            char_meta("b"),
-            char_meta("c"),
-            char_meta("d"),
+            char_meta("a", 8),
+            char_meta("b", 8),
+            char_meta("c", 8),
+            char_meta("d", 8),
         ],
     };
     write_dataset(&mut session, "T", ds);
@@ -371,7 +375,7 @@ fn pctn_empty_cell_is_dot_not_panic() {
     let df = df!["region" => [""; 0]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region")],
+        vars: vec![char_meta("region", 8)],
     };
     write_dataset(&mut session, "T", ds);
     let listing = run(
@@ -392,7 +396,7 @@ fn pctsum_grand_total_denominator() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -433,7 +437,7 @@ fn pctsum_zero_denominator_is_dot() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
     let listing = run(

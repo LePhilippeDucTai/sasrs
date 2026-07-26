@@ -179,7 +179,7 @@ fn detail_report_explicit_column_order() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("name"), num_meta("age")],
+        vars: vec![char_meta("name", 8), num_meta("age")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -222,7 +222,7 @@ fn summary_report_group_sum_and_mean() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("region"), num_meta("sales")],
+        vars: vec![char_meta("region", 8), num_meta("sales")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -275,7 +275,7 @@ fn summary_report_mean_stat() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 8), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 

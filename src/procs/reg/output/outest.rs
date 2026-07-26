@@ -308,14 +308,14 @@ pub(crate) fn write_outest(
     let mut columns: Vec<Column> = Vec::new();
     let mut vars: Vec<VarMeta> = Vec::new();
     columns.push(Series::new("_MODEL_".into(), model_c).into());
-    vars.push(char_meta("_MODEL_", 32));
+    vars.push(char_var_meta("_MODEL_", 32));
     columns.push(Series::new("_TYPE_".into(), type_c).into());
-    vars.push(char_meta("_TYPE_", 8));
+    vars.push(char_var_meta("_TYPE_", 8));
     columns.push(Series::new("_DEPVAR_".into(), depvar_c).into());
-    vars.push(char_meta("_DEPVAR_", 32));
+    vars.push(char_var_meta("_DEPVAR_", 32));
     if with_name {
         columns.push(Series::new("_NAME_".into(), name_c).into());
-        vars.push(char_meta("_NAME_", 32));
+        vars.push(char_var_meta("_NAME_", 32));
     }
     // M36.9 — selector columns precede _RMSE_ when ridge / IPC rows are present.
     if with_ridge {
@@ -424,9 +424,9 @@ pub(crate) fn write_outsscp(
     let type_col: Vec<Option<String>> = (0..m).map(|_| Some("SSCP".to_string())).collect();
     let name_col: Vec<Option<String>> = labels.iter().map(|l| Some(l.clone())).collect();
     columns.push(Series::new("_TYPE_".into(), type_col).into());
-    vars.push(char_meta("_TYPE_", 8));
+    vars.push(char_var_meta("_TYPE_", 8));
     columns.push(Series::new("_NAME_".into(), name_col).into());
-    vars.push(char_meta("_NAME_", 32));
+    vars.push(char_var_meta("_NAME_", 32));
     for (c, lbl) in labels.iter().enumerate() {
         let data: Vec<Option<f64>> = (0..m).map(|r| Some(a[r][c])).collect();
         columns.push(Series::new(lbl.as_str().into(), data).into());
@@ -447,15 +447,4 @@ pub(crate) fn write_outsscp(
         display, n_rows, n_vars_out
     ));
     Ok(())
-}
-
-/// VarMeta for a character output column (M36.8).
-pub(crate) fn char_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::testkit::*;
 
 #[test]
 fn test_one_sample_basic() {
@@ -109,33 +110,9 @@ fn test_paired_simple() {
 
 // --- parser + executor smoke tests ---
 
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::source::SourceFile;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-fn char_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.into(),
-        ty: VarType::Char,
-        length: 1,
-        format: None,
-        label: None,
-    }
-}
 
 fn parse_ttest(src: &str) -> Result<TTestAst> {
     let source = SourceFile::new(src);
@@ -188,7 +165,7 @@ fn execute_two_sample_listing() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 1), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 

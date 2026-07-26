@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::dataset::SasDataset;
+use crate::testkit::*;
 use polars::df;
 
 // ───────────── execute tests ─────────────
@@ -11,7 +12,7 @@ fn execute_replace_no_ranks() {
     let df = df!["x" => [30.0_f64, 10.0, 20.0], "g" => ["a", "b", "c"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![num_meta("x"), char_meta("g")],
+        vars: vec![num_meta("x"), char_meta("g", 4)],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -114,7 +115,7 @@ fn execute_default_var_all_numeric() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![num_meta("x"), char_meta("g"), num_meta("y")],
+        vars: vec![num_meta("x"), char_meta("g", 4), num_meta("y")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -243,7 +244,7 @@ fn execute_by_independent_groups() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -276,7 +277,7 @@ fn execute_by_fraction_per_group() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -309,7 +310,7 @@ fn execute_by_not_sorted_errors() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 4), num_meta("x")],
     };
     write_dataset(&mut session, "T", ds);
 

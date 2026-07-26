@@ -2,12 +2,8 @@ use super::*;
 use crate::dataset::{SasDataset, VarMeta};
 use crate::session::Session;
 use crate::source::SourceFile;
+use crate::testkit::*;
 use crate::value::VarType;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_compare_src(src: &str) -> Result<CompareAst> {
     let source = SourceFile::new(src);

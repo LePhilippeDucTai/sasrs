@@ -177,7 +177,7 @@ fn compute_reads_cn_positional_reference() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("sex"), num_meta("age")],
+        vars: vec![char_meta("sex", 8), num_meta("age")],
     };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
@@ -213,7 +213,7 @@ fn where_missing_semantics_dot_equals_dot() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("g"), num_meta("x")],
+        vars: vec![char_meta("g", 8), num_meta("x")],
     };
     write_dataset(&mut session, "M", ds);
     // where x = . → only the row with missing x survives (g='b').
@@ -307,7 +307,7 @@ fn width_truncates_and_pads_column() {
     let df = df!["name" => ["Alfred", "Bo"]].unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("name")],
+        vars: vec![char_meta("name", 8)],
     };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
@@ -337,7 +337,7 @@ fn spacing_changes_intercolumn_gap() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("a"), char_meta("b")],
+        vars: vec![char_meta("a", 8), char_meta("b", 8)],
     };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {

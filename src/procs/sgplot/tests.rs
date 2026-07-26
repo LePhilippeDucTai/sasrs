@@ -1,5 +1,6 @@
 use super::*;
 use crate::source::SourceFile;
+use crate::testkit::*;
 
 fn parse_sgplot(src: &str) -> Result<SgplotAst> {
     let source = SourceFile::new(src);
@@ -10,12 +11,7 @@ fn parse_sgplot(src: &str) -> Result<SgplotAst> {
 }
 
 #[allow(dead_code)]
-fn make_session() -> Session {
-    Session::new(None, std::env::temp_dir(), true).unwrap()
-}
-
 // ── Parse tests ──────────────────────────────────────────────────────
-
 #[test]
 fn parse_scatter() {
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=height; run;").unwrap();
@@ -192,7 +188,7 @@ fn parse_by() {
 
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -202,7 +198,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_with_ods_on_no_feature_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -213,7 +209,7 @@ fn execute_with_ods_on_no_feature_defers() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_loess_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_sgplot("proc sgplot data=a; loess x=age y=h / smooth=0.5; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -224,7 +220,7 @@ fn execute_loess_defers() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_density_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_sgplot("proc sgplot data=a; density h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -234,7 +230,7 @@ fn execute_density_defers() {
 
 #[test]
 fn execute_by_defers() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     let ast = parse_sgplot("proc sgplot data=a; by sex; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
@@ -277,7 +273,7 @@ fn write_heights(session: &mut Session, table: &str) {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_with_graphics_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_single".into());
@@ -295,7 +291,7 @@ fn execute_with_graphics_writes_image() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_sequential_naming() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_seq".into());
@@ -380,7 +376,7 @@ fn kernel_density_integrates_to_one() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_loess_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_loess".into());
@@ -405,7 +401,7 @@ fn execute_loess_writes_image() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_density_writes_image() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_density".into());
@@ -427,7 +423,7 @@ fn execute_density_writes_image() {
 #[cfg(feature = "graphics")]
 #[test]
 fn execute_missing_column_errors() {
-    let mut session = make_session();
+    let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
     session.ods_graphics.output_dir = std::env::temp_dir();
     write_heights(&mut session, "H");

@@ -1,8 +1,7 @@
 //! Tests des combinateurs de parsing partagés par les PROCs.
 use super::*;
-use crate::session::Session;
 use crate::source::SourceFile;
-use std::path::PathBuf;
+use crate::testkit::*;
 
 /// Construit un `StatementStream` positionné sur le premier token utile,
 /// après avoir consommé `proc <name>` (même construction que les modules
@@ -13,10 +12,6 @@ fn proc_stream<'a>(src: &'a SourceFile) -> StatementStream<'a> {
     ts.next(); // "proc"
     ts.next(); // <proc name>
     ts
-}
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
 }
 
 // ── parse_proc_options ────────────────────────────────────────────────

@@ -1,14 +1,9 @@
 use super::*;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::session::Session;
 use crate::source::SourceFile;
-use crate::value::VarType;
+use crate::testkit::*;
 use polars::df;
-use std::path::PathBuf;
-
-fn make_session() -> Session {
-    Session::new(None, PathBuf::from("."), true).unwrap()
-}
 
 fn parse_append(src: &str) -> Result<AppendAst> {
     let source = SourceFile::new(src);
@@ -18,33 +13,9 @@ fn parse_append(src: &str) -> Result<AppendAst> {
     parse(&mut ts)
 }
 
-fn write_dataset(session: &mut Session, table: &str, ds: SasDataset) {
-    session.libs.get("WORK").unwrap().write(table, &ds).unwrap();
-}
-
 fn read_dataset(session: &Session, table: &str) -> SasDataset {
     let (ds, _) = session.libs.get("WORK").unwrap().read(table).unwrap();
     ds
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
-fn char_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
 }
 
 // --- Parse tests ---

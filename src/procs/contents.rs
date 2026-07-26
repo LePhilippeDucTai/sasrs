@@ -24,11 +24,12 @@
 //! `#` and `Len` are right-aligned; all others left-aligned.
 
 use crate::ast::DatasetRef;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::error::Result;
 use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::{char_var_meta, num_var_meta};
 use crate::session::Session;
 use crate::value::VarType;
 use polars::prelude::*;
@@ -339,12 +340,12 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         Series::new("FORMAT".into(), formats).into(),
     ];
     let out_vars = vec![
-        char_meta("NAME", 32),
-        num_meta("TYPE"),
-        num_meta("LENGTH"),
-        num_meta("VARNUM"),
-        char_meta("LABEL", 256),
-        char_meta("FORMAT", 49),
+        char_var_meta("NAME", 32),
+        num_var_meta("TYPE"),
+        num_var_meta("LENGTH"),
+        num_var_meta("VARNUM"),
+        char_var_meta("LABEL", 256),
+        char_var_meta("FORMAT", 49),
     ];
     let df = DataFrame::new(columns)?;
     let out_ds = SasDataset { df, vars: out_vars };
@@ -362,26 +363,6 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         display, n_rows, n_vars
     ));
     Ok(())
-}
-
-fn num_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
-fn char_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
 }
 
 #[cfg(test)]
