@@ -22,8 +22,9 @@
 //! `#[cfg_attr(not(feature = "graphics"), allow(dead_code))]`.
 
 use crate::ast::DatasetRef;
-use crate::error::{Result, SasError};
+use crate::error::Result;
 use crate::parser::StatementStream;
+use crate::procs::common::{expect_ident, read_value};
 use crate::session::Session;
 use crate::token::TokenKind;
 
@@ -70,46 +71,6 @@ pub enum ChartType {
 }
 
 // ───────────────────────── Parser ─────────────────────────
-
-/// Lit un nom de variable (identifiant). Erreur propre sinon.
-fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
-    match ts.peek().ident().map(str::to_string) {
-        Some(s) => {
-            ts.next();
-            Ok(s)
-        }
-        None => Err(SasError::parse(
-            format!("expected an identifier {ctx}"),
-            ts.peek().span,
-        )),
-    }
-}
-
-/// Lit une valeur (string, ident ou nombre) après un `=`.
-fn read_value(ts: &mut StatementStream) -> Option<String> {
-    match &ts.peek().kind {
-        TokenKind::Str { value, .. } => {
-            let v = value.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Ident(s) => {
-            let v = s.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Num(f) => {
-            let f = *f;
-            ts.next();
-            Some(if f.fract() == 0.0 {
-                format!("{}", f as i64)
-            } else {
-                format!("{f}")
-            })
-        }
-        _ => None,
-    }
-}
 
 /// Parse les options après `/` d'un statement VBAR/HBAR :
 /// `sumvar=var`, `type=freq|sum|mean`. Renvoie `(sumvar, chart_type)`.

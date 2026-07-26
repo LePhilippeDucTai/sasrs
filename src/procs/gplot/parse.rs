@@ -2,20 +2,6 @@ use super::*;
 
 // ───────────────────────── Parser ─────────────────────────
 
-/// Lit un nom de variable (identifiant). Erreur propre sinon.
-pub(super) fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
-    match ts.peek().ident().map(str::to_string) {
-        Some(s) => {
-            ts.next();
-            Ok(s)
-        }
-        None => Err(SasError::parse(
-            format!("expected an identifier {ctx}"),
-            ts.peek().span,
-        )),
-    }
-}
-
 /// Parse un statement PLOT : `y*x`, `y*x=group`, ou `(y1 y2)*x`.
 ///
 /// Le mot-clé `plot` a déjà été consommé. Consomme jusqu'au `;` exclu (mais
@@ -163,32 +149,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
         symbols,
         axes,
     })
-}
-
-/// Lit une valeur (string, ident ou nombre) — pour `color=`, `value=`, etc.
-pub(super) fn read_value(ts: &mut StatementStream) -> Option<String> {
-    match &ts.peek().kind {
-        TokenKind::Str { value, .. } => {
-            let v = value.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Ident(s) => {
-            let v = s.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Num(f) => {
-            let f = *f;
-            ts.next();
-            Some(if f.fract() == 0.0 {
-                format!("{}", f as i64)
-            } else {
-                format!("{f}")
-            })
-        }
-        _ => None,
-    }
 }
 
 /// Parse un SYMBOLn : suite d'options `name=value` jusqu'au `;` (non consommé).

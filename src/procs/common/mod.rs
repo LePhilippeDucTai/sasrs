@@ -65,6 +65,12 @@ pub use format::value_label;
 
 pub use parse::expect_eq;
 
+pub use parse::expect_ident;
+
+pub use parse::parse_string_or_ident;
+
+pub use parse::read_value;
+
 pub use parse::parse_dataset_opt;
 
 pub use parse::parse_out_opt;

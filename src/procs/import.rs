@@ -41,6 +41,7 @@ use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::parse_string_or_ident;
 use crate::session::Session;
 use crate::token::TokenKind;
 use polars::prelude::*;
@@ -357,28 +358,6 @@ fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     }
     ts.next();
     Ok(())
-}
-
-/// Parse un littéral de chaîne ou un identifiant sans guillemets (pour les
-/// chemins et valeurs courtes). Retourne le contenu sans guillemets.
-fn parse_string_or_ident(ts: &mut StatementStream, opt: &str) -> Result<String> {
-    let tok = ts.peek().clone();
-    match &tok.kind {
-        TokenKind::Str { value, .. } => {
-            let s = value.clone();
-            ts.next();
-            Ok(s)
-        }
-        TokenKind::Ident(s) => {
-            let s = s.clone();
-            ts.next();
-            Ok(s)
-        }
-        _ => Err(SasError::parse(
-            format!("expected a value after {opt}="),
-            tok.span,
-        )),
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::expect_ident;
 use crate::procs::common::{self, decode_column};
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -59,19 +60,6 @@ pub enum PlotStmt {
 }
 
 // ───────────────────────── Parser helpers ─────────────────────────
-
-fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
-    match ts.peek().ident().map(str::to_string) {
-        Some(s) => {
-            ts.next();
-            Ok(s)
-        }
-        None => Err(SasError::parse(
-            format!("expected an identifier {ctx}"),
-            ts.peek().span,
-        )),
-    }
-}
 
 /// Parse the left-hand side of a PLOT request: either a single y identifier or
 /// a parenthesized list `(y1 y2 ...)`.

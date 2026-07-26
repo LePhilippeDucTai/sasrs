@@ -1300,7 +1300,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   disparaissent au profit de `stat::matrix_vec_mult` (qui existait déjà à côté d'eux — c'était
   la vraie duplication) ; `un_block` (structure UN(t) de SAS, partagée mixed⇄glimmix) va dans
   `common/model.rs`. −145 lignes. Zéro `.snap.new` : l'ordre de sommation est préservé.
-- [ ] MQ8.4 — helpers de parsing des procs graphiques → `common/parse.rs` : `expect_ident` ×6,
+- [x] MQ8.4 — helpers de parsing des procs graphiques → `common/parse.rs` : `expect_ident` ×6,
   `read_value` ×3, `parse_string_or_ident` ×2 (Sonnet, faible)
 - [ ] MQ8.5 — **piège `expect_eq`** : renommer la variante de `common/parse.rs` en
   `consume_option_eq` (elle consomme le nom d'option), exposer un `expect_eq` au contrat

@@ -13,20 +13,6 @@ pub(super) fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     Ok(())
 }
 
-/// Lit un nom de variable (identifiant). Erreur propre sinon.
-pub(super) fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
-    match ts.peek().ident().map(str::to_string) {
-        Some(s) => {
-            ts.next();
-            Ok(s)
-        }
-        None => Err(SasError::parse(
-            format!("expected an identifier {ctx}"),
-            ts.peek().span,
-        )),
-    }
-}
-
 /// Lit une valeur numérique littérale. Erreur propre sinon.
 pub(super) fn expect_number(ts: &mut StatementStream, ctx: &str) -> Result<f64> {
     match ts.peek().kind {
@@ -38,32 +24,6 @@ pub(super) fn expect_number(ts: &mut StatementStream, ctx: &str) -> Result<f64> 
             format!("expected a number {ctx}"),
             ts.peek().span,
         )),
-    }
-}
-
-/// Lit une valeur de chaîne (string littérale ou identifiant).
-pub(super) fn read_value(ts: &mut StatementStream) -> Option<String> {
-    match &ts.peek().kind {
-        TokenKind::Str { value, .. } => {
-            let v = value.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Ident(s) => {
-            let v = s.clone();
-            ts.next();
-            Some(v)
-        }
-        TokenKind::Num(f) => {
-            let f = *f;
-            ts.next();
-            Some(if f.fract() == 0.0 {
-                format!("{}", f as i64)
-            } else {
-                format!("{f}")
-            })
-        }
-        _ => None,
     }
 }
 

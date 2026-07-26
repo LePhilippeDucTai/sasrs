@@ -143,3 +143,77 @@ pub fn unknown_option_error(ts: &StatementStream, proc_name: &str) -> SasError {
         span,
     )
 }
+
+/// Lit un identifiant et le consomme ; erreur de parsing sinon. `ctx` complète
+/// le message (« expected an identifier {ctx} »), p.ex. `"after PLOT"` ou
+/// `"after OUT="`.
+///
+/// MQ8.4 — unifie les 4 copies identiques de gplot / gchart / plot / sgplot et
+/// celle de transpose (dont le message est reconstruit au site d'appel).
+pub fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
+    match ts.peek().ident().map(str::to_string) {
+        Some(s) => {
+            ts.next();
+            Ok(s)
+        }
+        None => Err(SasError::parse(
+            format!("expected an identifier {ctx}"),
+            ts.peek().span,
+        )),
+    }
+}
+
+/// Lit la valeur d'une option de proc graphique : chaîne, identifiant ou
+/// nombre (rendu sans partie décimale quand elle est nulle). `None` — sans
+/// rien consommer — si le token courant n'est aucun des trois.
+///
+/// MQ8.4 — unifie les 3 copies identiques de gplot / gchart / sgplot.
+pub fn read_value(ts: &mut StatementStream) -> Option<String> {
+    match &ts.peek().kind {
+        TokenKind::Str { value, .. } => {
+            let v = value.clone();
+            ts.next();
+            Some(v)
+        }
+        TokenKind::Ident(s) => {
+            let v = s.clone();
+            ts.next();
+            Some(v)
+        }
+        TokenKind::Num(f) => {
+            let f = *f;
+            ts.next();
+            Some(if f.fract() == 0.0 {
+                format!("{}", f as i64)
+            } else {
+                format!("{f}")
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Valeur d'option `opt=<chaîne|identifiant>` : consomme le token et le rend,
+/// erreur « expected a value after {opt}= » sinon. Le token courant EST la
+/// valeur (le `=` a déjà été consommé).
+///
+/// MQ8.4 — unifie les copies identiques d'IMPORT et EXPORT.
+pub fn parse_string_or_ident(ts: &mut StatementStream, opt: &str) -> Result<String> {
+    let tok = ts.peek().clone();
+    match &tok.kind {
+        TokenKind::Str { value, .. } => {
+            let s = value.clone();
+            ts.next();
+            Ok(s)
+        }
+        TokenKind::Ident(s) => {
+            let s = s.clone();
+            ts.next();
+            Ok(s)
+        }
+        _ => Err(SasError::parse(
+            format!("expected a value after {opt}="),
+            tok.span,
+        )),
+    }
+}

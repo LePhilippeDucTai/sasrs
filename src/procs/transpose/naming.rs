@@ -1,18 +1,5 @@
 use super::*;
 
-pub(crate) fn expect_ident(ts: &mut StatementStream, opt: &str) -> Result<String> {
-    match ts.peek().ident().map(str::to_string) {
-        Some(s) => {
-            ts.next();
-            Ok(s)
-        }
-        None => Err(SasError::parse(
-            format!("expected an identifier after {opt}="),
-            ts.peek().span,
-        )),
-    }
-}
-
 /// Resolve a variable name to its column index (case-insensitive), erroring
 /// like SAS when absent.
 pub(crate) fn resolve_var(ds: &SasDataset, vname: &str) -> Result<usize> {
