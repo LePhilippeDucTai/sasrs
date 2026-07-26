@@ -299,7 +299,7 @@ fn execute_report_contains_title_and_var() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("The MEANS Procedure"),
         "listing: {listing}"
@@ -340,7 +340,7 @@ fn execute_noprint_writes_nothing_to_listing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         !listing.contains("The MEANS Procedure"),
         "noprint should not emit a report: {listing}"
@@ -428,7 +428,7 @@ fn execute_clm_report_headers() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Lower 95% CL for Mean"),
         "listing: {listing}"
@@ -476,7 +476,7 @@ fn execute_by_per_group_report_and_headings() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Title once, BY headings for each group.
     assert!(
         listing.contains("The MEANS Procedure"),

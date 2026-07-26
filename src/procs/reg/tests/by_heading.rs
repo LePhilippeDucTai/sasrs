@@ -28,7 +28,7 @@ fn test_by_heading_inside_header_block() {
     );
     ast.by = vec!["g".into()];
     execute(&ast, &mut session).unwrap();
-    let out = session.listing.into_string();
+    let out = session.listing.take_string();
     let lines: Vec<&str> = out.lines().map(|l| l.trim()).collect();
     // For the first group locate "The REG Procedure", "g=1", and the model
     // label, and assert the ordering proc-line < heading < model-label.
@@ -99,7 +99,7 @@ fn test_weighted_residual_summary_matches_error_ss() {
         );
         ast.weight = weight.map(|w| w.to_string());
         execute(&ast, &mut session).unwrap();
-        session.listing.into_string()
+        session.listing.take_string()
     };
 
     // (a) Weighted run: printed Sum of Squared Residuals == ANOVA Error SS.
@@ -157,7 +157,7 @@ fn test_id_column_in_r_table() {
     );
     ast.id = vec!["name".into()];
     execute(&ast, &mut session).unwrap();
-    let out = session.listing.into_string();
+    let out = session.listing.take_string();
     assert!(out.contains("Output Statistics"), "{out}");
     // The ID values 10..50 appear as a leading column.
     assert!(out.contains("Id"), "{out}");

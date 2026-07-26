@@ -76,7 +76,7 @@ fn make_poisson_session() -> (Session, GenmodAst) {
 fn run_poisson() -> String {
     let (mut session, ast) = make_poisson_session();
     execute(&ast, &mut session).unwrap();
-    session.listing.into_string()
+    session.listing.take_string()
 }
 
 // ── Execute tests — Normal oracle ────────────────────────────────────
@@ -177,7 +177,7 @@ fn gamma_intercept_estimate(link: LinkFunction) -> f64 {
     let (mut session, mut ast) = make_gamma_intercept_session(link);
     ast.model.as_mut().unwrap().noprint = false;
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Find the "Intercept" line and take its first numeric token.
     let line = listing
         .lines()

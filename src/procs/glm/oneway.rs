@@ -57,10 +57,7 @@ pub(super) fn compute_oneway_stats(
     // Listwise deletion
     let mut usable_rows: Vec<usize> = Vec::new();
     for i in 0..n_obs {
-        let dep_ok = match value_to_num(&dep_col[i]) {
-            Some(v) if !v.is_nan() => true,
-            _ => false,
-        };
+        let dep_ok = matches!(value_to_num(&dep_col[i]), Some(v) if !v.is_nan());
         let cls_ok = !class_col[i].is_missing();
         if dep_ok && cls_ok {
             usable_rows.push(i);

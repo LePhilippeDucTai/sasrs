@@ -141,6 +141,6 @@ fn execute_does_not_write_to_listing() {
     execute(&ast, &mut session).unwrap();
 
     // PROC OPTIONS writes to log only, not listing
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.is_empty(), "listing should be empty: {listing}");
 }

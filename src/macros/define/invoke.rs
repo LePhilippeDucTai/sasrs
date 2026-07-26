@@ -1,5 +1,8 @@
 use super::*;
 
+/// Arguments d'un appel de macro : `(positionnels, nommés, index après la `)`)`.
+type ParsedCallArgs = (Vec<String>, Vec<(String, String)>, usize);
+
 impl MacroEngine {
     /// Expanse une invocation `%name[(args)]`. `name_start` pointe sur le nom
     /// (après le `%`), `after_name` sur le premier caractère après le nom.
@@ -144,10 +147,7 @@ impl MacroEngine {
     /// `(`. Rend `(positionnels, mots-clés, index après `)`)`. Les valeurs sont
     /// prises telles quelles (trim des bords) jusqu'au `,`/`)` de même niveau ;
     /// les parenthèses imbriquées sont équilibrées.
-    pub(crate) fn parse_arg_list(
-        chars: &[char],
-        lparen: usize,
-    ) -> Option<(Vec<String>, Vec<(String, String)>, usize)> {
+    pub(crate) fn parse_arg_list(chars: &[char], lparen: usize) -> Option<ParsedCallArgs> {
         let mut j = lparen + 1;
         let mut positional = Vec::new();
         let mut keyword = Vec::new();

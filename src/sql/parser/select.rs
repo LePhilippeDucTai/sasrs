@@ -277,11 +277,7 @@ pub(super) fn maybe_table_alias(ts: &mut StatementStream) -> Result<Option<Strin
 /// <from-item> [ON <sqlexpr>]`, accumulées.
 pub(super) fn parse_joins(ts: &mut StatementStream) -> Result<Vec<Join>> {
     let mut joins = Vec::new();
-    loop {
-        let kind = match peek_join_kind(ts) {
-            Some(k) => k,
-            None => break,
-        };
+    while let Some(kind) = peek_join_kind(ts) {
         consume_join_prefix(ts)?;
         let table = parse_from_item(ts)?;
         let on = if ts.peek().is_kw("on") {

@@ -124,7 +124,9 @@ fn dw_normal_prob(d: f64, x_mat: &[Vec<f64>], xtx_inv: &[Vec<f64>]) -> Option<(f
     let dfree = (n - p) as f64;
     let mean = tr_ma / dfree;
     let var = 2.0 * (tr_ma2 - dfree * mean * mean) / (dfree * (dfree + 2.0));
-    if !(var > 0.0) {
+    // `var` peut être NaN (matrice dégénérée) : le test doit rejeter NaN
+    // AUTANT que les variances nulles/négatives, d'où la forme explicite.
+    if var.is_nan() || var <= 0.0 {
         return None;
     }
     let z = (d - mean) / var.sqrt();

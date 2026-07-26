@@ -73,7 +73,7 @@ pub(crate) fn fn_mod(args: &[Value], ctx: &mut EvalCtx) -> Value {
     }
     match (coerce_num(&args[0], ctx), coerce_num(&args[1], ctx)) {
         (None, _) | (_, None) => Value::missing(),
-        (Some(_), Some(b)) if b == 0.0 => {
+        (Some(_), Some(0.0)) => {
             ctx.division_by_zero += 1;
             ctx.error_flag = true;
             Value::missing()

@@ -23,13 +23,9 @@ pub fn parse_sql_program(ts: &mut StatementStream) -> Result<SqlProgram> {
             break;
         }
         let stmt = parse_statement(ts)?;
-        match stmt {
-            Some(s) => {
-                stmts.push(s);
-                ts.expect_semi()?;
-            }
-            // Statement ignoré (RESET/TITLE/...) : déjà avancé jusqu'au `;`.
-            None => {}
+        if let Some(s) = stmt {
+            stmts.push(s);
+            ts.expect_semi()?;
         }
     }
     Ok(SqlProgram { stmts })

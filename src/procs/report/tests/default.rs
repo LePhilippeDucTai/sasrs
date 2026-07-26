@@ -31,7 +31,7 @@ fn default_usages_numeric_analysis_char_display() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Detail report → both raw rows present.
     assert!(listing.contains("A"), "listing: {listing}");
     assert!(listing.contains("B"), "listing: {listing}");
@@ -83,7 +83,7 @@ fn missing_values_excluded_from_group_mean() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // mean over non-missing [2,4] = 3 (NOT (2+4)/3).
     assert!(listing.contains('3'), "mean excludes missing: {listing}");
 }
@@ -185,7 +185,7 @@ fn where_filters_observations() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // F filtered sum = 13, M = 29.
     assert!(listing.contains("13"), "F sum 13: {listing}");
     assert!(listing.contains("29"), "M sum 29: {listing}");
@@ -217,7 +217,7 @@ fn where_char_equality_sas_cmp() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("14"), "{listing}");
     assert!(listing.contains("15"), "{listing}");
     assert!(!listing.contains("11"), "11 filtered: {listing}");
@@ -318,7 +318,7 @@ fn across_makes_columns_from_distinct_values() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Two across columns "F Sum" and "M Sum"; E row → F 10, M 20; W → 30,40.
     assert!(listing.contains("F SUM"), "across header F: {listing}");
     assert!(listing.contains("M SUM"), "across header M: {listing}");
@@ -377,7 +377,7 @@ fn across_with_descending_direction() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Descending across order → header for k=2 appears before k=1.
     let i2 = listing.find("2 SUM").unwrap();
     let i1 = listing.find("1 SUM").unwrap();
@@ -438,7 +438,7 @@ fn break_after_group_summary_line() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // E subtotal = 10+30 = 40 appears after the E rows.
     assert!(listing.contains("40"), "E subtotal 40: {listing}");
     // W subtotal = 100.

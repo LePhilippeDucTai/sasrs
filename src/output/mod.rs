@@ -115,7 +115,7 @@ pub trait OutputDestination {
     /// destinations fichier (à venir) ce sera typiquement vide (déjà écrit sur
     /// disque). Remplace l'ancien `ListingWriter::into_string` (qui consommait
     /// `self`, impossible derrière un `Box<dyn …>`).
-    fn into_string(&mut self) -> String;
+    fn take_string(&mut self) -> String;
 
     /// Finalise la destination : si elle cible un fichier, renvoie
     /// `Some((path, contenu))` pour que l'appelant écrive le fichier sur disque.

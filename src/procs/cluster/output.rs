@@ -76,12 +76,13 @@ pub(super) fn write_outtree(
         }
     }
 
-    let mut columns: Vec<Column> = Vec::new();
-    columns.push(Series::new("_NAME_".into(), name_vals).into());
-    columns.push(Series::new("_PARENT_".into(), parent_vals).into());
-    columns.push(Series::new("_NCL_".into(), ncl_vals).into());
-    columns.push(Series::new("_FREQ_".into(), freq_vals).into());
-    columns.push(Series::new("_HEIGHT_".into(), height_vals).into());
+    let mut columns: Vec<Column> = vec![
+        Series::new("_NAME_".into(), name_vals).into(),
+        Series::new("_PARENT_".into(), parent_vals).into(),
+        Series::new("_NCL_".into(), ncl_vals).into(),
+        Series::new("_FREQ_".into(), freq_vals).into(),
+        Series::new("_HEIGHT_".into(), height_vals).into(),
+    ];
     for (v, name) in var_names.iter().enumerate() {
         columns.push(Series::new(name.as_str().into(), coord_vals[v].clone()).into());
     }

@@ -38,17 +38,18 @@ fn var(s: &str) -> Expr {
 
 // ── DO itératif / conditionnel (M2) ──────────────────────────────────
 
+/// Champs d'un `DsStmt::DoLoop` : `(var, from, to, by, while_, body)`.
+type DoLoopParts<'a> = (
+    &'a Option<(String, Expr)>,
+    &'a Option<Expr>,
+    &'a Option<Expr>,
+    &'a Option<Expr>,
+    &'a Option<Expr>,
+    &'a Vec<DsStmt>,
+);
+
 /// Déstructure un DoLoop ou panique.
-fn as_do_loop(
-    stmt: &DsStmt,
-) -> (
-    &Option<(String, Expr)>,
-    &Option<Expr>,
-    &Option<Expr>,
-    &Option<Expr>,
-    &Option<Expr>,
-    &Vec<DsStmt>,
-) {
+fn as_do_loop(stmt: &DsStmt) -> DoLoopParts<'_> {
     let DsStmt::DoLoop {
         index,
         to,

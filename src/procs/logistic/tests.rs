@@ -110,7 +110,7 @@ fn test_parse_class_allowed() {
 fn test_execute_beta_oracle() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // β₁ ≈ 2.3026
     assert!(
         listing.contains("2.3026") || listing.contains("2.302"),
@@ -122,7 +122,7 @@ fn test_execute_beta_oracle() {
 fn test_execute_or_oracle() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // OR = exp(β₁) ≈ 10.000
     assert!(
         listing.contains("10.000") || listing.contains("10.0000"),
@@ -134,7 +134,7 @@ fn test_execute_or_oracle() {
 fn test_execute_se_oracle() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // SE(β₁) ≈ 0.6245
     assert!(
         listing.contains("0.6245") || listing.contains("0.624"),
@@ -146,7 +146,7 @@ fn test_execute_se_oracle() {
 fn test_execute_neg2logl() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // -2LogL ≈ 66.8990
     assert!(
         listing.contains("66.899") || listing.contains("66.8990"),
@@ -158,7 +158,7 @@ fn test_execute_neg2logl() {
 fn test_execute_lr_test() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // LR χ² ≈ 16.279
     assert!(
         listing.contains("16.27") || listing.contains("16.279"),
@@ -223,7 +223,7 @@ fn test_execute_class_reproduces_binary_or() {
     };
     let mut session = session;
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // ref = last level "1"; non-ref dummy is "0". β = ln(odds(0)/odds(1)) =
     // ln( (10/25)/(20/5) ) = ln(0.1) = −2.3026 → OR 0.1000. Magnitude ln(10).
     assert!(
@@ -283,7 +283,7 @@ fn tiny_link_session(link: Link) -> (Session, LogisticAst) {
 fn test_execute_probit_converges() {
     let (mut session, ast) = tiny_link_session(Link::Probit);
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("binary probit"), "model line: {listing}");
     // Estimates must be finite (no NaN/inf printed).
     assert!(
@@ -301,7 +301,7 @@ fn test_execute_probit_converges() {
 fn test_execute_cloglog_converges() {
     let (mut session, ast) = tiny_link_session(Link::Cloglog);
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("binary cloglog"), "model line: {listing}");
     assert!(
         !listing.contains("NaN") && !listing.contains("inf"),
@@ -344,7 +344,7 @@ fn test_execute_ordinal_monotone_intercepts() {
     };
     let mut session = session;
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("cumulative logit"),
         "ordinal model not used: {listing}"

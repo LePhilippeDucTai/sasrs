@@ -1,11 +1,14 @@
 use super::*;
 
+/// Colonnes décodées d'un PROC DISCRIM : `(classe, une colonne par VAR, ID)`.
+type DecodedColumns = (Vec<Value>, Vec<Vec<Value>>, Option<Vec<Value>>);
+
 /// Find CLASS/VAR/ID column indices and decode the columns.
 pub(super) fn resolve_and_decode(
     ds: &crate::dataset::SasDataset,
     ast: &DiscrimAst,
     class_name: &str,
-) -> Result<(Vec<Value>, Vec<Vec<Value>>, Option<Vec<Value>>)> {
+) -> Result<DecodedColumns> {
     let p = ast.var_vars.len();
 
     let find_col = |nm: &str| -> Result<usize> {

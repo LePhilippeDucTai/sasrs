@@ -133,7 +133,7 @@ fn execute_basic_contents() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Header block should contain dataset name and observation count
     assert!(listing.contains("WORK.CLASS"), "listing: {listing}");
@@ -172,7 +172,7 @@ fn execute_shows_format_and_label() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Format should appear in the variable table
     assert!(
@@ -204,7 +204,7 @@ fn execute_varnum_ordering() {
         details: false,
     };
     execute(&ast_alpha, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Find positions of "age" and "name" in the variable table section.
     // Use rfind so the header "Data Set Name:" (which also contains "name")
@@ -237,7 +237,7 @@ fn execute_varnum_ordering() {
         details: false,
     };
     execute(&ast_varnum, &mut session2).unwrap();
-    let listing2 = session2.listing.into_string();
+    let listing2 = session2.listing.take_string();
     let lower2 = listing2.to_lowercase();
     // Skip the header "Variables: 2" which also contains text before variable table
     // Find the variable table section after the blank line following the header
@@ -291,7 +291,7 @@ fn execute_all_lists_tables() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("CLASS"), "listing: {listing}");
     assert!(listing.contains("SCORES"), "listing: {listing}");
     assert!(listing.contains("Member Name"), "listing: {listing}");
@@ -311,7 +311,7 @@ fn execute_uses_last_dataset_when_no_data() {
         details: false,
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("WORK.CLASS"), "listing: {listing}");
 }
 
@@ -425,7 +425,7 @@ fn execute_short_lists_variable_names_only() {
         details: false,
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Alphabetical name list "age name" (default sort).
     assert!(listing.contains("age name"), "short var list: {listing}");
     // SHORT suppresses the per-variable detail table: the "Num"/"Char" type
@@ -456,7 +456,7 @@ fn execute_details_adds_header_lines() {
         details: true,
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("# Observations:"),
         "details obs line: {listing}"

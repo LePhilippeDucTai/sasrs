@@ -65,7 +65,7 @@ fn execute_report_contains_sections_and_median() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("The UNIVARIATE Procedure"),
         "listing: {listing}"
@@ -119,7 +119,7 @@ fn execute_default_all_numeric_vars() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Both numeric variables analyzed; char skipped.
     assert!(listing.contains("Variable: a"), "listing: {listing}");
     assert!(listing.contains("Variable: b"), "listing: {listing}");
@@ -155,7 +155,7 @@ fn execute_by_per_group_sections() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("The UNIVARIATE Procedure"),
         "listing: {listing}"
@@ -330,7 +330,7 @@ fn execute_weighted_moments() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("The UNIVARIATE Procedure"),
         "listing: {listing}"
@@ -383,7 +383,7 @@ fn execute_weighted_no_quantiles_section() {
         plots: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // With equal weights the weighted mean equals the plain mean (20).
     assert!(listing.contains("Mean"), "listing: {listing}");
     // M33.2: the weighted Quantiles + Extremes tables are now emitted.

@@ -47,7 +47,7 @@ fn test_class_two_level_equals_manual_dummy() {
     };
     let mut s_c = session;
     execute(&ast_c, &mut s_c).unwrap();
-    let listing_c = s_c.listing.into_string();
+    let listing_c = s_c.listing.take_string();
 
     // Manual dummy: d = 1 if g=="a" else 0 (ref = last level "b").
     let session2 = make_session();
@@ -89,7 +89,7 @@ fn test_class_two_level_equals_manual_dummy() {
     };
     let mut s_d = session2;
     execute(&ast_d, &mut s_d).unwrap();
-    let listing_d = s_d.listing.into_string();
+    let listing_d = s_d.listing.take_string();
 
     // Both fit β̂ for the "a vs b" contrast = ln(2) − ln(5) = ln(0.4).
     let contrast = (2.0_f64).ln() - (5.0_f64).ln();
@@ -141,7 +141,7 @@ fn test_scale_fixed_normal_noscale() {
     let (mut session, mut ast) = make_normal_session();
     ast.model.as_mut().unwrap().noscale = true;
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     let scale_line = listing
         .lines()
         .map(|l| l.split_whitespace().collect::<Vec<_>>())

@@ -142,7 +142,7 @@ fn test_type1_vs_type3_unbalanced() {
         means_vars: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Type I SS"), "missing Type I: {listing}");
     assert!(
         listing.contains("Type III SS"),

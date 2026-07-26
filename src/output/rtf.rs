@@ -47,7 +47,7 @@ impl RtfDestination {
                 '}' => out.push_str("\\}"),
                 c if c.is_ascii() => out.push(c),
                 c if (c as u32) <= 0xFF => {
-                    out.push_str(&format!("\\'{}", format!("{:02x}", c as u32)));
+                    out.push_str(&format!("\\'{:02x}", c as u32));
                 }
                 c => {
                     out.push_str(&format!("\\u{}?", c as u32));
@@ -159,7 +159,7 @@ impl OutputDestination for RtfDestination {
         self.ls
     }
 
-    fn into_string(&mut self) -> String {
+    fn take_string(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
         }
@@ -176,7 +176,7 @@ impl OutputDestination for RtfDestination {
 
     fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
         let path = self.file.clone()?;
-        let content = self.into_string();
+        let content = self.take_string();
         if content.is_empty() {
             None
         } else {

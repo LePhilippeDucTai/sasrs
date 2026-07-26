@@ -54,7 +54,7 @@ fn open_html_becomes_current() {
     // HTML est la destination courante : son rendu mémoire est vide (stub),
     // et son nom est mémorisé.
     assert_eq!(s.current_destination, "HTML");
-    assert_eq!(s.listing.into_string(), "");
+    assert_eq!(s.listing.take_string(), "");
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn close_html_restores_text_listing() {
     // Le listing texte par défaut redevient la destination courante :
     // un write_line est rendu verbatim.
     s.listing.write_line("hello");
-    assert_eq!(s.listing.into_string(), "hello\n");
+    assert_eq!(s.listing.take_string(), "hello\n");
 }
 
 /// M22.4 — close_destination avec un fichier cible écrit le HTML sur disque.
@@ -95,7 +95,7 @@ fn close_html_with_file_writes_document() {
     // La destination est redevenue un TextListing.
     assert_eq!(s.current_destination, "LISTING");
     s.listing.write_line("after");
-    assert_eq!(s.listing.into_string(), "after\n");
+    assert_eq!(s.listing.take_string(), "after\n");
 
     // Le fichier HTML existe et contient la table + une valeur connue.
     assert!(tmp_file.exists(), "fichier HTML non créé");
@@ -181,7 +181,7 @@ fn titles_pushed_to_current_destination() {
     s.set_title_level(1, Some("Hello".into()));
     s.set_title_level(2, Some("World".into()));
     s.listing.page_header();
-    let out = s.listing.into_string();
+    let out = s.listing.take_string();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0].trim(), "Hello");
     assert_eq!(lines[1].trim(), "World");

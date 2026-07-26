@@ -9,7 +9,7 @@ fn file_print_routes_to_listing() {
         &mut s,
     )
     .unwrap();
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     assert!(
         listing.contains("in listing Alfred"),
         "listing was: {listing}"

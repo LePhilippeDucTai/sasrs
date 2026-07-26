@@ -181,7 +181,7 @@ fn execute_oracle_listing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The FACTOR Procedure"), "{listing}");
     assert!(listing.contains("Factor Pattern"), "{listing}");
     assert!(listing.contains("MINEIGEN criterion"), "{listing}");
@@ -299,7 +299,7 @@ fn execute_varimax_no_panic() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Rotated Factor Pattern"), "{listing}");
     assert!(listing.contains("Rotation Method: Varimax"), "{listing}");
     // No NaN in the listing.
@@ -387,7 +387,7 @@ fn execute_promax_listing() {
         var: vec!["a".into(), "b".into(), "c".into(), "d".into()],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Rotation Method: Promax"), "{listing}");
     assert!(listing.contains("Inter-Factor Correlations"), "{listing}");
     assert!(!listing.contains("NaN"), "NaN in listing: {listing}");

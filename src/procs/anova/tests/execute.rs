@@ -38,7 +38,7 @@ fn test_execute_listing() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     assert!(listing.contains("The ANOVA Procedure"), "{listing}");
     assert!(listing.contains("Class Level Information"), "{listing}");
@@ -82,7 +82,7 @@ fn test_execute_means() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Should show class level in the means table
     assert!(
@@ -133,7 +133,7 @@ fn test_execute_multiway_listing() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     assert!(listing.contains("The ANOVA Procedure"), "{listing}");
     assert!(listing.contains("Class Level Information"), "{listing}");

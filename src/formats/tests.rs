@@ -188,6 +188,7 @@ fn informat_dot_gives_missing() {
     assert_eq!(result, Value::missing());
 }
 
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn informat_numeric_string_gives_num() {
     let cat = catalog();

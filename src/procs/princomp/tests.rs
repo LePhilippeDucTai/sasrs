@@ -177,7 +177,7 @@ fn execute_oracle_listing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The PRINCOMP Procedure"), "{listing}");
     assert!(listing.contains("Correlation Matrix"), "{listing}");
     // Eigenvalues 1.8321 and 0.1679.

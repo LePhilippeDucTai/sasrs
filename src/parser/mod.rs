@@ -82,6 +82,11 @@ impl<'a> StatementStream<'a> {
         &self.toks[self.pos]
     }
 
+    /// Consomme et rend le token courant. Ce n'est PAS `Iterator::next` : le
+    /// flux se fige sur l'`Eof` terminal au lieu de rendre `None`, si bien que
+    /// `peek()`/`next()` restent valides après la fin — d'où la signature
+    /// `-> Token` et non `-> Option<Token>`.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         let tok = self.toks[self.pos].clone();
         if tok.kind != TokenKind::Eof {
@@ -231,7 +236,10 @@ impl<'a> StatementStream<'a> {
                         };
                         self.next();
                         match crate::procs::parse_proc(&name, self) {
-                            Ok(ast) => Ok(Block::Proc { name, ast }),
+                            Ok(ast) => Ok(Block::Proc {
+                                name,
+                                ast: Box::new(ast),
+                            }),
                             Err(e) => {
                                 self.skip_to_step_boundary();
                                 Err(e)

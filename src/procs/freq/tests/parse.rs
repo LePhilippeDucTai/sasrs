@@ -157,7 +157,7 @@ fn execute_one_way_default_excludes_missing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The FREQ Procedure"), "{listing}");
     assert!(listing.contains("Frequency Missing = 1"), "{listing}");
     // 1: freq 2, percent 2/3 = 66.67; 2: freq 1, 33.33; cumulative 100.00.
@@ -189,7 +189,7 @@ fn execute_one_way_missing_option_includes_it() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // With MISSING the denom is 4: 1 -> 2/4 = 50.00; missing -> 1/4 = 25.00.
     assert!(listing.contains("50.00"), "{listing}");
     assert!(listing.contains("25.00"), "{listing}");
@@ -275,7 +275,7 @@ fn execute_crosstab_counts_and_total() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Table of r by c"), "{listing}");
     // Grand total 4 and column total for c=1 is 3.
     assert!(listing.contains("Total"), "{listing}");
@@ -330,7 +330,7 @@ fn execute_fisher_measures_agree_end_to_end() {
         by: Vec::new(),
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Fisher's Exact Test"), "{listing}");
     assert!(
         listing.contains("Estimates of the Relative Risk"),
@@ -343,18 +343,10 @@ fn execute_fisher_measures_agree_end_to_end() {
 #[test]
 fn execute_one_way_chisq_end_to_end() {
     let mut session = make_session();
+    // 10 fois 1, 20 fois 2, 30 fois 3, 40 fois 4.
     let mut x: Vec<f64> = Vec::new();
-    for _ in 0..10 {
-        x.push(1.0);
-    }
-    for _ in 0..20 {
-        x.push(2.0);
-    }
-    for _ in 0..30 {
-        x.push(3.0);
-    }
-    for _ in 0..40 {
-        x.push(4.0);
+    for (value, count) in [(1.0, 10), (2.0, 20), (3.0, 30), (4.0, 40)] {
+        x.extend(std::iter::repeat_n(value, count));
     }
     let df = df!["x" => x].unwrap();
     let ds = SasDataset {
@@ -375,7 +367,7 @@ fn execute_one_way_chisq_end_to_end() {
         by: Vec::new(),
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Chi-Square Test for Equal Proportions"),
         "{listing}"

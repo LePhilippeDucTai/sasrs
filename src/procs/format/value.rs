@@ -137,10 +137,7 @@ pub(super) fn parse_single_range(ts: &mut StatementStream, is_char: bool) -> Res
 
     // Now decide if there's a range at all.
     // If the next token is `=` or `,` or `;` or EOF or step-boundary → single value.
-    let has_range = match ts.peek().kind {
-        TokenKind::Minus => true,
-        _ => false,
-    };
+    let has_range = matches!(ts.peek().kind, TokenKind::Minus);
 
     if !has_range {
         // Single value: from == to, no exclusivity.

@@ -24,7 +24,7 @@ fn test_ols_simple() {
         basic_model("y", &["x"]),
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("1.0000") || listing.contains("R-Square"),
         "listing: {listing}"
@@ -54,7 +54,7 @@ fn test_ols_regression() {
         basic_model("y", &["x"]),
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("0.8000") || listing.contains("R-Square"),
         "{listing}"

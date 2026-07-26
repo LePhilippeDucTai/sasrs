@@ -19,6 +19,7 @@ fn day_2020_01_01() {
 
 // ── w.d numeric format ────────────────────────────────────────────────────
 
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn wd_no_width() {
     let v = Value::Num(3.14159);
@@ -65,6 +66,7 @@ fn best12_integer() {
     assert_eq!(s, "          42");
 }
 
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn best12_decimal() {
     let v = Value::Num(3.14);

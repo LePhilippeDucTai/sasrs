@@ -129,9 +129,12 @@ pub fn cholesky(a: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
 }
 
 /// QR decomposition via Householder reflections.
+/// Décomposition QR : `(Q, R)` avec `A = Q·R`.
+pub type Qr = (Vec<Vec<f64>>, Vec<Vec<f64>>);
+
 /// Returns (Q, R) where A = Q·R, Q orthonormal (m×n), R upper triangular (n×n).
 /// Requires m >= n (at least as many rows as columns).
-pub fn qr_decomposition(a: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+pub fn qr_decomposition(a: &[Vec<f64>]) -> Result<Qr> {
     let m = a.len();
     if m == 0 {
         return Err(SasError::InvalidInput("empty matrix".into()));

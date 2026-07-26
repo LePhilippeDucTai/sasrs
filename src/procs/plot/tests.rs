@@ -101,7 +101,7 @@ fn render_ascii_contains_title() {
     write_xy(&mut session, "XY");
     let ast = parse_plot("proc plot data=work.xy; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Plot of Y*X"), "listing: {listing}");
 }
 
@@ -111,7 +111,7 @@ fn render_ascii_contains_min_max() {
     write_xy(&mut session, "XY");
     let ast = parse_plot("proc plot data=work.xy; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // x ranges 1..6, y ranges 10..40 — extremes must appear as tick labels.
     assert!(listing.contains('1'), "listing: {listing}");
     assert!(listing.contains('6'), "listing: {listing}");

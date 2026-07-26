@@ -121,8 +121,8 @@ fn test_dfe_le_one_undefined() {
     let n = y.len();
     let p_eff = 2;
     let x = design(true, &[&x1], n);
-    let fit = ols_fit(&x, &y.to_vec()).unwrap();
-    let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff, None);
+    let fit = ols_fit(&x, y.as_ref()).unwrap();
+    let infl = compute_influence_stats(&x, y.as_ref(), &fit, n, p_eff, None);
     for s in &infl {
         assert!(!s.rstudent.is_finite());
         assert!(!s.covratio.is_finite());
@@ -195,7 +195,7 @@ fn test_diagnostics_off_no_extra_columns() {
         basic_model("y", &["x"]),
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(!listing.contains("Tolerance"));
     assert!(!listing.contains("Variance Inflation"));
     assert!(!listing.contains("Collinearity Diagnostics"));
@@ -225,7 +225,7 @@ fn test_m365_off_no_extra_columns() {
         basic_model("y", &["x"]),
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(!listing.contains("Type I SS"));
     assert!(!listing.contains("Type II SS"));
     assert!(!listing.contains("Standardized Estimate"));
@@ -340,7 +340,7 @@ fn test_m366_include_forces_first_regressors() {
     let mut sel = sel_with(SelMethod::RSquare);
     sel.include = 1; // x1 forced
     run_all_subsets(&sel, &xcols, &y, &regs, true, &mut session);
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("R-Square Selection Method"), "{listing}");
     // Every "Variables in Model" entry must contain x1; size-1 row is "x1".
     for line in listing.lines() {
@@ -406,7 +406,7 @@ fn test_m366_none_matches_no_selection() {
             model,
         );
         execute(&ast, &mut session).unwrap();
-        session.listing.into_string()
+        session.listing.take_string()
     };
     let plain = build(None);
     let none = build(Some(sel_with(SelMethod::None)));
@@ -438,7 +438,7 @@ fn test_by_two_groups() {
     );
     ast.by = vec!["g".into()];
     execute(&ast, &mut session).unwrap();
-    let out = session.listing.into_string();
+    let out = session.listing.take_string();
     assert!(out.contains("g=1"), "{out}");
     assert!(out.contains("g=2"), "{out}");
     assert_eq!(out.matches("The REG Procedure").count(), 2, "{out}");

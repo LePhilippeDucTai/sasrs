@@ -427,5 +427,5 @@ fn put_default_destination_is_log() {
     let lines = put_log_lines(&s.log.into_string());
     assert_eq!(lines, vec!["42"]);
     // Rien dans le listing.
-    assert!(!s.listing.into_string().contains("42"));
+    assert!(!s.listing.take_string().contains("42"));
 }

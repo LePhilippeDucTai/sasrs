@@ -194,7 +194,7 @@ fn execute_nolist_suppresses_listing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.is_empty(),
         "listing should be empty with nolist: {listing}"
@@ -216,7 +216,7 @@ fn execute_without_nolist_emits_directory() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("T1"), "listing: {listing}");
     assert!(listing.contains("T2"), "listing: {listing}");
     assert!(listing.contains("DATA"), "Member Type column: {listing}");

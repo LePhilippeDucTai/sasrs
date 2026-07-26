@@ -217,18 +217,19 @@ pub(super) fn aggregate_to_polars(
 ) -> Result<Expr> {
     let f = func.to_ascii_lowercase();
     match f.as_str() {
-        "count" => {
-            if star || arg.is_none() {
-                Ok(len())
-            } else {
-                let a = sql_expr_to_polars(arg.unwrap(), ctx)?;
+        "count" => match arg {
+            // `COUNT(*)` (ou `COUNT()`) : cardinalité, pas de colonne.
+            None => Ok(len()),
+            Some(_) if star => Ok(len()),
+            Some(inner) => {
+                let a = sql_expr_to_polars(inner, ctx)?;
                 if distinct {
                     Ok(a.n_unique())
                 } else {
                     Ok(a.count())
                 }
             }
-        }
+        },
         "sum" | "avg" | "mean" | "min" | "max" => {
             let arg = arg.ok_or_else(|| {
                 SasError::runtime(format!(

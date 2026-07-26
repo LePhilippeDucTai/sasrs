@@ -5,7 +5,9 @@ pub enum Block {
     DataStep(DataStepAst),
     Proc {
         name: String,
-        ast: ProcAst,
+        /// Boxé : `ProcAst` a 41 variants et pèse plusieurs kilo-octets ;
+        /// sans le `Box` toute valeur `Block` paierait cette taille.
+        ast: Box<ProcAst>,
     },
     /// `run;` isolé ou statement vide : écho dans le log, aucune action.
     Empty,

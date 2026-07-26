@@ -101,7 +101,7 @@ fn one_way_listing(opts: impl Fn(&mut TableRequest)) -> String {
         by: Vec::new(),
     };
     execute(&ast, &mut session).unwrap();
-    session.listing.into_string()
+    session.listing.take_string()
 }
 
 fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
@@ -128,7 +128,7 @@ fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
         by: Vec::new(),
     };
     execute(&ast, &mut session).unwrap();
-    session.listing.into_string()
+    session.listing.take_string()
 }
 
 // ───────────────────── M21.2 advanced statistics ─────────────────────
@@ -137,7 +137,7 @@ fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
 fn run_block<F: FnOnce(&mut Session)>(f: F) -> String {
     let mut session = make_session();
     f(&mut session);
-    session.listing.into_string()
+    session.listing.take_string()
 }
 
 fn margins(freq: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, usize) {

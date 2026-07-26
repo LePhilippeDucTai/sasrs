@@ -15,7 +15,7 @@ fn new_session_listing_is_text_listing() {
 fn write_line_renders_text() {
     let mut d = TextListing::new(96);
     d.write_line("test");
-    let out = d.into_string();
+    let out = d.take_string();
     assert_eq!(out, "test\n");
 }
 
@@ -23,7 +23,7 @@ fn write_line_renders_text() {
 fn page_header_default_title_centered() {
     let mut d = TextListing::new(40);
     d.page_header();
-    let out = d.into_string();
+    let out = d.take_string();
     assert!(out.contains("The SAS System"), "out: {out:?}");
     // Centré dans LS=40 : padding gauche de (40-14)/2 = 13 espaces.
     assert!(
@@ -37,7 +37,7 @@ fn set_title_overrides_default() {
     let mut d = TextListing::new(40);
     d.set_title(Some("Mon Titre".to_string()));
     d.page_header();
-    let out = d.into_string();
+    let out = d.take_string();
     assert!(out.contains("Mon Titre"), "out: {out:?}");
     assert!(!out.contains("The SAS System"), "out: {out:?}");
 }
@@ -55,7 +55,7 @@ fn write_table_matches_listing_writer() {
             vec!["2".into(), "200".into()],
         ],
     );
-    let via_trait = d.into_string();
+    let via_trait = d.take_string();
 
     let mut l = ListingWriter::new(40);
     l.page_header();
@@ -78,16 +78,16 @@ fn blank_emits_empty_line() {
     d.write_line("a");
     d.blank();
     d.write_line("b");
-    assert_eq!(d.into_string(), "a\n\nb\n");
+    assert_eq!(d.take_string(), "a\n\nb\n");
 }
 
 #[test]
-fn into_string_leaves_destination_empty() {
+fn take_string_leaves_destination_empty() {
     // Deux drains successifs ne dupliquent pas le contenu.
     let mut d = TextListing::new(40);
     d.write_line("once");
-    assert_eq!(d.into_string(), "once\n");
-    assert_eq!(d.into_string(), "");
+    assert_eq!(d.take_string(), "once\n");
+    assert_eq!(d.take_string(), "");
 }
 
 // html_stub_is_noop retiré : HtmlDestination est désormais une vraie
@@ -119,7 +119,7 @@ fn html_table_renders_escaped_cells() {
             vec!["<tag>".into(), "99".into()],
         ],
     );
-    let out = h.into_string();
+    let out = h.take_string();
     // Présence de la structure de table.
     assert!(out.contains("<table"), "pas de <table : {out}");
     assert!(out.contains("</table>"), "pas de </table> : {out}");
@@ -139,10 +139,10 @@ fn html_table_renders_escaped_cells() {
 }
 
 #[test]
-fn html_into_string_wraps_document() {
+fn html_take_string_wraps_document() {
     let mut h = HtmlDestination::new(96);
     h.write_line("hello");
-    let out = h.into_string();
+    let out = h.take_string();
     // Structure HTML obligatoire.
     assert!(out.contains("<!DOCTYPE html>"), "DOCTYPE manquant : {out}");
     assert!(out.contains("<style"), "style manquant : {out}");
@@ -150,7 +150,7 @@ fn html_into_string_wraps_document() {
     assert!(out.contains("</body>"), "</body> manquant : {out}");
     assert!(out.contains("<p>hello</p>"), "<p> manquant : {out}");
     // Second drain → chaîne vide (idempotent).
-    assert_eq!(h.into_string(), "", "second drain non vide");
+    assert_eq!(h.take_string(), "", "second drain non vide");
 }
 
 #[test]
@@ -162,10 +162,10 @@ fn html_without_file_finalize_none() {
 }
 
 #[test]
-fn html_empty_into_string_is_empty() {
-    // Rien d'écrit → into_string() renvoie "" (pas de document vide).
+fn html_empty_take_string_is_empty() {
+    // Rien d'écrit → take_string() renvoie "" (pas de document vide).
     let mut h = HtmlDestination::new(96);
-    assert_eq!(h.into_string(), "");
+    assert_eq!(h.take_string(), "");
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn html_page_header_uses_title() {
     let mut h = HtmlDestination::new(96);
     h.set_title(Some("Mon Rapport".to_string()));
     h.page_header();
-    let out = h.into_string();
+    let out = h.take_string();
     assert!(out.contains("Mon Rapport"), "titre absent : {out}");
     assert!(
         out.contains("class=\"systitle\""),
@@ -185,7 +185,7 @@ fn html_page_header_uses_title() {
 fn html_page_header_default_title() {
     let mut h = HtmlDestination::new(96);
     h.page_header();
-    let out = h.into_string();
+    let out = h.take_string();
     assert!(
         out.contains("The SAS System"),
         "titre par défaut absent : {out}"
@@ -210,7 +210,7 @@ fn html_with_file_finalize_some() {
     assert!(html.contains("<!DOCTYPE html>"), "HTML complet attendu");
     assert!(html.contains("<p>content</p>"), "contenu attendu");
     // Après finalize, buf est vide.
-    assert_eq!(h.into_string(), "", "buf doit être vide après finalize");
+    assert_eq!(h.take_string(), "", "buf doit être vide après finalize");
 }
 
 // --- Tests M23.1 : RtfDestination réelle ---
@@ -223,7 +223,7 @@ fn rtf_table_renders_structure() {
         &[Align::Left, Align::Right],
         &[vec!["Alfred".into(), "14".into()]],
     );
-    let out = r.into_string();
+    let out = r.take_string();
     assert!(out.starts_with("{\\rtf1"), "RTF header manquant: {out}");
     assert!(out.contains("\\trowd"), "table RTF manquante: {out}");
     assert!(out.contains("Alfred"), "valeur manquante: {out}");
@@ -235,7 +235,7 @@ fn rtf_table_renders_structure() {
 fn rtf_escape_special_chars() {
     let mut r = RtfDestination::new(96);
     r.write_line("a\\b{c}d");
-    let out = r.into_string();
+    let out = r.take_string();
     assert!(out.contains("a\\\\b\\{c\\}d"), "RTF escape rate: {out}");
 }
 
@@ -328,7 +328,7 @@ fn html_renders_multiple_titles_and_footnotes() {
     h.set_footnotes(&["F1".to_string()]);
     h.page_header();
     h.write_line("body");
-    let out = h.into_string();
+    let out = h.take_string();
     let p1 = out.find("T1").unwrap();
     let p2 = out.find("T2").unwrap();
     assert!(p1 < p2, "titres dans l'ordre des niveaux");
@@ -349,7 +349,7 @@ fn rtf_renders_multiple_titles_and_footnotes() {
     r.set_footnotes(&["F1".to_string()]);
     r.page_header();
     r.write_line("body");
-    let out = r.into_string();
+    let out = r.take_string();
     assert!(out.find("T1").unwrap() < out.find("T2").unwrap());
     assert!(out.find("F1").unwrap() > out.find("body").unwrap());
 }

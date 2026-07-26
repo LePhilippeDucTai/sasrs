@@ -41,7 +41,7 @@ fn execute_perfect_correlation_listing() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The CORR Procedure"), "{listing}");
     assert!(listing.contains("Simple Statistics"), "{listing}");
     assert!(
@@ -90,7 +90,7 @@ fn execute_nosimple_noprob_toggles() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         !listing.contains("Simple Statistics"),
         "nosimple: {listing}"
@@ -141,7 +141,7 @@ fn execute_missing_pairwise_n_line() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // N line should show a "3" somewhere in the matrix region.
     assert!(listing.contains(" 3"), "expected N line with 3: {listing}");
     assert!(listing.contains(" 4"), "expected N line with 4: {listing}");
@@ -183,7 +183,7 @@ fn execute_constant_variable_missing_r() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Off-diagonal r between constant x and y is missing → ".".
     assert!(listing.contains(" ."), "expected missing r '.': {listing}");
 }
@@ -225,7 +225,7 @@ fn execute_with_statement_shapes_matrix() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("1 With Variables:"), "{listing}");
     assert!(listing.contains("2 Variables:"), "{listing}");
     // w perfectly correlates with a (1.00000) and anti with b (-1.00000).
@@ -270,7 +270,7 @@ fn execute_default_var_all_numeric() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Only x and y (numeric) are analyzed; char g excluded.
     assert!(listing.contains("2 Variables:"), "{listing}");
     assert!(listing.contains("x y"), "{listing}");
@@ -296,7 +296,7 @@ fn execute_spearman_block() {
     ast.spearman = true;
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Spearman Correlation Coefficients"),
         "{listing}"
@@ -328,7 +328,7 @@ fn execute_kendall_block() {
     ast.kendall = true;
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Kendall Tau b Coefficients"), "{listing}");
     assert!(listing.contains("Prob > |tau|"), "{listing}");
     // tau_b = 0.66667.
@@ -355,7 +355,7 @@ fn execute_all_three_methods() {
     ast.kendall = true;
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Pearson Correlation Coefficients"),
         "{listing}"
@@ -496,7 +496,7 @@ fn execute_weighted_listing_runs() {
     ast.weight = Some("wt".into());
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // With w=1 the weighted r equals the unweighted perfect correlation.
     assert!(listing.contains("1.00000"), "{listing}");
     assert!(

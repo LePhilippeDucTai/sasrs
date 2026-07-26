@@ -47,7 +47,7 @@ fn create_view_basic() {
     // The view is purely in memory (no parquet written).
     assert!(!s.libs.get("WORK").unwrap().exists("V"));
     assert!(s.views.contains_key("V"));
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     assert!(listing.contains("Al"), "listing: {listing}");
     assert!(listing.contains("14"), "listing: {listing}");
     let log = s.log.into_string();
@@ -78,7 +78,7 @@ fn bare_select_renders_to_listing() {
     let mut s = make_session();
     write_people(&mut s);
     run_sql("select name, age from t where age > 12;", &mut s);
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     assert!(listing.contains("Bo"), "listing: {listing}");
     assert!(listing.contains("Cy"), "listing: {listing}");
     assert!(listing.contains("14"), "listing: {listing}");
@@ -334,7 +334,7 @@ fn view_from_qualified_table() {
          select name from v;",
         &mut s,
     );
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     assert!(listing.contains("Bo"), "listing: {listing}");
     assert!(listing.contains("Cy"), "listing: {listing}");
     assert!(!listing.contains("Al"), "listing: {listing}");
@@ -376,7 +376,7 @@ fn view_referencing_view() {
          select name from v2;",
         &mut s,
     );
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     assert!(listing.contains("Bo"), "listing: {listing}");
     assert!(listing.contains("Cy"), "listing: {listing}");
     assert!(!listing.contains("Al"), "listing: {listing}");

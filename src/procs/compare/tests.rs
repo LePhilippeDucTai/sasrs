@@ -117,7 +117,7 @@ fn execute_identical_datasets_no_diffs() {
     let log = session.log.into_string();
     assert!(log.contains("No unequal values"), "log: {log}");
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("WORK.A"), "listing: {listing}");
     assert!(listing.contains("WORK.B"), "listing: {listing}");
 }
@@ -146,7 +146,7 @@ fn execute_with_differences() {
     let log = session.log.into_string();
     assert!(log.contains("1 observation"), "log: {log}");
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("1"), "diffs in listing: {listing}");
 }
 
@@ -219,7 +219,7 @@ fn execute_variable_only_in_base() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("BASE only") || listing.contains("Z"),
         "listing: {listing}"
@@ -286,7 +286,7 @@ fn execute_type_mismatch_reported() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Different Types") || listing.contains("Num") || listing.contains("Char"),
         "listing: {listing}"
@@ -314,7 +314,7 @@ fn execute_different_nobs() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Not Compared") || listing.contains("2"),
         "listing: {listing}"
@@ -376,13 +376,7 @@ fn execute_missing_equality() {
         .libs
         .get("WORK")
         .unwrap()
-        .write(
-            "MISS2",
-            &SasDataset {
-                df: df_comp,
-                vars: vars,
-            },
-        )
+        .write("MISS2", &SasDataset { df: df_comp, vars })
         .unwrap();
 
     let ast = CompareAst {
@@ -456,7 +450,7 @@ fn execute_briefsummary() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Brief Summary") || listing.contains("WORK.BS1"),
         "listing: {listing}"
@@ -484,7 +478,7 @@ fn execute_novalues_omits_values_section() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // The values section header should be absent
     assert!(
         !listing.contains("Values Comparison Summary"),

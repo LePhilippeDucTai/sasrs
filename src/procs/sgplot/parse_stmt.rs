@@ -1,18 +1,20 @@
 use super::*;
 
-/// Parse les options X=var Y=var et les options après `/` d'un statement de
-/// tracé à deux variables (SCATTER, SERIES, REG, LOESS). Renvoie
-/// `(x, y, group, markerattrs, degree, smooth)`. Les inconnues sont ignorées.
-pub(super) fn parse_xy_stmt(
-    ts: &mut StatementStream,
-) -> Result<(
+/// Statement de tracé à deux variables :
+/// `(x, y, group, markerattrs, degree, smooth)`.
+type XyStmt = (
     String,
     String,
     Option<String>,
     Option<MarkerAttrs>,
     Option<u32>,
     Option<f64>,
-)> {
+);
+
+/// Parse les options X=var Y=var et les options après `/` d'un statement de
+/// tracé à deux variables (SCATTER, SERIES, REG, LOESS). Renvoie
+/// `(x, y, group, markerattrs, degree, smooth)`. Les inconnues sont ignorées.
+pub(super) fn parse_xy_stmt(ts: &mut StatementStream) -> Result<XyStmt> {
     let mut x: Option<String> = None;
     let mut y: Option<String> = None;
     let mut group: Option<String> = None;

@@ -115,6 +115,9 @@ pub(super) fn fit_glm(
 
 // ───────────────────────── Variance-components mixed fit ─────────────────────
 
+/// Ajustement à composantes de variance : `(σ²_u, σ²_e, β, Var(β), −2 Res LogLik)`.
+type VcFit = (f64, f64, Vec<f64>, Vec<Vec<f64>>, f64);
+
 /// Fit y = Xβ + Zu + ε with V = σ²_u ZZ' + σ²_e I (single random intercept).
 /// Returns (σ²_u, σ²_e, β, Var(β), -2 Res LogLik). Used for NORMAL/IDENTITY
 /// (closed-form REML) and as the WMME solver inside the PQL loop (working data).
@@ -124,7 +127,7 @@ pub(super) fn fit_vc(
     subj_of: &[usize],
     n_subjects: usize,
     weights: Option<&[f64]>,
-) -> Result<(f64, f64, Vec<f64>, Vec<Vec<f64>>, f64)> {
+) -> Result<VcFit> {
     let p = x[0].len();
 
     // Balance detection for the closed-form intercept-only path.

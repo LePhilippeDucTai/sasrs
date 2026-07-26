@@ -83,7 +83,7 @@ fn test_execute_poisson_beta0() {
     // Run directly and check beta via log — use execute with noprint off
     // to exercise the path, but check values through listing
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // β₀ ≈ ln(2) = 0.6931
     assert!(
         listing.contains("0.6931") || listing.contains("0.693"),
@@ -115,7 +115,7 @@ fn test_execute_poisson_se() {
 fn test_execute_normal_beta() {
     let (mut session, ast) = make_normal_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // β₀ = 2.0000, β₁ = 3.0000
     assert!(
         listing.contains("2.0000") || listing.contains("2.000"),
@@ -131,7 +131,7 @@ fn test_execute_normal_beta() {
 fn test_execute_normal_scale() {
     let (mut session, ast) = make_normal_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Scale = sqrt(MSE) = sqrt(1.0) = 1.0000
     assert!(
         listing.contains("1.0000") || listing.contains("1.000"),
@@ -169,7 +169,7 @@ fn test_gamma_pearson_dispersion() {
     let (mut session, mut ast) = make_gamma_intercept_session(LinkFunction::Reciprocal);
     ast.model.as_mut().unwrap().noprint = false;
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     let y = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let ybar = 3.5;

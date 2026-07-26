@@ -254,7 +254,7 @@ fn datejul_two_digit_year() {
     assert_eq!(invoke("DATEJUL", &[num(7365.0)]), num(-18994.0));
     // 107001 = day 1 of 2007 (100–199 → 2000–2099) → SAS date 17167.
     let r = invoke("DATEJUL", &[num(107001.0)]);
-    assert_eq!(invoke("YEAR", &[r.clone()]), num(2007.0));
+    assert_eq!(invoke("YEAR", std::slice::from_ref(&r)), num(2007.0));
     assert_eq!(invoke("JULDATE", &[r]), num(1.0));
 }
 

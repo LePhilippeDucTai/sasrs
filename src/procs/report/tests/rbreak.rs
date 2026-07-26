@@ -37,7 +37,7 @@ fn rbreak_grand_total_line() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Grand total of ages = 11+12+13+14+15 = 65.
     assert!(listing.contains("65"), "grand total 65: {listing}");
 }
@@ -120,7 +120,7 @@ fn compute_simple_assignment() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // First row age 11 → dbl 22; age 15 → dbl 30.
     assert!(listing.contains("22"), "11*2=22: {listing}");
     assert!(listing.contains("30"), "15*2=30: {listing}");
@@ -162,7 +162,7 @@ fn compute_after_line_text() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("End of report"), "line text: {listing}");
 }
 
@@ -197,7 +197,7 @@ fn compute_reads_cn_positional_reference() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // age 20 → ratio 2; age 30 → ratio 3.
     assert!(listing.contains('2'), "_c2_/10 = 2: {listing}");
     assert!(listing.contains('3'), "_c2_/10 = 3: {listing}");
@@ -233,7 +233,7 @@ fn where_missing_semantics_dot_equals_dot() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains('b'), "missing row kept: {listing}");
     assert!(!listing.contains('a'), "non-missing filtered: {listing}");
 }
@@ -273,7 +273,7 @@ fn break_without_summarize_emits_no_subtotal() {
     };
     // Should not panic; n for F=3, M=2.
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains('3'), "F n=3: {listing}");
     assert!(listing.contains('2'), "M n=2: {listing}");
 }
@@ -295,7 +295,7 @@ fn format_applies_to_displayed_numeric() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("11.0"), "formatted 11.0: {listing}");
     assert!(listing.contains("12.0"), "formatted 12.0: {listing}");
 }
@@ -317,7 +317,7 @@ fn width_truncates_and_pads_column() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // "Alfred" truncated to "Alf"; full name must NOT appear.
     assert!(listing.contains("Alf"), "truncated to Alf: {listing}");
     assert!(
@@ -351,7 +351,7 @@ fn spacing_changes_intercolumn_gap() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Row "x" then 6 spaces (spacing) then "p". Default leading spacing is 2
     // on column a. So a data line should contain "x      p" (1+6 = the gap).
     assert!(listing.contains("x      p"), "6-space gap: {listing:?}");
@@ -383,7 +383,7 @@ fn line_with_format_renders_via_format_engine() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Grand total of ages = 65, rendered by best8. as "65".
     assert!(
         listing.contains("Total age: 65"),

@@ -78,7 +78,7 @@ fn user_format_end_to_end_via_session_catalog() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // The user-defined format labels must appear in the listing.
     // This proves the session catalog was used, not FormatCatalog::default().
     assert!(listing.contains("Male"), "listing: {listing}");

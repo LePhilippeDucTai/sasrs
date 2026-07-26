@@ -130,7 +130,7 @@ fn print_generates_listing_section() {
     let mut session = Session::new(None, PathBuf::from("."), true).unwrap();
     let prog = parse_body("a = {1 2, 3 4}; print a;").unwrap();
     execute(&prog, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The IML Procedure"), "listing: {listing}");
     assert!(listing.contains("COL1"), "listing: {listing}");
     assert!(listing.contains("ROW1"), "listing: {listing}");

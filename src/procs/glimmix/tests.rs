@@ -38,6 +38,7 @@ fn parse_glimmix(src: &str) -> Result<GlimmixAst> {
 }
 
 // ── Test 1: Poisson β convergence ────────────────────────────────────────
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn test_poisson_beta() {
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -56,6 +57,7 @@ fn test_poisson_beta() {
 }
 
 // ── Test 2: Binary + FREQ β convergence ──────────────────────────────────
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn test_binary_freq_beta() {
     // counts: (y,x,count): (1,1,20)(1,0,10)(0,1,5)(0,0,25)
@@ -107,7 +109,7 @@ fn test_ar1_fits_and_names() {
     )
     .unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("AR(1)"),
         "missing AR(1) cov parm: {listing}"
@@ -150,6 +152,7 @@ fn test_quad_deferred() {
 }
 
 // ── Test 5b: LAPLACE cross-check (b) — no random ≡ GLM MLE ────────────────
+#[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]
 fn test_laplace_no_random_eq_glm() {
     // Same Poisson data as test_poisson_beta; LAPLACE with no RANDOM must
@@ -251,7 +254,7 @@ fn test_execute_poisson_ok() {
     let ast =
         parse_glimmix("proc glimmix; model y = x / dist=poisson link=log solution; run;").unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("0.6931"), "missing b0: {listing}");
     assert!(listing.contains("0.9163"), "missing b1: {listing}");
     assert!(listing.contains("The GLIMMIX Procedure"));
@@ -365,7 +368,7 @@ fn test_execute_laplace_listing() {
     )
     .unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Laplace"), "missing Laplace: {listing}");
     assert!(
         listing.contains("-2 Log Likelihood"),

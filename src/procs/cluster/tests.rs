@@ -136,7 +136,7 @@ fn execute_listing_smoke() {
         id: None,
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The CLUSTER Procedure"), "{listing}");
     assert!(listing.contains("Cluster History"), "{listing}");
     assert!(listing.contains("0.9310"), "{listing}");

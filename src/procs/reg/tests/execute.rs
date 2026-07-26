@@ -36,7 +36,7 @@ fn test_execute_simple() {
         basic_model("weight", &["height"]),
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The REG Procedure"), "{listing}");
     assert!(listing.contains("Analysis of Variance"), "{listing}");
     assert!(
@@ -70,7 +70,7 @@ fn test_execute_test_and_restrict() {
     ts.next();
     let ast = parse(&mut ts).unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Test peak Results for Dependent Variable y"),
         "{listing}"
@@ -107,7 +107,7 @@ fn test_execute_cl_listing() {
         model,
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("95% Confidence Limits"), "{listing}");
     assert!(listing.contains("Output Statistics"), "{listing}");
     assert!(listing.contains("CL Mean"), "{listing}");
@@ -139,7 +139,7 @@ fn test_execute_r_influence_listing() {
         model,
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Student Residual"), "{listing}");
     assert!(listing.contains("Sum of Residuals"), "{listing}");
     assert!(listing.contains("PRESS"), "{listing}");
@@ -167,7 +167,7 @@ fn test_execute_diagnostics_listing() {
         parse_reg("proc reg data=work.t; model y=x1 x2 / vif tol collin spec dw dwprob acov; run;")
             .unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Tolerance"), "{listing}");
     assert!(listing.contains("Variance Inflation"), "{listing}");
     assert!(listing.contains("Collinearity Diagnostics"), "{listing}");
@@ -204,7 +204,7 @@ fn test_execute_m365_listing() {
     )
     .unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Type I SS"), "{listing}");
     assert!(listing.contains("Type II SS"), "{listing}");
     assert!(listing.contains("Standardized Estimate"), "{listing}");
@@ -256,7 +256,7 @@ fn test_noint_fit() {
         model,
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Uncorrected Total"), "{listing}");
     // R² = 1.0000 (perfect through-origin fit).
     assert!(listing.contains("R-Square     1.0000"), "{listing}");
@@ -377,7 +377,7 @@ fn test_forward_selection() {
         model,
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Summary of Forward Selection"),
         "{listing}"
@@ -432,7 +432,7 @@ fn test_backward_selection() {
         model,
     );
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Summary of Backward Elimination"),
         "{listing}"

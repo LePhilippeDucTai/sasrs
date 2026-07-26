@@ -136,7 +136,7 @@ fn normality_block_emitted_only_with_normal() {
         plots: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Tests for Normality"),
         "listing: {listing}"
@@ -170,7 +170,7 @@ fn normality_degenerate_note_no_panic() {
         plots: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Tests for Normality"),
         "listing: {listing}"

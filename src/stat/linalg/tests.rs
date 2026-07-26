@@ -25,7 +25,7 @@ fn test_helpers() {
     let c = matrix_mult(&a, &transpose(&a));
     assert_eq!(c, vec![vec![5.0, 11.0], vec![11.0, 25.0]]);
 
-    let fn_norm = frobenius_norm(&vec![vec![3.0, 4.0]]);
+    let fn_norm = frobenius_norm(&[vec![3.0, 4.0]]);
     assert!(approx(fn_norm, 5.0, 1e-12));
 
     let r = vec![vec![2.0, 1.0], vec![0.0, 3.0]];

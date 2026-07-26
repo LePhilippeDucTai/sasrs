@@ -65,10 +65,7 @@ impl MacroEngine {
             }
         }
         // Le caractère suivant ne doit pas continuer un identifiant.
-        match chars.get(i + 1 + kwc.len()) {
-            Some(c) if c.is_ascii_alphanumeric() || *c == '_' => false,
-            _ => true,
-        }
+        !matches!(chars.get(i + 1 + kwc.len()), Some(c) if c.is_ascii_alphanumeric() || *c == '_')
     }
 
     /// Vrai si `chars[i..]` commence par `%<kw>` (insensible casse) suivi

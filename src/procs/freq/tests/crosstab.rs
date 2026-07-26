@@ -82,7 +82,7 @@ fn crosstab_chisq_2x2_hand_computed() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Statistics for Table of r by c"),
         "{listing}"
@@ -326,7 +326,7 @@ fn weighted_one_way_sum_of_weights() {
     );
     ast.weight = Some("w".to_string());
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     // Frequencies 5 and 5 (sum of weights), each 50.00%, cum 5 then 10.
     assert!(l.contains("50.00"), "{l}");
     // Integer-valued weighted freqs print as integers (no decimals).
@@ -364,7 +364,7 @@ fn weighted_excludes_missing_and_nonpositive() {
     );
     ast.weight = Some("w".to_string());
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     assert!(l.contains("40.00"), "cat1 = 4/10 = 40.00:\n{l}");
     assert!(l.contains("60.00"), "cat2 = 6/10 = 60.00:\n{l}");
 }
@@ -399,7 +399,7 @@ fn weighted_two_way_chisq() {
     );
     ast.weight = Some("w".to_string());
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     // Weighted grand total = 100 ; Pearson = 0.7937.
     assert!(l.contains("0.7937"), "weighted Pearson 0.7937:\n{l}");
     // Weighted cell freq for (a,1) is 10 (integer-printed).
@@ -433,7 +433,7 @@ fn by_groups_split_one_way() {
     );
     ast.by = vec![("g".to_string(), false)];
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     assert!(l.contains("g=A"), "BY header for A:\n{l}");
     assert!(l.contains("g=B"), "BY header for B:\n{l}");
     // Group A percents 33.33 / 66.67 ; Group B 100.00.

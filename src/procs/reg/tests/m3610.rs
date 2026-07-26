@@ -39,7 +39,7 @@ fn test_m3610_multi_response_prints_block_per_dependent() {
 
     let ast = parse_reg("proc reg data=work.t; model y1 y2 = x; mtest x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // BOTH per-response blocks are present.
     assert!(
@@ -222,7 +222,7 @@ fn test_m3610_mtest_execute_prints_table() {
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let ast = parse_reg("proc reg data=work.t; model y1 y2 = x1 x2; mymt: mtest; run;").unwrap();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Multivariate Test: mymt"), "{listing}");
     assert!(listing.contains("Wilks' Lambda"), "{listing}");
     assert!(listing.contains("Pillai's Trace"), "{listing}");
@@ -250,7 +250,7 @@ fn test_m3610_add_delete_applied_to_fit() {
     let ast = parse_reg("proc reg data=work.t; model y = x1; add x2; delete x1; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // The fitted parameter table must list x2 (the edited regressor).
     assert!(listing.contains("x2"), "{listing}");
     assert!(
@@ -285,9 +285,11 @@ fn test_m3610_deferred_notes() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn plots_request_defers_under_default_build() {
-    let mut req = PlotRequests::default();
-    req.diagnostics = true;
-    req.explicit = true;
+    let req = PlotRequests {
+        diagnostics: true,
+        explicit: true,
+        ..Default::default()
+    };
     let log = run_plots(false, false, req, vec![]);
     assert!(log.contains("REG PLOTS= request"), "log: {log}");
     assert!(log.contains("deferred"), "log: {log}");
@@ -296,9 +298,11 @@ fn plots_request_defers_under_default_build() {
 /// PLOTS=NONE suppresses the automatic diagnostic image/NOTE (even with ODS on).
 #[test]
 fn plots_none_suppresses_automatic_diagnostic() {
-    let mut req = PlotRequests::default();
-    req.none = true;
-    req.explicit = true;
+    let req = PlotRequests {
+        none: true,
+        explicit: true,
+        ..Default::default()
+    };
     let log = run_plots(true, true, req, vec![]);
     assert!(!log.contains("REG diagnostics"), "log: {log}");
     assert!(!log.contains("image deferred"), "log: {log}");

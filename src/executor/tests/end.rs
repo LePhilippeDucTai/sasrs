@@ -105,7 +105,7 @@ fn execute_global_ods_options_no_warning() {
 fn multi_title_end_to_end_renders_centered_in_order() {
     let mut s = run_globals(&["title 'Top';", "title2 'Mid';", "title3 'Bottom';"]);
     s.listing.page_header();
-    let out = s.listing.into_string();
+    let out = s.listing.take_string();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0].trim(), "Top");
     assert_eq!(lines[1].trim(), "Mid");
@@ -118,7 +118,7 @@ fn title_then_title1_clears_above_end_to_end() {
     // title/title2/title3 puis title 'X' efface 2-3.
     let mut s = run_globals(&["title 'A';", "title2 'B';", "title3 'C';", "title 'X';"]);
     s.listing.page_header();
-    let out = s.listing.into_string();
+    let out = s.listing.take_string();
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0].trim(), "X");
     assert_eq!(lines[1], "");
@@ -129,7 +129,7 @@ fn footnote_end_to_end_renders_after_content() {
     let mut s = run_globals(&["footnote 'Bye';"]);
     s.listing.page_header();
     s.listing.write_line("body");
-    let out = s.listing.into_string();
+    let out = s.listing.take_string();
     let lines: Vec<&str> = out.lines().collect();
     let pos = lines.iter().position(|x| x.trim() == "Bye").unwrap();
     let body = lines.iter().position(|x| x.trim() == "body").unwrap();

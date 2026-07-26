@@ -62,7 +62,7 @@ impl OutputDestination for TextListing {
         self.inner.ls
     }
 
-    fn into_string(&mut self) -> String {
+    fn take_string(&mut self) -> String {
         // Remplace le writer interne par un writer vide de même LINESIZE et
         // rend la chaîne accumulée. Équivalent à l'ancien `into_string` qui
         // consommait `self`, mais utilisable derrière un trait object. Les

@@ -76,10 +76,7 @@ impl<'a> RawSegmenter<'a> {
                 _ => return false,
             }
         }
-        match chars.get(i + kwc.len()) {
-            Some(c) if c.is_ascii_alphanumeric() || *c == '_' => false,
-            _ => true,
-        }
+        !matches!(chars.get(i + kwc.len()), Some(c) if c.is_ascii_alphanumeric() || *c == '_')
     }
 
     /// Renvoie la prochaine plage d'octets `[start, end)`, ou `None` à la fin.

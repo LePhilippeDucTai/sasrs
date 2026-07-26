@@ -78,7 +78,7 @@ fn execute_contents_empty_catalog() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("WORK.FORMATS"), "listing: {listing}");
     // No user formats yet → empty listing with note
     assert!(

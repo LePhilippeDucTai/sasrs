@@ -113,7 +113,7 @@ fn execute_basic_print() {
 
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Should have Obs column header
     assert!(listing.contains("Obs"), "listing: {listing}");
     // Should have column headers
@@ -159,7 +159,7 @@ fn execute_noobs() {
 
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Obs column should NOT appear
     assert!(
         !listing.contains("Obs"),
@@ -190,7 +190,7 @@ fn execute_with_var_selection() {
 
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // age column must be present
     assert!(
         listing.contains("AGE") || listing.contains("age"),
@@ -251,7 +251,7 @@ fn execute_last_dataset() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Alice"), "listing: {listing}");
 }
 
@@ -342,7 +342,7 @@ fn execute_applies_numeric_format() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // dollar8. renders 112 as "$112" (and 98 as "$98").
     assert!(listing.contains("$112"), "listing: {listing}");
     assert!(listing.contains("$98"), "listing: {listing}");
@@ -378,7 +378,7 @@ fn execute_label_option_uses_labels_as_headers() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("Body Weight"), "listing: {listing}");
     assert!(listing.contains("Pupil Name"), "listing: {listing}");
 }
@@ -392,7 +392,7 @@ fn execute_sum_no_by_totals() {
         ..base_ast()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Grand total of v = 12.
     assert!(listing.contains("12"), "sum total 12 expected: {listing}");
 }
@@ -406,7 +406,7 @@ fn execute_n_option_prints_count() {
         ..base_ast()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("N = 3"), "N = 3 expected: {listing}");
 }
 
@@ -421,7 +421,7 @@ fn execute_by_sections_with_sum_subtotals_and_grand_total() {
         ..base_ast()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // BY headings.
     assert!(listing.contains("grp=A"), "BY heading A: {listing}");
     assert!(listing.contains("grp=B"), "BY heading B: {listing}");
@@ -445,7 +445,7 @@ fn execute_id_replaces_obs_column() {
         ..base_ast()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Obs column suppressed; ID variable header (grp) present.
     assert!(
         !listing.contains("Obs"),
@@ -499,7 +499,7 @@ fn execute_double_spaces_rows() {
         ..base_ast()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // 3 data rows double-spaced → blank line between consecutive rows.
     // Count rows containing a value cell; the listing should be taller than
     // the single-spaced version. Cheap proxy: the value "4" and "5" appear.
@@ -532,7 +532,7 @@ fn listing_alignments() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // Listing should contain all 3 obs numbers
     assert!(listing.contains("1"), "listing: {listing}");
     assert!(listing.contains("2"), "listing: {listing}");

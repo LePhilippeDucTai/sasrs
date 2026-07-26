@@ -290,7 +290,7 @@ fn test_oracle_dfbetas_loo_refit() {
     let p_eff = 2;
     let x = design(true, &[&x1], n);
     let fit = ols_fit(&x, &y).unwrap();
-    let infl = compute_influence_stats(&x, &y.to_vec(), &fit, n, p_eff, None);
+    let infl = compute_influence_stats(&x, y.as_ref(), &fit, n, p_eff, None);
 
     for drop in 0..n {
         // Refit without observation `drop`.

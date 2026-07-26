@@ -161,6 +161,10 @@ pub(super) fn note_deferred_features_legacy(
     }
 }
 
+/// Observations complètes du chemin legacy : `(y, indice de sujet par obs,
+/// niveaux de sujet triés, nombre d'obs écartées)`.
+type LegacyObservations = (Vec<f64>, Vec<usize>, Vec<Value>, usize);
+
 /// Complete observations for the legacy path: y, subject index per obs and
 /// sorted subject levels (SAS comparison order). Guards: at least one complete
 /// observation and at least 2 subjects.
@@ -168,7 +172,7 @@ pub(super) fn build_observations_legacy(
     resp_col: &[Value],
     subj_col: &[Value],
     n_read: usize,
-) -> Result<(Vec<f64>, Vec<usize>, Vec<Value>, usize)> {
+) -> Result<LegacyObservations> {
     let mut y: Vec<f64> = Vec::new();
     let mut subj_values: Vec<Value> = Vec::new();
     let mut n_not_used = 0usize;

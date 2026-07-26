@@ -90,7 +90,7 @@ impl OutputDestination for ExcelDestination {
         self.ls
     }
 
-    fn into_string(&mut self) -> String {
+    fn take_string(&mut self) -> String {
         String::new()
     }
 

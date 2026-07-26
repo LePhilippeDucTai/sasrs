@@ -21,7 +21,7 @@ fn execute_hoeffding_block() {
     ast.hoeffding = true;
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Hoeffding Dependence Coefficients"),
         "{listing}"
@@ -57,7 +57,7 @@ fn execute_weighted_spearman_block() {
     ast.weight = Some("wt".into());
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("Spearman Correlation Coefficients"),
         "{listing}"

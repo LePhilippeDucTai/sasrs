@@ -153,7 +153,7 @@ fn multi_statement_program() {
     );
     // big was dropped at the end.
     assert!(!s.libs.get("WORK").unwrap().exists("BIG"));
-    let listing = s.listing.into_string();
+    let listing = s.listing.take_string();
     // selected names of those with age >= 12 (Bo, Cy).
     assert!(listing.contains("Bo"), "listing: {listing}");
     assert!(listing.contains("Cy"), "listing: {listing}");

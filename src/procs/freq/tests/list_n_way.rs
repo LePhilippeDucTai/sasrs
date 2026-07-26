@@ -33,7 +33,7 @@ fn list_layout_rows() {
         vec![req],
     );
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     // LIST: header columns, no "Row Pct"/"Col Pct".
     assert!(l.contains("Cumulative Frequency"), "{l}");
     assert!(!l.contains("Row Pct"), "LIST suppresses Row Pct:\n{l}");
@@ -68,7 +68,7 @@ fn n_way_stratified() {
         vec![tr(&["s", "r", "c"], false, None)],
     );
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     assert!(l.contains("Controlling for s=A"), "stratum A header:\n{l}");
     assert!(l.contains("Controlling for s=B"), "stratum B header:\n{l}");
     assert!(l.contains("Table of r by c"), "{l}");

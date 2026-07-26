@@ -69,7 +69,7 @@ pub(super) fn apply_option(session: &mut Session, name: &str, value: Option<&str
             Some(v) if v.chars().count() == 1 => {
                 session.options.missing_char = v.chars().next().expect("length checked");
             }
-            Some(v) if v.is_empty() => {
+            Some("") => {
                 // OPTIONS MISSING=''; → space (SAS behaviour)
                 session.options.missing_char = ' ';
             }

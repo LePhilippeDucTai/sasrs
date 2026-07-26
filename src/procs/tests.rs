@@ -225,7 +225,7 @@ fn execute_proc_print_full_pipeline() {
 
     execute_proc("print", &ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(
         listing.contains("The SAS System") || listing.contains("SAS"),
         "listing: {listing}"

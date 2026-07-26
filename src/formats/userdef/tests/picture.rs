@@ -64,8 +64,10 @@ fn picture_decimal_values() {
 
 #[test]
 fn picture_prefix() {
-    let mut dir = PictureDirectives::default();
-    dir.prefix = Some("$".to_string());
+    let dir = PictureDirectives {
+        prefix: Some("$".to_string()),
+        ..Default::default()
+    };
     let p = pic_low_high("000,000,009.99", dir);
     assert_eq!(p.render(&Value::Num(1234.5)).as_deref(), Some("$1,234.50"));
 }
@@ -73,8 +75,10 @@ fn picture_prefix() {
 #[test]
 fn picture_explicit_mult() {
     // MULT=100 turns a proportion into a percentage of digits.
-    let mut dir = PictureDirectives::default();
-    dir.mult = Some(100.0);
+    let dir = PictureDirectives {
+        mult: Some(100.0),
+        ..Default::default()
+    };
     let p = pic_low_high("009.9%", dir);
     // 0.125 * 100 = 12.5 → with one fractional selector (auto would be 10,
     // but explicit MULT=100 wins): scaled = round(0.125*100)=12 → '12%'?
@@ -86,8 +90,10 @@ fn picture_explicit_mult() {
 
 #[test]
 fn picture_fill_character() {
-    let mut dir = PictureDirectives::default();
-    dir.fill = Some('*');
+    let dir = PictureDirectives {
+        fill: Some('*'),
+        ..Default::default()
+    };
     let p = pic_low_high("00000", dir);
     assert_eq!(p.render(&Value::Num(42.0)).as_deref(), Some("***42"));
 }

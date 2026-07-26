@@ -318,7 +318,7 @@ mod parsing_tests {
             name: "T".into(),
         });
         let r = resolve_last_dataset(&explicit, &session).unwrap();
-        assert_eq!(r, explicit.unwrap());
+        assert_eq!(Some(r), explicit);
     }
 
     #[test]

@@ -267,7 +267,7 @@ fn test_oracle_freq_two_doubles_df() {
             ast.freq = Some("f".into());
         }
         execute(&ast, &mut session).unwrap();
-        session.listing.into_string()
+        session.listing.take_string()
     };
     let plain = render(false);
     let freq = render(true);
@@ -315,7 +315,7 @@ fn test_oracle_freq_ones_equals_none() {
     with_freq.freq = Some("f".into());
     execute(&base, &mut s1).unwrap();
     execute(&with_freq, &mut s2).unwrap();
-    assert_eq!(s1.listing.into_string(), s2.listing.into_string());
+    assert_eq!(s1.listing.take_string(), s2.listing.take_string());
 }
 
 /// BY with a single group ⇒ identical listing to no BY (the heading is only
@@ -348,7 +348,7 @@ fn test_oracle_by_single_group_matches_body() {
             ast.by = vec!["g".into()];
         }
         execute(&ast, &mut session).unwrap();
-        session.listing.into_string()
+        session.listing.take_string()
     };
     let plain = render(false);
     let by = render(true);

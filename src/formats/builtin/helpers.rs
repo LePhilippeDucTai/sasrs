@@ -257,10 +257,9 @@ pub(super) fn to_fract(v: f64) -> String {
 /// `s` is expected to NOT already have commas.
 pub(super) fn add_commas(s: &str) -> String {
     // Handle negative sign
-    let (sign, digits_and_dec) = if s.starts_with('-') {
-        ("-", &s[1..])
-    } else {
-        ("", s)
+    let (sign, digits_and_dec) = match s.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", s),
     };
     // Split on decimal
     let (int_part, dec_part) = match digits_and_dec.find('.') {

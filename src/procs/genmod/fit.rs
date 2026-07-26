@@ -1,5 +1,8 @@
 use super::*;
 
+/// Résultat d'un ajustement IRLS : `(β, (X'WX)⁻¹ à convergence, μ ajusté)`.
+type IrlsFit = (Vec<f64>, Vec<Vec<f64>>, Vec<f64>);
+
 /// IRLS / Newton-Raphson fit. Returns `(β, (X'WX)⁻¹ at convergence, fitted μ)`.
 pub(super) fn fit_irls(
     session: &mut Session,
@@ -10,7 +13,7 @@ pub(super) fn fit_irls(
     lf: &LinkFunction,
     n_total: f64,
     p_param: usize,
-) -> Result<(Vec<f64>, Vec<Vec<f64>>, Vec<f64>)> {
+) -> Result<IrlsFit> {
     let n_obs = y_vec.len();
 
     // Initialize β

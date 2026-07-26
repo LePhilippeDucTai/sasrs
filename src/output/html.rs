@@ -143,7 +143,7 @@ impl OutputDestination for HtmlDestination {
     /// Si `buf` est vide (rien n'a été écrit), renvoie une chaîne vide
     /// (comportement idempotent identique à `TextListing::into_string`).
     /// Après cet appel `buf` est vide : un second appel renvoie `""`.
-    fn into_string(&mut self) -> String {
+    fn take_string(&mut self) -> String {
         if self.buf.is_empty() {
             return String::new();
         }
@@ -178,7 +178,7 @@ table.sas th,table.sas td{{border:1px solid #888;padding:4px;}}\
     /// Sinon renvoie `None`.
     fn finalize(&mut self) -> Option<(std::path::PathBuf, String)> {
         let path = self.file.clone()?;
-        let html = self.into_string();
+        let html = self.take_string();
         if html.is_empty() {
             // Rien à écrire (destination ouverte mais inutilisée).
             None

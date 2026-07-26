@@ -1,5 +1,8 @@
 use super::*;
 
+/// Statistiques d'un score : `(test à 2 échantillons si k == 2, test k échantillons)`.
+type ScorePair = (Option<ScoreTwoSample>, ScoreOneWay);
+
 // ───────────────────────── OUT= dataset ─────────────────────────
 
 /// One accumulated OUT= row (one VAR within one BY group). Statistics are
@@ -185,79 +188,78 @@ pub(super) fn write_out_dataset(
     }
 
     // Generic per-score-method emission.
-    let emit_score =
-        |columns: &mut Vec<Column>,
-         vars: &mut Vec<VarMeta>,
-         present: bool,
-         has_z: bool,
-         stat_name: &str,
-         z_name: &str,
-         p2_name: &str,
-         p_name: &str,
-         df_name: &str,
-         get: &dyn Fn(&OutRow) -> Option<&(Option<ScoreTwoSample>, ScoreOneWay)>| {
-            if !present {
-                return;
-            }
-            // _STAT_ = 2-sample statistic (only meaningful when k == 2).
+    let emit_score = |columns: &mut Vec<Column>,
+                      vars: &mut Vec<VarMeta>,
+                      present: bool,
+                      has_z: bool,
+                      stat_name: &str,
+                      z_name: &str,
+                      p2_name: &str,
+                      p_name: &str,
+                      df_name: &str,
+                      get: &dyn Fn(&OutRow) -> Option<&ScorePair>| {
+        if !present {
+            return;
+        }
+        // _STAT_ = 2-sample statistic (only meaningful when k == 2).
+        push_num(
+            columns,
+            vars,
+            stat_name,
+            rows.iter()
+                .map(|r| {
+                    get(r)
+                        .and_then(|(t, _)| t.as_ref())
+                        .map(|t| t.stat)
+                        .and_then(finite)
+                })
+                .collect(),
+        );
+        if has_z {
             push_num(
                 columns,
                 vars,
-                stat_name,
+                z_name,
                 rows.iter()
                     .map(|r| {
                         get(r)
                             .and_then(|(t, _)| t.as_ref())
-                            .map(|t| t.stat)
+                            .map(|t| t.z)
                             .and_then(finite)
                     })
                     .collect(),
             );
-            if has_z {
-                push_num(
-                    columns,
-                    vars,
-                    z_name,
-                    rows.iter()
-                        .map(|r| {
-                            get(r)
-                                .and_then(|(t, _)| t.as_ref())
-                                .map(|t| t.z)
-                                .and_then(finite)
-                        })
-                        .collect(),
-                );
-                push_num(
-                    columns,
-                    vars,
-                    p2_name,
-                    rows.iter()
-                        .map(|r| {
-                            get(r)
-                                .and_then(|(t, _)| t.as_ref())
-                                .map(|t| t.p2)
-                                .and_then(finite)
-                        })
-                        .collect(),
-                );
-            }
             push_num(
                 columns,
                 vars,
-                p_name,
+                p2_name,
                 rows.iter()
-                    .map(|r| get(r).map(|(_, o)| o.p).and_then(finite))
+                    .map(|r| {
+                        get(r)
+                            .and_then(|(t, _)| t.as_ref())
+                            .map(|t| t.p2)
+                            .and_then(finite)
+                    })
                     .collect(),
             );
-            push_num(
-                columns,
-                vars,
-                df_name,
-                rows.iter()
-                    .map(|r| get(r).map(|(_, o)| o.df as f64))
-                    .collect(),
-            );
-        };
+        }
+        push_num(
+            columns,
+            vars,
+            p_name,
+            rows.iter()
+                .map(|r| get(r).map(|(_, o)| o.p).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            columns,
+            vars,
+            df_name,
+            rows.iter()
+                .map(|r| get(r).map(|(_, o)| o.df as f64))
+                .collect(),
+        );
+    };
 
     emit_score(
         &mut columns,

@@ -137,7 +137,7 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
     };
     RunOutcome {
         log: session.log.into_string(),
-        listing: session.listing.into_string(),
+        listing: session.listing.take_string(),
         // NB : `Session.listing` est désormais `Box<dyn OutputDestination>` ;
         // `into_string` prend `&mut self` (drain) au lieu de consommer.
         exit_code,

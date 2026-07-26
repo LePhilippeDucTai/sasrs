@@ -225,7 +225,7 @@ fn ranexp_missing_seed_still_numeric() {
 #[test]
 fn ranbin_returns_non_negative_integer() {
     let v = num_val(invoke("RANBIN", &[num(0.3), num(10.0)]));
-    assert!(v >= 0.0 && v <= 10.0, "RANBIN out of range: {v}");
+    assert!((0.0..=10.0).contains(&v), "RANBIN out of range: {v}");
     assert_eq!(v.fract(), 0.0, "RANBIN must return integer: {v}");
 }
 
@@ -293,7 +293,7 @@ fn rand_poisson_non_negative_integer() {
 #[test]
 fn rand_binomial_range() {
     let v = num_val(invoke("RAND", &[chr("BINOMIAL"), num(0.5), num(10.0)]));
-    assert!(v >= 0.0 && v <= 10.0);
+    assert!((0.0..=10.0).contains(&v));
     assert_eq!(v.fract(), 0.0);
 }
 

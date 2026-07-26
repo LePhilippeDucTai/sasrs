@@ -198,7 +198,7 @@ fn detail_report_explicit_column_order() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // All three names and ages present (raw per-row values).
     assert!(listing.contains("Alice"), "listing: {listing}");
     assert!(listing.contains("Bob"), "listing: {listing}");
@@ -257,7 +257,7 @@ fn summary_report_group_sum_and_mean() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // East sum = 40, West sum = 100. Two group rows.
     assert!(listing.contains("East"), "listing: {listing}");
     assert!(listing.contains("West"), "listing: {listing}");
@@ -310,7 +310,7 @@ fn summary_report_mean_stat() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // group a mean = 3, group b mean = 9.
     assert!(listing.contains("3"), "a mean 3: {listing}");
     assert!(listing.contains("9"), "b mean 9: {listing}");
@@ -363,7 +363,7 @@ fn order_keeps_distinct_rows_group_collapses() {
     };
     execute(&ast, &mut session).unwrap();
 
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     // k=1 → sum 12, k=2 → sum 11. Two rows.
     assert!(listing.contains("12"), "k=1 sum 12: {listing}");
     assert!(listing.contains("11"), "k=2 sum 11: {listing}");
@@ -399,7 +399,7 @@ fn define_label_appears_and_noheader_suppresses() {
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("My X Label"), "label header: {listing}");
 
     // Now noheader: label must NOT appear.
@@ -429,7 +429,7 @@ fn define_label_appears_and_noheader_suppresses() {
         ..report_defaults()
     };
     execute(&ast2, &mut session2).unwrap();
-    let listing2 = session2.listing.into_string();
+    let listing2 = session2.listing.take_string();
     assert!(
         !listing2.contains("My X Label"),
         "noheader must suppress label: {listing2}"

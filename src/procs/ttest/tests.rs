@@ -207,7 +207,7 @@ fn execute_two_sample_listing() {
         by: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("The TTEST Procedure"), "{listing}");
     assert!(listing.contains("Two-Sample t Tests"), "{listing}");
     assert!(listing.contains("Pooled"), "{listing}");
@@ -245,7 +245,7 @@ fn execute_one_sample_and_paired_listing() {
         by: vec![],
     };
     execute(&ast1, &mut session).unwrap();
-    let l1 = session.listing.into_string();
+    let l1 = session.listing.take_string();
     assert!(l1.contains("One-Sample t Tests"), "{l1}");
 
     // Paired x*y.
@@ -278,7 +278,7 @@ fn execute_one_sample_and_paired_listing() {
         by: vec![],
     };
     execute(&ast2, &mut session2).unwrap();
-    let l2 = session2.listing.into_string();
+    let l2 = session2.listing.take_string();
     assert!(l2.contains("Paired t Tests"), "{l2}");
     // OUT= dataset written.
     let (out, _) = session2.libs.get("WORK").unwrap().read("OUT").unwrap();
@@ -325,7 +325,7 @@ fn execute_one_sample_by_groups() {
         by: vec![("g".into(), false)],
     };
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     // BY headings for both groups, two distinct One-Sample sections.
     assert!(l.contains("g=1"), "{l}");
     assert!(l.contains("g=2"), "{l}");
@@ -380,9 +380,11 @@ fn execute_ci_and_sides_columns() {
         vars: vec![num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let mut po = TTestProcOptions::default();
-    po.ci_explicit = true;
-    po.sides = TTestSides::Upper;
+    let po = TTestProcOptions {
+        ci_explicit: true,
+        sides: TTestSides::Upper,
+        ..Default::default()
+    };
     let ast = TTestAst {
         data_options: TTestDataOptions {
             input: Some(DatasetRef {
@@ -398,7 +400,7 @@ fn execute_ci_and_sides_columns() {
         by: vec![],
     };
     execute(&ast, &mut session).unwrap();
-    let l = session.listing.into_string();
+    let l = session.listing.take_string();
     assert!(l.contains("95% CL Mean L"), "{l}");
     assert!(l.contains("95% CL Std L"), "{l}");
     assert!(l.contains("Pr > t"), "{l}");

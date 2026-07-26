@@ -30,7 +30,7 @@ fn invoke(name: &str, args: &[Value]) -> Value {
     call(name, args, &mut c).expect("function should be known")
 }
 
-fn invoke_ctx<'a>(name: &str, args: &[Value], c: &'a mut EvalCtx) -> Value {
+fn invoke_ctx(name: &str, args: &[Value], c: &mut EvalCtx) -> Value {
     call(name, args, c).expect("function should be known")
 }
 

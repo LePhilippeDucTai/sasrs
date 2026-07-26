@@ -47,7 +47,7 @@ fn parse_src(src: &str) -> Result<TabulateAst> {
 fn run(mut session: Session, src: &str) -> Result<String> {
     let ast = parse_src(src)?;
     execute(&ast, &mut session)?;
-    Ok(session.listing.into_string())
+    Ok(session.listing.take_string())
 }
 
 // ─────────────── M21.4: page dimension ───────────────

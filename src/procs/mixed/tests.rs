@@ -349,7 +349,7 @@ fn test_ar1_execute_runs() {
 }
 
 fn take_listing(session: &mut crate::session::Session) -> String {
-    session.listing.into_string()
+    session.listing.take_string()
 }
 
 #[test]

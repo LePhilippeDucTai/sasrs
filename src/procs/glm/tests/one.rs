@@ -128,7 +128,7 @@ fn test_execute_lsmeans() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     assert!(listing.contains("Least Squares Means"), "listing={listing}");
 }
@@ -182,7 +182,7 @@ fn test_execute_estimate_correct() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Estimate should be -9.0
     assert!(
@@ -246,7 +246,7 @@ fn test_execute_contrast_f_eq_t_squared() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // F should be 121.5 (= t² = 11.02² ≈ 121.5)
     // Check both sections are present
@@ -348,7 +348,7 @@ fn test_reference_cell_betas_2x2() {
     };
 
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
 
     // Intercept (mu) = 30.000000
     assert!(

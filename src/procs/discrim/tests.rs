@@ -185,7 +185,7 @@ fn test_posterior_x3() {
 fn test_execute_oracle_listing() {
     let (mut session, ast) = make_oracle_session();
     execute(&ast, &mut session).unwrap();
-    let listing = session.listing.into_string();
+    let listing = session.listing.take_string();
     assert!(listing.contains("-2.6931"), "Constant_A missing: {listing}");
     assert!(
         listing.contains("-18.6931"),
