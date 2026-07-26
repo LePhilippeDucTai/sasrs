@@ -21,6 +21,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column};
+use crate::procs::common::{fmt4, fmt6};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;

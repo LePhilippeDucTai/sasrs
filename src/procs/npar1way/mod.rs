@@ -362,7 +362,7 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
                 if res.tie_factor < 1.0 {
                     session.listing.write_line(&format!(
                         "Average scores were used for ties (tie correction factor = {}).",
-                        fmt4(res.tie_factor)
+                        fmt4_finite(res.tie_factor)
                     ));
                 }
                 session.listing.blank();

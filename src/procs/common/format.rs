@@ -37,3 +37,32 @@ pub fn value_label(v: &Value) -> String {
         Value::Char(s) => s.trim_end().to_string(),
     }
 }
+
+/// Cellule numérique à 2 décimales fixes (MQ8.2 — unifie 5 copies).
+pub fn fmt2(v: f64) -> String {
+    format!("{v:.2}")
+}
+
+/// Cellule numérique à 4 décimales fixes (MQ8.2 — unifie 6 copies).
+///
+/// Les variantes qui rendent `.` sur une valeur absente ou non finie ne sont
+/// PAS repliées ici : voir `ttest::report::fmt4_opt` (`Option<f64>`) et
+/// `npar1way::report::fmt4_finite` (garde `is_finite`).
+pub fn fmt4(v: f64) -> String {
+    format!("{v:.4}")
+}
+
+/// Cellule numérique à 5 décimales fixes (MQ8.2 — unifie 3 copies).
+pub fn fmt5(v: f64) -> String {
+    format!("{v:.5}")
+}
+
+/// Cellule numérique à 6 décimales fixes (MQ8.2 — unifie 3 copies).
+pub fn fmt6(v: f64) -> String {
+    format!("{v:.6}")
+}
+
+/// Cellule numérique à 8 décimales fixes (matrices de produits croisés REG).
+pub fn fmt8(v: f64) -> String {
+    format!("{v:.8}")
+}

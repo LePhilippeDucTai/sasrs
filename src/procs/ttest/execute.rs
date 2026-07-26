@@ -57,19 +57,19 @@ pub(super) fn execute_one_sample(
         let mut row = vec![
             ds.vars[c].name.clone(),
             format!("{}", r.n),
-            fmt4(if r.n > 0 { Some(r.mean) } else { None }),
-            fmt4(r.std),
-            fmt4(r.se),
-            fmt4(if r.n > 0 { Some(r.min) } else { None }),
-            fmt4(if r.n > 0 { Some(r.max) } else { None }),
+            fmt4_opt(if r.n > 0 { Some(r.mean) } else { None }),
+            fmt4_opt(r.std),
+            fmt4_opt(r.se),
+            fmt4_opt(if r.n > 0 { Some(r.min) } else { None }),
+            fmt4_opt(if r.n > 0 { Some(r.max) } else { None }),
         ];
         if show_ci {
-            row.push(fmt4(r.mean_lcl));
-            row.push(fmt4(r.mean_ucl));
-            row.push(fmt4(r.std_lcl));
-            row.push(fmt4(r.std_ucl));
+            row.push(fmt4_opt(r.mean_lcl));
+            row.push(fmt4_opt(r.mean_ucl));
+            row.push(fmt4_opt(r.std_lcl));
+            row.push(fmt4_opt(r.std_ucl));
         }
-        row.push(fmt4(r.t));
+        row.push(fmt4_opt(r.t));
         row.push(fmt_p(r.p));
         rows.push(row);
         ods_rows.push((ds.vars[c].name.clone(), r));
@@ -193,12 +193,12 @@ pub(super) fn execute_two_sample(
         };
         let mut pooled_row = vec![vname.clone(), "Pooled".into()];
         if show_ci {
-            pooled_row.push(fmt4(diff));
-            pooled_row.push(fmt4(res.pooled_cl.map(|(l, _)| l)));
-            pooled_row.push(fmt4(res.pooled_cl.map(|(_, u)| u)));
+            pooled_row.push(fmt4_opt(diff));
+            pooled_row.push(fmt4_opt(res.pooled_cl.map(|(l, _)| l)));
+            pooled_row.push(fmt4_opt(res.pooled_cl.map(|(_, u)| u)));
         }
-        pooled_row.push(fmt4(pdf));
-        pooled_row.push(fmt4(pt));
+        pooled_row.push(fmt4_opt(pdf));
+        pooled_row.push(fmt4_opt(pt));
         pooled_row.push(fmt_p(pp));
         rows.push(pooled_row);
 
@@ -208,12 +208,12 @@ pub(super) fn execute_two_sample(
         };
         let mut satt_row = vec![vname.clone(), "Satterthwaite".into()];
         if show_ci {
-            satt_row.push(fmt4(diff));
-            satt_row.push(fmt4(res.satt_cl.map(|(l, _)| l)));
-            satt_row.push(fmt4(res.satt_cl.map(|(_, u)| u)));
+            satt_row.push(fmt4_opt(diff));
+            satt_row.push(fmt4_opt(res.satt_cl.map(|(l, _)| l)));
+            satt_row.push(fmt4_opt(res.satt_cl.map(|(_, u)| u)));
         }
-        satt_row.push(fmt4(sdf));
-        satt_row.push(fmt4(st));
+        satt_row.push(fmt4_opt(sdf));
+        satt_row.push(fmt4_opt(st));
         satt_row.push(fmt_p(sp));
         rows.push(satt_row);
 
@@ -222,7 +222,7 @@ pub(super) fn execute_two_sample(
                 vname.clone(),
                 format!("{}", df1 as usize),
                 format!("{}", df2 as usize),
-                fmt4(Some(f)),
+                fmt4_opt(Some(f)),
                 fmt_p(Some(p)),
             ]);
         } else {
@@ -335,16 +335,16 @@ pub(super) fn execute_paired(
         let mut row = vec![
             label.clone(),
             format!("{}", res.n),
-            fmt4(if res.n > 0 { Some(res.mean) } else { None }),
-            fmt4(res.std),
-            fmt4(res.se),
+            fmt4_opt(if res.n > 0 { Some(res.mean) } else { None }),
+            fmt4_opt(res.std),
+            fmt4_opt(res.se),
         ];
         if show_ci {
-            row.push(fmt4(res.mean_lcl));
-            row.push(fmt4(res.mean_ucl));
+            row.push(fmt4_opt(res.mean_lcl));
+            row.push(fmt4_opt(res.mean_ucl));
         }
-        row.push(fmt4(if res.n >= 1 { Some(res.df) } else { None }));
-        row.push(fmt4(res.t));
+        row.push(fmt4_opt(if res.n >= 1 { Some(res.df) } else { None }));
+        row.push(fmt4_opt(res.t));
         row.push(fmt_p(res.p));
         rows.push(row);
         ods.push((label, res));

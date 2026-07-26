@@ -15,6 +15,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::{decode_column, sample_std};
+use crate::procs::common::{fmt2, fmt5, fmt6};
 use crate::session::Session;
 use crate::stat::{f_cdf, student_t_cdf};
 use crate::token::TokenKind;
@@ -81,18 +82,6 @@ pub struct GlmContrast {
 }
 
 // ───────────────────────── Formatting ─────────────────────────
-
-fn fmt5(v: f64) -> String {
-    format!("{v:.5}")
-}
-
-fn fmt2(v: f64) -> String {
-    format!("{v:.2}")
-}
-
-fn fmt6(v: f64) -> String {
-    format!("{v:.6}")
-}
 
 use crate::procs::common::fmt_p;
 

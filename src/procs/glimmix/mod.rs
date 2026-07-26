@@ -27,6 +27,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::decode_column;
+use crate::procs::common::{fmt2, fmt4};
 use crate::session::Session;
 use crate::stat::dists::probnorm;
 use crate::stat::{f_cdf, invert_matrix, student_t_cdf};

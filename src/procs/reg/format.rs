@@ -1,13 +1,5 @@
 // ───────────────────────── Formatting helpers ─────────────────────────
 
-pub(super) fn fmt5(v: f64) -> String {
-    format!("{v:.5}")
-}
-
-pub(super) fn fmt2(v: f64) -> String {
-    format!("{v:.2}")
-}
-
 pub(super) fn fmt_fit4(v: f64) -> String {
     format!("{v:.4}")
 }

@@ -2,14 +2,6 @@ use super::*;
 
 // ───────────────────────── Formatting helpers ─────────────────────────
 
-pub(super) fn fmt4(v: f64) -> String {
-    format!("{v:.4}")
-}
-
-pub(super) fn fmt6(v: f64) -> String {
-    format!("{v:.6}")
-}
-
 /// Header counts table (Observations/Variables/DF/Classes).
 pub(super) fn print_counts_header(session: &mut Session, model: &LdaModel, p: usize) {
     let n = model.n_total;

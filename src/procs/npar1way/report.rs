@@ -3,7 +3,8 @@ use super::*;
 // ───────────────────────── formatting ─────────────────────────
 
 /// Format a statistic to 4 decimals; NaN → ".".
-pub(super) fn fmt4(v: f64) -> String {
+/// Distinct de `common::fmt4` : rend `.` sur une valeur non finie.
+pub(super) fn fmt4_finite(v: f64) -> String {
     if v.is_finite() {
         format!("{v:.4}")
     } else {
@@ -74,7 +75,13 @@ pub(super) fn write_two_sample_table(
         Align::Right,
         Align::Right,
     ];
-    let rows = vec![vec![fmt4(stat), fmt4(mean), fmt4(sd), fmt4(z), fmt_p(p)]];
+    let rows = vec![vec![
+        fmt4_finite(stat),
+        fmt4_finite(mean),
+        fmt4_finite(sd),
+        fmt4_finite(z),
+        fmt_p(p),
+    ]];
     session.listing.write_table(&headers, &aligns, &rows);
 }
 
@@ -82,7 +89,7 @@ pub(super) fn write_two_sample_table(
 pub(super) fn write_one_way_table(session: &mut Session, chisq: f64, df: usize, p: f64) {
     let headers: Vec<String> = vec!["Chi-Square".into(), "DF".into(), "Pr > ChiSq".into()];
     let aligns = vec![Align::Right, Align::Right, Align::Right];
-    let rows = vec![vec![fmt4(chisq), format!("{df}"), fmt_p(p)]];
+    let rows = vec![vec![fmt4_finite(chisq), format!("{df}"), fmt_p(p)]];
     session.listing.write_table(&headers, &aligns, &rows);
 }
 

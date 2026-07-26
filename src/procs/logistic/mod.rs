@@ -23,6 +23,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::fmt4;
 use crate::procs::common::num_var_meta;
 use crate::procs::common::{chisq_sf, decode_column, probnorm};
 use crate::session::Session;
@@ -118,10 +119,6 @@ pub struct LogisticOutput {
 }
 
 // ───────────────────────── Formatting helpers ─────────────────────────
-
-fn fmt4(v: f64) -> String {
-    format!("{v:.4}")
-}
 
 use crate::procs::common::fmt_p_num as fmt_p_opt;
 

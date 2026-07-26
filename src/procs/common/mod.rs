@@ -55,6 +55,8 @@ pub use dataset::resolve_last_dataset;
 
 pub use format::centered;
 
+pub use format::{fmt2, fmt4, fmt5, fmt6, fmt8};
+
 pub use format::fmt_p;
 
 pub use format::fmt_p_num;

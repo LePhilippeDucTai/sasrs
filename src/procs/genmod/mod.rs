@@ -12,6 +12,7 @@
 //!   (Deviance/Pearson/LL/AIC/AICC/BIC), Analysis Of Maximum Likelihood
 //!   Parameter Estimates (β/SE/Wald CI/Wald χ²/p), Scale parameter row.
 
+use crate::procs::common::fmt4;
 use std::f64::consts::PI;
 
 use crate::ast::DatasetRef;
@@ -87,10 +88,6 @@ pub struct GenmodModel {
 }
 
 // ───────────────────────── Formatting helpers ─────────────────────────
-
-fn fmt4(v: f64) -> String {
-    format!("{v:.4}")
-}
 
 use crate::procs::common::fmt_p_num as fmt_p_opt;
 

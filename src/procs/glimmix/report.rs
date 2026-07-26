@@ -4,14 +4,6 @@ use super::*;
 
 // ───────────────────────── Formatting helpers ─────────────────────────
 
-pub(super) fn fmt4(v: f64) -> String {
-    format!("{v:.4}")
-}
-
-pub(super) fn fmt2(v: f64) -> String {
-    format!("{v:.2}")
-}
-
 pub(super) fn value_matches_event(v: &Value, event: &str) -> bool {
     match v {
         Value::Char(s) => s.trim_end() == event.trim(),

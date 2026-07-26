@@ -93,11 +93,6 @@ fn print_labeled_matrix(
     session.listing.write_table(&headers, &aligns, &rows);
 }
 
-/// 8-decimal fixed formatting for the crossproduct / inverse matrix cells.
-fn fmt8(v: f64) -> String {
-    format!("{v:.8}")
-}
-
 /// Print the XPX crossproducts matrix block (M36.8). Layout: rows/cols are
 /// Intercept (if present), the regressors, then the dependent variable; the cell
 /// values are X'X augmented with X'Y / Y'Y.

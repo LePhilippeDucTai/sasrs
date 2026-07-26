@@ -2,14 +2,6 @@ use super::*;
 
 // ───────────────────────── Formatting helpers ─────────────────────────
 
-pub(super) fn fmt4(v: f64) -> String {
-    format!("{v:.4}")
-}
-
-pub(super) fn fmt2(v: f64) -> String {
-    format!("{v:.2}")
-}
-
 /// Print the page header and the Model Information table.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn print_model_information_gen(

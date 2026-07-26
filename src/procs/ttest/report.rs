@@ -22,7 +22,8 @@ pub(super) fn cl_pct(alpha: f64) -> String {
 }
 
 /// Format a t-statistic / mean / CI value to 4 decimals; None → ".".
-pub(super) fn fmt4(v: Option<f64>) -> String {
+/// Distinct de `common::fmt4` : accepte une valeur ABSENTE.
+pub(super) fn fmt4_opt(v: Option<f64>) -> String {
     match v {
         Some(f) => format!("{f:.4}"),
         None => ".".to_string(),

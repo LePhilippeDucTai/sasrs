@@ -1285,9 +1285,13 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
 - [x] MQ8.1 — `common::dataset::{num_var_meta, char_var_meta}` ; supprimer les 11 + 5 copies
   (means, ttest, reg, corr, logistic, rank, transpose, distance, npar1way, univariate, freq)
   (Sonnet, faible)
-- [ ] MQ8.2 — `common::format::fmt_dp(v, n)` (+ alias `fmt2/4/5/6` si plus lisible aux sites
+- [x] MQ8.2 — `common::format::fmt_dp(v, n)` (+ alias `fmt2/4/5/6` si plus lisible aux sites
   d'appel) ; supprimer les ~18 copies (ttest, genmod, reg, glm, logistic, mixed, discrim,
-  npar1way, glimmix, anova) (Sonnet, faible)
+  npar1way, glimmix, anova) (Sonnet, faible) : `common::format::{fmt2,fmt4,fmt5,fmt6,fmt8}`,
+  17 copies supprimées. Les DEUX variantes divergentes ne sont PAS repliées mais RENOMMÉES
+  pour que leur nom dise la garde : `ttest::report::fmt4_opt` (`Option<f64>` → `.`) et
+  `npar1way::report::fmt4_finite` (non fini → `.`). Elles s'appelaient toutes deux `fmt4`,
+  ce qui rendait la divergence invisible.
 - [ ] MQ8.3 — algèbre partagée `dot`/`mat_vec`/`log_det_spd`/`un_block` → foyer unique
   (`stat/linalg.rs`) ; supprimer `mixed/linalg.rs` ≈ `glimmix/linalg.rs` + copies genmod/
   logistic/discrim. **Garde-fou** : même ordre de sommation (les digits REG/MIXED/GLIMMIX en
