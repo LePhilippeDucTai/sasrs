@@ -66,3 +66,5 @@ pub use linalg::{
     cholesky, eigenvalues_jacobi, eigenvectors_jacobi, invert_matrix, least_squares,
     qr_decomposition,
 };
+
+pub(crate) use linalg::{dot, log_det_spd, matrix_vec_mult};

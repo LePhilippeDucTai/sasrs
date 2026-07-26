@@ -154,3 +154,23 @@ pub(crate) fn parse_effect_terms(ts: &mut StatementStream) -> (Vec<String>, Vec<
     }
     (effects, terms)
 }
+
+/// Reconstruit le bloc de covariance UN(t) (t×t) à partir des paramètres
+/// empaquetés en triangulaire inférieure, dans l'ordre SAS : UN(1,1), UN(2,1),
+/// UN(2,2), UN(3,1), … Partagé par PROC MIXED et PROC GLIMMIX (MQ8.3).
+// Indices explicites : `r`/`c` parcourent le triangle inférieur d'une matrice
+// symétrique, la forme itérateur n'y dit rien de plus (cf. MQ7.2c).
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn un_block(theta: &[f64], t: usize) -> Vec<Vec<f64>> {
+    let mut m = vec![vec![0.0; t]; t];
+    let mut k = 0;
+    for r in 0..t {
+        for c in 0..=r {
+            let val = theta[k];
+            m[r][c] = val;
+            m[c][r] = val;
+            k += 1;
+        }
+    }
+    m
+}

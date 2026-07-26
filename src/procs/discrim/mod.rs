@@ -24,6 +24,7 @@ use crate::procs::common::{self, decode_column};
 use crate::procs::common::{fmt4, fmt6};
 use crate::session::Session;
 use crate::stat::invert_matrix;
+use crate::stat::{dot, matrix_vec_mult};
 use crate::token::TokenKind;
 use crate::value::Value;
 

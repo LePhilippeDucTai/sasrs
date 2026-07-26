@@ -59,7 +59,7 @@ pub(super) fn fit_glm(
             }
         }
         let hinv = invert_matrix(&hess)?;
-        let delta = mat_vec(&hinv, &score);
+        let delta = matrix_vec_mult(&hinv, &score);
         for j in 0..p {
             beta[j] += delta[j];
         }
@@ -249,11 +249,11 @@ pub(super) fn neg2_reml(
     let xtvix_inv = invert_matrix(&xtvix)?;
     let log_det_xtvix = log_det_spd(&xtvix)?;
     let xtviy: Vec<f64> = (0..p).map(|a| dot(&xtvi[a], y)).collect();
-    let beta = mat_vec(&xtvix_inv, &xtviy);
+    let beta = matrix_vec_mult(&xtvix_inv, &xtviy);
     let resid: Vec<f64> = (0..n)
         .map(|i| y[i] - (0..p).map(|a| x[i][a] * beta[a]).sum::<f64>())
         .collect();
-    let vir = mat_vec(&v_inv, &resid);
+    let vir = matrix_vec_mult(&v_inv, &resid);
     let quad = dot(&resid, &vir);
 
     let two_pi = std::f64::consts::TAU;
@@ -311,11 +311,11 @@ pub(super) fn profile_search(
         let xtvix_inv = invert_matrix(&xtvix)?;
         let log_det_xtvix = log_det_spd(&xtvix)?;
         let xtviy: Vec<f64> = (0..p).map(|a| dot(&xtvi[a], y)).collect();
-        let beta = mat_vec(&xtvix_inv, &xtviy);
+        let beta = matrix_vec_mult(&xtvix_inv, &xtviy);
         let resid: Vec<f64> = (0..n)
             .map(|i| y[i] - (0..p).map(|a| x[i][a] * beta[a]).sum::<f64>())
             .collect();
-        let vir = mat_vec(&v0_inv, &resid);
+        let vir = matrix_vec_mult(&v0_inv, &resid);
         let quad = dot(&resid, &vir);
         let dof = (n - p) as f64;
         let sigma2_e = quad / dof;
@@ -367,11 +367,11 @@ pub(super) fn profile_search(
         }
         let xtvix_inv = invert_matrix(&xtvix)?;
         let xtviy: Vec<f64> = (0..p).map(|a| dot(&xtvi[a], y)).collect();
-        let beta = mat_vec(&xtvix_inv, &xtviy);
+        let beta = matrix_vec_mult(&xtvix_inv, &xtviy);
         let resid: Vec<f64> = (0..n)
             .map(|i| y[i] - (0..p).map(|a| x[i][a] * beta[a]).sum::<f64>())
             .collect();
-        let vir = mat_vec(&v0_inv, &resid);
+        let vir = matrix_vec_mult(&v0_inv, &resid);
         let quad = dot(&resid, &vir);
         Ok(quad / (n - p) as f64)
     };

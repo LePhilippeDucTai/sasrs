@@ -1292,10 +1292,14 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   pour que leur nom dise la garde : `ttest::report::fmt4_opt` (`Option<f64>` → `.`) et
   `npar1way::report::fmt4_finite` (non fini → `.`). Elles s'appelaient toutes deux `fmt4`,
   ce qui rendait la divergence invisible.
-- [ ] MQ8.3 — algèbre partagée `dot`/`mat_vec`/`log_det_spd`/`un_block` → foyer unique
+- [x] MQ8.3 — algèbre partagée `dot`/`mat_vec`/`log_det_spd`/`un_block` → foyer unique
   (`stat/linalg.rs`) ; supprimer `mixed/linalg.rs` ≈ `glimmix/linalg.rs` + copies genmod/
   logistic/discrim. **Garde-fou** : même ordre de sommation (les digits REG/MIXED/GLIMMIX en
-  dépendent) (Opus, moyen)
+  dépendent) (Opus, moyen) : `mixed/linalg.rs` et `glimmix/linalg.rs` SUPPRIMÉS (clones
+  verbatim) ; `dot` et `log_det_spd` rejoignent `stat/linalg.rs` ; les 5 `mat_vec` locaux
+  disparaissent au profit de `stat::matrix_vec_mult` (qui existait déjà à côté d'eux — c'était
+  la vraie duplication) ; `un_block` (structure UN(t) de SAS, partagée mixed⇄glimmix) va dans
+  `common/model.rs`. −145 lignes. Zéro `.snap.new` : l'ordre de sommation est préservé.
 - [ ] MQ8.4 — helpers de parsing des procs graphiques → `common/parse.rs` : `expect_ident` ×6,
   `read_value` ×3, `parse_string_or_ident` ×2 (Sonnet, faible)
 - [ ] MQ8.5 — **piège `expect_eq`** : renommer la variante de `common/parse.rs` en

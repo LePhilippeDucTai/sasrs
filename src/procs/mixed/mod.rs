@@ -29,8 +29,10 @@ use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::decode_column;
+use crate::procs::common::un_block;
 use crate::procs::common::{fmt2, fmt4};
 use crate::session::Session;
+use crate::stat::{dot, log_det_spd, matrix_vec_mult};
 use crate::stat::{invert_matrix, student_t_cdf};
 use crate::token::TokenKind;
 use crate::value::Value;
@@ -42,7 +44,6 @@ mod general;
 mod general_report;
 mod legacy;
 mod legacy_report;
-mod linalg;
 mod parse;
 mod plan;
 
@@ -53,7 +54,6 @@ use general::*;
 use general_report::*;
 use legacy::*;
 use legacy_report::*;
-use linalg::*;
 use plan::*;
 
 // ───────────────────────── AST ─────────────────────────

@@ -388,6 +388,28 @@ pub(crate) fn matrix_vec_mult(a: &[Vec<f64>], x: &[f64]) -> Vec<f64> {
     y
 }
 
+/// Inner product of two vectors: Σ aᵢ·bᵢ.
+///
+/// MQ8.3 — foyer unique du `dot` jusque-là recopié dans `mixed/linalg.rs`,
+/// `glimmix/linalg.rs`, `logistic/mod.rs` et `discrim/lda.rs`.
+pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Log-déterminant d'une matrice symétrique définie positive, via Cholesky :
+/// `ln|A| = 2·Σ ln Lᵢᵢ`.
+///
+/// MQ8.3 — foyer unique (était recopié dans `mixed/linalg.rs` et
+/// `glimmix/linalg.rs`).
+pub(crate) fn log_det_spd(a: &[Vec<f64>]) -> Result<f64> {
+    let l = cholesky(a)?;
+    let mut s = 0.0;
+    for (i, row) in l.iter().enumerate() {
+        s += row[i].ln();
+    }
+    Ok(2.0 * s)
+}
+
 /// Matrix-matrix multiplication: C = A @ B.
 pub(crate) fn matrix_mult(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let m = a.len();

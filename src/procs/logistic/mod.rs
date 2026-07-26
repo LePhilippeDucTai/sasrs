@@ -28,6 +28,7 @@ use crate::procs::common::num_var_meta;
 use crate::procs::common::{chisq_sf, decode_column, probnorm};
 use crate::session::Session;
 use crate::stat::invert_matrix;
+use crate::stat::{dot, matrix_vec_mult};
 use crate::token::TokenKind;
 use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
@@ -148,18 +149,6 @@ fn value_matches_event(v: &Value, event: &str) -> bool {
 }
 
 // ───────────────────────── Matrix helpers ─────────────────────────
-
-/// Multiply matrix (m×k) by vector (k) → vector (m).
-fn mat_vec(mat: &[Vec<f64>], vec: &[f64]) -> Vec<f64> {
-    mat.iter()
-        .map(|row| row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum())
-        .collect()
-}
-
-/// Inner product of two vectors.
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
 
 pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     // ── 1. Guards ──────────────────────────────────────────────────────────

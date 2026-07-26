@@ -8,18 +8,6 @@ use super::*;
 
 // ───────────────────────── Linear algebra helpers ─────────────────────────
 
-/// Multiply matrix (m×k) by vector (k) → vector (m).
-pub(super) fn mat_vec(mat: &[Vec<f64>], vec: &[f64]) -> Vec<f64> {
-    mat.iter()
-        .map(|row| row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum())
-        .collect()
-}
-
-/// Inner product of two vectors.
-pub(super) fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
 // ───────────────────────── Core LDA computation ─────────────────────────
 
 /// Result of fitting the LDA model. All vectors/matrices indexed by class
@@ -74,7 +62,7 @@ impl LdaModel {
         let diff: Vec<f64> = (0..self.p)
             .map(|d| self.means[i][d] - self.means[j][d])
             .collect();
-        let tmp = mat_vec(&self.pooled_inv, &diff);
+        let tmp = matrix_vec_mult(&self.pooled_inv, &diff);
         dot(&diff, &tmp)
     }
 }
@@ -169,7 +157,7 @@ pub(super) fn fit_lda(
     let mut coefs: Vec<Vec<f64>> = Vec::with_capacity(n_groups);
     let mut constants: Vec<f64> = Vec::with_capacity(n_groups);
     for k in 0..n_groups {
-        let coef_k = mat_vec(&pooled_inv, &means[k]);
+        let coef_k = matrix_vec_mult(&pooled_inv, &means[k]);
         let const_k = -0.5 * dot(&means[k], &coef_k) + priors[k].ln();
         coefs.push(coef_k);
         constants.push(const_k);

@@ -77,7 +77,7 @@ pub(super) fn fit_binary(
             .collect();
 
         let neg_h_inv = invert_matrix(&neg_hessian)?;
-        let delta = mat_vec(&neg_h_inv, &score);
+        let delta = matrix_vec_mult(&neg_h_inv, &score);
 
         // Update beta
         for j in 0..p_param {
@@ -157,7 +157,7 @@ pub(super) fn wald_global_test(beta: &[f64], var_beta: &[Vec<f64>], nb_cols: usi
         let sigma_c = submatrix_predictors(var_beta, nb_cols);
         let sigma_c_inv = invert_matrix(&sigma_c)?;
         let beta_c: Vec<f64> = (1..=nb_cols).map(|j| beta[j]).collect();
-        let tmp = mat_vec(&sigma_c_inv, &beta_c);
+        let tmp = matrix_vec_mult(&sigma_c_inv, &beta_c);
         dot(&beta_c, &tmp)
     } else {
         0.0
@@ -229,7 +229,7 @@ pub(super) fn score_global_test(
 
         // χ²_Score = Score_c|0' * I_cc|0^{-1} * Score_c|0
         let i_cc_schur_inv = invert_matrix(&i_cc_schur)?;
-        let tmp = mat_vec(&i_cc_schur_inv, &score_c_schur);
+        let tmp = matrix_vec_mult(&i_cc_schur_inv, &score_c_schur);
         dot(&score_c_schur, &tmp)
     } else {
         0.0

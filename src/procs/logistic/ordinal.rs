@@ -226,7 +226,7 @@ pub(super) fn fit_ordinal(
             Ok(m) => m,
             Err(_) => break,
         };
-        let delta = mat_vec(&inv, &grad);
+        let delta = matrix_vec_mult(&inv, &grad);
         for j in 0..n_par {
             theta[j] += delta[j];
         }

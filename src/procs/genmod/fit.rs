@@ -70,7 +70,7 @@ pub(super) fn fit_irls(
 
         // Solve H·δ = score
         let h_inv = invert_matrix(&hessian)?;
-        let delta = mat_vec(&h_inv, &score);
+        let delta = matrix_vec_mult(&h_inv, &score);
 
         // Update β with step-halving to keep μ valid (μ>0 for Gamma/Poisson,
         // 0<μ<1 for Binomial). The reciprocal link in particular can drive μ

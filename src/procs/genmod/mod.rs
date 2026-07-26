@@ -13,6 +13,7 @@
 //!   Parameter Estimates (β/SE/Wald CI/Wald χ²/p), Scale parameter row.
 
 use crate::procs::common::fmt4;
+use crate::stat::matrix_vec_mult;
 use std::f64::consts::PI;
 
 use crate::ast::DatasetRef;
@@ -112,12 +113,6 @@ fn value_matches_event(v: &Value, event: &str) -> bool {
 }
 
 // ───────────────────────── Matrix helpers ─────────────────────────
-
-fn mat_vec(mat: &[Vec<f64>], vec: &[f64]) -> Vec<f64> {
-    mat.iter()
-        .map(|row| row.iter().zip(vec.iter()).map(|(a, b)| a * b).sum())
-        .collect()
-}
 
 // ───────────────────────── Execute ─────────────────────────
 
