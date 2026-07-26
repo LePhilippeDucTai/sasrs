@@ -1321,8 +1321,16 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   `parse_paren_attrs` : rien à y faire. Le rapprochement `parse_axis_stmt` sgplot⇄gplot
   est laissé de côté (les deux AST diffèrent : `AxisOpts`/`Result` vs `AxisDef`, `VALUES=`
   vs `ORDER=`) — l'unification demanderait un type commun, hors périmètre move-only.
-- [ ] MQ8.7 — `macros/eval/mod.rs` (`EvalParser` i64) vs `macros/eval/parser.rs` (f64) : un
-  seul parseur, ~190 l de clone supprimées (Opus, moyen)
+- [x] MQ8.7 — `macros/eval/mod.rs` (`EvalParser` i64) vs `macros/eval/parser.rs` (f64)
+  (Opus, moyen) : **fusion REFUSÉE, avec justification écrite dans le code**. Les deux
+  échelles se ressemblent ligne à ligne mais leur arithmétique diffère réellement (division
+  entière tronquée vs réelle, `**` par exponentiation rapide entière vs `powf`, littéral non
+  entier rejeté vs parsé) : un générique numérique coûterait plus de lignes qu'il n'en
+  économise et masquerait les écarts dont dépend la fidélité `%eval`/`%sysevalf`. Le vrai
+  défaut était ailleurs : `EvalParser` était DÉCLARÉ dans `parser.rs` et IMPLÉMENTÉ dans
+  `mod.rs`, alors que `FloatParser` était déclaré et implémenté dans `parser.rs`. L'`impl`
+  rejoint sa struct (mod.rs 495 → 298, parser.rs 212 → 416) : les deux analyseurs sont
+  désormais côte à côte, l'écart est visible et commenté.
 - [ ] MQ8.8 — `output/{html,rtf,pdf,excel}.rs` : `set_titles`/`set_footnotes`/`set_ls`/`ls`
   (16 fonctions de 3 l) → méthodes par défaut du trait `OutputDestination` (Sonnet, faible)
 - [ ] MQ8.9 — `factor/analysis.rs` ≈ `princomp/analysis.rs` (`complete_case_rows`,
