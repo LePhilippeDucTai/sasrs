@@ -176,6 +176,31 @@ pub fn expect_ident(ts: &mut StatementStream, ctx: &str) -> Result<String> {
     }
 }
 
+/// Consomme et JETTE la valeur d'une option non gérée (`= valeur` ou
+/// `= (…)`), afin que le parsing du reste du statement reste synchronisé.
+/// Sans effet si le token courant n'est pas un `=` (option booléenne).
+///
+/// MQ9.2 — les procs graphiques acceptent SILENCIEUSEMENT les options
+/// qu'elles ne rendent pas (politique documentée : la colonne « non couvert »
+/// du README les liste, elles ne sont pas des erreurs). Les six sites qui
+/// écrivaient `let _ = parse_paren_attrs(ts)` / `let _ = read_value(ts)`
+/// exprimaient donc bien une intention — mais rien ne le disait, et un
+/// `let _ =` isolé est indiscernable d'une erreur avalée par mégarde. Le nom
+/// de cette fonction porte l'intention. Elle utilise en prime
+/// `skip_balanced_parens`, qui gère l'imbrication, là où `parse_paren_attrs`
+/// s'arrêtait à la première `)` et désynchronisait sur `opt=(a=(1 2))`.
+pub fn skip_option_value(ts: &mut StatementStream) {
+    if ts.peek().kind != TokenKind::Eq {
+        return;
+    }
+    ts.next();
+    if ts.peek().kind == TokenKind::LParen {
+        ts.skip_balanced_parens();
+    } else {
+        read_value(ts);
+    }
+}
+
 /// Lit la valeur d'une option de proc graphique : chaîne, identifiant ou
 /// nombre (rendu sans partie décimale quand elle est nulle). `None` — sans
 /// rien consommer — si le token courant n'est aucun des trois.

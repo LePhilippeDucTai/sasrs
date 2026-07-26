@@ -85,7 +85,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
             Ok(true)
         } else if kw == "random" {
             ts.next();
-            random = Some(parse_random(ts));
+            random = Some(parse_random(ts)?);
             Ok(true)
         } else if kw == "freq" {
             ts.next();
@@ -164,8 +164,9 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("dist") || tk.is_kw("distribution") || tk.is_kw("d") {
-                let _ = common::consume_option_eq(ts, "DIST");
+                common::consume_option_eq(ts, "DIST")?;
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    let span = ts.peek().span;
                     ts.next();
                     dist_opt = Some(match name.to_ascii_lowercase().as_str() {
                         "normal" | "gaussian" | "gauss" => Distribution::Normal,
@@ -173,12 +174,24 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
                         "binary" | "bin" | "binomial" => Distribution::Binary,
                         "gamma" | "gam" => Distribution::Gamma,
                         "negbinomial" | "negbin" | "nb" => Distribution::NegBinomial,
-                        _ => Distribution::Normal,
+                        // MQ9.2 — une distribution inconnue retombait
+                        // SILENCIEUSEMENT sur NORMAL : l'utilisateur obtenait
+                        // un modèle faux, sans le moindre diagnostic.
+                        other => {
+                            return Err(SasError::parse(
+                                format!(
+                                    "Unknown DIST= value '{}' on the MODEL statement.",
+                                    other.to_uppercase()
+                                ),
+                                span,
+                            ));
+                        }
                     });
                 }
             } else if tk.is_kw("link") {
-                let _ = common::consume_option_eq(ts, "LINK");
+                common::consume_option_eq(ts, "LINK")?;
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
+                    let span = ts.peek().span;
                     ts.next();
                     link_opt = Some(match name.to_ascii_lowercase().as_str() {
                         "identity" | "id" => LinkFunction::Identity,
@@ -186,7 +199,16 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
                         "logit" => LinkFunction::Logit,
                         "probit" => LinkFunction::Probit,
                         "cloglog" | "cll" => LinkFunction::Cloglog,
-                        _ => LinkFunction::Identity,
+                        // MQ9.2 — même piège que DIST= ci-dessus.
+                        other => {
+                            return Err(SasError::parse(
+                                format!(
+                                    "Unknown LINK= value '{}' on the MODEL statement.",
+                                    other.to_uppercase()
+                                ),
+                                span,
+                            ));
+                        }
                     });
                 }
             } else if tk.is_kw("solution") || tk.is_kw("s") {
@@ -218,7 +240,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 }
 
 /// Parse the RANDOM statement body (after `random`).
-pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
+pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
     let effects = common::parse_effect_list(ts);
 
     let mut subject: Option<String> = None;
@@ -230,11 +252,11 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::consume_option_eq(ts, "SUBJECT");
+                common::consume_option_eq(ts, "SUBJECT")?;
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::consume_option_eq(ts, "TYPE");
+                common::consume_option_eq(ts, "TYPE")?;
                 cov_type = parse_cov_type(ts);
             } else if tk.is_kw("solution") || tk.is_kw("s") {
                 solution = true;
@@ -244,12 +266,12 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
             }
         }
     }
-    let _ = ts.expect_semi();
+    ts.expect_semi()?;
 
-    RandomSpec {
+    Ok(RandomSpec {
         effects,
         subject,
         cov_type,
         solution,
-    }
+    })
 }

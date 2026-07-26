@@ -1368,7 +1368,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   (`stat/optim.rs`, seul site du dépôt à ne pas le faire) ; découpes `s[..2]`/`s[2..4]` sur
   OCTETS avec garde en `len()` (`formats/builtin/informat.rs` ×9 + `formats/mod.rs` ×3) →
   char-safe. Un test de non-régression par correctif (Opus, moyen)
-- [ ] MQ9.2 — **change la sortie** : erreurs de syntaxe avalées — 13 `let _ = expect_eq(...)`/
+- [x] MQ9.2 — **change la sortie** : erreurs de syntaxe avalées — 13 `let _ = expect_eq(...)`/
   `let _ = ts.expect_semi()` (mixed/glimmix) → `?` ; `DIST=`/`LINK=` inconnu → ERROR au lieu
   du défaut silencieux ; 12 `let _ = parse_paren_attrs(...)` (sgplot/gplot) → diagnostic ou
   commentaire justifiant l'ignorance délibérée. Snapshots régénérés ET revalidés à la main

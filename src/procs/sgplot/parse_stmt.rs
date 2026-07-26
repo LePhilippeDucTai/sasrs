@@ -85,8 +85,10 @@ pub(super) fn parse_xy_stmt(ts: &mut StatementStream) -> Result<XyStmt> {
                     markerattrs = Some(m);
                 }
                 "lineattrs" => {
+                    // LINEATTRS= est parsé mais PAS rendu (différé, cf. README) :
+                    // on consomme sa valeur pour rester synchronisé.
                     expect_eq(ts, "LINEATTRS")?;
-                    let _ = parse_paren_attrs(ts);
+                    ts.skip_balanced_parens();
                 }
                 "degree" => {
                     expect_eq(ts, "DEGREE")?;
@@ -96,18 +98,10 @@ pub(super) fn parse_xy_stmt(ts: &mut StatementStream) -> Result<XyStmt> {
                     expect_eq(ts, "SMOOTH")?;
                     smooth = Some(expect_number(ts, "after SMOOTH=")?);
                 }
-                // Options à valeur (ex. NAME=) : consommer `= valeur` si présents.
+                // Options à valeur (ex. NAME=) : consommer `= valeur` si
+                // présent ; sinon flag booléen (NOAUTOLEGEND, …) déjà consommé.
                 _ => {
-                    if ts.peek().kind == TokenKind::Eq {
-                        ts.next();
-                        // Valeur simple ou parenthésée.
-                        if ts.peek().kind == TokenKind::LParen {
-                            let _ = parse_paren_attrs(ts);
-                        } else {
-                            let _ = read_value(ts);
-                        }
-                    }
-                    // Sinon : flag booléen (NOAUTOLEGEND, …) — déjà consommé.
+                    common::skip_option_value(ts);
                 }
             }
         }
@@ -150,16 +144,7 @@ pub(super) fn parse_bar_stmt(
                         _ => BarStat::Freq,
                     };
                 }
-                _ => {
-                    if ts.peek().kind == TokenKind::Eq {
-                        ts.next();
-                        if ts.peek().kind == TokenKind::LParen {
-                            let _ = parse_paren_attrs(ts);
-                        } else {
-                            let _ = read_value(ts);
-                        }
-                    }
-                }
+                _ => common::skip_option_value(ts),
             }
         }
     }
@@ -198,16 +183,7 @@ pub(super) fn parse_histogram_stmt(
                         _ => HistScale::Count,
                     };
                 }
-                _ => {
-                    if ts.peek().kind == TokenKind::Eq {
-                        ts.next();
-                        if ts.peek().kind == TokenKind::LParen {
-                            let _ = parse_paren_attrs(ts);
-                        } else {
-                            let _ = read_value(ts);
-                        }
-                    }
-                }
+                _ => common::skip_option_value(ts),
             }
         }
     }
@@ -276,16 +252,7 @@ pub(super) fn parse_axis_stmt(ts: &mut StatementStream) -> Result<AxisOpts> {
                     }
                 }
             }
-            _ => {
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
-                    if ts.peek().kind == TokenKind::LParen {
-                        ts.skip_balanced_parens();
-                    } else {
-                        let _ = read_value(ts);
-                    }
-                }
-            }
+            _ => common::skip_option_value(ts),
         }
     }
     Ok(opts)

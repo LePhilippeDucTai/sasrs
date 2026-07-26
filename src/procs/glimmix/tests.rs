@@ -12,6 +12,32 @@ fn parse_glimmix(src: &str) -> Result<GlimmixAst> {
     parse(&mut ts)
 }
 
+// ── MQ9.2 : les erreurs de syntaxe ne sont plus avalées ──────────────────
+
+#[test]
+fn unknown_dist_is_an_error_not_a_silent_normal() {
+    // Avant MQ9.2 : `dist=bogus` retombait SILENCIEUSEMENT sur NORMAL et
+    // l'utilisateur obtenait un modèle faux sans le moindre diagnostic.
+    let err = parse_glimmix("proc glimmix; model y = x / dist=bogus; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown DIST= value 'BOGUS'"), "msg: {msg}");
+}
+
+#[test]
+fn unknown_link_is_an_error_not_a_silent_identity() {
+    let err = parse_glimmix("proc glimmix; model y = x / link=bogus; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown LINK= value 'BOGUS'"), "msg: {msg}");
+}
+
+#[test]
+fn random_statement_missing_eq_is_an_error() {
+    // Avant MQ9.2 : `let _ = expect_eq(...)` acceptait le `=` manquant et le
+    // parsing continuait depuis une position désynchronisée.
+    let err = parse_glimmix("proc glimmix; model y = x; random int / subject g; run;").unwrap_err();
+    assert!(err.to_string().contains("expected '='"), "msg: {err}");
+}
+
 // ── Test 1: Poisson β convergence ────────────────────────────────────────
 #[allow(clippy::approx_constant)] // valeur attendue du test, pas une constante mathématique
 #[test]

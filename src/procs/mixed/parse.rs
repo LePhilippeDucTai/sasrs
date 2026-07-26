@@ -97,15 +97,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
             Ok(true)
         } else if kw == "random" {
             ts.next();
-            random = Some(parse_random(ts));
+            random = Some(parse_random(ts)?);
             Ok(true)
         } else if kw == "repeated" {
             ts.next();
-            repeated = Some(parse_repeated(ts));
+            repeated = Some(parse_repeated(ts)?);
             Ok(true)
         } else if kw == "lsmeans" {
             ts.next();
-            if let Some(spec) = parse_lsmeans(ts) {
+            if let Some(spec) = parse_lsmeans(ts)? {
                 lsmeans.push(spec);
             }
             Ok(true)
@@ -192,7 +192,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 }
 
 /// Parse the RANDOM statement body (after `random`).
-pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
+pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
     let effects = common::parse_effect_list(ts);
 
     let mut subject: Option<String> = None;
@@ -203,28 +203,28 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::consume_option_eq(ts, "SUBJECT");
+                common::consume_option_eq(ts, "SUBJECT")?;
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::consume_option_eq(ts, "TYPE");
+                common::consume_option_eq(ts, "TYPE")?;
                 cov_type = parse_cov_type(ts);
             } else {
                 ts.next();
             }
         }
     }
-    let _ = ts.expect_semi();
+    ts.expect_semi()?;
 
-    RandomSpec {
+    Ok(RandomSpec {
         effects,
         subject,
         cov_type,
-    }
+    })
 }
 
 /// Parse the REPEATED statement body (after `repeated`).
-pub(super) fn parse_repeated(ts: &mut StatementStream) -> RepeatedSpec {
+pub(super) fn parse_repeated(ts: &mut StatementStream) -> Result<RepeatedSpec> {
     let mut subject: Option<String> = None;
     let mut cov_type = CovType::Vc;
 
@@ -240,25 +240,29 @@ pub(super) fn parse_repeated(ts: &mut StatementStream) -> RepeatedSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::consume_option_eq(ts, "SUBJECT");
+                common::consume_option_eq(ts, "SUBJECT")?;
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::consume_option_eq(ts, "TYPE");
+                common::consume_option_eq(ts, "TYPE")?;
                 cov_type = parse_cov_type(ts);
             } else {
                 ts.next();
             }
         }
     }
-    let _ = ts.expect_semi();
+    ts.expect_semi()?;
 
-    RepeatedSpec { subject, cov_type }
+    Ok(RepeatedSpec { subject, cov_type })
 }
 
 /// Parse the LSMEANS statement body (after `lsmeans`).
-pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Option<LsmeansSpec> {
-    let effect = ts.peek().ident().map(str::to_string)?;
+pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Result<Option<LsmeansSpec>> {
+    // Pas d'effet nommé → statement ignoré (le `?` d'origine sur un `Option`
+    // rendait `None` ; on garde ce comportement, désormais explicite).
+    let Some(effect) = ts.peek().ident().map(str::to_string) else {
+        return Ok(None);
+    };
     ts.next();
 
     let mut diff = false;
@@ -280,7 +284,7 @@ pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Option<LsmeansSpec> {
                 cl = true;
                 ts.next();
             } else if tk.is_kw("alpha") {
-                let _ = common::consume_option_eq(ts, "ALPHA");
+                common::consume_option_eq(ts, "ALPHA")?;
                 if let TokenKind::Num(v) = ts.peek().kind {
                     alpha = v;
                 }
@@ -290,13 +294,13 @@ pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Option<LsmeansSpec> {
             }
         }
     }
-    let _ = ts.expect_semi();
+    ts.expect_semi()?;
 
-    Some(LsmeansSpec {
+    Ok(Some(LsmeansSpec {
         effect,
         diff,
         pdiff,
         cl,
         alpha,
-    })
+    }))
 }

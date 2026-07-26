@@ -132,16 +132,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
                                     kernel = v.eq_ignore_ascii_case("kernel");
                                 }
                             }
-                            _ => {
-                                if ts.peek().kind == TokenKind::Eq {
-                                    ts.next();
-                                    if ts.peek().kind == TokenKind::LParen {
-                                        let _ = parse_paren_attrs(ts);
-                                    } else {
-                                        let _ = read_value(ts);
-                                    }
-                                }
-                            }
+                            _ => common::skip_option_value(ts),
                         }
                     }
                 }
@@ -167,9 +158,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
                         if name == "category" {
                             expect_eq(ts, "CATEGORY")?;
                             category = Some(expect_ident(ts, "after CATEGORY=")?);
-                        } else if ts.peek().kind == TokenKind::Eq {
-                            ts.next();
-                            let _ = read_value(ts);
+                        } else {
+                            common::skip_option_value(ts);
                         }
                     }
                 }

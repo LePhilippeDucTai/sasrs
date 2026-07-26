@@ -26,6 +26,7 @@
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
+use crate::procs::common;
 use crate::procs::common::{expect_ident, read_value};
 use crate::session::Session;
 use crate::token::TokenKind;

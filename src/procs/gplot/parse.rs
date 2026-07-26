@@ -248,16 +248,7 @@ pub(super) fn parse_axis_stmt(ts: &mut StatementStream) -> AxisDef {
                     def.label = read_value(ts);
                 }
             }
-            _ => {
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
-                    if ts.peek().kind == TokenKind::LParen {
-                        ts.skip_balanced_parens();
-                    } else {
-                        let _ = read_value(ts);
-                    }
-                }
-            }
+            _ => common::skip_option_value(ts),
         }
     }
     def
