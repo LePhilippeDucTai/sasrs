@@ -1373,10 +1373,19 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   du défaut silencieux ; 12 `let _ = parse_paren_attrs(...)` (sgplot/gplot) → diagnostic ou
   commentaire justifiant l'ignorance délibérée. Snapshots régénérés ET revalidés à la main
   (Opus, élevé)
-- [ ] MQ9.3 — **change la sortie** : résultats faux sans diagnostic — `corr/mod.rs`
+- [x] MQ9.3 — **change la sortie** : résultats faux sans diagnostic — `corr/mod.rs`
   `unwrap_or_default()` → `?` (colonne indécodable = `Vec` vide qui alimente la matrice de
   corrélation) ; idem `sql/convert.rs` ×3 + `sql/select.rs` ×2 ; `executor/mod.rs`
-  `let _ = run_program(...)` (CALL EXECUTE) → propager/compter les erreurs (Opus, élevé)
+  `let _ = run_program(...)` (CALL EXECUTE) (Opus, élevé) : CORR propage désormais
+  (`unwrap_or_default()` sur une colonne indécodable donnait un `Vec` VIDE qui alimentait
+  la matrice partielle et la pondération → statistiques fausses sans ERROR) ;
+  `sql/select.rs` rend un vecteur de blancs de la BONNE longueur au lieu d'un vecteur vide
+  (les lignes sont indexées par position → colonne tronquée en silence).
+  **Deux constats de la revue INVALIDÉS après vérification** : (a) `sql/convert.rs`
+  n'avale rien — le `dtype` est filtré par le `match` juste au-dessus, les `.f64()`/`.str()`
+  ne peuvent pas échouer ; (b) `executor::run_program` n'a JAMAIS eu de chemin `Err`, le
+  `let _ =` ne jetait qu'un `Ok` systématique. Sa signature passe à `-> ()` pour que la
+  lecture ne trompe plus (c'est exactement ce qui avait trompé la revue).
 - [ ] MQ9.4 — `SasError` : `Parse.span` est WRITE-ONLY (rempli 30×, lu 0×) → supprimer le
   champ mort (log inchangé) ; retirer `Numerical`/`InvalidInput` (12 constructions, jamais
   matchés). Câbler le span vers `log.error` reste une case OPTIONNELLE (change le log)

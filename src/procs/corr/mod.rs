@@ -237,15 +237,20 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
     for &c in &analysis_cols {
         decoded.insert(c, decode_column(&ds, c)?);
     }
+    // MQ9.3 — ces deux boucles faisaient `unwrap_or_default()` : une colonne
+    // indécodable devenait un `Vec` VIDE qui alimentait ensuite la matrice de
+    // corrélation partielle et la pondération, donc des statistiques FAUSSES
+    // sans le moindre ERROR. On propage, comme la boucle des colonnes
+    // d'analyse trois lignes plus haut le faisait déjà.
     for &c in &partial_cols {
-        decoded
-            .entry(c)
-            .or_insert_with(|| decode_column(&ds, c).unwrap_or_default());
+        if let std::collections::hash_map::Entry::Vacant(e) = decoded.entry(c) {
+            e.insert(decode_column(&ds, c)?);
+        }
     }
-    if let Some(wc) = weight_col {
-        decoded
-            .entry(wc)
-            .or_insert_with(|| decode_column(&ds, wc).unwrap_or_default());
+    if let Some(wc) = weight_col
+        && let std::collections::hash_map::Entry::Vacant(e) = decoded.entry(wc)
+    {
+        e.insert(decode_column(&ds, wc)?);
     }
     let weight_vals: Option<&[Value]> = weight_col.map(|wc| decoded[&wc].as_slice());
 

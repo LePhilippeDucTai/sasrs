@@ -46,11 +46,16 @@ pub(super) fn render_listing(ds: &SasDataset, session: &mut Session) {
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                // MQ9.3 — `unwrap_or_default()` rendait un vecteur VIDE si le
+                // dtype Polars ne correspondait pas au `VarType` SAS, alors que
+                // les lignes sont ensuite indexées par position : colonne
+                // tronquée en silence. Un vecteur de blancs de la BONNE
+                // longueur est visible et ne désaligne rien.
+                .unwrap_or_else(|_| vec![String::new(); n_obs]),
             VarType::Char => series
                 .str()
                 .map(|ca| ca.iter().map(|o| o.unwrap_or("").to_string()).collect())
-                .unwrap_or_default(),
+                .unwrap_or_else(|_| vec![String::new(); n_obs]),
         };
         col_cells.push(cells);
     }

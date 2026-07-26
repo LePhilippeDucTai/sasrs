@@ -81,9 +81,7 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
     // l'`executor` (cf. `run_program`). Le source brut est passé tel quel.
     let src = SourceFile::new(source_text.to_string());
 
-    if let Err(e) = executor::run_program(&src, &mut session) {
-        session.log.error(&e.to_string());
-    }
+    executor::run_program(&src, &mut session);
 
     // M23 — filet de sécurité : si une destination avec fichier cible est encore
     // ouverte à la fin du programme (fixture sans `ODS CLOSE`), on l'écrit

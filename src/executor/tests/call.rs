@@ -20,6 +20,24 @@ fn call_execute_runs_queued_step_after_run() {
     assert!(out.listing.contains('7'), "listing:\n{}", out.listing);
 }
 
+/// MQ9.3 — une erreur DANS le code rejoué apparaît bien dans le log.
+///
+/// La revue avait signalé `let _ = run_program(...)` comme une erreur avalée.
+/// Vérification faite, c'est FAUX : `run_program` journalise ses erreurs et
+/// n'a jamais eu de chemin `Err` — le `let _ =` ne jetait qu'un `Ok`
+/// systématique. Ce test verrouille le comportement réel, et la signature de
+/// `run_program` a été corrigée (`-> ()`) pour que la lecture ne trompe plus.
+#[test]
+fn call_execute_reports_errors_from_replayed_code() {
+    let out = run_det("data _null_; call execute('proc nosuchproc; run;'); run;\n");
+    assert!(
+        out.log.contains("ERROR: Procedure NOSUCHPROC not found."),
+        "l'erreur du code rejoué doit être journalisée, log :\n{}",
+        out.log
+    );
+    assert_eq!(out.exit_code, 2, "log was:\n{}", out.log);
+}
+
 /// CALL EXECUTE, one per input row, builds several statements that run in
 /// order after the generating step.
 #[test]

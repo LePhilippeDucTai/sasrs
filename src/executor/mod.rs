@@ -74,7 +74,12 @@ use global::*;
 /// EXPANSÉ de ce segment (pas l'original). C'est sans incidence sur les
 /// fixtures de snapshot (aucune n'emploie de macro), et sans fixture dédiée
 /// pour ce cas.
-pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
+/// MQ9.3 — rend `()` et non `Result` : cette fonction JOURNALISE ses erreurs
+/// (récupération par segment et par bloc) et n'a jamais eu de chemin `Err`.
+/// Le `Result` sans issue faisait écrire `let _ = run_program(...)` au rejeu
+/// CALL EXECUTE, ce qui se lit comme une erreur avalée alors qu'il n'y avait
+/// rien à avaler — c'est d'ailleurs ce qu'a conclu la revue avant vérification.
+pub fn run_program(src: &SourceFile, session: &mut Session) {
     use crate::preprocess::RawSegmenter;
 
     let orig = src;
@@ -113,7 +118,6 @@ pub fn run_program(src: &SourceFile, session: &mut Session) -> Result<()> {
         // ouvert pur (segment sans étape DATA).
         run_call_execute_queue(session);
     }
-    Ok(())
 }
 
 /// Exécute UN bloc déjà lexé/parsé (commun aux deux builds). L'écho de source
@@ -201,7 +205,7 @@ fn run_call_execute_queue(session: &mut Session) {
         }
         let code = std::mem::take(&mut session.call_execute_queue).join("\n");
         let src = SourceFile::new(code);
-        let _ = run_program(&src, session);
+        run_program(&src, session);
     }
 }
 
