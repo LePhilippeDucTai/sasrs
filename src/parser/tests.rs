@@ -41,6 +41,27 @@ fn skip_to_semi_consumes_semi() {
 }
 
 #[test]
+fn skip_balanced_parens_handles_nesting_and_guards() {
+    // Bloc imbriqué : on ressort juste après la `)` appariée.
+    let src = SourceFile::new("(a (b c) d) next");
+    let mut ts = stream(&src);
+    ts.skip_balanced_parens();
+    assert!(ts.peek().is_kw("next"));
+
+    // Parenthèse non fermée bornée par le `;` : le `;` N'EST PAS consommé.
+    let src = SourceFile::new("(a b ; next");
+    let mut ts = stream(&src);
+    ts.skip_balanced_parens();
+    assert_eq!(ts.peek().kind, TokenKind::Semi);
+
+    // Token courant qui n'est pas une `(` : no-op.
+    let src = SourceFile::new("abc (d)");
+    let mut ts = stream(&src);
+    ts.skip_balanced_parens();
+    assert!(ts.peek().is_kw("abc"));
+}
+
+#[test]
 fn dataset_ref_one_and_two_level() {
     let src = SourceFile::new("a mylib.b ;");
     let mut ts = stream(&src);

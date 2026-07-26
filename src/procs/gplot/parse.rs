@@ -252,26 +252,7 @@ pub(super) fn parse_axis_stmt(ts: &mut StatementStream) -> AxisDef {
                 if ts.peek().kind == TokenKind::Eq {
                     ts.next();
                     if ts.peek().kind == TokenKind::LParen {
-                        let mut depth = 0;
-                        loop {
-                            match ts.peek().kind {
-                                TokenKind::LParen => {
-                                    depth += 1;
-                                    ts.next();
-                                }
-                                TokenKind::RParen => {
-                                    depth -= 1;
-                                    ts.next();
-                                    if depth == 0 {
-                                        break;
-                                    }
-                                }
-                                TokenKind::Eof | TokenKind::Semi => break,
-                                _ => {
-                                    ts.next();
-                                }
-                            }
-                        }
+                        ts.skip_balanced_parens();
                     } else {
                         let _ = read_value(ts);
                     }

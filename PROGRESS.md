@@ -1314,7 +1314,13 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   ont attrapé la régression (`ERROR: expected '=' after DATA` sur `proc print data=a`).
   C'est exactement le scénario que le renommage supprime. — `StatementStream::skip_balanced_parens()` (à côté de `skip_to_semi`) ; supprime
   les 3 sites à profondeur ~9 (sgplot ×2, gplot) et rapproche `parse_axis_stmt` sgplot ⇄ gplot
-  (65 l sur ~96 identiques) (Sonnet, moyen)
+  (65 l sur ~96 identiques) (Sonnet, moyen) : helper posé à côté de `skip_to_semi`, les
+  deux boucles inline (gplot, sgplot) le remplacent — ~4 niveaux d'imbrication en moins
+  à chaque site. +1 test (imbrication, parenthèse non fermée bornée par `;` sans le
+  consommer, no-op hors `(`). Le 3e site signalé (`sgplot/parse.rs`) passait déjà par
+  `parse_paren_attrs` : rien à y faire. Le rapprochement `parse_axis_stmt` sgplot⇄gplot
+  est laissé de côté (les deux AST diffèrent : `AxisOpts`/`Result` vs `AxisDef`, `VALUES=`
+  vs `ORDER=`) — l'unification demanderait un type commun, hors périmètre move-only.
 - [ ] MQ8.7 — `macros/eval/mod.rs` (`EvalParser` i64) vs `macros/eval/parser.rs` (f64) : un
   seul parseur, ~190 l de clone supprimées (Opus, moyen)
 - [ ] MQ8.8 — `output/{html,rtf,pdf,excel}.rs` : `set_titles`/`set_footnotes`/`set_ls`/`ls`

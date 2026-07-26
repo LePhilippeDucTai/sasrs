@@ -147,6 +147,40 @@ impl<'a> StatementStream<'a> {
         }
     }
 
+    /// Saute un bloc parenthésé équilibré à partir de la `(` COURANTE, `)`
+    /// finale comprise. S'arrête aussi sur `Eof` ou `;` (parenthèses non
+    /// appariées), sans consommer le `;`. Sans effet si le token courant n'est
+    /// pas une `(`.
+    ///
+    /// MQ8.6 — les sous-parsers d'options graphiques (SGPLOT, GPLOT) doivent
+    /// ignorer les valeurs `option=(...)` qu'ils ne gèrent pas ; ils
+    /// réécrivaient chacun cette boucle, à quatre niveaux d'imbrication.
+    pub fn skip_balanced_parens(&mut self) {
+        if self.peek().kind != TokenKind::LParen {
+            return;
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.peek().kind {
+                TokenKind::LParen => {
+                    depth += 1;
+                    self.next();
+                }
+                TokenKind::RParen => {
+                    depth -= 1;
+                    self.next();
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                TokenKind::Eof | TokenKind::Semi => return,
+                _ => {
+                    self.next();
+                }
+            }
+        }
+    }
+
     /// Saute jusqu'après `run;`/`quit;`, ou s'arrête juste avant un
     /// `data`/`proc`/statement global en début de statement (frontière
     /// implicite). Best-effort : le test de frontière à l'entrée suppose
