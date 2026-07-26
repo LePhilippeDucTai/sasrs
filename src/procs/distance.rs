@@ -111,7 +111,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
         } else if ts.peek().is_kw("out") {
             out = Some(common::parse_out_opt(ts)?);
         } else if ts.peek().is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             method = parse_method(ts)?;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;

@@ -77,37 +77,37 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                 } else if ts.peek().is_kw("selection") {
                     selection = Some(parse_selection_value(ts)?);
                 } else if ts.peek().is_kw("slentry") || ts.peek().is_kw("sle") {
-                    common::expect_eq(ts, "SLENTRY")?;
+                    common::consume_option_eq(ts, "SLENTRY")?;
                     let v = read_float(ts)?;
                     if let Some(sel) = selection.as_mut() {
                         sel.slentry = v;
                     }
                 } else if ts.peek().is_kw("slstay") || ts.peek().is_kw("sls") {
-                    common::expect_eq(ts, "SLSTAY")?;
+                    common::consume_option_eq(ts, "SLSTAY")?;
                     let v = read_float(ts)?;
                     if let Some(sel) = selection.as_mut() {
                         sel.slstay = v;
                     }
                 } else if ts.peek().is_kw("best") {
-                    common::expect_eq(ts, "BEST")?;
+                    common::consume_option_eq(ts, "BEST")?;
                     let v = read_float(ts)? as usize;
                     if let Some(sel) = selection.as_mut() {
                         sel.best = Some(v);
                     }
                 } else if ts.peek().is_kw("include") {
-                    common::expect_eq(ts, "INCLUDE")?;
+                    common::consume_option_eq(ts, "INCLUDE")?;
                     let v = read_float(ts)? as usize;
                     if let Some(sel) = selection.as_mut() {
                         sel.include = v;
                     }
                 } else if ts.peek().is_kw("start") {
-                    common::expect_eq(ts, "START")?;
+                    common::consume_option_eq(ts, "START")?;
                     let v = read_float(ts)? as usize;
                     if let Some(sel) = selection.as_mut() {
                         sel.start = Some(v);
                     }
                 } else if ts.peek().is_kw("stop") {
-                    common::expect_eq(ts, "STOP")?;
+                    common::consume_option_eq(ts, "STOP")?;
                     let v = read_float(ts)? as usize;
                     if let Some(sel) = selection.as_mut() {
                         sel.stop = Some(v);
@@ -117,7 +117,7 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                     // (used by SAS only to label grouped regressors in
                     // the selection display). Consume the `=` and the
                     // following string/ident list.
-                    common::expect_eq(ts, "GROUPNAMES")?;
+                    common::consume_option_eq(ts, "GROUPNAMES")?;
                     while matches!(ts.peek().kind, TokenKind::Str { .. } | TokenKind::Ident(_)) {
                         ts.next();
                     }
@@ -127,7 +127,7 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                     }
                     ts.next();
                 } else if ts.peek().is_kw("alpha") {
-                    common::expect_eq(ts, "ALPHA")?;
+                    common::consume_option_eq(ts, "ALPHA")?;
                     alpha = read_float(ts)?;
                 } else if ts.peek().is_kw("clb") {
                     clb = true;

@@ -26,7 +26,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("nosimple") {
             ts.next();
@@ -50,13 +50,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
             ts.next();
             hoeffding = true;
         } else if ts.peek().is_kw("out") || ts.peek().is_kw("outp") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             outp = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outs") {
-            common::expect_eq(ts, "OUTS")?;
+            common::consume_option_eq(ts, "OUTS")?;
             outs = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("outk") {
-            common::expect_eq(ts, "OUTK")?;
+            common::consume_option_eq(ts, "OUTK")?;
             outk = Some(ts.parse_dataset_ref()?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;

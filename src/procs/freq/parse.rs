@@ -15,7 +15,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
@@ -133,7 +133,7 @@ pub(super) fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>
                 ts.next();
                 missing = true;
             } else if ts.peek().is_kw("out") {
-                common::expect_eq(ts, "OUT")?;
+                common::consume_option_eq(ts, "OUT")?;
                 out = Some(ts.parse_dataset_ref()?);
             } else if ts.peek().is_kw("nopercent") {
                 ts.next();

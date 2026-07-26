@@ -63,6 +63,8 @@ pub use format::fmt_p_num;
 
 pub use format::value_label;
 
+pub use parse::consume_option_eq;
+
 pub use parse::expect_eq;
 
 pub use parse::expect_ident;

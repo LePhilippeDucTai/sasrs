@@ -75,12 +75,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
         if ts.peek().is_kw("data") {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if ts.peek().is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             method = parse_method(ts)?;
         } else if ts.peek().is_kw("outtree") {
             outtree = Some(common::parse_dataset_opt(ts, "OUTTREE")?);
         } else if ts.peek().is_kw("print") {
-            common::expect_eq(ts, "PRINT")?;
+            common::consume_option_eq(ts, "PRINT")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,

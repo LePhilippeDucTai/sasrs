@@ -228,7 +228,7 @@ pub(super) fn parse_ods_graphics(ts: &mut StatementStream) -> Result<GlobalStmt>
 
             match name.as_str() {
                 "width" | "height" => {
-                    expect_eq(ts, &name)?;
+                    expect_ods_graphics_eq(ts, &name)?;
                     let v = parse_dim(ts, &name)?;
                     if name == "width" {
                         width = Some(v);
@@ -237,11 +237,11 @@ pub(super) fn parse_ods_graphics(ts: &mut StatementStream) -> Result<GlobalStmt>
                     }
                 }
                 "imagefmt" | "outputfmt" => {
-                    expect_eq(ts, &name)?;
+                    expect_ods_graphics_eq(ts, &name)?;
                     imagefmt = Some(parse_imagefmt(ts)?);
                 }
                 "imagename" => {
-                    expect_eq(ts, &name)?;
+                    expect_ods_graphics_eq(ts, &name)?;
                     let val_tok = ts.peek().clone();
                     let value = parse_option_value(ts, &val_tok.span)?;
                     imagename = Some(value);

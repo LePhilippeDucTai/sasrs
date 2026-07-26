@@ -59,22 +59,22 @@ pub(crate) fn parse_infile(ts: &mut StatementStream) -> Result<DsStmt> {
                     }
                     "delimiter" | "dlm" => {
                         ts.next();
-                        expect_eq(ts, &lower)?;
+                        expect_infile_eq(ts, &lower)?;
                         options.delimiter = Some(parse_infile_delimiter(ts)?);
                     }
                     "firstobs" => {
                         ts.next();
-                        expect_eq(ts, &lower)?;
+                        expect_infile_eq(ts, &lower)?;
                         options.firstobs = Some(parse_infile_count(ts, "FIRSTOBS")?);
                     }
                     "obs" => {
                         ts.next();
-                        expect_eq(ts, &lower)?;
+                        expect_infile_eq(ts, &lower)?;
                         options.obs = Some(parse_infile_count(ts, "OBS")?);
                     }
                     "lrecl" => {
                         ts.next();
-                        expect_eq(ts, &lower)?;
+                        expect_infile_eq(ts, &lower)?;
                         // LRECL est conservé mais reste un no-op fonctionnel.
                         options.lrecl = Some(parse_infile_count(ts, "LRECL")?);
                     }
@@ -97,7 +97,7 @@ pub(crate) fn parse_infile(ts: &mut StatementStream) -> Result<DsStmt> {
 }
 
 /// Consomme le `=` d'une option `nom=valeur`.
-pub(crate) fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
+pub(crate) fn expect_infile_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
             format!(

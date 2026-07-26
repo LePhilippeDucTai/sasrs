@@ -86,7 +86,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("n") {
-            common::expect_eq(ts, "N")?;
+            common::consume_option_eq(ts, "N")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,

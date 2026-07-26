@@ -45,30 +45,30 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             input = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             output = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("h0") {
-            common::expect_eq(ts, "H0")?;
+            common::consume_option_eq(ts, "H0")?;
             proc_options.h0 = parse_num_value(ts, "H0")?;
         } else if ts.peek().is_kw("alpha") {
-            common::expect_eq(ts, "ALPHA")?;
+            common::consume_option_eq(ts, "ALPHA")?;
             proc_options.alpha = parse_num_value(ts, "ALPHA")?;
         } else if ts.peek().is_kw("ci") {
-            common::expect_eq(ts, "CI")?;
+            common::consume_option_eq(ts, "CI")?;
             proc_options.ci = parse_num_value(ts, "CI")?;
             proc_options.ci_explicit = true;
         } else if ts.peek().is_kw("equal") {
-            common::expect_eq(ts, "EQUAL")?;
+            common::consume_option_eq(ts, "EQUAL")?;
             let v = ts.peek().ident().map(str::to_string).ok_or_else(|| {
                 SasError::parse("expected YES or NO after EQUAL=", ts.peek().span)
             })?;
             ts.next();
             proc_options.equal = !v.eq_ignore_ascii_case("no");
         } else if ts.peek().is_kw("sides") {
-            common::expect_eq(ts, "SIDES")?;
+            common::consume_option_eq(ts, "SIDES")?;
             let v = ts.peek().ident().map(str::to_string).ok_or_else(|| {
                 SasError::parse("expected 2, U or L after SIDES=", ts.peek().span)
             })?;
@@ -158,7 +158,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
                 // `output out=<ref>;`
                 ts.next();
                 if ts.peek().is_kw("out") {
-                    common::expect_eq(ts, "OUT")?;
+                    common::consume_option_eq(ts, "OUT")?;
                     output = Some(ts.parse_dataset_ref()?);
                 }
                 ts.skip_to_semi();

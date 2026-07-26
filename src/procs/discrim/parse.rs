@@ -31,11 +31,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
         } else if tk.is_kw("outstat") {
             outstat = Some(common::parse_dataset_opt(ts, "OUTSTAT")?);
         } else if tk.is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             method = ts.peek().ident().map(|s| s.to_ascii_uppercase());
             ts.next();
         } else if tk.is_kw("pool") {
-            common::expect_eq(ts, "POOL")?;
+            common::consume_option_eq(ts, "POOL")?;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             pool = match v.as_deref() {
                 Some("no") => Pool::No,

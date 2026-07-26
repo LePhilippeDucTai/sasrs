@@ -88,16 +88,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
         } else if ts.peek().is_kw("out") {
             out = Some(common::parse_out_opt(ts)?);
         } else if ts.peek().is_kw("maxclusters") || ts.peek().is_kw("maxc") {
-            common::expect_eq(ts, "MAXCLUSTERS")?;
+            common::consume_option_eq(ts, "MAXCLUSTERS")?;
             maxclusters = Some(parse_num(ts, "MAXCLUSTERS")? as usize);
         } else if ts.peek().is_kw("maxiter") {
-            common::expect_eq(ts, "MAXITER")?;
+            common::consume_option_eq(ts, "MAXITER")?;
             maxiter = parse_num(ts, "MAXITER")? as usize;
         } else if ts.peek().is_kw("converge") {
-            common::expect_eq(ts, "CONVERGE")?;
+            common::consume_option_eq(ts, "CONVERGE")?;
             converge = parse_num(ts, "CONVERGE")?;
         } else if ts.peek().is_kw("seed") {
-            common::expect_eq(ts, "SEED")?;
+            common::consume_option_eq(ts, "SEED")?;
             seed = Some(parse_num(ts, "SEED")? as i64);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;

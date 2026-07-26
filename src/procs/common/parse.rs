@@ -99,15 +99,28 @@ where
     Ok(())
 }
 
-/// Consomme le token courant (le nom d'option) puis exige `=`, avec le MÊME
-/// texte/span d'erreur que les procs aujourd'hui (`expected '=' after DATA`).
-/// Extrait verbatim de `sort.rs`/`means.rs`.
+/// Consomme le nom d'option courant PUIS le `=` qui le suit.
+///
+/// MQ8.5 — s'appelait `expect_eq`, sous le même nom que quatre copies locales
+/// au contrat INVERSE (elles laissent le nom d'option au flux). Migrer une
+/// proc de l'une à l'autre avalait donc un token de plus, silencieusement.
+/// Le nom dit maintenant lequel des deux contrats on prend ; le message et le
+/// span d'erreur sont inchangés (`expected '=' after DATA`).
 ///
 /// `opt` est l'étiquette affichée dans le message (par convention déjà en
 /// majuscules côté appelant, ex. « DATA », « OUT »).
-pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
+pub fn consume_option_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     // Consomme le nom d'option (le mot-clé courant).
     ts.next();
+    expect_eq(ts, opt)
+}
+
+/// Exige un `=` sur le token COURANT et le consomme ; le nom d'option a déjà
+/// été consommé par l'appelant. C'est le contrat majoritaire (MEANS, SGPLOT,
+/// IMPORT, EXPORT l'écrivaient chacun de leur côté).
+///
+/// Voir [`consume_option_eq`] pour la variante qui consomme aussi le nom.
+pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
             format!("expected '=' after {opt}"),
@@ -118,10 +131,10 @@ pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     Ok(())
 }
 
-/// `option = <dataset-ref>` : `expect_eq` puis `parse_dataset_ref()`.
-/// Appelé avec le token courant positionné sur le nom d'option (`opt`).
+/// `option = <dataset-ref>` : `consume_option_eq` puis `parse_dataset_ref()`.
+/// Appelé avec le token courant positionné sur le NOM D'OPTION (`opt`).
 pub fn parse_dataset_opt(ts: &mut StatementStream, opt: &str) -> Result<DatasetRef> {
-    expect_eq(ts, opt)?;
+    consume_option_eq(ts, opt)?;
     ts.parse_dataset_ref()
 }
 

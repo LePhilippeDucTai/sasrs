@@ -93,12 +93,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<TransposeAst> {
                 true
             }
             "prefix" => {
-                common::expect_eq(ts, "PREFIX")?;
+                common::consume_option_eq(ts, "PREFIX")?;
                 prefix = Some(expect_ident(ts, "after PREFIX=")?);
                 true
             }
             "name" => {
-                common::expect_eq(ts, "NAME")?;
+                common::consume_option_eq(ts, "NAME")?;
                 name = Some(expect_ident(ts, "after NAME=")?);
                 true
             }

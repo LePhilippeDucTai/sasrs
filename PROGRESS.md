@@ -1302,12 +1302,17 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   `common/model.rs`. −145 lignes. Zéro `.snap.new` : l'ordre de sommation est préservé.
 - [x] MQ8.4 — helpers de parsing des procs graphiques → `common/parse.rs` : `expect_ident` ×6,
   `read_value` ×3, `parse_string_or_ident` ×2 (Sonnet, faible)
-- [ ] MQ8.5 — **piège `expect_eq`** : renommer la variante de `common/parse.rs` en
+- [x] MQ8.5 — **piège `expect_eq`** : renommer la variante de `common/parse.rs` en
   `consume_option_eq` (elle consomme le nom d'option), exposer un `expect_eq` au contrat
   majoritaire, migrer les 6 copies (means, sgplot, export, import, `parser/datastep/io/
   infile.rs`, `parser/global/titles.rs`) ; vérification message d'erreur par message d'erreur
-  (Opus, moyen)
-- [ ] MQ8.6 — `StatementStream::skip_balanced_parens()` (à côté de `skip_to_semi`) ; supprime
+  (Opus, moyen) : `common::expect_eq` → `consume_option_eq` (80 sites) ; nouveau
+  `common::expect_eq` au contrat majoritaire ; 4 copies locales supprimées (means, sgplot,
+  export, import) ; les 2 variantes à message spécifique renommées `expect_ods_graphics_eq`
+  et `expect_infile_eq`. **Le piège s'est déclenché pendant la case** : `parse_dataset_opt`
+  appelait `expect_eq` en interne et est passé sur la mauvaise variante — 4 tests exécuteur
+  ont attrapé la régression (`ERROR: expected '=' after DATA` sur `proc print data=a`).
+  C'est exactement le scénario que le renommage supprime. — `StatementStream::skip_balanced_parens()` (à côté de `skip_to_semi`) ; supprime
   les 3 sites à profondeur ~9 (sgplot ×2, gplot) et rapproche `parse_axis_stmt` sgplot ⇄ gplot
   (65 l sur ~96 identiques) (Sonnet, moyen)
 - [ ] MQ8.7 — `macros/eval/mod.rs` (`EvalParser` i64) vs `macros/eval/parser.rs` (f64) : un

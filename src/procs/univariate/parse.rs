@@ -20,7 +20,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
             // Accepted and ignored for rendering: UNIVARIATE always shows its
@@ -183,7 +183,7 @@ pub(super) fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput>
             break;
         }
         if ts.peek().is_kw("out") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(kw) = ts.peek().ident().map(str::to_string) {
             let stat = kw.to_ascii_lowercase();
@@ -196,7 +196,7 @@ pub(super) fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput>
                     ts.peek().span,
                 ));
             }
-            common::expect_eq(ts, "OUTPUT statistic")?;
+            common::consume_option_eq(ts, "OUTPUT statistic")?;
             // Collect one or more output names until the next stat keyword,
             // `out`, or `;`.
             let mut names: Vec<String> = Vec::new();

@@ -36,11 +36,11 @@ pub(super) fn parse_xy_stmt(ts: &mut StatementStream) -> Result<XyStmt> {
         };
         match name.as_str() {
             "x" => {
-                common::expect_eq(ts, "X")?;
+                common::consume_option_eq(ts, "X")?;
                 x = Some(expect_ident(ts, "after X=")?);
             }
             "y" => {
-                common::expect_eq(ts, "Y")?;
+                common::consume_option_eq(ts, "Y")?;
                 y = Some(expect_ident(ts, "after Y=")?);
             }
             _ => {

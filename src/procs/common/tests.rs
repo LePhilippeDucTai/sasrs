@@ -144,24 +144,24 @@ fn body_recovers_unknown_substatement_via_skip_to_semi() {
     assert!(ts.at_eof());
 }
 
-// ── expect_eq / parse_dataset_opt ─────────────────────────────────────
+// ── consume_option_eq / parse_dataset_opt ─────────────────────────────────────
 
 #[test]
-fn expect_eq_happy_path_consumes_name_and_eq() {
+fn consume_option_eq_consumes_name_and_eq() {
     let src = SourceFile::new("proc foo data= lib.x; run;");
     let mut ts = proc_stream(&src);
     // Positioned on `data`.
     assert!(ts.peek().is_kw("data"));
-    expect_eq(&mut ts, "DATA").unwrap();
+    consume_option_eq(&mut ts, "DATA").unwrap();
     // Both `data` and `=` consumed; now on the dataset ref.
     assert!(ts.peek().is_kw("lib"));
 }
 
 #[test]
-fn expect_eq_missing_eq_errors() {
+fn consume_option_eq_missing_eq_errors() {
     let src = SourceFile::new("proc foo data lib.x; run;");
     let mut ts = proc_stream(&src);
-    let err = expect_eq(&mut ts, "DATA").unwrap_err();
+    let err = consume_option_eq(&mut ts, "DATA").unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("expected '=' after DATA"), "msg: {msg}");
 }

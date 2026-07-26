@@ -41,6 +41,7 @@ use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::expect_eq;
 use crate::procs::common::parse_string_or_ident;
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -101,13 +102,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
             break;
         }
         if ts.peek().is_kw("datafile") || ts.peek().is_kw("filename") {
-            common::expect_eq(ts, "DATAFILE")?;
+            common::consume_option_eq(ts, "DATAFILE")?;
             datafile = Some(parse_string_or_ident(ts, "DATAFILE")?);
         } else if ts.peek().is_kw("out") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("dbms") {
-            common::expect_eq(ts, "DBMS")?;
+            common::consume_option_eq(ts, "DBMS")?;
             let tok = ts.peek().clone();
             let name = tok
                 .ident()
@@ -346,18 +347,6 @@ fn parse_delimiter_char(s: &str, span: crate::token::Span) -> Result<Option<u8>>
         format!("DELIMITER value '{s}' must be a single ASCII character or a recognized mnemonic."),
         span,
     ))
-}
-
-/// Consomme `=` ; renvoie une erreur si absent.
-fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

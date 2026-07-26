@@ -2,17 +2,6 @@ use super::*;
 
 // ───────────────────────── Parser helpers ─────────────────────────
 
-pub(super) fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
-    if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            format!("expected '=' after {opt}"),
-            ts.peek().span,
-        ));
-    }
-    ts.next();
-    Ok(())
-}
-
 /// Lit une valeur numérique littérale. Erreur propre sinon.
 pub(super) fn expect_number(ts: &mut StatementStream, ctx: &str) -> Result<f64> {
     match ts.peek().kind {

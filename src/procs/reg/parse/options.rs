@@ -68,11 +68,11 @@ pub(super) fn parse_proc_options(ts: &mut StatementStream) -> Result<ProcOptions
             // RIDGE=value-list (M36.9): a list of ridge constants k, accepting
             // both an explicit list (`ridge=0 0.01 0.1`) and a SAS numeric range
             // (`ridge=0 to 0.1 by 0.02`).
-            common::expect_eq(ts, "RIDGE")?;
+            common::consume_option_eq(ts, "RIDGE")?;
             ridge = parse_value_list(ts)?;
         } else if ts.peek().is_kw("pcomit") {
             // PCOMIT=value-list (M36.9): principal-component drop counts m.
-            common::expect_eq(ts, "PCOMIT")?;
+            common::consume_option_eq(ts, "PCOMIT")?;
             pcomit = parse_value_list(ts)?;
         } else if ts.peek().is_kw("outvif") {
             outvif = true;
@@ -150,7 +150,7 @@ pub(super) fn parse_output_stmt(
     let mut dfbetas: Option<String> = None;
     // Read the value name for a `KEYWORD=name` OUTPUT option.
     let read_name = |ts: &mut StatementStream, kw: &str| -> Result<Option<String>> {
-        common::expect_eq(ts, kw)?;
+        common::consume_option_eq(ts, kw)?;
         let name = ts.peek().ident().map(str::to_string);
         if name.is_some() {
             ts.next();

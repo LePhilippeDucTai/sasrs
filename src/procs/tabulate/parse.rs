@@ -35,7 +35,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
             out = Some(common::parse_dataset_opt(ts, "OUT")?);
         } else if ts.peek().is_kw("format") {
             // `format=<fmt>` — table-level default cell format (M33.4).
-            common::expect_eq(ts, "FORMAT")?;
+            common::consume_option_eq(ts, "FORMAT")?;
             format = Some(crate::parser::expr::read_format_token(ts)?);
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;

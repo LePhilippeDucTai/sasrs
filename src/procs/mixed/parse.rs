@@ -51,7 +51,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
         if tk.is_kw("data") {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             method = match v.as_deref() {
                 Some("ml") => Method::Ml,
@@ -171,7 +171,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
                 nofit = true;
                 ts.next();
             } else if tk.is_kw("ddfm") {
-                common::expect_eq(ts, "DDFM")?;
+                common::consume_option_eq(ts, "DDFM")?;
                 ddfm = ts.peek().ident().map(|s| s.to_ascii_lowercase());
                 ts.next();
             } else {
@@ -203,11 +203,11 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::expect_eq(ts, "SUBJECT");
+                let _ = common::consume_option_eq(ts, "SUBJECT");
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::expect_eq(ts, "TYPE");
+                let _ = common::consume_option_eq(ts, "TYPE");
                 cov_type = parse_cov_type(ts);
             } else {
                 ts.next();
@@ -240,11 +240,11 @@ pub(super) fn parse_repeated(ts: &mut StatementStream) -> RepeatedSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::expect_eq(ts, "SUBJECT");
+                let _ = common::consume_option_eq(ts, "SUBJECT");
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::expect_eq(ts, "TYPE");
+                let _ = common::consume_option_eq(ts, "TYPE");
                 cov_type = parse_cov_type(ts);
             } else {
                 ts.next();
@@ -280,7 +280,7 @@ pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Option<LsmeansSpec> {
                 cl = true;
                 ts.next();
             } else if tk.is_kw("alpha") {
-                let _ = common::expect_eq(ts, "ALPHA");
+                let _ = common::consume_option_eq(ts, "ALPHA");
                 if let TokenKind::Num(v) = ts.peek().kind {
                     alpha = v;
                 }

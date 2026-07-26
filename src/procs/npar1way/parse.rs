@@ -51,13 +51,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             input = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             output = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("alpha") {
-            common::expect_eq(ts, "ALPHA")?;
+            common::consume_option_eq(ts, "ALPHA")?;
             proc_options.alpha = parse_num_value(ts, "ALPHA")?;
         } else if ts.peek().is_kw("wilcoxon") {
             ts.next();
@@ -133,7 +133,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
                 // `output out=<ref>;`
                 ts.next();
                 if ts.peek().is_kw("out") {
-                    common::expect_eq(ts, "OUT")?;
+                    common::consume_option_eq(ts, "OUT")?;
                     output = Some(ts.parse_dataset_ref()?);
                 }
                 ts.skip_to_semi();

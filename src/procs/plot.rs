@@ -162,7 +162,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PlotAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             data_ref = Some(ts.parse_dataset_ref()?);
         } else {
             ts.next(); // ignore unknown PROC-level options

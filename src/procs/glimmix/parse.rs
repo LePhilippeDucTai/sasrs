@@ -46,7 +46,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
         if tk.is_kw("data") {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             method = match v.as_deref() {
                 Some("laplace") => Method::Laplace,
@@ -164,7 +164,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("dist") || tk.is_kw("distribution") || tk.is_kw("d") {
-                let _ = common::expect_eq(ts, "DIST");
+                let _ = common::consume_option_eq(ts, "DIST");
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
                     ts.next();
                     dist_opt = Some(match name.to_ascii_lowercase().as_str() {
@@ -177,7 +177,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
                     });
                 }
             } else if tk.is_kw("link") {
-                let _ = common::expect_eq(ts, "LINK");
+                let _ = common::consume_option_eq(ts, "LINK");
                 if let Some(name) = ts.peek().ident().map(str::to_string) {
                     ts.next();
                     link_opt = Some(match name.to_ascii_lowercase().as_str() {
@@ -230,11 +230,11 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> RandomSpec {
         while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
             let tk = ts.peek();
             if tk.is_kw("subject") || tk.is_kw("subj") {
-                let _ = common::expect_eq(ts, "SUBJECT");
+                let _ = common::consume_option_eq(ts, "SUBJECT");
                 subject = ts.peek().ident().map(str::to_string);
                 ts.next();
             } else if tk.is_kw("type") {
-                let _ = common::expect_eq(ts, "TYPE");
+                let _ = common::consume_option_eq(ts, "TYPE");
                 cov_type = parse_cov_type(ts);
             } else if tk.is_kw("solution") || tk.is_kw("s") {
                 solution = true;

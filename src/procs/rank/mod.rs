@@ -185,16 +185,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             break;
         }
         if ts.peek().is_kw("data") {
-            common::expect_eq(ts, "DATA")?;
+            common::consume_option_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("out") {
-            common::expect_eq(ts, "OUT")?;
+            common::consume_option_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("descending") {
             ts.next();
             descending = true;
         } else if ts.peek().is_kw("ties") {
-            common::expect_eq(ts, "TIES")?;
+            common::consume_option_eq(ts, "TIES")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a TIES= method (MEAN|LOW|HIGH|DENSE)", tok.span)
@@ -216,7 +216,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             };
             ts.next();
         } else if ts.peek().is_kw("groups") {
-            common::expect_eq(ts, "GROUPS")?;
+            common::consume_option_eq(ts, "GROUPS")?;
             let tok = ts.peek().clone();
             let n = match &tok.kind {
                 TokenKind::Num(v) => *v,
@@ -242,7 +242,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             ts.next();
             set_method(Method::Savage, &mut method)?;
         } else if ts.peek().is_kw("normal") {
-            common::expect_eq(ts, "NORMAL")?;
+            common::consume_option_eq(ts, "NORMAL")?;
             let tok = ts.peek().clone();
             let name = tok.ident().ok_or_else(|| {
                 SasError::parse("expected a NORMAL= method (BLOM|TUKEY|VW)", tok.span)

@@ -115,13 +115,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
                     || ts.peek().is_kw("prob")
                     || ts.peek().is_kw("p")
                 {
-                    common::expect_eq(ts, "PREDICTED")?;
+                    common::consume_option_eq(ts, "PREDICTED")?;
                     predicted = ts.peek().ident().map(str::to_string);
                     if predicted.is_some() {
                         ts.next();
                     }
                 } else if ts.peek().is_kw("xbeta") {
-                    common::expect_eq(ts, "XBETA")?;
+                    common::consume_option_eq(ts, "XBETA")?;
                     xbeta = ts.peek().ident().map(str::to_string);
                     if xbeta.is_some() {
                         ts.next();

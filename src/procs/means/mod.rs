@@ -60,6 +60,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::expect_eq;
 use crate::procs::common::num_var_meta;
 use crate::procs::common::{
     by_groups, decode_column, partition_numeric, partition_weighted, resolve_by_cols, sample_std,

@@ -27,7 +27,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             ts.next();
             cov = true;
         } else if ts.peek().is_kw("nfactors") {
-            common::expect_eq(ts, "NFACTORS")?;
+            common::consume_option_eq(ts, "NFACTORS")?;
             let span = ts.peek().span;
             let k = match ts.peek().kind {
                 TokenKind::Num(v) => v,
@@ -36,7 +36,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
             ts.next();
             nfactors = Some(k as usize);
         } else if ts.peek().is_kw("method") {
-            common::expect_eq(ts, "METHOD")?;
+            common::consume_option_eq(ts, "METHOD")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(m) => {
@@ -51,7 +51,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                 }
             }
         } else if ts.peek().is_kw("rotate") {
-            common::expect_eq(ts, "ROTATE")?;
+            common::consume_option_eq(ts, "ROTATE")?;
             let span = ts.peek().span;
             match ts.peek().ident() {
                 Some(r) => {

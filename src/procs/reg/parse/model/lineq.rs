@@ -4,7 +4,7 @@ use super::*;
 /// `selection` keyword has not been consumed yet) and build the initial
 /// `Selection` request with the method's default SLE/SLS.
 pub(crate) fn parse_selection_value(ts: &mut StatementStream) -> Result<Selection> {
-    common::expect_eq(ts, "SELECTION")?;
+    common::consume_option_eq(ts, "SELECTION")?;
     let method_name = ts.peek().ident().map(str::to_string).ok_or_else(|| {
         SasError::parse("expected selection method after SELECTION=", ts.peek().span)
     })?;

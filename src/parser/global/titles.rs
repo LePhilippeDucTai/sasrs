@@ -1,7 +1,7 @@
 use super::*;
 
 /// Helper M29.1 : exige un `=` après un nom d'option ODS GRAPHICS.
-pub(super) fn expect_eq(ts: &mut StatementStream, name: &str) -> Result<()> {
+pub(super) fn expect_ods_graphics_eq(ts: &mut StatementStream, name: &str) -> Result<()> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
             format!(
