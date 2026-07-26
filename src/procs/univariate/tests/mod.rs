@@ -62,10 +62,16 @@ fn run_plots(
     }
     session.ods_graphics.file_stem = file_stem;
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: None,
@@ -78,11 +84,17 @@ fn run_plots(
 }
 
 fn hist() -> Vec<UnivariatePlot> {
-    vec![UnivariatePlot { kind: UnivariatePlotKind::Histogram, var: Some("x".into()) }]
+    vec![UnivariatePlot {
+        kind: UnivariatePlotKind::Histogram,
+        var: Some("x".into()),
+    }]
 }
 
 fn qq() -> Vec<UnivariatePlot> {
-    vec![UnivariatePlot { kind: UnivariatePlotKind::QqPlot, var: Some("x".into()) }]
+    vec![UnivariatePlot {
+        kind: UnivariatePlotKind::QqPlot,
+        var: Some("x".into()),
+    }]
 }
 
 // ─────────────────────────── quantile def-5 tests ──────────────────────
@@ -126,6 +138,6 @@ fn wq(pairs: &[(f64, f64)], p: f64) -> f64 {
     weighted_quantile_def5(&s, p).unwrap()
 }
 
-mod phi;
 mod execute;
+mod phi;
 mod skewness;

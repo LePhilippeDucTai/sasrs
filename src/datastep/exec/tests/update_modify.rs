@@ -9,7 +9,14 @@ use crate::source::SourceFile;
 fn update_basic_overlay() {
     let mut s = session();
     // maître : id=1,2,3 ; x=10,20,30
-    write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+    write_num_ds(
+        &s,
+        "mas",
+        &[
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
+    );
     // transaction : id=2 ; x=99
     write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
     let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
@@ -28,7 +35,11 @@ fn update_basic_overlay() {
 #[test]
 fn update_no_match_unchanged() {
     let mut s = session();
-    write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
     write_num_ds(&s, "tra", &[("id", some(&[9.0])), ("x", some(&[99.0]))]);
     run("data mas; update mas tra key=id; run;", &mut s).unwrap();
     assert_eq!(col(&s, "mas", "x"), some(&[10.0, 20.0]));
@@ -41,13 +52,21 @@ fn update_missing_transaction_skips_overlay() {
     write_num_ds(
         &s,
         "mas",
-        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0])), ("y", some(&[1.0, 2.0]))],
+        &[
+            ("id", some(&[1.0, 2.0])),
+            ("x", some(&[10.0, 20.0])),
+            ("y", some(&[1.0, 2.0])),
+        ],
     );
     // transaction id=1 : x=. (manquant → pas de MAJ), y=77 (MAJ).
     write_num_ds(
         &s,
         "tra",
-        &[("id", some(&[1.0])), ("x", vec![None]), ("y", some(&[77.0]))],
+        &[
+            ("id", some(&[1.0])),
+            ("x", vec![None]),
+            ("y", some(&[77.0])),
+        ],
     );
     run("data mas; update mas tra key=id; run;", &mut s).unwrap();
     // x inchangé (transaction manquante) ; y mis à jour.
@@ -72,7 +91,11 @@ fn update_key_not_overwritten() {
 fn update_multiple_transactions_first_wins() {
     let mut s = session();
     write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
-    write_num_ds(&s, "tra", &[("id", some(&[1.0, 1.0])), ("x", some(&[20.0, 30.0]))]);
+    write_num_ds(
+        &s,
+        "tra",
+        &[("id", some(&[1.0, 1.0])), ("x", some(&[20.0, 30.0]))],
+    );
     run("data mas; update mas tra key=id; run;", &mut s).unwrap();
     // Première transaction (20) appliquée, la seconde (30) ignorée.
     assert_eq!(col(&s, "mas", "x"), some(&[20.0]));
@@ -83,7 +106,11 @@ fn update_multiple_transactions_first_wins() {
 fn update_unmatched_transaction_ignored() {
     let mut s = session();
     write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
-    write_num_ds(&s, "tra", &[("id", some(&[1.0, 2.0])), ("x", some(&[11.0, 22.0]))]);
+    write_num_ds(
+        &s,
+        "tra",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[11.0, 22.0]))],
+    );
     let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
     // id=2 (sans maître) n'est PAS inséré : 1 obs en sortie.
     assert_eq!(col(&s, "mas", "id"), some(&[1.0]));
@@ -96,7 +123,14 @@ fn update_unmatched_transaction_ignored() {
 #[test]
 fn update_master_where() {
     let mut s = session();
-    write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+    write_num_ds(
+        &s,
+        "mas",
+        &[
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
+    );
     write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
     let stats = run(
         "data out; update mas(where=(id>=2)) tra key=id; run;",
@@ -117,13 +151,21 @@ fn update_multiple_keys() {
     write_num_ds(
         &s,
         "mas",
-        &[("k1", some(&[1.0, 1.0])), ("k2", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+        &[
+            ("k1", some(&[1.0, 1.0])),
+            ("k2", some(&[1.0, 2.0])),
+            ("x", some(&[10.0, 20.0])),
+        ],
     );
     // Met à jour seulement (1,2).
     write_num_ds(
         &s,
         "tra",
-        &[("k1", some(&[1.0])), ("k2", some(&[2.0])), ("x", some(&[99.0]))],
+        &[
+            ("k1", some(&[1.0])),
+            ("k2", some(&[2.0])),
+            ("x", some(&[99.0])),
+        ],
     );
     run("data mas; update mas tra key=k1 k2; run;", &mut s).unwrap();
     assert_eq!(col(&s, "mas", "x"), some(&[10.0, 99.0]));
@@ -133,7 +175,13 @@ fn update_multiple_keys() {
 #[test]
 fn update_char_key() {
     let mut s = session();
-    write_keyed_ds(&s, "mas", "name", &["a", "b", "c"], &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_keyed_ds(
+        &s,
+        "mas",
+        "name",
+        &["a", "b", "c"],
+        &[("x", some(&[1.0, 2.0, 3.0]))],
+    );
     write_keyed_ds(&s, "tra", "name", &["b"], &[("x", some(&[20.0]))]);
     run("data mas; update mas tra key=name; run;", &mut s).unwrap();
     assert_eq!(col(&s, "mas", "x"), some(&[1.0, 20.0, 3.0]));
@@ -143,7 +191,11 @@ fn update_char_key() {
 #[test]
 fn update_new_variable_from_transaction() {
     let mut s = session();
-    write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
     write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("z", some(&[5.0]))]);
     run("data mas; update mas tra key=id; run;", &mut s).unwrap();
     // z existe (du maître absent → missing), posée pour id=1.
@@ -179,7 +231,11 @@ fn update_with_by_first_last() {
     write_num_ds(
         &s,
         "mas",
-        &[("g", some(&[1.0, 1.0, 2.0])), ("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))],
+        &[
+            ("g", some(&[1.0, 1.0, 2.0])),
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
     );
     write_num_ds(&s, "tra", &[("id", some(&[2.0])), ("x", some(&[99.0]))]);
     run(
@@ -202,9 +258,17 @@ fn update_with_by_groups_update() {
     write_num_ds(
         &s,
         "mas",
-        &[("g", some(&[1.0, 2.0])), ("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+        &[
+            ("g", some(&[1.0, 2.0])),
+            ("id", some(&[1.0, 2.0])),
+            ("x", some(&[10.0, 20.0])),
+        ],
     );
-    write_num_ds(&s, "tra", &[("id", some(&[1.0, 2.0])), ("x", some(&[100.0, 200.0]))]);
+    write_num_ds(
+        &s,
+        "tra",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[100.0, 200.0]))],
+    );
     run("data out; update mas tra key=id; by g; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "x"), some(&[100.0, 200.0]));
 }
@@ -213,7 +277,11 @@ fn update_with_by_groups_update() {
 #[test]
 fn update_with_derived_body_statement() {
     let mut s = session();
-    write_num_ds(&s, "mas", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
     write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("x", some(&[100.0]))]);
     run("data out; update mas tra key=id; d = x * 2; run;", &mut s).unwrap();
     // x après MAJ : 100, 20 ; d = 200, 40.
@@ -228,7 +296,10 @@ fn update_after_set_is_error() {
     write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
     write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
     let e = run_err("data out; set a; update a b key=id; run;", &mut s);
-    assert!(e.contains("Only one SET, MERGE, UPDATE, or MODIFY"), "got: {e}");
+    assert!(
+        e.contains("Only one SET, MERGE, UPDATE, or MODIFY"),
+        "got: {e}"
+    );
 }
 
 // ----- MODIFY -----
@@ -237,7 +308,14 @@ fn update_after_set_is_error() {
 #[test]
 fn modify_basic_assign_persists() {
     let mut s = session();
-    write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+    write_num_ds(
+        &s,
+        "d",
+        &[
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
+    );
     let stats = run("data d; modify d; x = x + 1; run;", &mut s).unwrap();
     assert_eq!(col(&s, "d", "x"), some(&[11.0, 21.0, 31.0]));
     // Réécriture en place : même nombre d'obs/variables.
@@ -250,7 +328,14 @@ fn modify_basic_assign_persists() {
 #[test]
 fn modify_conditional_update() {
     let mut s = session();
-    write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0, 3.0])), ("x", some(&[10.0, 20.0, 30.0]))]);
+    write_num_ds(
+        &s,
+        "d",
+        &[
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
+    );
     run("data d; modify d; if id = 2 then x = 999; run;", &mut s).unwrap();
     assert_eq!(col(&s, "d", "x"), some(&[10.0, 999.0, 30.0]));
 }
@@ -268,7 +353,11 @@ fn modify_output_not_allowed() {
 #[test]
 fn modify_with_key() {
     let mut s = session();
-    write_num_ds(&s, "d", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
+    write_num_ds(
+        &s,
+        "d",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
     run("data d; modify d key=id; x = x * 10; run;", &mut s).unwrap();
     assert_eq!(col(&s, "d", "x"), some(&[100.0, 200.0]));
 }
@@ -317,7 +406,13 @@ fn modify_point_single_row() {
 #[test]
 fn modify_char_column() {
     let mut s = session();
-    write_keyed_ds(&s, "d", "grp", &["a", "a", "b"], &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_keyed_ds(
+        &s,
+        "d",
+        "grp",
+        &["a", "a", "b"],
+        &[("x", some(&[1.0, 2.0, 3.0]))],
+    );
     run("data d; modify d; if x >= 2 then grp = 'z'; run;", &mut s).unwrap();
     assert_eq!(
         col_str(&s, "d", "grp"),
@@ -341,5 +436,8 @@ fn modify_twice_is_error() {
     write_num_ds(&s, "a", &[("x", some(&[1.0]))]);
     write_num_ds(&s, "b", &[("x", some(&[1.0]))]);
     let e = run_err("data a; modify a; modify b; run;", &mut s);
-    assert!(e.contains("Only one SET, MERGE, UPDATE, or MODIFY"), "got: {e}");
+    assert!(
+        e.contains("Only one SET, MERGE, UPDATE, or MODIFY"),
+        "got: {e}"
+    );
 }

@@ -9,7 +9,14 @@ fn exists_subquery_parses() {
         panic!("expected Exists");
     };
     assert!(!negated);
-    assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
+    assert_eq!(
+        query.from,
+        vec![FromItem {
+            table: dref("b"),
+            alias: None,
+            subquery: None
+        }]
+    );
 
     let stmt = one("select * from a where not exists (select 1 from b);");
     let SqlStmt::Select(sel) = stmt else { panic!() };

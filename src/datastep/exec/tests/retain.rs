@@ -52,7 +52,10 @@ fn retain_char_init_truncated_to_fixed_length() {
     // par le pdv.set normal au moment de poser les valeurs initiales.
     run("data out; length c $ 3; retain c 'abcdef'; run;", &mut s).unwrap();
     let ds = read_work(&s, "out");
-    assert_eq!(ds.df.column("c").unwrap().str().unwrap().get(0), Some("abc"));
+    assert_eq!(
+        ds.df.column("c").unwrap().str().unwrap().get(0),
+        Some("abc")
+    );
 }
 
 #[test]
@@ -79,19 +82,11 @@ fn retain_date_literal_quoted() {
 fn retain_datetime_literal() {
     // `retain dt '01JAN1960 00:00:00'dt;` = 0 secondes depuis l'époque.
     let mut s = session();
-    run(
-        "data out; retain dt '01JAN1960 00:00:00'dt; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; retain dt '01JAN1960 00:00:00'dt; run;", &mut s).unwrap();
     assert_eq!(num_at(&s, "out", "dt", 0), Some(0.0));
     // '01JAN1960 00:01:00'dt = 60 secondes.
     let mut s2 = session();
-    run(
-        "data out; retain dt '01JAN1960 00:01:00'dt; run;",
-        &mut s2,
-    )
-    .unwrap();
+    run("data out; retain dt '01JAN1960 00:01:00'dt; run;", &mut s2).unwrap();
     assert_eq!(num_at(&s2, "out", "dt", 0), Some(60.0));
 }
 
@@ -101,11 +96,7 @@ fn retain_date_literal_is_retained_across_iterations() {
     // on l'incrémente à chaque obs lue.
     let mut s = session();
     write_class(&s, "inp");
-    run(
-        "data out; set inp; retain d 100d; d = d + 1; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; set inp; retain d 100d; d = d + 1; run;", &mut s).unwrap();
     // 100 (initial) +1 par obs : 101, 102, 103.
     assert_eq!(num_at(&s, "out", "d", 0), Some(101.0));
     assert_eq!(num_at(&s, "out", "d", 1), Some(102.0));
@@ -185,14 +176,21 @@ fn length_truncates_longer_assignment() {
     let stats = run("data out; length c $ 3; c = 'abcdef'; run;", &mut s).unwrap();
     assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 1, 1)]);
     let ds = read_work(&s, "out");
-    assert_eq!(ds.df.column("c").unwrap().str().unwrap().get(0), Some("abc"));
+    assert_eq!(
+        ds.df.column("c").unwrap().str().unwrap().get(0),
+        Some("abc")
+    );
     assert_eq!(ds.vars[0].length, 3);
 }
 
 #[test]
 fn do_to_sums_one_to_ten() {
     let mut s = session();
-    run("data out; s = 0; do i = 1 to 10; s = s + i; end; run;", &mut s).unwrap();
+    run(
+        "data out; s = 0; do i = 1 to 10; s = s + i; end; run;",
+        &mut s,
+    )
+    .unwrap();
     assert_eq!(num_at(&s, "out", "s", 0), Some(55.0));
 }
 
@@ -253,7 +251,11 @@ fn do_until_runs_at_least_once() {
 #[test]
 fn pure_do_while_loops_until_condition_false() {
     let mut s = session();
-    run("data out; x = 0; do while(x < 3); x = x + 1; end; run;", &mut s).unwrap();
+    run(
+        "data out; x = 0; do while(x < 3); x = x + 1; end; run;",
+        &mut s,
+    )
+    .unwrap();
     assert_eq!(num_at(&s, "out", "x", 0), Some(3.0));
 }
 
@@ -363,7 +365,10 @@ fn missing_over_zero_does_not_emit_division_note() {
     assert_eq!(num_at(&s, "out", "r", 0), None);
     let log = s.log.into_string();
     assert!(!log.contains("Division by zero"), "log was: {log}");
-    assert!(log.contains("Missing values were generated"), "log was: {log}");
+    assert!(
+        log.contains("Missing values were generated"),
+        "log was: {log}"
+    );
 }
 
 #[test]

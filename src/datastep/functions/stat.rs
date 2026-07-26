@@ -42,7 +42,13 @@ pub(super) fn fn_min(args: &[Value], ctx: &mut EvalCtx) -> Value {
         if let Some(f) = coerce_num(a, ctx) {
             min_val = Some(match min_val {
                 None => f,
-                Some(m) => if f < m { f } else { m },
+                Some(m) => {
+                    if f < m {
+                        f
+                    } else {
+                        m
+                    }
+                }
             });
         }
     }
@@ -58,7 +64,13 @@ pub(super) fn fn_max(args: &[Value], ctx: &mut EvalCtx) -> Value {
         if let Some(f) = coerce_num(a, ctx) {
             max_val = Some(match max_val {
                 None => f,
-                Some(m) => if f > m { f } else { m },
+                Some(m) => {
+                    if f > m {
+                        f
+                    } else {
+                        m
+                    }
+                }
             });
         }
     }
@@ -94,4 +106,3 @@ pub(super) fn fn_missing(args: &[Value], _ctx: &mut EvalCtx) -> Value {
         Value::missing()
     }
 }
-

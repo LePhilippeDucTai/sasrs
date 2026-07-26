@@ -136,5 +136,8 @@ fn execute_does_not_affect_listing_output() {
 
     // listing should still be empty (PRINTTO alone writes nothing to listing)
     let listing = session.listing.into_string();
-    assert!(listing.is_empty(), "listing should be empty after PRINTTO: {listing}");
+    assert!(
+        listing.is_empty(),
+        "listing should be empty after PRINTTO: {listing}"
+    );
 }

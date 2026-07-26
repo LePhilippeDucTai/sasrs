@@ -49,7 +49,11 @@ pub(super) fn parse_libname(ts: &mut StatementStream) -> Result<GlobalStmt> {
         let path = value.clone();
         ts.next(); // consume the string literal
         ts.expect_semi()?;
-        return Ok(GlobalStmt::Libname { libref, engine: None, path });
+        return Ok(GlobalStmt::Libname {
+            libref,
+            engine: None,
+            path,
+        });
     }
 
     // `libname ref <engine> 'path' ;`  — engine identifier before the path.
@@ -72,7 +76,11 @@ pub(super) fn parse_libname(ts: &mut StatementStream) -> Result<GlobalStmt> {
                 let path = value.clone();
                 ts.next(); // consume the string literal
                 ts.expect_semi()?;
-                return Ok(GlobalStmt::Libname { libref, engine: Some(engine), path });
+                return Ok(GlobalStmt::Libname {
+                    libref,
+                    engine: Some(engine),
+                    path,
+                });
             }
             _ => {
                 return Err(SasError::parse(
@@ -154,9 +162,9 @@ pub(super) fn parse_filename(ts: &mut StatementStream) -> Result<GlobalStmt> {
             // Mots-clés device connus → accepté-et-ignoré (pas de chemin).
             let upper = id.to_ascii_uppercase();
             const DEVICES: &[&str] = &[
-                "TEMP", "PIPE", "URL", "DUMMY", "TERMINAL", "PLOTTER", "PRINTER",
-                "TAPE", "DISK", "CATALOG", "FTP", "SOCKET", "EMAIL", "CLIPBRD",
-                "ZIP", "HADOOP", "SFTP", "WEBDAV", "JMS",
+                "TEMP", "PIPE", "URL", "DUMMY", "TERMINAL", "PLOTTER", "PRINTER", "TAPE", "DISK",
+                "CATALOG", "FTP", "SOCKET", "EMAIL", "CLIPBRD", "ZIP", "HADOOP", "SFTP", "WEBDAV",
+                "JMS",
             ];
             if DEVICES.contains(&upper.as_str()) {
                 device = Some(upper);
@@ -182,5 +190,9 @@ pub(super) fn parse_filename(ts: &mut StatementStream) -> Result<GlobalStmt> {
         ts.next();
     }
     ts.expect_semi()?;
-    Ok(GlobalStmt::Filename { fileref, path, device })
+    Ok(GlobalStmt::Filename {
+        fileref,
+        path,
+        device,
+    })
 }

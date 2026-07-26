@@ -45,19 +45,27 @@ fn parse_minimal() {
 #[test]
 fn parse_methods() {
     assert_eq!(
-        parse_distance("proc distance method=cityblock; var x; run;").unwrap().method,
+        parse_distance("proc distance method=cityblock; var x; run;")
+            .unwrap()
+            .method,
         DistMethod::CityBlock
     );
     assert_eq!(
-        parse_distance("proc distance method=L2; var x; run;").unwrap().method,
+        parse_distance("proc distance method=L2; var x; run;")
+            .unwrap()
+            .method,
         DistMethod::Euclid
     );
     assert_eq!(
-        parse_distance("proc distance method=chebychev; var x; run;").unwrap().method,
+        parse_distance("proc distance method=chebychev; var x; run;")
+            .unwrap()
+            .method,
         DistMethod::Chebychev
     );
     assert_eq!(
-        parse_distance("proc distance method=cosine; var x; run;").unwrap().method,
+        parse_distance("proc distance method=cosine; var x; run;")
+            .unwrap()
+            .method,
         DistMethod::Cosine
     );
 }
@@ -98,8 +106,14 @@ fn execute_writes_out_dataset() {
     write_dataset(&mut session, "PTS", ds);
 
     let ast = DistanceAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "PTS".into() }),
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "DIST".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "PTS".into(),
+        }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DIST".into(),
+        }),
         method: DistMethod::Euclid,
         var: vec!["x".into()],
     };
@@ -128,7 +142,10 @@ fn execute_no_out_emits_note() {
     write_dataset(&mut session, "PTS", ds);
 
     let ast = DistanceAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "PTS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "PTS".into(),
+        }),
         out: None,
         method: DistMethod::Euclid,
         var: vec!["x".into()],

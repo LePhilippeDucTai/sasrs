@@ -163,10 +163,7 @@ pub(super) fn maybe_alias(ts: &mut StatementStream) -> Result<Option<String>> {
         ts.next();
         let tok = ts.peek().clone();
         let Some(name) = tok.ident().map(str::to_string) else {
-            return Err(SasError::parse(
-                "expected an alias name after AS",
-                tok.span,
-            ));
+            return Err(SasError::parse("expected an alias name after AS", tok.span));
         };
         ts.next();
         return Ok(Some(name));
@@ -261,10 +258,7 @@ pub(super) fn maybe_table_alias(ts: &mut StatementStream) -> Result<Option<Strin
         ts.next();
         let tok = ts.peek().clone();
         let Some(name) = tok.ident().map(str::to_string) else {
-            return Err(SasError::parse(
-                "expected an alias name after AS",
-                tok.span,
-            ));
+            return Err(SasError::parse("expected an alias name after AS", tok.span));
         };
         ts.next();
         return Ok(Some(name));

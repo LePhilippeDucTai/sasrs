@@ -29,17 +29,16 @@ use crate::procs::common;
 use crate::session::Session;
 use crate::token::TokenKind;
 
-
-mod parse_util;
-mod parse_stmt;
-mod parse;
 mod execute;
+mod parse;
+mod parse_stmt;
+mod parse_util;
 
 pub use execute::execute;
 pub use parse::parse;
 
-use parse_util::*;
 use parse_stmt::*;
+use parse_util::*;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -176,4 +175,3 @@ pub(crate) mod graphics_impl;
 
 #[cfg(test)]
 mod tests;
-

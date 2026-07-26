@@ -61,25 +61,24 @@ use crate::parser::StatementStream;
 use crate::procs::common::{self, chisq_sf, decode_column, ln_choose, probnorm};
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::*;
 use std::cmp::Ordering;
 
-
-mod parse;
-mod tally;
 mod oneway;
-mod twoway;
-mod stats;
 mod output;
+mod parse;
+mod stats;
+mod tally;
+mod twoway;
 
 pub use parse::parse;
 
-use tally::*;
 use oneway::*;
-use twoway::*;
-use stats::*;
 use output::*;
+use stats::*;
+use tally::*;
+use twoway::*;
 
 pub struct FreqAst {
     pub data: Option<DatasetRef>,

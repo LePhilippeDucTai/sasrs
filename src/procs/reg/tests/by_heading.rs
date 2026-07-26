@@ -20,7 +20,10 @@ fn test_by_heading_inside_header_block() {
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let mut ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         basic_model("y", &["x"]),
     );
     ast.by = vec!["g".into()];
@@ -29,7 +32,10 @@ fn test_by_heading_inside_header_block() {
     let lines: Vec<&str> = out.lines().map(|l| l.trim()).collect();
     // For the first group locate "The REG Procedure", "g=1", and the model
     // label, and assert the ordering proc-line < heading < model-label.
-    let proc_i = lines.iter().position(|l| *l == "The REG Procedure").unwrap();
+    let proc_i = lines
+        .iter()
+        .position(|l| *l == "The REG Procedure")
+        .unwrap();
     let head_i = lines.iter().position(|l| *l == "g=1").unwrap();
     let model_i = lines.iter().position(|l| *l == "Model: MODEL1").unwrap();
     assert!(
@@ -85,7 +91,10 @@ fn test_weighted_residual_summary_matches_error_ss() {
         let mut model = basic_model("y", &["x"]);
         model.r = true;
         let mut ast = single_model_ast(
-            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
             model,
         );
         ast.weight = weight.map(|w| w.to_string());
@@ -115,7 +124,11 @@ fn test_weighted_residual_summary_matches_error_ss() {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    assert_eq!(block(&none), block(&ones), "all-ones weight changed summary");
+    assert_eq!(
+        block(&none),
+        block(&ones),
+        "all-ones weight changed summary"
+    );
 }
 
 /// ID prepends an `Id` leading column to the MODEL R Output Statistics table.
@@ -136,7 +149,10 @@ fn test_id_column_in_r_table() {
     let mut model = basic_model("y", &["x"]);
     model.r = true;
     let mut ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         model,
     );
     ast.id = vec!["name".into()];
@@ -161,10 +177,8 @@ fn test_outest_covout_outseb_edf_rows() {
         vars: vec![num_meta("y"), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t outest=est covout outseb edf; model y = x; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=work.t outest=est covout outseb edf; model y = x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
     let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
@@ -196,7 +210,11 @@ fn test_m369_ridge0_equals_ols() {
     let (b0, slopes) = back_transform(&b_star, &std);
     let xm = design(true, &[&cols[0], &cols[1]], n);
     let fit = ols_fit(&xm, &y).unwrap();
-    assert!((b0 - fit.beta[0]).abs() < 1e-7, "intercept {b0} vs {}", fit.beta[0]);
+    assert!(
+        (b0 - fit.beta[0]).abs() < 1e-7,
+        "intercept {b0} vs {}",
+        fit.beta[0]
+    );
     assert!((slopes[0] - fit.beta[1]).abs() < 1e-7);
     assert!((slopes[1] - fit.beta[2]).abs() < 1e-7);
 }
@@ -279,8 +297,7 @@ fn test_m369_parse_ridge_range() {
 
 #[test]
 fn test_m369_parse_ridge_outvif_outest() {
-    let ast =
-        parse_reg("proc reg ridge=0 0.1 outvif outest=e; model y = x; run;").unwrap();
+    let ast = parse_reg("proc reg ridge=0 0.1 outvif outest=e; model y = x; run;").unwrap();
     assert_eq!(ast.data_options.ridge, vec![0.0, 0.1]);
     assert!(ast.data_options.outvif);
     assert!(ast.data_options.outest.is_some());
@@ -313,14 +330,16 @@ fn test_m369_outest_ridge_rows_and_columns() {
         vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t ridge=0 0.1 outvif outest=est; model y = x1 x2; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=work.t ridge=0 0.1 outvif outest=est; model y = x1 x2; run;")
+            .unwrap();
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
     let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
-    assert!(names.contains(&"_RIDGE_".to_string()), "no _RIDGE_ col: {names:?}");
+    assert!(
+        names.contains(&"_RIDGE_".to_string()),
+        "no _RIDGE_ col: {names:?}"
+    );
     let tidx = out.vars.iter().position(|v| v.name == "_TYPE_").unwrap();
     let tcol = decode_column(&out, tidx).unwrap();
     let types: Vec<String> = tcol
@@ -349,7 +368,6 @@ fn test_m369_outest_ridge_rows_and_columns() {
 
 #[test]
 fn test_m369_value_list_plain() {
-    let ast =
-        parse_reg("proc reg ridge=0 0.01 0.05 0.1; model y = x; run;").unwrap();
+    let ast = parse_reg("proc reg ridge=0 0.01 0.05 0.1; model y = x; run;").unwrap();
     assert_eq!(ast.data_options.ridge, vec![0.0, 0.01, 0.05, 0.1]);
 }

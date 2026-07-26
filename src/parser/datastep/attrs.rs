@@ -50,9 +50,7 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
             // consomme s'il est présent et adjacent.
             if let TokenKind::Ident(s) = &ts.peek().kind {
                 let lower = s.to_ascii_lowercase();
-                if ts.peek().span.start == num_end
-                    && matches!(lower.as_str(), "d" | "t" | "dt")
-                {
+                if ts.peek().span.start == num_end && matches!(lower.as_str(), "d" | "t" | "dt") {
                     ts.next(); // suffixe
                 }
             }
@@ -79,7 +77,9 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
             let suffix = *suffix;
             let span = tok.span;
             ts.next();
-            Ok(Some(super::expr::literal_from_string(&value, suffix, span)?))
+            Ok(Some(super::expr::literal_from_string(
+                &value, suffix, span,
+            )?))
         }
         TokenKind::Dot => {
             // `.` seul, ou missing spécial `.a`.. / `._` si l'ident d'UNE

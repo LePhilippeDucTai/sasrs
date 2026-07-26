@@ -11,7 +11,8 @@ pub(super) fn parse_plots_option(ts: &mut StatementStream, req: &mut PlotRequest
     // Optional global-option parenthesis directly after PLOTS: PLOTS(UNPACK)=…
     if ts.peek().kind == TokenKind::LParen {
         ts.next();
-        while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Semi
+        while ts.peek().kind != TokenKind::RParen
+            && ts.peek().kind != TokenKind::Semi
             && ts.peek().kind != TokenKind::Eof
         {
             if let Some(id) = ts.peek().ident() {
@@ -36,7 +37,8 @@ pub(super) fn parse_plots_option(ts: &mut StatementStream, req: &mut PlotRequest
     // Either a parenthesised list of keywords, or a single keyword.
     if ts.peek().kind == TokenKind::LParen {
         ts.next();
-        while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Semi
+        while ts.peek().kind != TokenKind::RParen
+            && ts.peek().kind != TokenKind::Semi
             && ts.peek().kind != TokenKind::Eof
         {
             if let Some(id) = ts.peek().ident() {

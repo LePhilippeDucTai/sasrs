@@ -7,9 +7,29 @@ pub(super) enum Tok {
     Num(f64),
     Ident(String),
     Str(String),
-    LBrace, RBrace, LBracket, RBracket, LParen, RParen,
-    Comma, Semi, Star, Slash, Plus, Minus, Hash, At, Quote, Colon, Dot,
-    Eq, Ne, Lt, Le, Gt, Ge,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    LParen,
+    RParen,
+    Comma,
+    Semi,
+    Star,
+    Slash,
+    Plus,
+    Minus,
+    Hash,
+    At,
+    Quote,
+    Colon,
+    Dot,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     Eof,
 }
 
@@ -69,9 +89,9 @@ pub(super) fn lex(src: &str) -> Result<Vec<Tok>> {
                     }
                 }
                 let txt = &src[start..i];
-                let v: f64 = txt.parse().map_err(|_| {
-                    SasError::runtime(format!("IML: invalid number '{txt}'"))
-                })?;
+                let v: f64 = txt
+                    .parse()
+                    .map_err(|_| SasError::runtime(format!("IML: invalid number '{txt}'")))?;
                 out.push(Tok::Num(v));
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -104,35 +124,106 @@ pub(super) fn lex(src: &str) -> Result<Vec<Tok>> {
                 i += 1; // closing quote
                 out.push(Tok::Str(s));
             }
-            b'{' => { out.push(Tok::LBrace); i += 1; }
-            b'}' => { out.push(Tok::RBrace); i += 1; }
-            b'[' => { out.push(Tok::LBracket); i += 1; }
-            b']' => { out.push(Tok::RBracket); i += 1; }
-            b'(' => { out.push(Tok::LParen); i += 1; }
-            b')' => { out.push(Tok::RParen); i += 1; }
-            b',' => { out.push(Tok::Comma); i += 1; }
-            b';' => { out.push(Tok::Semi); i += 1; }
-            b'*' => { out.push(Tok::Star); i += 1; }
-            b'/' => { out.push(Tok::Slash); i += 1; }
-            b'+' => { out.push(Tok::Plus); i += 1; }
-            b'-' => { out.push(Tok::Minus); i += 1; }
-            b'#' => { out.push(Tok::Hash); i += 1; }
-            b'@' => { out.push(Tok::At); i += 1; }
-            b'\'' => { out.push(Tok::Quote); i += 1; }
-            b':' => { out.push(Tok::Colon); i += 1; }
-            b'.' => { out.push(Tok::Dot); i += 1; }
-            b'=' => { out.push(Tok::Eq); i += 1; }
+            b'{' => {
+                out.push(Tok::LBrace);
+                i += 1;
+            }
+            b'}' => {
+                out.push(Tok::RBrace);
+                i += 1;
+            }
+            b'[' => {
+                out.push(Tok::LBracket);
+                i += 1;
+            }
+            b']' => {
+                out.push(Tok::RBracket);
+                i += 1;
+            }
+            b'(' => {
+                out.push(Tok::LParen);
+                i += 1;
+            }
+            b')' => {
+                out.push(Tok::RParen);
+                i += 1;
+            }
+            b',' => {
+                out.push(Tok::Comma);
+                i += 1;
+            }
+            b';' => {
+                out.push(Tok::Semi);
+                i += 1;
+            }
+            b'*' => {
+                out.push(Tok::Star);
+                i += 1;
+            }
+            b'/' => {
+                out.push(Tok::Slash);
+                i += 1;
+            }
+            b'+' => {
+                out.push(Tok::Plus);
+                i += 1;
+            }
+            b'-' => {
+                out.push(Tok::Minus);
+                i += 1;
+            }
+            b'#' => {
+                out.push(Tok::Hash);
+                i += 1;
+            }
+            b'@' => {
+                out.push(Tok::At);
+                i += 1;
+            }
+            b'\'' => {
+                out.push(Tok::Quote);
+                i += 1;
+            }
+            b':' => {
+                out.push(Tok::Colon);
+                i += 1;
+            }
+            b'.' => {
+                out.push(Tok::Dot);
+                i += 1;
+            }
+            b'=' => {
+                out.push(Tok::Eq);
+                i += 1;
+            }
             b'<' => {
-                if i + 1 < n && b[i + 1] == b'=' { out.push(Tok::Le); i += 2; }
-                else { out.push(Tok::Lt); i += 1; }
+                if i + 1 < n && b[i + 1] == b'=' {
+                    out.push(Tok::Le);
+                    i += 2;
+                } else {
+                    out.push(Tok::Lt);
+                    i += 1;
+                }
             }
             b'>' => {
-                if i + 1 < n && b[i + 1] == b'=' { out.push(Tok::Ge); i += 2; }
-                else { out.push(Tok::Gt); i += 1; }
+                if i + 1 < n && b[i + 1] == b'=' {
+                    out.push(Tok::Ge);
+                    i += 2;
+                } else {
+                    out.push(Tok::Gt);
+                    i += 1;
+                }
             }
             b'^' | b'~' => {
-                if i + 1 < n && b[i + 1] == b'=' { out.push(Tok::Ne); i += 2; }
-                else { return Err(SasError::runtime(format!("IML: unexpected character '{}'", c as char))); }
+                if i + 1 < n && b[i + 1] == b'=' {
+                    out.push(Tok::Ne);
+                    i += 2;
+                } else {
+                    return Err(SasError::runtime(format!(
+                        "IML: unexpected character '{}'",
+                        c as char
+                    )));
+                }
             }
             other => {
                 return Err(SasError::runtime(format!(

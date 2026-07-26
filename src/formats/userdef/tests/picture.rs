@@ -30,13 +30,19 @@ fn picture_literal_separators_date() {
     // '99/99/9999' on a packed date-like integer.
     let p = pic_low_high("99/99/9999", PictureDirectives::default());
     // 12252020 → 12/25/2020
-    assert_eq!(p.render(&Value::Num(12252020.0)).as_deref(), Some("12/25/2020"));
+    assert_eq!(
+        p.render(&Value::Num(12252020.0)).as_deref(),
+        Some("12/25/2020")
+    );
 }
 
 #[test]
 fn picture_comma_separator() {
     let p = pic_low_high("000,000,009", PictureDirectives::default());
-    assert_eq!(p.render(&Value::Num(1234567.0)).as_deref(), Some("  1,234,567"));
+    assert_eq!(
+        p.render(&Value::Num(1234567.0)).as_deref(),
+        Some("  1,234,567")
+    );
     // Leading separators dropped when value is small.
     assert_eq!(p.render(&Value::Num(5.0)).as_deref(), Some("          5"));
 }

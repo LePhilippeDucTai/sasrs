@@ -6,11 +6,7 @@ pub fn student_t_cdf(t: f64, df: f64) -> f64 {
     // P(T <= t) = 1 - 0.5 * I_{df/(df+t^2)}(df/2, 1/2) for t >= 0, mirrored.
     let x = df / (df + t * t);
     let ib = betai(df / 2.0, 0.5, x);
-    if t >= 0.0 {
-        1.0 - 0.5 * ib
-    } else {
-        0.5 * ib
-    }
+    if t >= 0.0 { 1.0 - 0.5 * ib } else { 0.5 * ib }
 }
 
 /// Standard normal cumulative distribution function.

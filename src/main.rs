@@ -67,16 +67,14 @@ fn main() -> ExitCode {
         },
     );
 
-    let write_or = |target: &Option<PathBuf>, content: &str, fallback_stdout: bool| {
-        match target {
-            Some(path) => {
-                if let Err(e) = std::fs::write(path, content) {
-                    eprintln!("ERROR: cannot write {}: {e}", path.display());
-                }
+    let write_or = |target: &Option<PathBuf>, content: &str, fallback_stdout: bool| match target {
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, content) {
+                eprintln!("ERROR: cannot write {}: {e}", path.display());
             }
-            None if fallback_stdout => print!("{content}"),
-            None => eprint!("{content}"),
         }
+        None if fallback_stdout => print!("{content}"),
+        None => eprint!("{content}"),
     };
 
     write_or(&cli.log, &outcome.log, false);

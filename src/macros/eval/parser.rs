@@ -99,12 +99,7 @@ impl FloatParser<'_> {
         if let Some(op) = self.peek().cloned() {
             let is_cmp = matches!(
                 op,
-                EvalTok::Eq
-                    | EvalTok::Ne
-                    | EvalTok::Lt
-                    | EvalTok::Le
-                    | EvalTok::Gt
-                    | EvalTok::Ge
+                EvalTok::Eq | EvalTok::Ne | EvalTok::Lt | EvalTok::Le | EvalTok::Gt | EvalTok::Ge
             );
             if is_cmp {
                 self.bump();

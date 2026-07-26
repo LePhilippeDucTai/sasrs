@@ -36,11 +36,7 @@ fn hash_declare_options_parsed() {
 #[test]
 fn hash_declare_multidata_no() {
     let mut s = session();
-    run(
-        "data _null_; declare hash h(multidata:'no'); run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data _null_; declare hash h(multidata:'no'); run;", &mut s).unwrap();
     assert!(!s.debug_hashes.get("H").unwrap().multidata);
 }
 
@@ -163,10 +159,7 @@ fn hash_define_key_creates_variable() {
 #[test]
 fn hash_method_on_undeclared_object_errors() {
     let mut s = session();
-    let e = run_err(
-        "data _null_; k = 1; ghost.defineKey('k'); run;",
-        &mut s,
-    );
+    let e = run_err("data _null_; k = 1; ghost.defineKey('k'); run;", &mut s);
     assert!(e.to_uppercase().contains("GHOST"), "got: {e}");
 }
 
@@ -205,7 +198,10 @@ fn hash_add_find_roundtrip() {
     .unwrap();
     assert_eq!(stats.written[0].1, 1);
     let ds = read_work(&s, "out");
-    assert_eq!(ds.df.column("v").unwrap().f64().unwrap().get(0), Some(200.0));
+    assert_eq!(
+        ds.df.column("v").unwrap().f64().unwrap().get(0),
+        Some(200.0)
+    );
     assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
 }
 
@@ -281,8 +277,14 @@ fn hash_remove_and_num_items() {
     let ds = read_work(&s, "out");
     assert_eq!(ds.df.column("n1").unwrap().f64().unwrap().get(0), Some(2.0));
     assert_eq!(ds.df.column("n2").unwrap().f64().unwrap().get(0), Some(1.0));
-    assert_eq!(ds.df.column("rc1").unwrap().f64().unwrap().get(0), Some(0.0));
-    assert_ne!(ds.df.column("rc2").unwrap().f64().unwrap().get(0), Some(0.0));
+    assert_eq!(
+        ds.df.column("rc1").unwrap().f64().unwrap().get(0),
+        Some(0.0)
+    );
+    assert_ne!(
+        ds.df.column("rc2").unwrap().f64().unwrap().get(0),
+        Some(0.0)
+    );
 }
 
 /// clear vide le hash (num_items → 0).
@@ -415,11 +417,23 @@ fn hash_multidata_find_next() {
     )
     .unwrap();
     let ds = read_work(&s, "out");
-    assert_eq!(ds.df.column("v1").unwrap().f64().unwrap().get(0), Some(100.0));
-    assert_eq!(ds.df.column("v2").unwrap().f64().unwrap().get(0), Some(200.0));
-    assert_eq!(ds.df.column("v3").unwrap().f64().unwrap().get(0), Some(300.0));
+    assert_eq!(
+        ds.df.column("v1").unwrap().f64().unwrap().get(0),
+        Some(100.0)
+    );
+    assert_eq!(
+        ds.df.column("v2").unwrap().f64().unwrap().get(0),
+        Some(200.0)
+    );
+    assert_eq!(
+        ds.df.column("v3").unwrap().f64().unwrap().get(0),
+        Some(300.0)
+    );
     // find_next au-delà → rc ≠ 0.
-    assert_ne!(ds.df.column("rc4").unwrap().f64().unwrap().get(0), Some(0.0));
+    assert_ne!(
+        ds.df.column("rc4").unwrap().f64().unwrap().get(0),
+        Some(0.0)
+    );
 }
 
 /// duplicate:'replace' écrase la donnée d'une clé existante (sans multidata).

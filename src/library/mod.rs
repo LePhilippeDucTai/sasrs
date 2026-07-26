@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-
 mod csv;
 mod dir;
 // Tout le contenu de `s3` est derrière la feature `s3` : sans elle le module
@@ -19,7 +18,6 @@ pub use csv::CsvLibrary;
 pub use dir::DirLibrary;
 #[cfg(feature = "s3")]
 pub use s3::S3Library;
-
 
 /// Storage backend for one libref. Everything above this trait manipulates
 /// table names only; the provider owns paths/URIs. A future S3 provider
@@ -126,9 +124,7 @@ impl LibraryManager {
             return Err(SasError::runtime("Libref WORK cannot be cleared."));
         }
         if self.refs.remove(&key).is_none() {
-            return Err(SasError::runtime(format!(
-                "Libref {key} is not assigned."
-            )));
+            return Err(SasError::runtime(format!("Libref {key} is not assigned.")));
         }
         Ok(())
     }
@@ -137,7 +133,9 @@ impl LibraryManager {
         self.refs
             .get(&libref.to_uppercase())
             .cloned()
-            .ok_or_else(|| SasError::runtime(format!("Libref {} is not assigned.", libref.to_uppercase())))
+            .ok_or_else(|| {
+                SasError::runtime(format!("Libref {} is not assigned.", libref.to_uppercase()))
+            })
     }
 
     /// Noms (MAJUSCULES) de toutes les bibliothèques assignées, triés. Sert aux
@@ -157,7 +155,9 @@ fn validate_libref(libref: &str) -> Result<()> {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && libref.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        && libref
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
     if valid {
         Ok(())
     } else {
@@ -174,8 +174,11 @@ mod csv_tests {
 
     fn make_ds(vals: Vec<i32>, names: Vec<&str>) -> SasDataset {
         // Build a small DataFrame with one numeric column and one char column.
-        let numeric = Series::new("x".into(), vals.iter().map(|&v| v as f64).collect::<Vec<_>>());
-        let chars   = Series::new("name".into(), names);
+        let numeric = Series::new(
+            "x".into(),
+            vals.iter().map(|&v| v as f64).collect::<Vec<_>>(),
+        );
+        let chars = Series::new("name".into(), names);
         let df = DataFrame::new(vec![numeric.into(), chars.into()]).unwrap();
         SasDataset::from_dataframe(df).unwrap().0
     }
@@ -205,8 +208,13 @@ mod csv_tests {
         let (ds2, _) = lib.read("t").unwrap();
         let col = ds2.df.column("x").unwrap();
         // CSV is read back as floats or ints – check values via to_string.
-        let s: Vec<f64> = col.cast(&DataType::Float64).unwrap()
-            .f64().unwrap().into_no_null_iter().collect();
+        let s: Vec<f64> = col
+            .cast(&DataType::Float64)
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_no_null_iter()
+            .collect();
         assert_eq!(s, vec![10.0, 20.0]);
     }
 
@@ -268,7 +276,11 @@ mod csv_tests {
     fn csv_read_nonexistent_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = CsvLibrary::new(tmp.path().to_path_buf());
-        let err_msg = lib.read("nobody").err().expect("expected error reading non-existent table").to_string();
+        let err_msg = lib
+            .read("nobody")
+            .err()
+            .expect("expected error reading non-existent table")
+            .to_string();
         assert!(err_msg.contains("does not exist"), "{err_msg}");
     }
 
@@ -302,7 +314,9 @@ mod csv_tests {
     #[test]
     fn assign_csv_rejects_missing_dir() {
         let mut mgr = LibraryManager::new(None).unwrap();
-        let err = mgr.assign_csv("x", PathBuf::from("/nonexistent/path/xyz")).unwrap_err();
+        let err = mgr
+            .assign_csv("x", PathBuf::from("/nonexistent/path/xyz"))
+            .unwrap_err();
         assert!(err.to_string().contains("does not exist"), "{err}");
     }
 }

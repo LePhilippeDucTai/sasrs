@@ -4,7 +4,11 @@ use super::*;
 pub(super) fn expect_eq(ts: &mut StatementStream, name: &str) -> Result<()> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
-            format!("ODS GRAPHICS option {} requires a value (e.g. {}=...)", name.to_uppercase(), name.to_uppercase()),
+            format!(
+                "ODS GRAPHICS option {} requires a value (e.g. {}=...)",
+                name.to_uppercase(),
+                name.to_uppercase()
+            ),
             ts.peek().span,
         ));
     }
@@ -39,7 +43,10 @@ pub(super) fn parse_title(ts: &mut StatementStream, n: u8) -> Result<GlobalStmt>
             let text = value.clone();
             ts.next(); // consume the string literal
             ts.expect_semi()?;
-            Ok(GlobalStmt::Title { n, text: Some(text) })
+            Ok(GlobalStmt::Title {
+                n,
+                text: Some(text),
+            })
         }
         _ => {
             // Unquoted text or any non-string token after TITLE.
@@ -75,7 +82,10 @@ pub(super) fn parse_footnote(ts: &mut StatementStream, n: u8) -> Result<GlobalSt
             let text = value.clone();
             ts.next(); // consume the string literal
             ts.expect_semi()?;
-            Ok(GlobalStmt::Footnote { n, text: Some(text) })
+            Ok(GlobalStmt::Footnote {
+                n,
+                text: Some(text),
+            })
         }
         _ => Err(SasError::parse(
             "FOOTNOTE text must be a quoted string literal, e.g. footnote 'My Note';",

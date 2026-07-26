@@ -26,20 +26,16 @@ fn parse_catalog_minimal() {
 
 #[test]
 fn parse_catalog_with_contents() {
-    let ast = parse_catalog_src(
-        "proc catalog catalog=work.cat; contents; quit;",
-    )
-    .unwrap();
+    let ast = parse_catalog_src("proc catalog catalog=work.cat; contents; quit;").unwrap();
     assert_eq!(ast.stmts.len(), 1);
     assert!(matches!(ast.stmts[0], CatalogStmt::Contents));
 }
 
 #[test]
 fn parse_catalog_delete_entry() {
-    let ast = parse_catalog_src(
-        "proc catalog catalog=sasuser.profile; delete myfmt / et=format; quit;",
-    )
-    .unwrap();
+    let ast =
+        parse_catalog_src("proc catalog catalog=sasuser.profile; delete myfmt / et=format; quit;")
+            .unwrap();
     assert_eq!(ast.stmts.len(), 1);
     match &ast.stmts[0] {
         CatalogStmt::Delete { entries } => {
@@ -51,10 +47,8 @@ fn parse_catalog_delete_entry() {
 
 #[test]
 fn parse_catalog_copy() {
-    let ast = parse_catalog_src(
-        "proc catalog catalog=work.cat; copy out=work.cat2; quit;",
-    )
-    .unwrap();
+    let ast =
+        parse_catalog_src("proc catalog catalog=work.cat; copy out=work.cat2; quit;").unwrap();
     assert_eq!(ast.stmts.len(), 1);
     match &ast.stmts[0] {
         CatalogStmt::Copy { out } => {
@@ -67,10 +61,8 @@ fn parse_catalog_copy() {
 #[test]
 fn parse_catalog_quit_terminates() {
     // Anything after quit; should be ignored
-    let ast = parse_catalog_src(
-        "proc catalog catalog=work.cat; contents; quit; contents;",
-    )
-    .unwrap();
+    let ast =
+        parse_catalog_src("proc catalog catalog=work.cat; contents; quit; contents;").unwrap();
     // Should have only 1 statement (the one before quit)
     assert_eq!(ast.stmts.len(), 1);
 }
@@ -89,7 +81,10 @@ fn execute_contents_empty_catalog() {
     let listing = session.listing.into_string();
     assert!(listing.contains("WORK.FORMATS"), "listing: {listing}");
     // No user formats yet → empty listing with note
-    assert!(listing.contains("No entries") || listing.is_empty() || listing.contains("Catalog"), "listing: {listing}");
+    assert!(
+        listing.contains("No entries") || listing.is_empty() || listing.contains("Catalog"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -104,7 +99,10 @@ fn execute_delete_noop_with_note() {
     execute(&ast, &mut session).unwrap();
 
     let log = session.log.into_string();
-    assert!(log.contains("DELETE") || log.contains("no-op"), "log: {log}");
+    assert!(
+        log.contains("DELETE") || log.contains("no-op"),
+        "log: {log}"
+    );
     assert!(log.contains("MYFORMAT"), "log: {log}");
 }
 

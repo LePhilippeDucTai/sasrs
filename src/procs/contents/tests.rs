@@ -140,8 +140,14 @@ fn execute_basic_contents() {
     assert!(listing.contains('2'), "obs count: {listing}");
 
     // Variable names must appear
-    assert!(listing.contains("name") || listing.contains("NAME"), "listing: {listing}");
-    assert!(listing.contains("age") || listing.contains("AGE"), "listing: {listing}");
+    assert!(
+        listing.contains("name") || listing.contains("NAME"),
+        "listing: {listing}"
+    );
+    assert!(
+        listing.contains("age") || listing.contains("AGE"),
+        "listing: {listing}"
+    );
 
     // Type column
     assert!(listing.contains("Num"), "Num type: {listing}");
@@ -169,7 +175,10 @@ fn execute_shows_format_and_label() {
     let listing = session.listing.into_string();
 
     // Format should appear in the variable table
-    assert!(listing.contains("best12.") || listing.contains("BEST12."), "format: {listing}");
+    assert!(
+        listing.contains("best12.") || listing.contains("BEST12."),
+        "format: {listing}"
+    );
 
     // Label should appear in the variable table
     assert!(listing.contains("Age of subject"), "label: {listing}");
@@ -204,7 +213,10 @@ fn execute_varnum_ordering() {
     let lower = listing.to_lowercase();
     let pos_age = lower.rfind("age");
     let pos_name = lower.rfind("name");
-    assert!(pos_age.is_some() && pos_name.is_some(), "listing: {listing}");
+    assert!(
+        pos_age.is_some() && pos_name.is_some(),
+        "listing: {listing}"
+    );
     assert!(
         pos_age.unwrap() < pos_name.unwrap(),
         "alphabetical: age before name; listing:\n{listing}"
@@ -231,7 +243,10 @@ fn execute_varnum_ordering() {
     // Find the variable table section after the blank line following the header
     let pos_age2 = lower2.rfind("age");
     let pos_name2 = lower2.rfind("name");
-    assert!(pos_age2.is_some() && pos_name2.is_some(), "listing2: {listing2}");
+    assert!(
+        pos_age2.is_some() && pos_name2.is_some(),
+        "listing2: {listing2}"
+    );
     assert!(
         pos_name2.unwrap() < pos_age2.unwrap(),
         "varnum: name (index 0) before age (index 1); listing:\n{listing2}"
@@ -252,7 +267,10 @@ fn execute_all_lists_tables() {
         format: None,
         label: None,
     }];
-    let ds2 = SasDataset { df: df2, vars: vars2 };
+    let ds2 = SasDataset {
+        df: df2,
+        vars: vars2,
+    };
     session
         .libs
         .get("WORK")
@@ -312,22 +330,26 @@ fn execute_no_last_dataset_errors() {
     let result = execute(&ast, &mut session);
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("_LAST_") || msg.contains("undefined"), "msg: {msg}");
+    assert!(
+        msg.contains("_LAST_") || msg.contains("undefined"),
+        "msg: {msg}"
+    );
 }
 
 // ── M33.7 : OUT= / SHORT / DETAILS ────────────────────────────────────────
 
 #[test]
 fn parse_out_short_details() {
-    let ast = parse_contents_full(
-        "proc contents data=work.x out=work.meta short details; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_contents_full("proc contents data=work.x out=work.meta short details; run;").unwrap();
     assert!(ast.short);
     assert!(ast.details);
     assert_eq!(
         ast.out,
-        Some(DatasetRef { libref: Some("work".into()), name: "meta".into() })
+        Some(DatasetRef {
+            libref: Some("work".into()),
+            name: "meta".into()
+        })
     );
 }
 
@@ -337,10 +359,16 @@ fn execute_out_dataset_shape_and_values() {
     write_test_dataset(&mut session); // name (Char,5), age (Num,8, best12., "Age of subject")
 
     let ast = ContentsAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "CLASS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLASS".into(),
+        }),
         varnum: false,
         all: false,
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "META".into() }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "META".into(),
+        }),
         short: false,
         details: false,
     };
@@ -350,7 +378,10 @@ fn execute_out_dataset_shape_and_values() {
     // 6 columns, 2 rows (one per variable in creation order: name, age).
     assert_eq!(out.n_obs(), 2, "one row per variable");
     let cols: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
-    assert_eq!(cols, vec!["NAME", "TYPE", "LENGTH", "VARNUM", "LABEL", "FORMAT"]);
+    assert_eq!(
+        cols,
+        vec!["NAME", "TYPE", "LENGTH", "VARNUM", "LABEL", "FORMAT"]
+    );
 
     // Decode rows. Row 0 = name (Char → TYPE 2, LENGTH 5, VARNUM 1).
     let name = out.df.column("NAME").unwrap().str().unwrap();
@@ -383,7 +414,10 @@ fn execute_short_lists_variable_names_only() {
     let mut session = make_session();
     write_test_dataset(&mut session);
     let ast = ContentsAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "CLASS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLASS".into(),
+        }),
         varnum: false,
         all: false,
         out: None,
@@ -396,8 +430,14 @@ fn execute_short_lists_variable_names_only() {
     assert!(listing.contains("age name"), "short var list: {listing}");
     // SHORT suppresses the per-variable detail table: the "Num"/"Char" type
     // cells of the detail table must not appear.
-    assert!(!listing.contains("Char"), "no detail table under SHORT: {listing}");
-    assert!(!listing.contains("Num"), "no detail table under SHORT: {listing}");
+    assert!(
+        !listing.contains("Char"),
+        "no detail table under SHORT: {listing}"
+    );
+    assert!(
+        !listing.contains("Num"),
+        "no detail table under SHORT: {listing}"
+    );
 }
 
 #[test]
@@ -405,7 +445,10 @@ fn execute_details_adds_header_lines() {
     let mut session = make_session();
     write_test_dataset(&mut session);
     let ast = ContentsAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "CLASS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLASS".into(),
+        }),
         varnum: false,
         all: false,
         out: None,
@@ -414,6 +457,12 @@ fn execute_details_adds_header_lines() {
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("# Observations:"), "details obs line: {listing}");
-    assert!(listing.contains("# Variables:"), "details var line: {listing}");
+    assert!(
+        listing.contains("# Observations:"),
+        "details obs line: {listing}"
+    );
+    assert!(
+        listing.contains("# Variables:"),
+        "details var line: {listing}"
+    );
 }

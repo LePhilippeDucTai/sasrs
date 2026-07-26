@@ -334,7 +334,11 @@ pub(super) fn parse_sql_atom(ts: &mut StatementStream) -> Result<SqlExpr> {
 /// `(` suivie de SELECT = sous-requête interdite. La liste de valeurs réutilise
 /// `parse_expr` (littéraux de base). Représenté comme `SqlExpr::Base(Expr::In)`
 /// avec un membre gauche aplati (Qualified → "table.column").
-pub(super) fn parse_sql_in(ts: &mut StatementStream, left: SqlExpr, negated: bool) -> Result<SqlExpr> {
+pub(super) fn parse_sql_in(
+    ts: &mut StatementStream,
+    left: SqlExpr,
+    negated: bool,
+) -> Result<SqlExpr> {
     ts.next(); // IN
     if ts.peek().kind != TokenKind::LParen {
         return Err(SasError::parse("expected '(' after IN", ts.peek().span));
@@ -364,12 +368,8 @@ pub(super) fn parse_sql_in(ts: &mut StatementStream, left: SqlExpr, negated: boo
         }
     }
     expect_rparen(ts)?;
-    let base_left = sql_expr_to_base(&left).ok_or_else(|| {
-        SasError::parse(
-            "unsupported left-hand side for IN",
-            ts.peek().span,
-        )
-    })?;
+    let base_left = sql_expr_to_base(&left)
+        .ok_or_else(|| SasError::parse("unsupported left-hand side for IN", ts.peek().span))?;
     let in_expr = Expr::In {
         expr: Box::new(base_left),
         list,

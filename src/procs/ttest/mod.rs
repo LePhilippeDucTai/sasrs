@@ -126,19 +126,18 @@ use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 
-
-mod parse;
-mod stats;
-mod report;
 mod execute;
 mod output;
+mod parse;
+mod report;
+mod stats;
 
 pub use parse::parse;
 
-use stats::*;
-use report::*;
 use execute::*;
 use output::*;
+use report::*;
+use stats::*;
 
 #[derive(Debug, Clone)]
 pub struct TTestAst {

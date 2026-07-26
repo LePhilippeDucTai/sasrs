@@ -17,7 +17,10 @@ pub(super) struct ColPlan {
 
 /// Resolve the column list (display order) and build the per-column plan,
 /// applying DEFINEs and type defaults.
-pub(super) fn build_col_plan(ast: &ReportAst, ds: &crate::dataset::SasDataset) -> Result<Vec<ColPlan>> {
+pub(super) fn build_col_plan(
+    ast: &ReportAst,
+    ds: &crate::dataset::SasDataset,
+) -> Result<Vec<ColPlan>> {
     let col_names: Vec<String> = match &ast.columns {
         Some(list) => list.clone(),
         None => ds.vars.iter().map(|m| m.name.clone()).collect(),
@@ -124,7 +127,10 @@ pub(super) fn decode_and_filter(
 }
 
 /// Headers + per-column alignments for the listing.
-pub(super) fn build_headers(plan: &[ColPlan], ds: &crate::dataset::SasDataset) -> (Vec<String>, Vec<Align>) {
+pub(super) fn build_headers(
+    plan: &[ColPlan],
+    ds: &crate::dataset::SasDataset,
+) -> (Vec<String>, Vec<Align>) {
     let headers: Vec<String> = plan.iter().map(|c| c.header.clone()).collect();
     let aligns: Vec<Align> = plan
         .iter()

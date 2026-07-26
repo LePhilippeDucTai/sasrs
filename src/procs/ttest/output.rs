@@ -29,7 +29,11 @@ pub(super) fn output_target(ast: &TTestAst, session: &Session) -> Option<Dataset
         .or_else(|| ast.data_options.output.clone())
 }
 
-pub(super) fn write_out_dataset(session: &mut Session, target: &DatasetRef, out_ds: SasDataset) -> Result<()> {
+pub(super) fn write_out_dataset(
+    session: &mut Session,
+    target: &DatasetRef,
+    out_ds: SasDataset,
+) -> Result<()> {
     let out_libref = target.libref_or_work();
     let out_table = target.name.to_uppercase();
     let display = format!("{out_libref}.{out_table}");
@@ -54,7 +58,10 @@ pub(super) fn maybe_write_one_sample_output(
     };
     let var: Vec<Option<String>> = rows.iter().map(|(n, _)| Some(n.clone())).collect();
     let n: Vec<Option<f64>> = rows.iter().map(|(_, r)| Some(r.n as f64)).collect();
-    let mean: Vec<Option<f64>> = rows.iter().map(|(_, r)| (r.n > 0).then_some(r.mean)).collect();
+    let mean: Vec<Option<f64>> = rows
+        .iter()
+        .map(|(_, r)| (r.n > 0).then_some(r.mean))
+        .collect();
     let std: Vec<Option<f64>> = rows.iter().map(|(_, r)| r.std).collect();
     let stderr: Vec<Option<f64>> = rows.iter().map(|(_, r)| r.se).collect();
     let df: Vec<Option<f64>> = rows.iter().map(|(_, r)| Some(r.df)).collect();

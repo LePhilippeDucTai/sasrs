@@ -14,13 +14,8 @@
 //! Convention commune : `data=` absent → `session.last_dataset` (_LAST_) ;
 //! aucun dataset créé dans la session → ERROR (comme SAS _LAST_ vide).
 
-pub mod append;
 pub mod anova;
-pub mod factor;
-pub mod genmod;
-pub mod glimmix;
-pub mod glm;
-pub mod logistic;
+pub mod append;
 pub mod catalog;
 pub mod cluster;
 pub mod common;
@@ -31,14 +26,19 @@ pub mod datasets;
 pub mod discrim;
 pub mod distance;
 pub mod export;
+pub mod factor;
 pub mod fastclus;
 pub mod format;
 pub mod freq;
 pub mod gchart;
+pub mod genmod;
+pub mod glimmix;
+pub mod glm;
 pub mod gplot;
 pub mod iml;
 pub mod import;
 pub mod lincom;
+pub mod logistic;
 pub mod means;
 pub mod mixed;
 pub mod npar1way;

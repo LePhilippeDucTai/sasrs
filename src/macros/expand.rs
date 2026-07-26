@@ -44,7 +44,11 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     // « toujours vrai », mot-clé de table inutilisé.
     ("", |_, _, _| true, MacroEngine::consume_unsupported_stmt),
     // `%let` insensible à la casse (matcher dédié : `%let` + blanc).
-    ("let", |chars, i, _| MacroEngine::matches_let(chars, i), MacroEngine::consume_let),
+    (
+        "let",
+        |chars, i, _| MacroEngine::matches_let(chars, i),
+        MacroEngine::consume_let,
+    ),
     // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
     // n'émet RIEN dans le flux de code.
     ("put", STMT, MacroEngine::consume_put),
@@ -58,19 +62,31 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     // `%macro name(params); body %mend;` — capture, n'émet rien.
     ("macro", STMT, MacroEngine::consume_macro_def),
     // `%local v1 v2;` / `%global v1 v2;`
-    ("local", STMT, |s, c, i, o| s.consume_scope_decl(c, i, true, o)),
-    ("global", STMT, |s, c, i, o| s.consume_scope_decl(c, i, false, o)),
+    ("local", STMT, |s, c, i, o| {
+        s.consume_scope_decl(c, i, true, o)
+    }),
+    ("global", STMT, |s, c, i, o| {
+        s.consume_scope_decl(c, i, false, o)
+    }),
     // `%eval(expr)` — évalue et splice le résultat entier.
     ("eval", FUNC, MacroEngine::consume_eval),
     // `%sysfunc(func(args))` / `%qsysfunc(...)` — appelle la fonction
     // DATA-step et splice le résultat formaté en texte.
-    ("sysfunc", FUNC, |s, c, i, o| s.consume_sysfunc(c, i, "sysfunc", o)),
-    ("qsysfunc", FUNC, |s, c, i, o| s.consume_sysfunc(c, i, "qsysfunc", o)),
+    ("sysfunc", FUNC, |s, c, i, o| {
+        s.consume_sysfunc(c, i, "sysfunc", o)
+    }),
+    ("qsysfunc", FUNC, |s, c, i, o| {
+        s.consume_sysfunc(c, i, "qsysfunc", o)
+    }),
     // `%sysevalf(expr [, conv])` — évaluation FLOTTANTE (M19.1).
     ("sysevalf", FUNC, MacroEngine::consume_sysevalf),
     // `%cmpres(text)` / `%qcmpres(text)` — compression des blancs (M19.1).
-    ("qcmpres", FUNC, |s, c, i, o| s.consume_cmpres(c, i, "qcmpres", true, o)),
-    ("cmpres", FUNC, |s, c, i, o| s.consume_cmpres(c, i, "cmpres", false, o)),
+    ("qcmpres", FUNC, |s, c, i, o| {
+        s.consume_cmpres(c, i, "qcmpres", true, o)
+    }),
+    ("cmpres", FUNC, |s, c, i, o| {
+        s.consume_cmpres(c, i, "cmpres", false, o)
+    }),
     // `%symexist(name)` / `%sysmexist(name)` / `%sysget(name)` (M19.1).
     ("symexist", FUNC, MacroEngine::consume_symexist),
     ("sysmexist", FUNC, MacroEngine::consume_sysmexist),
@@ -80,29 +96,56 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     // `%superq(name)` — valeur d'une variable SANS résolution, masquée.
     ("superq", FUNC, MacroEngine::consume_superq),
     // `%bquote(text)` / `%nrbquote(text)` — résout puis masque.
-    ("nrbquote", FUNC, |s, c, i, o| s.consume_bquote(c, i, "nrbquote", true, o)),
-    ("bquote", FUNC, |s, c, i, o| s.consume_bquote(c, i, "bquote", false, o)),
+    ("nrbquote", FUNC, |s, c, i, o| {
+        s.consume_bquote(c, i, "nrbquote", true, o)
+    }),
+    ("bquote", FUNC, |s, c, i, o| {
+        s.consume_bquote(c, i, "bquote", false, o)
+    }),
     // Fonctions chaîne macro simples et leurs variantes `%q*` (le booléen
     // vaut « résultat masqué », vrai pour les `%q*`).
-    ("qupcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qupcase", true, o)),
-    ("upcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "upcase", false, o)),
-    ("qlowcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qlowcase", true, o)),
-    ("lowcase", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "lowcase", false, o)),
-    ("qsubstr", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qsubstr", true, o)),
-    ("substr", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "substr", false, o)),
-    ("qscan", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "qscan", true, o)),
-    ("scan", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "scan", false, o)),
-    ("index", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "index", false, o)),
-    ("length", FUNC, |s, c, i, o| s.consume_macro_fn(c, i, "length", false, o)),
+    ("qupcase", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "qupcase", true, o)
+    }),
+    ("upcase", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "upcase", false, o)
+    }),
+    ("qlowcase", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "qlowcase", true, o)
+    }),
+    ("lowcase", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "lowcase", false, o)
+    }),
+    ("qsubstr", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "qsubstr", true, o)
+    }),
+    ("substr", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "substr", false, o)
+    }),
+    ("qscan", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "qscan", true, o)
+    }),
+    ("scan", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "scan", false, o)
+    }),
+    ("index", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "index", false, o)
+    }),
+    ("length", FUNC, |s, c, i, o| {
+        s.consume_macro_fn(c, i, "length", false, o)
+    }),
     // `%str(...)` / `%nrstr(...)` — masquage des caractères spéciaux.
-    ("str", FUNC, |s, c, i, o| s.consume_quote(c, i, "str", false, o)),
-    ("nrstr", FUNC, |s, c, i, o| s.consume_quote(c, i, "nrstr", true, o)),
+    ("str", FUNC, |s, c, i, o| {
+        s.consume_quote(c, i, "str", false, o)
+    }),
+    ("nrstr", FUNC, |s, c, i, o| {
+        s.consume_quote(c, i, "nrstr", true, o)
+    }),
     // `%if <cond> %then <action>; [%else <action>;]`
     ("if", STMT, MacroEngine::consume_if),
     // `%do ...` (plain group ou itératif `%do i=a %to b`).
     ("do", STMT, MacroEngine::consume_do),
 ];
-
 
 impl MacroEngine {
     /// Coeur de l'expansion `%let`/`&var` (une passe gauche→droite). Met à jour
@@ -245,7 +288,12 @@ impl MacroEngine {
     /// Consomme un `%let name = value ;` complet à partir de `i` et met la
     /// table à jour. Rend l'index après le `;` (et préserve un `\n` final).
     /// Rend `None` si la syntaxe ne tient pas (on laisse alors le `%` brut).
-    pub(super) fn consume_let(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_let(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 4; // après `%let`
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -316,14 +364,19 @@ impl MacroEngine {
     }
 }
 
-mod sysfunc;
 mod quoting;
+mod sysfunc;
 
 impl MacroEngine {
     /// Consomme `%eval ( expr )` : résout les `&refs` de `expr`, évalue, et
     /// splice le résultat entier. Rend l'index après la `)`, ou `None` si la
     /// parenthèse n'est pas trouvée (laisse alors le `%` brut).
-    pub(super) fn consume_eval(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_eval(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 1 + "eval".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -343,5 +396,3 @@ impl MacroEngine {
         Some(after)
     }
 }
-
-

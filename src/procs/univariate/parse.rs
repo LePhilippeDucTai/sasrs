@@ -189,7 +189,10 @@ pub(super) fn parse_output(ts: &mut StatementStream) -> Result<UnivariateOutput>
             let stat = kw.to_ascii_lowercase();
             if !is_output_stat(&stat) {
                 return Err(SasError::parse(
-                    format!("Unsupported statistic '{}' in OUTPUT statement.", kw.to_uppercase()),
+                    format!(
+                        "Unsupported statistic '{}' in OUTPUT statement.",
+                        kw.to_uppercase()
+                    ),
                     ts.peek().span,
                 ));
             }

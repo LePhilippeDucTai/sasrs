@@ -35,10 +35,7 @@ fn test_one_way_glm_params() {
 
 #[test]
 fn test_parse_model_solution() {
-    let ast = parse_glm(
-        "proc glm; class sex; model height = sex / solution; run;",
-    )
-    .unwrap();
+    let ast = parse_glm("proc glm; class sex; model height = sex / solution; run;").unwrap();
     let m = ast.model.unwrap();
     assert!(m.solution, "solution should be true");
     assert_eq!(m.dependents, vec!["height"]);
@@ -49,10 +46,8 @@ fn test_parse_model_solution() {
 
 #[test]
 fn test_parse_estimate() {
-    let ast = parse_glm(
-        "proc glm; class sex; model y = sex; estimate 'F vs M' sex 1 -1; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_glm("proc glm; class sex; model y = sex; estimate 'F vs M' sex 1 -1; run;").unwrap();
     assert_eq!(ast.estimates.len(), 1);
     let e = &ast.estimates[0];
     assert_eq!(e.label, "F vs M");
@@ -66,10 +61,8 @@ fn test_parse_estimate() {
 
 #[test]
 fn test_parse_contrast() {
-    let ast = parse_glm(
-        "proc glm; class sex; model y = sex; contrast 'F vs M' sex 1 -1; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_glm("proc glm; class sex; model y = sex; contrast 'F vs M' sex 1 -1; run;").unwrap();
     assert_eq!(ast.contrasts.len(), 1);
     let c = &ast.contrasts[0];
     assert_eq!(c.label, "F vs M");
@@ -81,10 +74,7 @@ fn test_parse_contrast() {
 
 #[test]
 fn test_parse_interaction_terms() {
-    let ast = parse_glm(
-        "proc glm; class a b; model y = a b a*b / solution; run;",
-    )
-    .unwrap();
+    let ast = parse_glm("proc glm; class a b; model y = a b a*b / solution; run;").unwrap();
     let m = ast.model.unwrap();
     // Legacy flat list keeps `a*b` joined.
     assert_eq!(m.effects, vec!["a", "b", "a*b"]);
@@ -195,9 +185,15 @@ fn test_execute_estimate_correct() {
     let listing = session.listing.into_string();
 
     // Estimate should be -9.0
-    assert!(listing.contains("-9.000000"), "Expected -9.000000 in listing: {listing}");
+    assert!(
+        listing.contains("-9.000000"),
+        "Expected -9.000000 in listing: {listing}"
+    );
     // t value should be negative
-    assert!(listing.contains("-11"), "Expected negative t value: {listing}");
+    assert!(
+        listing.contains("-11"),
+        "Expected negative t value: {listing}"
+    );
 }
 
 // ── Test 7: CONTRAST F = (ESTIMATE t)² ───────────────────────────────
@@ -254,10 +250,19 @@ fn test_execute_contrast_f_eq_t_squared() {
 
     // F should be 121.5 (= t² = 11.02² ≈ 121.5)
     // Check both sections are present
-    assert!(listing.contains("Estimates"), "listing missing Estimates: {listing}");
-    assert!(listing.contains("Contrasts"), "listing missing Contrasts: {listing}");
+    assert!(
+        listing.contains("Estimates"),
+        "listing missing Estimates: {listing}"
+    );
+    assert!(
+        listing.contains("Contrasts"),
+        "listing missing Contrasts: {listing}"
+    );
     // The ANOVA F is 121.5 (same as the contrast F)
-    assert!(listing.contains("121.50"), "Expected F=121.50 in listing: {listing}");
+    assert!(
+        listing.contains("121.50"),
+        "Expected F=121.50 in listing: {listing}"
+    );
 }
 
 // ── M34.5: two-way design matrix dimensions ─────────────────────────────
@@ -346,14 +351,29 @@ fn test_reference_cell_betas_2x2() {
     let listing = session.listing.into_string();
 
     // Intercept (mu) = 30.000000
-    assert!(listing.contains("30.000000"), "expected intercept 30: {listing}");
+    assert!(
+        listing.contains("30.000000"),
+        "expected intercept 30: {listing}"
+    );
     // a A = -16.000000
-    assert!(listing.contains("-16.000000"), "expected a A=-16: {listing}");
+    assert!(
+        listing.contains("-16.000000"),
+        "expected a A=-16: {listing}"
+    );
     // b X = -10.000000
-    assert!(listing.contains("-10.000000"), "expected b X=-10: {listing}");
+    assert!(
+        listing.contains("-10.000000"),
+        "expected b X=-10: {listing}"
+    );
     // interaction a A b X = 6.000000
     assert!(listing.contains("6.000000"), "expected ab=6: {listing}");
     // LSMEAN for a=A is mean of cell means over b = (10+14)/2 = 12; a=B = 25.
-    assert!(listing.contains("12.000000"), "expected LSMEAN a=A 12: {listing}");
-    assert!(listing.contains("25.000000"), "expected LSMEAN a=B 25: {listing}");
+    assert!(
+        listing.contains("12.000000"),
+        "expected LSMEAN a=A 12: {listing}"
+    );
+    assert!(
+        listing.contains("25.000000"),
+        "expected LSMEAN a=B 25: {listing}"
+    );
 }

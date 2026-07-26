@@ -201,7 +201,7 @@ pub(super) fn compute_cell_value(
                     return Err(SasError::runtime(format!(
                         "PROC TABULATE: statistic {} requires an analysis variable (not yet supported)",
                         stat.to_uppercase()
-                    )))
+                    )));
                 }
             }
         }

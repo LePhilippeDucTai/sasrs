@@ -226,4 +226,3 @@ pub(super) fn seed_to_state(seed: i64) -> u64 {
 pub fn streaminit_seed(seed: i64) -> u64 {
     seed_to_state(seed)
 }
-

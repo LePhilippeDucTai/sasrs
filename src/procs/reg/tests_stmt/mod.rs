@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 mod mtest;
 
 pub(crate) use mtest::*;
@@ -42,7 +41,7 @@ pub(super) fn build_lc(
                     return Err(SasError::runtime(format!(
                         "Variable {} in TEST/RESTRICT not in the model.",
                         name
-                    )))
+                    )));
                 }
             }
         }
@@ -269,19 +268,13 @@ pub(super) fn run_tests(
         let _ = p_eff;
         // SAS heading is "Test <name> Results …"; an unlabeled TEST uses the
         // bare ordinal (→ "Test 1 …"), a labeled one its name (→ "Test peak …").
-        let label = test
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{}", ti + 1));
+        let label = test.label.clone().unwrap_or_else(|| format!("{}", ti + 1));
 
         session.listing.blank();
         session.listing.blank();
         centered(
             session,
-            &format!(
-                "Test {} Results for Dependent Variable {}",
-                label, dep_name
-            ),
+            &format!("Test {} Results for Dependent Variable {}", label, dep_name),
         );
         session.listing.blank();
         let headers: Vec<String> = vec![

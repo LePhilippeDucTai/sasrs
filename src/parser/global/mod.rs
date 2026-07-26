@@ -21,14 +21,13 @@
 //!   applique `ls=` (40..=256) et ignore le reste avec WARNING
 //!   "Option XXX is not yet supported".
 
-use super::{footnote_level, title_level, StatementStream};
+use super::{StatementStream, footnote_level, title_level};
 use crate::ast::{DatasetRef, GlobalStmt, OdsAction};
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, TokenKind};
 
-
-mod ods;
 mod lib;
+mod ods;
 mod titles;
 
 pub use ods::parse_ods_statement;

@@ -24,18 +24,17 @@ use crate::procs::common::{chisq_sf, decode_column};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value};
+use crate::value::{Value, format_best};
 
-
-mod link;
-mod parse;
 mod design;
 mod fit;
+mod link;
+mod parse;
 mod report;
-use link::*;
-pub use parse::parse;
 use design::*;
 use fit::*;
+use link::*;
+pub use parse::parse;
 use report::*;
 
 // ───────────────────────── AST ─────────────────────────
@@ -95,13 +94,11 @@ fn fmt4(v: f64) -> String {
 
 use crate::procs::common::fmt_p_num as fmt_p_opt;
 
-
 use crate::procs::common::centered;
 
 // ───────────────────────── Value helpers ─────────────────────────
 
 use crate::procs::common::value_label;
-
 
 fn value_matches_event(v: &Value, event: &str) -> bool {
     match v {
@@ -129,9 +126,10 @@ fn mat_vec(mat: &[Vec<f64>], vec: &[f64]) -> Vec<f64> {
 
 pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     // ── 1. Guards ──────────────────────────────────────────────────────────
-    let model = ast.model.as_ref().ok_or_else(|| {
-        SasError::runtime("MODEL statement required for PROC GENMOD")
-    })?;
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required for PROC GENMOD"))?;
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
@@ -153,9 +151,7 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         ds.vars
             .iter()
             .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
-            })
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
     };
 
     let resp_idx = find_col(resp_name)?;
@@ -208,17 +204,14 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     let n_total: f64 = freq_vec.iter().sum();
     let n_obs = y_vec.len();
 
-    session.log.note(&format!(
-        "There were {} observations used.",
-        n_total as i64
-    ));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n_total as i64));
 
     let p_param = 1 + n_design; // intercept + design columns
 
     if n_obs <= n_design {
-        return Err(SasError::runtime(
-            "Not enough observations for PROC GENMOD",
-        ));
+        return Err(SasError::runtime("Not enough observations for PROC GENMOD"));
     }
 
     // ── 5-8. Listing: header, model info, class levels, response profile ──
@@ -241,11 +234,14 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 9. IRLS / Newton-Raphson ──────────────────────────────────────────
-    let (beta, h_inv, final_mu) =
-        fit_irls(session, &y_vec, &x_mat, &freq_vec, dist, lf, n_total, p_param)?;
+    let (beta, h_inv, final_mu) = fit_irls(
+        session, &y_vec, &x_mat, &freq_vec, dist, lf, n_total, p_param,
+    )?;
 
     // ── 10. Scale / Dispersion ────────────────────────────────────────────
-    let scale = compute_scale(model, dist, &y_vec, &final_mu, &freq_vec, h_inv, n_total, p_param);
+    let scale = compute_scale(
+        model, dist, &y_vec, &final_mu, &freq_vec, h_inv, n_total, p_param,
+    );
 
     // ── 11. SE, Wald chi², CI ─────────────────────────────────────────────
     let var_beta = &scale.var_beta;

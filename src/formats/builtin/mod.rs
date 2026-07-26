@@ -29,8 +29,8 @@
 
 #![allow(unused_variables, dead_code)]
 
-use super::{right_justify, FormatSpec};
-use crate::value::{format_best, Value};
+use super::{FormatSpec, right_justify};
+use crate::value::{Value, format_best};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 
 mod datetime;

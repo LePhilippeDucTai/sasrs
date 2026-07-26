@@ -35,7 +35,12 @@ impl MacroEngine {
     /// - fichier illisible/absent → idem (commentaire d'erreur) ;
     /// - `%include *;` (clavier/stdin) → non supporté : un commentaire de note
     ///   est émis et le statement consommé jusqu'au `;`.
-    pub(super) fn consume_include(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_include(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%include".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -116,10 +121,7 @@ impl MacroEngine {
         let contents = match std::fs::read_to_string(&resolved) {
             Ok(text) => text,
             Err(e) => {
-                out.push_str(&format!(
-                    "/* %include: cannot read '{}': {} */",
-                    path, e
-                ));
+                out.push_str(&format!("/* %include: cannot read '{}': {} */", path, e));
                 return Some(resume);
             }
         };
@@ -140,7 +142,12 @@ impl MacroEngine {
     /// le flux de code. Rend l'index après le `;` (un `\n` final préservé).
     ///
     /// Conformément à SAS, `%put;` (sans argument) écrit une ligne vide.
-    pub(super) fn consume_put(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_put(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%put".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;

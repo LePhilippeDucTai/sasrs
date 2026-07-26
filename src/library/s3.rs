@@ -81,9 +81,11 @@ impl S3Library {
     /// depuis les variables d'environnement AWS standard. En cas d'échec de
     /// résolution (rare), on retombe sur des `CloudOptions` par défaut.
     pub(super) fn scan_args(&self, uri: &str) -> ScanArgsParquet {
-        let cloud_options =
-            polars::prelude::cloud::CloudOptions::from_untyped_config(uri, std::iter::empty::<(String, String)>())
-                .ok();
+        let cloud_options = polars::prelude::cloud::CloudOptions::from_untyped_config(
+            uri,
+            std::iter::empty::<(String, String)>(),
+        )
+        .ok();
         ScanArgsParquet {
             cloud_options,
             ..Default::default()

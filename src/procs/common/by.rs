@@ -83,17 +83,17 @@ pub fn by_groups(
                         .enumerate()
                         .find_map(|(k, col)| {
                             if col[prev].sas_cmp(&col[row]) != Ordering::Equal {
-                                Some((
-                                    by_names[k].clone(),
-                                    by_cell(&col[prev]),
-                                    by_cell(&col[row]),
-                                ))
+                                Some((by_names[k].clone(), by_cell(&col[prev]), by_cell(&col[row])))
                             } else {
                                 None
                             }
                         })
                         .unwrap_or_else(|| {
-                            (by_names[0].clone(), by_cell(&by_values[0][prev]), by_cell(&by_values[0][row]))
+                            (
+                                by_names[0].clone(),
+                                by_cell(&by_values[0][prev]),
+                                by_cell(&by_values[0][row]),
+                            )
                         });
                     return Err(SasError::runtime(format!(
                         "Data set {display} is not sorted in ascending sequence. \
@@ -118,10 +118,7 @@ pub fn by_groups(
 
 /// Group all rows by the tuple of the given class columns' values, in
 /// `sas_cmp` order. Returns (key tuple, row indices) pairs.
-pub fn group_by_keys(
-    class_values: &[&Vec<Value>],
-    n_obs: usize,
-) -> Vec<(Vec<Value>, Vec<usize>)> {
+pub fn group_by_keys(class_values: &[&Vec<Value>], n_obs: usize) -> Vec<(Vec<Value>, Vec<usize>)> {
     let mut groups: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
     for row in 0..n_obs {
         let key: Vec<Value> = class_values.iter().map(|c| c[row].clone()).collect();

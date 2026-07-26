@@ -34,7 +34,8 @@ impl OutputDestination for TextListing {
         double: bool,
         totals: Option<&Vec<String>>,
     ) {
-        self.inner.write_table_ext(headers, aligns, rows, double, totals);
+        self.inner
+            .write_table_ext(headers, aligns, rows, double, totals);
     }
 
     fn write_line(&mut self, line: &str) {

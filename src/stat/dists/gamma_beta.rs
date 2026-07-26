@@ -19,8 +19,7 @@ pub(super) fn gamma_pdf(x: f64, shape: f64, scale: f64) -> f64 {
         return 0.0;
     }
     // ln pdf = (shape-1)*ln x - x/scale - shape*ln(scale) - lnΓ(shape)
-    let ln_pdf =
-        (shape - 1.0) * x.ln() - x / scale - shape * scale.ln() - ln_gamma(shape);
+    let ln_pdf = (shape - 1.0) * x.ln() - x / scale - shape * scale.ln() - ln_gamma(shape);
     ln_pdf.exp()
 }
 

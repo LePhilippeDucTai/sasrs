@@ -21,11 +21,8 @@ fn fixtures() {
         // les autres fixtures continuent de tourner pour vérifier l'invariant
         // byte-identique du build graphics.
         #[cfg(feature = "graphics")]
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| {
-                n.starts_with("sgplot")
+        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.starts_with("sgplot")
                     || n.starts_with("proc_plot")
                     || n.starts_with("gplot")
                     || n.starts_with("gchart")
@@ -35,8 +32,7 @@ fn fixtures() {
                     // NOTE — would diverge: skip when graphics is on, like the
                     // plotting procs above.
                     || n.starts_with("univariate")
-            })
-        {
+        }) {
             return;
         }
         let source = std::fs::read_to_string(path).unwrap();

@@ -83,29 +83,30 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
-use crate::procs::common::{self, decode_column, partition_numeric, partition_weighted, sample_std};
+use crate::procs::common::{
+    self, decode_column, partition_numeric, partition_weighted, sample_std,
+};
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 
-
+mod matrix;
+mod output;
 mod parse;
 mod pearson;
 mod rank_stats;
-mod special;
-mod matrix;
 mod report;
-mod output;
+mod special;
 
 pub use parse::parse;
 
+use matrix::*;
+use output::*;
 use pearson::*;
 use rank_stats::*;
-use special::*;
-use matrix::*;
 use report::*;
-use output::*;
+use special::*;
 
 pub struct CorrAst {
     pub data: Option<DatasetRef>,
@@ -312,8 +313,10 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
             }
             let cells = partial_pearson_matrix(&row_cols, &col_cols, &partial_cols, &decoded);
             let k = partial_cols.len();
-            let controlling: Vec<String> =
-                partial_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            let controlling: Vec<String> = partial_cols
+                .iter()
+                .map(|&c| ds.vars[c].name.clone())
+                .collect();
             let heading = format!(
                 "Pearson Partial Correlation Coefficients, Controlled for: {}",
                 controlling.join(" ")
@@ -321,14 +324,7 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
             let _ = k; // df = n − k − 2 is applied inside partial_pvalue
             let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
             emit_correlations(
-                session,
-                &ds,
-                &row_cols,
-                &col_cols,
-                &heading,
-                &prob_line,
-                &cells,
-                ast.noprob,
+                session, &ds, &row_cols, &col_cols, &heading, &prob_line, &cells, ast.noprob,
             );
         } else {
             for &method in &methods {
@@ -362,14 +358,8 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
     ];
     for (method, target) in out_targets {
         if let Some(target) = target {
-            let out_ds = build_out_dataset(
-                method,
-                &ds,
-                &analysis_cols,
-                &decoded,
-                weight_vals,
-                n_obs,
-            )?;
+            let out_ds =
+                build_out_dataset(method, &ds, &analysis_cols, &decoded, weight_vals, n_obs)?;
             write_out_dataset(session, target, out_ds)?;
         }
     }

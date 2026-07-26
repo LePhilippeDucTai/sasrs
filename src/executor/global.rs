@@ -124,23 +124,21 @@ pub(super) fn apply_option(session: &mut Session, name: &str, value: Option<&str
         // M19.3 — options de trace booléennes : MPRINT/MLOGIC/
         // SYMBOLGEN (et leurs formes NO...). Appliquées à la session
         // ET propagées au processeur macro (qui décide de l'écho).
-        _ if parse_macro_trace_flag(name).is_some() => {
-            match parse_macro_trace_flag(name) {
-                Some(("mprint", on)) => {
-                    session.options.mprint = on;
-                    session.macro_engine.set_mprint(on);
-                }
-                Some(("mlogic", on)) => {
-                    session.options.mlogic = on;
-                    session.macro_engine.set_mlogic(on);
-                }
-                Some(("symbolgen", on)) => {
-                    session.options.symbolgen = on;
-                    session.macro_engine.set_symbolgen(on);
-                }
-                _ => {}
+        _ if parse_macro_trace_flag(name).is_some() => match parse_macro_trace_flag(name) {
+            Some(("mprint", on)) => {
+                session.options.mprint = on;
+                session.macro_engine.set_mprint(on);
             }
-        }
+            Some(("mlogic", on)) => {
+                session.options.mlogic = on;
+                session.macro_engine.set_mlogic(on);
+            }
+            Some(("symbolgen", on)) => {
+                session.options.symbolgen = on;
+                session.macro_engine.set_symbolgen(on);
+            }
+            _ => {}
+        },
         _ => {
             session.log.warning(&format!(
                 "Option {} is not yet supported.",
@@ -169,7 +167,11 @@ pub(super) fn log_libref_assignment(
 
 pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
     match stmt {
-        GlobalStmt::Libname { libref, engine, path } => {
+        GlobalStmt::Libname {
+            libref,
+            engine,
+            path,
+        } => {
             // M13 : routage cloud. Quand la feature `s3` est active et que le
             // chemin commence par `s3://`, on enregistre une `S3Library`
             // (bucket/prefix) au lieu d'une `DirLibrary`. Le chemin affiché
@@ -180,7 +182,10 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             // erreur runtime habituelle).
             // M13 : routage cloud s3://.
             #[cfg(feature = "s3")]
-            if path.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("s3://")) {
+            if path
+                .get(..5)
+                .is_some_and(|p| p.eq_ignore_ascii_case("s3://"))
+            {
                 let result = session.libs.assign_uri(libref, path);
                 log_libref_assignment(session, libref, "PARQUET", path, result);
                 return;
@@ -229,7 +234,11 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             )),
             Err(e) => session.log.error(&e.to_string()),
         },
-        GlobalStmt::Filename { fileref, path, device } => {
+        GlobalStmt::Filename {
+            fileref,
+            path,
+            device,
+        } => {
             // M35.2 — registre minimal fileref → chemin pour `%include fileref;`.
             // La forme `FILENAME ref 'chemin';` (ou chemin nu) enregistre le
             // chemin résolu (même base que %include/LIBNAME/SASAUTOS). Les
@@ -271,10 +280,25 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 apply_option(session, name, value.as_deref());
             }
         }
-        GlobalStmt::Ods { destination, action, file, style } => {
-            exec_ods(session, destination, *action, file.as_deref(), style.as_deref());
+        GlobalStmt::Ods {
+            destination,
+            action,
+            file,
+            style,
+        } => {
+            exec_ods(
+                session,
+                destination,
+                *action,
+                file.as_deref(),
+                style.as_deref(),
+            );
         }
-        GlobalStmt::OdsOptions { nocenter, date, number } => {
+        GlobalStmt::OdsOptions {
+            nocenter,
+            date,
+            number,
+        } => {
             session.ods_options.nocenter = *nocenter;
             session.ods_options.date = *date;
             session.ods_options.number = *number;
@@ -359,7 +383,9 @@ pub(super) fn exec_ods(
     file: Option<&str>,
     _style: Option<&str>,
 ) {
-    use crate::output::{HtmlDestination, RtfDestination, PdfDestination, ExcelDestination, TextListing};
+    use crate::output::{
+        ExcelDestination, HtmlDestination, PdfDestination, RtfDestination, TextListing,
+    };
 
     let dest = destination.to_ascii_lowercase();
     let ls = session.options.ls;
@@ -378,10 +404,8 @@ pub(super) fn exec_ods(
                 // matérialisée (aucun fichier).
                 if let Some(f) = file {
                     let path = session.resolve_path(f);
-                    session.open_destination(
-                        "html",
-                        Box::new(HtmlDestination::with_file(ls, path)),
-                    );
+                    session
+                        .open_destination("html", Box::new(HtmlDestination::with_file(ls, path)));
                 } else {
                     session.open_destination("html", Box::new(HtmlDestination::new(ls)));
                     session.log.note(
@@ -395,7 +419,9 @@ pub(super) fn exec_ods(
                     session.open_destination("rtf", Box::new(RtfDestination::with_file(ls, path)));
                 } else {
                     session.open_destination("rtf", Box::new(RtfDestination::new(ls)));
-                    session.log.note("ODS RTF sans FILE= : la sortie RTF n'est pas materialisee (v1).");
+                    session
+                        .log
+                        .note("ODS RTF sans FILE= : la sortie RTF n'est pas materialisee (v1).");
                 }
             }
             "pdf" => {
@@ -404,16 +430,21 @@ pub(super) fn exec_ods(
                     session.open_destination("pdf", Box::new(PdfDestination::with_file(ls, path)));
                 } else {
                     session.open_destination("pdf", Box::new(PdfDestination::new(ls)));
-                    session.log.note("ODS PDF sans FILE= : la sortie PDF n'est pas materialisee (v1).");
+                    session
+                        .log
+                        .note("ODS PDF sans FILE= : la sortie PDF n'est pas materialisee (v1).");
                 }
             }
             "excel" => {
                 if let Some(f) = file {
                     let path = session.resolve_path(f);
-                    session.open_destination("excel", Box::new(ExcelDestination::with_file(ls, path)));
+                    session
+                        .open_destination("excel", Box::new(ExcelDestination::with_file(ls, path)));
                 } else {
                     session.open_destination("excel", Box::new(ExcelDestination::new(ls)));
-                    session.log.note("ODS EXCEL sans FILE= : la sortie Excel n'est pas materialisee (v1).");
+                    session.log.note(
+                        "ODS EXCEL sans FILE= : la sortie Excel n'est pas materialisee (v1).",
+                    );
                 }
             }
             other => {
@@ -425,9 +456,7 @@ pub(super) fn exec_ods(
         },
         OdsAction::Select | OdsAction::Exclude => {
             // Différé M22.3 ; le parser rejette déjà ces formes, donc inatteignable.
-            session
-                .log
-                .note("ODS SELECT/EXCLUDE is deferred to M22.3.");
+            session.log.note("ODS SELECT/EXCLUDE is deferred to M22.3.");
         }
     }
 }
@@ -439,7 +468,9 @@ pub(super) fn exec_ods(
 pub(super) fn parse_macro_trace_flag(name: &str) -> Option<(&'static str, bool)> {
     let lower = name.to_ascii_lowercase();
     let (body, on) = match lower.strip_prefix("no") {
-        Some(rest) if matches!(rest, "mprint" | "mlogic" | "symbolgen") => (rest.to_string(), false),
+        Some(rest) if matches!(rest, "mprint" | "mlogic" | "symbolgen") => {
+            (rest.to_string(), false)
+        }
         _ => (lower, true),
     };
     let canon = match body.as_str() {

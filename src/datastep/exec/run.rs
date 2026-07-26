@@ -41,7 +41,9 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     } = prog;
 
     for name in &uninitialized {
-        session.log.note(&format!("Variable {name} is uninitialized."));
+        session
+            .log
+            .note(&format!("Variable {name} is uninitialized."));
     }
 
     let builders = outputs
@@ -67,11 +69,9 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let n_text_lines = text_input.as_ref().map_or(0, |t| t.lines.len());
     let n_datasets = input.as_ref().map_or(0, |i| i.datasets.len());
     // FIRST./LAST. valent 1 tant qu'aucune observation n'a été servie.
-    let by_flags = input
-        .as_ref()
-        .map_or(Vec::new(), |i| {
-            i.by.iter().map(|b| (b.name.clone(), true, true)).collect()
-        });
+    let by_flags = input.as_ref().map_or(Vec::new(), |i| {
+        i.by.iter().map(|b| (b.name.clone(), true, true)).collect()
+    });
     // IN= : initialisées à 0 (aucun groupe encore servi).
     let in_flags = input.as_ref().map_or(Vec::new(), |i| {
         i.in_flags
@@ -299,7 +299,9 @@ pub(crate) fn write_dataset_with_note(
         ds.vars.len()
     ));
     if let Some(stats) = stats {
-        stats.written.push((display.to_string(), n_obs, ds.vars.len()));
+        stats
+            .written
+            .push((display.to_string(), n_obs, ds.vars.len()));
     }
     Ok(())
 }

@@ -1,0 +1,9 @@
+# Formatage : style rustfmt par défaut, sans exception.
+#
+# Le dépôt a été formaté à la main jusqu'à MQ7.1, d'où une dérive de 453
+# fichiers sur 542. Ce fichier fige la référence : `cargo fmt --check` fait
+# partie de la DoD de chaque case depuis la Phase Q3.
+#
+# `edition` est ici pour les invocations directes de `rustfmt` (hors
+# `cargo fmt`, qui la lit dans Cargo.toml).
+edition = "2024"

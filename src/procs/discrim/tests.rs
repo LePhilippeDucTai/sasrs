@@ -115,9 +115,17 @@ fn test_pooled_cov_and_inverse() {
 fn test_constants_bake_in_prior() {
     let m = fit_oracle();
     // Constant_A = -2.0 + ln(0.5) = -2.6931
-    assert!((m.constants[0] - (-2.6931)).abs() < 1e-3, "got {}", m.constants[0]);
+    assert!(
+        (m.constants[0] - (-2.6931)).abs() < 1e-3,
+        "got {}",
+        m.constants[0]
+    );
     // Constant_B = -18.0 + ln(0.5) = -18.6931
-    assert!((m.constants[1] - (-18.6931)).abs() < 1e-3, "got {}", m.constants[1]);
+    assert!(
+        (m.constants[1] - (-18.6931)).abs() < 1e-3,
+        "got {}",
+        m.constants[1]
+    );
     // coefficients
     assert!((m.coefs[0][0] - 2.0).abs() < 1e-12);
     assert!((m.coefs[1][0] - 6.0).abs() < 1e-12);
@@ -179,7 +187,10 @@ fn test_execute_oracle_listing() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("-2.6931"), "Constant_A missing: {listing}");
-    assert!(listing.contains("-18.6931"), "Constant_B missing: {listing}");
+    assert!(
+        listing.contains("-18.6931"),
+        "Constant_B missing: {listing}"
+    );
     assert!(listing.contains("16.0000"), "D²(A,B) missing: {listing}");
     assert!(
         listing.contains("The DISCRIMINANT Procedure"),

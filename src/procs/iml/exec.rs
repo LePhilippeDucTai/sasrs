@@ -31,8 +31,7 @@ pub(super) fn exec_stmt(
         ImlStmt::Assign { var, expr } => {
             // Une liste de chaînes est stockée dans str_vars, pas dans vars.
             if let ImlExpr::StrList(strs) = expr {
-                env.str_vars
-                    .insert(var.to_ascii_uppercase(), strs.clone());
+                env.str_vars.insert(var.to_ascii_uppercase(), strs.clone());
                 env.vars.remove(&var.to_ascii_uppercase());
                 return Ok(());
             }
@@ -50,17 +49,26 @@ pub(super) fn exec_stmt(
                             .vars
                             .get(&name.to_ascii_uppercase())
                             .cloned()
-                            .ok_or_else(|| SasError::runtime(format!(
-                                "IML: matrix {} has not been set to a value.",
-                                name.to_uppercase()
-                            )))?;
-                        out.push(PrintOp::Matrix { name: name.to_ascii_uppercase(), m });
+                            .ok_or_else(|| {
+                                SasError::runtime(format!(
+                                    "IML: matrix {} has not been set to a value.",
+                                    name.to_uppercase()
+                                ))
+                            })?;
+                        out.push(PrintOp::Matrix {
+                            name: name.to_ascii_uppercase(),
+                            m,
+                        });
                     }
                 }
             }
             Ok(())
         }
-        ImlStmt::If { cond, then_body, else_body } => {
+        ImlStmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
             let c = eval_expr(cond, env)?;
             if matrix_truthy(&c) {
                 exec_stmts(then_body, env, out, session)
@@ -68,7 +76,13 @@ pub(super) fn exec_stmt(
                 exec_stmts(else_body, env, out, session)
             }
         }
-        ImlStmt::DoLoop { var, from, to, by, body } => {
+        ImlStmt::DoLoop {
+            var,
+            from,
+            to,
+            by,
+            body,
+        } => {
             let f = as_scalar(&eval_expr(from, env)?)?;
             let t = as_scalar(&eval_expr(to, env)?)?;
             let step = match by {
@@ -92,7 +106,9 @@ pub(super) fn exec_stmt(
                 i += step;
                 guard += 1;
                 if guard > 10_000_000 {
-                    return Err(SasError::runtime("IML: DO loop exceeded the iteration guard."));
+                    return Err(SasError::runtime(
+                        "IML: DO loop exceeded the iteration guard.",
+                    ));
                 }
             }
             Ok(())
@@ -103,7 +119,9 @@ pub(super) fn exec_stmt(
                 exec_stmts(body, env, out, session)?;
                 guard += 1;
                 if guard > 10_000_000 {
-                    return Err(SasError::runtime("IML: DO WHILE loop exceeded the iteration guard."));
+                    return Err(SasError::runtime(
+                        "IML: DO WHILE loop exceeded the iteration guard.",
+                    ));
                 }
             }
             Ok(())
@@ -117,7 +135,9 @@ pub(super) fn exec_stmt(
                 }
                 guard += 1;
                 if guard > 10_000_000 {
-                    return Err(SasError::runtime("IML: DO UNTIL loop exceeded the iteration guard."));
+                    return Err(SasError::runtime(
+                        "IML: DO UNTIL loop exceeded the iteration guard.",
+                    ));
                 }
             }
             Ok(())
@@ -221,10 +241,12 @@ pub(super) fn exec_create(
         .vars
         .get(&from.to_ascii_uppercase())
         .cloned()
-        .ok_or_else(|| SasError::runtime(format!(
-            "IML: matrix {} has not been set to a value.",
-            from.to_uppercase()
-        )))?;
+        .ok_or_else(|| {
+            SasError::runtime(format!(
+                "IML: matrix {} has not been set to a value.",
+                from.to_uppercase()
+            ))
+        })?;
     let ncol = dims(&mat).1;
     let colnames: Vec<String> = match colname {
         Some(ImlExpr::StrList(s)) => s.iter().map(|x| x.to_string()).collect(),
@@ -232,10 +254,12 @@ pub(super) fn exec_create(
             .str_vars
             .get(&v.to_ascii_uppercase())
             .cloned()
-            .ok_or_else(|| SasError::runtime(format!(
-                "IML: COLNAME= must reference a string list; '{}' is not a character matrix.",
-                v.to_uppercase()
-            )))?,
+            .ok_or_else(|| {
+                SasError::runtime(format!(
+                    "IML: COLNAME= must reference a string list; '{}' is not a character matrix.",
+                    v.to_uppercase()
+                ))
+            })?,
         Some(_) => {
             return Err(SasError::runtime(
                 "IML: COLNAME= must be a string literal list, e.g. {\"x\" \"y\"}.",
@@ -252,7 +276,10 @@ pub(super) fn exec_create(
     }
     env.open_writes.insert(
         ds.to_uppercase(),
-        OpenWrite { colnames, rows: Vec::new() },
+        OpenWrite {
+            colnames,
+            rows: Vec::new(),
+        },
     );
     Ok(())
 }
@@ -263,10 +290,12 @@ pub(super) fn exec_append(from: &str, env: &mut Env) -> Result<()> {
         .vars
         .get(&from.to_ascii_uppercase())
         .cloned()
-        .ok_or_else(|| SasError::runtime(format!(
-            "IML: matrix {} has not been set to a value.",
-            from.to_uppercase()
-        )))?;
+        .ok_or_else(|| {
+            SasError::runtime(format!(
+                "IML: matrix {} has not been set to a value.",
+                from.to_uppercase()
+            ))
+        })?;
     // SAS APPEND s'applique au dataset courant en écriture. Ici on exige qu'il
     // y en ait exactement un d'ouvert.
     if env.open_writes.len() != 1 {
@@ -371,10 +400,12 @@ pub(super) fn exec_read_all(
             .vars
             .iter()
             .position(|v| v.name.eq_ignore_ascii_case(vname))
-            .ok_or_else(|| SasError::runtime(format!(
-                "IML: variable {} not found in data set {libref}.{table}.",
-                vname
-            )))?;
+            .ok_or_else(|| {
+                SasError::runtime(format!(
+                    "IML: variable {} not found in data set {libref}.{table}.",
+                    vname
+                ))
+            })?;
         col_idx.push(idx);
     }
     let nrow = ds.n_obs();

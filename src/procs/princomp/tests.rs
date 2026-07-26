@@ -47,8 +47,7 @@ fn parse_minimal() {
 
 #[test]
 fn parse_options() {
-    let ast =
-        parse_princomp("proc princomp data=a cov n=2 out=b; var x y z; run;").unwrap();
+    let ast = parse_princomp("proc princomp data=a cov n=2 out=b; var x y z; run;").unwrap();
     assert!(ast.cov);
     assert_eq!(ast.n, Some(2));
     assert_eq!(ast.out.as_ref().unwrap().name, "b");
@@ -74,7 +73,10 @@ fn execute_too_few_variables_errors() {
     };
     write_dataset(&mut session, "T", ds);
     let ast = PrincompAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         n: None,
         out: None,
@@ -82,7 +84,12 @@ fn execute_too_few_variables_errors() {
     };
     let r = execute(&ast, &mut session);
     assert!(r.is_err());
-    assert!(r.err().unwrap().to_string().contains("at least 2 variables"));
+    assert!(
+        r.err()
+            .unwrap()
+            .to_string()
+            .contains("at least 2 variables")
+    );
 }
 
 #[test]
@@ -95,7 +102,10 @@ fn execute_missing_variable_errors() {
     };
     write_dataset(&mut session, "T", ds);
     let ast = PrincompAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         n: None,
         out: None,
@@ -156,7 +166,10 @@ fn execute_oracle_listing() {
     write_dataset(&mut session, "T", ds);
 
     let ast = PrincompAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         n: None,
         out: None,
@@ -196,10 +209,16 @@ fn out_scores_variance_equals_eigenvalues() {
     write_dataset(&mut session, "T", ds);
 
     let ast = PrincompAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         n: None,
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "SCORES".into() }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "SCORES".into(),
+        }),
         var: vec!["x".into(), "y".into()],
     };
     execute(&ast, &mut session).unwrap();
@@ -255,16 +274,27 @@ fn out_scores_cov_centered_mean_zero() {
     write_dataset(&mut session, "T", ds);
 
     let ast = PrincompAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: true,
         n: None,
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "CS".into() }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CS".into(),
+        }),
         var: vec!["x".into(), "y".into()],
     };
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("CS").unwrap();
     for comp in 1..=2 {
-        let col = out.df.column(&format!("Prin{comp}")).unwrap().f64().unwrap();
+        let col = out
+            .df
+            .column(&format!("Prin{comp}"))
+            .unwrap()
+            .f64()
+            .unwrap();
         let vals: Vec<f64> = col.into_no_null_iter().collect();
         let mean = vals.iter().sum::<f64>() / vals.len() as f64;
         assert!(mean.abs() < 1e-9, "Prin{comp} mean={mean}");

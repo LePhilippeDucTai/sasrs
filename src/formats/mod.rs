@@ -20,7 +20,7 @@
 pub mod builtin;
 pub mod userdef;
 
-use crate::value::{format_best, Value};
+use crate::value::{Value, format_best};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]

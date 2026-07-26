@@ -2,12 +2,11 @@
 
 use super::*;
 
-
-mod select;
 mod loops;
+mod select;
 
-pub(crate) use select::*;
 pub(crate) use loops::*;
+pub(crate) use select::*;
 
 /// `goto label;` / `go to label;` (M16.6). Le mot-clé de tête (`goto` ou `go`)
 /// a déjà été identifié ; pour `go`, on consomme le `to` qui suit. La cible est

@@ -97,7 +97,7 @@
 //!   existe) : n_ > n_rows + 10_000 → erreur d'exécution. SAS bouclerait
 //!   sans fin ; divergence assumée.
 
-use super::eval::{coerce_num, eval, sas_values_equal, EvalCtx};
+use super::eval::{EvalCtx, coerce_num, eval, sas_values_equal};
 use super::pdv::Pdv;
 use super::{
     ByVar, InputAction, InputData, InputDataset, OutputSpec, ShortMode, StepProgram, TextInput,
@@ -107,18 +107,17 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::session::Session;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-
-mod state;
 mod runner;
+mod state;
 mod update_modify;
 
-use state::*;
 use runner::*;
+use state::*;
 use update_modify::*;
 
 mod hash;
@@ -128,7 +127,6 @@ mod input;
 mod put;
 
 mod setmerge;
-
 
 mod run;
 

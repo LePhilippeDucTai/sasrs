@@ -24,11 +24,9 @@ use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
 
-
 mod parse;
 
 pub use parse::parse;
-
 
 pub struct DatasetsAst {
     pub lib: String,
@@ -102,19 +100,19 @@ fn unique_temp_name(provider: &dyn crate::library::LibraryProvider) -> String {
 /// Execute PROC DATASETS.
 pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
     let lib = ast.lib.to_uppercase();
-    let provider = session.libs.get(&lib).map_err(|_| {
-        SasError::runtime(format!("Libref {} is not assigned.", lib))
-    })?;
+    let provider = session
+        .libs
+        .get(&lib)
+        .map_err(|_| SasError::runtime(format!("Libref {} is not assigned.", lib)))?;
 
     // ── Apply deletes ─────────────────────────────────────────────────────────
     for name in &ast.deletes {
         let name_upper = name.to_uppercase();
         if provider.exists(&name_upper) {
             provider.delete(&name_upper)?;
-            session.log.note(&format!(
-                "Deleting {}.{} (memtype=DATA).",
-                lib, name_upper
-            ));
+            session
+                .log
+                .note(&format!("Deleting {}.{} (memtype=DATA).", lib, name_upper));
         } else {
             session.log.warning(&format!(
                 "Table {}.{} does not exist and was not deleted.",
@@ -142,9 +140,10 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                 let src = session.libs.get(&src_lib).map_err(|_| {
                     SasError::runtime(format!("Libref {} is not assigned.", src_lib))
                 })?;
-                let dst = session.libs.get(out).map_err(|_| {
-                    SasError::runtime(format!("Libref {} is not assigned.", out))
-                })?;
+                let dst = session
+                    .libs
+                    .get(out)
+                    .map_err(|_| SasError::runtime(format!("Libref {} is not assigned.", out)))?;
                 // Members to copy: SELECT list, or every member of the source.
                 let members: Vec<String> = if select.is_empty() {
                     let mut m = src.list()?;
@@ -156,10 +155,9 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                 for m in &members {
                     let mu = m.to_uppercase();
                     if !src.exists(&mu) {
-                        session.log.warning(&format!(
-                            "Member {}.{} not found; not copied.",
-                            src_lib, mu
-                        ));
+                        session
+                            .log
+                            .warning(&format!("Member {}.{} not found; not copied.", src_lib, mu));
                         continue;
                     }
                     let (ds, notes) = src.read(&mu)?;
@@ -200,18 +198,22 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                     let tu = t.to_uppercase();
                     if !keep_upper.contains(&tu) {
                         provider.delete(&tu)?;
-                        session.log.note(&format!(
-                            "Deleting {lib}.{tu} (memtype=DATA)."
-                        ));
+                        session
+                            .log
+                            .note(&format!("Deleting {lib}.{tu} (memtype=DATA)."));
                     }
                 }
             }
-            DsOp::Modify { member, renames, labels } => {
+            DsOp::Modify {
+                member,
+                renames,
+                labels,
+            } => {
                 let mu = member.to_uppercase();
                 if !provider.exists(&mu) {
-                    session.log.warning(&format!(
-                        "Member {lib}.{mu} not found; MODIFY skipped."
-                    ));
+                    session
+                        .log
+                        .warning(&format!("Member {lib}.{mu} not found; MODIFY skipped."));
                     continue;
                 }
                 let (mut ds, notes) = provider.read(&mu)?;
@@ -220,7 +222,11 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                 }
                 // RENAME variables (rename both VarMeta and the DataFrame column).
                 for (old, new) in renames {
-                    match ds.vars.iter().position(|v| v.name.eq_ignore_ascii_case(old)) {
+                    match ds
+                        .vars
+                        .iter()
+                        .position(|v| v.name.eq_ignore_ascii_case(old))
+                    {
                         Some(idx) => {
                             let phys_old = ds.vars[idx].name.clone();
                             ds.df.rename(&phys_old, new.as_str().into())?;
@@ -241,7 +247,11 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                 }
                 // LABEL variables.
                 for (var, text) in labels {
-                    match ds.vars.iter().position(|v| v.name.eq_ignore_ascii_case(var)) {
+                    match ds
+                        .vars
+                        .iter()
+                        .position(|v| v.name.eq_ignore_ascii_case(var))
+                    {
                         Some(idx) => {
                             ds.vars[idx].label = Some(text.clone());
                         }
@@ -275,13 +285,7 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
         let rows: Vec<Vec<String>> = tables
             .iter()
             .enumerate()
-            .map(|(i, t)| {
-                vec![
-                    (i + 1).to_string(),
-                    t.to_uppercase(),
-                    "DATA".to_string(),
-                ]
-            })
+            .map(|(i, t)| vec![(i + 1).to_string(), t.to_uppercase(), "DATA".to_string()])
             .collect();
 
         session.listing.write_table(&headers, &aligns, &rows);

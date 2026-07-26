@@ -47,8 +47,9 @@ pub(super) fn print_parameter_estimates(
     let with_tol = model.tol && tolvif.is_some();
     let with_vif = model.vif && tolvif.is_some();
     let with_seq = seqstats.is_some();
-    let (pe_headers, pe_aligns) =
-        pe_table_columns(model, with_label, with_clb, clb_level, with_tol, with_vif, with_seq);
+    let (pe_headers, pe_aligns) = pe_table_columns(
+        model, with_label, with_clb, clb_level, with_tol, with_vif, with_seq,
+    );
     let mut pe_rows: Vec<Vec<String>> = Vec::with_capacity(p_eff);
     for j in 0..p_eff {
         let var_name = if intercept {
@@ -75,11 +76,7 @@ pub(super) fn print_parameter_estimates(
         if with_tol || with_vif {
             // Map design column j to a regressor index (intercept has none).
             let reg_idx = if intercept {
-                if j == 0 {
-                    None
-                } else {
-                    Some(j - 1)
-                }
+                if j == 0 { None } else { Some(j - 1) }
             } else {
                 Some(j)
             };
@@ -141,7 +138,15 @@ pub(super) fn print_parameter_estimates(
         pe_rows.push(row);
     }
     // Append RESTRICT rows — see `append_restrict_rows`.
-    append_restrict_rows(model, restricted, with_clb, with_tol, with_vif, with_seq, &mut pe_rows);
+    append_restrict_rows(
+        model,
+        restricted,
+        with_clb,
+        with_tol,
+        with_vif,
+        with_seq,
+        &mut pe_rows,
+    );
     session
         .listing
         .write_table(&pe_headers, &pe_aligns, &pe_rows);
@@ -235,8 +240,8 @@ pub(super) fn pe_table_columns(
     (pe_headers, pe_aligns)
 }
 
-    // Append RESTRICT rows: Variable="RESTRICT", DF=-1 (negative per SAS),
-    // Estimate=λ_i, with the restriction expression in the Label column.
+// Append RESTRICT rows: Variable="RESTRICT", DF=-1 (negative per SAS),
+// Estimate=λ_i, with the restriction expression in the Label column.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn append_restrict_rows(
     model: &RegModel,

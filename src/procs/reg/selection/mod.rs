@@ -2,12 +2,11 @@
 
 use super::*;
 
-
-mod subsets;
 mod rsq;
+mod subsets;
 
-pub(crate) use subsets::*;
 pub(crate) use rsq::*;
+pub(crate) use subsets::*;
 
 // ───────────────────────── SELECTION ─────────────────────────
 
@@ -150,8 +149,7 @@ pub(crate) fn run_selection(
                 }
                 match worst {
                     Some((v, f, pv)) if pv > sel.slstay => {
-                        let reduced: Vec<usize> =
-                            s.iter().cloned().filter(|&c| c != v).collect();
+                        let reduced: Vec<usize> = s.iter().cloned().filter(|&c| c != v).collect();
                         let sse_r = subset_sse(xcols, y, &reduced, intercept).unwrap_or(f64::NAN);
                         let partial = model_r2(sse_s) - model_r2(sse_r);
                         s.retain(|&c| c != v);
@@ -245,8 +243,7 @@ pub(crate) fn run_selection(
                         if Some(v) == just_entered {
                             continue;
                         }
-                        let reduced: Vec<usize> =
-                            s.iter().cloned().filter(|&c| c != v).collect();
+                        let reduced: Vec<usize> = s.iter().cloned().filter(|&c| c != v).collect();
                         if let Some(sse_r) = subset_sse(xcols, y, &reduced, intercept) {
                             let f = (sse_r - sse_cur) / mse_cur;
                             let pv = (1.0 - f_cdf(f, 1.0, df_cur)).clamp(0.0, 1.0);

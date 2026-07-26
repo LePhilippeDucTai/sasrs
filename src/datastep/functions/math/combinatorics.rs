@@ -147,7 +147,11 @@ pub(crate) fn fn_gamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// x ≤ 0 integer → missing + error.
 pub(crate) fn fn_lgamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num_checked(args, ctx, |x| {
-        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(lgamma_approx(x)) }
+        if x <= 0.0 && x.fract() == 0.0 {
+            None
+        } else {
+            Some(lgamma_approx(x))
+        }
     })
 }
 
@@ -155,7 +159,11 @@ pub(crate) fn fn_lgamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// x ≤ 0 integer → missing + error.
 pub(crate) fn fn_digamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num_checked(args, ctx, |x| {
-        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(crate::stat::digamma(x)) }
+        if x <= 0.0 && x.fract() == 0.0 {
+            None
+        } else {
+            Some(crate::stat::digamma(x))
+        }
     })
 }
 
@@ -163,7 +171,11 @@ pub(crate) fn fn_digamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// x ≤ 0 integer → missing + error (mirrors DIGAMMA's pole handling).
 pub(crate) fn fn_trigamma(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num_checked(args, ctx, |x| {
-        if x <= 0.0 && x.fract() == 0.0 { None } else { Some(crate::stat::trigamma(x)) }
+        if x <= 0.0 && x.fract() == 0.0 {
+            None
+        } else {
+            Some(crate::stat::trigamma(x))
+        }
     })
 }
 
@@ -220,8 +232,6 @@ pub(crate) fn lgamma_approx(x: f64) -> f64 {
         // Stirling's approximation
         let ln_2pi = (2.0 * std::f64::consts::PI).ln();
         let x_minus_half = x - 0.5;
-        x_minus_half * x.ln() - x + 0.5 * ln_2pi
-            + 1.0 / (12.0 * x)
-            - 1.0 / (360.0 * x * x * x)
+        x_minus_half * x.ln() - x + 0.5 * ln_2pi + 1.0 / (12.0 * x) - 1.0 / (360.0 * x * x * x)
     }
 }

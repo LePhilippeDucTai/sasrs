@@ -76,11 +76,15 @@ pub(crate) fn nelder_mead<F: Fn(&[f64]) -> f64>(
         }
         // Reflection.
         let worst = &simplex[np];
-        let refl: Vec<f64> = (0..np).map(|d| centroid[d] + alpha * (centroid[d] - worst[d])).collect();
+        let refl: Vec<f64> = (0..np)
+            .map(|d| centroid[d] + alpha * (centroid[d] - worst[d]))
+            .collect();
         let fr = eval(&refl);
         if fr < fvals[0] {
             // Expansion.
-            let exp: Vec<f64> = (0..np).map(|d| centroid[d] + gamma * (refl[d] - centroid[d])).collect();
+            let exp: Vec<f64> = (0..np)
+                .map(|d| centroid[d] + gamma * (refl[d] - centroid[d]))
+                .collect();
             let fe = eval(&exp);
             if fe < fr {
                 simplex[np] = exp;
@@ -94,7 +98,9 @@ pub(crate) fn nelder_mead<F: Fn(&[f64]) -> f64>(
             fvals[np] = fr;
         } else {
             // Contraction.
-            let con: Vec<f64> = (0..np).map(|d| centroid[d] + rho_c * (worst[d] - centroid[d])).collect();
+            let con: Vec<f64> = (0..np)
+                .map(|d| centroid[d] + rho_c * (worst[d] - centroid[d]))
+                .collect();
             let fc = eval(&con);
             if fc < fvals[np] {
                 simplex[np] = con;

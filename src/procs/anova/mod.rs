@@ -16,15 +16,14 @@ use crate::stat::f_cdf;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 
-
-mod oneway;
 mod design;
 mod multiway;
 mod multiway_report;
-use oneway::*;
+mod oneway;
 use design::*;
 use multiway::*;
 use multiway_report::*;
+use oneway::*;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -147,7 +146,6 @@ fn fmt6(v: f64) -> String {
 
 use crate::procs::common::fmt_p;
 
-
 // ───────────────────────── Listing helpers ─────────────────────────
 
 use crate::procs::common::centered;
@@ -174,10 +172,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
     // Validate every effect term references only declared CLASS variables.
     for term in &model.terms {
         for part in term {
-            let is_class = ast
-                .class_vars
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case(part));
+            let is_class = ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(part));
             if !is_class {
                 return Err(SasError::runtime(format!(
                     "Variable {} not found in CLASS list.",
@@ -244,10 +239,7 @@ pub fn execute(ast: &AnovaAst, session: &mut Session) -> Result<()> {
 
         // MEANS section — only if means_vars contains `eff`
         let show_means = !ast.means_vars.is_empty()
-            && ast
-                .means_vars
-                .iter()
-                .any(|m| m.eq_ignore_ascii_case(eff));
+            && ast.means_vars.iter().any(|m| m.eq_ignore_ascii_case(eff));
 
         if show_means {
             print_oneway_means(session, eff, &stats);

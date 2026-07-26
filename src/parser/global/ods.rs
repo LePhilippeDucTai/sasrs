@@ -287,7 +287,10 @@ pub(super) fn parse_dim(ts: &mut StatementStream, name: &str) -> Result<u32> {
             Ok(v)
         }
         _ => Err(SasError::parse(
-            format!("ODS GRAPHICS {} requires a positive integer", name.to_uppercase()),
+            format!(
+                "ODS GRAPHICS {} requires a positive integer",
+                name.to_uppercase()
+            ),
             tok.span,
         )),
     }
@@ -305,10 +308,7 @@ pub(super) fn parse_imagefmt(ts: &mut StatementStream) -> Result<crate::ods_grap
     let name = match tok.ident() {
         Some(s) => s.to_ascii_lowercase(),
         None => {
-            return Err(SasError::parse(
-                "IMAGEFMT= requires PNG or SVG",
-                tok.span,
-            ));
+            return Err(SasError::parse("IMAGEFMT= requires PNG or SVG", tok.span));
         }
     };
     let fmt = match name.as_str() {
@@ -316,7 +316,10 @@ pub(super) fn parse_imagefmt(ts: &mut StatementStream) -> Result<crate::ods_grap
         "svg" => ImageFmt::Svg,
         other => {
             return Err(SasError::parse(
-                format!("IMAGEFMT={} is not supported (use PNG or SVG)", other.to_uppercase()),
+                format!(
+                    "IMAGEFMT={} is not supported (use PNG or SVG)",
+                    other.to_uppercase()
+                ),
                 tok.span,
             ));
         }
@@ -337,7 +340,9 @@ pub(super) fn parse_imagefmt(ts: &mut StatementStream) -> Result<crate::ods_grap
 /// Parse les options d'un statement `ODS` jusqu'au `;` : `FILE=`, `STYLE=`,
 /// `OPTIONS=` (ignorée). Renvoie `(file, style)`. Les options inconnues lèvent
 /// une erreur de parse (schéma large v1 strict sur les options).
-pub(super) fn parse_ods_options(ts: &mut StatementStream) -> Result<(Option<String>, Option<String>)> {
+pub(super) fn parse_ods_options(
+    ts: &mut StatementStream,
+) -> Result<(Option<String>, Option<String>)> {
     let mut file: Option<String> = None;
     let mut style: Option<String> = None;
 
@@ -362,7 +367,11 @@ pub(super) fn parse_ods_options(ts: &mut StatementStream) -> Result<(Option<Stri
                 // Toutes ces options attendent `= valeur`.
                 if ts.peek().kind != TokenKind::Eq {
                     return Err(SasError::parse(
-                        format!("ODS option {} requires a value (e.g. {}=...)", name.to_uppercase(), name.to_uppercase()),
+                        format!(
+                            "ODS option {} requires a value (e.g. {}=...)",
+                            name.to_uppercase(),
+                            name.to_uppercase()
+                        ),
                         ts.peek().span,
                     ));
                 }
@@ -378,7 +387,10 @@ pub(super) fn parse_ods_options(ts: &mut StatementStream) -> Result<(Option<Stri
             }
             other => {
                 return Err(SasError::parse(
-                    format!("ODS option '{}' is not supported in this build.", other.to_uppercase()),
+                    format!(
+                        "ODS option '{}' is not supported in this build.",
+                        other.to_uppercase()
+                    ),
                     name_tok.span,
                 ));
             }

@@ -56,7 +56,9 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
             ctx.comp_nvars.to_string(),
         ],
     ];
-    session.listing.write_table(&ds_headers, &ds_aligns, &ds_rows);
+    session
+        .listing
+        .write_table(&ds_headers, &ds_aligns, &ds_rows);
     session.listing.blank();
 
     // === Variables Summary ===
@@ -101,8 +103,7 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
     // === Observation Summary ===
     session.listing.write_line("Observation Summary");
     session.listing.blank();
-    let n_uncompared =
-        (ctx.base_nobs as isize - ctx.comp_nobs as isize).unsigned_abs();
+    let n_uncompared = (ctx.base_nobs as isize - ctx.comp_nobs as isize).unsigned_abs();
     session.listing.write_line(&format!(
         "Number of Observations in Common: {}",
         ctx.n_compared
@@ -154,13 +155,17 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
                 ]
             })
             .collect();
-        session.listing.write_table(&val_headers, &val_aligns, &val_rows);
+        session
+            .listing
+            .write_table(&val_headers, &val_aligns, &val_rows);
     }
 }
 
 /// BRIEFSUMMARY: condensed report (totals only).
 pub(super) fn print_brief_report(session: &mut Session, ctx: &ReportCtx<'_>) {
-    session.listing.write_line("The COMPARE Procedure - Brief Summary");
+    session
+        .listing
+        .write_line("The COMPARE Procedure - Brief Summary");
     session.listing.blank();
     session.listing.write_line(&format!(
         "BASE:    {} ({} obs, {} vars)",

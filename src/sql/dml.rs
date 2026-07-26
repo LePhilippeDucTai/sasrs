@@ -306,10 +306,9 @@ pub(super) fn exec_delete(
     let provider = session.libs.get(&libref)?;
     provider.write(&name, &ds)?;
     session.last_dataset = Some(display.clone());
-    session.log.note(&format!(
-        "{} rows were deleted from {}.",
-        deleted, display
-    ));
+    session
+        .log
+        .note(&format!("{} rows were deleted from {}.", deleted, display));
     Ok(())
 }
 

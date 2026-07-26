@@ -1,11 +1,10 @@
 use super::*;
 
-
-mod define;
 mod compute;
+mod define;
 
-pub(crate) use define::*;
 pub(crate) use compute::*;
+pub(crate) use define::*;
 
 /// Statistic keywords accepted after an ANALYSIS usage on a DEFINE.
 pub(crate) const ANALYSIS_STATS: &[&str] = &["sum", "mean", "min", "max", "n", "std"];

@@ -123,11 +123,7 @@ pub(super) fn mode(sorted: &[f64]) -> Option<f64> {
         best_cnt = cur_cnt;
         best_val = cur_val;
     }
-    if best_cnt >= 2 {
-        Some(best_val)
-    } else {
-        None
-    }
+    if best_cnt >= 2 { Some(best_val) } else { None }
 }
 
 /// Format a numeric statistic value (BEST-style, width 12).

@@ -68,17 +68,25 @@ pub(crate) fn mtest_statistics(lambda: &[f64], p: f64, q: f64, v: f64) -> Vec<Mt
         let r2 = p.max(q);
         let df1 = r2;
         let df2 = v - r2 + q;
-        let f = if df1 > 0.0 {
-            roy * df2 / df1
-        } else {
-            f64::NAN
-        };
+        let f = if df1 > 0.0 { roy * df2 / df1 } else { f64::NAN };
         (f, df1, df2)
     };
 
     vec![
-        MtestStat { name: "Wilks' Lambda", value: wilks, f: w_f, df1: w_df1, df2: w_df2 },
-        MtestStat { name: "Pillai's Trace", value: pillai, f: pi_f, df1: pi_df1, df2: pi_df2 },
+        MtestStat {
+            name: "Wilks' Lambda",
+            value: wilks,
+            f: w_f,
+            df1: w_df1,
+            df2: w_df2,
+        },
+        MtestStat {
+            name: "Pillai's Trace",
+            value: pillai,
+            f: pi_f,
+            df1: pi_df1,
+            df2: pi_df2,
+        },
         MtestStat {
             name: "Hotelling-Lawley Trace",
             value: hlt,
@@ -298,10 +306,7 @@ pub(crate) fn run_mtests(
         let qdf = m_rank as f64; // hypothesis degrees of freedom (rank L)
         let stats = mtest_statistics(&lambda, p, qdf, v);
 
-        let label = mt
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{}", ti + 1));
+        let label = mt.label.clone().unwrap_or_else(|| format!("{}", ti + 1));
 
         session.listing.blank();
         session.listing.blank();

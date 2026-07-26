@@ -30,17 +30,19 @@ pub(super) fn is_legacy_case(ast: &MixedAst) -> bool {
 
 pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()> {
     // ── 1. Validate / guards ────────────────────────────────────────────────
-    let model = ast.model.as_ref().ok_or_else(|| {
-        SasError::runtime("MODEL statement required in PROC MIXED.")
-    })?;
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required in PROC MIXED."))?;
 
     let random = ast.random.as_ref().ok_or_else(|| {
         SasError::runtime("PROC MIXED currently requires a RANDOM statement with SUBJECT=.")
     })?;
 
-    let subject = random.subject.as_ref().ok_or_else(|| {
-        SasError::runtime("RANDOM statement requires SUBJECT= in PROC MIXED.")
-    })?;
+    let subject = random
+        .subject
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("RANDOM statement requires SUBJECT= in PROC MIXED."))?;
 
     // NOTEs for parse-accepted / deferred features.
     note_deferred_features_legacy(ast, model, session);
@@ -64,8 +66,7 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
     let subj_col = decode_column(&ds, subj_idx)?;
 
     // ── 3. Build complete observations ──────────────────────────────────────
-    let (y, subj_of, levels, n_not_used) =
-        build_observations_legacy(&resp_col, &subj_col, n_read)?;
+    let (y, subj_of, levels, n_not_used) = build_observations_legacy(&resp_col, &subj_col, n_read)?;
     let n_used = y.len();
     let n_subjects = levels.len();
 
@@ -103,7 +104,11 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
 }
 
 /// NOTEs for parse-accepted / deferred features (legacy path).
-pub(super) fn note_deferred_features_legacy(ast: &MixedAst, model: &ModelSpec, session: &mut Session) {
+pub(super) fn note_deferred_features_legacy(
+    ast: &MixedAst,
+    model: &ModelSpec,
+    session: &mut Session,
+) {
     if ast.covtest {
         session
             .log
@@ -192,7 +197,10 @@ pub(super) fn build_observations_legacy(
     // Determine subject levels (sorted by SAS comparison order).
     let mut levels: Vec<Value> = Vec::new();
     for v in &subj_values {
-        if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+        if !levels
+            .iter()
+            .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+        {
             levels.push(v.clone());
         }
     }

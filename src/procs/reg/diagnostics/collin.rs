@@ -105,7 +105,12 @@ pub(crate) fn compute_collin(
     // Scale each analysed column to unit (2-norm) length.
     let norms: Vec<f64> = cols
         .iter()
-        .map(|&c| (0..n).map(|i| x_mat[i][c] * x_mat[i][c]).sum::<f64>().sqrt())
+        .map(|&c| {
+            (0..n)
+                .map(|i| x_mat[i][c] * x_mat[i][c])
+                .sum::<f64>()
+                .sqrt()
+        })
         .collect();
     // Scaled cross-product A = ZᵀZ (m×m) where Z column c is x[:,c]/‖x[:,c]‖.
     let mut a = vec![vec![0.0; m]; m];
@@ -127,7 +132,13 @@ pub(crate) fn compute_collin(
     let lmax = eigenvalues.iter().cloned().fold(0.0_f64, f64::max);
     let condition_index: Vec<f64> = eigenvalues
         .iter()
-        .map(|&l| if l > 0.0 { (lmax / l).sqrt() } else { f64::INFINITY })
+        .map(|&l| {
+            if l > 0.0 {
+                (lmax / l).sqrt()
+            } else {
+                f64::INFINITY
+            }
+        })
         .collect();
 
     // Variance proportions. φ_{kj} = v_{jk}² / λ_k ; π_{jk} = φ_{kj}/Σ_k φ_{kj}.

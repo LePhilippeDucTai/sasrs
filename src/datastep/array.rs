@@ -1,4 +1,3 @@
-
 /// Définition compilée d'un array (M16.2). `slots` = slots PDV des
 /// éléments dans l'ordre row-major ; `dims` = bornes supérieures de chaque
 /// dimension (borne inférieure = 1, comme SAS). Un array 1-D a `dims` de

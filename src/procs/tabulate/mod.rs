@@ -135,22 +135,21 @@ use crate::procs::common::{self, decode_column, partition_numeric};
 use crate::procs::means::{compute, stat_header};
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::*;
 use std::cmp::Ordering;
 
-
-mod model;
-mod parse;
-mod output;
 mod cell;
+mod model;
+mod output;
+mod parse;
 
 pub use parse::parse;
 
-use model::*;
-use parse::*;
-use output::*;
 use cell::*;
+use model::*;
+use output::*;
+use parse::*;
 
 pub struct TabulateAst {
     pub data: Option<DatasetRef>,
@@ -215,19 +214,27 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
     // Resolve CLASS and VAR columns (validate existence; VAR must be numeric).
     let mut class_cols: Vec<(String, usize)> = Vec::with_capacity(ast.class.len());
     for cname in &ast.class {
-        match ds.vars.iter().position(|m| m.name.eq_ignore_ascii_case(cname)) {
+        match ds
+            .vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(cname))
+        {
             Some(i) => class_cols.push((ds.vars[i].name.clone(), i)),
             None => {
                 return Err(SasError::runtime(format!(
                     "Variable {} not found.",
                     cname.to_uppercase()
-                )))
+                )));
             }
         }
     }
     let mut var_cols: Vec<(String, usize)> = Vec::with_capacity(ast.var.len());
     for vname in &ast.var {
-        match ds.vars.iter().position(|m| m.name.eq_ignore_ascii_case(vname)) {
+        match ds
+            .vars
+            .iter()
+            .position(|m| m.name.eq_ignore_ascii_case(vname))
+        {
             Some(i) => {
                 if ds.vars[i].ty != VarType::Num {
                     return Err(SasError::runtime(format!(
@@ -241,7 +248,7 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                 return Err(SasError::runtime(format!(
                     "Variable {} not found.",
                     vname.to_uppercase()
-                )))
+                )));
             }
         }
     }
@@ -292,9 +299,11 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
     for page in &page_cells {
         // Page label line (only when a page dimension is present).
         if let Some(pc) = page {
-            session
-                .listing
-                .write_line(&format!("{}={}", page_dim_name(&ast, &ds), cell_label(pc, &ds)));
+            session.listing.write_line(&format!(
+                "{}={}",
+                page_dim_name(&ast, &ds),
+                cell_label(pc, &ds)
+            ));
             session.listing.blank();
         }
         let page_atoms: &[Atom] = match page {

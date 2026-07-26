@@ -13,11 +13,17 @@ fn execute_by_unsorted_errors() {
         "x" => [1.0_f64, 2.0, 3.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("sex"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: false,
         stats: vec![],
@@ -51,11 +57,17 @@ fn execute_by_output_dataset_rows() {
         "x" => [2.0_f64, 4.0, 10.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("sex"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -68,7 +80,10 @@ fn execute_by_output_dataset_rows() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("mean".into(), "x".into(), "mx".into())],
         }),
     };
@@ -99,11 +114,17 @@ fn execute_weight_report_and_exclusions() {
         "w" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(0.0), None, Some(4.0)]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec!["n".into(), "nmiss".into(), "mean".into(), "sum".into()],
@@ -116,7 +137,10 @@ fn execute_weight_report_and_exclusions() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![
                 ("n".into(), "x".into(), "nx".into()),
                 ("nmiss".into(), "x".into(), "nmx".into()),
@@ -151,11 +175,17 @@ fn execute_weight_with_by() {
         "w" => [1.0_f64, 2.0, 3.0, 1.0, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -168,7 +198,10 @@ fn execute_weight_with_by() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("mean".into(), "x".into(), "mx".into())],
         }),
     };
@@ -196,11 +229,17 @@ fn execute_weight_with_class() {
         "w" => [1.0_f64, 2.0, 3.0, 5.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -213,7 +252,10 @@ fn execute_weight_with_class() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("mean".into(), "x".into(), "mx".into())],
         }),
     };
@@ -266,13 +308,19 @@ fn cl_percent_label_values() {
 fn ods_output_summary_captures_dataset() {
     let mut session = make_session();
     let df = df!["x" => [Some(2.0_f64), Some(4.0), Some(6.0)]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     // Activate ODS OUTPUT Summary=means_out.
     session.set_ods_output(&[(
         "summary".into(),
-        DatasetRef { libref: None, name: "means_out".into() },
+        DatasetRef {
+            libref: None,
+            name: "means_out".into(),
+        },
     )]);
 
     let ast = means_ast_var_x();
@@ -288,12 +336,27 @@ fn ods_output_summary_captures_dataset() {
     let var_idx = out.vars.iter().position(|v| v.name == "Variable").unwrap();
     assert_eq!(out.vars[var_idx].ty, VarType::Char);
 
-    assert_eq!(read_num_col(&session, "MEANS_OUT", "N"), vec![Value::Num(3.0)]);
-    assert_eq!(read_num_col(&session, "MEANS_OUT", "Mean"), vec![Value::Num(4.0)]);
+    assert_eq!(
+        read_num_col(&session, "MEANS_OUT", "N"),
+        vec![Value::Num(3.0)]
+    );
+    assert_eq!(
+        read_num_col(&session, "MEANS_OUT", "Mean"),
+        vec![Value::Num(4.0)]
+    );
     // std of [2,4,6] = 2.
-    assert_eq!(read_num_col(&session, "MEANS_OUT", "StdDev"), vec![Value::Num(2.0)]);
-    assert_eq!(read_num_col(&session, "MEANS_OUT", "Min"), vec![Value::Num(2.0)]);
-    assert_eq!(read_num_col(&session, "MEANS_OUT", "Max"), vec![Value::Num(6.0)]);
+    assert_eq!(
+        read_num_col(&session, "MEANS_OUT", "StdDev"),
+        vec![Value::Num(2.0)]
+    );
+    assert_eq!(
+        read_num_col(&session, "MEANS_OUT", "Min"),
+        vec![Value::Num(2.0)]
+    );
+    assert_eq!(
+        read_num_col(&session, "MEANS_OUT", "Max"),
+        vec![Value::Num(6.0)]
+    );
 
     // last_dataset points at the captured dataset.
     assert_eq!(session.last_dataset.as_deref(), Some("WORK.MEANS_OUT"));
@@ -303,13 +366,19 @@ fn ods_output_summary_captures_dataset() {
 fn ods_output_summary_case_insensitive_table_name() {
     let mut session = make_session();
     let df = df!["x" => [Some(1.0_f64), Some(3.0)]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     // Registered under a different casing; matching must be case-insensitive.
     session.set_ods_output(&[(
         "SuMMaRy".into(),
-        DatasetRef { libref: None, name: "o".into() },
+        DatasetRef {
+            libref: None,
+            name: "o".into(),
+        },
     )]);
 
     execute(&means_ast_var_x(), &mut session).unwrap();
@@ -323,7 +392,10 @@ fn ods_output_inactive_writes_no_dataset() {
     // Invariant: with an empty ods_output_map, no capture dataset is written.
     let mut session = make_session();
     let df = df!["x" => [Some(2.0_f64), Some(4.0)]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     execute(&means_ast_var_x(), &mut session).unwrap();
@@ -341,12 +413,18 @@ fn ods_output_summary_multiple_vars_one_row_each() {
         "y" => [Some(10.0_f64), Some(20.0)],
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     session.set_ods_output(&[(
         "summary".into(),
-        DatasetRef { libref: None, name: "o".into() },
+        DatasetRef {
+            libref: None,
+            name: "o".into(),
+        },
     )]);
 
     let mut ast = means_ast_var_x();

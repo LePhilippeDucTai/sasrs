@@ -21,7 +21,11 @@ impl Parser {
         if let Some(op) = op {
             self.next();
             let right = self.parse_add()?;
-            Ok(ImlExpr::BinOp { op, left: Box::new(left), right: Box::new(right) })
+            Ok(ImlExpr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
         } else {
             Ok(left)
         }
@@ -37,7 +41,11 @@ impl Parser {
             };
             self.next();
             let right = self.parse_mul()?;
-            left = ImlExpr::BinOp { op, left: Box::new(left), right: Box::new(right) };
+            left = ImlExpr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -53,7 +61,11 @@ impl Parser {
             };
             self.next();
             let right = self.parse_kron()?;
-            left = ImlExpr::BinOp { op, left: Box::new(left), right: Box::new(right) };
+            left = ImlExpr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -63,7 +75,11 @@ impl Parser {
         while self.peek() == &Tok::At {
             self.next();
             let right = self.parse_unary()?;
-            left = ImlExpr::BinOp { op: ImlOp::Kronecker, left: Box::new(left), right: Box::new(right) };
+            left = ImlExpr::BinOp {
+                op: ImlOp::Kronecker,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -72,7 +88,10 @@ impl Parser {
         if self.peek() == &Tok::Minus {
             self.next();
             let e = self.parse_unary()?;
-            return Ok(ImlExpr::Unary { op: UnaryOp::Neg, expr: Box::new(e) });
+            return Ok(ImlExpr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(e),
+            });
         }
         self.parse_postfix()
     }
@@ -90,7 +109,11 @@ impl Parser {
                     self.next();
                     let (row, col) = self.parse_subscript()?;
                     self.expect(&Tok::RBracket, "']'")?;
-                    e = ImlExpr::Subscript { mat: Box::new(e), row, col };
+                    e = ImlExpr::Subscript {
+                        mat: Box::new(e),
+                        row,
+                        col,
+                    };
                 }
                 _ => break,
             }

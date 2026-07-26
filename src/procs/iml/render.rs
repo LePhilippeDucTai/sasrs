@@ -32,7 +32,10 @@ pub(super) fn render_matrix(name: &str, m: &Matrix, session: &mut Session) {
     session.listing.blank();
 
     // Cellules formatées.
-    let cells: Vec<Vec<String>> = m.iter().map(|r| r.iter().map(|v| fmt_val(*v)).collect()).collect();
+    let cells: Vec<Vec<String>> = m
+        .iter()
+        .map(|r| r.iter().map(|v| fmt_val(*v)).collect())
+        .collect();
 
     let show_col_hdr = nc >= 2;
     let show_row_hdr = nr >= 2;
@@ -50,7 +53,10 @@ pub(super) fn render_matrix(name: &str, m: &Matrix, session: &mut Session) {
 
     // Largeur de l'étiquette de ligne.
     let row_label_w = if show_row_hdr {
-        (0..nr).map(|i| format!("ROW{}", i + 1).len()).max().unwrap_or(0)
+        (0..nr)
+            .map(|i| format!("ROW{}", i + 1).len())
+            .max()
+            .unwrap_or(0)
     } else {
         0
     };

@@ -9,16 +9,9 @@ use super::*;
 /// `Selection` request with the method's default SLE/SLS.
 pub(crate) fn parse_selection_value(ts: &mut StatementStream) -> Result<Selection> {
     common::expect_eq(ts, "SELECTION")?;
-    let method_name = ts
-        .peek()
-        .ident()
-        .map(str::to_string)
-        .ok_or_else(|| {
-            SasError::parse(
-                "expected selection method after SELECTION=",
-                ts.peek().span,
-            )
-        })?;
+    let method_name = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+        SasError::parse("expected selection method after SELECTION=", ts.peek().span)
+    })?;
     ts.next();
     let method = match method_name.to_ascii_lowercase().as_str() {
         "forward" => SelMethod::Forward,

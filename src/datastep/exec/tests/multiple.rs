@@ -87,10 +87,7 @@ fn targeted_outputs_split_disjoint_datasets() {
     // sortie indépendants.
     assert_eq!(
         stats.written,
-        vec![
-            ("WORK.M".to_string(), 2, 3),
-            ("WORK.F".to_string(), 2, 3),
-        ]
+        vec![("WORK.M".to_string(), 2, 3), ("WORK.F".to_string(), 2, 3),]
     );
     let m = read_work(&s, "m");
     let f = read_work(&s, "f");
@@ -163,10 +160,7 @@ fn two_by_keys_first_last_prefix_rule() {
     write_num_ds(
         &s,
         "g",
-        &[
-            ("a", some(&[1.0, 1.0, 2.0])),
-            ("b", some(&[7.0, 8.0, 8.0])),
-        ],
+        &[("a", some(&[1.0, 1.0, 2.0])), ("b", some(&[7.0, 8.0, 8.0]))],
     );
     run(
         "data out; set g; by a b; fa = first.a; fb = first.b; la = last.a; lb = last.b; run;",
@@ -237,8 +231,16 @@ fn merge_one_to_one() {
     // Sortie SAS calculée à la main : a={(1,x=10),(2,x=20)},
     // b={(1,y=100),(2,y=200)} ; merge a b; by id; → (1,10,100),(2,20,200).
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))]);
-    write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))]);
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
+    write_num_ds(
+        &s,
+        "b",
+        &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))],
+    );
     let stats = run("data out; merge a b; by id; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0]));
     assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
@@ -256,7 +258,11 @@ fn merge_one_to_many_short_side_persists() {
     // ; merge a b; by id; → (1,10,100),(1,20,100). y PERSISTE à 100 sur
     // la 2e obs (persistance du côté court).
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[1.0, 1.0])), ("x", some(&[10.0, 20.0]))]);
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[1.0, 1.0])), ("x", some(&[10.0, 20.0]))],
+    );
     write_num_ds(&s, "b", &[("id", some(&[1.0])), ("y", some(&[100.0]))]);
     run("data out; merge a b; by id; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "id"), some(&[1.0, 1.0]));
@@ -273,8 +279,16 @@ fn merge_unmatched_keys_with_in_and_missing() {
     //   id=2 : x=. , y=20, ina=0, inb=1
     //   id=3 : x=30, y=33, ina=1, inb=1
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))]);
-    write_num_ds(&s, "b", &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))]);
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))],
+    );
+    write_num_ds(
+        &s,
+        "b",
+        &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))],
+    );
     run(
         "data out; merge a(in=ina) b(in=inb); by id; a_in = ina; b_in = inb; run;",
         &mut s,
@@ -297,8 +311,16 @@ fn merge_inner_join_via_in() {
     // Idiome SAS : `if ina and inb;` = inner join. Mêmes données que le
     // test précédent → 1 obs (id=3). Sortie calculée à la main.
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))]);
-    write_num_ds(&s, "b", &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))]);
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[1.0, 3.0])), ("x", some(&[10.0, 30.0]))],
+    );
+    write_num_ds(
+        &s,
+        "b",
+        &[("id", some(&[2.0, 3.0])), ("y", some(&[20.0, 33.0]))],
+    );
     run(
         "data out; merge a(in=ina) b(in=inb); by id; if ina and inb; run;",
         &mut s,
@@ -318,14 +340,40 @@ fn merge_variable_overlap_rightmost_wins() {
     let v_a = Series::new("v".into(), &["A"]);
     let df_a = DataFrame::new(vec![id_a.into(), v_a.into()]).unwrap();
     let vars = vec![
-        VarMeta { name: "id".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "v".into(), ty: VarType::Char, length: 8, format: None, label: None },
+        VarMeta {
+            name: "id".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "v".into(),
+            ty: VarType::Char,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
-    s.libs.get("WORK").unwrap().write("a", &SasDataset { df: df_a, vars: vars.clone() }).unwrap();
+    s.libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "a",
+            &SasDataset {
+                df: df_a,
+                vars: vars.clone(),
+            },
+        )
+        .unwrap();
     let id_b = Series::new("id".into(), &[Some(1.0)]);
     let v_b = Series::new("v".into(), &["B"]);
     let df_b = DataFrame::new(vec![id_b.into(), v_b.into()]).unwrap();
-    s.libs.get("WORK").unwrap().write("b", &SasDataset { df: df_b, vars }).unwrap();
+    s.libs
+        .get("WORK")
+        .unwrap()
+        .write("b", &SasDataset { df: df_b, vars })
+        .unwrap();
     run("data out; merge a b; by id; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "id"), some(&[1.0]));
     assert_eq!(col_str(&s, "out", "v"), vec![Some("B".to_string())]);
@@ -338,8 +386,19 @@ fn merge_first_last_on_one_to_many_group() {
     // obs : first=1/0, last=0/1 ; groupe id=2 → 1 obs : first=1, last=1.
     // Sortie calculée à la main.
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[1.0, 1.0, 2.0])), ("x", some(&[10.0, 11.0, 20.0]))]);
-    write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))]);
+    write_num_ds(
+        &s,
+        "a",
+        &[
+            ("id", some(&[1.0, 1.0, 2.0])),
+            ("x", some(&[10.0, 11.0, 20.0])),
+        ],
+    );
+    write_num_ds(
+        &s,
+        "b",
+        &[("id", some(&[1.0, 2.0])), ("y", some(&[100.0, 200.0]))],
+    );
     run(
         "data out; merge a b; by id; f = first.id; l = last.id; run;",
         &mut s,
@@ -356,9 +415,19 @@ fn merge_first_last_on_one_to_many_group() {
 fn merge_unsorted_data_stops_with_error() {
     // Un dataset non trié selon le BY → ERROR de désordre.
     let mut s = session();
-    write_num_ds(&s, "a", &[("id", some(&[2.0, 1.0])), ("x", some(&[1.0, 2.0]))]);
-    write_num_ds(&s, "b", &[("id", some(&[1.0, 2.0])), ("y", some(&[1.0, 2.0]))]);
-    let err = run("data out; merge a b; by id; run;", &mut s).err().unwrap();
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[2.0, 1.0])), ("x", some(&[1.0, 2.0]))],
+    );
+    write_num_ds(
+        &s,
+        "b",
+        &[("id", some(&[1.0, 2.0])), ("y", some(&[1.0, 2.0]))],
+    );
+    let err = run("data out; merge a b; by id; run;", &mut s)
+        .err()
+        .unwrap();
     assert_eq!(
         err.to_string(),
         "BY variables are not properly sorted on data set WORK.A."
@@ -379,7 +448,9 @@ fn merge_after_set_is_error() {
     let mut s = session();
     write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
     write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
-    let err = run("data out; set a; merge a b; by id; run;", &mut s).err().unwrap();
+    let err = run("data out; set a; merge a b; by id; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("not allowed"), "got: {err}");
 }
 

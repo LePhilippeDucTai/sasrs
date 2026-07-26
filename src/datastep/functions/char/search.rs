@@ -109,7 +109,7 @@ pub(crate) fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
         return Value::Num(0.0);
     }
 
-    let search_from_char_idx = start_pos as usize;  // startPos is exclusive (1-based), skip to next char
+    let search_from_char_idx = start_pos as usize; // startPos is exclusive (1-based), skip to next char
 
     let target_search = if case_insensitive {
         target.to_lowercase()
@@ -178,7 +178,11 @@ pub(crate) fn fn_findc(args: &[Value], ctx: &mut EvalCtx) -> Value {
     };
 
     for (i, &c) in chars.iter().enumerate().skip((start_pos - 1) as usize) {
-        let test_c = if case_insensitive { c.to_lowercase().to_string() } else { c.to_string() };
+        let test_c = if case_insensitive {
+            c.to_lowercase().to_string()
+        } else {
+            c.to_string()
+        };
         if target_chars.contains(&test_c.chars().next().unwrap_or('?')) {
             return Value::Num((i + 1) as f64);
         }
@@ -206,8 +210,16 @@ pub(crate) fn fn_count(args: &[Value], _ctx: &mut EvalCtx) -> Value {
         false
     };
 
-    let search_str = if case_insensitive { s.to_lowercase() } else { s.clone() };
-    let target_str = if case_insensitive { target.to_lowercase() } else { target.clone() };
+    let search_str = if case_insensitive {
+        s.to_lowercase()
+    } else {
+        s.clone()
+    };
+    let target_str = if case_insensitive {
+        target.to_lowercase()
+    } else {
+        target.clone()
+    };
 
     let mut count = 0;
     let mut start = 0;
@@ -244,14 +256,17 @@ pub(crate) fn fn_countc(args: &[Value], _ctx: &mut EvalCtx) -> Value {
         target.chars().collect()
     };
 
-    let count = s.chars().filter(|c| {
-        let test_c = if case_insensitive {
-            c.to_lowercase().next().unwrap_or('?')
-        } else {
-            *c
-        };
-        target_chars.contains(&test_c)
-    }).count();
+    let count = s
+        .chars()
+        .filter(|c| {
+            let test_c = if case_insensitive {
+                c.to_lowercase().next().unwrap_or('?')
+            } else {
+                *c
+            };
+            target_chars.contains(&test_c)
+        })
+        .count();
 
     Value::Num(count as f64)
 }
@@ -266,7 +281,11 @@ pub(crate) fn fn_verify(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let target = coerce_char(&args[1]);
 
     if target.is_empty() {
-        return if s.is_empty() { Value::Num(0.0) } else { Value::Num(1.0) };
+        return if s.is_empty() {
+            Value::Num(0.0)
+        } else {
+            Value::Num(1.0)
+        };
     }
 
     let case_insensitive = if args.len() >= 3 {

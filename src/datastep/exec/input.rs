@@ -12,10 +12,7 @@ impl Runner {
     /// Résout les items AST d'un statement INPUT en `InputAction` (slots PDV
     /// + informats parsés). Plusieurs INPUT par étape sont ainsi gérés (chacun
     /// avec ses propres items).
-    fn resolve_input_items(
-        &self,
-        ast_items: &[crate::ast::InputItem],
-    ) -> Result<Vec<InputAction>> {
+    fn resolve_input_items(&self, ast_items: &[crate::ast::InputItem]) -> Result<Vec<InputAction>> {
         use crate::ast::InputItem;
         let mut out = Vec::with_capacity(ast_items.len());
         for item in ast_items {
@@ -28,14 +25,14 @@ impl Runner {
                     list_modifier,
                 } => {
                     let slot = self.pdv.slot(name).ok_or_else(|| {
-                        SasError::runtime(format!(
-                            "Variable {name} is not on the INPUT statement."
-                        ))
+                        SasError::runtime(format!("Variable {name} is not on the INPUT statement."))
                     })?;
                     let spec = match informat {
-                        Some(tok) => Some(crate::formats::FormatSpec::parse(tok).ok_or_else(
-                            || SasError::runtime(format!("The informat {tok} is not valid.")),
-                        )?),
+                        Some(tok) => {
+                            Some(crate::formats::FormatSpec::parse(tok).ok_or_else(|| {
+                                SasError::runtime(format!("The informat {tok} is not valid."))
+                            })?)
+                        }
                         None => None,
                     };
                     let pdv_is_char = self.pdv.vars()[slot].ty == VarType::Char;
@@ -76,7 +73,9 @@ impl Runner {
         };
 
         if self.text_io.src.is_none() {
-            return Err(SasError::runtime("INPUT statement without an INFILE source."));
+            return Err(SasError::runtime(
+                "INPUT statement without an INFILE source.",
+            ));
         }
         // Items résolus en `InputAction` (slots PDV + informats parsés). On les
         // résout depuis l'AST de CE statement INPUT pour gérer plusieurs INPUT
@@ -120,8 +119,16 @@ impl Runner {
                     list_modifier,
                 } => {
                     let outcome = self.read_one_var(
-                        &line, &mut cursor, *slot, *is_char, *cols, informat, *list_modifier,
-                        &delim, dsd, short,
+                        &line,
+                        &mut cursor,
+                        *slot,
+                        *is_char,
+                        *cols,
+                        informat,
+                        *list_modifier,
+                        &delim,
+                        dsd,
+                        short,
                     )?;
                     match outcome {
                         ReadOutcome::Ok => {}

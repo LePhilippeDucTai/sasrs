@@ -16,7 +16,11 @@ impl Parser {
         } else {
             Vec::new()
         };
-        Ok(ImlStmt::If { cond, then_body, else_body })
+        Ok(ImlStmt::If {
+            cond,
+            then_body,
+            else_body,
+        })
     }
 
     /// Après THEN/ELSE : soit `DO; ... END;`, soit un statement unique.
@@ -91,7 +95,13 @@ impl Parser {
         self.expect(&Tok::Semi, "';' after a DO loop header")?;
         let body = self.parse_block_until_end()?;
         self.expect(&Tok::Semi, "';' after END")?;
-        Ok(ImlStmt::DoLoop { var, from, to, by, body })
+        Ok(ImlStmt::DoLoop {
+            var,
+            from,
+            to,
+            by,
+            body,
+        })
     }
 
     /// Parse des statements jusqu'à `END` (consommé), sans le `;` final.

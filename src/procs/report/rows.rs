@@ -1,7 +1,11 @@
 use super::*;
 
 /// Detail report: one listing row per (surviving) observation.
-pub(super) fn build_detail_rows(plan: &[ColPlan], decoded: &[Vec<Value>], n_obs: usize) -> Vec<RowOut> {
+pub(super) fn build_detail_rows(
+    plan: &[ColPlan],
+    decoded: &[Vec<Value>],
+    n_obs: usize,
+) -> Vec<RowOut> {
     let mut value_rows: Vec<RowOut> = Vec::new();
     for r in 0..n_obs {
         let vals: Vec<Value> = (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect();
@@ -53,8 +57,7 @@ pub(super) fn build_summary_rows(
             group_positions
                 .iter()
                 .position(|&p| {
-                    plan[p].idx != usize::MAX
-                        && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
+                    plan[p].idx != usize::MAX && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
                 })
                 .map(|pos| (pos, b))
         })
@@ -72,9 +75,11 @@ pub(super) fn build_summary_rows(
         for &(level_pos, brk) in &break_after {
             let is_last = gi + 1 == groups.len();
             let changes = is_last
-                || groups[gi + 1].0.get(level_pos).map(|nv| {
-                    key[level_pos].sas_cmp(nv) != Ordering::Equal
-                }) != Some(false);
+                || groups[gi + 1]
+                    .0
+                    .get(level_pos)
+                    .map(|nv| key[level_pos].sas_cmp(nv) != Ordering::Equal)
+                    != Some(false);
             if changes && brk.summarize {
                 // Range = all original rows whose key matches up to and
                 // including `level_pos`. Collect across the contiguous run.
@@ -117,7 +122,11 @@ pub(super) enum RowKind {
 }
 
 /// Compute the typed cell values of a summary (group) row.
-pub(super) fn summary_row_values(plan: &[ColPlan], decoded: &[Vec<Value>], grp_rows: &[usize]) -> Vec<Value> {
+pub(super) fn summary_row_values(
+    plan: &[ColPlan],
+    decoded: &[Vec<Value>],
+    grp_rows: &[usize],
+) -> Vec<Value> {
     let mut vals = Vec::with_capacity(plan.len());
     for (ci, c) in plan.iter().enumerate() {
         let v = match &c.usage {
@@ -200,9 +209,8 @@ pub(super) fn break_range_rows(
     let mut out: Vec<usize> = Vec::new();
     // Walk backwards while the prefix matches, then forward — but since groups
     // are sorted, the run sharing this prefix is contiguous and ends at gi.
-    let prefix_eq = |k: &[Value]| -> bool {
-        (0..=level_pos).all(|p| key[p].sas_cmp(&k[p]) == Ordering::Equal)
-    };
+    let prefix_eq =
+        |k: &[Value]| -> bool { (0..=level_pos).all(|p| key[p].sas_cmp(&k[p]) == Ordering::Equal) };
     let mut start = gi;
     while start > 0 && prefix_eq(&groups[start - 1].0) {
         start -= 1;

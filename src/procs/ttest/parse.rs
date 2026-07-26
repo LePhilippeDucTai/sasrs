@@ -14,7 +14,10 @@ pub(super) fn parse_num_value(ts: &mut StatementStream, opt: &str) -> Result<f64
                 ts.next();
                 Ok(-n)
             } else {
-                Err(SasError::parse(format!("expected a number after {opt}="), ts.peek().span))
+                Err(SasError::parse(
+                    format!("expected a number after {opt}="),
+                    ts.peek().span,
+                ))
             }
         }
         _ => Err(SasError::parse(
@@ -59,20 +62,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             proc_options.ci_explicit = true;
         } else if ts.peek().is_kw("equal") {
             common::expect_eq(ts, "EQUAL")?;
-            let v = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected YES or NO after EQUAL=", ts.peek().span))?;
+            let v = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                SasError::parse("expected YES or NO after EQUAL=", ts.peek().span)
+            })?;
             ts.next();
             proc_options.equal = !v.eq_ignore_ascii_case("no");
         } else if ts.peek().is_kw("sides") {
             common::expect_eq(ts, "SIDES")?;
-            let v = ts
-                .peek()
-                .ident()
-                .map(str::to_string)
-                .ok_or_else(|| SasError::parse("expected 2, U or L after SIDES=", ts.peek().span))?;
+            let v = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                SasError::parse("expected 2, U or L after SIDES=", ts.peek().span)
+            })?;
             ts.next();
             proc_options.sides = match v.to_ascii_uppercase().as_str() {
                 "U" => TTestSides::Upper,
@@ -87,7 +86,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
             ));
         } else {
             let span = ts.peek().span;
-            return Err(SasError::parse("Unexpected token on PROC TTEST statement.", span));
+            return Err(SasError::parse(
+                "Unexpected token on PROC TTEST statement.",
+                span,
+            ));
         }
     }
 
@@ -124,11 +126,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
                     if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
                         break;
                     }
-                    let left = ts
-                        .peek()
-                        .ident()
-                        .map(str::to_string)
-                        .ok_or_else(|| SasError::parse("expected a variable name in PAIRED", ts.peek().span))?;
+                    let left = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                        SasError::parse("expected a variable name in PAIRED", ts.peek().span)
+                    })?;
                     ts.next();
                     if ts.peek().kind != TokenKind::Star {
                         return Err(SasError::parse(
@@ -137,11 +137,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<TTestAst> {
                         ));
                     }
                     ts.next();
-                    let right = ts
-                        .peek()
-                        .ident()
-                        .map(str::to_string)
-                        .ok_or_else(|| SasError::parse("expected a variable name after '*' in PAIRED", ts.peek().span))?;
+                    let right = ts.peek().ident().map(str::to_string).ok_or_else(|| {
+                        SasError::parse(
+                            "expected a variable name after '*' in PAIRED",
+                            ts.peek().span,
+                        )
+                    })?;
                     ts.next();
                     paired_vars.push((left, right));
                 }

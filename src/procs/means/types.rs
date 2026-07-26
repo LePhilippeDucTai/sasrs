@@ -16,7 +16,11 @@ pub(super) fn type_mask(active: &[usize], k: usize) -> u64 {
 /// to keep. Returns `None` when neither WAYS nor TYPES is given (no
 /// restriction — every `_TYPE_` is kept, preserving the default path). `k` is
 /// the number of CLASS variables; `class` the CLASS names (for TYPES lookups).
-pub(super) fn allowed_types(ast: &MeansAst, class: &[String], k: usize) -> Result<Option<std::collections::BTreeSet<u64>>> {
+pub(super) fn allowed_types(
+    ast: &MeansAst,
+    class: &[String],
+    k: usize,
+) -> Result<Option<std::collections::BTreeSet<u64>>> {
     if ast.ways.is_empty() && ast.types.is_empty() {
         return Ok(None);
     }

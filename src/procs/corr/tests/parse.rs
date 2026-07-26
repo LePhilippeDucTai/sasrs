@@ -13,8 +13,7 @@ fn parse_minimal() {
 
 #[test]
 fn parse_options_and_statements() {
-    let ast =
-        parse_corr("proc corr data=a nosimple noprob nocorr; var x y; with z; run;").unwrap();
+    let ast = parse_corr("proc corr data=a nosimple noprob nocorr; var x y; with z; run;").unwrap();
     assert!(ast.nosimple && ast.noprob && ast.nocorr);
     assert_eq!(ast.var, vec!["x", "y"]);
     assert_eq!(ast.with, vec!["z"]);
@@ -29,10 +28,8 @@ fn parse_unknown_option_errors() {
 
 #[test]
 fn parse_out_options() {
-    let ast = parse_corr(
-        "proc corr data=a out=p outs=s outk=k spearman kendall pearson; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_corr("proc corr data=a out=p outs=s outk=k spearman kendall pearson; run;").unwrap();
     assert_eq!(ast.outp.as_ref().unwrap().name, "p");
     assert_eq!(ast.outs.as_ref().unwrap().name, "s");
     assert_eq!(ast.outk.as_ref().unwrap().name, "k");
@@ -52,8 +49,14 @@ fn parse_outp_and_weight() {
 
 #[test]
 fn pearson_perfect_positive() {
-    let x: Vec<Value> = [1.0, 2.0, 3.0, 4.0].iter().map(|v| Value::Num(*v)).collect();
-    let y: Vec<Value> = [2.0, 4.0, 6.0, 8.0].iter().map(|v| Value::Num(*v)).collect();
+    let x: Vec<Value> = [1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| Value::Num(*v))
+        .collect();
+    let y: Vec<Value> = [2.0, 4.0, 6.0, 8.0]
+        .iter()
+        .map(|v| Value::Num(*v))
+        .collect();
     let (r, n) = pearson(&x, &y);
     assert_eq!(n, 4);
     assert!((r.unwrap() - 1.0).abs() < 1e-12);
@@ -70,8 +73,14 @@ fn pearson_perfect_negative() {
 #[test]
 fn pearson_hand_computed() {
     // x=[1,2,3,5], y=[2,1,4,3].
-    let x: Vec<Value> = [1.0, 2.0, 3.0, 5.0].iter().map(|v| Value::Num(*v)).collect();
-    let y: Vec<Value> = [2.0, 1.0, 4.0, 3.0].iter().map(|v| Value::Num(*v)).collect();
+    let x: Vec<Value> = [1.0, 2.0, 3.0, 5.0]
+        .iter()
+        .map(|v| Value::Num(*v))
+        .collect();
+    let y: Vec<Value> = [2.0, 1.0, 4.0, 3.0]
+        .iter()
+        .map(|v| Value::Num(*v))
+        .collect();
     let (r, n) = pearson(&x, &y);
     assert_eq!(n, 4);
     // mx=2.75, my=2.5; Sxy=3.5, Sxx=8.75, Syy=5 -> r = 3.5/sqrt(43.75) = 0.52915026
@@ -119,8 +128,7 @@ fn partial_pearson_matches_single_control_formula() {
     let r_xy = pearson_xy(&xf, &yf).unwrap();
     let r_xz = pearson_xy(&xf, &zf).unwrap();
     let r_yz = pearson_xy(&yf, &zf).unwrap();
-    let expected =
-        (r_xy - r_xz * r_yz) / ((1.0 - r_xz * r_xz) * (1.0 - r_yz * r_yz)).sqrt();
+    let expected = (r_xy - r_xz * r_yz) / ((1.0 - r_xz * r_xz) * (1.0 - r_yz * r_yz)).sqrt();
 
     let to_col = |v: &[f64]| -> Vec<Value> { v.iter().map(|f| Value::Num(*f)).collect() };
     let mut decoded: std::collections::HashMap<usize, Vec<Value>> =

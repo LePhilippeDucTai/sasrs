@@ -100,7 +100,10 @@ pub(crate) fn parse_infile(ts: &mut StatementStream) -> Result<DsStmt> {
 pub(crate) fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     if ts.peek().kind != TokenKind::Eq {
         return Err(SasError::parse(
-            format!("expected '=' after the INFILE option {}", opt.to_uppercase()),
+            format!(
+                "expected '=' after the INFILE option {}",
+                opt.to_uppercase()
+            ),
             ts.peek().span,
         ));
     }

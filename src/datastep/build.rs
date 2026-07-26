@@ -186,7 +186,10 @@ impl Compiler<'_> {
         }
         // FIRST.x / LAST.x : x doit être une variable BY.
         for full in &self.first_last_refs {
-            let suffix = full.split_once('.').map(|(_, s)| s).unwrap_or(full.as_str());
+            let suffix = full
+                .split_once('.')
+                .map(|(_, s)| s)
+                .unwrap_or(full.as_str());
             if !by.iter().any(|b| b.name == suffix) {
                 return Err(SasError::runtime(format!(
                     "Variable {full} is not defined: {suffix} is not a BY variable."
@@ -272,10 +275,7 @@ impl Compiler<'_> {
                     SasError::runtime(format!("Unable to read INFILE '{path}': {e}"))
                 })?;
                 // Lignes sans le `\n` ; un `\r` final est retiré.
-                let lines: Vec<String> = content
-                    .lines()
-                    .map(|l| l.to_string())
-                    .collect();
+                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
                 (lines, format!("the infile '{path}'"), true)
             }
             Some((crate::ast::InfileSource::Datalines, _)) | None => {

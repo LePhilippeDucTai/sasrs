@@ -10,7 +10,11 @@ impl Runner {
     /// élément d'array) via `resolve_lvalue_slot`. SYMPUT/SYMPUTX diffèrent
     /// l'écriture macro à la fin de l'étape (règle de visibilité SAS) ;
     /// EXECUTE met du code en file pour exécution post-étape.
-    pub(super) fn exec_call_routine(&mut self, name: &str, args: &[crate::ast::Expr]) -> Result<Flow> {
+    pub(super) fn exec_call_routine(
+        &mut self,
+        name: &str,
+        args: &[crate::ast::Expr],
+    ) -> Result<Flow> {
         // CALL STREAMINIT(seed) — initialise the RNG stream. Accepts an
         // optional single argument (integer seed); no argument → no-op.
         if name.eq_ignore_ascii_case("streaminit") {
@@ -236,8 +240,7 @@ impl Runner {
         let var_slot = self.resolve_lvalue_slot(&args[0])?;
         let result_slot = self.resolve_lvalue_slot(&args[1])?;
         let var_name = self.pdv.vars()[var_slot].name.clone();
-        let coerced =
-            self.coerce_assign(Value::Char(var_name), self.pdv.vars()[result_slot].ty);
+        let coerced = self.coerce_assign(Value::Char(var_name), self.pdv.vars()[result_slot].ty);
         self.pdv.set(result_slot, coerced);
         Ok(Flow::Normal)
     }

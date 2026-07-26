@@ -29,12 +29,7 @@ fn write_simple_dataset(session: &mut Session, name: &str) {
         label: None,
     }];
     let ds = SasDataset { df, vars };
-    session
-        .libs
-        .get("WORK")
-        .unwrap()
-        .write(name, &ds)
-        .unwrap();
+    session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
 }
 
 /// Write a dataset with a format and label so a sidecar file is created.
@@ -48,12 +43,7 @@ fn write_dataset_with_meta(session: &mut Session, name: &str) {
         label: Some("Age".to_string()),
     }];
     let ds = SasDataset { df, vars };
-    session
-        .libs
-        .get("WORK")
-        .unwrap()
-        .write(name, &ds)
-        .unwrap();
+    session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
 }
 
 // ── Parse tests ───────────────────────────────────────────────────────────
@@ -65,10 +55,7 @@ fn parse_full_example() {
     assert_eq!(ast.lib, "WORK");
     assert!(ast.nolist);
     assert_eq!(ast.deletes, vec!["A".to_string(), "B".to_string()]);
-    assert_eq!(
-        ast.changes,
-        vec![("C".to_string(), "D".to_string())]
-    );
+    assert_eq!(ast.changes, vec![("C".to_string(), "D".to_string())]);
 }
 
 #[test]
@@ -184,12 +171,7 @@ fn execute_change_renames_table() {
     assert!(session.libs.get("WORK").unwrap().exists("NEWNAME"));
 
     // Verify data is intact
-    let (ds, _) = session
-        .libs
-        .get("WORK")
-        .unwrap()
-        .read("NEWNAME")
-        .unwrap();
+    let (ds, _) = session.libs.get("WORK").unwrap().read("NEWNAME").unwrap();
     assert_eq!(ds.n_obs(), 2);
 
     let log = session.log.into_string();
@@ -213,7 +195,10 @@ fn execute_nolist_suppresses_listing() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.is_empty(), "listing should be empty with nolist: {listing}");
+    assert!(
+        listing.is_empty(),
+        "listing should be empty with nolist: {listing}"
+    );
 }
 
 #[test]
@@ -256,13 +241,12 @@ fn execute_rename_moves_sidecar() {
     assert!(session.libs.get("WORK").unwrap().exists("RENAMED"));
 
     // Read back and verify format survived the rename (sidecar was moved)
-    let (ds, _) = session
-        .libs
-        .get("WORK")
-        .unwrap()
-        .read("RENAMED")
+    let (ds, _) = session.libs.get("WORK").unwrap().read("RENAMED").unwrap();
+    let age_var = ds
+        .vars
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case("age"))
         .unwrap();
-    let age_var = ds.vars.iter().find(|v| v.name.eq_ignore_ascii_case("age")).unwrap();
     assert_eq!(
         age_var.format.as_deref(),
         Some("best12."),
@@ -327,7 +311,10 @@ fn execute_copy_moves_member_to_other_lib() {
     // Source lib = WORK; destination lib = a fresh assigned dir.
     write_simple_dataset(&mut session, "SRCTAB");
     let tmp = tempfile::tempdir().unwrap();
-    session.libs.assign("TGT", tmp.path().to_path_buf()).unwrap();
+    session
+        .libs
+        .assign("TGT", tmp.path().to_path_buf())
+        .unwrap();
 
     let ast = DatasetsAst {
         ops: vec![DsOp::Copy {
@@ -353,8 +340,19 @@ fn execute_exchange_swaps_names() {
     // them apart after the swap.
     write_simple_dataset(&mut session, "ALPHA"); // x = [1, 2]
     let df = df!["x" => [9.0_f64]].unwrap();
-    let vars = vec![VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None }];
-    session.libs.get("WORK").unwrap().write("BETA", &SasDataset { df, vars }).unwrap();
+    let vars = vec![VarMeta {
+        name: "x".into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }];
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("BETA", &SasDataset { df, vars })
+        .unwrap();
 
     let ast = DatasetsAst {
         ops: vec![DsOp::Exchange("ALPHA".into(), "BETA".into())],
@@ -405,7 +403,11 @@ fn execute_modify_renames_variable_and_sets_label() {
     let (ds, _) = session.libs.get("WORK").unwrap().read("MTAB").unwrap();
     // Variable renamed (no "age", has "years"), and label updated.
     assert!(ds.vars.iter().all(|v| !v.name.eq_ignore_ascii_case("age")));
-    let years = ds.vars.iter().find(|v| v.name.eq_ignore_ascii_case("years")).unwrap();
+    let years = ds
+        .vars
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case("years"))
+        .unwrap();
     assert_eq!(years.label.as_deref(), Some("Years old"));
     // DataFrame column was renamed too.
     assert!(ds.df.column("years").is_ok(), "df column renamed");

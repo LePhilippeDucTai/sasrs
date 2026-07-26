@@ -26,20 +26,19 @@ use crate::stat::invert_matrix;
 use crate::token::TokenKind;
 use crate::value::Value;
 
-
-mod parse;
-mod lda;
 mod data;
-mod report;
+mod lda;
 mod output;
+mod parse;
+mod report;
 
 pub use parse::parse;
 
-use parse::*;
-use lda::*;
 use data::*;
-use report::*;
+use lda::*;
 use output::*;
+use parse::*;
+use report::*;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -131,7 +130,9 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
 
     // ── 8. OUT= dataset ────────────────────────────────────────────────────
     if let Some(out_ref) = &ast.out {
-        write_out_dataset(ast, session, &ds, &model, &var_cols, &class_col, out_ref, n_read)?;
+        write_out_dataset(
+            ast, session, &ds, &model, &var_cols, &class_col, out_ref, n_read,
+        )?;
     }
 
     Ok(())

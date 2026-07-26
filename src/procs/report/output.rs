@@ -32,8 +32,10 @@ pub(super) fn write_out_dataset(
             ds.vars[c.idx].name.clone()
         };
         if is_char {
-            let vals: Vec<Option<String>> =
-                body.iter().map(|r| value_to_char_cell(&r.vals[ci])).collect();
+            let vals: Vec<Option<String>> = body
+                .iter()
+                .map(|r| value_to_char_cell(&r.vals[ci]))
+                .collect();
             let len = vals
                 .iter()
                 .flatten()
@@ -50,8 +52,7 @@ pub(super) fn write_out_dataset(
                 label: None,
             });
         } else {
-            let vals: Vec<Option<f64>> =
-                body.iter().map(|r| value_to_num(&r.vals[ci])).collect();
+            let vals: Vec<Option<f64>> = body.iter().map(|r| value_to_num(&r.vals[ci])).collect();
             columns.push(Series::new(name.as_str().into(), vals).into());
             vars.push(VarMeta {
                 name,

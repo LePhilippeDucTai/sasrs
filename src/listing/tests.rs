@@ -7,7 +7,10 @@ fn table_layout() {
     l.write_table(
         &["Obs".into(), "x".into()],
         &[Align::Right, Align::Right],
-        &[vec!["1".into(), "10".into()], vec!["2".into(), "200".into()]],
+        &[
+            vec!["1".into(), "10".into()],
+            vec!["2".into(), "200".into()],
+        ],
     );
     let s = l.into_string();
     assert!(s.contains("The SAS System"));
@@ -69,5 +72,8 @@ fn no_footnote_no_extra_output() {
     l.page_header();
     l.write_line("body");
     let s = l.into_string();
-    assert_eq!(s, format!("{}The SAS System\n\nbody\n", " ".repeat((40 - 14) / 2)));
+    assert_eq!(
+        s,
+        format!("{}The SAS System\n\nbody\n", " ".repeat((40 - 14) / 2))
+    );
 }

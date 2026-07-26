@@ -26,7 +26,10 @@ fn page_header_default_title_centered() {
     let out = d.into_string();
     assert!(out.contains("The SAS System"), "out: {out:?}");
     // Centré dans LS=40 : padding gauche de (40-14)/2 = 13 espaces.
-    assert!(out.starts_with("             The SAS System"), "out: {out:?}");
+    assert!(
+        out.starts_with("             The SAS System"),
+        "out: {out:?}"
+    );
 }
 
 #[test]
@@ -121,12 +124,18 @@ fn html_table_renders_escaped_cells() {
     assert!(out.contains("<table"), "pas de <table : {out}");
     assert!(out.contains("</table>"), "pas de </table> : {out}");
     // Échappement dans en-tête.
-    assert!(out.contains("Value &lt;x&gt;"), "échappement header raté : {out}");
+    assert!(
+        out.contains("Value &lt;x&gt;"),
+        "échappement header raté : {out}"
+    );
     // Échappement dans cellule.
     assert!(out.contains("a &amp; b"), "échappement & raté : {out}");
     assert!(out.contains("&lt;tag&gt;"), "échappement < raté : {out}");
     // Alignement droite sur la 2ᵉ colonne.
-    assert!(out.contains("text-align:right"), "alignement right manquant : {out}");
+    assert!(
+        out.contains("text-align:right"),
+        "alignement right manquant : {out}"
+    );
 }
 
 #[test]
@@ -166,7 +175,10 @@ fn html_page_header_uses_title() {
     h.page_header();
     let out = h.into_string();
     assert!(out.contains("Mon Rapport"), "titre absent : {out}");
-    assert!(out.contains("class=\"systitle\""), "classe systitle absente : {out}");
+    assert!(
+        out.contains("class=\"systitle\""),
+        "classe systitle absente : {out}"
+    );
 }
 
 #[test]
@@ -174,7 +186,10 @@ fn html_page_header_default_title() {
     let mut h = HtmlDestination::new(96);
     h.page_header();
     let out = h.into_string();
-    assert!(out.contains("The SAS System"), "titre par défaut absent : {out}");
+    assert!(
+        out.contains("The SAS System"),
+        "titre par défaut absent : {out}"
+    );
 }
 
 #[test]
@@ -248,11 +263,7 @@ fn rtf_with_file_finalize_some() {
 #[test]
 fn excel_without_file_finalize_to_bytes_none() {
     let mut e = ExcelDestination::new(96);
-    e.write_table(
-        &["x".into()],
-        &[Align::Right],
-        &[vec!["1".into()]],
-    );
+    e.write_table(&["x".into()], &[Align::Right], &[vec!["1".into()]]);
     assert!(e.finalize_to_bytes().is_none());
 }
 
@@ -270,7 +281,11 @@ fn excel_with_file_finalize_to_bytes_some() {
     let (path, bytes) = result.unwrap();
     assert_eq!(path, tmp);
     // Les fichiers XLSX commencent par PK (ZIP magic bytes)
-    assert!(bytes.starts_with(b"PK"), "XLSX doit commencer par PK: {:?}", &bytes[..4]);
+    assert!(
+        bytes.starts_with(b"PK"),
+        "XLSX doit commencer par PK: {:?}",
+        &bytes[..4]
+    );
 }
 
 // --- Tests M23.2 : PdfDestination réelle ---
@@ -296,7 +311,11 @@ fn pdf_with_file_finalize_to_bytes_some() {
     assert!(result.is_some(), "finalize_to_bytes devrait retourner Some");
     let (path, bytes) = result.unwrap();
     assert_eq!(path, tmp);
-    assert!(bytes.starts_with(b"%PDF-"), "PDF magic bytes: {:?}", &bytes[..5]);
+    assert!(
+        bytes.starts_with(b"%PDF-"),
+        "PDF magic bytes: {:?}",
+        &bytes[..5]
+    );
     let _ = std::fs::remove_file(&tmp);
 }
 
@@ -313,8 +332,14 @@ fn html_renders_multiple_titles_and_footnotes() {
     let p1 = out.find("T1").unwrap();
     let p2 = out.find("T2").unwrap();
     assert!(p1 < p2, "titres dans l'ordre des niveaux");
-    assert!(out.contains("sysfootnote"), "classe footnote absente : {out}");
-    assert!(out.find("F1").unwrap() > out.find("body").unwrap(), "footnote après le corps");
+    assert!(
+        out.contains("sysfootnote"),
+        "classe footnote absente : {out}"
+    );
+    assert!(
+        out.find("F1").unwrap() > out.find("body").unwrap(),
+        "footnote après le corps"
+    );
 }
 
 #[test]
@@ -353,11 +378,7 @@ fn excel_renders_titles_and_footnotes_as_rows() {
     let mut e = ExcelDestination::with_file(96, tmp.clone());
     e.set_titles(&["Top Title".to_string()]);
     e.set_footnotes(&["Bottom Note".to_string()]);
-    e.write_table(
-        &["Name".into()],
-        &[Align::Left],
-        &[vec!["Alice".into()]],
-    );
+    e.write_table(&["Name".into()], &[Align::Left], &[vec!["Alice".into()]]);
     let (_, bytes) = e.finalize_to_bytes().unwrap();
     // XLSX = ZIP : la chaîne partagée contient titres et footnotes.
     let blob = String::from_utf8_lossy(&bytes);

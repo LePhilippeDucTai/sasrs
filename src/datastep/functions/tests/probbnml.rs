@@ -40,7 +40,12 @@ fn poisson_missing() {
 // CDF generic
 #[test]
 fn cdf_normal_matches_probnorm() {
-    approx("CDF", &[chr("NORMAL"), num(1.96), num(0.0), num(1.0)], 0.9750021, 1e-6);
+    approx(
+        "CDF",
+        &[chr("NORMAL"), num(1.96), num(0.0), num(1.0)],
+        0.9750021,
+        1e-6,
+    );
 }
 
 #[test]
@@ -52,7 +57,10 @@ fn cdf_t_and_chisq() {
 #[test]
 fn cdf_bad_distribution() {
     let mut c = ctx();
-    assert_eq!(invoke_ctx("CDF", &[chr("WEIBULL"), num(1.0)], &mut c), miss());
+    assert_eq!(
+        invoke_ctx("CDF", &[chr("WEIBULL"), num(1.0)], &mut c),
+        miss()
+    );
     assert!(c.error_flag);
 }
 
@@ -91,13 +99,23 @@ fn pdf_normal_at_zero() {
 #[test]
 fn pdf_poisson_pmf() {
     // dpois(2, 2) = 0.2706706
-    approx("PDF", &[chr("POISSON"), num(2.0), num(2.0)], 0.2706705665, 1e-9);
+    approx(
+        "PDF",
+        &[chr("POISSON"), num(2.0), num(2.0)],
+        0.2706705665,
+        1e-9,
+    );
 }
 
 #[test]
 fn pdf_binomial_pmf() {
     // dbinom(3, 10, 0.5) = 0.1171875
-    approx("PDF", &[chr("BINOMIAL"), num(3.0), num(0.5), num(10.0)], 0.1171875, 1e-9);
+    approx(
+        "PDF",
+        &[chr("BINOMIAL"), num(3.0), num(0.5), num(10.0)],
+        0.1171875,
+        1e-9,
+    );
 }
 
 // QUANTILE generic (inverse of CDF)
@@ -146,7 +164,10 @@ fn ranuni_seed_deterministic() {
 fn ranuni_missing_arg_returns_numeric() {
     // Missing seed → treated as no seed (returns numeric, not missing).
     let v = invoke("RANUNI", &[miss()]);
-    assert!(!v.is_missing(), "RANUNI(missing) should still return a number");
+    assert!(
+        !v.is_missing(),
+        "RANUNI(missing) should still return a number"
+    );
 }
 
 // ── RANNOR ───────────────────────────────────────────────────────────────

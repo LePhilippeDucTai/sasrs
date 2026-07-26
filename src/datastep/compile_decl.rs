@@ -29,9 +29,7 @@ impl Compiler<'_> {
             // Listes spéciales _NUMERIC_/_CHARACTER_ : retiennent les
             // variables du type voulu connues à ce point (mêmes règles
             // que _ALL_ — créées après = non retenues).
-            if name.eq_ignore_ascii_case("_numeric_")
-                || name.eq_ignore_ascii_case("_character_")
-            {
+            if name.eq_ignore_ascii_case("_numeric_") || name.eq_ignore_ascii_case("_character_") {
                 if init.is_some() {
                     return Err(SasError::runtime(
                         "An initial value is not allowed with a special RETAIN list.",
@@ -109,7 +107,11 @@ impl Compiler<'_> {
                 // la longueur (3..=8) est une simple MÉTADONNÉE en
                 // M2 — le stockage reste f64 sur 8 octets.
                 None => {
-                    let ty = if spec.char { VarType::Char } else { VarType::Num };
+                    let ty = if spec.char {
+                        VarType::Char
+                    } else {
+                        VarType::Num
+                    };
                     self.add_var(name, ty, spec.len);
                 }
                 // Déjà au PDV : la longueur est figée. SAS n'émet le
@@ -174,8 +176,7 @@ impl Compiler<'_> {
         // argument (`call sortn(arr)`) — ce n'est pas une référence de
         // variable illégale, mais le déballage de tous ses éléments.
         // On ne walke donc PAS un argument qui nomme un array déclaré.
-        let is_sort = name.eq_ignore_ascii_case("sortn")
-            || name.eq_ignore_ascii_case("sortc");
+        let is_sort = name.eq_ignore_ascii_case("sortn") || name.eq_ignore_ascii_case("sortc");
         for a in args {
             if is_sort
                 && let Expr::Var(n) = a

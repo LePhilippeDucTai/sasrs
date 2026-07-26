@@ -106,8 +106,14 @@ fn execute_base_missing_creates_copy() {
     write_dataset(&mut session, "DATA_DS", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE_DS".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA_DS".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE_DS".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA_DS".into(),
+        },
         force: false,
         nowarn: false,
         appendver: None,
@@ -125,7 +131,10 @@ fn execute_base_missing_creates_copy() {
 
     // Log should mention copying.
     let log = session.log.into_string();
-    assert!(log.contains("DATA file is being copied to BASE file"), "log: {log}");
+    assert!(
+        log.contains("DATA file is being copied to BASE file"),
+        "log: {log}"
+    );
 }
 
 #[test]
@@ -133,16 +142,28 @@ fn execute_compatible_append_grows_base() {
     let mut session = make_session();
 
     let base_df = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+    let base_ds = SasDataset {
+        df: base_df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "BASE", base_ds);
 
     let data_df = df!["x" => [3.0_f64, 4.0, 5.0]].unwrap();
-    let data_ds = SasDataset { df: data_df, vars: vec![num_meta("x")] };
+    let data_ds = SasDataset {
+        df: data_df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: false,
         nowarn: false,
         appendver: None,
@@ -175,7 +196,10 @@ fn execute_without_force_extra_data_var_anomaly_errors() {
 
     // BASE has only x; DATA has x and y (y is extra — anomaly without FORCE).
     let base_df = df!["x" => [1.0_f64]].unwrap();
-    let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+    let base_ds = SasDataset {
+        df: base_df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "BASE", base_ds);
 
     let data_df = df!["x" => [2.0_f64], "y" => [99.0_f64]].unwrap();
@@ -186,8 +210,14 @@ fn execute_without_force_extra_data_var_anomaly_errors() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: false,
         nowarn: false,
         appendver: None,
@@ -222,8 +252,14 @@ fn execute_with_force_extra_data_var_dropped_base_only_var_missing() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: true,
         nowarn: false,
         appendver: None,
@@ -272,8 +308,14 @@ fn execute_with_force_char_truncation() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: true,
         nowarn: false,
         appendver: None,
@@ -308,8 +350,14 @@ fn execute_without_force_char_truncation_is_anomaly() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: false,
         nowarn: false,
         appendver: None,
@@ -351,7 +399,10 @@ fn execute_nowarn_suppresses_force_warning() {
 
     // BASE has x only; DATA has x and y (y is extra).
     let base_df = df!["x" => [1.0_f64]].unwrap();
-    let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+    let base_ds = SasDataset {
+        df: base_df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "BASE", base_ds);
 
     let data_df = df!["x" => [2.0_f64], "y" => [99.0_f64]].unwrap();
@@ -362,8 +413,14 @@ fn execute_nowarn_suppresses_force_warning() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: true,
         nowarn: true,
         appendver: None,
@@ -388,7 +445,10 @@ fn execute_force_without_nowarn_emits_warning() {
     let mut session = make_session();
 
     let base_df = df!["x" => [1.0_f64]].unwrap();
-    let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+    let base_ds = SasDataset {
+        df: base_df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "BASE", base_ds);
 
     let data_df = df!["x" => [2.0_f64], "y" => [99.0_f64]].unwrap();
@@ -399,8 +459,14 @@ fn execute_force_without_nowarn_emits_warning() {
     write_dataset(&mut session, "DATA", data_ds);
 
     let ast = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: true,
         nowarn: false,
         appendver: None,
@@ -422,18 +488,30 @@ fn execute_appendver_no_effect_on_output() {
 
     for s in [&mut s1, &mut s2] {
         let base_df = df!["x" => [1.0_f64]].unwrap();
-        let base_ds = SasDataset { df: base_df, vars: vec![num_meta("x")] };
+        let base_ds = SasDataset {
+            df: base_df,
+            vars: vec![num_meta("x")],
+        };
         write_dataset(s, "BASE", base_ds);
 
         let data_df = df!["x" => [2.0_f64]].unwrap();
-        let data_ds = SasDataset { df: data_df, vars: vec![num_meta("x")] };
+        let data_ds = SasDataset {
+            df: data_df,
+            vars: vec![num_meta("x")],
+        };
         write_dataset(s, "DATA", data_ds);
     }
 
     // Without APPENDVER.
     let ast_plain = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: false,
         nowarn: false,
         appendver: None,
@@ -442,8 +520,14 @@ fn execute_appendver_no_effect_on_output() {
 
     // With APPENDVER=V6.
     let ast_ver = AppendAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE".into() },
-        data: DatasetRef { libref: Some("WORK".into()), name: "DATA".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE".into(),
+        },
+        data: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DATA".into(),
+        },
         force: false,
         nowarn: false,
         appendver: Some("V6".to_string()),

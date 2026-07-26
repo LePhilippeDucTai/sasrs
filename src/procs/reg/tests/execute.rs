@@ -15,7 +15,12 @@ fn test_execute_simple() {
         df: frame,
         vars: vec![num_meta("weight"), num_meta("height")],
     };
-    session.libs.get("WORK").unwrap().write("CLASS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("CLASS", &ds)
+        .unwrap();
 
     let ast = single_model_ast(
         DatasetRef {
@@ -28,7 +33,10 @@ fn test_execute_simple() {
     let listing = session.listing.into_string();
     assert!(listing.contains("The REG Procedure"), "{listing}");
     assert!(listing.contains("Analysis of Variance"), "{listing}");
-    assert!(listing.contains("Parameter Estimates") || listing.contains("Parameter"), "{listing}");
+    assert!(
+        listing.contains("Parameter Estimates") || listing.contains("Parameter"),
+        "{listing}"
+    );
 }
 
 /// End-to-end: TEST and RESTRICT statements parse and execute, emitting the
@@ -48,7 +56,8 @@ fn test_execute_test_and_restrict() {
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
-    let src = "proc reg data=work.t; model y = x1 x2; peak: test x1 = x2; restrict x1 + x2 = 3; run;";
+    let src =
+        "proc reg data=work.t; model y = x1 x2; peak: test x1 = x2; restrict x1 + x2 = 3; run;";
     let source = SourceFile::new(src);
     let mut ts = StatementStream::new(&source).unwrap();
     ts.next();
@@ -56,7 +65,10 @@ fn test_execute_test_and_restrict() {
     let ast = parse(&mut ts).unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("Test peak Results for Dependent Variable y"), "{listing}");
+    assert!(
+        listing.contains("Test peak Results for Dependent Variable y"),
+        "{listing}"
+    );
     assert!(listing.contains("Numerator"), "{listing}");
     assert!(listing.contains("Denominator"), "{listing}");
     assert!(listing.contains("RESTRICT"), "{listing}");
@@ -82,7 +94,10 @@ fn test_execute_cl_listing() {
     model.clm = true;
     model.cli = true;
     let ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         model,
     );
     execute(&ast, &mut session).unwrap();
@@ -111,7 +126,10 @@ fn test_execute_r_influence_listing() {
     model.r = true;
     model.influence = true;
     let ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         model,
     );
     execute(&ast, &mut session).unwrap();
@@ -139,10 +157,9 @@ fn test_execute_diagnostics_listing() {
         vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t; model y=x1 x2 / vif tol collin spec dw dwprob acov; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=work.t; model y=x1 x2 / vif tol collin spec dw dwprob acov; run;")
+            .unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("Tolerance"), "{listing}");
@@ -186,7 +203,10 @@ fn test_execute_m365_listing() {
     assert!(listing.contains("Type II SS"), "{listing}");
     assert!(listing.contains("Standardized Estimate"), "{listing}");
     assert!(listing.contains("Squared Partial Corr Type I"), "{listing}");
-    assert!(listing.contains("Squared Partial Corr Type II"), "{listing}");
+    assert!(
+        listing.contains("Squared Partial Corr Type II"),
+        "{listing}"
+    );
     assert!(
         listing.contains("Squared Semi-partial Corr Type I"),
         "{listing}"
@@ -289,7 +309,10 @@ fn test_partial_f_equals_t_squared() {
     let _ = (f_enter, t2);
 
     // Re-run with a slightly noisy y so SSE>0.
-    let y2: Vec<f64> = x1.iter().map(|&v| 3.0 + 2.0 * v + (v * 0.137).sin()).collect();
+    let y2: Vec<f64> = x1
+        .iter()
+        .map(|&v| 3.0 + 2.0 * v + (v * 0.137).sin())
+        .collect();
     let sse_s2 = subset_sse(&xcols, &y2, &s, true).unwrap();
     let sse_c2 = subset_sse(&xcols, &y2, &cand, true).unwrap();
     let f_enter2 = (sse_s2 - sse_c2) / (sse_c2 / df_full);
@@ -349,13 +372,19 @@ fn test_forward_selection() {
     );
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("Summary of Forward Selection"), "{listing}");
+    assert!(
+        listing.contains("Summary of Forward Selection"),
+        "{listing}"
+    );
     // Inspect the final fitted-model block (after the last "Model: MODEL1"),
     // which holds the parameter-estimates table.
     let final_block = listing.rsplit("Model: MODEL1").next().unwrap();
     // x1 entered → appears as a fitted parameter; x2 rejected → absent.
     assert!(final_block.contains("x1"), "{listing}");
-    assert!(!final_block.contains("x2"), "x2 should be rejected: {listing}");
+    assert!(
+        !final_block.contains("x2"),
+        "x2 should be rejected: {listing}"
+    );
 }
 
 /// BACKWARD selection: start with both x1 and noise x2; x2 is eliminated.
@@ -398,10 +427,16 @@ fn test_backward_selection() {
     );
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("Summary of Backward Elimination"), "{listing}");
+    assert!(
+        listing.contains("Summary of Backward Elimination"),
+        "{listing}"
+    );
     // Inspect the final fitted-model block (after the last "Model: MODEL1").
     let final_block = listing.rsplit("Model: MODEL1").next().unwrap();
     // x2 removed → absent from fitted parameters; x1 retained → present.
     assert!(final_block.contains("x1"), "{listing}");
-    assert!(!final_block.contains("x2"), "x2 should be eliminated: {listing}");
+    assert!(
+        !final_block.contains("x2"),
+        "x2 should be eliminated: {listing}"
+    );
 }

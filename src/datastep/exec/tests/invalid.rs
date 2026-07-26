@@ -230,11 +230,7 @@ fn input_single_hold_then_release() {
 #[test]
 fn input_column_pointer_at() {
     let mut s = session();
-    run(
-        "data out; input @3 x 2.; datalines;\nXX42\n;\nrun;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; input @3 x 2.; datalines;\nXX42\n;\nrun;", &mut s).unwrap();
     let ds = read_work(&s, "out");
     assert_eq!(ds.df.column("x").unwrap().f64().unwrap().get(0), Some(42.0));
 }
@@ -291,11 +287,7 @@ fn input_list_modifier_colon_informat() {
 fn datalines_without_infile_is_implicit_source() {
     let mut s = session();
     // Pas de `infile datalines;` : `input` utilise quand même le bloc.
-    run(
-        "data out; input x y; datalines;\n1 2\n3 4\n;\nrun;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; input x y; datalines;\n1 2\n3 4\n;\nrun;", &mut s).unwrap();
     let ds = read_work(&s, "out");
     assert_eq!(ds.n_obs(), 2);
 }
@@ -360,11 +352,7 @@ fn put_formatted_date9() {
 #[test]
 fn put_column_pointer_and_skip() {
     let mut s = session();
-    run(
-        "data _null_; x = 1; y = 2; put @5 x +3 y; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data _null_; x = 1; y = 2; put @5 x +3 y; run;", &mut s).unwrap();
     let lines = put_log_lines(&s.log.into_string());
     // @5 → "1" en colonne 5 (index 4) ; le curseur passe à la colonne 6
     // (index 5), +3 l'avance à la colonne 9 (index 8) où s'écrit "2".
@@ -374,11 +362,7 @@ fn put_column_pointer_and_skip() {
 #[test]
 fn put_slash_newline_within_one_put() {
     let mut s = session();
-    run(
-        "data _null_; x = 1; y = 2; put x / y; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data _null_; x = 1; y = 2; put x / y; run;", &mut s).unwrap();
     let lines = put_log_lines(&s.log.into_string());
     assert_eq!(lines, vec!["1", "2"]);
 }
@@ -389,11 +373,7 @@ fn put_single_hold_joins_one_line() {
     write_class(&s, "inp");
     // `put name @;` maintient la ligne ; le PUT suivant (même itération)
     // la continue, puis la relâche.
-    run(
-        "data _null_; set inp; put name @; put age; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data _null_; set inp; put name @; put age; run;", &mut s).unwrap();
     let lines = put_log_lines(&s.log.into_string());
     // Une ligne par observation (hold simple relâché en fin d'itération).
     assert_eq!(lines, vec!["Alfred 14", "Alice .", "Barbara 13"]);
@@ -429,9 +409,12 @@ fn put_all_writes_every_pdv_var() {
 fn put_unknown_variable_errors() {
     let mut s = session();
     let res = run("data _null_; x = 1; put nosuchvar; run;", &mut s);
-    let err = res.err().expect("expected an error for an unknown PUT variable");
+    let err = res
+        .err()
+        .expect("expected an error for an unknown PUT variable");
     assert!(
-        err.to_string().contains("nosuchvar is not on the PUT statement"),
+        err.to_string()
+            .contains("nosuchvar is not on the PUT statement"),
         "got: {err}"
     );
 }

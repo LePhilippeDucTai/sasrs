@@ -67,7 +67,13 @@ pub(super) fn variance(mu: f64, dist: Distribution) -> f64 {
 /// Per-observation log-density and its first/second derivatives w.r.t. the
 /// linear predictor η. `scale` is the residual variance σ²_e (Normal only).
 /// Returns (log f, d log f/dη, d² log f/dη²).
-pub(super) fn log_density(y: f64, eta: f64, dist: Distribution, lf: LinkFunction, scale: f64) -> (f64, f64, f64) {
+pub(super) fn log_density(
+    y: f64,
+    eta: f64,
+    dist: Distribution,
+    lf: LinkFunction,
+    scale: f64,
+) -> (f64, f64, f64) {
     match (dist, lf) {
         (Distribution::Normal, LinkFunction::Identity) => {
             let s2 = scale.max(1e-12);

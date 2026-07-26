@@ -52,10 +52,7 @@ impl LibraryProvider for CsvLibrary {
             .with_has_header(true)
             .try_into_reader_with_file_path(Some(path.clone()))
             .map_err(|e| {
-                SasError::runtime(format!(
-                    "CsvLibrary: cannot open '{}': {e}",
-                    path.display()
-                ))
+                SasError::runtime(format!("CsvLibrary: cannot open '{}': {e}", path.display()))
             })?
             .finish()
             .map_err(|e| {

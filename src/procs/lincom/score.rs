@@ -28,7 +28,11 @@ pub fn score_test(u: &[f64], info: &[Vec<f64>]) -> ScoreTest {
     let df = k as f64;
     // Dimension sanity: square info matching u.
     let dims_ok = info.len() == k && info.iter().all(|r| r.len() == k);
-    let inv = if dims_ok { invert_matrix(info).ok() } else { None };
+    let inv = if dims_ok {
+        invert_matrix(info).ok()
+    } else {
+        None
+    };
     let chi_square = match inv {
         Some(inv) => {
             // Quadratic form Uᵀ I⁻¹ U, mirroring quad_form's accumulation shape.
@@ -50,9 +54,5 @@ pub fn score_test(u: &[f64], info: &[Vec<f64>]) -> ScoreTest {
     } else {
         Some((1.0 - chisq_cdf(chi_square, df)).clamp(0.0, 1.0))
     };
-    ScoreTest {
-        chi_square,
-        df,
-        p,
-    }
+    ScoreTest { chi_square, df, p }
 }

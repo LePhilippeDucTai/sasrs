@@ -28,7 +28,9 @@ pub(super) fn print_class_level_info_multiway(
             values_str.join(" "),
         ]);
     }
-    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session
+        .listing
+        .write_table(&cli_headers, &cli_aligns, &cli_rows);
     session.listing.blank();
     session.listing.write_line(&format!(
         "               Number of Observations Read     {}",
@@ -40,7 +42,11 @@ pub(super) fn print_class_level_info_multiway(
 
 /// Print the Analysis of Variance, fit statistics, and Type I / Type III SS
 /// tables for the multiway path.
-pub(super) fn print_multiway_anova_and_fit(session: &mut Session, dep_var: &str, fit: &MultiwayFit) {
+pub(super) fn print_multiway_anova_and_fit(
+    session: &mut Session,
+    dep_var: &str,
+    fit: &MultiwayFit,
+) {
     let &MultiwayFit {
         y_bar,
         sst,
@@ -88,7 +94,11 @@ pub(super) fn print_multiway_anova_and_fit(session: &mut Session, dep_var: &str,
             format!("{}", df_model as usize),
             fmt5(ssm),
             if msm.is_nan() { ".".into() } else { fmt5(msm) },
-            if f_model.is_nan() { ".".into() } else { fmt2(f_model) },
+            if f_model.is_nan() {
+                ".".into()
+            } else {
+                fmt2(f_model)
+            },
             fmt_p(p_model),
         ],
         vec![
@@ -108,7 +118,9 @@ pub(super) fn print_multiway_anova_and_fit(session: &mut Session, dep_var: &str,
             "".into(),
         ],
     ];
-    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session
+        .listing
+        .write_table(&anova_headers, &anova_aligns, &anova_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -121,13 +133,10 @@ pub(super) fn print_multiway_anova_and_fit(session: &mut Session, dep_var: &str,
         dep_mean_header,
     ];
     let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-    let fit_rows: Vec<Vec<String>> = vec![vec![
-        fmt6(r2),
-        fmt6(cv),
-        fmt6(root_mse),
-        fmt6(y_bar),
-    ]];
-    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    let fit_rows: Vec<Vec<String>> = vec![vec![fmt6(r2), fmt6(cv), fmt6(root_mse), fmt6(y_bar)]];
+    session
+        .listing
+        .write_table(&fit_headers, &fit_aligns, &fit_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -221,7 +230,11 @@ pub(super) fn print_multiway_solution(
             let pieces: Vec<String> = spec
                 .iter()
                 .map(|&(fi, dj)| {
-                    format!("{} {}", factors[fi].name, level_label_value(&factors[fi].levels[dj]))
+                    format!(
+                        "{} {}",
+                        factors[fi].name,
+                        level_label_value(&factors[fi].levels[dj])
+                    )
                 })
                 .collect();
             let _ = term; // term name implied by factor names in pieces
@@ -256,9 +269,7 @@ pub(super) fn print_multiway_solution(
             for (ci, lbl) in col_labels.iter().enumerate() {
                 let est = b[ci];
                 let se = match &xtx_inv {
-                    Some(inv) if !mse.is_nan() && inv[ci][ci] >= 0.0 => {
-                        (mse * inv[ci][ci]).sqrt()
-                    }
+                    Some(inv) if !mse.is_nan() && inv[ci][ci] >= 0.0 => (mse * inv[ci][ci]).sqrt(),
                     _ => f64::NAN,
                 };
                 let t = if se > 0.0 { est / se } else { f64::NAN };
@@ -267,13 +278,7 @@ pub(super) fn print_multiway_solution(
                 } else {
                     Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
                 };
-                param_rows.push(vec![
-                    lbl.clone(),
-                    fmt6(est),
-                    fmt6(se),
-                    fmt2(t),
-                    fmt_p(p),
-                ]);
+                param_rows.push(vec![lbl.clone(), fmt6(est), fmt6(se), fmt2(t), fmt_p(p)]);
             }
         }
         (None, None) => {}
@@ -298,7 +303,9 @@ pub(super) fn print_multiway_solution(
             }
         }
     }
-    session.listing.write_table(&param_headers, &param_aligns, &param_rows);
+    session
+        .listing
+        .write_table(&param_headers, &param_aligns, &param_rows);
     session.listing.blank();
     session.listing.blank();
 }
@@ -322,7 +329,10 @@ pub(super) fn print_multiway_lsmeans(
     let df_error = fit.df_error;
 
     for lsm_var in &ast.lsmeans_vars {
-        let fi = match factors.iter().position(|f| f.name.eq_ignore_ascii_case(lsm_var)) {
+        let fi = match factors
+            .iter()
+            .position(|f| f.name.eq_ignore_ascii_case(lsm_var))
+        {
             Some(i) => i,
             None => continue,
         };
@@ -400,7 +410,9 @@ pub(super) fn print_multiway_lsmeans(
                 }
             }
         }
-        session.listing.write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
+        session
+            .listing
+            .write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
         session.listing.blank();
         session.listing.blank();
     }
@@ -422,7 +434,9 @@ pub(super) fn note_skipped_contrasts(
             .effect_terms
             .iter()
             .any(|t| t.len() > 1 && t.iter().any(|v| v.eq_ignore_ascii_case(&c.effect)))
-            && !factors.iter().any(|f| f.name.eq_ignore_ascii_case(&c.effect))
+            && !factors
+                .iter()
+                .any(|f| f.name.eq_ignore_ascii_case(&c.effect))
         {
             session.log.note(&format!(
                 "CONTRAST '{}' references an effect not supported in the multiway path; skipped.",
@@ -431,7 +445,10 @@ pub(super) fn note_skipped_contrasts(
         }
     }
     for e in &ast.estimates {
-        if !factors.iter().any(|f| f.name.eq_ignore_ascii_case(&e.effect)) {
+        if !factors
+            .iter()
+            .any(|f| f.name.eq_ignore_ascii_case(&e.effect))
+        {
             session.log.note(&format!(
                 "ESTIMATE '{}' references an effect not supported in the multiway path; skipped.",
                 e.label

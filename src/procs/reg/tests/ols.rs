@@ -55,5 +55,8 @@ fn test_ols_regression() {
     );
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("0.8000") || listing.contains("R-Square"), "{listing}");
+    assert!(
+        listing.contains("0.8000") || listing.contains("R-Square"),
+        "{listing}"
+    );
 }

@@ -86,9 +86,18 @@ pub(super) fn to_roman(mut n: u32) -> String {
         return String::new();
     }
     const VALS: &[(u32, &str)] = &[
-        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
-        (100, "C"),  (90, "XC"), (50, "L"),  (40, "XL"),
-        (10, "X"),   (9, "IX"),  (5, "V"),   (4, "IV"),
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
         (1, "I"),
     ];
     let mut result = String::new();
@@ -106,20 +115,37 @@ pub(super) fn to_words(n: i64) -> String {
     if n == 0 {
         return "ZERO".into();
     }
-    let (neg, n) = if n < 0 { (true, (-n) as u64) } else { (false, n as u64) };
-    let s = to_words_unsigned(n);
-    if neg {
-        format!("NEGATIVE {}", s)
+    let (neg, n) = if n < 0 {
+        (true, (-n) as u64)
     } else {
-        s
-    }
+        (false, n as u64)
+    };
+    let s = to_words_unsigned(n);
+    if neg { format!("NEGATIVE {}", s) } else { s }
 }
 
 pub(super) fn to_words_unsigned(n: u64) -> String {
     const ONES: &[&str] = &[
-        "", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
-        "TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN",
-        "SEVENTEEN", "EIGHTEEN", "NINETEEN",
+        "",
+        "ONE",
+        "TWO",
+        "THREE",
+        "FOUR",
+        "FIVE",
+        "SIX",
+        "SEVEN",
+        "EIGHT",
+        "NINE",
+        "TEN",
+        "ELEVEN",
+        "TWELVE",
+        "THIRTEEN",
+        "FOURTEEN",
+        "FIFTEEN",
+        "SIXTEEN",
+        "SEVENTEEN",
+        "EIGHTEEN",
+        "NINETEEN",
     ];
     const TENS: &[&str] = &[
         "", "", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY",
@@ -187,7 +213,11 @@ pub(super) fn to_fract(v: f64) -> String {
 
     if frac < 1e-9 {
         // Integer value
-        let s = if whole == 0 { "0".into() } else { format!("{}", whole) };
+        let s = if whole == 0 {
+            "0".into()
+        } else {
+            format!("{}", whole)
+        };
         return if negative { format!("-{}", s) } else { s };
     }
 

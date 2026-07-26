@@ -207,7 +207,13 @@ pub(super) fn parse_lag_dif(name: &str) -> Option<(usize, bool)> {
 ///
 /// L'argument est évalué EXACTEMENT UNE FOIS. La file renvoie missing tant que
 /// `n` exécutions n'ont pas eu lieu, puis la valeur d'il y a `n` exécutions.
-pub(super) fn eval_lag_dif(n: usize, is_dif: bool, args: &[Expr], pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+pub(super) fn eval_lag_dif(
+    n: usize,
+    is_dif: bool,
+    args: &[Expr],
+    pdv: &Pdv,
+    ctx: &mut EvalCtx,
+) -> Value {
     // Clé de site AVANT d'emprunter ctx de façon mutable pour l'évaluation.
     let key = args.as_ptr() as usize;
     // Évaluer l'argument UNE seule fois (emprunt mutable de ctx).

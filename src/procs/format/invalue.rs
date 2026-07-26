@@ -87,7 +87,11 @@ pub(super) fn parse_invalue_stmt(ts: &mut StatementStream) -> Result<(String, Us
         }
     }
 
-    let ui = UserInformat { is_char_result, ranges, other };
+    let ui = UserInformat {
+        is_char_result,
+        ranges,
+        other,
+    };
     Ok((name, ui))
 }
 

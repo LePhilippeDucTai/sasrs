@@ -272,9 +272,7 @@ fn render_ascii(session: &mut Session, x_name: &str, y_name: &str, data: &[(f64,
 
     session.listing.page_header();
     session.listing.blank();
-    let title = format!(
-        "Plot of {y_disp}*{x_disp}.  Legend: A = 1 obs, B = 2 obs, etc."
-    );
+    let title = format!("Plot of {y_disp}*{x_disp}.  Legend: A = 1 obs, B = 2 obs, etc.");
     let ls = session.listing.ls();
     let pad = ls.saturating_sub(title.len()) / 2;
     session
@@ -283,9 +281,7 @@ fn render_ascii(session: &mut Session, x_name: &str, y_name: &str, data: &[(f64,
     session.listing.blank();
 
     if data.is_empty() {
-        session
-            .listing
-            .write_line("   (no observations to plot)");
+        session.listing.write_line("   (no observations to plot)");
         session.listing.blank();
         return;
     }
@@ -447,7 +443,7 @@ fn render_image(
 
     #[cfg(feature = "graphics")]
     {
-        use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+        use crate::graphics::render::{DrawingSpec, PlotType, draw_to_file};
         let _ = symbol; // marker shape is fixed in the image backend for v1.
 
         let spec = DrawingSpec {

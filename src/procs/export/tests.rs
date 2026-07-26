@@ -27,9 +27,27 @@ fn write_test_dataset(session: &mut Session, name: &str) {
     ]
     .unwrap();
     let vars = vec![
-        VarMeta { name: "name".into(), ty: VarType::Char, length: 5, format: None, label: None },
-        VarMeta { name: "age".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "score".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        VarMeta {
+            name: "name".into(),
+            ty: VarType::Char,
+            length: 5,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "age".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "score".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
@@ -40,10 +58,8 @@ fn write_test_dataset(session: &mut Session, name: &str) {
 
 #[test]
 fn parse_export_csv_minimal() {
-    let ast = parse_export_src(
-        "proc export data=work.t outfile='/tmp/out.csv' dbms=csv; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_export_src("proc export data=work.t outfile='/tmp/out.csv' dbms=csv; run;").unwrap();
     assert_eq!(ast.outfile, "/tmp/out.csv");
     assert_eq!(ast.dbms, ExportDbms::Csv);
     assert!(ast.data.is_some());
@@ -51,20 +67,17 @@ fn parse_export_csv_minimal() {
 
 #[test]
 fn parse_export_tab() {
-    let ast = parse_export_src(
-        "proc export data=work.t outfile='out.tsv' dbms=TAB replace; run;",
-    )
-    .unwrap();
+    let ast = parse_export_src("proc export data=work.t outfile='out.tsv' dbms=TAB replace; run;")
+        .unwrap();
     assert_eq!(ast.dbms, ExportDbms::Tab);
     assert!(ast.replace);
 }
 
 #[test]
 fn parse_export_dlm_with_delimiter() {
-    let ast = parse_export_src(
-        "proc export data=work.t outfile='out.txt' dbms=dlm; delimiter='|'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_export_src("proc export data=work.t outfile='out.txt' dbms=dlm; delimiter='|'; run;")
+            .unwrap();
     assert_eq!(ast.dbms, ExportDbms::Dlm);
     assert_eq!(ast.delimiter, Some(b'|'));
 }
@@ -79,9 +92,7 @@ fn parse_export_missing_outfile_errors() {
 
 #[test]
 fn parse_export_xlsx_deferred_error() {
-    let result = parse_export_src(
-        "proc export data=work.t outfile='out.xlsx' dbms=xlsx; run;",
-    );
+    let result = parse_export_src("proc export data=work.t outfile='out.xlsx' dbms=xlsx; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
     assert!(msg.contains("not yet implemented"), "msg: {msg}");
@@ -90,9 +101,7 @@ fn parse_export_xlsx_deferred_error() {
 
 #[test]
 fn parse_export_excel_deferred_error() {
-    let result = parse_export_src(
-        "proc export data=work.t outfile='out.xlsx' dbms=excel; run;",
-    );
+    let result = parse_export_src("proc export data=work.t outfile='out.xlsx' dbms=excel; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
     assert!(msg.contains("not yet implemented"), "msg: {msg}");
@@ -107,8 +116,7 @@ fn execute_export_csv_basic() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     write_test_dataset(&mut session, "MYDS");
 
@@ -148,8 +156,7 @@ fn execute_export_tab_separated() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     write_test_dataset(&mut session, "T");
 
@@ -179,8 +186,7 @@ fn execute_export_dlm_pipe() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     write_test_dataset(&mut session, "T");
 
@@ -219,8 +225,7 @@ fn execute_export_roundtrip_with_import() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     // IMPORT
     let import_ast = crate::procs::import::ImportAst {
@@ -273,8 +278,7 @@ fn execute_export_last_dataset() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     write_test_dataset(&mut session, "LAST");
 

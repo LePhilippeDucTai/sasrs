@@ -72,15 +72,15 @@ pub(super) fn fisher_block(
     let aligns = vec![Align::Left, Align::Right];
     let rows = vec![
         vec!["Cell (1,1) Frequency (F)".to_string(), format!("{a_obs}")],
-        vec![
-            "Left-sided Pr <= F".to_string(),
-            fmt_chisq_p(clamp(p_left)),
-        ],
+        vec!["Left-sided Pr <= F".to_string(), fmt_chisq_p(clamp(p_left))],
         vec![
             "Right-sided Pr >= F".to_string(),
             fmt_chisq_p(clamp(p_right)),
         ],
-        vec!["Table Probability (P)".to_string(), fmt_chisq_p(clamp(p_obs))],
+        vec![
+            "Table Probability (P)".to_string(),
+            fmt_chisq_p(clamp(p_obs)),
+        ],
         vec!["Two-sided Pr <= P".to_string(), fmt_chisq_p(clamp(p_two))],
     ];
     session.listing.write_table(&headers, &aligns, &rows);
@@ -159,8 +159,14 @@ pub(super) fn trend_block(
     let aligns = vec![Align::Left, Align::Right];
     let rows = vec![
         vec!["Statistic (Z)".to_string(), format!("{z:.4}")],
-        vec!["One-sided Pr".to_string(), fmt_chisq_p(p_one.clamp(0.0, 1.0))],
-        vec!["Two-sided Pr".to_string(), fmt_chisq_p(p_two.clamp(0.0, 1.0))],
+        vec![
+            "One-sided Pr".to_string(),
+            fmt_chisq_p(p_one.clamp(0.0, 1.0)),
+        ],
+        vec![
+            "Two-sided Pr".to_string(),
+            fmt_chisq_p(p_two.clamp(0.0, 1.0)),
+        ],
     ];
     session.listing.write_table(&headers, &aligns, &rows);
 }
@@ -208,10 +214,7 @@ pub(super) fn measures_block(session: &mut Session, freq: &[Vec<usize>]) {
     if a > 0.0 && b > 0.0 && c > 0.0 && d > 0.0 {
         let or = (a * d) / (b * c);
         let se = (1.0 / a + 1.0 / b + 1.0 / c + 1.0 / d).sqrt();
-        let (lo, hi) = (
-            (or.ln() - 1.96 * se).exp(),
-            (or.ln() + 1.96 * se).exp(),
-        );
+        let (lo, hi) = ((or.ln() - 1.96 * se).exp(), (or.ln() + 1.96 * se).exp());
         rows.push(vec![
             "Case-Control (Odds Ratio)".to_string(),
             format!("{or:.4}"),
@@ -283,9 +286,7 @@ pub(super) fn agree_block(
     session.listing.blank();
 
     if nr != nc {
-        session
-            .listing
-            .write_line("AGREE requires a square table.");
+        session.listing.write_line("AGREE requires a square table.");
         return;
     }
     if grand == 0 {

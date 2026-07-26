@@ -26,7 +26,12 @@ pub(super) struct OneSampleResult {
 
 /// One-sample t-test of `values` against `h0` at significance `alpha`,
 /// reporting the `sides`-appropriate probability and ALPHA-level CLs.
-pub(super) fn one_sample(values: &[f64], h0: f64, alpha: f64, sides: TTestSides) -> OneSampleResult {
+pub(super) fn one_sample(
+    values: &[f64],
+    h0: f64,
+    alpha: f64,
+    sides: TTestSides,
+) -> OneSampleResult {
     let n = values.len();
     let mean = if n > 0 {
         values.iter().sum::<f64>() / n as f64
@@ -118,8 +123,16 @@ pub(super) fn two_sample(a: &[f64], b: &[f64], alpha: f64, sides: TTestSides) ->
     let n_b = b.len();
     let naf = n_a as f64;
     let nbf = n_b as f64;
-    let mean_a = if n_a > 0 { a.iter().sum::<f64>() / naf } else { f64::NAN };
-    let mean_b = if n_b > 0 { b.iter().sum::<f64>() / nbf } else { f64::NAN };
+    let mean_a = if n_a > 0 {
+        a.iter().sum::<f64>() / naf
+    } else {
+        f64::NAN
+    };
+    let mean_b = if n_b > 0 {
+        b.iter().sum::<f64>() / nbf
+    } else {
+        f64::NAN
+    };
     let std_a = sample_std(a);
     let std_b = sample_std(b);
 

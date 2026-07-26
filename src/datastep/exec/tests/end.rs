@@ -59,11 +59,7 @@ fn end_option_with_by() {
     let mut s = session();
     write_num_ds(&s, "a", &[("k", some(&[1.0, 3.0]))]);
     write_num_ds(&s, "b", &[("k", some(&[2.0, 4.0]))]);
-    run(
-        "data out; set a b end=eof; by k; flag = eof; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; set a b end=eof; by k; flag = eof; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "k"), some(&[1.0, 2.0, 3.0, 4.0]));
     assert_eq!(col(&s, "out", "flag"), some(&[0.0, 0.0, 0.0, 1.0]));
 }
@@ -152,11 +148,7 @@ fn point_option_reverse_order() {
 fn point_option_single_index() {
     let mut s = session();
     write_num_ds(&s, "a", &[("x", some(&[11.0, 22.0, 33.0]))]);
-    run(
-        "data out; p = 2; set a point=p; output; stop; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; p = 2; set a point=p; output; stop; run;", &mut s).unwrap();
     assert_eq!(read_work(&s, "out").n_obs(), 1);
     assert_eq!(num_at(&s, "out", "x", 0), Some(22.0));
 }
@@ -195,7 +187,10 @@ fn point_option_zero_index_errors() {
 fn point_option_out_of_bounds_errors() {
     let mut s = session();
     write_num_ds(&s, "a", &[("x", some(&[11.0, 22.0]))]);
-    let e = run_err("data out; p = 99; set a point=p; output; stop; run;", &mut s);
+    let e = run_err(
+        "data out; p = 99; set a point=p; output; stop; run;",
+        &mut s,
+    );
     assert!(e.contains("Error in variable"), "got: {e}");
 }
 
@@ -219,10 +214,7 @@ fn point_option_multiple_datasets_global_index() {
 fn point_option_with_by_errors() {
     let mut s = session();
     write_num_ds(&s, "a", &[("k", some(&[1.0, 2.0]))]);
-    let e = run_err(
-        "data out; set a point=p; by k; output; stop; run;",
-        &mut s,
-    );
+    let e = run_err("data out; set a point=p; by k; output; stop; run;", &mut s);
     assert!(e.contains("POINT="), "got: {e}");
 }
 

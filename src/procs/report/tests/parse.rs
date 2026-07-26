@@ -35,8 +35,7 @@ fn parse_column_and_defines() {
 
 #[test]
 fn parse_order_descending() {
-    let ast =
-        parse_report("proc report data=a; define x / order order=descending; run;").unwrap();
+    let ast = parse_report("proc report data=a; define x / order order=descending; run;").unwrap();
     assert_eq!(ast.defines[0].usage, Usage::Order);
     assert_eq!(ast.defines[0].order, OrderDir::Descending);
 }
@@ -74,8 +73,7 @@ fn parse_across_usage_now_parses() {
 
 #[test]
 fn parse_compute_block_now_parses() {
-    let ast =
-        parse_report("proc report data=a; compute after; line 'hi'; endcomp; run;").unwrap();
+    let ast = parse_report("proc report data=a; compute after; line 'hi'; endcomp; run;").unwrap();
     assert_eq!(ast.computes.len(), 1);
     assert_eq!(ast.computes[0].target, "after");
     assert!(matches!(ast.computes[0].stmts[0], ComputeStmt::Line(_)));
@@ -93,8 +91,7 @@ fn parse_compute_assignment() {
 
 #[test]
 fn parse_break_now_parses() {
-    let ast =
-        parse_report("proc report data=a; break after region / summarize; run;").unwrap();
+    let ast = parse_report("proc report data=a; break after region / summarize; run;").unwrap();
     assert_eq!(ast.breaks.len(), 1);
     assert_eq!(ast.breaks[0].var.as_deref(), Some("region"));
     assert!(ast.breaks[0].summarize);
@@ -156,10 +153,8 @@ fn parse_define_flow_still_errors() {
 #[test]
 fn parse_line_with_pointer_and_format() {
     // `line @5 total best8.;` parses to Pointer + Expr-with-format.
-    let ast = parse_report(
-        "proc report data=a; compute after; line @5 age best8.; endcomp; run;",
-    )
-    .unwrap();
+    let ast = parse_report("proc report data=a; compute after; line @5 age best8.; endcomp; run;")
+        .unwrap();
     match &ast.computes[0].stmts[0] {
         ComputeStmt::Line(items) => {
             assert!(matches!(items[0], LineItem::Pointer(5)));

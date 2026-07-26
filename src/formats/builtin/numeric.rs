@@ -157,7 +157,11 @@ pub(super) fn fmt_dollarx(fval: f64, spec: &FormatSpec) -> Option<String> {
         .rev()
         .enumerate()
         .flat_map(|(i, c)| {
-            if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+            if i > 0 && i % 3 == 0 {
+                vec!['.', c]
+            } else {
+                vec![c]
+            }
         })
         .collect();
     let int_with_sep: String = rev.chars().rev().collect();
@@ -198,7 +202,11 @@ pub(super) fn fmt_euro(fval: f64, spec: &FormatSpec) -> Option<String> {
         .rev()
         .enumerate()
         .flat_map(|(i, c)| {
-            if i > 0 && i % 3 == 0 { vec!['.', c] } else { vec![c] }
+            if i > 0 && i % 3 == 0 {
+                vec!['.', c]
+            } else {
+                vec![c]
+            }
         })
         .collect();
     let int_with_sep: String = rev.chars().rev().collect();

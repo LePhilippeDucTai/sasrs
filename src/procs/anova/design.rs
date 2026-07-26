@@ -46,7 +46,11 @@ pub(super) fn main_effect_dummies(codes: &[usize], n_levels: usize, n: usize) ->
 /// L−1, else 0. Returns L−1 columns. Building interaction terms from elementwise
 /// products of these centered contrasts yields the SAS Type III estimable
 /// function, so the partial SS matches SAS Type III even on unbalanced data.
-pub(super) fn main_effect_effect_coded(codes: &[usize], n_levels: usize, n: usize) -> Vec<Vec<f64>> {
+pub(super) fn main_effect_effect_coded(
+    codes: &[usize],
+    n_levels: usize,
+    n: usize,
+) -> Vec<Vec<f64>> {
     let mut cols: Vec<Vec<f64>> = Vec::new();
     let last = n_levels.saturating_sub(1);
     for lvl in 0..n_levels.saturating_sub(1) {

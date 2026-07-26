@@ -6,7 +6,11 @@ use super::*;
 
 /// METHOD / DIST / LINK / RANDOM guards plus NOTEs for parse-accepted but
 /// deferred features.
-pub(super) fn check_guards(ast: &GlimmixAst, model: &ModelSpec, session: &mut Session) -> Result<()> {
+pub(super) fn check_guards(
+    ast: &GlimmixAst,
+    model: &ModelSpec,
+    session: &mut Session,
+) -> Result<()> {
     // METHOD guards. LAPLACE is supported for a single VC random intercept;
     // QUAD remains deferred (documented NOTE).
     match ast.method {
@@ -21,8 +25,8 @@ pub(super) fn check_guards(ast: &GlimmixAst, model: &ModelSpec, session: &mut Se
             match &ast.random {
                 None => {}
                 Some(r) => {
-                    let is_intercept = r.effects.len() == 1
-                        && r.effects[0].eq_ignore_ascii_case("intercept");
+                    let is_intercept =
+                        r.effects.len() == 1 && r.effects[0].eq_ignore_ascii_case("intercept");
                     if !is_intercept
                         || !matches!(r.cov_type, CovType::Vc | CovType::Cs)
                         || r.subject.is_none()
@@ -69,8 +73,7 @@ pub(super) fn check_guards(ast: &GlimmixAst, model: &ModelSpec, session: &mut Se
     if let Some(r) = &ast.random {
         // AR(1)/UN are accepted as within-subject (repeated) covariance
         // structures and require SUBJECT= to order observations.
-        let is_intercept =
-            r.effects.len() == 1 && r.effects[0].eq_ignore_ascii_case("intercept");
+        let is_intercept = r.effects.len() == 1 && r.effects[0].eq_ignore_ascii_case("intercept");
         if !is_intercept {
             return Err(SasError::runtime(
                 "Only RANDOM INTERCEPT is implemented in PROC GLIMMIX.",
@@ -272,7 +275,10 @@ pub(super) fn index_subjects(subj_values: &[Value], has_subject: bool) -> (Vec<u
     if has_subject {
         let mut levels: Vec<Value> = Vec::new();
         for v in subj_values {
-            if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+            if !levels
+                .iter()
+                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            {
                 levels.push(v.clone());
             }
         }
@@ -329,7 +335,9 @@ pub(super) fn compute_fit(
         let g = fit_glm(y, x, freq, model.dist, model.link)?;
         let sigma2_e = if model.dist == Distribution::Normal {
             // residual variance = MSE.
-            let sse: f64 = (0..n_used).map(|i| freq[i] * (y[i] - g.mu[i]).powi(2)).sum();
+            let sse: f64 = (0..n_used)
+                .map(|i| freq[i] * (y[i] - g.mu[i]).powi(2))
+                .sum();
             sse / (n_total - p as f64).max(1.0)
         } else {
             1.0
@@ -346,9 +354,7 @@ pub(super) fn compute_fit(
         }
     } else if use_laplace {
         // METHOD=LAPLACE single random intercept → true ML by Laplace.
-        let lf = fit_laplace(
-            y, x, freq, subj_of, n_subjects, model.dist, model.link,
-        )?;
+        let lf = fit_laplace(y, x, freq, subj_of, n_subjects, model.dist, model.link)?;
         GlimmixFit {
             beta: lf.beta,
             cov_beta: lf.cov_beta,
@@ -364,13 +370,10 @@ pub(super) fn compute_fit(
         // is fit as a weighted LMM at each RSPL step. For Normal/Identity this
         // is the exact REML (no PQL iteration); for non-normal links we run the
         // RSPL working-variate loop with R as the working covariance.
-        fit_rspl_rep(
-            y, x, freq, subj_of, within_idx, rep, model.dist, model.link,
-        )?
+        fit_rspl_rep(y, x, freq, subj_of, within_idx, rep, model.dist, model.link)?
     } else if model.dist == Distribution::Normal {
         // Normal + random → PQL == REML, closed-form / profile.
-        let (s2u, s2e, beta, cov, neg2) =
-            fit_vc(y, x, subj_of, n_subjects, None)?;
+        let (s2u, s2e, beta, cov, neg2) = fit_vc(y, x, subj_of, n_subjects, None)?;
         let mu = (0..n_used).map(|i| dot(&x[i], &beta)).collect();
         GlimmixFit {
             beta,

@@ -95,7 +95,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrinttoAst> {
     // Parse sub-statements until `run;` or `quit;` (combinateur partagé M31).
     common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
-    Ok(PrinttoAst { log, print, new, reset })
+    Ok(PrinttoAst {
+        log,
+        print,
+        new,
+        reset,
+    })
 }
 
 /// Parse a string literal ('path') or an identifier (fileref).
@@ -112,12 +117,10 @@ fn parse_path_or_ident(ts: &mut StatementStream) -> Result<String> {
             ts.next();
             Ok(ident)
         }
-        _ => {
-            Err(SasError::parse(
-                "expected a fileref or quoted path after '='",
-                tok.span,
-            ))
-        }
+        _ => Err(SasError::parse(
+            "expected a fileref or quoted path after '='",
+            tok.span,
+        )),
     }
 }
 
@@ -127,7 +130,9 @@ pub fn execute(ast: &PrinttoAst, session: &mut Session) -> Result<()> {
         // Reset both destinations
         session.printto_log = None;
         session.printto_print = None;
-        session.log.note("PROCEDURE PRINTTO: log and print destinations reset to default.");
+        session
+            .log
+            .note("PROCEDURE PRINTTO: log and print destinations reset to default.");
     } else {
         if let Some(ref path) = ast.log {
             let resolved = session.resolve_path(path);

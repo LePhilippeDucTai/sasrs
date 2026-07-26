@@ -175,7 +175,10 @@ fn compute_reads_cn_positional_reference() {
         "age" => [20.0_f64, 30.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("age")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("sex"), num_meta("age")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
         data: Some(work_ref("T")),
@@ -226,9 +229,7 @@ fn where_missing_semantics_dot_equals_dot() {
             width: None,
             spacing: None,
         }],
-        where_: Some(
-            parse_test_expr("x = .;"),
-        ),
+        where_: Some(parse_test_expr("x = .;")),
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();
@@ -282,7 +283,10 @@ fn format_applies_to_displayed_numeric() {
     // DEFINE / FORMAT=5.1 on a detail numeric column. Oracle: 11 → "11.0".
     let mut session = make_session();
     let df = df!["age" => [11.0_f64, 12.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("age")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("age")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
         data: Some(work_ref("T")),
@@ -301,7 +305,10 @@ fn width_truncates_and_pads_column() {
     // WIDTH=3 on a char column truncates long values to 3 chars.
     let mut session = make_session();
     let df = df!["name" => ["Alfred", "Bo"]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("name")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("name")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
         data: Some(work_ref("T")),
@@ -313,7 +320,10 @@ fn width_truncates_and_pads_column() {
     let listing = session.listing.into_string();
     // "Alfred" truncated to "Alf"; full name must NOT appear.
     assert!(listing.contains("Alf"), "truncated to Alf: {listing}");
-    assert!(!listing.contains("Alfred"), "full name truncated away: {listing}");
+    assert!(
+        !listing.contains("Alfred"),
+        "full name truncated away: {listing}"
+    );
 }
 
 #[test]
@@ -325,7 +335,10 @@ fn spacing_changes_intercolumn_gap() {
         "b" => ["p", "q"]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("a"), char_meta("b")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("a"), char_meta("b")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = ReportAst {
         data: Some(work_ref("T")),
@@ -356,7 +369,10 @@ fn line_with_format_renders_via_format_engine() {
             def("sex", Usage::Group, None, None, None, None),
             def("age", Usage::Analysis("sum".into()), None, None, None, None),
         ],
-        rbreak: Some(Break { var: None, summarize: true }),
+        rbreak: Some(Break {
+            var: None,
+            summarize: true,
+        }),
         computes: vec![Compute {
             target: "after".into(),
             stmts: vec![ComputeStmt::Line(vec![
@@ -369,5 +385,8 @@ fn line_with_format_renders_via_format_engine() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     // Grand total of ages = 65, rendered by best8. as "65".
-    assert!(listing.contains("Total age: 65"), "line with format: {listing}");
+    assert!(
+        listing.contains("Total age: 65"),
+        "line with format: {listing}"
+    );
 }

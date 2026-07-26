@@ -1,4 +1,3 @@
-
 pub(crate) fn today_sas() -> f64 {
     // Jours depuis 1960-01-01 : jours Unix + offset 1960→1970 (3653,
     // constante partagée avec dataset.rs — l'époque SAS précède Unix).

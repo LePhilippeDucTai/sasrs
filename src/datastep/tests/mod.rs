@@ -84,5 +84,5 @@ fn write_weights(session: &Session, table: &str) {
         .unwrap();
 }
 
-mod set;
 mod array;
+mod set;

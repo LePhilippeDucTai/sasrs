@@ -145,7 +145,11 @@ pub(super) fn fit_ordinal(
             let xi = &x_mat[i];
             let fi = freq_vec[i];
             let c = cat_vec[i]; // 1..=k
-            let xb: f64 = xi.iter().zip(theta[n_int..].iter()).map(|(x, b)| x * b).sum();
+            let xb: f64 = xi
+                .iter()
+                .zip(theta[n_int..].iter())
+                .map(|(x, b)| x * b)
+                .sum();
 
             // Cumulative probs γ_j = P(Y ≤ j) = σ(α_j + xβ), j = 1..k-1
             // with γ_0 = 0, γ_k = 1. Probability of category c is γ_c − γ_{c-1}.
@@ -213,8 +217,10 @@ pub(super) fn fit_ordinal(
             }
         }
 
-        let neg_hess: Vec<Vec<f64>> =
-            hess.iter().map(|r| r.iter().map(|v| -v).collect()).collect();
+        let neg_hess: Vec<Vec<f64>> = hess
+            .iter()
+            .map(|r| r.iter().map(|v| -v).collect())
+            .collect();
         let inv = match invert_matrix(&neg_hess) {
             Ok(m) => m,
             Err(_) => break,
@@ -275,7 +281,11 @@ pub(super) fn ordinal_varcov(
         let xi = &x_mat[i];
         let fi = freq_vec[i];
         let c = cat_vec[i];
-        let xb: f64 = xi.iter().zip(theta[n_int..].iter()).map(|(x, b)| x * b).sum();
+        let xb: f64 = xi
+            .iter()
+            .zip(theta[n_int..].iter())
+            .map(|(x, b)| x * b)
+            .sum();
         let gamma = |j: usize| -> f64 {
             if j == 0 {
                 0.0

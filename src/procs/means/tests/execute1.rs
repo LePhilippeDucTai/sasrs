@@ -20,7 +20,10 @@ fn execute_ways_restricts_output_rows() {
     write_dataset(&mut session, "T", ds);
 
     let mut ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -33,7 +36,10 @@ fn execute_ways_restricts_output_rows() {
         ways: vec![1],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("sum".into(), "x".into(), "sx".into())],
         }),
     };
@@ -66,11 +72,17 @@ fn execute_ways_restricts_output_rows() {
 fn execute_output_k0_no_class() {
     let mut session = make_session();
     let df = df!["x" => [Some(2.0_f64), Some(4.0), Some(6.0), None]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -83,7 +95,10 @@ fn execute_output_k0_no_class() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![
                 ("mean".into(), "x".into(), "m".into()),
                 ("n".into(), "x".into(), "cnt".into()),
@@ -116,11 +131,17 @@ fn execute_output_k1() {
         "x" => [1.0_f64, 3.0, 10.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -133,10 +154,11 @@ fn execute_output_k1() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
-            specs: vec![
-                ("mean".into(), "x".into(), "mx".into()),
-            ],
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
+            specs: vec![("mean".into(), "x".into(), "mx".into())],
         }),
     };
     execute(&ast, &mut session).unwrap();
@@ -186,7 +208,10 @@ fn execute_output_k2_type_set_and_rowcount() {
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -199,7 +224,10 @@ fn execute_output_k2_type_set_and_rowcount() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("sum".into(), "x".into(), "sx".into())],
         }),
     };
@@ -222,16 +250,16 @@ fn execute_output_k2_type_set_and_rowcount() {
             _ => panic!("type must be numeric"),
         })
         .collect();
-    assert_eq!(
-        type_set,
-        [0i64, 1, 2, 3].iter().cloned().collect()
-    );
+    assert_eq!(type_set, [0i64, 1, 2, 3].iter().cloned().collect());
 
     // _TYPE_ is ascending.
-    let tys: Vec<f64> = ty.iter().map(|v| match v {
-        Value::Num(f) => *f,
-        _ => unreachable!(),
-    }).collect();
+    let tys: Vec<f64> = ty
+        .iter()
+        .map(|v| match v {
+            Value::Num(f) => *f,
+            _ => unreachable!(),
+        })
+        .collect();
     let mut sorted = tys.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(tys, sorted);
@@ -245,11 +273,17 @@ fn execute_output_k2_type_set_and_rowcount() {
 fn execute_report_contains_title_and_var() {
     let mut session = make_session();
     let df = df!["height" => [60.0_f64, 62.0, 64.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("height")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("height")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: false,
         stats: vec![],
@@ -266,7 +300,10 @@ fn execute_report_contains_title_and_var() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("The MEANS Procedure"), "listing: {listing}");
+    assert!(
+        listing.contains("The MEANS Procedure"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("height"), "listing: {listing}");
     // default stats headers
     assert!(listing.contains("Mean"), "listing: {listing}");
@@ -277,11 +314,17 @@ fn execute_report_contains_title_and_var() {
 fn execute_noprint_writes_nothing_to_listing() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: true,
         noprint: true,
         stats: vec![],
@@ -310,11 +353,17 @@ fn execute_clm_output_readback() {
     // [2,4,4,4,5,5,7,9]: mean 5, lclm≈3.21251, uclm≈6.78749 (alpha 0.05,
     // SAS sample-std CI).
     let df = df!["x" => [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: true,
         stats: vec![],
@@ -327,7 +376,10 @@ fn execute_clm_output_readback() {
         ways: vec![],
         types: vec![],
         output: Some(MeansOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![
                 ("lclm".into(), "x".into(), "lo".into()),
                 ("uclm".into(), "x".into(), "hi".into()),
@@ -350,11 +402,17 @@ fn execute_clm_output_readback() {
 fn execute_clm_report_headers() {
     let mut session = make_session();
     let df = df!["x" => [2.0_f64, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: false,
         stats: vec!["mean".into(), "clm".into()],
@@ -392,11 +450,17 @@ fn execute_by_per_group_report_and_headings() {
         "x" => [2.0_f64, 4.0, 10.0, 20.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("sex"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("sex"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: false,
         stats: vec!["mean".into()],
@@ -414,7 +478,10 @@ fn execute_by_per_group_report_and_headings() {
 
     let listing = session.listing.into_string();
     // Title once, BY headings for each group.
-    assert!(listing.contains("The MEANS Procedure"), "listing: {listing}");
+    assert!(
+        listing.contains("The MEANS Procedure"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("sex=F"), "listing: {listing}");
     assert!(listing.contains("sex=M"), "listing: {listing}");
     // The F group mean is 3, the M group mean is 15.

@@ -1,4 +1,3 @@
-
 /// Lanczos approximation of ln Γ(x) for x > 0. Accuracy ~1e-13.
 /// Promoted from common.rs.
 pub fn ln_gamma(x: f64) -> f64 {
@@ -170,11 +169,7 @@ pub fn erf(x: f64) -> f64 {
     }
     // P(1/2, x²) = lower regularized incomplete gamma = 1 - Q(1/2, x²).
     let p = 1.0 - gammq(0.5, x * x);
-    if x > 0.0 {
-        p
-    } else {
-        -p
-    }
+    if x > 0.0 { p } else { -p }
 }
 
 /// Natural log of n! = ln Γ(n+1), for n >= 0.
@@ -249,10 +244,7 @@ pub fn trigamma(x: f64) -> f64 {
         // Asymptotic expansion at z (≥ 12): 1/z + 1/(2z²) + 1/(6z³) − 1/(30z⁵) + 1/(42z⁷).
         let inv = 1.0 / z;
         let inv2 = inv * inv;
-        let asymp = inv
-            + 0.5 * inv2
-            + inv2 * inv / 6.0
-            - inv2 * inv2 * inv / 30.0
+        let asymp = inv + 0.5 * inv2 + inv2 * inv / 6.0 - inv2 * inv2 * inv / 30.0
             + inv2 * inv2 * inv2 * inv / 42.0;
         acc + asymp
     }
@@ -263,7 +255,14 @@ pub fn trigamma(x: f64) -> f64 {
 /// increasing CDF and `pdf` its derivative. Bracket is maintained from the
 /// monotonicity of the CDF; if a Newton step leaves the current bracket or the
 /// derivative is degenerate, a bisection step is taken instead.
-pub(super) fn newton_with_bisection<F, G>(p: f64, init: f64, lo: f64, hi: f64, cdf: F, pdf: G) -> f64
+pub(super) fn newton_with_bisection<F, G>(
+    p: f64,
+    init: f64,
+    lo: f64,
+    hi: f64,
+    cdf: F,
+    pdf: G,
+) -> f64
 where
     F: Fn(f64) -> f64,
     G: Fn(f64) -> f64,

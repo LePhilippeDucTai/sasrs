@@ -113,6 +113,6 @@ fn def(
     }
 }
 
-mod parse;
 mod default;
+mod parse;
 mod rbreak;

@@ -139,7 +139,12 @@ pub(super) fn ratio(rsq: f64) -> f64 {
 }
 
 /// Pooled RMS std within one cluster (denominator = freq, across all vars).
-pub(super) fn cluster_rms_std(coords: &[Vec<f64>], assign: &[usize], cluster: usize, centroid: &[f64]) -> f64 {
+pub(super) fn cluster_rms_std(
+    coords: &[Vec<f64>],
+    assign: &[usize],
+    cluster: usize,
+    centroid: &[f64],
+) -> f64 {
     let p = centroid.len();
     let mut ss = 0.0_f64;
     let mut cnt = 0usize;
@@ -177,7 +182,13 @@ pub(super) fn variable_rsquare(
     }
     let total_std: Vec<f64> = total_ss
         .iter()
-        .map(|s| if n > 1 { (s / (n - 1) as f64).sqrt() } else { 0.0 })
+        .map(|s| {
+            if n > 1 {
+                (s / (n - 1) as f64).sqrt()
+            } else {
+                0.0
+            }
+        })
         .collect();
     let k = centroids.len();
     let within_df = (n.saturating_sub(k)).max(1) as f64;

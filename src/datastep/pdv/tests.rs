@@ -1,5 +1,5 @@
 use super::*;
-use crate::value::{MissingKind, VarType, Value};
+use crate::value::{MissingKind, Value, VarType};
 
 fn make_num_var(name: &str) -> PdvVar {
     PdvVar {

@@ -64,9 +64,9 @@ use self::char::*;
 use self::datetime::*;
 use self::distributions::*;
 use self::math::*;
+pub use self::random::streaminit_seed;
 use self::random::*;
 use self::stat::*;
-pub use self::random::streaminit_seed;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -91,7 +91,7 @@ fn coerce_num(v: &Value, ctx: &mut EvalCtx) -> Option<f64> {
                         ctx.error_flag = true;
                         None
                     }
-            }
+                }
             }
         }
     }
@@ -291,7 +291,7 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("CATQ", fn_catq),
     // Date
     ("TODAY", fn_today),
-    ("DATE", fn_today),   // DATE() is an alias for TODAY()
+    ("DATE", fn_today), // DATE() is an alias for TODAY()
     ("MDY", fn_mdy),
     ("YEAR", fn_year),
     ("MONTH", fn_month),

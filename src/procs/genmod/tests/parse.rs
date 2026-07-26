@@ -60,8 +60,7 @@ fn test_parse_gamma_default_link_reciprocal() {
 
 #[test]
 fn test_parse_gamma_link_log() {
-    let ast =
-        parse_genmod("proc genmod; model y = x / dist=gamma link=log; run;").unwrap();
+    let ast = parse_genmod("proc genmod; model y = x / dist=gamma link=log; run;").unwrap();
     let m = ast.model.unwrap();
     assert_eq!(m.dist, Distribution::Gamma);
     assert_eq!(m.link, LinkFunction::Log);
@@ -69,11 +68,9 @@ fn test_parse_gamma_link_log() {
 
 #[test]
 fn test_parse_scale_noscale() {
-    let ast =
-        parse_genmod("proc genmod; model y = x / dist=normal noscale; run;").unwrap();
+    let ast = parse_genmod("proc genmod; model y = x / dist=normal noscale; run;").unwrap();
     assert!(ast.model.unwrap().noscale);
-    let ast2 =
-        parse_genmod("proc genmod; model y = x / dist=normal scale=2.5; run;").unwrap();
+    let ast2 = parse_genmod("proc genmod; model y = x / dist=normal scale=2.5; run;").unwrap();
     assert_eq!(ast2.model.unwrap().scale, Some(2.5));
 }
 
@@ -169,16 +166,18 @@ fn test_gamma_pearson_dispersion() {
     // Independently verify the Pearson dispersion φ̂ for an intercept-only
     // reciprocal-link Gamma: μ̂ = ȳ for every obs, so
     //   φ̂ = (1/(n−1)) Σ (y−ȳ)²/ȳ².
-    let (mut session, mut ast) =
-        make_gamma_intercept_session(LinkFunction::Reciprocal);
+    let (mut session, mut ast) = make_gamma_intercept_session(LinkFunction::Reciprocal);
     ast.model.as_mut().unwrap().noprint = false;
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
 
     let y = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let ybar = 3.5;
-    let phi: f64 =
-        y.iter().map(|v| (v - ybar).powi(2) / (ybar * ybar)).sum::<f64>() / 5.0;
+    let phi: f64 = y
+        .iter()
+        .map(|v| (v - ybar).powi(2) / (ybar * ybar))
+        .sum::<f64>()
+        / 5.0;
     // Reported Scale = 1/φ.
     let scale = 1.0 / phi;
     let scale_str = format!("{scale:.4}");

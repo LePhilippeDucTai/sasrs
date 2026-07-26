@@ -338,7 +338,8 @@ impl Session {
                     .to_string();
                 match std::fs::write(&path, &bytes) {
                     Ok(()) => {
-                        self.log.note(&format!("Writing {} file: {}", label, file_name));
+                        self.log
+                            .note(&format!("Writing {} file: {}", label, file_name));
                     }
                     Err(e) => {
                         self.log.note(&format!(
@@ -356,7 +357,8 @@ impl Session {
                     .to_string();
                 match std::fs::write(&path, &content) {
                     Ok(()) => {
-                        self.log.note(&format!("Writing {} file: {}", label, file_name));
+                        self.log
+                            .note(&format!("Writing {} file: {}", label, file_name));
                     }
                     Err(e) => {
                         self.log.note(&format!(
@@ -394,7 +396,9 @@ impl Session {
     /// active pour cette table. Les procs consultent cette méthode AVANT
     /// d'écrire une table capturée.
     pub fn ods_output_target(&self, table: &str) -> Option<DatasetRef> {
-        self.ods_output_map.get(&table.to_ascii_uppercase()).cloned()
+        self.ods_output_map
+            .get(&table.to_ascii_uppercase())
+            .cloned()
     }
 
     /// M22.2 — applique une option globale ODS (CENTER/NOCENTER, DATE/NODATE,

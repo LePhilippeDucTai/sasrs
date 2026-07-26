@@ -207,8 +207,16 @@ where
 
     // Calcul des plages selon le type de tracé. Les overlays (LOESS, DENSITY,
     // séries multiples) participent aux bornes pour ne pas être tronqués.
-    let overlay_x = || deco.overlays.iter().flat_map(|o| o.data.iter().map(|(x, _)| *x));
-    let overlay_y = || deco.overlays.iter().flat_map(|o| o.data.iter().map(|(_, y)| *y));
+    let overlay_x = || {
+        deco.overlays
+            .iter()
+            .flat_map(|o| o.data.iter().map(|(x, _)| *x))
+    };
+    let overlay_y = || {
+        deco.overlays
+            .iter()
+            .flat_map(|o| o.data.iter().map(|(_, y)| *y))
+    };
     let (mut x_lo, mut x_hi, mut y_lo, mut y_hi): (f64, f64, f64, f64) = match &spec.plot_type {
         PlotType::VBar => {
             let (y_lo, y_hi) = safe_range(spec.x_categorical.iter().map(|(_, v)| *v));
@@ -223,10 +231,8 @@ where
         }
         PlotType::Pie => unreachable!("handled above"),
         _ => {
-            let (x_lo, x_hi) =
-                safe_range(spec.data.iter().map(|(x, _)| *x).chain(overlay_x()));
-            let (y_lo, y_hi) =
-                safe_range(spec.data.iter().map(|(_, y)| *y).chain(overlay_y()));
+            let (x_lo, x_hi) = safe_range(spec.data.iter().map(|(x, _)| *x).chain(overlay_x()));
+            let (y_lo, y_hi) = safe_range(spec.data.iter().map(|(_, y)| *y).chain(overlay_y()));
             (x_lo, x_hi, y_lo, y_hi)
         }
     };
@@ -326,7 +332,10 @@ where
         let col = ov.color.rgb();
         if ov.line {
             chart
-                .draw_series(LineSeries::new(ov.data.iter().copied(), col.stroke_width(2)))
+                .draw_series(LineSeries::new(
+                    ov.data.iter().copied(),
+                    col.stroke_width(2),
+                ))
                 .map_err(|e| SasError::runtime(format!("graphics overlay line error: {e}")))?;
         }
         if ov.marker {
@@ -356,7 +365,11 @@ pub fn pie_angles(values: &[f64]) -> Vec<(f64, f64)> {
     }
     let mut acc = 0.0;
     for &v in values {
-        let frac = if v.is_finite() && v > 0.0 { v / total } else { 0.0 };
+        let frac = if v.is_finite() && v > 0.0 {
+            v / total
+        } else {
+            0.0
+        };
         let start = acc * std::f64::consts::TAU;
         acc += frac;
         let end = acc * std::f64::consts::TAU;
@@ -411,11 +424,8 @@ where
     let mut ly = (cy + radius) as i32 + 20;
     for (i, (label, value)) in spec.x_categorical.iter().enumerate() {
         let col = palette(i).rgb();
-        area.draw(&Rectangle::new(
-            [(12, ly), (24, ly + 12)],
-            col.filled(),
-        ))
-        .map_err(|e| SasError::runtime(format!("graphics pie legend error: {e}")))?;
+        area.draw(&Rectangle::new([(12, ly), (24, ly + 12)], col.filled()))
+            .map_err(|e| SasError::runtime(format!("graphics pie legend error: {e}")))?;
         area.draw(&Text::new(
             format!("{label} ({value})"),
             (30, ly),

@@ -32,10 +32,24 @@ fn parse_all_options() {
 
 #[test]
 fn parse_ties_variants() {
-    assert_eq!(parse_rank("proc rank ties=mean; var x; run;").unwrap().ties, Ties::Mean);
-    assert_eq!(parse_rank("proc rank ties=low; var x; run;").unwrap().ties, Ties::Low);
-    assert_eq!(parse_rank("proc rank ties=high; var x; run;").unwrap().ties, Ties::High);
-    assert_eq!(parse_rank("proc rank ties=dense; var x; run;").unwrap().ties, Ties::Dense);
+    assert_eq!(
+        parse_rank("proc rank ties=mean; var x; run;").unwrap().ties,
+        Ties::Mean
+    );
+    assert_eq!(
+        parse_rank("proc rank ties=low; var x; run;").unwrap().ties,
+        Ties::Low
+    );
+    assert_eq!(
+        parse_rank("proc rank ties=high; var x; run;").unwrap().ties,
+        Ties::High
+    );
+    assert_eq!(
+        parse_rank("proc rank ties=dense; var x; run;")
+            .unwrap()
+            .ties,
+        Ties::Dense
+    );
 }
 
 #[test]
@@ -61,20 +75,40 @@ fn parse_unknown_option_errors() {
 
 #[test]
 fn parse_method_options() {
-    assert_eq!(parse_rank("proc rank fraction; var x; run;").unwrap().method, Method::Fraction);
-    assert_eq!(parse_rank("proc rank nplus1; var x; run;").unwrap().method, Method::NPlus1);
-    assert_eq!(parse_rank("proc rank percent; var x; run;").unwrap().method, Method::Percent);
-    assert_eq!(parse_rank("proc rank savage; var x; run;").unwrap().method, Method::Savage);
     assert_eq!(
-        parse_rank("proc rank normal=blom; var x; run;").unwrap().method,
+        parse_rank("proc rank fraction; var x; run;")
+            .unwrap()
+            .method,
+        Method::Fraction
+    );
+    assert_eq!(
+        parse_rank("proc rank nplus1; var x; run;").unwrap().method,
+        Method::NPlus1
+    );
+    assert_eq!(
+        parse_rank("proc rank percent; var x; run;").unwrap().method,
+        Method::Percent
+    );
+    assert_eq!(
+        parse_rank("proc rank savage; var x; run;").unwrap().method,
+        Method::Savage
+    );
+    assert_eq!(
+        parse_rank("proc rank normal=blom; var x; run;")
+            .unwrap()
+            .method,
         Method::Normal(NormalScore::Blom)
     );
     assert_eq!(
-        parse_rank("proc rank normal=tukey; var x; run;").unwrap().method,
+        parse_rank("proc rank normal=tukey; var x; run;")
+            .unwrap()
+            .method,
         Method::Normal(NormalScore::Tukey)
     );
     assert_eq!(
-        parse_rank("proc rank normal=vw; var x; run;").unwrap().method,
+        parse_rank("proc rank normal=vw; var x; run;")
+            .unwrap()
+            .method,
         Method::Normal(NormalScore::Vw)
     );
 }
@@ -89,7 +123,12 @@ fn parse_normal_requires_method() {
 fn parse_two_methods_errors() {
     let r = parse_rank("proc rank fraction percent; var x; run;");
     assert!(r.is_err());
-    assert!(r.err().unwrap().to_string().contains("Only one ranking-method"));
+    assert!(
+        r.err()
+            .unwrap()
+            .to_string()
+            .contains("Only one ranking-method")
+    );
 }
 
 #[test]
@@ -97,18 +136,33 @@ fn parse_by_now_supported() {
     let ast = parse_rank("proc rank data=a; by g; var x; run;").unwrap();
     assert_eq!(ast.by, vec![("g".to_string(), false)]);
     let ast2 = parse_rank("proc rank data=a; by descending g h; var x; run;").unwrap();
-    assert_eq!(ast2.by, vec![("g".to_string(), true), ("h".to_string(), false)]);
+    assert_eq!(
+        ast2.by,
+        vec![("g".to_string(), true), ("h".to_string(), false)]
+    );
 }
 
 #[test]
 fn rank_basic_ascending() {
-    let out = rank_column(&nums(&[30.0, 10.0, 20.0]), false, Ties::Mean, None, Method::Rank);
+    let out = rank_column(
+        &nums(&[30.0, 10.0, 20.0]),
+        false,
+        Ties::Mean,
+        None,
+        Method::Rank,
+    );
     assert_eq!(out, nums(&[3.0, 1.0, 2.0]));
 }
 
 #[test]
 fn rank_descending() {
-    let out = rank_column(&nums(&[30.0, 10.0, 20.0]), true, Ties::Mean, None, Method::Rank);
+    let out = rank_column(
+        &nums(&[30.0, 10.0, 20.0]),
+        true,
+        Ties::Mean,
+        None,
+        Method::Rank,
+    );
     // 30 largest → rank 1.
     assert_eq!(out, nums(&[1.0, 3.0, 2.0]));
 }

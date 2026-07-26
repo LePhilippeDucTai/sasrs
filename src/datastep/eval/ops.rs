@@ -29,7 +29,13 @@ pub(super) fn eval_unary(op: &UnaryOp, expr: &Expr, pdv: &Pdv, ctx: &mut EvalCtx
     }
 }
 
-pub(super) fn eval_binary(op: BinaryOp, left: &Expr, right: &Expr, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
+pub(super) fn eval_binary(
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    pdv: &Pdv,
+    ctx: &mut EvalCtx,
+) -> Value {
     let l = eval(left, pdv, ctx);
     if ctx.fatal.is_some() {
         return Value::missing();

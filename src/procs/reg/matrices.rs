@@ -192,13 +192,7 @@ pub(super) fn print_estimate_matrices(
         .collect();
     let covb = covb_matrix(xtx_inv, mse);
     if model.covb {
-        print_labeled_matrix(
-            "Covariance of Estimates",
-            &labels,
-            &labels,
-            &covb,
-            session,
-        );
+        print_labeled_matrix("Covariance of Estimates", &labels, &labels, &covb, session);
     }
     if model.corrb {
         let corrb = corrb_matrix(&covb);
@@ -294,11 +288,7 @@ fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
         sbb += db * db;
     }
     let d = (saa * sbb).sqrt();
-    if d > 0.0 {
-        sab / d
-    } else {
-        f64::NAN
-    }
+    if d > 0.0 { sab / d } else { f64::NAN }
 }
 
 /// Print the PROC-level "Correlation" matrix (CORR option, M36.8) among all

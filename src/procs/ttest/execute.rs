@@ -25,7 +25,15 @@ pub(super) fn execute_one_sample(
         "Minimum".into(),
         "Maximum".into(),
     ];
-    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right, Align::Right];
+    let mut aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
     if show_ci {
         // Confidence-limit columns, gated by an explicit CI= request so the
         // default listing stays byte-identical.
@@ -90,7 +98,9 @@ pub(super) fn execute_two_sample(
         .vars
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(class_name))
-        .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", class_name.to_uppercase())))?;
+        .ok_or_else(|| {
+            SasError::runtime(format!("Variable {} not found.", class_name.to_uppercase()))
+        })?;
     let class_vals = decode_column(ds, class_idx)?;
 
     // Collect distinct non-missing class levels (sas_cmp comparison + order).
@@ -100,7 +110,10 @@ pub(super) fn execute_two_sample(
         if v.is_missing() {
             continue;
         }
-        if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+        if !levels
+            .iter()
+            .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+        {
             levels.push(v.clone());
         }
     }
@@ -126,10 +139,7 @@ pub(super) fn execute_two_sample(
     session.listing.blank();
 
     let cl = cl_pct(alpha);
-    let mut headers: Vec<String> = vec![
-        "Variable".into(),
-        "Method".into(),
-    ];
+    let mut headers: Vec<String> = vec!["Variable".into(), "Method".into()];
     let mut aligns = vec![Align::Left, Align::Left];
     if show_ci {
         headers.push("Mean Diff".into());
@@ -173,7 +183,11 @@ pub(super) fn execute_two_sample(
         let res = two_sample(&a, &b, alpha, sides);
         let vname = ds.vars[c].name.clone();
 
-        let diff = if res.diff.is_nan() { None } else { Some(res.diff) };
+        let diff = if res.diff.is_nan() {
+            None
+        } else {
+            Some(res.diff)
+        };
         let (pt, pdf, pp) = match res.pooled {
             Some((t, df, p)) => (Some(t), Some(df), Some(p)),
             None => (None, None, None),
@@ -213,7 +227,13 @@ pub(super) fn execute_two_sample(
                 fmt_p(Some(p)),
             ]);
         } else {
-            feq_rows.push(vec![vname.clone(), ".".into(), ".".into(), ".".into(), ".".into()]);
+            feq_rows.push(vec![
+                vname.clone(),
+                ".".into(),
+                ".".into(),
+                ".".into(),
+                ".".into(),
+            ]);
         }
         ods.push((vname, res));
     }
@@ -231,8 +251,16 @@ pub(super) fn execute_two_sample(
         "F Value".into(),
         "Pr > F".into(),
     ];
-    let feq_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right];
-    session.listing.write_table(&feq_headers, &feq_aligns, &feq_rows);
+    let feq_aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    session
+        .listing
+        .write_table(&feq_headers, &feq_aligns, &feq_rows);
     session.listing.blank();
 
     maybe_write_two_sample_output(ast, session, &ods, &label_a, &label_b)?;
@@ -261,7 +289,13 @@ pub(super) fn execute_paired(
         "Std Dev".into(),
         "Std Err".into(),
     ];
-    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right, Align::Right];
+    let mut aligns = vec![
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
     if show_ci {
         headers.push(format!("{cl} CL Mean L"));
         headers.push(format!("{cl} CL Mean U"));

@@ -124,7 +124,10 @@ fn execute_listing_smoke() {
     };
     write_dataset(&mut session, "PTS", ds);
     let ast = ClusterAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "PTS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "PTS".into(),
+        }),
         method: LinkMethod::Ward,
         outtree: None,
         print: None,
@@ -141,17 +144,26 @@ fn execute_listing_smoke() {
 
 #[test]
 fn outtree_dataset_shape_and_monotone() {
-    use crate::procs::common::decode_column;
     use crate::missing::value_to_num;
+    use crate::procs::common::decode_column;
 
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 7.0, 8.0, 9.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "PTS", ds);
     let ast = ClusterAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "PTS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "PTS".into(),
+        }),
         method: LinkMethod::Ward,
-        outtree: Some(DatasetRef { libref: Some("WORK".into()), name: "TREE".into() }),
+        outtree: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "TREE".into(),
+        }),
         print: None,
         noeigen: false,
         var: vec!["x".into()],
@@ -178,6 +190,9 @@ fn outtree_dataset_shape_and_monotone() {
         .collect();
     let merge_heights = &heights[6..]; // skip the 6 leaves
     for w in merge_heights.windows(2) {
-        assert!(w[0] <= w[1] + 1e-12, "heights not monotone: {merge_heights:?}");
+        assert!(
+            w[0] <= w[1] + 1e-12,
+            "heights not monotone: {merge_heights:?}"
+        );
     }
 }

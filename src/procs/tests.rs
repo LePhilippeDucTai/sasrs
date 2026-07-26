@@ -163,7 +163,12 @@ fn write_test_dataset(session: &mut Session) {
         },
     ];
     let ds = SasDataset { df, vars };
-    session.libs.get("WORK").unwrap().write("TEST", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("TEST", &ds)
+        .unwrap();
     session.last_dataset = Some("WORK.TEST".to_string());
 }
 
@@ -221,7 +226,10 @@ fn execute_proc_print_full_pipeline() {
     execute_proc("print", &ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("The SAS System") || listing.contains("SAS"), "listing: {listing}");
+    assert!(
+        listing.contains("The SAS System") || listing.contains("SAS"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("Obs"), "listing: {listing}");
 
     let log = session.log.into_string();

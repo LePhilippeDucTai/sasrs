@@ -65,9 +65,6 @@ pub(super) fn plot_values(
                 .collect();
             (label, xs)
         }
-        None => (
-            plot.var.clone().unwrap_or_default(),
-            Vec::new(),
-        ),
+        None => (plot.var.clone().unwrap_or_default(), Vec::new()),
     }
 }

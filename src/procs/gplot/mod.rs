@@ -29,11 +29,9 @@ use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
 
-
 mod parse;
 
 pub use parse::parse;
-
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -137,7 +135,7 @@ pub fn execute(ast: &GplotAst, session: &mut Session) -> Result<()> {
 pub(crate) mod graphics_impl {
     use super::*;
     use crate::graphics::render::{
-        draw_to_file_ext, palette, Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
+        Decorations, DrawingSpec, Overlay, PlotType, SeriesColor, draw_to_file_ext, palette,
     };
     use crate::missing::value_to_num;
     use crate::ods_graphics::ImageFmt;
@@ -302,12 +300,7 @@ pub(crate) mod graphics_impl {
         // honorer la couleur SYMBOL de CHACUNE (la série primaire du DrawingSpec
         // est toujours bleue côté render.rs). Le DrawingSpec ne porte que les
         // axes ; ses données primaires restent vides.
-        let spec = DrawingSpec::new(
-            "The GPLOT Procedure",
-            x_label,
-            y_label,
-            PlotType::Scatter,
-        );
+        let spec = DrawingSpec::new("The GPLOT Procedure", x_label, y_label, PlotType::Scatter);
 
         let mut overlays: Vec<Overlay> = Vec::new();
         for (data, color, line, marker) in series.into_iter() {
@@ -320,14 +313,20 @@ pub(crate) mod graphics_impl {
         }
 
         // Bornes d'axes : AXIS1 ORDER= → X, AXIS2 ORDER= → Y.
-        let x_range = ast.axes.first().and_then(|a| match (a.order_min, a.order_max) {
-            (Some(lo), Some(hi)) => Some((lo, hi)),
-            _ => None,
-        });
-        let y_range = ast.axes.get(1).and_then(|a| match (a.order_min, a.order_max) {
-            (Some(lo), Some(hi)) => Some((lo, hi)),
-            _ => None,
-        });
+        let x_range = ast
+            .axes
+            .first()
+            .and_then(|a| match (a.order_min, a.order_max) {
+                (Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => None,
+            });
+        let y_range = ast
+            .axes
+            .get(1)
+            .and_then(|a| match (a.order_min, a.order_max) {
+                (Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => None,
+            });
 
         let deco = Decorations {
             overlays,

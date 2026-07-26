@@ -25,7 +25,10 @@ fn sysfunc_numeric_function() {
 #[test]
 fn sysfunc_unknown_function_errors_no_panic() {
     let out = run("%sysfunc(nosuchfn(1))");
-    assert!(out.contains("not supported") || out.contains("unknown"), "got: {out}");
+    assert!(
+        out.contains("not supported") || out.contains("unknown"),
+        "got: {out}"
+    );
 }
 
 // --- M35.1 : %sysfunc délègue à la bibliothèque COMPLÈTE (plus de whitelist) ---

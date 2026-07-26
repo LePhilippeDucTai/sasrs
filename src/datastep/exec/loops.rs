@@ -125,9 +125,7 @@ impl Runner {
                         None => 1.0,
                     };
                     if by_v == 0.0 {
-                        return Err(SasError::runtime(
-                            "Invalid DO loop control information.",
-                        ));
+                        return Err(SasError::runtime("Invalid DO loop control information."));
                     }
                     let mut cur = from_v;
                     loop {
@@ -323,9 +321,7 @@ impl Runner {
                 self.pdv.error_ = true;
                 Err(SasError::runtime("Invalid DO loop control information."))
             }
-            Value::Missing(_) => {
-                Err(SasError::runtime("Invalid DO loop control information."))
-            }
+            Value::Missing(_) => Err(SasError::runtime("Invalid DO loop control information.")),
         }
     }
 

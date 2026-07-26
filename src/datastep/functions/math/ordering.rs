@@ -8,11 +8,23 @@ pub(crate) fn fn_range(args: &[Value], ctx: &mut EvalCtx) -> Value {
         if let Some(f) = coerce_num(a, ctx) {
             min_val = Some(match min_val {
                 None => f,
-                Some(m) => if f < m { f } else { m },
+                Some(m) => {
+                    if f < m {
+                        f
+                    } else {
+                        m
+                    }
+                }
             });
             max_val = Some(match max_val {
                 None => f,
-                Some(m) => if f > m { f } else { m },
+                Some(m) => {
+                    if f > m {
+                        f
+                    } else {
+                        m
+                    }
+                }
             });
         }
     }

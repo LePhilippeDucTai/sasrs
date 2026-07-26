@@ -201,7 +201,11 @@ pub fn build_design(
             // indicator of `levels[j]` (j < L−1), so for a data value `v` whose
             // level index is `li`, the column-`j` value is `coding[li][j]`.
             let coding = class_coding(&levels, Param::Ref);
-            for (j, lvl) in levels.iter().take(levels.len().saturating_sub(1)).enumerate() {
+            for (j, lvl) in levels
+                .iter()
+                .take(levels.len().saturating_sub(1))
+                .enumerate()
+            {
                 let label = format!("{} {}", eff, value_label(lvl));
                 let values: Vec<f64> = col
                     .1

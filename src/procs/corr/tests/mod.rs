@@ -46,7 +46,10 @@ fn parse_corr(src: &str) -> Result<CorrAst> {
 
 fn base_ast(table: &str) -> CorrAst {
     CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: table.into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: table.into(),
+        }),
         nosimple: true,
         noprob: false,
         nocorr: false,
@@ -81,6 +84,6 @@ fn replicate(xs: &[f64], ws: &[usize]) -> Vec<f64> {
     out
 }
 
-mod parse;
 mod execute1;
 mod execute2;
+mod parse;

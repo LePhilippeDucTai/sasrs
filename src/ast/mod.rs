@@ -5,11 +5,10 @@
 use crate::token::Span;
 use crate::value::MissingKind;
 
-
 mod dataset;
 mod expr;
-mod io;
 mod global;
+mod io;
 
 pub use dataset::DatasetOptions;
 pub use dataset::DatasetRef;
@@ -31,7 +30,6 @@ pub use io::InfileSource;
 pub use io::InputItem;
 pub use io::PutDest;
 pub use io::PutItem;
-
 
 /// Spec d'une variable dans un statement LENGTH : `$ n` (char) ou `n` (num).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +139,10 @@ pub enum DsStmt {
     /// `Expr::Missing` — un `-5` est replié en `Num(-5.0)` par le parser).
     Retain(Vec<(String, Option<Expr>)>),
     /// Sum statement `var + expr;` (ex. `total + x;`). PAS de forme `-`.
-    Sum { var: String, expr: Expr },
+    Sum {
+        var: String,
+        expr: Expr,
+    },
     /// `length v1 v2 $ 20 v3 5;`
     Length(Vec<(String, LengthSpec)>),
     /// `format weight height 8.2 name $char10.;` (M4) — chaque groupe est
@@ -191,7 +192,10 @@ pub enum DsStmt {
     /// « not yet implemented ». Le nom est conservé tel quel (résolu en
     /// MAJUSCULES à l'exécution). Ce statement est parsé dans les DEUX
     /// builds (aucun test/fixture existant n'emploie `call`).
-    CallRoutine { name: String, args: Vec<Expr> },
+    CallRoutine {
+        name: String,
+        args: Vec<Expr>,
+    },
     /// `infile <source> [options];` (M14) — déclare la source de lecture
     /// texte de l'étape et ses options. Un seul INFILE par étape (un second
     /// → erreur de compilation).
@@ -210,7 +214,9 @@ pub enum DsStmt {
     /// `file <dest>;` (M14.2) — fixe la destination courante des PUT
     /// (fichier externe, LOG ou listing). Déclaratif à l'exécution : un FILE
     /// change la destination des PUT qui suivent.
-    File { dest: PutDest },
+    File {
+        dest: PutDest,
+    },
     /// `put <items>;` (M14.2) — écrit une ligne de texte vers la destination
     /// courante (le LOG par défaut). Un PUT sans item relâche la ligne
     /// maintenue / écrit une ligne vide.

@@ -5,7 +5,9 @@ use super::*;
 /// Decode every dataset variable into a name→Values map (lowercased names) so a
 /// WHERE predicate can reference any variable. Returns a Vec of (name, column)
 /// to preserve simple lookup without pulling in a HashMap.
-pub(super) fn decode_named_columns(ds: &crate::dataset::SasDataset) -> Result<Vec<(String, Vec<Value>)>> {
+pub(super) fn decode_named_columns(
+    ds: &crate::dataset::SasDataset,
+) -> Result<Vec<(String, Vec<Value>)>> {
     let mut out = Vec::with_capacity(ds.vars.len());
     for (i, m) in ds.vars.iter().enumerate() {
         out.push((m.name.to_ascii_lowercase(), decode_column(ds, i)?));
@@ -14,7 +16,11 @@ pub(super) fn decode_named_columns(ds: &crate::dataset::SasDataset) -> Result<Ve
 }
 
 /// Look up a column's value for row `r` by (case-insensitive) name.
-pub(super) fn lookup_var<'a>(cols: &'a [(String, Vec<Value>)], name: &str, r: usize) -> Option<&'a Value> {
+pub(super) fn lookup_var<'a>(
+    cols: &'a [(String, Vec<Value>)],
+    name: &str,
+    r: usize,
+) -> Option<&'a Value> {
     let lname = name.to_ascii_lowercase();
     cols.iter()
         .find(|(n, _)| *n == lname)
@@ -32,7 +38,9 @@ pub(super) fn eval_row_expr(expr: &Expr, cols: &[(String, Vec<Value>)], r: usize
         Expr::Num(n) => Value::Num(*n),
         Expr::Str(s) => Value::Char(s.clone()),
         Expr::Missing(k) => Value::Missing(*k),
-        Expr::Var(name) => lookup_var(cols, name, r).cloned().unwrap_or(Value::missing()),
+        Expr::Var(name) => lookup_var(cols, name, r)
+            .cloned()
+            .unwrap_or(Value::missing()),
         Expr::Unary { op, expr } => {
             let v = eval_row_expr(expr, cols, r);
             match op {
@@ -88,27 +96,25 @@ pub(super) fn eval_row_binary(op: crate::ast::BinaryOp, l: &Value, r: &Value) ->
             let rs = value_to_disp(r);
             Value::Char(format!("{ls}{rs}"))
         }
-        Add | Sub | Mul | Div | Power => {
-            match (value_to_num(l), value_to_num(r)) {
-                (Some(a), Some(b)) => {
-                    let v = match op {
-                        Add => a + b,
-                        Sub => a - b,
-                        Mul => a * b,
-                        Div => {
-                            if b == 0.0 {
-                                return Value::missing();
-                            }
-                            a / b
+        Add | Sub | Mul | Div | Power => match (value_to_num(l), value_to_num(r)) {
+            (Some(a), Some(b)) => {
+                let v = match op {
+                    Add => a + b,
+                    Sub => a - b,
+                    Mul => a * b,
+                    Div => {
+                        if b == 0.0 {
+                            return Value::missing();
                         }
-                        Power => a.powf(b),
-                        _ => unreachable!(),
-                    };
-                    Value::Num(v)
-                }
-                _ => Value::missing(),
+                        a / b
+                    }
+                    Power => a.powf(b),
+                    _ => unreachable!(),
+                };
+                Value::Num(v)
             }
-        }
+            _ => Value::missing(),
+        },
     }
 }
 

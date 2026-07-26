@@ -207,8 +207,7 @@ pub(super) fn emit_report_type(
             rows.push(row);
         }
     } else {
-        let active_refs: Vec<&Vec<Value>> =
-            active.iter().map(|&i| &class_values[i]).collect();
+        let active_refs: Vec<&Vec<Value>> = active.iter().map(|&i| &class_values[i]).collect();
         let groups = group_by_keys_subset(&active_refs, group_rows);
         for (key, grp_rows) in &groups {
             for (vi, vname_idx) in var_cols.iter().enumerate() {

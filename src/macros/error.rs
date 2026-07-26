@@ -14,7 +14,9 @@ pub struct MacroError {
 
 impl MacroError {
     pub(super) fn new(msg: impl Into<String>) -> Self {
-        MacroError { message: msg.into() }
+        MacroError {
+            message: msg.into(),
+        }
     }
 }
 

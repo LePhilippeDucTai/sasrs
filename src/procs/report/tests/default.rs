@@ -190,7 +190,10 @@ fn where_filters_observations() {
     assert!(listing.contains("13"), "F sum 13: {listing}");
     assert!(listing.contains("29"), "M sum 29: {listing}");
     // The filtered-out values 11/12 must not appear as an F total of 36.
-    assert!(!listing.contains("36"), "36 should be filtered out: {listing}");
+    assert!(
+        !listing.contains("36"),
+        "36 should be filtered out: {listing}"
+    );
 }
 
 #[test]
@@ -210,9 +213,7 @@ fn where_char_equality_sas_cmp() {
             width: None,
             spacing: None,
         }],
-        where_: Some(
-            parse_test_expr("sex = 'M';"),
-        ),
+        where_: Some(parse_test_expr("sex = 'M';")),
         ..report_defaults()
     };
     execute(&ast, &mut session).unwrap();

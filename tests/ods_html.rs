@@ -8,7 +8,7 @@
 
 mod common;
 
-use sasrs::{run, RunOptions};
+use sasrs::{RunOptions, run};
 
 /// Exécute un programme SAS en mode déterministe avec `base_dir` = tempdir
 /// peuplé de `data/class.parquet`, puis renvoie le contenu du fichier HTML
@@ -101,12 +101,7 @@ fn ods_html_without_file_writes_nothing() {
     let stray: Vec<_> = std::fs::read_dir(tmp.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "html")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "html").unwrap_or(false))
         .collect();
     assert!(stray.is_empty(), "aucun fichier HTML ne devrait être créé");
 }

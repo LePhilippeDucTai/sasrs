@@ -329,8 +329,7 @@ pub(super) fn starts_with_kw(ts: &StatementStream, kw: &str) -> bool {
         .ident()
         .map(|s| {
             let lower = s.to_ascii_lowercase();
-            lower.starts_with(kw)
-                && lower[kw.len()..].chars().all(|c| c.is_ascii_digit())
+            lower.starts_with(kw) && lower[kw.len()..].chars().all(|c| c.is_ascii_digit())
         })
         .unwrap_or(false)
 }

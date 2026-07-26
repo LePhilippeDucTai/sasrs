@@ -40,5 +40,5 @@ fn read_num_col(session: &Session, table: &str, col: &str) -> Vec<Value> {
     decode_column(&ds, idx).unwrap()
 }
 
-mod parse;
 mod execute;
+mod parse;

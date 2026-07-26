@@ -102,25 +102,24 @@ use crate::procs::common::{self, decode_column, group_by_keys, partition_numeric
 use crate::procs::means;
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
 
-
+mod compute;
+mod output;
 mod parse;
 mod plan;
-mod rows;
-mod compute;
 mod render;
-mod output;
+mod rows;
 
 pub use parse::parse;
 
-use plan::*;
-use rows::*;
 use compute::*;
-use render::*;
 use output::*;
+use plan::*;
+use render::*;
+use rows::*;
 
 /// Usage of a column in the report.
 #[derive(Debug, Clone, PartialEq)]
@@ -283,7 +282,9 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
 
     // Whether any DEFINE carried WIDTH=/SPACING= (M33.5). When none do, we keep
     // the exact historical rendering path (byte-identical default).
-    let has_layout = plan.iter().any(|c| c.width.is_some() || c.spacing.is_some());
+    let has_layout = plan
+        .iter()
+        .any(|c| c.width.is_some() || c.spacing.is_some());
 
     session.listing.page_header();
     if has_layout {

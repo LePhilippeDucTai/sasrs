@@ -125,11 +125,7 @@ pub fn format_best(v: f64, w: usize) -> String {
     }
     // Last resort: scientific notation.
     let s = format!("{v:E}");
-    if s.len() <= w {
-        s
-    } else {
-        format!("{v:.2E}")
-    }
+    if s.len() <= w { s } else { format!("{v:.2E}") }
 }
 
 #[cfg(test)]

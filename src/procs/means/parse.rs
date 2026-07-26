@@ -79,10 +79,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
             let val = match tok.kind {
                 TokenKind::Num(f) => f,
                 _ => {
-                    return Err(SasError::parse(
-                        "expected a number after ALPHA=",
-                        tok.span,
-                    ));
+                    return Err(SasError::parse("expected a number after ALPHA=", tok.span));
                 }
             };
             ts.next();

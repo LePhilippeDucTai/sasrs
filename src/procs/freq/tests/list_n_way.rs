@@ -17,13 +17,19 @@ fn list_layout_rows() {
         "c" => [1.0_f64, 2.0, 1.0, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("r"), num_meta("c")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut req = tr(&["r", "c"], false, None);
     req.list = true;
     let ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![req],
     );
     execute(&ast, &mut session).unwrap();
@@ -55,7 +61,10 @@ fn n_way_stratified() {
     write_dataset(&mut session, "T", ds);
 
     let ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![tr(&["s", "r", "c"], false, None)],
     );
     execute(&ast, &mut session).unwrap();

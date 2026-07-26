@@ -56,10 +56,7 @@ pub(super) fn build_design_terms(
     let nb_preds = predictors.len();
     let mut design_terms: Vec<DesignTerm> = Vec::with_capacity(nb_preds);
     for (pi, nm) in predictors.iter().enumerate() {
-        let is_class = ast
-            .class_vars
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(nm));
+        let is_class = ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
         if is_class {
             let col = &pred_cols[pi];
             let levels = crate::procs::lincom::class_levels(col.iter());
@@ -227,15 +224,13 @@ pub(super) fn build_model_matrices(
         let mut ok = true;
         for term in design_terms {
             match term {
-                DesignTerm::Continuous { col, .. } => {
-                    match value_to_num(&pred_cols[*col][i]) {
-                        Some(v) if !v.is_nan() => row.push(v),
-                        _ => {
-                            ok = false;
-                            break;
-                        }
+                DesignTerm::Continuous { col, .. } => match value_to_num(&pred_cols[*col][i]) {
+                    Some(v) if !v.is_nan() => row.push(v),
+                    _ => {
+                        ok = false;
+                        break;
                     }
-                }
+                },
                 DesignTerm::Class { col, levels, .. } => {
                     let v = &pred_cols[*col][i];
                     if v.is_missing() {

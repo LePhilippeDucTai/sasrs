@@ -69,11 +69,7 @@ pub(super) fn compute_anova_stats(
         };
     } else {
         // Uncorrected (weighted) sums of squares (NOINT).
-        let sst_unc: f64 = y
-            .iter()
-            .zip(wts.iter())
-            .map(|(yi, w)| w * yi * yi)
-            .sum();
+        let sst_unc: f64 = y.iter().zip(wts.iter()).map(|(yi, w)| w * yi * yi).sum();
         let ssm_unc: f64 = y_hat
             .iter()
             .zip(wts.iter())
@@ -93,7 +89,11 @@ pub(super) fn compute_anova_stats(
         };
     }
 
-    let msm = if model_df > 0.0 { ssm / model_df } else { f64::NAN };
+    let msm = if model_df > 0.0 {
+        ssm / model_df
+    } else {
+        f64::NAN
+    };
     let mse = sse / error_df;
     let f_stat = if mse > 0.0 { msm / mse } else { f64::NAN };
     let p_f = (1.0 - f_cdf(f_stat, model_df, error_df)).clamp(0.0, 1.0);
@@ -124,9 +124,9 @@ pub(super) fn compute_anova_stats(
     }
 }
 
-    // --- Standard errors / t / p for each beta ---
-    // For the restricted fit these come from the constrained covariance matrix
-    // computed in compute_restricted; otherwise from the usual MSE·(X'X)⁻¹.
+// --- Standard errors / t / p for each beta ---
+// For the restricted fit these come from the constrained covariance matrix
+// computed in compute_restricted; otherwise from the usual MSE·(X'X)⁻¹.
 pub(super) fn compute_beta_tests(
     restricted: Option<&Restricted>,
     fit: &OlsFit,

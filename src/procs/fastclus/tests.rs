@@ -35,8 +35,8 @@ fn parse_fastclus(src: &str) -> Result<FastclusAst> {
 
 #[test]
 fn parse_minimal() {
-    let ast = parse_fastclus("proc fastclus data=a maxclusters=2 out=b maxiter=20; var x; run;")
-        .unwrap();
+    let ast =
+        parse_fastclus("proc fastclus data=a maxclusters=2 out=b maxiter=20; var x; run;").unwrap();
     assert_eq!(ast.maxclusters, 2);
     assert_eq!(ast.maxiter, 20);
     assert_eq!(ast.out.as_ref().unwrap().name, "b");
@@ -92,8 +92,14 @@ fn execute_writes_out_with_cluster() {
     };
     write_dataset(&mut session, "PTS", ds);
     let ast = FastclusAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "PTS".into() }),
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "CL".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "PTS".into(),
+        }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CL".into(),
+        }),
         maxclusters: 2,
         maxiter: 20,
         converge: 0.02,

@@ -2,7 +2,11 @@ use super::*;
 
 impl Compiler<'_> {
     /// Compile un statement `SET` (bras `DsStmt::Set` de `walk_stmt`).
-    pub(super) fn compile_set_stmt(&mut self, specs: &[DatasetSpec], options: &SetOptions) -> Result<()> {
+    pub(super) fn compile_set_stmt(
+        &mut self,
+        specs: &[DatasetSpec],
+        options: &SetOptions,
+    ) -> Result<()> {
         if self.seen_set {
             return Err(SasError::runtime(
                 "Multiple SET statements are not yet implemented.",
@@ -80,8 +84,7 @@ impl Compiler<'_> {
         transaction: &DatasetRef,
         key_vars: &[String],
     ) -> Result<()> {
-        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
-        {
+        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some() {
             return Err(SasError::runtime(
                 "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
             ));
@@ -89,8 +92,7 @@ impl Compiler<'_> {
         // Le maître entre au PDV en premier (ordre de référence), puis
         // la transaction (ses variables nouvelles s'ajoutent).
         let master_ds = self.materialize_input(master, &DatasetOptions::default())?;
-        let transaction_ds =
-            self.materialize_input(transaction, &DatasetOptions::default())?;
+        let transaction_ds = self.materialize_input(transaction, &DatasetOptions::default())?;
         if let Some(w) = master_where {
             self.validate_where_vars(w, &master.display())?;
         }
@@ -112,8 +114,7 @@ impl Compiler<'_> {
         point: &Option<String>,
         nobs: &Option<String>,
     ) -> Result<()> {
-        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some()
-        {
+        if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some() {
             return Err(SasError::runtime(
                 "Only one SET, MERGE, UPDATE, or MODIFY statement is allowed per DATA step.",
             ));
@@ -256,8 +257,7 @@ impl Compiler<'_> {
         // Validation des options : KEEP=/DROP=/RENAME= référencent les noms
         // D'ORIGINE de l'input (règle SAS : KEEP/DROP s'appliquent AVANT
         // RENAME). Un nom absent de l'input → même erreur que l'existant.
-        let input_names: HashSet<String> =
-            ds.vars.iter().map(|v| v.name.to_uppercase()).collect();
+        let input_names: HashSet<String> = ds.vars.iter().map(|v| v.name.to_uppercase()).collect();
         for name in opts
             .keep
             .iter()
@@ -293,9 +293,7 @@ impl Compiler<'_> {
             let upper = meta.name.to_uppercase();
             // KEEP=/DROP= filtrent quelles variables d'input entrent au PDV
             // (une variable renommée mais non gardée est ignorée).
-            if keep_set.as_ref().is_some_and(|k| !k.contains(&upper))
-                || drop_set.contains(&upper)
-            {
+            if keep_set.as_ref().is_some_and(|k| !k.contains(&upper)) || drop_set.contains(&upper) {
                 continue;
             }
             // RENAME= : la variable entre au PDV sous le NOUVEAU nom

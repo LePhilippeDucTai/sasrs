@@ -27,26 +27,25 @@ use crate::procs::common::{chisq_sf, decode_column, probnorm};
 use crate::session::Session;
 use crate::stat::invert_matrix;
 use crate::token::TokenKind;
-use crate::value::{format_best, VarType, Value};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 
-
-mod parse;
-mod design;
 mod binary;
-mod report;
-mod output;
+mod design;
 mod ordinal;
 mod ordinal_report;
+mod output;
+mod parse;
+mod report;
 
 pub use parse::parse;
 
-use design::*;
 use binary::*;
-use report::*;
-use output::*;
+use design::*;
 use ordinal::*;
 use ordinal_report::*;
+use output::*;
+use report::*;
 
 /// Link function for the (binary) logistic model. `Logit` is the default and
 /// reproduces the canonical-link IRLS exactly; the other two branch only where
@@ -81,7 +80,6 @@ impl Link {
             Link::Cloglog => (eta - eta.exp()).exp(),
         }
     }
-
 }
 
 // ───────────────────────── AST ─────────────────────────
@@ -126,13 +124,11 @@ fn fmt4(v: f64) -> String {
 
 use crate::procs::common::fmt_p_num as fmt_p_opt;
 
-
 use crate::procs::common::centered;
 
 // ───────────────────────── Value → display string ─────────────────────────
 
 use crate::procs::common::value_label;
-
 
 /// Compare a Value against an event string. Returns true if they match.
 /// For numeric values, try parsing the event string as f64.
@@ -169,9 +165,10 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     // ── 1. Guards ──────────────────────────────────────────────────────────
-    let model = ast.model.as_ref().ok_or_else(|| {
-        SasError::runtime("MODEL statement required")
-    })?;
+    let model = ast
+        .model
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("MODEL statement required"))?;
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data_options.input, session)?;
@@ -191,9 +188,7 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
         ds.vars
             .iter()
             .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
-            })
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
     };
 
     let resp_idx = find_col(resp_name)?;
@@ -241,8 +236,8 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
             ));
         }
         return execute_ordinal(
-            ast, session, model, &ds, &in_libref, &in_table, resp_name, &resp_col,
-            &pred_cols, &freq_col, &levels, &design, n_read,
+            ast, session, model, &ds, &in_libref, &in_table, resp_name, &resp_col, &pred_cols,
+            &freq_col, &levels, &design, n_read,
         );
     }
 
@@ -269,10 +264,9 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     let n_obs = y_vec.len();
 
     // ── 5. Manual NOTE ────────────────────────────────────────────────────
-    session.log.note(&format!(
-        "There were {} observations used.",
-        n_total as i64
-    ));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n_total as i64));
 
     if n_obs <= nb_cols + 1 {
         return Err(SasError::runtime(
@@ -355,7 +349,15 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     // ── Listing (remaining sections) ─────────────────────────────────────
     if !model.noprint {
         print_convergence_status(session, converged);
-        print_model_fit_statistics(session, aic_null, aic, sc_null, sc, neg2log_l_null, neg2log_l);
+        print_model_fit_statistics(
+            session,
+            aic_null,
+            aic,
+            sc_null,
+            sc,
+            neg2log_l_null,
+            neg2log_l,
+        );
         print_global_tests(
             session,
             nb_cols,

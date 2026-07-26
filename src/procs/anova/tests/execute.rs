@@ -85,7 +85,10 @@ fn test_execute_means() {
     let listing = session.listing.into_string();
 
     // Should show class level in the means table
-    assert!(listing.contains("Level of sex") || listing.contains("sex"), "{listing}");
+    assert!(
+        listing.contains("Level of sex") || listing.contains("sex"),
+        "{listing}"
+    );
     assert!(listing.contains('F'), "{listing}");
     assert!(listing.contains('M'), "{listing}");
 }

@@ -34,27 +34,26 @@ use crate::stat::{invert_matrix, student_t_cdf};
 use crate::token::TokenKind;
 use crate::value::Value;
 
-
 use crate::procs::lincom::build_design;
 
-mod parse;
-mod linalg;
 mod fit;
+mod general;
+mod general_report;
 mod legacy;
 mod legacy_report;
-mod general;
+mod linalg;
+mod parse;
 mod plan;
-mod general_report;
 
 pub use parse::parse;
 
-use linalg::*;
 use fit::*;
+use general::*;
+use general_report::*;
 use legacy::*;
 use legacy_report::*;
-use general::*;
+use linalg::*;
 use plan::*;
-use general_report::*;
 
 // ───────────────────────── AST ─────────────────────────
 

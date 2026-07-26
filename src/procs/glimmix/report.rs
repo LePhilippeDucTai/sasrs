@@ -2,7 +2,6 @@ use super::*;
 
 // ───────────────────────── Fixed-effects design ─────────────────────────
 
-
 // ───────────────────────── Formatting helpers ─────────────────────────
 
 pub(super) fn fmt4(v: f64) -> String {
@@ -65,7 +64,10 @@ pub(super) fn print_model_information(
             vec!["Variance Function".into(), "Default".into()],
         ];
         if laplace {
-            rows.push(vec!["Estimation Technique".into(), "Maximum Likelihood".into()]);
+            rows.push(vec![
+                "Estimation Technique".into(),
+                "Maximum Likelihood".into(),
+            ]);
             rows.push(vec!["Likelihood Approximation".into(), "Laplace".into()]);
         } else {
             rows.push(vec!["Estimation Technique".into(), "Residual PL".into()]);
@@ -89,11 +91,7 @@ pub(super) fn print_class_level_information(
     session.listing.blank();
     let headers = vec!["Class".into(), "Levels".into(), "Values".into()];
     let aligns = vec![Align::Left, Align::Right, Align::Left];
-    let values_str = levels
-        .iter()
-        .map(value_label)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let values_str = levels.iter().map(value_label).collect::<Vec<_>>().join(" ");
     let rows = vec![vec![
         subject.clone().unwrap_or_default(),
         n_subjects.to_string(),
@@ -274,7 +272,11 @@ pub(super) fn print_fit_statistics(
         if laplace {
             // True-ML fit statistics: -2 Log Likelihood plus information criteria.
             // Number of estimated parameters = p (β) + 1 (σ²_u) [+1 σ²_e Normal].
-            let n_cov = if model.dist == Distribution::Normal { 2.0 } else { 1.0 };
+            let n_cov = if model.dist == Distribution::Normal {
+                2.0
+            } else {
+                1.0
+            };
             let n_parm = p as f64 + n_cov;
             let neg2 = fit.neg2;
             let aic = neg2 + 2.0 * n_parm;
@@ -291,10 +293,7 @@ pub(super) fn print_fit_statistics(
             rows.push(vec!["BIC  (smaller is better)".into(), fmt4(bic)]);
         } else {
             if has_random {
-                rows.push(vec![
-                    "-2 Res Log Pseudo-Likelihood".into(),
-                    fmt4(fit.neg2),
-                ]);
+                rows.push(vec!["-2 Res Log Pseudo-Likelihood".into(), fmt4(fit.neg2)]);
             }
             rows.push(vec!["Generalized Chi-Square".into(), fmt4(gen_chisq)]);
             rows.push(vec![

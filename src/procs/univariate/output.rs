@@ -21,12 +21,7 @@ pub(super) fn emit_by_heading(session: &mut Session, by_names: &[String], by_key
 /// Compute one OUTPUT statistic for a single variable over the group's
 /// non-missing values `xs` (sorted in `sorted`), the missing count, and the
 /// total row count. Returns `None` (→ SAS missing) when undefined.
-pub(super) fn output_stat(
-    stat: &str,
-    xs: &[f64],
-    sorted: &[f64],
-    n_missing: usize,
-) -> Option<f64> {
+pub(super) fn output_stat(stat: &str, xs: &[f64], sorted: &[f64], n_missing: usize) -> Option<f64> {
     let n = xs.len();
     let mean = if n > 0 {
         Some(xs.iter().sum::<f64>() / n as f64)
@@ -144,7 +139,11 @@ pub(super) fn write_output(
             }
             let mut sorted = xs.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            per_var.push(VarStats { xs, sorted, n_missing });
+            per_var.push(VarStats {
+                xs,
+                sorted,
+                n_missing,
+            });
         }
         per_group.push(per_var);
     }

@@ -3,12 +3,10 @@
 
 use super::*;
 
-
 mod types;
 
 pub use types::MacroDef;
 pub use types::MacroParam;
-
 
 impl MacroEngine {
     /// Profondeur maximale d'invocation de macro (garde anti-récursion).
@@ -22,7 +20,12 @@ impl MacroEngine {
     /// Enregistre la définition et n'émet RIEN. Rend l'index après le `;` du
     /// `%mend` (un `\n` final juste après est préservé pour la numérotation),
     /// ou `None` si la syntaxe ne tient pas (le `%` est alors laissé brut).
-    pub(super) fn consume_macro_def(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_macro_def(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%macro".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -103,20 +106,17 @@ impl MacroEngine {
             out.push('\n');
             j += 1;
         }
-        self.macros.insert(
-            name.to_uppercase(),
-            MacroDef {
-                name,
-                params,
-                body,
-            },
-        );
+        self.macros
+            .insert(name.to_uppercase(), MacroDef { name, params, body });
         Some(j)
     }
 
     /// Parse une liste de paramètres `(p1, p2, kw=def, ...)` à partir de `(`.
     /// Rend `(params, index après `)`)`. `None` si pas de `)` fermant.
-    pub(super) fn parse_param_list(chars: &[char], lparen: usize) -> Option<(Vec<MacroParam>, usize)> {
+    pub(super) fn parse_param_list(
+        chars: &[char],
+        lparen: usize,
+    ) -> Option<(Vec<MacroParam>, usize)> {
         let mut j = lparen + 1;
         let mut params = Vec::new();
         loop {
@@ -171,7 +171,11 @@ impl MacroEngine {
         is_local: bool,
         out: &mut String,
     ) -> Option<usize> {
-        let kwlen = if is_local { "%local".len() } else { "%global".len() };
+        let kwlen = if is_local {
+            "%local".len()
+        } else {
+            "%global".len()
+        };
         let mut j = i + kwlen;
         let mut names = Vec::new();
         loop {
@@ -216,4 +220,3 @@ impl MacroEngine {
         Some(j)
     }
 }
-

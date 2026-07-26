@@ -23,11 +23,9 @@ use quoting::MaskSet;
 pub use define::{MacroDef, MacroParam};
 pub use error::MacroError;
 
-
 mod segmenter;
 
 pub use segmenter::RawSegmenter;
-
 
 pub trait TextStage {
     /// Transform submitted source text before lexing.
@@ -333,10 +331,7 @@ impl MacroEngine {
     /// M19.3 — étiquette de macro courante pour MPRINT/MLOGIC : nom de la macro
     /// la plus interne en cours d'expansion, ou chaîne vide en code ouvert.
     fn current_macro_label(&self) -> String {
-        self.macro_stack
-            .last()
-            .cloned()
-            .unwrap_or_default()
+        self.macro_stack.last().cloned().unwrap_or_default()
     }
 
     /// Expanse un segment de "open code" (texte SAS hors corps de `%macro`).

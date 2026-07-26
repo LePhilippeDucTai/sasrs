@@ -26,14 +26,8 @@ pub(super) fn write_out_dataset(
         // Columns: _TYPE_, _OBS_, <common vars matching type>
         let n_rows = out_rows.len();
 
-        let type_col: StringChunked = out_rows
-            .iter()
-            .map(|r| Some(r.row_type))
-            .collect();
-        let obs_col: Float64Chunked = out_rows
-            .iter()
-            .map(|r| Some(r.obs as f64))
-            .collect();
+        let type_col: StringChunked = out_rows.iter().map(|r| Some(r.row_type)).collect();
+        let obs_col: Float64Chunked = out_rows.iter().map(|r| Some(r.obs as f64)).collect();
 
         let mut columns: Vec<Column> = vec![
             Series::new("_TYPE_".into(), type_col).into(),
@@ -70,9 +64,7 @@ pub(super) fn write_out_dataset(
                             })
                         })
                         .collect();
-                    columns.push(
-                        Series::new(mv.name.as_str().into(), col_vals).into(),
-                    );
+                    columns.push(Series::new(mv.name.as_str().into(), col_vals).into());
                 }
                 VarType::Char => {
                     let col_vals: StringChunked = out_rows
@@ -84,9 +76,7 @@ pub(super) fn write_out_dataset(
                             })
                         })
                         .collect();
-                    columns.push(
-                        Series::new(mv.name.as_str().into(), col_vals).into(),
-                    );
+                    columns.push(Series::new(mv.name.as_str().into(), col_vals).into());
                 }
             }
             vars.push(VarMeta {
@@ -105,9 +95,7 @@ pub(super) fn write_out_dataset(
         out_provider.write(&out_name, &out_ds)?;
         session.log.note(&format!(
             "Output data set: {}.{} ({} observations).",
-            out_libref,
-            out_name,
-            n_rows
+            out_libref, out_name, n_rows
         ));
         session.last_dataset = Some(format!("{}.{}", out_libref, out_name));
     } else if out_rows.is_empty() {

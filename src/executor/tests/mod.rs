@@ -1,4 +1,4 @@
-use crate::{run, RunOptions};
+use crate::{RunOptions, run};
 
 fn run_det(src: &str) -> crate::RunOutcome {
     run(
@@ -17,11 +17,10 @@ fn run_det(src: &str) -> crate::RunOutcome {
 /// Construit une Session déterministe et exécute UN statement `ODS GRAPHICS`
 /// dessus, en renvoyant la Session pour inspection de `session.ods_graphics`.
 fn run_graphics_stmt(src: &str) -> crate::session::Session {
-    use crate::parser::global::parse_global;
     use crate::parser::StatementStream;
+    use crate::parser::global::parse_global;
     use crate::source::SourceFile;
-    let mut session =
-        crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+    let mut session = crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
     let sf = SourceFile::new(src);
     let mut ts = StatementStream::new(&sf).unwrap();
     let stmt = parse_global(&mut ts).unwrap();
@@ -33,11 +32,10 @@ fn run_graphics_stmt(src: &str) -> crate::session::Session {
 
 /// Exécute une suite de statements globaux sur une même session déterministe.
 fn run_globals(srcs: &[&str]) -> crate::session::Session {
-    use crate::parser::global::parse_global;
     use crate::parser::StatementStream;
+    use crate::parser::global::parse_global;
     use crate::source::SourceFile;
-    let mut session =
-        crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
+    let mut session = crate::session::Session::new(None, std::env::temp_dir(), true).unwrap();
     for src in srcs {
         let sf = SourceFile::new(*src);
         let mut ts = StatementStream::new(&sf).unwrap();
@@ -47,6 +45,6 @@ fn run_globals(srcs: &[&str]) -> crate::session::Session {
     session
 }
 
+mod call;
 mod end;
 mod options;
-mod call;

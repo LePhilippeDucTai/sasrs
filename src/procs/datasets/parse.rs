@@ -97,10 +97,7 @@ pub(super) fn parse_header_options(ts: &mut StatementStream) -> Result<(String, 
         if ts.peek().is_kw("lib") || ts.peek().is_kw("library") {
             ts.next(); // consume "lib" / "library"
             if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after LIB",
-                    ts.peek().span,
-                ));
+                return Err(SasError::parse("expected '=' after LIB", ts.peek().span));
             }
             ts.next(); // consume `=`
             let ident_tok = ts.peek().clone();
@@ -239,7 +236,11 @@ pub(super) fn parse_copy_stmt(ts: &mut StatementStream) -> Result<DsOp> {
             ts.next();
         }
     }
-    Ok(DsOp::Copy { out, r#in: in_lib, select })
+    Ok(DsOp::Copy {
+        out,
+        r#in: in_lib,
+        select,
+    })
 }
 
 /// `exchange a=b ... ;` — one `DsOp::Exchange` per pair, appended to `ops`.
@@ -329,7 +330,11 @@ pub(super) fn parse_modify_stmt(ts: &mut StatementStream) -> Result<DsOp> {
             break;
         }
     }
-    Ok(DsOp::Modify { member: member.to_uppercase(), renames, labels })
+    Ok(DsOp::Modify {
+        member: member.to_uppercase(),
+        renames,
+        labels,
+    })
 }
 
 /// MODIFY sub-statement `rename old=new ... ;`.

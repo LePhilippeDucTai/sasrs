@@ -200,10 +200,7 @@ fn datalines4_terminator() {
     else {
         unreachable!()
     };
-    assert_eq!(
-        v,
-        &vec!["a;b".to_string(), "; not the end".to_string()]
-    );
+    assert_eq!(v, &vec!["a;b".to_string(), "; not the end".to_string()]);
     assert!(k.contains(&TokenKind::Ident("run".into())));
 }
 
@@ -211,9 +208,10 @@ fn datalines4_terminator() {
 fn cards_keyword_also_captures() {
     let src = "cards;\nx\n;\n";
     let k = kinds(src);
-    assert!(k
-        .iter()
-        .any(|t| matches!(t, TokenKind::DataLines(v) if v == &vec!["x".to_string()])));
+    assert!(
+        k.iter()
+            .any(|t| matches!(t, TokenKind::DataLines(v) if v == &vec!["x".to_string()]))
+    );
 }
 
 #[test]

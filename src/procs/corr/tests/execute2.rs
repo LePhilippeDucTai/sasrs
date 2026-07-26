@@ -11,7 +11,10 @@ fn execute_hoeffding_block() {
         "y" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
@@ -19,12 +22,18 @@ fn execute_hoeffding_block() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Hoeffding Dependence Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Hoeffding Dependence Coefficients"),
+        "{listing}"
+    );
     assert!(listing.contains("Prob > D"), "{listing}");
     // Off-diagonal D = 1.00000 (perfect monotone).
     assert!(listing.contains("1.00000"), "{listing}");
     // No Pearson block when only hoeffding requested.
-    assert!(!listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    assert!(
+        !listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
 }
 
 #[test]
@@ -49,7 +58,10 @@ fn execute_weighted_spearman_block() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Spearman Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Spearman Correlation Coefficients"),
+        "{listing}"
+    );
     // Weighted r_s = 0.57895 (matches replicated Spearman).
     assert!(listing.contains("0.57895"), "{listing}");
 }
@@ -148,7 +160,12 @@ fn weighted_equals_unweighted_when_w1() {
     let (ru, _) = pearson(&x, &y);
     let (rw, nw) = pearson_weighted(&x, &y, &w);
     assert_eq!(nw, 4);
-    assert!((ru.unwrap() - rw.unwrap()).abs() < 1e-12, "{:?} {:?}", ru, rw);
+    assert!(
+        (ru.unwrap() - rw.unwrap()).abs() < 1e-12,
+        "{:?} {:?}",
+        ru,
+        rw
+    );
 }
 
 #[test]
@@ -156,7 +173,12 @@ fn weighted_excludes_nonpositive_and_missing() {
     // Row with w=0 and row with missing w are dropped → n=2.
     let x = vnum(&[1.0, 2.0, 3.0, 4.0]);
     let y = vnum(&[2.0, 4.0, 6.0, 8.0]);
-    let w = vec![Value::Num(2.0), Value::Num(0.0), Value::missing(), Value::Num(3.0)];
+    let w = vec![
+        Value::Num(2.0),
+        Value::Num(0.0),
+        Value::missing(),
+        Value::Num(3.0),
+    ];
     let (r, n) = pearson_weighted(&x, &y, &w);
     assert_eq!(n, 2);
     // Remaining pairs perfectly correlated → r = 1.
@@ -200,7 +222,10 @@ fn weighted_spearman_equals_replicated() {
         "weighted={rw:?} replicated={rr:?}"
     );
     // And the shared value (hand: 0.57894736842…).
-    assert!((rw.unwrap() - 0.578_947_368_421_052_6).abs() < 1e-12, "rw={rw:?}");
+    assert!(
+        (rw.unwrap() - 0.578_947_368_421_052_6).abs() < 1e-12,
+        "rw={rw:?}"
+    );
 }
 
 #[test]
@@ -302,12 +327,12 @@ fn hoeffding_matches_sas_class_oracle() {
     // sashelp.class height × weight (19 obs) → SAS PROC CORR HOEFFDING
     // reports D = 0.31609 (exact to 5 decimals).
     let h = vnum(&[
-        69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5,
-        72.0, 64.8, 67.0, 57.5, 66.5,
+        69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5, 72.0,
+        64.8, 67.0, 57.5, 66.5,
     ]);
     let w = vnum(&[
-        112.5, 84.0, 98.0, 102.5, 102.5, 83.0, 84.5, 112.5, 84.0, 99.5, 50.5, 90.0, 77.0,
-        112.0, 150.0, 128.0, 133.0, 85.0, 112.0,
+        112.5, 84.0, 98.0, 102.5, 102.5, 83.0, 84.5, 112.5, 84.0, 99.5, 50.5, 90.0, 77.0, 112.0,
+        150.0, 128.0, 133.0, 85.0, 112.0,
     ]);
     let (d, n) = hoeffding_d(&h, &w);
     assert_eq!(n, 19);

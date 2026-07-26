@@ -36,7 +36,9 @@ fn set_brings_input_vars_in_dataset_order() {
 #[test]
 fn set_missing_table_errors() {
     let mut s = session();
-    let err = compile_src("data o; set nosuch; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; set nosuch; run;", &mut s)
+        .err()
+        .unwrap();
     assert_eq!(err.to_string(), "File WORK.NOSUCH.DATA does not exist.");
 }
 
@@ -177,7 +179,9 @@ fn keep_drop_interaction() {
 #[test]
 fn keep_unknown_variable_errors() {
     let mut s = session();
-    let err = compile_src("data o; x = 1; keep nosuch; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; x = 1; keep nosuch; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(
         err.to_string()
             .contains("in the DROP, KEEP, or RENAME list has never been referenced"),
@@ -197,18 +201,16 @@ fn second_set_errors_m1() {
     let mut s = session();
     write_class(&s, "a");
     write_class(&s, "b");
-    let err = compile_src("data o; set a; set b; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; set a; set b; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("not yet implemented"));
 }
 
 #[test]
 fn explicit_output_detected_inside_if() {
     let mut s = session();
-    let prog = compile_src(
-        "data o; x = 1; if x then do; output; end; run;",
-        &mut s,
-    )
-    .unwrap();
+    let prog = compile_src("data o; x = 1; if x then do; output; end; run;", &mut s).unwrap();
     assert!(prog.has_explicit_output);
 }
 
@@ -376,7 +378,9 @@ fn length_after_reference_is_silent_for_num_and_same_char_length() {
 #[test]
 fn length_out_of_range_errors() {
     let mut s = session();
-    let err = compile_src("data o; length n 9; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; length n 9; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("out of range (3-8)"), "got: {err}");
     let err = compile_src("data o; length c $ 40000; run;", &mut s)
         .err()
@@ -385,7 +389,9 @@ fn length_out_of_range_errors() {
         err.to_string().contains("out of range (1-32767)"),
         "got: {err}"
     );
-    let err = compile_src("data o; length n 2; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; length n 2; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("out of range"), "got: {err}");
 }
 

@@ -51,10 +51,9 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column};
 use crate::session::Session;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::*;
 use std::cmp::Ordering;
-
 
 mod naming;
 
@@ -176,9 +175,7 @@ pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
     } else {
         (0..ds.vars.len())
             .filter(|&i| {
-                ds.vars[i].ty == VarType::Num
-                    && !by_cols.contains(&i)
-                    && Some(i) != id_col
+                ds.vars[i].ty == VarType::Num && !by_cols.contains(&i) && Some(i) != id_col
             })
             .collect()
     };
@@ -308,15 +305,15 @@ pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
         let meta = &ds.vars[col_idx];
         let series = match meta.ty {
             VarType::Num => {
-                let vals: Vec<Option<f64>> =
-                    out_rows.iter().map(|r| value_to_num(&r.by_key[bi])).collect();
+                let vals: Vec<Option<f64>> = out_rows
+                    .iter()
+                    .map(|r| value_to_num(&r.by_key[bi]))
+                    .collect();
                 Series::new(meta.name.as_str().into(), vals)
             }
             VarType::Char => {
-                let vals: Vec<Option<String>> = out_rows
-                    .iter()
-                    .map(|r| char_cell(&r.by_key[bi]))
-                    .collect();
+                let vals: Vec<Option<String>> =
+                    out_rows.iter().map(|r| char_cell(&r.by_key[bi])).collect();
                 Series::new(meta.name.as_str().into(), vals)
             }
         };
@@ -371,9 +368,10 @@ pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
     let out_ds = SasDataset { df, vars };
 
     // out= is required for M7.
-    let out_ref = ast.out.clone().ok_or_else(|| {
-        SasError::runtime("The OUT= option is required for PROC TRANSPOSE.")
-    })?;
+    let out_ref = ast
+        .out
+        .clone()
+        .ok_or_else(|| SasError::runtime("The OUT= option is required for PROC TRANSPOSE."))?;
     let out_libref = out_ref.libref_or_work();
     let out_table = out_ref.name.to_uppercase();
     let display = format!("{out_libref}.{out_table}");

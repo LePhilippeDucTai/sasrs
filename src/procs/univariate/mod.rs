@@ -57,7 +57,7 @@ use crate::procs::common::{
 
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::*;
 use std::cmp::Ordering;
 
@@ -330,9 +330,9 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         if !session.ods_graphics.enabled {
             // ODS GRAPHICS off: rendering stays deferred (byte-identical to the
             // pre-M29.3 behaviour — a single NOTE for the whole PROC step).
-            session.log.note(
-                "HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).",
-            );
+            session
+                .log
+                .note("HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).");
         } else {
             // ODS GRAPHICS on: wire each plot to the image infrastructure.
             for plot in &ast.plots {
@@ -362,4 +362,3 @@ mod plot_graphics;
 
 #[cfg(test)]
 mod tests;
-

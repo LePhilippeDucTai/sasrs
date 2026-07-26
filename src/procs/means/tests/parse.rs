@@ -19,8 +19,7 @@ fn parse_noprint() {
 
 #[test]
 fn parse_class_and_var() {
-    let ast =
-        parse_means("proc means data=a; class g h; var x y; run;").unwrap();
+    let ast = parse_means("proc means data=a; class g h; var x y; run;").unwrap();
     assert_eq!(ast.class, vec!["g", "h"]);
     assert_eq!(ast.var, vec!["x", "y"]);
 }
@@ -36,7 +35,11 @@ fn parse_output_specs() {
     assert_eq!(
         out.specs,
         vec![
-            ("mean".to_string(), "height".to_string(), "avg_h".to_string()),
+            (
+                "mean".to_string(),
+                "height".to_string(),
+                "avg_h".to_string()
+            ),
             ("n".to_string(), "height".to_string(), "n_h".to_string()),
         ]
     );
@@ -54,10 +57,8 @@ fn parse_unknown_option_errors() {
 
 #[test]
 fn parse_ways_and_types() {
-    let ast = parse_means(
-        "proc means data=a; class g h; ways 0 1 2; types (g) (g*h) h; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_means("proc means data=a; class g h; ways 0 1 2; types (g) (g*h) h; run;").unwrap();
     assert_eq!(ast.ways, vec![0, 1, 2]);
     assert_eq!(
         ast.types,
@@ -137,8 +138,8 @@ fn compute_percentiles_def5_hand_oracle() {
     // Definition 5: np=19*p, j=floor(np), g=np-j;
     //   g==0 → (x[j]+x[j+1])/2 ; else → x[j+1]  (1-indexed)
     let xs = vec![
-        69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5,
-        72.0, 64.8, 67.0, 57.5, 66.5,
+        69.0, 56.5, 65.3, 62.8, 63.5, 57.3, 59.8, 62.5, 62.5, 59.0, 51.3, 64.3, 56.3, 66.5, 72.0,
+        64.8, 67.0, 57.5, 66.5,
     ];
     // P25: np=4.75, j=4, g=.75 → x[5]=57.5
     assert_eq!(compute("p25", &xs, 0, 0.05), Value::Num(57.5));
@@ -311,16 +312,13 @@ fn compute_weighted_n1_std_missing() {
 #[test]
 fn percentile_keywords_recognized() {
     for k in [
-        "p1", "p5", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80",
-        "p90", "p95", "p99", "q1", "q3", "qrange",
+        "p1", "p5", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80", "p90",
+        "p95", "p99", "q1", "q3", "qrange",
     ] {
         assert!(is_stat_keyword(k), "{k} should be a stat keyword");
     }
     let ast = parse_means("proc means data=a p25 median p75 p95 qrange; run;").unwrap();
-    assert_eq!(
-        ast.stats,
-        vec!["p25", "median", "p75", "p95", "qrange"]
-    );
+    assert_eq!(ast.stats, vec!["p25", "median", "p75", "p95", "qrange"]);
 }
 
 #[test]
@@ -331,7 +329,10 @@ fn percentile_report_headers() {
     assert_eq!(percentile_header("q3").as_deref(), Some("75th Pctl"));
     assert_eq!(percentile_header("p50").as_deref(), Some("Median"));
     assert_eq!(percentile_header("median").as_deref(), Some("Median"));
-    assert_eq!(percentile_header("qrange").as_deref(), Some("Quartile Range"));
+    assert_eq!(
+        percentile_header("qrange").as_deref(),
+        Some("Quartile Range")
+    );
     assert_eq!(percentile_header("mean"), None);
 }
 

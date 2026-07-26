@@ -106,8 +106,8 @@ pub(super) fn ods_summary_stat_colname(stat: &str) -> String {
         "lclm" => "LowerCLMean".to_string(),
         "uclm" => "UpperCLMean".to_string(),
         // Percentile keywords (M33.3): canonical PNN / QRANGE column names.
-        p @ ("p1" | "p5" | "p10" | "p20" | "p25" | "p30" | "p40" | "p50" | "p60" | "p70" | "p75"
-        | "p80" | "p90" | "p95" | "p99") => p.to_uppercase(),
+        p @ ("p1" | "p5" | "p10" | "p20" | "p25" | "p30" | "p40" | "p50" | "p60" | "p70"
+        | "p75" | "p80" | "p90" | "p95" | "p99") => p.to_uppercase(),
         "q1" => "P25".to_string(),
         "q3" => "P75".to_string(),
         "qrange" => "QRange".to_string(),

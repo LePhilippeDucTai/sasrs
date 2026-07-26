@@ -36,11 +36,7 @@ impl MacroEngine {
         let format: Option<String> = if chars.get(k) == Some(&',') {
             let rest: String = chars[k + 1..].iter().collect();
             let f = rest.trim().to_string();
-            if f.is_empty() {
-                None
-            } else {
-                Some(f)
-            }
+            if f.is_empty() { None } else { Some(f) }
         } else {
             None
         };
@@ -64,12 +60,13 @@ impl MacroEngine {
         let mut ctx = crate::datastep::eval::EvalCtx::default();
         // Délégation à la bibliothèque COMPLÈTE de fonctions DATA-step (plus de
         // liste blanche, M35.1). Fonction inconnue → None → note d'erreur propre.
-        let result = crate::datastep::functions::call(&upper, &args, &mut ctx).ok_or_else(|| {
-            MacroError::new(format!(
-                "ERROR: Function {} not found or not supported by %SYSFUNC",
-                name
-            ))
-        })?;
+        let result =
+            crate::datastep::functions::call(&upper, &args, &mut ctx).ok_or_else(|| {
+                MacroError::new(format!(
+                    "ERROR: Function {} not found or not supported by %SYSFUNC",
+                    name
+                ))
+            })?;
         match format {
             // Format présent : on l'applique via le MÊME chemin que PUT (module
             // formats), puis on rogne les blancs (SAS gauche-aligne / retire les

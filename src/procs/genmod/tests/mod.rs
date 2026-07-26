@@ -40,7 +40,12 @@ fn make_poisson_session() -> (Session, GenmodAst) {
         df: frame,
         vars: vec![num_meta("y"), num_meta("x")],
     };
-    session.libs.get("WORK").unwrap().write("POIS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("POIS", &ds)
+        .unwrap();
 
     let ast = GenmodAst {
         data_options: GenmodDataOptions {
@@ -87,7 +92,12 @@ fn make_normal_session() -> (Session, GenmodAst) {
         df: frame,
         vars: vec![num_meta("y"), num_meta("x")],
     };
-    session.libs.get("WORK").unwrap().write("POIS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("POIS", &ds)
+        .unwrap();
 
     let ast = GenmodAst {
         data_options: GenmodDataOptions {
@@ -179,5 +189,5 @@ fn gamma_intercept_estimate(link: LinkFunction) -> f64 {
     toks[2].parse::<f64>().expect("estimate parse")
 }
 
-mod parse;
 mod class;
+mod parse;

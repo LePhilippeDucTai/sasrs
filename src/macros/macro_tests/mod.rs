@@ -45,7 +45,7 @@ fn write_file(dir: &std::path::Path, name: &str, content: &str) -> std::path::Pa
     path
 }
 
+mod include;
 mod segmenter;
 mod sysfunc;
-mod include;
 mod window;

@@ -97,14 +97,7 @@ fn power_binds_tighter_than_unary_minus() {
 fn not_binds_tighter_than_comparison() {
     // not x = 1  ≡  (not x) = 1.
     let e = ok("not x = 1");
-    assert_eq!(
-        e,
-        bin(
-            BinaryOp::Eq,
-            un(UnaryOp::Not, var("x")),
-            num(1.0)
-        )
-    );
+    assert_eq!(e, bin(BinaryOp::Eq, un(UnaryOp::Not, var("x")), num(1.0)));
 }
 
 #[test]
@@ -113,13 +106,21 @@ fn arithmetic_precedence() {
     let e = ok("1 + 2 * 3");
     assert_eq!(
         e,
-        bin(BinaryOp::Add, num(1.0), bin(BinaryOp::Mul, num(2.0), num(3.0)))
+        bin(
+            BinaryOp::Add,
+            num(1.0),
+            bin(BinaryOp::Mul, num(2.0), num(3.0))
+        )
     );
     // 2 * 3 + 1  ≡  (2*3) + 1.
     let e = ok("2 * 3 + 1");
     assert_eq!(
         e,
-        bin(BinaryOp::Add, bin(BinaryOp::Mul, num(2.0), num(3.0)), num(1.0))
+        bin(
+            BinaryOp::Add,
+            bin(BinaryOp::Mul, num(2.0), num(3.0)),
+            num(1.0)
+        )
     );
 }
 
@@ -129,7 +130,11 @@ fn add_sub_left_associative() {
     let e = ok("10 - 3 - 2");
     assert_eq!(
         e,
-        bin(BinaryOp::Sub, bin(BinaryOp::Sub, num(10.0), num(3.0)), num(2.0))
+        bin(
+            BinaryOp::Sub,
+            bin(BinaryOp::Sub, num(10.0), num(3.0)),
+            num(2.0)
+        )
     );
 }
 
@@ -191,7 +196,11 @@ fn parentheses_override_precedence() {
     let e = ok("(1 + 2) * 3");
     assert_eq!(
         e,
-        bin(BinaryOp::Mul, bin(BinaryOp::Add, num(1.0), num(2.0)), num(3.0))
+        bin(
+            BinaryOp::Mul,
+            bin(BinaryOp::Add, num(1.0), num(2.0)),
+            num(3.0)
+        )
     );
 }
 
@@ -205,19 +214,13 @@ fn date_literal_epoch() {
 #[test]
 fn time_literal_seconds_from_midnight() {
     assert_eq!(ok("'12:30't"), num(12.0 * 3600.0 + 30.0 * 60.0));
-    assert_eq!(
-        ok("'12:30:45't"),
-        num(12.0 * 3600.0 + 30.0 * 60.0 + 45.0)
-    );
+    assert_eq!(ok("'12:30:45't"), num(12.0 * 3600.0 + 30.0 * 60.0 + 45.0));
 }
 
 #[test]
 fn datetime_literal_seconds_from_1960() {
     // 1960-01-02 12:00:00 = 1 day + 12h.
-    assert_eq!(
-        ok("'02jan1960:12:00:00'dt"),
-        num(86400.0 + 12.0 * 3600.0)
-    );
+    assert_eq!(ok("'02jan1960:12:00:00'dt"), num(86400.0 + 12.0 * 3600.0));
     // Epoch itself.
     assert_eq!(ok("'01jan1960:00:00:00'dt"), num(0.0));
 }
@@ -340,10 +343,7 @@ fn in_operator_num_and_str() {
         e,
         Expr::In {
             expr: Box::new(var("sex")),
-            list: vec![
-                Expr::Str("M".to_string()),
-                Expr::Str("F".to_string())
-            ],
+            list: vec![Expr::Str("M".to_string()), Expr::Str("F".to_string())],
         }
     );
 }

@@ -20,10 +20,8 @@ fn parse_import_src(src: &str) -> Result<ImportAst> {
 
 #[test]
 fn parse_import_csv_minimal() {
-    let ast = parse_import_src(
-        "proc import datafile='/tmp/x.csv' out=work.myds dbms=csv; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_import_src("proc import datafile='/tmp/x.csv' out=work.myds dbms=csv; run;").unwrap();
     assert_eq!(ast.datafile, "/tmp/x.csv");
     assert_eq!(ast.out.name.to_uppercase(), "MYDS");
     assert_eq!(ast.dbms, ImportDbms::Csv);
@@ -33,29 +31,25 @@ fn parse_import_csv_minimal() {
 
 #[test]
 fn parse_import_tab_with_replace() {
-    let ast = parse_import_src(
-        "proc import datafile='data.txt' out=work.t dbms=TAB replace; run;",
-    )
-    .unwrap();
+    let ast = parse_import_src("proc import datafile='data.txt' out=work.t dbms=TAB replace; run;")
+        .unwrap();
     assert_eq!(ast.dbms, ImportDbms::Tab);
     assert!(ast.replace);
 }
 
 #[test]
 fn parse_import_getnames_no() {
-    let ast = parse_import_src(
-        "proc import datafile='x.csv' out=work.t dbms=csv; getnames=no; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_import_src("proc import datafile='x.csv' out=work.t dbms=csv; getnames=no; run;")
+            .unwrap();
     assert!(!ast.getnames);
 }
 
 #[test]
 fn parse_import_delimiter_in_body() {
-    let ast = parse_import_src(
-        "proc import datafile='x.txt' out=work.t dbms=dlm; delimiter='|'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_import_src("proc import datafile='x.txt' out=work.t dbms=dlm; delimiter='|'; run;")
+            .unwrap();
     assert_eq!(ast.dbms, ImportDbms::Dlm);
     assert_eq!(ast.delimiter, Some(b'|'));
 }
@@ -87,9 +81,7 @@ fn parse_import_missing_out_errors() {
 
 #[test]
 fn parse_import_xlsx_deferred_error() {
-    let result = parse_import_src(
-        "proc import datafile='x.xlsx' out=work.t dbms=xlsx; run;",
-    );
+    let result = parse_import_src("proc import datafile='x.xlsx' out=work.t dbms=xlsx; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
     assert!(
@@ -101,9 +93,7 @@ fn parse_import_xlsx_deferred_error() {
 
 #[test]
 fn parse_import_excel_deferred_error() {
-    let result = parse_import_src(
-        "proc import datafile='x.xlsx' out=work.t dbms=excel; run;",
-    );
+    let result = parse_import_src("proc import datafile='x.xlsx' out=work.t dbms=excel; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
     assert!(msg.contains("not yet implemented"), "msg: {msg}");
@@ -163,8 +153,7 @@ fn execute_import_csv_values_correct() {
     // Créer une session pointant le WORK vers un répertoire connu.
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     let ast = ImportAst {
         datafile: csv_path.to_string_lossy().into_owned(),
@@ -207,8 +196,7 @@ fn execute_import_tab_separated() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     let ast = ImportAst {
         datafile: tsv_path.to_string_lossy().into_owned(),
@@ -242,8 +230,7 @@ fn execute_import_dlm_pipe() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     let ast = ImportAst {
         datafile: path.to_string_lossy().into_owned(),
@@ -277,8 +264,7 @@ fn execute_import_getnames_no_produces_var_n() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir.clone()), PathBuf::from("."), true).unwrap();
 
     let ast = ImportAst {
         datafile: csv_path.to_string_lossy().into_owned(),
@@ -298,7 +284,12 @@ fn execute_import_getnames_no_produces_var_n() {
     let (ds, _) = provider.read("NOHEAD").unwrap();
     assert_eq!(ds.n_vars(), 2);
     // Les noms doivent être VAR1, VAR2
-    let names: Vec<&str> = ds.df.get_column_names().into_iter().map(|s| s.as_str()).collect();
+    let names: Vec<&str> = ds
+        .df
+        .get_column_names()
+        .into_iter()
+        .map(|s| s.as_str())
+        .collect();
     assert_eq!(names, vec!["VAR1", "VAR2"], "column names: {names:?}");
 }
 
@@ -310,8 +301,7 @@ fn execute_import_sets_last_dataset() {
 
     let work_dir = dir.path().join("work");
     std::fs::create_dir(&work_dir).unwrap();
-    let mut session =
-        Session::new(Some(work_dir), PathBuf::from("."), true).unwrap();
+    let mut session = Session::new(Some(work_dir), PathBuf::from("."), true).unwrap();
 
     let ast = ImportAst {
         datafile: csv_path.to_string_lossy().into_owned(),
@@ -354,7 +344,10 @@ fn execute_import_nonexistent_file_errors() {
 fn resolve_separator_csv() {
     let ast = ImportAst {
         datafile: String::new(),
-        out: DatasetRef { libref: None, name: "t".into() },
+        out: DatasetRef {
+            libref: None,
+            name: "t".into(),
+        },
         dbms: ImportDbms::Csv,
         replace: false,
         getnames: true,
@@ -368,7 +361,10 @@ fn resolve_separator_csv() {
 fn resolve_separator_tab() {
     let ast = ImportAst {
         datafile: String::new(),
-        out: DatasetRef { libref: None, name: "t".into() },
+        out: DatasetRef {
+            libref: None,
+            name: "t".into(),
+        },
         dbms: ImportDbms::Tab,
         replace: false,
         getnames: true,
@@ -382,7 +378,10 @@ fn resolve_separator_tab() {
 fn resolve_separator_dlm_default_space() {
     let ast = ImportAst {
         datafile: String::new(),
-        out: DatasetRef { libref: None, name: "t".into() },
+        out: DatasetRef {
+            libref: None,
+            name: "t".into(),
+        },
         dbms: ImportDbms::Dlm,
         replace: false,
         getnames: true,
@@ -396,7 +395,10 @@ fn resolve_separator_dlm_default_space() {
 fn resolve_separator_dlm_with_delimiter() {
     let ast = ImportAst {
         datafile: String::new(),
-        out: DatasetRef { libref: None, name: "t".into() },
+        out: DatasetRef {
+            libref: None,
+            name: "t".into(),
+        },
         dbms: ImportDbms::Dlm,
         replace: false,
         getnames: true,

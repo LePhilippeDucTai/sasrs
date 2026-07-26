@@ -7,8 +7,16 @@ fn test_one_sample_basic() {
     let r = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed);
     assert_eq!(r.n, 5);
     assert!((r.mean - 3.0).abs() < 1e-12);
-    assert!((r.std.unwrap() - 2.5_f64.sqrt()).abs() < 1e-9, "std={:?}", r.std);
-    assert!((r.se.unwrap() - 0.5_f64.sqrt()).abs() < 1e-9, "se={:?}", r.se);
+    assert!(
+        (r.std.unwrap() - 2.5_f64.sqrt()).abs() < 1e-9,
+        "std={:?}",
+        r.std
+    );
+    assert!(
+        (r.se.unwrap() - 0.5_f64.sqrt()).abs() < 1e-9,
+        "se={:?}",
+        r.se
+    );
     assert!((r.df - 4.0).abs() < 1e-12);
     let t = r.t.unwrap();
     assert!((t - 4.2426).abs() < 1e-4, "t={t}");
@@ -22,7 +30,9 @@ fn test_one_sided_p() {
     // Upper one-sided p = Pr(T>t) = p2/2 ≈ 0.0066314.
     // Lower one-sided p = Pr(T<t) = 1 - upper ≈ 0.9933686.
     let values = [1.0, 2.0, 3.0, 4.0, 5.0];
-    let two = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed).p.unwrap();
+    let two = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed)
+        .p
+        .unwrap();
     let up = one_sample(&values, 0.0, 0.05, TTestSides::Upper).p.unwrap();
     let lo = one_sample(&values, 0.0, 0.05, TTestSides::Lower).p.unwrap();
     assert!((two - 0.013263).abs() < 1e-4, "two={two}");
@@ -40,13 +50,29 @@ fn test_mean_ci() {
     // 95% CL Mean = [1.036757, 4.963243].
     let values = [1.0, 2.0, 3.0, 4.0, 5.0];
     let r = one_sample(&values, 0.0, 0.05, TTestSides::TwoTailed);
-    assert!((r.mean_lcl.unwrap() - 1.036757).abs() < 1e-4, "lcl={:?}", r.mean_lcl);
-    assert!((r.mean_ucl.unwrap() - 4.963243).abs() < 1e-4, "ucl={:?}", r.mean_ucl);
+    assert!(
+        (r.mean_lcl.unwrap() - 1.036757).abs() < 1e-4,
+        "lcl={:?}",
+        r.mean_lcl
+    );
+    assert!(
+        (r.mean_ucl.unwrap() - 4.963243).abs() < 1e-4,
+        "ucl={:?}",
+        r.mean_ucl
+    );
     // Std CL (chi-square) for s=1.581139, df=4:
     // chi2_{0.975,4}=11.143287, chi2_{0.025,4}=0.484419.
     // std L = s*sqrt(4/11.143287)=0.947247; std U = s*sqrt(4/0.484419)=4.543297.
-    assert!((r.std_lcl.unwrap() - 0.947247).abs() < 1e-3, "stdL={:?}", r.std_lcl);
-    assert!((r.std_ucl.unwrap() - 4.543297).abs() < 1e-3, "stdU={:?}", r.std_ucl);
+    assert!(
+        (r.std_lcl.unwrap() - 0.947247).abs() < 1e-3,
+        "stdL={:?}",
+        r.std_lcl
+    );
+    assert!(
+        (r.std_ucl.unwrap() - 4.543297).abs() < 1e-3,
+        "stdU={:?}",
+        r.std_ucl
+    );
 }
 
 #[test]
@@ -93,10 +119,22 @@ fn make_session() -> Session {
 }
 
 fn num_meta(name: &str) -> VarMeta {
-    VarMeta { name: name.into(), ty: VarType::Num, length: 8, format: None, label: None }
+    VarMeta {
+        name: name.into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }
 }
 fn char_meta(name: &str) -> VarMeta {
-    VarMeta { name: name.into(), ty: VarType::Char, length: 1, format: None, label: None }
+    VarMeta {
+        name: name.into(),
+        ty: VarType::Char,
+        length: 1,
+        format: None,
+        label: None,
+    }
 }
 
 fn parse_ttest(src: &str) -> Result<TTestAst> {
@@ -109,10 +147,9 @@ fn parse_ttest(src: &str) -> Result<TTestAst> {
 
 #[test]
 fn parse_options_and_statements() {
-    let ast = parse_ttest(
-        "proc ttest data=a h0=5 alpha=0.10 sides=u equal=no; var x y; class g; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_ttest("proc ttest data=a h0=5 alpha=0.10 sides=u equal=no; var x y; class g; run;")
+            .unwrap();
     assert_eq!(ast.data_options.input.as_ref().unwrap().name, "a");
     assert!((ast.proc_options.h0 - 5.0).abs() < 1e-12);
     assert!((ast.proc_options.alpha - 0.10).abs() < 1e-12);
@@ -127,7 +164,10 @@ fn parse_paired_pairs() {
     let ast = parse_ttest("proc ttest data=a; paired x*y z*w; run;").unwrap();
     assert_eq!(
         ast.paired_vars,
-        vec![("x".to_string(), "y".to_string()), ("z".to_string(), "w".to_string())]
+        vec![
+            ("x".to_string(), "y".to_string()),
+            ("z".to_string(), "w".to_string())
+        ]
     );
 }
 
@@ -146,12 +186,18 @@ fn execute_two_sample_listing() {
         "x" => [1.0_f64, 2.0, 3.0, 5.0, 6.0, 7.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
     let ast = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
             output: None,
         },
         proc_options: TTestProcOptions::default(),
@@ -177,13 +223,19 @@ fn execute_one_sample_and_paired_listing() {
         "y" => [1.0_f64, 2.0, 3.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
     // One-sample on all numeric vars.
     let ast1 = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
             output: None,
         },
         proc_options: TTestProcOptions::default(),
@@ -203,12 +255,21 @@ fn execute_one_sample_and_paired_listing() {
         "y" => [1.0_f64, 2.0, 3.0]
     ]
     .unwrap();
-    let ds2 = SasDataset { df: df2, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds2 = SasDataset {
+        df: df2,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     session2.libs.get("WORK").unwrap().write("T", &ds2).unwrap();
     let ast2 = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
-            output: Some(DatasetRef { libref: Some("WORK".into()), name: "OUT".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
+            output: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "OUT".into(),
+            }),
         },
         proc_options: TTestProcOptions::default(),
         var_vars: vec![],
@@ -243,12 +304,18 @@ fn execute_one_sample_by_groups() {
         "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("g"), num_meta("x")],
+    };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
     let ast = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
             output: None,
         },
         proc_options: TTestProcOptions::default(),
@@ -277,11 +344,17 @@ fn execute_by_unsorted_errors() {
         "x" => [10.0_f64, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("g"), num_meta("x")],
+    };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let ast = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
             output: None,
         },
         proc_options: TTestProcOptions::default(),
@@ -302,14 +375,20 @@ fn execute_ci_and_sides_columns() {
     // CI= triggers CL columns; SIDES=U triggers the one-sided p header.
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let mut po = TTestProcOptions::default();
     po.ci_explicit = true;
     po.sides = TTestSides::Upper;
     let ast = TTestAst {
         data_options: TTestDataOptions {
-            input: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            }),
             output: None,
         },
         proc_options: po,

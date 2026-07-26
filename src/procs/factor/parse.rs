@@ -43,7 +43,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                     method = m.to_lowercase();
                     ts.next();
                 }
-                None => return Err(SasError::parse("expected a method name after METHOD=", span)),
+                None => {
+                    return Err(SasError::parse(
+                        "expected a method name after METHOD=",
+                        span,
+                    ));
+                }
             }
         } else if ts.peek().is_kw("rotate") {
             common::expect_eq(ts, "ROTATE")?;
@@ -53,7 +58,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                     rotate = r.to_lowercase();
                     ts.next();
                 }
-                None => return Err(SasError::parse("expected a rotation name after ROTATE=", span)),
+                None => {
+                    return Err(SasError::parse(
+                        "expected a rotation name after ROTATE=",
+                        span,
+                    ));
+                }
             }
         } else if ts.peek().is_kw("out") {
             out = Some(common::parse_out_opt(ts)?);

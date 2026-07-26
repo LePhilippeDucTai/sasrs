@@ -95,7 +95,11 @@ impl UserPicture {
             Bound::Low => true,
             Bound::High => false,
             Bound::Num(lo) => {
-                if range.from_exclusive { n > *lo } else { n >= *lo }
+                if range.from_exclusive {
+                    n > *lo
+                } else {
+                    n >= *lo
+                }
             }
             Bound::Char(_) => false,
         };
@@ -106,7 +110,11 @@ impl UserPicture {
             Bound::High => true,
             Bound::Low => false,
             Bound::Num(hi) => {
-                if range.to_exclusive { n < *hi } else { n <= *hi }
+                if range.to_exclusive {
+                    n < *hi
+                } else {
+                    n <= *hi
+                }
             }
             Bound::Char(_) => false,
         }
@@ -146,7 +154,9 @@ pub(crate) fn render_template(template: &str, dir: &PictureDirectives, n: f64) -
     let n_selectors = template.chars().filter(|c| *c == '0' || *c == '9').count();
 
     // 1. Scale factor (MULT). Explicit wins; else 10^(decimal selectors).
-    let mult = dir.mult.unwrap_or_else(|| 10f64.powi(decimal_selectors(template) as i32));
+    let mult = dir
+        .mult
+        .unwrap_or_else(|| 10f64.powi(decimal_selectors(template) as i32));
 
     let negative = n.is_sign_negative() && n != 0.0;
     let scaled = (n.abs() * mult).round();

@@ -6,7 +6,10 @@ use super::*;
 
 /// Résout un GROUP BY / ORDER BY positionnel : entier N → expression du
 /// N-ième item du select-list (1-indexé).
-pub(super) fn resolve_positional<'a>(e: &'a SqlExpr, items: &'a [SelectItem]) -> Result<&'a SqlExpr> {
+pub(super) fn resolve_positional<'a>(
+    e: &'a SqlExpr,
+    items: &'a [SelectItem],
+) -> Result<&'a SqlExpr> {
     if let SqlExpr::Base(SasExpr::Num(n)) = e {
         let idx = *n as usize;
         if *n >= 1.0 && idx <= items.len() && (*n - idx as f64).abs() < 1e-9 {
@@ -23,7 +26,11 @@ pub(super) fn resolve_positional<'a>(e: &'a SqlExpr, items: &'a [SelectItem]) ->
 /// `group_by(keys).agg(aggs)`, la frame ne contient plus que les clés et les
 /// colonnes agrégées (par leur nom de sortie). La projection finale et le
 /// HAVING référencent donc ces colonnes par NOM (pas de ré-évaluation).
-pub(super) fn apply_group_by_project(query: &SelectStmt, lf: LazyFrame, ctx: &Ctx) -> Result<LazyFrame> {
+pub(super) fn apply_group_by_project(
+    query: &SelectStmt,
+    lf: LazyFrame,
+    ctx: &Ctx,
+) -> Result<LazyFrame> {
     let mut keys: Vec<Expr> = Vec::new();
     for g in &query.group_by {
         let resolved = resolve_positional(g, &query.items)?;
@@ -160,7 +167,11 @@ pub(super) fn sql_expr_with_aggs(
         }
         SqlExpr::IsNull { expr, negated } => {
             let a = sql_expr_with_aggs(expr, ctx, aggs)?;
-            Ok(if *negated { a.is_not_null() } else { a.is_null() })
+            Ok(if *negated {
+                a.is_not_null()
+            } else {
+                a.is_null()
+            })
         }
         // Pas d'agrégat à l'intérieur : traduction normale.
         _ => sql_expr_to_polars(e, ctx),

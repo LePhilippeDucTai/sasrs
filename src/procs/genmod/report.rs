@@ -52,14 +52,12 @@ pub(super) fn print_class_level_information(session: &mut Session, design_terms:
     centered(session, "Class Level Information");
     session.listing.blank();
 
-    let cli_headers: Vec<String> =
-        vec!["Class".into(), "Levels".into(), "Values".into()];
+    let cli_headers: Vec<String> = vec!["Class".into(), "Levels".into(), "Values".into()];
     let cli_aligns = vec![Align::Left, Align::Right, Align::Left];
     let mut cli_rows: Vec<Vec<String>> = Vec::new();
     for term in design_terms {
         if let DesignTerm::Class { name, levels, .. } = term {
-            let values_str: Vec<String> =
-                levels.iter().map(class_level_label).collect();
+            let values_str: Vec<String> = levels.iter().map(class_level_label).collect();
             cli_rows.push(vec![
                 name.clone(),
                 format!("{}", levels.len()),
@@ -180,11 +178,36 @@ pub(super) fn print_gof(session: &mut Session, crit: &FitCriteria) {
             fmt4(scaled_pearson),
             fmt4(scaled_pearson / df_gof as f64),
         ],
-        vec!["Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
-        vec!["Full Log Likelihood".into(), blank.clone(), fmt4(log_lik), blank.clone()],
-        vec!["AIC (smaller is better)".into(), blank.clone(), fmt4(aic), blank.clone()],
-        vec!["AICC (smaller is better)".into(), blank.clone(), fmt4(aicc), blank.clone()],
-        vec!["BIC (smaller is better)".into(), blank.clone(), fmt4(bic), blank.clone()],
+        vec![
+            "Log Likelihood".into(),
+            blank.clone(),
+            fmt4(log_lik),
+            blank.clone(),
+        ],
+        vec![
+            "Full Log Likelihood".into(),
+            blank.clone(),
+            fmt4(log_lik),
+            blank.clone(),
+        ],
+        vec![
+            "AIC (smaller is better)".into(),
+            blank.clone(),
+            fmt4(aic),
+            blank.clone(),
+        ],
+        vec![
+            "AICC (smaller is better)".into(),
+            blank.clone(),
+            fmt4(aicc),
+            blank.clone(),
+        ],
+        vec![
+            "BIC (smaller is better)".into(),
+            blank.clone(),
+            fmt4(bic),
+            blank.clone(),
+        ],
     ];
 
     session
@@ -210,7 +233,10 @@ pub(super) fn print_parameter_estimates(
     let scale_df = scale.scale_df;
     let se_scale = scale.se_scale;
 
-    centered(session, "Analysis Of Maximum Likelihood Parameter Estimates");
+    centered(
+        session,
+        "Analysis Of Maximum Likelihood Parameter Estimates",
+    );
     session.listing.blank();
 
     let amle_headers: Vec<String> = vec![
@@ -295,8 +321,7 @@ pub(super) fn print_parameter_estimates(
                     ]);
                 }
                 // Reference level row (last level): estimate 0, DF 0.
-                let ref_lbl =
-                    format!("{} {}", name, class_level_label(&levels[nref]));
+                let ref_lbl = format!("{} {}", name, class_level_label(&levels[nref]));
                 amle_rows.push(vec![
                     ref_lbl,
                     "0".into(),

@@ -23,7 +23,11 @@ pub(super) fn print_matrix_options(rf: &RespFit, session: &mut Session) {
     if (model.xpx || model.inv || model.covb || model.corrb) && !model.noprint {
         let n_used: f64 = weighting.as_ref().map(|w| w.total_n).unwrap_or(n as f64);
         let error_df = n_used - p_eff as f64;
-        let mse = if error_df > 0.0 { fit.sse / error_df } else { f64::NAN };
+        let mse = if error_df > 0.0 {
+            fit.sse / error_df
+        } else {
+            f64::NAN
+        };
         if model.xpx {
             let xpx = build_xpx(&x_mat, &y_vec);
             print_xpx(&xpx, &sel_reg_names, dep_name, intercept, session);
@@ -40,14 +44,7 @@ pub(super) fn print_matrix_options(rf: &RespFit, session: &mut Session) {
             );
         }
         if model.covb || model.corrb {
-            print_estimate_matrices(
-                model,
-                &fit.xtx_inv,
-                mse,
-                &sel_reg_names,
-                intercept,
-                session,
-            );
+            print_estimate_matrices(model, &fit.xtx_inv, mse, &sel_reg_names, intercept, session);
         }
     }
 }
@@ -107,8 +104,7 @@ pub(super) fn print_diagnostic_options(rf: &RespFit, session: &mut Session) {
     // off the (unrestricted) OLS fit, gated on the CLM/CLI model options.
     if (model.clm || model.cli) && !model.noprint {
         print_output_statistics(
-            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting, id_first,
-            session,
+            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting, id_first, session,
         );
     }
 

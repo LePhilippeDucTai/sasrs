@@ -5,7 +5,6 @@
 
 use super::*;
 
-
 mod parser;
 
 pub(crate) use parser::*;
@@ -49,7 +48,10 @@ impl MacroEngine {
     /// `f64` (division réelle, `**` réelle). Un opérande non numérique → erreur.
     pub(super) fn eval_float(expr: &str) -> Result<f64, MacroError> {
         let toks = Self::tokenize_eval(expr)?;
-        let mut p = FloatParser { toks: &toks, pos: 0 };
+        let mut p = FloatParser {
+            toks: &toks,
+            pos: 0,
+        };
         let v = p.parse_expr()?;
         if p.pos != p.toks.len() {
             return Err(MacroError::new(format!(
@@ -98,7 +100,10 @@ impl MacroEngine {
     /// erreur ("A character operand was found in the %EVAL function...").
     pub(super) fn macro_eval(&self, expr: &str) -> Result<i64, MacroError> {
         let toks = Self::tokenize_eval(expr)?;
-        let mut p = EvalParser { toks: &toks, pos: 0 };
+        let mut p = EvalParser {
+            toks: &toks,
+            pos: 0,
+        };
         let v = p.parse_expr()?;
         if p.pos != p.toks.len() {
             return Err(MacroError::new(format!(
@@ -240,7 +245,8 @@ impl MacroEngine {
                     // Un opérande alphanumérique mixte (ex. `3a`) est un mot.
                     if matches!(chars.get(i), Some(d) if d.is_ascii_alphabetic() || *d == '_') {
                         let wstart = start;
-                        while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_') {
+                        while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_')
+                        {
                             i += 1;
                         }
                         let w: String = chars[wstart..i].iter().collect();
@@ -255,14 +261,15 @@ impl MacroEngine {
                             Err(_) => {
                                 return Err(MacroError::new(format!(
                                     "ERROR: Overflow in the %EVAL function: {s}"
-                                )))
+                                )));
                             }
                         }
                     }
                 }
                 _ if c.is_ascii_alphabetic() || c == '_' => {
                     let start = i;
-                    while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_') {
+                    while matches!(chars.get(i), Some(d) if d.is_ascii_alphanumeric() || *d == '_')
+                    {
                         i += 1;
                     }
                     let w: String = chars[start..i].iter().collect();
@@ -282,7 +289,7 @@ impl MacroEngine {
                 other => {
                     return Err(MacroError::new(format!(
                         "ERROR: A syntax error was detected in the %EVAL expression near '{other}'"
-                    )))
+                    )));
                 }
             }
         }
@@ -346,12 +353,7 @@ impl<'a> EvalParser<'a> {
         if let Some(op) = self.peek().cloned() {
             let is_cmp = matches!(
                 op,
-                EvalTok::Eq
-                    | EvalTok::Ne
-                    | EvalTok::Lt
-                    | EvalTok::Le
-                    | EvalTok::Gt
-                    | EvalTok::Ge
+                EvalTok::Eq | EvalTok::Ne | EvalTok::Lt | EvalTok::Le | EvalTok::Gt | EvalTok::Ge
             );
             if is_cmp {
                 self.bump();

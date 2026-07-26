@@ -1,5 +1,5 @@
-use crate::procs::common::centered;
 use super::*;
+use crate::procs::common::centered;
 
 // ───────────────────────────── normality tests ─────────────────────────────
 //
@@ -82,14 +82,25 @@ pub(super) fn emit_normality_tests(
             "PLabel".into(),
             "PValue".into(),
         ],
-        &[Align::Left, Align::Left, Align::Right, Align::Left, Align::Right],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Left,
+            Align::Right,
+        ],
         &rows,
     );
 }
 
 /// Compute the four normality statistics + p-values. `sorted` ascending,
 /// `mean`/`std` the sample moments (std > 0), `n == sorted.len() >= 3`.
-pub(super) fn compute_normality_tests(sorted: &[f64], mean: f64, std: f64, n: usize) -> Vec<NormalityTest> {
+pub(super) fn compute_normality_tests(
+    sorted: &[f64],
+    mean: f64,
+    std: f64,
+    n: usize,
+) -> Vec<NormalityTest> {
     let mut out = Vec::with_capacity(4);
 
     // Shapiro-Wilk (only defined for 3 <= n <= 2000).

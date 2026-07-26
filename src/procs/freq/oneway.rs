@@ -162,8 +162,7 @@ pub(super) fn write_one_way_out(
     // Category column (same type/meta as the input variable).
     let cat_series = match meta.ty {
         VarType::Num => {
-            let vals: Vec<Option<f64>> =
-                cats.iter().map(|c| value_to_num(&c.value)).collect();
+            let vals: Vec<Option<f64>> = cats.iter().map(|c| value_to_num(&c.value)).collect();
             Series::new(meta.name.as_str().into(), vals)
         }
         VarType::Char => {

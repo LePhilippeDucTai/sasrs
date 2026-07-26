@@ -11,7 +11,10 @@ fn day_zero_is_epoch() {
 fn day_2020_01_01() {
     // Just verify the value is positive and reasonable (21915)
     let d = day_num(2020, 1, 1);
-    assert!(d > 20000.0 && d < 25000.0, "2020-01-01 day should be ~21915, got {d}");
+    assert!(
+        d > 20000.0 && d < 25000.0,
+        "2020-01-01 day should be ~21915, got {d}"
+    );
 }
 
 // ── w.d numeric format ────────────────────────────────────────────────────
@@ -153,7 +156,10 @@ fn percent_format_no_width() {
 fn e_format() {
     let v = Value::Num(12345.0);
     let s = format_builtin(&v, &spec("E", Some(12), None)).unwrap();
-    assert!(s.contains('E') || s.contains('e'), "expected scientific notation: {s}");
+    assert!(
+        s.contains('E') || s.contains('e'),
+        "expected scientific notation: {s}"
+    );
 }
 
 // ── $CHAR ────────────────────────────────────────────────────────────────

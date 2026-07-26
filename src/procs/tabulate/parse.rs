@@ -1,8 +1,9 @@
 use super::*;
 
 /// Statistic keywords recognized inside a TABLE expression.
-pub(super) const STAT_KEYWORDS: &[&str] =
-    &["n", "nmiss", "sum", "mean", "min", "max", "std", "pctn", "pctsum"];
+pub(super) const STAT_KEYWORDS: &[&str] = &[
+    "n", "nmiss", "sum", "mean", "min", "max", "std", "pctn", "pctsum",
+];
 
 pub(super) fn is_stat_keyword(s: &str) -> bool {
     let l = s.to_ascii_lowercase();
@@ -89,9 +90,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         })
     })?;
 
-    let col = col.ok_or_else(|| {
-        SasError::runtime("PROC TABULATE requires a TABLE statement.")
-    })?;
+    let col = col.ok_or_else(|| SasError::runtime("PROC TABULATE requires a TABLE statement."))?;
 
     Ok(TabulateAst {
         data,
@@ -111,10 +110,7 @@ pub(super) fn parse_dimexpr(ts: &mut StatementStream) -> Result<DimExpr> {
     let mut terms = Vec::new();
     loop {
         match ts.peek().kind {
-            TokenKind::Comma
-            | TokenKind::RParen
-            | TokenKind::Semi
-            | TokenKind::Eof => break,
+            TokenKind::Comma | TokenKind::RParen | TokenKind::Semi | TokenKind::Eof => break,
             _ => {}
         }
         terms.push(parse_term(ts)?);

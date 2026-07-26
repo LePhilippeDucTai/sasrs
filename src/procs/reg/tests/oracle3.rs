@@ -15,8 +15,7 @@ fn test_oracle_outest_dataset_dep_is_minus1() {
         vars: vec![num_meta("y"), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast =
-        parse_reg("proc reg data=work.t outest=est; model y = x; run;").unwrap();
+    let ast = parse_reg("proc reg data=work.t outest=est; model y = x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("EST").unwrap();
     let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
@@ -50,8 +49,7 @@ fn test_oracle_outsscp_dataset() {
         vars: vec![num_meta("y"), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast =
-        parse_reg("proc reg data=work.t outsscp=sscp; model y = x; run;").unwrap();
+    let ast = parse_reg("proc reg data=work.t outsscp=sscp; model y = x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("SSCP").unwrap();
     let names: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
@@ -233,10 +231,8 @@ fn test_m365_off_no_extra_columns() {
 
 #[test]
 fn test_m366_parse_rsquare_best_cp() {
-    let ast = parse_reg(
-        "proc reg data=a; model y = x1 x2 x3 / selection=rsquare best=2 cp; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2 x3 / selection=rsquare best=2 cp; run;")
+        .unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::RSquare);
     assert_eq!(sel.best, Some(2));
@@ -244,8 +240,7 @@ fn test_m366_parse_rsquare_best_cp() {
 
 #[test]
 fn test_m366_parse_adjrsq() {
-    let ast =
-        parse_reg("proc reg data=a; model y = x1 x2 / selection=adjrsq; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2 / selection=adjrsq; run;").unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::AdjRsq);
 }
@@ -266,8 +261,7 @@ fn test_m366_parse_maxr_include_stop_details_stb() {
 
 #[test]
 fn test_m366_parse_none() {
-    let ast =
-        parse_reg("proc reg data=a; model y = x1 / selection=none; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 / selection=none; run;").unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::None);
 }
@@ -361,8 +355,7 @@ fn test_m366_maxr_final_and_size1() {
     let p = 3;
     let regs: Vec<String> = vec!["x1".into(), "x2".into(), "x3".into()];
     let sel = sel_with(SelMethod::MaxR);
-    let final_set =
-        run_rsq_improvement(&sel, &xcols, &y, &regs, true, &mut session).unwrap();
+    let final_set = run_rsq_improvement(&sel, &xcols, &y, &regs, true, &mut session).unwrap();
     assert_eq!(final_set, (0..p).collect::<Vec<usize>>());
 
     // The single best regressor by R².
@@ -377,8 +370,7 @@ fn test_m366_maxr_final_and_size1() {
     let mut s1 = sel_with(SelMethod::MaxR);
     s1.stop = Some(1);
     let mut sess2 = make_session();
-    let set1 =
-        run_rsq_improvement(&s1, &xcols, &y, &regs, true, &mut sess2).unwrap();
+    let set1 = run_rsq_improvement(&s1, &xcols, &y, &regs, true, &mut sess2).unwrap();
     assert_eq!(set1, vec![best_single]);
 }
 
@@ -432,7 +424,10 @@ fn test_by_two_groups() {
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let mut ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         basic_model("y", &["x"]),
     );
     ast.by = vec!["g".into()];

@@ -262,14 +262,12 @@ pub(super) fn compute_scale(
     }
 
     // Scale SE (Normal/Gamma, when estimated): SE(scale) ≈ scale / sqrt(2·df).
-    let se_scale: f64 = if (*dist == Distribution::Normal
-        || *dist == Distribution::Gamma)
-        && scale_df > 0
-    {
-        scale_est / (2.0 * scale_df as f64).sqrt()
-    } else {
-        0.0
-    };
+    let se_scale: f64 =
+        if (*dist == Distribution::Normal || *dist == Distribution::Gamma) && scale_df > 0 {
+            scale_est / (2.0 * scale_df as f64).sqrt()
+        } else {
+            0.0
+        };
 
     ScaleInfo {
         scale_est,
@@ -345,8 +343,7 @@ pub(super) fn compute_fit_criteria(
                     let y = y_vec[i].max(1e-300);
                     let mu = final_mu[i].max(1e-300);
                     let fi = freq_vec[i];
-                    fi * ((nu - 1.0) * y.ln() - nu * y / mu - nu * mu.ln()
-                        + nu * nu.ln()
+                    fi * ((nu - 1.0) * y.ln() - nu * y / mu - nu * mu.ln() + nu * nu.ln()
                         - crate::stat::ln_gamma(nu))
                 })
                 .sum()
@@ -415,9 +412,8 @@ pub(super) fn compute_fit_criteria(
     // (just regression params) for AIC/BIC of all three distributions.
     let n_params = p_param; // intercept + predictors (no scale term)
     let aic = -2.0 * log_lik + 2.0 * (n_params as f64);
-    let aicc = aic
-        + 2.0 * (n_params as f64) * (n_params as f64 + 1.0)
-            / (n_total - n_params as f64 - 1.0);
+    let aicc =
+        aic + 2.0 * (n_params as f64) * (n_params as f64 + 1.0) / (n_total - n_params as f64 - 1.0);
     let bic = -2.0 * log_lik + (n_params as f64) * n_total.ln();
 
     FitCriteria {

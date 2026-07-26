@@ -86,9 +86,7 @@ pub(super) fn retain_literal(expr: &Expr) -> Result<(VarType, usize, Value)> {
             s.chars().count().max(1),
             Value::Char(s.clone()),
         )),
-        _ => Err(SasError::runtime(
-            "RETAIN initial values must be literals.",
-        )),
+        _ => Err(SasError::runtime("RETAIN initial values must be literals.")),
     }
 }
 
@@ -106,7 +104,11 @@ pub(super) fn input_var_type(is_char: bool, informat: Option<&str>) -> Result<(V
     let char = is_char || char_informat;
     if char {
         // Longueur = largeur de l'informat caractère, défaut 8.
-        let len = spec.as_ref().and_then(|s| s.w).map(|w| w as usize).unwrap_or(8);
+        let len = spec
+            .as_ref()
+            .and_then(|s| s.w)
+            .map(|w| w as usize)
+            .unwrap_or(8);
         Ok((VarType::Char, len.max(1)))
     } else {
         Ok((VarType::Num, 8))

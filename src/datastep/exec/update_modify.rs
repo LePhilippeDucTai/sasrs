@@ -27,7 +27,9 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
     let upd = update.expect("execute_update requires UpdateData");
 
     for name in &uninitialized {
-        session.log.note(&format!("Variable {name} is uninitialized."));
+        session
+            .log
+            .note(&format!("Variable {name} is uninitialized."));
     }
 
     let trans = &upd.transaction;
@@ -47,7 +49,12 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
     let overlay_pos: Vec<(usize, usize)> = upd
         .overlay_slots
         .iter()
-        .map(|&slot| (slot, trans.var_slots.iter().position(|&s| s == slot).unwrap()))
+        .map(|&slot| {
+            (
+                slot,
+                trans.var_slots.iter().position(|&s| s == slot).unwrap(),
+            )
+        })
         .collect();
 
     let mut r = build_um_runner(
@@ -102,10 +109,7 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
         kept_rows.push(m_row);
     }
     // Clés BY de chaque obs retenue (vide si pas de BY).
-    let by_keys: Vec<Vec<Value>> = kept_rows
-        .iter()
-        .map(|&row| keys_at(master, row))
-        .collect();
+    let by_keys: Vec<Vec<Value>> = kept_rows.iter().map(|&row| keys_at(master, row)).collect();
 
     for (seq, &m_row) in kept_rows.iter().enumerate() {
         r.pdv.n_ += 1;
@@ -200,7 +204,9 @@ pub(super) fn execute_modify(prog: StepProgram, session: &mut Session) -> Result
     let m = modify.expect("execute_modify requires ModifyData");
 
     for name in &uninitialized {
-        session.log.note(&format!("Variable {name} is uninitialized."));
+        session
+            .log
+            .note(&format!("Variable {name} is uninitialized."));
     }
 
     let mut r = build_um_runner(

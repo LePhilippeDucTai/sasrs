@@ -109,11 +109,7 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     // que `where=` (keep/drop/rename/in= sur UPDATE non supportés → erreur).
     let master_spec = ts.parse_dataset_spec()?;
     let opts = &master_spec.options;
-    if opts.keep.is_some()
-        || opts.drop.is_some()
-        || !opts.rename.is_empty()
-        || opts.in_.is_some()
-    {
+    if opts.keep.is_some() || opts.drop.is_some() || !opts.rename.is_empty() || opts.in_.is_some() {
         return Err(SasError::parse(
             "Only the WHERE= data set option is supported on the UPDATE master data set.",
             upd_tok.span,
@@ -221,10 +217,7 @@ pub(crate) fn parse_key_option(ts: &mut StatementStream) -> Result<Vec<String>> 
     }
     ts.next(); // `key`
     if ts.peek().kind != TokenKind::Eq {
-        return Err(SasError::parse(
-            "expected '=' after KEY",
-            ts.peek().span,
-        ));
+        return Err(SasError::parse("expected '=' after KEY", ts.peek().span));
     }
     ts.next(); // `=`
     let mut vars = Vec::new();

@@ -4,14 +4,13 @@
 
 use super::*;
 
-
-mod trig;
 mod combinatorics;
 mod ordering;
+mod trig;
 
-pub(crate) use trig::*;
 pub(crate) use combinatorics::*;
 pub(crate) use ordering::*;
+pub(crate) use trig::*;
 
 pub(crate) fn fn_abs(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num(args, ctx, |f| f.abs())

@@ -61,7 +61,6 @@ use crate::token::{Span, StrSuffix, TokenKind};
 use crate::value::MissingKind;
 use chrono::{NaiveDate, NaiveTime};
 
-
 mod literal;
 mod primary;
 
@@ -135,10 +134,7 @@ fn parse_compare(ts: &mut StatementStream) -> Result<Expr> {
 fn parse_in(ts: &mut StatementStream, left: Expr) -> Result<Expr> {
     ts.next(); // IN
     if ts.peek().kind != TokenKind::LParen {
-        return Err(SasError::parse(
-            "expected '(' after IN",
-            ts.peek().span,
-        ));
+        return Err(SasError::parse("expected '(' after IN", ts.peek().span));
     }
     ts.next(); // (
     let mut list = Vec::new();

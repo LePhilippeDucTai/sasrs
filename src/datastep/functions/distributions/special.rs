@@ -1,4 +1,3 @@
-
 /// High-precision log-gamma via the Lanczos approximation (g = 7, n = 9).
 /// Valid for x > 0. Far more accurate than the truncated-Stirling
 /// `lgamma_approx` used by the GAMMA/LGAMMA functions, which matters when it
@@ -124,10 +123,7 @@ pub(crate) fn betai(a: f64, b: f64, x: f64) -> f64 {
     if x >= 1.0 {
         return 1.0;
     }
-    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b)
-        + a * x.ln()
-        + b * (1.0 - x).ln())
-    .exp();
+    let bt = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln()).exp();
     if x < (a + 1.0) / (a + b + 2.0) {
         bt * betacf(a, b, x) / a
     } else {

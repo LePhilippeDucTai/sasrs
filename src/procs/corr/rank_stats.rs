@@ -6,7 +6,11 @@ use super::*;
 /// Spearman on the replicated data. Returns (r, n) where n is the number of
 /// usable (non-replicated) observations. None when n < 2 or a rank vector is
 /// constant.
-pub(super) fn spearman_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f64>, usize) {
+pub(super) fn spearman_weighted(
+    xcol: &[Value],
+    ycol: &[Value],
+    wcol: &[Value],
+) -> (Option<f64>, usize) {
     let (xs, ys, ws) = paired_complete_weighted(xcol, ycol, wcol);
     let n = xs.len();
     if n < 2 {
@@ -25,7 +29,11 @@ pub(super) fn spearman_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) 
 /// replicated observation are tied in both coordinates, so they cancel between
 /// n0 and n1 (and n0 and n2) and never count as C or D. Returns (τ, n). None
 /// when n < 2 or a denominator factor is zero.
-pub(super) fn kendall_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f64>, usize) {
+pub(super) fn kendall_weighted(
+    xcol: &[Value],
+    ycol: &[Value],
+    wcol: &[Value],
+) -> (Option<f64>, usize) {
     let (xs, ys, ws) = paired_complete_weighted(xcol, ycol, wcol);
     let n = xs.len();
     if n < 2 {
@@ -184,7 +192,11 @@ pub(super) fn bkr_survival(b: f64) -> f64 {
 pub(super) fn mean_ranks(xs: &[f64]) -> Vec<f64> {
     let n = xs.len();
     let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_by(|&a, &b| xs[a].partial_cmp(&xs[b]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&a, &b| {
+        xs[a]
+            .partial_cmp(&xs[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut ranks = vec![0.0_f64; n];
     let mut i = 0;
     while i < n {

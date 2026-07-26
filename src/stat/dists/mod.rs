@@ -102,11 +102,10 @@
 //! betai via continued fraction). Newton-Raphson limited to ~20 iterations
 //! with exit on convergence; no infinite loops or pathological cases.
 
-
-mod special;
-mod normal_t;
 mod chisq_f;
 mod gamma_beta;
+mod normal_t;
+mod special;
 
 pub use chisq_f::chisq_cdf;
 pub use chisq_f::chisq_quantile;

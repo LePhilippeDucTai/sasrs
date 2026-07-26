@@ -57,8 +57,7 @@ pub(super) fn build_design(
 ) -> Result<Design> {
     let nb_preds = predictors.len();
     let class_set: Vec<String> = class_vars.to_vec();
-    let is_class_var =
-        |nm: &str| class_set.iter().any(|c| c.eq_ignore_ascii_case(nm));
+    let is_class_var = |nm: &str| class_set.iter().any(|c| c.eq_ignore_ascii_case(nm));
 
     let mut effects: Vec<Effect> = Vec::with_capacity(nb_preds);
     let mut col_labels: Vec<String> = Vec::new();
@@ -182,13 +181,11 @@ pub(super) fn build_model_matrices(
                     break;
                 }
                 for lv in &eff.levels {
-                    row.push(
-                        if v.sas_cmp(lv) == std::cmp::Ordering::Equal {
-                            1.0
-                        } else {
-                            0.0
-                        },
-                    );
+                    row.push(if v.sas_cmp(lv) == std::cmp::Ordering::Equal {
+                        1.0
+                    } else {
+                        0.0
+                    });
                 }
             } else {
                 match value_to_num(&col[i]) {

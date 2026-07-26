@@ -1,4 +1,3 @@
-
 /// Source d'un statement INFILE (M14) : un fichier sur disque (chemin
 /// littéral) ou les lignes inline d'un bloc DATALINES/CARDS.
 #[derive(Debug, Clone, PartialEq)]

@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 mod collin;
 mod hetero;
 
@@ -137,19 +136,19 @@ pub(crate) fn print_durbin_watson(dwr: &DwResult, session: &mut Session) {
         .listing
         .write_line(&format!("Durbin-Watson D                {}", fmt5(dwr.d)));
     if let (Some(pp), Some(pn)) = (dwr.pr_pos, dwr.pr_neg) {
-        session
-            .listing
-            .write_line(&format!("Pr < DW                        {}", fmt_p(Some(pp))));
-        session
-            .listing
-            .write_line(&format!("Pr > DW                        {}", fmt_p(Some(pn))));
+        session.listing.write_line(&format!(
+            "Pr < DW                        {}",
+            fmt_p(Some(pp))
+        ));
+        session.listing.write_line(&format!(
+            "Pr > DW                        {}",
+            fmt_p(Some(pn))
+        ));
     }
-    session.listing.write_line(&format!(
-        "Number of Observations         {}",
-        dwr.n
-    ));
-    session.listing.write_line(&format!(
-        "1st Order Autocorrelation      {}",
-        fmt5(dwr.rho)
-    ));
+    session
+        .listing
+        .write_line(&format!("Number of Observations         {}", dwr.n));
+    session
+        .listing
+        .write_line(&format!("1st Order Autocorrelation      {}", fmt5(dwr.rho)));
 }

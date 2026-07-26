@@ -132,7 +132,10 @@ pub(crate) fn print_all_subsets_table(
     session: &mut Session,
 ) {
     let (title, extra_header): (&str, Option<&str>) = match sel.method {
-        SelMethod::AdjRsq => ("Adjusted R-Square Selection Method", Some("Adjusted R-Square")),
+        SelMethod::AdjRsq => (
+            "Adjusted R-Square Selection Method",
+            Some("Adjusted R-Square"),
+        ),
         SelMethod::Cp => ("C(p) Selection Method", Some("C(p)")),
         _ => ("R-Square Selection Method", None),
     };
@@ -165,16 +168,16 @@ pub(crate) fn print_all_subsets_table(
         }
         SelMethod::AdjRsq => {
             display.sort_by(|a, b| {
-                b.adj.partial_cmp(&a.adj).unwrap_or(std::cmp::Ordering::Equal)
+                b.adj
+                    .partial_cmp(&a.adj)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             if let Some(b) = sel.best {
                 display.truncate(b);
             }
         }
         SelMethod::Cp => {
-            display.sort_by(|a, b| {
-                a.cp.partial_cmp(&b.cp).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            display.sort_by(|a, b| a.cp.partial_cmp(&b.cp).unwrap_or(std::cmp::Ordering::Equal));
             if let Some(b) = sel.best {
                 display.truncate(b);
             }
@@ -204,8 +207,7 @@ pub(crate) fn print_all_subsets_table(
     let rows_str: Vec<Vec<String>> = display
         .iter()
         .map(|row| {
-            let vars: Vec<&str> =
-                row.cols.iter().map(|&c| regressors[c].as_str()).collect();
+            let vars: Vec<&str> = row.cols.iter().map(|&c| regressors[c].as_str()).collect();
             let mut cells = vec![format!("{}", row.k), fmt_fit4(row.r2)];
             match sel.method {
                 SelMethod::AdjRsq => cells.push(fmt_fit4(row.adj)),

@@ -104,7 +104,11 @@ pub(super) fn fit_multiway(
         .iter()
         .map(|&r| value_to_num(&dep_col[r]).unwrap())
         .collect();
-    let y_bar = if n > 0 { y.iter().sum::<f64>() / n as f64 } else { f64::NAN };
+    let y_bar = if n > 0 {
+        y.iter().sum::<f64>() / n as f64
+    } else {
+        f64::NAN
+    };
     let sst: f64 = y.iter().map(|&v| (v - y_bar).powi(2)).sum();
 
     // Column specs: per term, list of column definitions (each a product of
@@ -163,9 +167,21 @@ pub(super) fn fit_multiway(
     let df_error = (n as i64 - ncols as i64).max(0) as f64;
     let df_model: f64 = term_df.iter().map(|&d| d as f64).sum();
     let df_total = (n as f64 - 1.0).max(0.0);
-    let mse = if df_error > 0.0 { sse_full / df_error } else { f64::NAN };
-    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-    let f_model = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let mse = if df_error > 0.0 {
+        sse_full / df_error
+    } else {
+        f64::NAN
+    };
+    let msm = if df_model > 0.0 {
+        ssm / df_model
+    } else {
+        f64::NAN
+    };
+    let f_model = if mse > 0.0 && !mse.is_nan() {
+        msm / mse
+    } else {
+        f64::NAN
+    };
     let p_model = if f_model.is_nan() {
         None
     } else {
@@ -179,7 +195,9 @@ pub(super) fn fit_multiway(
         f64::NAN
     };
 
-    session.log.note(&format!("There were {} observations used.", n));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n));
 
     // --- Helper to build a design from a subset of terms (intercept + terms) ---
     let build_design = |term_subset: &[usize]| -> Vec<Vec<f64>> {
@@ -250,11 +268,7 @@ pub(super) fn fit_multiway(
     }
 
     // Term labels (e.g. `a*b`).
-    let term_labels: Vec<String> = model
-        .effect_terms
-        .iter()
-        .map(|t| t.join("*"))
-        .collect();
+    let term_labels: Vec<String> = model.effect_terms.iter().map(|t| t.join("*")).collect();
 
     Ok(MultiwayFit {
         factors,

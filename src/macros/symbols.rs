@@ -187,7 +187,13 @@ impl MacroEngine {
                 "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
             ];
             const DAYS: [&str; 7] = [
-                "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
             ];
             let mon = MONTHS[(now.month0()) as usize];
             let day = now.day();
@@ -246,8 +252,7 @@ impl MacroEngine {
             let user = std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .unwrap_or_else(|_| "sasuser".to_string());
-            let hostname = std::env::var("HOSTNAME")
-                .unwrap_or_else(|_| "localhost".to_string());
+            let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
             let pid = std::process::id();
             vars.extend([
                 ("SYSUSERID", user),

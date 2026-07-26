@@ -28,7 +28,10 @@ fn array_auto_named_elements_empty_var_list() {
     // `array a{3};` : la liste reste vide (auto-noms a1 a2 a3 à la
     // compilation).
     let ast = parse("data o; array a{3}; run;").unwrap();
-    assert_eq!(ast.stmts, vec![array_stmt("a", Some(vec![3]), None, vec![])]);
+    assert_eq!(
+        ast.stmts,
+        vec![array_stmt("a", Some(vec![3]), None, vec![])]
+    );
 }
 
 #[test]
@@ -36,7 +39,12 @@ fn array_char_with_and_without_length() {
     let ast = parse("data o; array c{3} $ 8 c1 c2 c3; run;").unwrap();
     assert_eq!(
         ast.stmts,
-        vec![array_stmt("c", Some(vec![3]), Some(8), vec!["c1", "c2", "c3"])]
+        vec![array_stmt(
+            "c",
+            Some(vec![3]),
+            Some(8),
+            vec!["c1", "c2", "c3"]
+        )]
     );
     // `$` sans longueur : défaut 8.
     let ast = parse("data o; array c{2} $ u v; run;").unwrap();
@@ -65,13 +73,22 @@ fn array_numbered_range_is_expanded() {
 fn array_invalid_range_errors() {
     // Préfixes différents.
     let err = parse("data o; array a{3} x1-y3; run;").unwrap_err();
-    assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+    assert!(
+        err.to_string().contains("invalid variable range"),
+        "got: {err}"
+    );
     // Bornes décroissantes.
     let err = parse("data o; array a{3} x3-x1; run;").unwrap_err();
-    assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+    assert!(
+        err.to_string().contains("invalid variable range"),
+        "got: {err}"
+    );
     // Pas de suffixe numérique.
     let err = parse("data o; array a{3} x-y; run;").unwrap_err();
-    assert!(err.to_string().contains("invalid variable range"), "got: {err}");
+    assert!(
+        err.to_string().contains("invalid variable range"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -119,9 +136,18 @@ fn array_special_lists_parse() {
     };
     assert!(*temporary);
     for (src, want) in [
-        ("data o; array a{*} _numeric_; run;", crate::ast::ArraySpecial::Numeric),
-        ("data o; array a{*} _character_; run;", crate::ast::ArraySpecial::Character),
-        ("data o; array a{*} _all_; run;", crate::ast::ArraySpecial::All),
+        (
+            "data o; array a{*} _numeric_; run;",
+            crate::ast::ArraySpecial::Numeric,
+        ),
+        (
+            "data o; array a{*} _character_; run;",
+            crate::ast::ArraySpecial::Character,
+        ),
+        (
+            "data o; array a{*} _all_; run;",
+            crate::ast::ArraySpecial::All,
+        ),
     ] {
         let ast = parse(src).unwrap();
         let DsStmt::Array { special, .. } = &ast.stmts[0] else {
@@ -266,7 +292,8 @@ fn keep_accepts_parenthesized_list_and_ranges() {
 fn unknown_dataset_option_errors() {
     let err = parse("data o(obs=5); run;").unwrap_err();
     assert!(
-        err.to_string().contains("Dataset option OBS is not supported."),
+        err.to_string()
+            .contains("Dataset option OBS is not supported."),
         "got: {err}"
     );
     let err = parse("data o; set i(firstobs=2); run;").unwrap_err();
@@ -364,10 +391,8 @@ fn attrib_format_and_label() {
 
 #[test]
 fn attrib_multiple_items() {
-    let ast = parse(
-        "data o; attrib a b format=dollar8. c label='C var' length=$ 10; run;",
-    )
-    .unwrap();
+    let ast =
+        parse("data o; attrib a b format=dollar8. c label='C var' length=$ 10; run;").unwrap();
     assert_eq!(
         ast.stmts,
         vec![DsStmt::Attrib(vec![
@@ -381,7 +406,10 @@ fn attrib_multiple_items() {
                 vars: vec!["c".to_string()],
                 format: None,
                 label: Some("C var".to_string()),
-                length: Some(LengthSpec { char: true, len: 10 }),
+                length: Some(LengthSpec {
+                    char: true,
+                    len: 10
+                }),
             },
         ])]
     );

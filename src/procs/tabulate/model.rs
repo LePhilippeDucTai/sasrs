@@ -130,7 +130,13 @@ pub(super) fn expand_dim(
 ) -> Result<Vec<Cell>> {
     let mut out: Vec<Cell> = Vec::new();
     for term in &dim.terms {
-        out.extend(expand_term(term, class_cols, var_cols, class_values, n_obs)?);
+        out.extend(expand_term(
+            term,
+            class_cols,
+            var_cols,
+            class_values,
+            n_obs,
+        )?);
     }
     Ok(out)
 }
@@ -146,8 +152,7 @@ pub(super) fn expand_term(
     // (concatenating atoms).
     let mut acc: Vec<Cell> = vec![Cell { atoms: Vec::new() }];
     for factor in &term.factors {
-        let factor_cells =
-            expand_factor(factor, class_cols, var_cols, class_values, n_obs)?;
+        let factor_cells = expand_factor(factor, class_cols, var_cols, class_values, n_obs)?;
         let mut next: Vec<Cell> = Vec::with_capacity(acc.len() * factor_cells.len());
         for base in &acc {
             for fc in &factor_cells {
@@ -169,9 +174,7 @@ pub(super) fn expand_factor(
     n_obs: usize,
 ) -> Result<Vec<Cell>> {
     match factor {
-        Factor::Group(inner) => {
-            expand_dim(inner, class_cols, var_cols, class_values, n_obs)
-        }
+        Factor::Group(inner) => expand_dim(inner, class_cols, var_cols, class_values, n_obs),
         Factor::Name {
             name,
             label,

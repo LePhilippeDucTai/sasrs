@@ -1,11 +1,10 @@
-
 mod calendar;
-mod interval;
 mod diff;
+mod interval;
 
 pub(crate) use calendar::*;
-pub(crate) use interval::*;
 pub(crate) use diff::*;
+pub(crate) use interval::*;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Date functions
@@ -160,7 +159,9 @@ pub(crate) fn fn_hour(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 pub(crate) fn fn_minute(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    unary_num(args, ctx, |dt| ((split_datetime(dt).1 % 3600.0) / 60.0).floor())
+    unary_num(args, ctx, |dt| {
+        ((split_datetime(dt).1 % 3600.0) / 60.0).floor()
+    })
 }
 
 pub(crate) fn fn_second(args: &[Value], ctx: &mut EvalCtx) -> Value {

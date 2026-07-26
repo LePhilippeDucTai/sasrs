@@ -78,7 +78,10 @@ fn execute_too_few_variables_errors() {
     };
     write_dataset(&mut session, "T", ds);
     let ast = FactorAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         nfactors: None,
         method: "principal".into(),
@@ -88,7 +91,12 @@ fn execute_too_few_variables_errors() {
     };
     let r = execute(&ast, &mut session);
     assert!(r.is_err());
-    assert!(r.err().unwrap().to_string().contains("at least 2 variables"));
+    assert!(
+        r.err()
+            .unwrap()
+            .to_string()
+            .contains("at least 2 variables")
+    );
 }
 
 #[test]
@@ -160,7 +168,10 @@ fn execute_oracle_listing() {
     write_dataset(&mut session, "T", ds);
 
     let ast = FactorAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         nfactors: None,
         method: "principal".into(),
@@ -184,11 +195,7 @@ fn execute_oracle_listing() {
 #[test]
 fn varimax_communality_invariant() {
     // 3-variable, 2-factor loading matrix (arbitrary values).
-    let l = vec![
-        vec![0.8, 0.2],
-        vec![0.7, 0.5],
-        vec![0.3, 0.9],
-    ];
+    let l = vec![vec![0.8, 0.2], vec![0.7, 0.5], vec![0.3, 0.9]];
     let h2_before: Vec<f64> = l
         .iter()
         .map(|row| row.iter().map(|&x| x * x).sum())
@@ -279,7 +286,10 @@ fn execute_varimax_no_panic() {
     write_dataset(&mut session, "V", ds);
 
     let ast = FactorAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "V".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "V".into(),
+        }),
         cov: false,
         nfactors: Some(2),
         method: "principal".into(),
@@ -365,7 +375,10 @@ fn execute_promax_listing() {
     write_dataset(&mut session, "P", ds);
 
     let ast = FactorAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "P".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "P".into(),
+        }),
         cov: false,
         nfactors: Some(2),
         method: "principal".into(),
@@ -376,10 +389,7 @@ fn execute_promax_listing() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("Rotation Method: Promax"), "{listing}");
-    assert!(
-        listing.contains("Inter-Factor Correlations"),
-        "{listing}"
-    );
+    assert!(listing.contains("Inter-Factor Correlations"), "{listing}");
     assert!(!listing.contains("NaN"), "NaN in listing: {listing}");
 }
 
@@ -400,12 +410,18 @@ fn execute_out_factor_scores() {
     write_dataset(&mut session, "T", ds);
 
     let ast = FactorAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         cov: false,
         nfactors: Some(1),
         method: "principal".into(),
         rotate: "none".into(),
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "FS".into() }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "FS".into(),
+        }),
         var: vec!["x".into(), "y".into()],
     };
     execute(&ast, &mut session).unwrap();

@@ -108,7 +108,10 @@ fn test_ar1_fits_and_names() {
     .unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("AR(1)"), "missing AR(1) cov parm: {listing}");
+    assert!(
+        listing.contains("AR(1)"),
+        "missing AR(1) cov parm: {listing}"
+    );
     assert!(listing.contains("Residual"), "missing Residual: {listing}");
 }
 
@@ -137,11 +140,11 @@ fn test_quad_deferred() {
     };
     session.libs.get("WORK").unwrap().write("D", &ds).unwrap();
     session.last_dataset = Some("WORK.D".to_string());
-    let ast =
-        parse_glimmix("proc glimmix method=quad; model y = x / dist=poisson; run;").unwrap();
+    let ast = parse_glimmix("proc glimmix method=quad; model y = x / dist=poisson; run;").unwrap();
     let err = execute(&ast, &mut session).unwrap_err();
     assert!(
-        err.to_string().contains("METHOD=QUAD is not yet implemented"),
+        err.to_string()
+            .contains("METHOD=QUAD is not yet implemented"),
         "got: {err}"
     );
 }
@@ -232,12 +235,18 @@ fn test_poisson_iterations() {
 #[test]
 fn test_execute_poisson_ok() {
     let mut session = make_session();
-    let frame = df!["y" => [1.0_f64,2.0,3.0,4.0,5.0,6.0], "x" => [0.0_f64,0.0,0.0,1.0,1.0,1.0]].unwrap();
+    let frame =
+        df!["y" => [1.0_f64,2.0,3.0,4.0,5.0,6.0], "x" => [0.0_f64,0.0,0.0,1.0,1.0,1.0]].unwrap();
     let ds = SasDataset {
         df: frame,
         vars: vec![num_meta("y"), num_meta("x")],
     };
-    session.libs.get("WORK").unwrap().write("POIS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("POIS", &ds)
+        .unwrap();
     session.last_dataset = Some("WORK.POIS".to_string());
     let ast =
         parse_glimmix("proc glimmix; model y = x / dist=poisson link=log solution; run;").unwrap();
@@ -312,8 +321,7 @@ fn test_build_design_class() {
             Value::Char("A".into()),
         ],
     )];
-    let design =
-        build_design(&cols, &["grp".to_string()], &["grp".to_string()], false, 4).unwrap();
+    let design = build_design(&cols, &["grp".to_string()], &["grp".to_string()], false, 4).unwrap();
     // Intercept + grp A + grp B = 3 columns.
     assert_eq!(design.len(), 3);
     assert_eq!(design[0].label, "Intercept");
@@ -387,8 +395,8 @@ fn test_laplace_ar1_rejected() {
 // ── Parse tests ──────────────────────────────────────────────────────────
 #[test]
 fn test_parse_poisson() {
-    let ast = parse_glimmix("proc glimmix; model y = x / dist=poisson link=log solution; run;")
-        .unwrap();
+    let ast =
+        parse_glimmix("proc glimmix; model y = x / dist=poisson link=log solution; run;").unwrap();
     let m = ast.model.unwrap();
     assert_eq!(m.dist, Distribution::Poisson);
     assert_eq!(m.link, LinkFunction::Log);

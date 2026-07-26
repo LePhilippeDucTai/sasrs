@@ -133,11 +133,7 @@ fn array_initial_values_row_major() {
 #[test]
 fn array_initial_values_space_separated_1d() {
     let mut s = session();
-    run(
-        "data out; array a{3} x y z (10 20 30); run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; array a{3} x y z (10 20 30); run;", &mut s).unwrap();
     assert_eq!(num_at(&s, "out", "x", 0), Some(10.0));
     assert_eq!(num_at(&s, "out", "y", 0), Some(20.0));
     assert_eq!(num_at(&s, "out", "z", 0), Some(30.0));
@@ -191,7 +187,12 @@ fn array_temporary_elements_not_in_output() {
     assert_eq!(num_at(&s, "out", "total", 0), Some(600.0));
     let ds = read_work(&s, "out");
     // Les éléments temporaires ne sont PAS des colonnes de sortie.
-    let cols: Vec<&str> = ds.df.get_column_names().iter().map(|s| s.as_str()).collect();
+    let cols: Vec<&str> = ds
+        .df
+        .get_column_names()
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
     assert_eq!(cols, vec!["total"], "temporary elements must not be output");
 }
 
@@ -240,7 +241,10 @@ fn array_character_special_list() {
     assert_eq!(num_at(&s, "out", "d", 0), Some(2.0));
     let ds = read_work(&s, "out");
     // chs{1} pointe sur la 1re variable char (a).
-    assert_eq!(ds.df.column("a").unwrap().str().unwrap().get(0), Some("NEW"));
+    assert_eq!(
+        ds.df.column("a").unwrap().str().unwrap().get(0),
+        Some("NEW")
+    );
 }
 
 #[test]
@@ -355,7 +359,10 @@ fn char_array_with_truncation() {
     .unwrap();
     let ds = read_work(&s, "out");
     // Longueur fixe 3 : troncature silencieuse à l'assignation.
-    assert_eq!(ds.df.column("u").unwrap().str().unwrap().get(0), Some("abc"));
+    assert_eq!(
+        ds.df.column("u").unwrap().str().unwrap().get(0),
+        Some("abc")
+    );
     assert_eq!(ds.df.column("v").unwrap().str().unwrap().get(0), Some("xy"));
     assert_eq!(ds.vars[0].length, 3);
 }
@@ -363,7 +370,11 @@ fn char_array_with_truncation() {
 #[test]
 fn char_array_default_length_is_8() {
     let mut s = session();
-    run("data out; array c{1} $ u; c{1} = 'abcdefghij'; run;", &mut s).unwrap();
+    run(
+        "data out; array c{1} $ u; c{1} = 'abcdefghij'; run;",
+        &mut s,
+    )
+    .unwrap();
     let ds = read_work(&s, "out");
     assert_eq!(
         ds.df.column("u").unwrap().str().unwrap().get(0),
@@ -390,9 +401,10 @@ fn out_of_range_subscript_stops_step_with_error() {
         "log was:\n{}",
         out.log
     );
-    assert!(out
-        .log
-        .contains("The SAS System stopped processing this step because of errors."));
+    assert!(
+        out.log
+            .contains("The SAS System stopped processing this step because of errors.")
+    );
 
     // Rvalue hors bornes (y compris indice 0) : même arrêt.
     let out = crate::run(

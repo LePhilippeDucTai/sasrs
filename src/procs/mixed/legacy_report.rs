@@ -27,10 +27,7 @@ pub(super) fn print_model_information_legacy(
     {
         let aligns = vec![Align::Left, Align::Left];
         let rows: Vec<Vec<String>> = vec![
-            vec![
-                "Data Set".into(),
-                format!("{}.{}", in_libref, in_table),
-            ],
+            vec!["Data Set".into(), format!("{}.{}", in_libref, in_table)],
             vec!["Dependent Variable".into(), model.response.clone()],
             vec!["Covariance Structure".into(), cov_struct.into()],
             vec!["Estimation Method".into(), method_name.into()],
@@ -46,17 +43,17 @@ pub(super) fn print_model_information_legacy(
 }
 
 /// Class Level Information table (legacy path: the SUBJECT= class only).
-pub(super) fn print_class_level_information_legacy(session: &mut Session, subject: &str, levels: &[Value]) {
+pub(super) fn print_class_level_information_legacy(
+    session: &mut Session,
+    subject: &str,
+    levels: &[Value],
+) {
     centered(session, "Class Level Information");
     session.listing.blank();
     {
         let headers = vec!["Class".into(), "Levels".into(), "Values".into()];
         let aligns = vec![Align::Left, Align::Right, Align::Left];
-        let values_str = levels
-            .iter()
-            .map(value_label)
-            .collect::<Vec<_>>()
-            .join(" ");
+        let values_str = levels.iter().map(value_label).collect::<Vec<_>>().join(" ");
         let rows = vec![vec![
             subject.to_string(),
             levels.len().to_string(),
@@ -68,7 +65,12 @@ pub(super) fn print_class_level_information_legacy(session: &mut Session, subjec
 }
 
 /// Dimensions table (legacy path).
-pub(super) fn print_dimensions_legacy(session: &mut Session, fit: &MixedFit, n_subjects: usize, max_obs: usize) {
+pub(super) fn print_dimensions_legacy(
+    session: &mut Session,
+    fit: &MixedFit,
+    n_subjects: usize,
+    max_obs: usize,
+) {
     centered(session, "Dimensions");
     session.listing.blank();
     {
@@ -126,12 +128,7 @@ pub(super) fn print_iteration_history_legacy(session: &mut Session, fit: &MixedF
         ];
         let aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
         let rows: Vec<Vec<String>> = vec![
-            vec![
-                "0".into(),
-                "1".into(),
-                fmt4(fit.neg2ll),
-                String::new(),
-            ],
+            vec!["0".into(), "1".into(), fmt4(fit.neg2ll), String::new()],
             vec![
                 "1".into(),
                 "1".into(),
@@ -217,7 +214,11 @@ pub(super) fn print_fit_statistics_legacy(
 }
 
 /// Solution for Fixed Effects (intercept-only, ddfm=contain) — legacy path.
-pub(super) fn print_fixed_solution_legacy(session: &mut Session, fit: &MixedFit, n_subjects: usize) {
+pub(super) fn print_fixed_solution_legacy(
+    session: &mut Session,
+    fit: &MixedFit,
+    n_subjects: usize,
+) {
     centered(session, "Solution for Fixed Effects");
     session.listing.blank();
     let headers = vec![

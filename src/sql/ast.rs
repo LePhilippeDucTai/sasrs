@@ -21,19 +21,39 @@ pub struct SqlProgram {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlStmt {
     Select(SelectStmt),
-    CreateTableAs { table: DatasetRef, query: SelectStmt },
+    CreateTableAs {
+        table: DatasetRef,
+        query: SelectStmt,
+    },
     /// `CREATE VIEW <name> AS <select>` (M20.4) : alias de requête réutilisable,
     /// stocké en mémoire (jamais matérialisé) dans `Session.views`.
-    CreateView { name: DatasetRef, query: Box<SelectStmt> },
+    CreateView {
+        name: DatasetRef,
+        query: Box<SelectStmt>,
+    },
     DropTable(Vec<DatasetRef>),
     /// `DROP VIEW <ref> [, <ref> ...]` (M20.4) : supprime une vue de
     /// `Session.views`.
     DropView(Vec<DatasetRef>),
     /// `UPDATE <table> SET col=expr [, ...] [WHERE cond]` (M20.4).
-    Update { table: DatasetRef, assignments: Vec<(String, SqlExpr)>, where_: Option<SqlExpr> },
-    InsertValues { table: DatasetRef, columns: Vec<String>, rows: Vec<Vec<Expr>> },
-    InsertSelect { table: DatasetRef, query: SelectStmt },
-    DeleteFrom { table: DatasetRef, where_: Option<SqlExpr> },
+    Update {
+        table: DatasetRef,
+        assignments: Vec<(String, SqlExpr)>,
+        where_: Option<SqlExpr>,
+    },
+    InsertValues {
+        table: DatasetRef,
+        columns: Vec<String>,
+        rows: Vec<Vec<Expr>>,
+    },
+    InsertSelect {
+        table: DatasetRef,
+        query: SelectStmt,
+    },
+    DeleteFrom {
+        table: DatasetRef,
+        where_: Option<SqlExpr>,
+    },
     Describe(DatasetRef),
 }
 
@@ -100,24 +120,58 @@ pub enum SqlExpr {
     /// `alias.*` — toutes les colonnes d'une table qualifiée.
     QualifiedStar(String),
     /// `alias.colonne`
-    Qualified { table: String, column: String },
+    Qualified {
+        table: String,
+        column: String,
+    },
     /// `CALCULATED alias` — référence à un alias du select-list.
     Calculated(String),
     /// COUNT(*) / COUNT(DISTINCT x) / SUM / AVG / MIN / MAX ...
-    Aggregate { func: String, distinct: bool, arg: Option<Box<SqlExpr>>, star: bool },
+    Aggregate {
+        func: String,
+        distinct: bool,
+        arg: Option<Box<SqlExpr>>,
+        star: bool,
+    },
     /// `x BETWEEN a AND b`, `x IS [NOT] NULL/MISSING`, `x LIKE 'p%'`
-    Between { expr: Box<SqlExpr>, low: Box<SqlExpr>, high: Box<SqlExpr>, negated: bool },
-    IsNull { expr: Box<SqlExpr>, negated: bool },
-    Like { expr: Box<SqlExpr>, pattern: String, negated: bool },
-    Binary { op: crate::ast::BinaryOp, left: Box<SqlExpr>, right: Box<SqlExpr> },
-    Unary { op: crate::ast::UnaryOp, expr: Box<SqlExpr> },
+    Between {
+        expr: Box<SqlExpr>,
+        low: Box<SqlExpr>,
+        high: Box<SqlExpr>,
+        negated: bool,
+    },
+    IsNull {
+        expr: Box<SqlExpr>,
+        negated: bool,
+    },
+    Like {
+        expr: Box<SqlExpr>,
+        pattern: String,
+        negated: bool,
+    },
+    Binary {
+        op: crate::ast::BinaryOp,
+        left: Box<SqlExpr>,
+        right: Box<SqlExpr>,
+    },
+    Unary {
+        op: crate::ast::UnaryOp,
+        expr: Box<SqlExpr>,
+    },
     /// Sous-requête scalaire `(SELECT ...)` : doit renvoyer une seule colonne /
     /// une seule ligne. Évaluée (non-corrélée) avant l'abaissement Polars.
     Subquery(Box<SelectStmt>),
     /// `expr [NOT] IN (SELECT ...)` : la sous-requête fournit une colonne de
     /// valeurs. Non-corrélée → évaluée puis transformée en liste.
-    InSubquery { expr: Box<SqlExpr>, query: Box<SelectStmt>, negated: bool },
+    InSubquery {
+        expr: Box<SqlExpr>,
+        query: Box<SelectStmt>,
+        negated: bool,
+    },
     /// `[NOT] EXISTS (SELECT ...)` : vrai si la sous-requête renvoie ≥ 1 ligne.
     /// Non-corrélée → évaluée puis réduite à un booléen constant.
-    Exists { query: Box<SelectStmt>, negated: bool },
+    Exists {
+        query: Box<SelectStmt>,
+        negated: bool,
+    },
 }

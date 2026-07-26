@@ -69,10 +69,7 @@ pub fn nullify_specials(df: &DataFrame) -> PolarsResult<DataFrame> {
         .collect();
     for name in names {
         let s = out.column(&name)?.f64()?;
-        let cleaned: Float64Chunked = s
-            .iter()
-            .map(|opt| opt.filter(|v| !v.is_nan()))
-            .collect();
+        let cleaned: Float64Chunked = s.iter().map(|opt| opt.filter(|v| !v.is_nan())).collect();
         out.replace(&name, cleaned.into_series())?;
     }
     Ok(out)

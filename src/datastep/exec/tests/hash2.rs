@@ -36,10 +36,19 @@ fn hash_iter_first_next() {
     .unwrap();
     let ds = read_work(&s, "out");
     assert_eq!(ds.df.column("k1").unwrap().f64().unwrap().get(0), Some(5.0));
-    assert_eq!(ds.df.column("v1").unwrap().f64().unwrap().get(0), Some(50.0));
+    assert_eq!(
+        ds.df.column("v1").unwrap().f64().unwrap().get(0),
+        Some(50.0)
+    );
     assert_eq!(ds.df.column("k2").unwrap().f64().unwrap().get(0), Some(6.0));
-    assert_eq!(ds.df.column("v2").unwrap().f64().unwrap().get(0), Some(60.0));
-    assert_ne!(ds.df.column("rc3").unwrap().f64().unwrap().get(0), Some(0.0));
+    assert_eq!(
+        ds.df.column("v2").unwrap().f64().unwrap().get(0),
+        Some(60.0)
+    );
+    assert_ne!(
+        ds.df.column("rc3").unwrap().f64().unwrap().get(0),
+        Some(0.0)
+    );
 }
 
 /// HITER last/prev : parcours arrière.
@@ -63,7 +72,10 @@ fn hash_iter_last_prev() {
     assert_eq!(ds.df.column("k1").unwrap().f64().unwrap().get(0), Some(3.0));
     assert_eq!(ds.df.column("k2").unwrap().f64().unwrap().get(0), Some(2.0));
     assert_eq!(ds.df.column("k3").unwrap().f64().unwrap().get(0), Some(1.0));
-    assert_ne!(ds.df.column("rc4").unwrap().f64().unwrap().get(0), Some(0.0));
+    assert_ne!(
+        ds.df.column("rc4").unwrap().f64().unwrap().get(0),
+        Some(0.0)
+    );
 }
 
 /// HITER respecte ordered:'descending' (first = clé max).
@@ -127,7 +139,13 @@ fn hash_char_key_data() {
     let ds = read_work(&s, "out");
     assert_eq!(ds.df.column("rc").unwrap().f64().unwrap().get(0), Some(0.0));
     assert_eq!(
-        ds.df.column("city").unwrap().str().unwrap().get(0).map(str::trim),
+        ds.df
+            .column("city")
+            .unwrap()
+            .str()
+            .unwrap()
+            .get(0)
+            .map(str::trim),
         Some("rome")
     );
 }

@@ -31,8 +31,7 @@ pub(super) fn write_class_level_info(session: &mut Session, design: &Design) {
             continue;
         }
         // Reconstruct the full ordered level list: non-reference levels then ref.
-        let mut labels: Vec<String> =
-            eff.levels.iter().map(value_label).collect();
+        let mut labels: Vec<String> = eff.levels.iter().map(value_label).collect();
         labels.push(eff.ref_label.clone());
         rows.push(vec![eff.name.clone(), labels.join(" ")]);
     }

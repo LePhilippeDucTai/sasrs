@@ -31,14 +31,13 @@
 
 #![allow(unused_variables, dead_code)]
 
-
-mod select;
-mod dml;
 mod convert;
+mod dml;
+mod select;
 
-use select::*;
-use dml::*;
 use convert::*;
+use dml::*;
+use select::*;
 
 pub mod ast;
 
@@ -60,7 +59,7 @@ use crate::missing::{num_to_value, value_to_num};
 
 use crate::session::Session;
 
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 
 use ast::{SqlProgram, SqlStmt};
 
@@ -70,9 +69,7 @@ pub fn execute(program: &SqlProgram, session: &mut Session) -> Result<()> {
     for stmt in &program.stmts {
         match stmt {
             SqlStmt::Select(sel) => exec_select(sel, session)?,
-            SqlStmt::CreateTableAs { table, query } => {
-                exec_create_table_as(table, query, session)?
-            }
+            SqlStmt::CreateTableAs { table, query } => exec_create_table_as(table, query, session)?,
             SqlStmt::CreateView { name, query } => exec_create_view(name, query, session)?,
             SqlStmt::DropTable(refs) => exec_drop(refs, session)?,
             SqlStmt::DropView(refs) => exec_drop_view(refs, session)?,
@@ -86,12 +83,8 @@ pub fn execute(program: &SqlProgram, session: &mut Session) -> Result<()> {
                 columns,
                 rows,
             } => exec_insert_values(table, columns, rows, session)?,
-            SqlStmt::InsertSelect { table, query } => {
-                exec_insert_select(table, query, session)?
-            }
-            SqlStmt::DeleteFrom { table, where_ } => {
-                exec_delete(table, where_.as_ref(), session)?
-            }
+            SqlStmt::InsertSelect { table, query } => exec_insert_select(table, query, session)?,
+            SqlStmt::DeleteFrom { table, where_ } => exec_delete(table, where_.as_ref(), session)?,
             SqlStmt::Describe(table) => exec_describe(table, session)?,
         }
     }

@@ -24,7 +24,10 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
         .collect();
 
     // Kaiser normalisation: divide each row i by sqrt(h²[i]).
-    let h_sqrt: Vec<f64> = h2.iter().map(|&h| if h > 0.0 { h.sqrt() } else { 1.0 }).collect();
+    let h_sqrt: Vec<f64> = h2
+        .iter()
+        .map(|&h| if h > 0.0 { h.sqrt() } else { 1.0 })
+        .collect();
     let mut l_norm: Vec<Vec<f64>> = l
         .iter()
         .enumerate()
@@ -56,7 +59,11 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
                 // u[i] = A[i]² - B[i]²,  v[i] = 2*A[i]*B[i]
                 let a: Vec<f64> = l_norm.iter().map(|r| r[p]).collect();
                 let b: Vec<f64> = l_norm.iter().map(|r| r[q]).collect();
-                let u: Vec<f64> = a.iter().zip(&b).map(|(&ai, &bi)| ai * ai - bi * bi).collect();
+                let u: Vec<f64> = a
+                    .iter()
+                    .zip(&b)
+                    .map(|(&ai, &bi)| ai * ai - bi * bi)
+                    .collect();
                 let v: Vec<f64> = a.iter().zip(&b).map(|(&ai, &bi)| 2.0 * ai * bi).collect();
 
                 let n = n_vars as f64;
@@ -201,11 +208,7 @@ pub fn promax(l_varimax: &[Vec<f64>], power: i32) -> Result<PromaxResult> {
     let scale: Vec<f64> = (0..k)
         .map(|j| {
             let d = qtq_inv[j][j];
-            if d > 0.0 {
-                d.sqrt()
-            } else {
-                1.0
-            }
+            if d > 0.0 { d.sqrt() } else { 1.0 }
         })
         .collect();
     for row in q.iter_mut() {

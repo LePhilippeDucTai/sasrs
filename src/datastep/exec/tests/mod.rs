@@ -217,7 +217,9 @@ fn num_col(ds: &SasDataset, name: &str) -> Vec<Option<f64>> {
 
 fn str_col(ds: &SasDataset, name: &str) -> Vec<String> {
     let c = ds.df.column(name).unwrap().str().unwrap();
-    (0..ds.n_obs()).map(|i| c.get(i).unwrap_or("").to_string()).collect()
+    (0..ds.n_obs())
+        .map(|i| c.get(i).unwrap_or("").to_string())
+        .collect()
 }
 
 // ── M16.4 : SET options END= / NOBS= / POINT= + multi-datasets ────────
@@ -273,15 +275,15 @@ fn write_keyed_ds(
         .unwrap();
 }
 
-mod set;
-mod retain;
 mod array;
-mod multiple;
-mod invalid;
-mod file;
-mod select;
 mod end;
-mod update_modify;
-mod link;
+mod file;
 mod hash1;
 mod hash2;
+mod invalid;
+mod link;
+mod multiple;
+mod retain;
+mod select;
+mod set;
+mod update_modify;

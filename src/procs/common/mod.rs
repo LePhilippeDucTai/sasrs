@@ -12,18 +12,16 @@ use crate::missing::{num_to_value, value_to_num};
 use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use std::cmp::Ordering;
 
-
-
-mod stmt;
-mod model;
 mod dist;
+mod model;
+mod stmt;
 
-pub(crate) use stmt::*;
-pub(crate) use model::*;
 pub(crate) use dist::*;
+pub(crate) use model::*;
+pub(crate) use stmt::*;
 
 mod stats;
 
@@ -82,11 +80,6 @@ pub use stats::sample_std;
 pub use stats::t_quantile;
 
 pub use stats::two_sided_p;
-
-
-
-
-
 
 // ───────────────────────── shared distributions ─────────────────────────
 //
@@ -180,7 +173,10 @@ mod parsing_tests {
         let mut ts = proc_stream(&src);
         let err = parse_proc_options(&mut ts, "FOO", |_ts, _kw| Ok(true)).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("Unexpected option '?' on PROC FOO statement."), "msg: {msg}");
+        assert!(
+            msg.contains("Unexpected option '?' on PROC FOO statement."),
+            "msg: {msg}"
+        );
     }
 
     // ── parse_proc_body ───────────────────────────────────────────────────
@@ -344,7 +340,10 @@ mod parsing_tests {
         let session = make_session();
         let err = resolve_last_dataset(&None, &session).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("_LAST_") || msg.contains("undefined"), "msg: {msg}");
+        assert!(
+            msg.contains("_LAST_") || msg.contains("undefined"),
+            "msg: {msg}"
+        );
     }
 
     // ── squelette MODEL (MQ4.6) ───────────────────────────────────────────

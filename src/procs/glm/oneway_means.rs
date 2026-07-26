@@ -23,12 +23,7 @@ pub(super) fn print_oneway_lsmeans(
         "Standard Error".into(),
         "Pr > |t|".into(),
     ];
-    let lsm_aligns = vec![
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
+    let lsm_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     let mut lsm_rows: Vec<Vec<String>> = Vec::new();
 
     for (gi, level) in levels.iter().enumerate() {
@@ -40,21 +35,22 @@ pub(super) fn print_oneway_lsmeans(
         } else {
             f64::NAN
         };
-        let t_lsm = if se_lsm > 0.0 { lsmean_i / se_lsm } else { f64::NAN };
+        let t_lsm = if se_lsm > 0.0 {
+            lsmean_i / se_lsm
+        } else {
+            f64::NAN
+        };
         let p_lsm = if t_lsm.is_nan() {
             None
         } else {
             Some(2.0 * (1.0 - student_t_cdf(t_lsm.abs(), df_error)))
         };
-        lsm_rows.push(vec![
-            lbl,
-            fmt6(lsmean_i),
-            fmt6(se_lsm),
-            fmt_p(p_lsm),
-        ]);
+        lsm_rows.push(vec![lbl, fmt6(lsmean_i), fmt6(se_lsm), fmt_p(p_lsm)]);
     }
 
-    session.listing.write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
+    session
+        .listing
+        .write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
     session.listing.blank();
     session.listing.blank();
 }
@@ -110,7 +106,11 @@ pub(super) fn print_oneway_contrasts(
                 )));
             }
             // Estimate = Σ c_i × ȳ_i
-            let estimate: f64 = c.iter().zip(group_means.iter()).map(|(ci, yi)| ci * yi).sum();
+            let estimate: f64 = c
+                .iter()
+                .zip(group_means.iter())
+                .map(|(ci, yi)| ci * yi)
+                .sum();
             // SE² = MSE × Σ (c_i²/n_i)
             let sum_c2_over_n: f64 = c
                 .iter()
@@ -120,28 +120,46 @@ pub(super) fn print_oneway_contrasts(
                     if ni > 0 { ci * ci / ni as f64 } else { 0.0 }
                 })
                 .sum();
-            let se_sq = if !mse.is_nan() { mse * sum_c2_over_n } else { f64::NAN };
+            let se_sq = if !mse.is_nan() {
+                mse * sum_c2_over_n
+            } else {
+                f64::NAN
+            };
             // F = Estimate² / se_sq
-            let f_con = if se_sq > 0.0 { estimate * estimate / se_sq } else { f64::NAN };
+            let f_con = if se_sq > 0.0 {
+                estimate * estimate / se_sq
+            } else {
+                f64::NAN
+            };
             let p_con = if f_con.is_nan() {
                 None
             } else {
                 Some((1.0 - f_cdf(f_con, 1.0, df_error)).clamp(0.0, 1.0))
             };
             // Contrast SS = F × MSE = Estimate² / Σ(c_i²/n_i)
-            let css = if sum_c2_over_n > 0.0 { estimate * estimate / sum_c2_over_n } else { f64::NAN };
+            let css = if sum_c2_over_n > 0.0 {
+                estimate * estimate / sum_c2_over_n
+            } else {
+                f64::NAN
+            };
 
             con_rows.push(vec![
                 contrast.label.clone(),
                 "1".into(),
                 if css.is_nan() { ".".into() } else { fmt5(css) },
                 if css.is_nan() { ".".into() } else { fmt5(css) },
-                if f_con.is_nan() { ".".into() } else { fmt2(f_con) },
+                if f_con.is_nan() {
+                    ".".into()
+                } else {
+                    fmt2(f_con)
+                },
                 fmt_p(p_con),
             ]);
         }
 
-        session.listing.write_table(&con_headers, &con_aligns, &con_rows);
+        session
+            .listing
+            .write_table(&con_headers, &con_aligns, &con_rows);
         session.listing.blank();
         session.listing.blank();
     }
@@ -190,7 +208,11 @@ pub(super) fn print_oneway_estimates(
         for est in &relevant_estimates {
             let c = &est.coefficients;
             // Estimate = Σ c_i × ȳ_i
-            let estimate: f64 = c.iter().zip(group_means.iter()).map(|(ci, yi)| ci * yi).sum();
+            let estimate: f64 = c
+                .iter()
+                .zip(group_means.iter())
+                .map(|(ci, yi)| ci * yi)
+                .sum();
             // SE² = MSE × Σ (c_i²/n_i)
             let sum_c2_over_n: f64 = c
                 .iter()
@@ -221,7 +243,9 @@ pub(super) fn print_oneway_estimates(
             ]);
         }
 
-        session.listing.write_table(&est_headers, &est_aligns, &est_rows);
+        session
+            .listing
+            .write_table(&est_headers, &est_aligns, &est_rows);
         session.listing.blank();
         session.listing.blank();
     }
@@ -237,12 +261,8 @@ pub(super) fn print_oneway_means(session: &mut Session, eff: &str, stats: &OneWa
     centered(session, &format!("Level of {}", eff));
     session.listing.blank();
 
-    let means_headers: Vec<String> = vec![
-        eff.to_string(),
-        "N".into(),
-        "Mean".into(),
-        "Std Dev".into(),
-    ];
+    let means_headers: Vec<String> =
+        vec![eff.to_string(), "N".into(), "Mean".into(), "Std Dev".into()];
     let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     let mut means_rows: Vec<Vec<String>> = Vec::new();
 
@@ -262,7 +282,9 @@ pub(super) fn print_oneway_means(session: &mut Session, eff: &str, stats: &OneWa
         ]);
     }
 
-    session.listing.write_table(&means_headers, &means_aligns, &means_rows);
+    session
+        .listing
+        .write_table(&means_headers, &means_aligns, &means_rows);
     session.listing.blank();
     session.listing.blank();
 }

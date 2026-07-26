@@ -62,7 +62,11 @@ pub(super) fn pearson_xy(xs: &[f64], ys: &[f64]) -> Option<f64> {
 /// Weighted moments: mean_w = Σw·x/Σw, cov_w = Σw(x−mx)(y−my)/Σw, etc.
 /// Returns (r, n) where n counts the usable triples. r is None when n < 2 or
 /// either weighted variance is zero.
-pub(super) fn pearson_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -> (Option<f64>, usize) {
+pub(super) fn pearson_weighted(
+    xcol: &[Value],
+    ycol: &[Value],
+    wcol: &[Value],
+) -> (Option<f64>, usize) {
     let n_rows = xcol.len().min(ycol.len()).min(wcol.len());
     let mut xs: Vec<f64> = Vec::new();
     let mut ys: Vec<f64> = Vec::new();
@@ -73,9 +77,7 @@ pub(super) fn pearson_weighted(xcol: &[Value], ycol: &[Value], wcol: &[Value]) -
             value_to_num(&ycol[i]),
             value_to_num(&wcol[i]),
         ) {
-            (Some(x), Some(y), Some(w))
-                if !x.is_nan() && !y.is_nan() && !w.is_nan() && w > 0.0 =>
-            {
+            (Some(x), Some(y), Some(w)) if !x.is_nan() && !y.is_nan() && !w.is_nan() && w > 0.0 => {
                 xs.push(x);
                 ys.push(y);
                 ws.push(w);
@@ -124,9 +126,7 @@ pub(super) fn paired_complete_weighted(
             value_to_num(&ycol[i]),
             value_to_num(&wcol[i]),
         ) {
-            (Some(x), Some(y), Some(w))
-                if !x.is_nan() && !y.is_nan() && !w.is_nan() && w > 0.0 =>
-            {
+            (Some(x), Some(y), Some(w)) if !x.is_nan() && !y.is_nan() && !w.is_nan() && w > 0.0 => {
                 xs.push(x);
                 ys.push(y);
                 ws.push(w);
@@ -147,7 +147,11 @@ pub(super) fn paired_complete_weighted(
 pub(super) fn weighted_mean_ranks(xs: &[f64], ws: &[f64]) -> Vec<f64> {
     let n = xs.len();
     let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_by(|&a, &b| xs[a].partial_cmp(&xs[b]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&a, &b| {
+        xs[a]
+            .partial_cmp(&xs[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut ranks = vec![0.0_f64; n];
     let mut cum = 0.0_f64;
     let mut i = 0;

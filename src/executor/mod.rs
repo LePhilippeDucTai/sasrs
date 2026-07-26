@@ -40,7 +40,6 @@ use crate::session::Session;
 use crate::source::SourceFile;
 use std::path::PathBuf;
 
-
 mod global;
 
 use global::*;

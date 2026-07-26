@@ -115,7 +115,11 @@ fn test_oracle_redundant_restrict_unchanged() {
         );
     }
     // λ ≈ 0 since the constraint is non-binding.
-    assert!(r.lambda_rows[0].1.abs() < 1e-6, "lambda={}", r.lambda_rows[0].1);
+    assert!(
+        r.lambda_rows[0].1.abs() < 1e-6,
+        "lambda={}",
+        r.lambda_rows[0].1
+    );
 }
 
 /// Oracle: Σ_i h_i == p_eff (trace of the hat matrix == #params).
@@ -123,7 +127,11 @@ fn test_oracle_redundant_restrict_unchanged() {
 fn test_oracle_leverage_trace() {
     let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
     let x2 = [2.0_f64, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0];
-    let y: Vec<f64> = x1.iter().zip(x2.iter()).map(|(&a, &b)| 1.0 + a + 0.5 * b).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .zip(x2.iter())
+        .map(|(&a, &b)| 1.0 + a + 0.5 * b)
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1, &x2], n);
     let fit = ols_fit(&x, &y).unwrap();
@@ -143,7 +151,10 @@ fn test_oracle_leverage_trace() {
 #[test]
 fn test_oracle_std_error_identities() {
     let x1 = [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 8.0, 7.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 2.0 + 3.0 * a + (a * 0.5).sin()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 2.0 + 3.0 * a + (a * 0.5).sin())
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1], n);
     let fit = ols_fit(&x, &y).unwrap();
@@ -167,7 +178,10 @@ fn test_oracle_std_error_identities() {
 #[test]
 fn test_oracle_clb_limits() {
     let x1 = [1.0_f64, 2.0, 4.0, 3.0, 6.0, 5.0, 7.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos())
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1], n);
     let fit = ols_fit(&x, &y).unwrap();
@@ -274,7 +288,10 @@ fn test_oracle_dfbetas_loo_refit() {
 
     for drop in 0..n {
         // Refit without observation `drop`.
-        let xr: Vec<Vec<f64>> = (0..n).filter(|&i| i != drop).map(|i| x[i].clone()).collect();
+        let xr: Vec<Vec<f64>> = (0..n)
+            .filter(|&i| i != drop)
+            .map(|i| x[i].clone())
+            .collect();
         let yr: Vec<f64> = (0..n).filter(|&i| i != drop).map(|i| y[i]).collect();
         let fit_i = ols_fit(&xr, &yr).unwrap();
         // s_(i) = √MSE_(i).
@@ -402,7 +419,10 @@ fn test_oracle_durbin_watson() {
 #[test]
 fn test_oracle_acov_hc0() {
     let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 1.0 + 2.0 * a + (a * 0.9).sin()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 1.0 + 2.0 * a + (a * 0.9).sin())
+        .collect();
     let n = y.len();
     let p_eff = 2;
     let x = design(true, &[&x1], n);

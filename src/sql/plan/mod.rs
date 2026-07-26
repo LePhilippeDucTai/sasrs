@@ -64,27 +64,26 @@
 
 #![allow(unused_variables, dead_code)]
 
-use crate::sql::ast::{JoinKind, SelectItem, SelectStmt, SetOp, SqlExpr};
-use crate::ast::{BinaryOp, UnaryOp};
 use crate::ast::Expr as SasExpr;
+use crate::ast::{BinaryOp, UnaryOp};
 use crate::error::{Result, SasError};
 use crate::session::Session;
+use crate::sql::ast::{JoinKind, SelectItem, SelectStmt, SetOp, SqlExpr};
 use crate::value::MissingKind;
 use polars::prelude::*;
 
-
-mod subquery;
-mod source;
+mod expr;
 mod grouping;
 mod project;
 mod setop;
-mod expr;
-use subquery::*;
-use source::*;
+mod source;
+mod subquery;
+use expr::*;
 use grouping::*;
 use project::*;
 use setop::*;
-use expr::*;
+use source::*;
+use subquery::*;
 
 /// Contexte de traduction : permet à `CALCULATED x` de retrouver
 /// l'expression de l'alias `x` dans le select-list courant.

@@ -86,11 +86,7 @@ pub(crate) fn weighted_ols_fit(x_mat: &[Vec<f64>], y: &[f64], wf: &[f64]) -> Res
         .zip(y_hat.iter())
         .map(|(yi, yhi)| yi - yhi)
         .collect();
-    let sse: f64 = resid
-        .iter()
-        .zip(wf.iter())
-        .map(|(e, &w)| w * e * e)
-        .sum();
+    let sse: f64 = resid.iter().zip(wf.iter()).map(|(e, &w)| w * e * e).sum();
     Ok(OlsFit {
         beta,
         y_hat,
@@ -125,7 +121,12 @@ pub(crate) fn leverages(x_mat: &[Vec<f64>], xtx_inv: &[Vec<f64>]) -> Vec<f64> {
 /// design matrix from `xcols` (columns of regressors, each length n) over the
 /// `subset` of column indices, optionally prepending an intercept column.
 /// Returns `None` if the fit is rank-deficient / not solvable.
-pub(crate) fn subset_sse(xcols: &[Vec<f64>], y: &[f64], subset: &[usize], intercept: bool) -> Option<f64> {
+pub(crate) fn subset_sse(
+    xcols: &[Vec<f64>],
+    y: &[f64],
+    subset: &[usize],
+    intercept: bool,
+) -> Option<f64> {
     let n = y.len();
     let mut x: Vec<Vec<f64>> = Vec::with_capacity(n);
     for i in 0..n {

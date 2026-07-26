@@ -180,8 +180,12 @@ pub(super) fn fmt_b8601dt(fval: f64, spec: &FormatSpec) -> Option<String> {
     let dt = secs_to_datetime(fval)?;
     let s = format!(
         "{:04}{:02}{:02}T{:02}{:02}{:02}",
-        dt.year(), dt.month(), dt.day(),
-        dt.hour(), dt.minute(), dt.second()
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
     );
     let w = spec.w.unwrap_or(15) as usize;
     Some(right_justify(&s, w))
@@ -211,8 +215,12 @@ pub(super) fn fmt_e8601dt(fval: f64, spec: &FormatSpec) -> Option<String> {
     let dt = secs_to_datetime(fval)?;
     let s = format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        dt.year(), dt.month(), dt.day(),
-        dt.hour(), dt.minute(), dt.second()
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
     );
     let w = spec.w.unwrap_or(19) as usize;
     Some(right_justify(&s, w))

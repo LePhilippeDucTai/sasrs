@@ -42,8 +42,7 @@ pub(crate) fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
                 validate_sas_name(&name, head.span)?;
                 ts.next(); // `=`
                 parse_iterative_do(ts, name)
-            } else if (lower == "while" || lower == "until")
-                && ts.peek().kind == TokenKind::LParen
+            } else if (lower == "while" || lower == "until") && ts.peek().kind == TokenKind::LParen
             {
                 // `do while(c);` / `do until(c);` : conditionnel pur.
                 let cond = parse_paren_cond(ts)?;
@@ -253,10 +252,7 @@ pub(crate) fn parse_do_body(ts: &mut StatementStream) -> Result<Vec<DsStmt>> {
         let tok = ts.peek().clone();
         match &tok.kind {
             TokenKind::Eof => {
-                return Err(SasError::parse(
-                    "missing END for DO block.",
-                    tok.span,
-                ));
+                return Err(SasError::parse("missing END for DO block.", tok.span));
             }
             TokenKind::Semi => {
                 ts.next();
@@ -273,10 +269,7 @@ pub(crate) fn parse_do_body(ts: &mut StatementStream) -> Result<Vec<DsStmt>> {
                 let lower = s.to_ascii_lowercase();
                 if lower == "run" || lower == "quit" || is_block_head_kw(&lower) {
                     // Frontière atteinte sans END : DO non clos.
-                    return Err(SasError::parse(
-                        "missing END for DO block.",
-                        tok.span,
-                    ));
+                    return Err(SasError::parse("missing END for DO block.", tok.span));
                 }
                 body.push(parse_statement(ts)?);
             }

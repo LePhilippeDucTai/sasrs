@@ -74,12 +74,12 @@ pub(super) fn print_class_level_information_gen(
         let aligns = vec![Align::Left, Align::Right, Align::Left];
         let mut rows: Vec<Vec<String>> = Vec::new();
         // Subject class.
-        let values_str = levels
-            .iter()
-            .map(value_label)
-            .collect::<Vec<_>>()
-            .join(" ");
-        rows.push(vec![subject.to_string(), n_subjects.to_string(), values_str]);
+        let values_str = levels.iter().map(value_label).collect::<Vec<_>>().join(" ");
+        rows.push(vec![
+            subject.to_string(),
+            n_subjects.to_string(),
+            values_str,
+        ]);
         // Fixed CLASS variables.
         for (nm, col) in kept_fixed {
             if ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm))

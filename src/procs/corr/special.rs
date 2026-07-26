@@ -1,4 +1,3 @@
-
 /// Upper-tail standard-normal survival function 1 − Φ(z) for z >= 0, via the
 /// complementary error function relation Φ(z) = ½ erfc(−z/√2). Accuracy ~1e-7,
 /// ample for a documented normal approximation.
@@ -18,14 +17,9 @@ pub(super) fn erfc(x: f64) -> f64 {
                         + t * (-0.18628806
                             + t * (0.27886807
                                 + t * (-1.13520398
-                                    + t * (1.48851587
-                                        + t * (-0.82215223 + t * 0.17087277)))))))))
-        .exp();
-    if x >= 0.0 {
-        ans
-    } else {
-        2.0 - ans
-    }
+                                    + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))))
+            .exp();
+    if x >= 0.0 { ans } else { 2.0 - ans }
 }
 
 /// Two-sided survival function of Student's t: P(|T_df| > t) for t >= 0.

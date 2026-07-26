@@ -33,14 +33,20 @@ pub(super) fn two_way(
         if !keep(rv) || !keep(cv) {
             continue;
         }
-        let r = row_vals.iter().position(|x| x.sas_cmp(rv) == Ordering::Equal);
-        let c = col_vals.iter().position(|x| x.sas_cmp(cv) == Ordering::Equal);
+        let r = row_vals
+            .iter()
+            .position(|x| x.sas_cmp(rv) == Ordering::Equal);
+        let c = col_vals
+            .iter()
+            .position(|x| x.sas_cmp(cv) == Ordering::Equal);
         if let (Some(r), Some(c)) = (r, c) {
             freq[r][c] += w;
         }
     }
 
-    render_two_way(session, req, &row_name, &col_name, &row_vals, &col_vals, &freq);
+    render_two_way(
+        session, req, &row_name, &col_name, &row_vals, &col_vals, &freq,
+    );
     Ok(())
 }
 
@@ -69,7 +75,9 @@ pub(super) fn render_two_way(
         render_two_way_list(
             session, req, row_name, col_name, row_vals, col_vals, freq, grand,
         );
-        emit_two_way_stats(session, req, row_name, col_name, freq, &row_tot, &col_tot, grand);
+        emit_two_way_stats(
+            session, req, row_name, col_name, freq, &row_tot, &col_tot, grand,
+        );
         return;
     }
 
@@ -207,7 +215,9 @@ pub(super) fn render_two_way(
 
     session.listing.write_table(&headers, &aligns, &rows);
 
-    emit_two_way_stats(session, req, row_name, col_name, freq, &row_tot, &col_tot, grand);
+    emit_two_way_stats(
+        session, req, row_name, col_name, freq, &row_tot, &col_tot, grand,
+    );
 }
 
 /// Print all requested statistic blocks for a two-way table. CHISQ uses the
@@ -296,7 +306,11 @@ pub(super) fn render_two_way_list(
             }
             cum += f;
             let pct = if grand > 0.0 { 100.0 * f / grand } else { 0.0 };
-            let cum_pct = if grand > 0.0 { 100.0 * cum / grand } else { 0.0 };
+            let cum_pct = if grand > 0.0 {
+                100.0 * cum / grand
+            } else {
+                0.0
+            };
             rows.push(vec![
                 category_label(&row_vals[r]),
                 category_label(&col_vals[c]),
@@ -399,14 +413,20 @@ pub(super) fn n_way(
             if !keep(rv) || !keep(cv) {
                 continue;
             }
-            let r = row_vals.iter().position(|x| x.sas_cmp(rv) == Ordering::Equal);
-            let c = col_vals.iter().position(|x| x.sas_cmp(cv) == Ordering::Equal);
+            let r = row_vals
+                .iter()
+                .position(|x| x.sas_cmp(rv) == Ordering::Equal);
+            let c = col_vals
+                .iter()
+                .position(|x| x.sas_cmp(cv) == Ordering::Equal);
             if let (Some(r), Some(c)) = (r, c) {
                 freq[r][c] += w;
             }
         }
 
-        render_two_way(session, req, row_name, col_name, &row_vals, &col_vals, &freq);
+        render_two_way(
+            session, req, row_name, col_name, &row_vals, &col_vals, &freq,
+        );
         session.listing.blank();
     }
 

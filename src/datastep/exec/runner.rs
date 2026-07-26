@@ -185,7 +185,11 @@ pub(super) fn drain_runner_side_effects(r: &mut Runner, session: &mut Session) -
 /// Écrit les sorties DATA (ordre du statement DATA ; _LAST_ = la dernière) à
 /// partir des builders du Runner. Partagé par les trois boucles d'exécution
 /// (principale, UPDATE, MODIFY). Consomme `outputs`/`builders` (mem::take).
-pub(super) fn write_runner_outputs(r: &mut Runner, session: &mut Session, stats: &mut StepStats) -> Result<()> {
+pub(super) fn write_runner_outputs(
+    r: &mut Runner,
+    session: &mut Session,
+    stats: &mut StepStats,
+) -> Result<()> {
     let outputs = std::mem::take(&mut r.outputs);
     let builders = std::mem::take(&mut r.builders);
     for ((spec, bset), n_out) in outputs.iter().zip(builders).zip(&r.out_rows) {

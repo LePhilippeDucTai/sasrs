@@ -48,36 +48,11 @@ pub(super) fn emit_variable(
     centered(session, "Moments");
     session.listing.blank();
     let moments: Vec<(&str, String, &str, String)> = vec![
-        (
-            "N",
-            format!("{n}"),
-            "Sum Weights",
-            format!("{n}"),
-        ),
-        (
-            "Mean",
-            fmt_opt(mean),
-            "Sum Observations",
-            fmt_num(sum),
-        ),
-        (
-            "Std Deviation",
-            fmt_opt(s),
-            "Variance",
-            fmt_opt(variance),
-        ),
-        (
-            "Skewness",
-            fmt_opt(skew),
-            "Kurtosis",
-            fmt_opt(kurt),
-        ),
-        (
-            "Uncorrected SS",
-            fmt_num(uss),
-            "Corrected SS",
-            fmt_num(css),
-        ),
+        ("N", format!("{n}"), "Sum Weights", format!("{n}")),
+        ("Mean", fmt_opt(mean), "Sum Observations", fmt_num(sum)),
+        ("Std Deviation", fmt_opt(s), "Variance", fmt_opt(variance)),
+        ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
+        ("Uncorrected SS", fmt_num(uss), "Corrected SS", fmt_num(css)),
         (
             "Coeff Variation",
             fmt_opt(cv),
@@ -320,8 +295,18 @@ pub(super) fn emit_variable_weighted(
         ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
         ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
         ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
-        ("Uncorrected SS", fmt_num(uss_w), "Corrected SS", fmt_num(css_w)),
-        ("Coeff Variation", fmt_opt(cv), "Std Error Mean", fmt_opt(std_err)),
+        (
+            "Uncorrected SS",
+            fmt_num(uss_w),
+            "Corrected SS",
+            fmt_num(css_w),
+        ),
+        (
+            "Coeff Variation",
+            fmt_opt(cv),
+            "Std Error Mean",
+            fmt_opt(std_err),
+        ),
     ];
     let m_rows: Vec<Vec<String>> = moments
         .into_iter()

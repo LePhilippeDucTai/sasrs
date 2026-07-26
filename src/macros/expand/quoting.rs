@@ -54,7 +54,12 @@ impl MacroEngine {
     ///      maintenant résolus comme des déclencheurs normaux.
     /// La passe `unmask` finale de `expand_open_code` ne fait alors plus rien sur
     /// ce fragment (déjà dé-masqué). Rend l'index après la `)`.
-    pub(crate) fn consume_unquote(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_unquote(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 1 + "unquote".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -86,7 +91,12 @@ impl MacroEngine {
     /// - absent    → le flottant formaté (entier sans décimales si exact).
     /// `&refs`/macros imbriquées dans `expr` sont résolues d'abord. Erreur de
     /// syntaxe → note d'erreur (pas de panic). Rend l'index après la `)`.
-    pub(crate) fn consume_sysevalf(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_sysevalf(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 1 + "sysevalf".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -118,7 +128,12 @@ impl MacroEngine {
     /// L'argument peut lui-même être un `&ref` désignant le nom (SAS résout
     /// l'argument en un nom). Variable indéfinie → chaîne vide (SAS émet un
     /// WARNING ; on se contente d'émettre vide). Rend l'index après la `)`.
-    pub(crate) fn consume_superq(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_superq(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 1 + "superq".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;

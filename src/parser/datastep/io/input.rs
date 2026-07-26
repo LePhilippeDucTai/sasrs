@@ -163,8 +163,7 @@ pub(crate) fn parse_input_var(ts: &mut StatementStream, name: String) -> Result<
 pub(crate) fn dollar_begins_informat(ts: &StatementStream) -> bool {
     let cur = ts.peek();
     let next = ts.peek2();
-    next.span.start == cur.span.end
-        && matches!(next.kind, TokenKind::Ident(_) | TokenKind::Num(_))
+    next.span.start == cur.span.end && matches!(next.kind, TokenKind::Ident(_) | TokenKind::Num(_))
 }
 
 /// Vrai si un informat suit (mode formaté) : un `$`, un nombre porteur d'un

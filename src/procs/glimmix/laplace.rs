@@ -125,11 +125,7 @@ pub(super) fn fit_laplace(
         let s2u = u[p].exp();
         let scale = if is_normal { u[p + 1].exp() } else { 1.0 };
         let v = laplace_neg2(y, x, freq, subj_of, n_subjects, beta, s2u, dist, lf, scale);
-        if v.is_finite() {
-            v
-        } else {
-            1e30
-        }
+        if v.is_finite() { v } else { 1e30 }
     };
 
     let mut u_best = u0.clone();
@@ -155,7 +151,9 @@ pub(super) fn fit_laplace(
     // Var(β̂) ≈ inverse of the observed information = Hessian of (−2logL/2)=−logL
     // w.r.t. β, by central finite differences (σ's held at the optimum).
     let neg_ll = |b: &[f64]| -> f64 {
-        0.5 * laplace_neg2(y, x, freq, subj_of, n_subjects, b, sigma2_u, dist, lf, sigma2_e)
+        0.5 * laplace_neg2(
+            y, x, freq, subj_of, n_subjects, b, sigma2_u, dist, lf, sigma2_e,
+        )
     };
     let h = 1e-4;
     let mut hess = vec![vec![0.0; p]; p];

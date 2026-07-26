@@ -26,16 +26,13 @@ pub(crate) fn parse_date_ddmonyyyy(s: &str, span: Span) -> Result<NaiveDate> {
     }
     let day_str = &s[..i];
     if day_str.is_empty() || i + 3 > s.len() {
-        return Err(SasError::parse(
-            format!("invalid date literal '{s}'"),
-            span,
-        ));
+        return Err(SasError::parse(format!("invalid date literal '{s}'"), span));
     }
     let mon_str = &s[i..i + 3];
     let year_str = &s[i + 3..];
-    let day: u32 = day_str.parse().map_err(|_| {
-        SasError::parse(format!("invalid date literal '{s}'"), span)
-    })?;
+    let day: u32 = day_str
+        .parse()
+        .map_err(|_| SasError::parse(format!("invalid date literal '{s}'"), span))?;
     let month = match mon_str.to_ascii_lowercase().as_str() {
         "jan" => 1,
         "feb" => 2,
@@ -62,12 +59,11 @@ pub(crate) fn parse_date_ddmonyyyy(s: &str, span: Span) -> Result<NaiveDate> {
             span,
         ));
     }
-    let year: i32 = year_str.parse().map_err(|_| {
-        SasError::parse(format!("invalid date literal '{s}'"), span)
-    })?;
-    NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
-        SasError::parse(format!("invalid date literal '{s}'"), span)
-    })
+    let year: i32 = year_str
+        .parse()
+        .map_err(|_| SasError::parse(format!("invalid date literal '{s}'"), span))?;
+    NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| SasError::parse(format!("invalid date literal '{s}'"), span))
 }
 
 /// `'ddMONyyyy'd` → jours depuis 1960-01-01 (f64).
@@ -85,16 +81,10 @@ pub(crate) fn parse_time_literal(s: &str, span: Span) -> Result<f64> {
     let m = parts.next();
     let sec = parts.next();
     if parts.next().is_some() {
-        return Err(SasError::parse(
-            format!("invalid time literal '{s}'"),
-            span,
-        ));
+        return Err(SasError::parse(format!("invalid time literal '{s}'"), span));
     }
     let (Some(h), Some(m)) = (h, m) else {
-        return Err(SasError::parse(
-            format!("invalid time literal '{s}'"),
-            span,
-        ));
+        return Err(SasError::parse(format!("invalid time literal '{s}'"), span));
     };
     let parse_int = |p: &str| -> Result<u32> {
         p.trim()
@@ -108,18 +98,12 @@ pub(crate) fn parse_time_literal(s: &str, span: Span) -> Result<f64> {
         None => 0,
     };
     if mm >= 60 || ss >= 60 {
-        return Err(SasError::parse(
-            format!("invalid time literal '{s}'"),
-            span,
-        ));
+        return Err(SasError::parse(format!("invalid time literal '{s}'"), span));
     }
     // Validation des composantes via NaiveTime (heures < 24 — SAS tolère
     // davantage, mais on reste strict pour les littéraux M1).
     if NaiveTime::from_hms_opt(hh, mm, ss).is_none() {
-        return Err(SasError::parse(
-            format!("invalid time literal '{s}'"),
-            span,
-        ));
+        return Err(SasError::parse(format!("invalid time literal '{s}'"), span));
     }
     Ok((hh * 3600 + mm * 60 + ss) as f64)
 }

@@ -96,7 +96,6 @@ use crate::value::{Value, VarType};
 use polars::prelude::*;
 use std::cmp::Ordering;
 
-
 mod compute;
 
 use compute::*;
@@ -219,12 +218,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
             let tok = ts.peek().clone();
             let n = match &tok.kind {
                 TokenKind::Num(v) => *v,
-                _ => {
-                    return Err(SasError::parse(
-                        "expected a number after GROUPS=",
-                        tok.span,
-                    ))
-                }
+                _ => return Err(SasError::parse("expected a number after GROUPS=", tok.span)),
             };
             if n < 1.0 || n.fract() != 0.0 {
                 return Err(SasError::runtime(

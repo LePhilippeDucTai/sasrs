@@ -3,7 +3,11 @@ use chrono::NaiveDate;
 
 // Helper: make a spec
 fn spec(name: &str, w: Option<u16>, d: Option<u16>) -> FormatSpec {
-    FormatSpec { name: name.to_string(), w, d }
+    FormatSpec {
+        name: name.to_string(),
+        w,
+        d,
+    }
 }
 
 // ── Date day-number computation (verify by chrono, not hardcoded) ─────────
@@ -15,5 +19,5 @@ fn day_num(y: i32, m: u32, d: u32) -> f64 {
 }
 
 mod day;
-mod informat;
 mod fract;
+mod informat;

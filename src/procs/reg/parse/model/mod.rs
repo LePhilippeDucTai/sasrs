@@ -1,6 +1,5 @@
 use super::*;
 
-
 mod lineq;
 
 pub(super) use lineq::*;
@@ -119,10 +118,7 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                     // the selection display). Consume the `=` and the
                     // following string/ident list.
                     common::expect_eq(ts, "GROUPNAMES")?;
-                    while matches!(
-                        ts.peek().kind,
-                        TokenKind::Str { .. } | TokenKind::Ident(_)
-                    ) {
+                    while matches!(ts.peek().kind, TokenKind::Str { .. } | TokenKind::Ident(_)) {
                         ts.next();
                     }
                 } else if ts.peek().is_kw("details") {

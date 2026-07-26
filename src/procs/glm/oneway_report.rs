@@ -50,7 +50,9 @@ pub(super) fn print_class_level_info_oneway(
         class_col_data.push((ds.vars[col_idx].name.clone(), col));
     }
 
-    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session
+        .listing
+        .write_table(&cli_headers, &cli_aligns, &cli_rows);
     session.listing.blank();
 
     session.listing.write_line(&format!(
@@ -110,7 +112,11 @@ pub(super) fn print_oneway_anova_and_fit(
         Align::Right,
         Align::Right,
     ];
-    let f_str = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+    let f_str = if f_stat.is_nan() {
+        ".".to_string()
+    } else {
+        fmt2(f_stat)
+    };
     let anova_rows: Vec<Vec<String>> = vec![
         vec![
             "Model".into(),
@@ -137,7 +143,9 @@ pub(super) fn print_oneway_anova_and_fit(
             "".into(),
         ],
     ];
-    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session
+        .listing
+        .write_table(&anova_headers, &anova_aligns, &anova_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -150,13 +158,10 @@ pub(super) fn print_oneway_anova_and_fit(
         dep_mean_header,
     ];
     let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-    let fit_rows: Vec<Vec<String>> = vec![vec![
-        fmt6(r2),
-        fmt6(cv),
-        fmt6(root_mse),
-        fmt6(y_bar),
-    ]];
-    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    let fit_rows: Vec<Vec<String>> = vec![vec![fmt6(r2), fmt6(cv), fmt6(root_mse), fmt6(y_bar)]];
+    session
+        .listing
+        .write_table(&fit_headers, &fit_aligns, &fit_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -178,7 +183,11 @@ pub(super) fn print_oneway_anova_and_fit(
             Align::Right,
             Align::Right,
         ];
-        let f_str2 = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+        let f_str2 = if f_stat.is_nan() {
+            ".".to_string()
+        } else {
+            fmt2(f_stat)
+        };
         let t_rows: Vec<Vec<String>> = vec![vec![
             eff.to_string(),
             format!("{}", df_model as usize),
@@ -234,7 +243,11 @@ pub(super) fn print_oneway_solution(session: &mut Session, eff: &str, stats: &On
     } else {
         f64::NAN
     };
-    let t_intercept = if se_intercept > 0.0 { intercept / se_intercept } else { f64::NAN };
+    let t_intercept = if se_intercept > 0.0 {
+        intercept / se_intercept
+    } else {
+        f64::NAN
+    };
     let p_intercept = if t_intercept.is_nan() {
         None
     } else {
@@ -259,7 +272,11 @@ pub(super) fn print_oneway_solution(session: &mut Session, eff: &str, stats: &On
         } else {
             f64::NAN
         };
-        let t_i = if se_i > 0.0 { estimate_i / se_i } else { f64::NAN };
+        let t_i = if se_i > 0.0 {
+            estimate_i / se_i
+        } else {
+            f64::NAN
+        };
         let p_i = if t_i.is_nan() {
             None
         } else {
@@ -285,7 +302,9 @@ pub(super) fn print_oneway_solution(session: &mut Session, eff: &str, stats: &On
         "".into(),
     ]);
 
-    session.listing.write_table(&param_headers, &param_aligns, &param_rows);
+    session
+        .listing
+        .write_table(&param_headers, &param_aligns, &param_rows);
     session.listing.blank();
     session.listing.blank();
 }

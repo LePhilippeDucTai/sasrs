@@ -99,7 +99,11 @@ fn catalog() -> FormatCatalog {
 #[test]
 fn format_missing_dot_right_justified() {
     let cat = catalog();
-    let spec = FormatSpec { name: "".into(), w: Some(5), d: None };
+    let spec = FormatSpec {
+        name: "".into(),
+        w: Some(5),
+        d: None,
+    };
     let result = cat.format(&Value::missing(), &spec);
     assert_eq!(result, "    .");
 }
@@ -107,7 +111,11 @@ fn format_missing_dot_right_justified() {
 #[test]
 fn format_missing_letter_a() {
     let cat = catalog();
-    let spec = FormatSpec { name: "".into(), w: Some(3), d: None };
+    let spec = FormatSpec {
+        name: "".into(),
+        w: Some(3),
+        d: None,
+    };
     let result = cat.format(&Value::Missing(MissingKind::Letter(0)), &spec);
     assert_eq!(result, "  A");
 }
@@ -115,7 +123,11 @@ fn format_missing_letter_a() {
 #[test]
 fn format_missing_underscore() {
     let cat = catalog();
-    let spec = FormatSpec { name: "".into(), w: Some(3), d: None };
+    let spec = FormatSpec {
+        name: "".into(),
+        w: Some(3),
+        d: None,
+    };
     let result = cat.format(&Value::Missing(MissingKind::Underscore), &spec);
     assert_eq!(result, "  _");
 }
@@ -123,7 +135,11 @@ fn format_missing_underscore() {
 #[test]
 fn format_char_left_justified_padded() {
     let cat = catalog();
-    let spec = FormatSpec { name: "$".into(), w: Some(8), d: None };
+    let spec = FormatSpec {
+        name: "$".into(),
+        w: Some(8),
+        d: None,
+    };
     let result = cat.format(&Value::Char("abc".into()), &spec);
     // fallback: not a known builtin name for $, but builtin handles $ too
     // Let's test the exact fallback only if builtin doesn't claim it.
@@ -135,7 +151,11 @@ fn format_char_left_justified_padded() {
 #[test]
 fn format_num_fallback_best12() {
     let cat = catalog();
-    let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: Some(12), d: None };
+    let spec = FormatSpec {
+        name: "UNKNOWNFORMAT".into(),
+        w: Some(12),
+        d: None,
+    };
     let result = cat.format(&Value::Num(42.0), &spec);
     assert_eq!(result, "          42");
 }
@@ -147,7 +167,11 @@ fn format_num_fallback_best12() {
 #[test]
 fn informat_empty_gives_missing() {
     let cat = catalog();
-    let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: None, d: None };
+    let spec = FormatSpec {
+        name: "UNKNOWNFORMAT".into(),
+        w: None,
+        d: None,
+    };
     let result = cat.informat("  ", &spec);
     assert_eq!(result, Value::missing());
 }
@@ -155,7 +179,11 @@ fn informat_empty_gives_missing() {
 #[test]
 fn informat_dot_gives_missing() {
     let cat = catalog();
-    let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: None, d: None };
+    let spec = FormatSpec {
+        name: "UNKNOWNFORMAT".into(),
+        w: None,
+        d: None,
+    };
     let result = cat.informat(".", &spec);
     assert_eq!(result, Value::missing());
 }
@@ -163,7 +191,11 @@ fn informat_dot_gives_missing() {
 #[test]
 fn informat_numeric_string_gives_num() {
     let cat = catalog();
-    let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: None, d: None };
+    let spec = FormatSpec {
+        name: "UNKNOWNFORMAT".into(),
+        w: None,
+        d: None,
+    };
     let result = cat.informat("3.14", &spec);
     assert_eq!(result, Value::Num(3.14));
 }
@@ -171,7 +203,11 @@ fn informat_numeric_string_gives_num() {
 #[test]
 fn informat_text_gives_char() {
     let cat = catalog();
-    let spec = FormatSpec { name: "UNKNOWNFORMAT".into(), w: None, d: None };
+    let spec = FormatSpec {
+        name: "UNKNOWNFORMAT".into(),
+        w: None,
+        d: None,
+    };
     let result = cat.informat("hello", &spec);
     assert_eq!(result, Value::Char("hello".into()));
 }
@@ -287,5 +323,8 @@ fn char_user_informat_resolved() {
     let spec = FormatSpec::parse("$SIZE.").unwrap();
     assert_eq!(cat.informat("S", &spec), Value::Char("Small".to_string()));
     assert_eq!(cat.informat("L", &spec), Value::Char("Large".to_string()));
-    assert_eq!(cat.informat("XL", &spec), Value::Char("Unknown".to_string()));
+    assert_eq!(
+        cat.informat("XL", &spec),
+        Value::Char("Unknown".to_string())
+    );
 }

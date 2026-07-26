@@ -1,5 +1,5 @@
-use crate::{run, RunOptions};
 use super::*;
+use crate::{RunOptions, run};
 
 #[test]
 fn options_ls_applied_and_unknown_option_warns() {
@@ -7,7 +7,10 @@ fn options_ls_applied_and_unknown_option_warns() {
     // as ODS options, so no warning. Test with an actually unknown option.
     let out = run_det("options ls=120 unknownopt;");
     assert_eq!(out.exit_code, 1, "{}", out.log);
-    assert!(out.log.contains("WARNING: Option UNKNOWNOPT is not yet supported."));
+    assert!(
+        out.log
+            .contains("WARNING: Option UNKNOWNOPT is not yet supported.")
+    );
 }
 
 #[test]
@@ -136,7 +139,11 @@ fn options_missing_default_dot_unchanged() {
          proc print data=a; run;\n",
     );
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
-    assert!(out.listing.contains('.'), "expected '.' in listing:\n{}", out.listing);
+    assert!(
+        out.listing.contains('.'),
+        "expected '.' in listing:\n{}",
+        out.listing
+    );
 }
 
 /// YEARCUTOFF= : défaut 1900 → 0-99 donne 1900-1999 (comportement actuel).
@@ -235,9 +242,10 @@ fn libname_relative_resolution_and_clear() {
         },
     );
     assert_eq!(out.exit_code, 0, "{}", out.log);
-    assert!(out
-        .log
-        .contains("Libref MYLIB was successfully assigned as follows:"));
+    assert!(
+        out.log
+            .contains("Libref MYLIB was successfully assigned as follows:")
+    );
     assert!(out.log.contains("Physical Name:"));
     assert!(out.log.contains("Libref MYLIB has been deassigned."));
 }
@@ -337,12 +345,9 @@ fn data_null_no_listing_no_dataset_note() {
 /// EXACTEMENT le même résultat que son équivalent sans macro.
 #[test]
 fn macro_let_ref_runs_through_executor() {
-    let with_macro = run_det(
-        "%let lib=work; data &lib..a; x=1; run; proc print data=&lib..a; run;",
-    );
-    let without_macro = run_det(
-        "data work.a; x=1; run; proc print data=work.a; run;",
-    );
+    let with_macro =
+        run_det("%let lib=work; data &lib..a; x=1; run; proc print data=&lib..a; run;");
+    let without_macro = run_det("data work.a; x=1; run; proc print data=work.a; run;");
     assert_eq!(with_macro.exit_code, 0, "log was:\n{}", with_macro.log);
     assert_eq!(
         with_macro.listing, without_macro.listing,
@@ -350,12 +355,16 @@ fn macro_let_ref_runs_through_executor() {
         with_macro.listing, without_macro.listing
     );
     // Les NOTEs de l'étape DATA / PROC doivent correspondre.
-    assert!(with_macro
-        .log
-        .contains("The data set WORK.A has 1 observations and 1 variables."));
-    assert!(with_macro
-        .log
-        .contains("There were 1 observations read from the data set WORK.A."));
+    assert!(
+        with_macro
+            .log
+            .contains("The data set WORK.A has 1 observations and 1 variables.")
+    );
+    assert!(
+        with_macro
+            .log
+            .contains("There were 1 observations read from the data set WORK.A.")
+    );
 }
 
 /// M11.5 : `CALL SYMPUT` dans une étape pose un symbole macro visible
@@ -376,9 +385,10 @@ fn symput_visible_in_next_segment_as_dataset_name() {
         "log was:\n{}",
         out.log
     );
-    assert!(out
-        .log
-        .contains("There were 1 observations read from the data set WORK.TBL_42."));
+    assert!(
+        out.log
+            .contains("There were 1 observations read from the data set WORK.TBL_42.")
+    );
 }
 
 /// M11.5 : formatage NUMÉRIQUE d'un symput — `42` (et non `          42`).
@@ -430,9 +440,10 @@ fn symget_reads_prior_let() {
     assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
     // v est une variable caractère = "5".
     assert!(out.listing.contains('5'), "listing was:\n{}", out.listing);
-    assert!(out
-        .log
-        .contains("The data set WORK.A has 1 observations and 1 variables."));
+    assert!(
+        out.log
+            .contains("The data set WORK.A has 1 observations and 1 variables.")
+    );
 }
 
 #[test]
@@ -442,8 +453,9 @@ fn proc_print_uses_last_dataset() {
          proc print; run;\n",
     );
     assert_eq!(out.exit_code, 0, "{}", out.log);
-    assert!(out
-        .log
-        .contains("There were 1 observations read from the data set WORK.ZZ."));
+    assert!(
+        out.log
+            .contains("There were 1 observations read from the data set WORK.ZZ.")
+    );
     assert!(out.listing.contains("3.5"));
 }

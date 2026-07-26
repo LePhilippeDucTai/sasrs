@@ -8,10 +8,16 @@ use polars::df;
 fn execute_graphics_emits_deferred_note() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0, 3.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: None,
@@ -129,11 +135,17 @@ fn execute_by_per_group_sections() {
         "x" => [1.0_f64, 3.0, 10.0, 20.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
@@ -144,11 +156,18 @@ fn execute_by_per_group_sections() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("The UNIVARIATE Procedure"), "listing: {listing}");
+    assert!(
+        listing.contains("The UNIVARIATE Procedure"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("g=a"), "listing: {listing}");
     assert!(listing.contains("g=b"), "listing: {listing}");
     // One Variable: x section per group (2 total).
-    assert_eq!(listing.matches("Variable: x").count(), 2, "listing: {listing}");
+    assert_eq!(
+        listing.matches("Variable: x").count(),
+        2,
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -160,11 +179,17 @@ fn execute_by_unsorted_errors() {
         "x" => [1.0_f64, 2.0, 3.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
@@ -186,16 +211,25 @@ fn execute_output_no_by() {
     let mut session = make_session();
     // [1,2,3,4,5] -> mean 3, n 5, min 1, max 5, median 3.
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: None,
         output: Some(UnivariateOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![
                 ("mean".into(), vec!["m".into()]),
                 ("n".into(), vec!["cnt".into()]),
@@ -228,16 +262,25 @@ fn execute_output_with_by() {
         "x" => [1.0_f64, 3.0, 10.0, 20.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
         output: Some(UnivariateOutput {
-            out: DatasetRef { libref: Some("WORK".into()), name: "O".into() },
+            out: DatasetRef {
+                libref: Some("WORK".into()),
+                name: "O".into(),
+            },
             specs: vec![("mean".into(), vec!["mx".into()])],
         }),
         normal: false,
@@ -267,11 +310,17 @@ fn execute_weighted_moments() {
         "w" => [1.0_f64, 2.0, 3.0, 0.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
@@ -282,14 +331,23 @@ fn execute_weighted_moments() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("The UNIVARIATE Procedure"), "listing: {listing}");
+    assert!(
+        listing.contains("The UNIVARIATE Procedure"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("Variable: x"), "listing: {listing}");
     assert!(listing.contains("Moments"), "listing: {listing}");
     // Weighted: Sum Weights = 6, Sum Observations = 14.
     assert!(listing.contains("Sum Weights"), "listing: {listing}");
     // M33.2: weighted Quantiles + Extreme Observations are now emitted.
-    assert!(listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
-    assert!(listing.contains("Extreme Observations"), "listing: {listing}");
+    assert!(
+        listing.contains("Quantiles (Definition 5)"),
+        "listing: {listing}"
+    );
+    assert!(
+        listing.contains("Extreme Observations"),
+        "listing: {listing}"
+    );
     assert!(
         !listing.contains("not computed with a WEIGHT variable"),
         "listing: {listing}"
@@ -306,11 +364,17 @@ fn execute_weighted_no_quantiles_section() {
         "w" => [1.0_f64, 1.0, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
@@ -325,7 +389,10 @@ fn execute_weighted_no_quantiles_section() {
     // M33.2: the weighted Quantiles + Extremes tables are now emitted.
     // With unit weights the weighted quantiles reduce to Definition 5:
     // median of [10,20,30] = 20.
-    assert!(listing.contains("Quantiles (Definition 5)"), "listing: {listing}");
+    assert!(
+        listing.contains("Quantiles (Definition 5)"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("Lowest Value"), "listing: {listing}");
 }
 
@@ -349,7 +416,12 @@ fn histogram_with_ods_no_feature_defers_image() {
 #[test]
 fn histogram_with_ods_and_feature_creates_image() {
     let dir = std::env::temp_dir();
-    let log = run_plots(true, hist(), Some(dir.clone()), Some("univtest_hist".into()));
+    let log = run_plots(
+        true,
+        hist(),
+        Some(dir.clone()),
+        Some("univtest_hist".into()),
+    );
     assert!(log.contains("written"), "log: {log}");
     let p = dir.join("univtest_hist_1.png");
     assert!(p.exists(), "image not created: {p:?}");
@@ -397,7 +469,10 @@ fn probplot_cdfplot_ppplot_with_feature_create_images() {
         (UnivariatePlotKind::PpPlot, "univtest_pp"),
     ] {
         let dir = std::env::temp_dir();
-        let plots = vec![UnivariatePlot { kind, var: Some("x".into()) }];
+        let plots = vec![UnivariatePlot {
+            kind,
+            var: Some("x".into()),
+        }];
         let log = run_plots(true, plots, Some(dir.clone()), Some(stem.into()));
         assert!(log.contains("written"), "{:?} log: {log}", kind);
         let p = dir.join(format!("{stem}_1.png"));
@@ -411,7 +486,10 @@ fn probplot_cdfplot_ppplot_with_feature_create_images() {
 #[test]
 fn cdfplot_ppplot_with_ods_no_feature_defer_image() {
     for kind in [UnivariatePlotKind::CdfPlot, UnivariatePlotKind::PpPlot] {
-        let plots = vec![UnivariatePlot { kind, var: Some("x".into()) }];
+        let plots = vec![UnivariatePlot {
+            kind,
+            var: Some("x".into()),
+        }];
         let log = run_plots(true, plots, None, None);
         assert!(log.contains("image deferred"), "{:?} log: {log}", kind);
     }

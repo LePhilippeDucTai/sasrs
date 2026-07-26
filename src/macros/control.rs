@@ -12,7 +12,6 @@ impl MacroEngine {
     pub(super) const MAX_GOTO_JUMPS: i64 = 1_000_000;
 }
 
-
 impl MacroEngine {
     /// Consomme `%if <cond> %then <action> [; %else <action> ;]`.
     ///
@@ -21,7 +20,12 @@ impl MacroEngine {
     /// d'action (le `;` est inclus dans le texte émis, comme une instruction
     /// SAS). On émet la branche prise EXPANSÉE et rien pour l'autre. Rend
     /// l'index de reprise, ou `None` si la structure ne tient pas.
-    pub(super) fn consume_if(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_if(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let cond_start = i + 1 + "if".len();
         // Trouver le `%then`.
         let then_pos = Self::find_kw(chars, cond_start, "then")?;
@@ -85,7 +89,12 @@ impl MacroEngine {
 
     /// Consomme un `%do` : soit `%do; ... %end;` (groupe), soit
     /// `%do i=a %to b [%by c]; ... %end;` (itératif). Émet le contenu expansé.
-    pub(super) fn consume_do(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_do(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + 1 + "do".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -211,7 +220,11 @@ impl MacroEngine {
         let mut value = start;
         let mut iters: i64 = 0;
         loop {
-            let cont = if step > 0 { value <= stop } else { value >= stop };
+            let cont = if step > 0 {
+                value <= stop
+            } else {
+                value >= stop
+            };
             if !cont {
                 break;
             }
@@ -338,8 +351,7 @@ impl MacroEngine {
 
 mod jump;
 
-impl MacroEngine {
-}
+impl MacroEngine {}
 
 // ── M35.4 : constructions macro hors-périmètre (NOTE + consommation) ──────────
 
@@ -398,5 +410,3 @@ impl MacroEngine {
         Some(Self::skip_trailing_newline(chars, j, out))
     }
 }
-
-

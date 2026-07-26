@@ -9,7 +9,13 @@ fn where_filter_numeric() {
     write_people(&mut s);
     let df = run("select name, age from t where age > 12;", &mut s);
     assert_eq!(df.height(), 2);
-    let ages: Vec<f64> = df.column("age").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let ages: Vec<f64> = df
+        .column("age")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(ages, vec![14.0, 13.0]);
 }
 
@@ -24,7 +30,13 @@ fn where_equals_missing_is_null() {
     write_table(&mut s, "T", df, vec![num("x"), num("y")]);
     let out = run("select y from t where x = .;", &mut s);
     assert_eq!(out.height(), 1);
-    let ys: Vec<f64> = out.column("y").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let ys: Vec<f64> = out
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(ys, vec![20.0]);
 }
 
@@ -40,7 +52,13 @@ fn where_special_missing_normalized_to_null() {
     .unwrap();
     write_table(&mut s, "T", df, vec![num("x"), num("y")]);
     let out = run("select y from t where x = .;", &mut s);
-    let ys: Vec<f64> = out.column("y").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let ys: Vec<f64> = out
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(ys, vec![20.0]);
 }
 
@@ -107,7 +125,9 @@ fn remerge_grand_total_and_note() {
     assert!(mxs.iter().all(|v| (*v - 60.0).abs() < 1e-9));
     let log = s.log.into_string();
     assert!(
-        log.contains("The query requires remerging summary statistics back with the original data."),
+        log.contains(
+            "The query requires remerging summary statistics back with the original data."
+        ),
         "log: {log}"
     );
 }
@@ -134,7 +154,13 @@ fn order_by_descending() {
     let mut s = make_session();
     write_people(&mut s);
     let out = run("select age from t order by age desc;", &mut s);
-    let ages: Vec<f64> = out.column("age").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let ages: Vec<f64> = out
+        .column("age")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(ages, vec![14.0, 13.0, 11.0, 10.0]);
 }
 
@@ -154,13 +180,16 @@ fn join_with_missing_key_matches() {
     ]
     .unwrap();
     write_table(&mut s, "R", right, vec![num("k"), num("b")]);
-    let out = run(
-        "select l.a, r.b from l inner join r on l.k = r.k;",
-        &mut s,
-    );
+    let out = run("select l.a, r.b from l inner join r on l.k = r.k;", &mut s);
     // k=1 (a=10,b=100) et k=null (a=20,b=200) → 2 lignes.
     assert_eq!(out.height(), 2);
-    let bs: Vec<f64> = out.column("b").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let bs: Vec<f64> = out
+        .column("b")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert!(bs.contains(&100.0) && bs.contains(&200.0));
 }
 
@@ -194,8 +223,20 @@ fn calculated_reexpands_alias() {
         "select age*2 as dbl, calculated dbl + 1 as plus from t order by age;",
         &mut s,
     );
-    let dbl: Vec<f64> = out.column("dbl").unwrap().f64().unwrap().into_no_null_iter().collect();
-    let plus: Vec<f64> = out.column("plus").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let dbl: Vec<f64> = out
+        .column("dbl")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    let plus: Vec<f64> = out
+        .column("plus")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     for (d, p) in dbl.iter().zip(plus.iter()) {
         assert!((p - (d + 1.0)).abs() < 1e-9);
     }

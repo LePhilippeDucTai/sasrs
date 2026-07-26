@@ -62,11 +62,7 @@ pub(crate) fn print_spec_test(reg_cols: &[Vec<f64>], resid: &[f64], session: &mu
     session.listing.blank();
     match white_spec_test(reg_cols, resid) {
         Some((w, df, pv)) => {
-            let headers: Vec<String> = vec![
-                "DF".into(),
-                "Chi-Square".into(),
-                "Pr > ChiSq".into(),
-            ];
+            let headers: Vec<String> = vec!["DF".into(), "Chi-Square".into(), "Pr > ChiSq".into()];
             let aligns = vec![Align::Right, Align::Right, Align::Right];
             let rows = vec![vec![format!("{}", df), fmt2(w), fmt_p(Some(pv))]];
             session.listing.write_table(&headers, &aligns, &rows);
@@ -182,13 +178,7 @@ pub(crate) fn print_acov(
             } else {
                 None
             };
-            vec![
-                label(j),
-                fmt5(beta[j]),
-                fmt5(se),
-                fmt2(t),
-                fmt_p(pv),
-            ]
+            vec![label(j), fmt5(beta[j]), fmt5(se), fmt2(t), fmt_p(pv)]
         })
         .collect();
     session.listing.write_table(&hh, &ha, &rows2);

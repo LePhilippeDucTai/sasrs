@@ -144,5 +144,5 @@ fn strs(df: &DataFrame, col: &str) -> Vec<String> {
         .collect()
 }
 
-mod where_filter;
 mod scalar;
+mod where_filter;

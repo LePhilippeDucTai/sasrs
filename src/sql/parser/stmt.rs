@@ -251,10 +251,7 @@ pub(super) fn parse_insert(ts: &mut StatementStream) -> Result<SqlStmt> {
 /// est déjà consommé. Les valeurs sont des `Expr` de base.
 pub(super) fn parse_values_group(ts: &mut StatementStream) -> Result<Vec<Expr>> {
     if ts.peek().kind != TokenKind::LParen {
-        return Err(SasError::parse(
-            "expected '(' after VALUES",
-            ts.peek().span,
-        ));
+        return Err(SasError::parse("expected '(' after VALUES", ts.peek().span));
     }
     ts.next(); // (
     let mut vals = Vec::new();

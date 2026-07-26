@@ -31,10 +31,9 @@
 
 use crate::error::{Result, SasError};
 use crate::procs::common::value_label;
-use crate::stat::{chisq_cdf, f_cdf, student_t_cdf};
 use crate::stat::linalg::invert_matrix;
+use crate::stat::{chisq_cdf, f_cdf, student_t_cdf};
 use crate::value::Value;
-
 
 mod coding;
 mod engine;
@@ -50,7 +49,6 @@ pub use engine::LinCombEngine;
 pub use engine::lsmean_coef;
 pub use score::ScoreTest;
 pub use score::score_test;
-
 
 /// Result of an `estimate` call: L·β − c with inference.
 #[derive(Debug, Clone)]

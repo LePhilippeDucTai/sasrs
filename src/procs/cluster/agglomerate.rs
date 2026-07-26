@@ -25,11 +25,7 @@ pub(super) struct ClusterNode {
 /// returning the merge history (NCl from n-1 down to 1).
 ///
 /// `labels` provides the singleton display labels (e.g. ID values or "OB1").
-pub fn agglomerate(
-    coords: &[Vec<f64>],
-    method: LinkMethod,
-    labels: &[String],
-) -> Vec<MergeStep> {
+pub fn agglomerate(coords: &[Vec<f64>], method: LinkMethod, labels: &[String]) -> Vec<MergeStep> {
     let n = coords.len();
     let p = if n > 0 { coords[0].len() } else { 0 };
 
@@ -176,7 +172,12 @@ pub fn agglomerate(
 /// Ward uses the centroid-based ΔSS. Single/Complete/Average are computed
 /// exactly from the raw inter-observation Euclidean distances (this is the
 /// definition; equivalent to the Lance-Williams recurrences).
-pub(super) fn pair_criterion(method: LinkMethod, a: &ClusterNode, b: &ClusterNode, coords: &[Vec<f64>]) -> f64 {
+pub(super) fn pair_criterion(
+    method: LinkMethod,
+    a: &ClusterNode,
+    b: &ClusterNode,
+    coords: &[Vec<f64>],
+) -> f64 {
     match method {
         LinkMethod::Ward => {
             let na = a.members.len() as f64;

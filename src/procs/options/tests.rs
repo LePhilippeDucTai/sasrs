@@ -78,7 +78,10 @@ fn execute_specific_option_obs() {
     let log = session.log.into_string();
     assert!(log.contains("OBS=MAX"), "log: {log}");
     // Should not contain other options
-    assert!(!log.contains("LINESIZE="), "should not contain LINESIZE: {log}");
+    assert!(
+        !log.contains("LINESIZE="),
+        "should not contain LINESIZE: {log}"
+    );
 }
 
 #[test]
@@ -106,7 +109,10 @@ fn execute_unknown_option_warns() {
     execute(&ast, &mut session).unwrap();
 
     let log = session.log.into_string();
-    assert!(log.contains("WARNING") || log.contains("not a recognized"), "log: {log}");
+    assert!(
+        log.contains("WARNING") || log.contains("not a recognized"),
+        "log: {log}"
+    );
 }
 
 #[test]

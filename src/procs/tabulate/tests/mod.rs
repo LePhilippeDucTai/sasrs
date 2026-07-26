@@ -11,11 +11,23 @@ fn make_session() -> Session {
 }
 
 fn num_meta(name: &str) -> VarMeta {
-    VarMeta { name: name.into(), ty: VarType::Num, length: 8, format: None, label: None }
+    VarMeta {
+        name: name.into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }
 }
 
 fn char_meta(name: &str) -> VarMeta {
-    VarMeta { name: name.into(), ty: VarType::Char, length: 8, format: None, label: None }
+    VarMeta {
+        name: name.into(),
+        ty: VarType::Char,
+        length: 8,
+        format: None,
+        label: None,
+    }
 }
 
 fn write_dataset(session: &mut Session, table: &str, ds: SasDataset) {
@@ -61,5 +73,5 @@ fn class_fixture(session: &mut Session) {
     write_dataset(session, "C", ds);
 }
 
-mod parse;
 mod no_output;
+mod parse;

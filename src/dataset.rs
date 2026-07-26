@@ -140,9 +140,7 @@ fn sidecar_path(path: &Path) -> std::path::PathBuf {
 /// format/label/longueur explicite, stabilité des snapshots existants).
 fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
     let has_meta = vars.iter().any(|v| {
-        v.format.is_some()
-            || v.label.is_some()
-            || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
+        v.format.is_some() || v.label.is_some() || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
     });
     let sc = sidecar_path(path);
     if !has_meta {
@@ -204,10 +202,7 @@ fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Ser
             let as_i64 = s.cast(&DataType::Int64).ok();
             if let Some(ref i) = as_i64 {
                 let ca = i.i64()?;
-                let overflow = ca
-                    .iter()
-                    .flatten()
-                    .any(|v| v.abs() > MAX_EXACT_INT);
+                let overflow = ca.iter().flatten().any(|v| v.abs() > MAX_EXACT_INT);
                 if overflow {
                     notes.push(format!(
                         "WARNING: Column {name} contains integers larger than 2**53; \
@@ -246,11 +241,7 @@ fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Ser
         DataType::Time => {
             // i64 nanoseconds since midnight -> seconds.
             let raw = s.cast(&DataType::Float64)?;
-            let secs: Float64Chunked = raw
-                .f64()?
-                .iter()
-                .map(|o| o.map(|v| v / 1e9))
-                .collect();
+            let secs: Float64Chunked = raw.f64()?.iter().map(|o| o.map(|v| v / 1e9)).collect();
             let series = secs.into_series().with_name(name.into());
             return Ok((series, num_meta(Some("TIME8."))));
         }

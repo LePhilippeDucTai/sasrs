@@ -109,11 +109,7 @@ pub fn t_quantile(p: f64, df: f64) -> f64 {
         }
     }
     let q = 0.5 * (lo + hi);
-    if upper {
-        q
-    } else {
-        -q
-    }
+    if upper { q } else { -q }
 }
 
 /// Two-sided p-value Pr(|T_df| > |t|) from a t statistic.

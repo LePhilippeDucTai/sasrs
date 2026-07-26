@@ -28,16 +28,24 @@ impl ExcelDestination {
     /// Crée la destination Excel sans fichier cible.
     pub fn new(ls: usize) -> Self {
         ExcelDestination {
-            titles: Vec::new(), footnotes: Vec::new(), ls, file: None,
-            tables: Vec::new(), pending_lines: Vec::new(),
+            titles: Vec::new(),
+            footnotes: Vec::new(),
+            ls,
+            file: None,
+            tables: Vec::new(),
+            pending_lines: Vec::new(),
         }
     }
 
     /// Crée la destination Excel avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
         ExcelDestination {
-            titles: Vec::new(), footnotes: Vec::new(), ls, file: Some(file),
-            tables: Vec::new(), pending_lines: Vec::new(),
+            titles: Vec::new(),
+            footnotes: Vec::new(),
+            ls,
+            file: Some(file),
+            tables: Vec::new(),
+            pending_lines: Vec::new(),
         }
     }
 }
@@ -135,7 +143,9 @@ pub(super) fn xlsx_col_ref(mut n: usize) -> String {
     let mut s = String::new();
     loop {
         s.push(char::from(b'A' + (n % 26) as u8));
-        if n < 26 { break; }
+        if n < 26 {
+            break;
+        }
         n = n / 26 - 1;
     }
     s.chars().rev().collect()
@@ -144,17 +154,21 @@ pub(super) fn xlsx_col_ref(mut n: usize) -> String {
 /// Échappe un contenu pour l'insérer dans un attribut ou texte XML.
 pub(super) fn xlsx_xml_escape(v: &str) -> String {
     v.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Génère le XML d'une feuille (`xl/worksheets/sheetN.xml`).
-pub(super) fn xlsx_sheet_xml(pre_lines: &[String], headers: &[String], rows: &[Vec<String>]) -> Vec<u8> {
+pub(super) fn xlsx_sheet_xml(
+    pre_lines: &[String],
+    headers: &[String],
+    rows: &[Vec<String>],
+) -> Vec<u8> {
     let mut x = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
         <worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
-        <sheetData>"
+        <sheetData>",
     );
     let mut r = 1usize;
     for line in pre_lines {
@@ -169,7 +183,8 @@ pub(super) fn xlsx_sheet_xml(pre_lines: &[String], headers: &[String], rows: &[V
         for (c, h) in headers.iter().enumerate() {
             x.push_str(&format!(
                 "<c r=\"{}{r}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
-                xlsx_col_ref(c), xlsx_xml_escape(h)
+                xlsx_col_ref(c),
+                xlsx_xml_escape(h)
             ));
         }
         x.push_str("</row>");
@@ -180,7 +195,8 @@ pub(super) fn xlsx_sheet_xml(pre_lines: &[String], headers: &[String], rows: &[V
         for (c, v) in row.iter().enumerate() {
             x.push_str(&format!(
                 "<c r=\"{}{r}\" t=\"inlineStr\"><is><t>{}</t></is></c>",
-                xlsx_col_ref(c), xlsx_xml_escape(v)
+                xlsx_col_ref(c),
+                xlsx_xml_escape(v)
             ));
         }
         x.push_str("</row>");
@@ -198,15 +214,23 @@ pub(super) fn crc32_zip(data: &[u8]) -> u32 {
         // Calcule le coefficient à la volée pour éviter une table statique globale.
         let mut coeff = idx as u32;
         for _ in 0..8 {
-            coeff = if coeff & 1 != 0 { 0xEDB88320 ^ (coeff >> 1) } else { coeff >> 1 };
+            coeff = if coeff & 1 != 0 {
+                0xEDB88320 ^ (coeff >> 1)
+            } else {
+                coeff >> 1
+            };
         }
         crc = coeff ^ (crc >> 8);
     }
     crc ^ 0xFFFF_FFFF
 }
 
-pub(super) fn zip_u16(buf: &mut Vec<u8>, v: u16) { buf.extend_from_slice(&v.to_le_bytes()); }
-pub(super) fn zip_u32(buf: &mut Vec<u8>, v: u32) { buf.extend_from_slice(&v.to_le_bytes()); }
+pub(super) fn zip_u16(buf: &mut Vec<u8>, v: u16) {
+    buf.extend_from_slice(&v.to_le_bytes());
+}
+pub(super) fn zip_u32(buf: &mut Vec<u8>, v: u32) {
+    buf.extend_from_slice(&v.to_le_bytes());
+}
 
 /// Construit un ZIP sans compression (store) à partir de paires (nom, octets).
 pub(super) fn build_zip_stored(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
@@ -221,11 +245,11 @@ pub(super) fn build_zip_stored(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         offsets.push(out.len() as u32);
         let nb = name.as_bytes();
         zip_u32(&mut out, 0x04034B50); // local file header signature
-        zip_u16(&mut out, 20);         // version needed
-        zip_u16(&mut out, 0);          // flags
-        zip_u16(&mut out, 0);          // compression = store
-        zip_u16(&mut out, 0);          // mod time
-        zip_u16(&mut out, 0);          // mod date
+        zip_u16(&mut out, 20); // version needed
+        zip_u16(&mut out, 0); // flags
+        zip_u16(&mut out, 0); // compression = store
+        zip_u16(&mut out, 0); // mod time
+        zip_u16(&mut out, 0); // mod date
         zip_u32(&mut out, crc);
         zip_u32(&mut out, data.len() as u32); // compressed size
         zip_u32(&mut out, data.len() as u32); // uncompressed size
@@ -240,21 +264,21 @@ pub(super) fn build_zip_stored(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
     for (i, (name, data)) in entries.iter().enumerate() {
         let nb = name.as_bytes();
         zip_u32(&mut out, 0x02014B50); // central dir signature
-        zip_u16(&mut out, 20);         // version made by
-        zip_u16(&mut out, 20);         // version needed
+        zip_u16(&mut out, 20); // version made by
+        zip_u16(&mut out, 20); // version needed
         zip_u16(&mut out, 0);
-        zip_u16(&mut out, 0);          // compression
+        zip_u16(&mut out, 0); // compression
         zip_u16(&mut out, 0);
         zip_u16(&mut out, 0);
         zip_u32(&mut out, crcs[i]);
         zip_u32(&mut out, data.len() as u32);
         zip_u32(&mut out, data.len() as u32);
         zip_u16(&mut out, nb.len() as u16);
-        zip_u16(&mut out, 0);  // extra length
-        zip_u16(&mut out, 0);  // comment length
-        zip_u16(&mut out, 0);  // disk start
-        zip_u16(&mut out, 0);  // internal attrs
-        zip_u32(&mut out, 0);  // external attrs
+        zip_u16(&mut out, 0); // extra length
+        zip_u16(&mut out, 0); // comment length
+        zip_u16(&mut out, 0); // disk start
+        zip_u16(&mut out, 0); // internal attrs
+        zip_u32(&mut out, 0); // external attrs
         zip_u32(&mut out, offsets[i]);
         out.extend_from_slice(nb);
     }
@@ -295,7 +319,7 @@ pub(super) fn xlsx_build(tables: &[ExcelTable], pending_lines: &[String]) -> Vec
         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
         <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
-        <Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+        <Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>",
     );
     for i in 1..=n {
         ct.push_str(&format!(
@@ -316,7 +340,7 @@ pub(super) fn xlsx_build(tables: &[ExcelTable], pending_lines: &[String]) -> Vec
     let mut wb = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
         <workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" \
-        xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"
+        xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>",
     );
     for (i, (name, _)) in sheets.iter().enumerate() {
         let id = i + 1;
@@ -330,7 +354,7 @@ pub(super) fn xlsx_build(tables: &[ExcelTable], pending_lines: &[String]) -> Vec
     // xl/_rels/workbook.xml.rels
     let mut wb_rels = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
-        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
     );
     for i in 1..=n {
         wb_rels.push_str(&format!(
@@ -349,7 +373,9 @@ pub(super) fn xlsx_build(tables: &[ExcelTable], pending_lines: &[String]) -> Vec
         ("xl/_rels/workbook.xml.rels", wb_rels.into_bytes()),
     ];
     // Les noms des feuilles doivent vivre assez longtemps pour la construction.
-    let sheet_names: Vec<String> = (1..=n).map(|i| format!("xl/worksheets/sheet{i}.xml")).collect();
+    let sheet_names: Vec<String> = (1..=n)
+        .map(|i| format!("xl/worksheets/sheet{i}.xml"))
+        .collect();
     for (i, (_, xml_bytes)) in sheets.into_iter().enumerate() {
         zip_entries.push((sheet_names[i].as_str(), xml_bytes));
     }

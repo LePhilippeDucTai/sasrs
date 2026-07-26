@@ -102,11 +102,7 @@ fn basic_model(dep: &str, regs: &[&str]) -> RegModel {
 
 // ───────────────────────── M29.3 diagnostics tests ─────────────────────────
 
-fn run_diag(
-    ods_on: bool,
-    output_dir: Option<PathBuf>,
-    file_stem: Option<String>,
-) -> String {
+fn run_diag(ods_on: bool, output_dir: Option<PathBuf>, file_stem: Option<String>) -> String {
     let mut session = make_session();
     session.ods_graphics.enabled = ods_on;
     if let Some(d) = output_dir {
@@ -164,7 +160,10 @@ fn design(intercept: bool, cols: &[&[f64]], n: usize) -> Vec<Vec<f64>> {
 /// a non-degenerate fit with dfE = n − 2 > 1).
 fn infl_setup() -> (Vec<Vec<f64>>, Vec<f64>, OlsFit, usize, usize) {
     let x1 = [1.0_f64, 3.0, 2.0, 5.0, 4.0, 6.0, 8.0, 7.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 2.0 + 3.0 * a + (a * 0.7).sin()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 2.0 + 3.0 * a + (a * 0.7).sin())
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1], n);
     let fit = ols_fit(&x, &y).unwrap();
@@ -284,7 +283,10 @@ fn run_plots(
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let mut ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         basic_model("y", &["x"]),
     );
     ast.plot_requests = plot_requests;
@@ -293,11 +295,11 @@ fn run_plots(
     session.log.into_string()
 }
 
-mod ols;
-mod parse;
+mod by_heading;
 mod execute;
+mod m3610;
+mod ols;
 mod oracle1;
 mod oracle2;
 mod oracle3;
-mod by_heading;
-mod m3610;
+mod parse;

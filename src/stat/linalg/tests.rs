@@ -85,11 +85,7 @@ fn test_qr_reconstruction() {
 
 #[test]
 fn test_qr_orthonormal() {
-    let a = vec![
-        vec![1.0, 1.0],
-        vec![1.0, 0.0],
-        vec![0.0, 1.0],
-    ];
+    let a = vec![vec![1.0, 1.0], vec![1.0, 0.0], vec![0.0, 1.0]];
     let (q, _) = qr_decomposition(&a).unwrap();
     // Q^T Q = I (n×n).
     let qtq = matrix_mult(&transpose(&q), &q);
@@ -113,11 +109,7 @@ fn test_qr_tall_and_errors() {
 #[test]
 fn test_least_squares_exact() {
     // y exactly in range(X): solve perfectly. X has intercept + slope.
-    let x = vec![
-        vec![1.0, 0.0],
-        vec![1.0, 1.0],
-        vec![1.0, 2.0],
-    ];
+    let x = vec![vec![1.0, 0.0], vec![1.0, 1.0], vec![1.0, 2.0]];
     // y = 2 + 3*t.
     let y = vec![2.0, 5.0, 8.0];
     let beta = least_squares(&x, &y).unwrap();

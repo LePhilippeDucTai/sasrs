@@ -88,7 +88,10 @@ fn std_fn() {
 
 #[test]
 fn do_loop_accumulates() {
-    let m = run_get("total = {0}; do i = 1 to 5; total = total + i; end;", "total");
+    let m = run_get(
+        "total = {0}; do i = 1 to 5; total = total + i; end;",
+        "total",
+    );
     assert_eq!(m, scalar(15.0));
 }
 
@@ -150,7 +153,10 @@ fn kronecker_2x2() {
 
 #[test]
 fn negative_and_decimal_literals() {
-    assert_eq!(eval_one("{1.5 -2, 0 3.7}"), vec![vec![1.5, -2.0], vec![0.0, 3.7]]);
+    assert_eq!(
+        eval_one("{1.5 -2, 0 3.7}"),
+        vec![vec![1.5, -2.0], vec![0.0, 3.7]]
+    );
 }
 
 // ───────────────────── M28a.3 : algèbre linéaire ─────────────────────
@@ -225,7 +231,10 @@ fn call_qr_dimensions() {
     assert_eq!(dims(r), (2, 2), "R dims");
     // Q*R ≈ original.
     let qr = eval_binop(ImlOp::Mul, q, r).unwrap();
-    assert!(approx(qr[0][0], 1.0, 1e-6) && approx(qr[2][1], 6.0, 1e-6), "qr={qr:?}");
+    assert!(
+        approx(qr[0][0], 1.0, 1e-6) && approx(qr[2][1], 6.0, 1e-6),
+        "qr={qr:?}"
+    );
 }
 
 #[test]
@@ -247,7 +256,10 @@ fn call_svdcd_singular_values() {
         .map(|row| row.iter().enumerate().map(|(j, &x)| x * d[j][0]).collect())
         .collect();
     let recon = eval_binop(ImlOp::Mul, &ud, &transpose(&vmat)).unwrap();
-    assert!(approx(recon[0][0], 1.0, 1e-4) && approx(recon[1][1], 4.0, 1e-4), "recon={recon:?}");
+    assert!(
+        approx(recon[0][0], 1.0, 1e-4) && approx(recon[1][1], 4.0, 1e-4),
+        "recon={recon:?}"
+    );
 }
 
 // ───────────────────── M34.10 : SHAPE / range / DET / EIGEN ─────────────
@@ -341,15 +353,29 @@ fn call_eigen_values_and_vectors() {
     // Vectors orthonormal: Vᵀ V = I.
     let vec = env.vars.get("VEC").unwrap().clone();
     let vtv = eval_binop(ImlOp::Mul, &transpose(&vec), &vec).unwrap();
-    assert!(approx(vtv[0][0], 1.0, 1e-9) && approx(vtv[1][1], 1.0, 1e-9), "vtv={vtv:?}");
-    assert!(approx(vtv[0][1], 0.0, 1e-9) && approx(vtv[1][0], 0.0, 1e-9), "vtv={vtv:?}");
+    assert!(
+        approx(vtv[0][0], 1.0, 1e-9) && approx(vtv[1][1], 1.0, 1e-9),
+        "vtv={vtv:?}"
+    );
+    assert!(
+        approx(vtv[0][1], 0.0, 1e-9) && approx(vtv[1][0], 0.0, 1e-9),
+        "vtv={vtv:?}"
+    );
     // Reconstruct A = V diag(λ) Vᵀ.
     let vd: Matrix = vec
         .iter()
-        .map(|row| row.iter().enumerate().map(|(j, &x)| x * val[j][0]).collect())
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(j, &x)| x * val[j][0])
+                .collect()
+        })
         .collect();
     let recon = eval_binop(ImlOp::Mul, &vd, &transpose(&vec)).unwrap();
-    assert!(approx(recon[0][0], 2.0, 1e-9) && approx(recon[1][1], 3.0, 1e-9), "recon={recon:?}");
+    assert!(
+        approx(recon[0][0], 2.0, 1e-9) && approx(recon[1][1], 3.0, 1e-9),
+        "recon={recon:?}"
+    );
 }
 
 #[test]
@@ -392,10 +418,27 @@ fn use_read_all_close_reads_dataset() {
         use polars::prelude::*;
         let df = df!["x" => [1.0_f64, 2.0, 3.0], "y" => [10.0_f64, 20.0, 30.0]].unwrap();
         let vars = vec![
-            VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-            VarMeta { name: "y".into(), ty: VarType::Num, length: 8, format: None, label: None },
+            VarMeta {
+                name: "x".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "y".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
         ];
-        session.libs.get("WORK").unwrap().write("IML_IN", &SasDataset { df, vars }).unwrap();
+        session
+            .libs
+            .get("WORK")
+            .unwrap()
+            .write("IML_IN", &SasDataset { df, vars })
+            .unwrap();
     }
     let src = r#"
         use work.iml_in;
@@ -408,7 +451,10 @@ fn use_read_all_close_reads_dataset() {
     exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session).unwrap();
     let m = env.vars.get("M").unwrap();
     assert_eq!(dims(m), (3, 2), "m={m:?}");
-    assert!(approx(m[0][0], 1.0, 1e-9) && approx(m[2][1], 30.0, 1e-9), "m={m:?}");
+    assert!(
+        approx(m[0][0], 1.0, 1e-9) && approx(m[2][1], 30.0, 1e-9),
+        "m={m:?}"
+    );
 }
 
 #[test]

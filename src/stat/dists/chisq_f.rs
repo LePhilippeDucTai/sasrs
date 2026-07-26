@@ -45,7 +45,14 @@ pub fn chisq_quantile(p: f64, df: f64) -> f64 {
     if !x.is_finite() || x <= 0.0 {
         x = df.max(1e-3);
     }
-    newton_with_bisection(p, x, 0.0, f64::INFINITY, |v| chisq_cdf(v, df), |v| chisq_pdf(v, df))
+    newton_with_bisection(
+        p,
+        x,
+        0.0,
+        f64::INFINITY,
+        |v| chisq_cdf(v, df),
+        |v| chisq_pdf(v, df),
+    )
 }
 
 /// F distribution cumulative distribution function.

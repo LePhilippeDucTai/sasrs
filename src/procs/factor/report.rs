@@ -46,7 +46,11 @@ pub(super) fn print_eigenvalue_table(
             ".".to_string()
         };
         let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
-        let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
+        let cumul = if trace != 0.0 {
+            cumulative / trace
+        } else {
+            0.0
+        };
         rows.push(vec![
             format!("{}", i + 1),
             format!("{:.4}", lambda[i]),
@@ -112,7 +116,11 @@ pub(super) fn print_variance_explained(session: &mut Session, factor_variance: &
 }
 
 /// "Final Communality Estimates: Total = …" plus the per-variable table.
-pub(super) fn print_final_communalities(session: &mut Session, names: &[String], communalities: &[f64]) {
+pub(super) fn print_final_communalities(
+    session: &mut Session,
+    names: &[String],
+    communalities: &[f64],
+) {
     let total_communality: f64 = communalities.iter().sum();
     centered(
         session,

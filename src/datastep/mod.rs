@@ -63,13 +63,10 @@
 //!   référence FIRST.x/LAST.x exige que x soit une clé BY. FIRST./LAST.
 //!   ne créent jamais de slot PDV (comme _N_/_ERROR_).
 
-
-
 mod program;
 
 pub use program::StepProgram;
 pub use program::compile;
-
 
 mod types;
 
@@ -103,9 +100,6 @@ pub use types::TextOptions;
 
 pub use types::UpdateData;
 
-
-
-
 use helpers::*;
 
 pub mod eval;
@@ -119,8 +113,8 @@ pub mod functions;
 pub mod pdv;
 
 use crate::ast::{
-    AttribItem, BinaryOp, DataStepAst, DatasetOptions, DatasetRef, DatasetSpec, DoListItem,
-    DsStmt, Expr, LengthSpec, SetOptions, WhenClause,
+    AttribItem, BinaryOp, DataStepAst, DatasetOptions, DatasetRef, DatasetSpec, DoListItem, DsStmt,
+    Expr, LengthSpec, SetOptions, WhenClause,
 };
 
 use crate::error::{Result, SasError};
@@ -385,7 +379,15 @@ impl Compiler<'_> {
                 initial,
                 temporary,
                 special,
-            } => self.compile_array(name, dims.as_deref(), *char_len, vars, initial, *temporary, *special),
+            } => self.compile_array(
+                name,
+                dims.as_deref(),
+                *char_len,
+                vars,
+                initial,
+                *temporary,
+                *special,
+            ),
             DsStmt::AssignIndexed {
                 array,
                 indices,

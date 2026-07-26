@@ -66,16 +66,15 @@ use crate::procs::common::{
 };
 use crate::session::Session;
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::*;
 use std::cmp::Ordering;
 
-
-mod parse;
-mod stats;
-mod report;
-mod types;
 mod output;
+mod parse;
+mod report;
+mod stats;
+mod types;
 
 pub use parse::parse;
 
@@ -87,10 +86,10 @@ pub use report::stat_header;
 pub use stats::compute;
 pub use stats::compute_weighted;
 
+use output::*;
 use parse::*;
 use report::*;
 use types::*;
-use output::*;
 
 pub struct MeansAst {
     pub data: Option<DatasetRef>,
@@ -283,10 +282,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             // only printed type is the full crossing AND neither PRINTALLTYPES
             // nor WAYS/TYPES is active, use the original combined-table emitter.
             let full_type = type_mask(&(0..k).collect::<Vec<_>>(), k);
-            if !ast.printalltypes
-                && allowed.is_none()
-                && print_types == [full_type]
-            {
+            if !ast.printalltypes && allowed.is_none() && print_types == [full_type] {
                 emit_report_group(
                     session,
                     &ds,

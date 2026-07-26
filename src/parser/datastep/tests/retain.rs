@@ -33,7 +33,10 @@ fn retain_negative_and_missing_inits() {
         vec![DsStmt::Retain(vec![
             ("a".to_string(), Some(Expr::Num(-5.0))),
             ("b".to_string(), Some(Expr::Missing(MissingKind::Dot))),
-            ("c".to_string(), Some(Expr::Missing(MissingKind::Letter(25)))),
+            (
+                "c".to_string(),
+                Some(Expr::Missing(MissingKind::Letter(25)))
+            ),
         ])]
     );
 }
@@ -109,9 +112,27 @@ fn length_groups_char_and_num() {
     assert_eq!(
         ast.stmts,
         vec![DsStmt::Length(vec![
-            ("a".to_string(), LengthSpec { char: true, len: 12 }),
-            ("b".to_string(), LengthSpec { char: true, len: 12 }),
-            ("c".to_string(), LengthSpec { char: false, len: 5 }),
+            (
+                "a".to_string(),
+                LengthSpec {
+                    char: true,
+                    len: 12
+                }
+            ),
+            (
+                "b".to_string(),
+                LengthSpec {
+                    char: true,
+                    len: 12
+                }
+            ),
+            (
+                "c".to_string(),
+                LengthSpec {
+                    char: false,
+                    len: 5
+                }
+            ),
         ])]
     );
 }
@@ -123,7 +144,10 @@ fn length_dollar_glued_to_number() {
         ast.stmts,
         vec![DsStmt::Length(vec![(
             "nm".to_string(),
-            LengthSpec { char: true, len: 20 },
+            LengthSpec {
+                char: true,
+                len: 20
+            },
         )])]
     );
 }
@@ -218,8 +242,7 @@ fn iterative_do_with_until() {
 
 #[test]
 fn iterative_do_to_by_while_until_combined() {
-    let ast =
-        parse("data o; do i = 0 to 8 by 2 while(a) until(b); end; run;").unwrap();
+    let ast = parse("data o; do i = 0 to 8 by 2 while(a) until(b); end; run;").unwrap();
     let (index, to, by, while_, until, body) = as_do_loop(&ast.stmts[0]);
     assert_eq!(*index, Some(("i".to_string(), Expr::Num(0.0))));
     assert_eq!(*to, Some(Expr::Num(8.0)));
@@ -289,8 +312,7 @@ fn do_index_named_while_is_iterative() {
 
 #[test]
 fn nested_do_loops_parse() {
-    let ast = parse("data o; do i = 1 to 2; do j = 1 to 3; n + 1; end; end; run;")
-        .unwrap();
+    let ast = parse("data o; do i = 1 to 2; do j = 1 to 3; n + 1; end; end; run;").unwrap();
     let (.., body) = as_do_loop(&ast.stmts[0]);
     let (index, .., inner_body) = as_do_loop(&body[0]);
     assert_eq!(index.as_ref().unwrap().0, "j");

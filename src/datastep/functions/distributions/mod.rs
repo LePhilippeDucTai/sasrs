@@ -1,15 +1,14 @@
-
-mod special;
 mod cdf;
-mod pdf;
-mod legacy;
 mod generic;
+mod legacy;
+mod pdf;
+mod special;
 
-pub(crate) use special::*;
 pub(crate) use cdf::*;
-pub(crate) use pdf::*;
-pub(crate) use legacy::*;
 pub(crate) use generic::*;
+pub(crate) use legacy::*;
+pub(crate) use pdf::*;
+pub(crate) use special::*;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Numerical helpers for probability distributions (M15.4)

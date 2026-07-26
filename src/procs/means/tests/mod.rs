@@ -54,7 +54,10 @@ fn char_meta(name: &str) -> VarMeta {
 
 fn means_ast_var_x() -> MeansAst {
     MeansAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         summary: false,
         noprint: false,
         stats: vec![],
@@ -70,6 +73,6 @@ fn means_ast_var_x() -> MeansAst {
     }
 }
 
-mod parse;
 mod execute1;
 mod execute2;
+mod parse;

@@ -33,7 +33,10 @@ pub enum TokenKind {
     /// Identifier or keyword; raw spelling preserved, matched case-insensitively.
     Ident(String),
     Num(f64),
-    Str { value: String, suffix: StrSuffix },
+    Str {
+        value: String,
+        suffix: StrSuffix,
+    },
     /// `%name` — reserved for the macro facility (later phase).
     MacroCall(String),
     Semi,

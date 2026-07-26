@@ -49,7 +49,11 @@ pub(super) fn sql_expr_to_polars(e: &SqlExpr, ctx: &Ctx) -> Result<Expr> {
         }
         SqlExpr::IsNull { expr, negated } => {
             let a = sql_expr_to_polars(expr, ctx)?;
-            Ok(if *negated { a.is_not_null() } else { a.is_null() })
+            Ok(if *negated {
+                a.is_not_null()
+            } else {
+                a.is_null()
+            })
         }
         SqlExpr::Like {
             expr,
@@ -88,9 +92,7 @@ pub(super) fn base_expr_to_polars(e: &SasExpr, ctx: &Ctx) -> Result<Expr> {
         // déjà normalisés en null sur les colonnes).
         SasExpr::Missing(_) => Ok(lit(NULL)),
         SasExpr::Var(name) => Ok(col(name.clone())),
-        SasExpr::Binary { op, left, right } => {
-            base_binary_to_polars(*op, left, right, ctx)
-        }
+        SasExpr::Binary { op, left, right } => base_binary_to_polars(*op, left, right, ctx),
         SasExpr::Unary { op, expr } => {
             let a = base_expr_to_polars(expr, ctx)?;
             Ok(match op {
@@ -127,7 +129,12 @@ pub(super) fn is_missing_literal(e: &SasExpr) -> bool {
     matches!(e, SasExpr::Missing(_))
 }
 
-pub(super) fn base_binary_to_polars(op: BinaryOp, left: &SasExpr, right: &SasExpr, ctx: &Ctx) -> Result<Expr> {
+pub(super) fn base_binary_to_polars(
+    op: BinaryOp,
+    left: &SasExpr,
+    right: &SasExpr,
+    ctx: &Ctx,
+) -> Result<Expr> {
     // Egalité/inégalité contre un littéral missing.
     if matches!(op, BinaryOp::Eq) {
         if is_missing_literal(right) {
@@ -150,7 +157,12 @@ pub(super) fn base_binary_to_polars(op: BinaryOp, left: &SasExpr, right: &SasExp
     Ok(apply_binop(op, l, r))
 }
 
-pub(super) fn binary_to_polars(op: BinaryOp, left: &SqlExpr, right: &SqlExpr, ctx: &Ctx) -> Result<Expr> {
+pub(super) fn binary_to_polars(
+    op: BinaryOp,
+    left: &SqlExpr,
+    right: &SqlExpr,
+    ctx: &Ctx,
+) -> Result<Expr> {
     // Missing literal en SqlExpr::Base.
     if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
         let l_missing = matches!(left, SqlExpr::Base(b) if is_missing_literal(b));

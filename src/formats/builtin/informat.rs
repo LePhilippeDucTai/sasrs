@@ -34,10 +34,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
 
         // ── COMMAw.d — strip $ and , then treat as w.d ───────────────────────
         "COMMA" | "DOLLAR" => {
-            let cleaned: String = trimmed
-                .chars()
-                .filter(|&c| c != ',' && c != '$')
-                .collect();
+            let cleaned: String = trimmed.chars().filter(|&c| c != ',' && c != '$').collect();
             if cleaned.is_empty() || cleaned == "." {
                 return Some(Value::missing());
             }
@@ -66,7 +63,10 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
             let mon_str = &trimmed[2..5].to_uppercase();
             let year_str = &trimmed[5..];
             let day: u32 = day_str.parse().ok()?;
-            let month = MONTHS.iter().position(|&m| m == mon_str).map(|p| p as u32 + 1)?;
+            let month = MONTHS
+                .iter()
+                .position(|&m| m == mon_str)
+                .map(|p| p as u32 + 1)?;
             let year: i32 = year_str.parse().ok()?;
             // 2-digit year: 00-99 → 2000-2099 (simple heuristic matching SAS)
             let year = if year_str.len() == 2 {
@@ -219,9 +219,5 @@ pub(super) fn parse_ymd_variants(s: &str) -> Option<(i32, u32, u32)> {
 
 /// Expand a 2-digit year to 4 digits (00-99 → 2000-2099).
 pub(super) fn expand_year(y: i32, len: usize) -> i32 {
-    if len == 2 {
-        2000 + y
-    } else {
-        y
-    }
+    if len == 2 { 2000 + y } else { y }
 }

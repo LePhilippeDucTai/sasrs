@@ -37,19 +37,31 @@ pub mod optim;
 
 // Re-export fréquent vers l'extérieur
 pub use dists::{
-    ln_gamma, betai, student_t_cdf, gammq, erf, probnorm, phi_inv,
-    ln_factorial, ln_choose,
+    beta_cdf,
+    beta_quantile,
+    betai,
     // Ajout M24.1 : F, χ², gamma, bêta CDFs et quantiles
-    chisq_cdf, chisq_quantile,
-    f_cdf, f_quantile,
-    t_quantile,
-    gamma_cdf, gamma_quantile,
-    beta_cdf, beta_quantile,
+    chisq_cdf,
+    chisq_quantile,
     // Ajout M37.3 : digamma ψ et trigamma ψ′
-    digamma, trigamma,
+    digamma,
+    erf,
+    f_cdf,
+    f_quantile,
+    gamma_cdf,
+    gamma_quantile,
+    gammq,
+    ln_choose,
+    ln_factorial,
+    ln_gamma,
+    phi_inv,
+    probnorm,
+    student_t_cdf,
+    t_quantile,
+    trigamma,
 };
 
 pub use linalg::{
-    cholesky, qr_decomposition, least_squares, invert_matrix,
-    eigenvalues_jacobi, eigenvectors_jacobi,
+    cholesky, eigenvalues_jacobi, eigenvectors_jacobi, invert_matrix, least_squares,
+    qr_decomposition,
 };

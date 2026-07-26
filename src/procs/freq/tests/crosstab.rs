@@ -46,18 +46,36 @@ fn crosstab_chisq_2x2_hand_computed() {
     // Build column vectors that reproduce the table counts.
     let mut r: Vec<&str> = Vec::new();
     let mut c: Vec<f64> = Vec::new();
-    for _ in 0..10 { r.push("a"); c.push(1.0); }
-    for _ in 0..20 { r.push("a"); c.push(2.0); }
-    for _ in 0..30 { r.push("b"); c.push(1.0); }
-    for _ in 0..40 { r.push("b"); c.push(2.0); }
+    for _ in 0..10 {
+        r.push("a");
+        c.push(1.0);
+    }
+    for _ in 0..20 {
+        r.push("a");
+        c.push(2.0);
+    }
+    for _ in 0..30 {
+        r.push("b");
+        c.push(1.0);
+    }
+    for _ in 0..40 {
+        r.push("b");
+        c.push(2.0);
+    }
     let df = df!["r" => r, "c" => c].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("r"), num_meta("c")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut req = tr(&["r", "c"], false, None);
     req.chisq = true;
     let ast = FreqAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         tables: vec![req],
         weight: None,
         by: Vec::new(),
@@ -65,7 +83,10 @@ fn crosstab_chisq_2x2_hand_computed() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Statistics for Table of r by c"), "{listing}");
+    assert!(
+        listing.contains("Statistics for Table of r by c"),
+        "{listing}"
+    );
     assert!(listing.contains("Chi-Square"), "{listing}");
     assert!(listing.contains("Likelihood Ratio Chi-Square"), "{listing}");
     // Pearson value formatted to 4 decimals.
@@ -290,11 +311,17 @@ fn weighted_one_way_sum_of_weights() {
         "w" => [2.0_f64, 3.0, 5.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![tr(&["x"], false, None)],
     );
     ast.weight = Some("w".to_string());
@@ -303,7 +330,10 @@ fn weighted_one_way_sum_of_weights() {
     // Frequencies 5 and 5 (sum of weights), each 50.00%, cum 5 then 10.
     assert!(l.contains("50.00"), "{l}");
     // Integer-valued weighted freqs print as integers (no decimals).
-    assert!(l.contains(" 5 ") || l.contains(" 5\n") || l.contains("5  "), "{l}");
+    assert!(
+        l.contains(" 5 ") || l.contains(" 5\n") || l.contains("5  "),
+        "{l}"
+    );
     assert!(l.contains("100.00"), "{l}");
 }
 
@@ -319,11 +349,17 @@ fn weighted_excludes_missing_and_nonpositive() {
         "w" => [Some(4.0_f64), None, Some(-1.0), Some(6.0)]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("w")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![tr(&["x"], false, None)],
     );
     ast.weight = Some("w".to_string());
@@ -355,7 +391,10 @@ fn weighted_two_way_chisq() {
     let mut req = tr(&["r", "c"], false, None);
     req.chisq = true;
     let mut ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![req],
     );
     ast.weight = Some("w".to_string());
@@ -379,11 +418,17 @@ fn by_groups_split_one_way() {
         "x" => [1.0_f64, 2.0, 2.0, 1.0, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![tr(&["x"], false, None)],
     );
     ast.by = vec![("g".to_string(), false)];
@@ -406,10 +451,16 @@ fn by_unsorted_errors() {
         "x" => [1.0_f64, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let mut ast = fast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         vec![tr(&["x"], false, None)],
     );
     ast.by = vec![("g".to_string(), false)];

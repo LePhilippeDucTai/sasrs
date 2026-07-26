@@ -137,12 +137,11 @@ pub(super) fn fit_vc(
     let intercept_only = p == 1 && x.iter().all(|row| row[0] == 1.0);
     let unweighted = weights.is_none();
 
-    let (mut sigma2_u, sigma2_e) =
-        if unweighted && balanced && intercept_only && n_subjects >= 2 {
-            closed_form_vc(y, subj_of, n_subjects, n_i)
-        } else {
-            profile_search(y, x, subj_of, weights)?
-        };
+    let (mut sigma2_u, sigma2_e) = if unweighted && balanced && intercept_only && n_subjects >= 2 {
+        closed_form_vc(y, subj_of, n_subjects, n_i)
+    } else {
+        profile_search(y, x, subj_of, weights)?
+    };
     if sigma2_u < 0.0 {
         sigma2_u = 0.0;
     }
@@ -152,7 +151,12 @@ pub(super) fn fit_vc(
 }
 
 /// Closed-form REML variance components, balanced one-way random intercept.
-pub(super) fn closed_form_vc(y: &[f64], subj_of: &[usize], n_subjects: usize, n_i: usize) -> (f64, f64) {
+pub(super) fn closed_form_vc(
+    y: &[f64],
+    subj_of: &[usize],
+    n_subjects: usize,
+    n_i: usize,
+) -> (f64, f64) {
     let a = n_subjects;
     let n_total = y.len();
     let mut group_sum = vec![0.0; a];
@@ -161,8 +165,11 @@ pub(super) fn closed_form_vc(y: &[f64], subj_of: &[usize], n_subjects: usize, n_
     }
     let group_mean: Vec<f64> = group_sum.iter().map(|s| s / n_i as f64).collect();
     let grand_mean = y.iter().sum::<f64>() / n_total as f64;
-    let ss_between: f64 =
-        group_mean.iter().map(|m| (m - grand_mean).powi(2)).sum::<f64>() * n_i as f64;
+    let ss_between: f64 = group_mean
+        .iter()
+        .map(|m| (m - grand_mean).powi(2))
+        .sum::<f64>()
+        * n_i as f64;
     let ss_within: f64 = y
         .iter()
         .enumerate()
@@ -310,8 +317,10 @@ pub(super) fn profile_search(
         let dof = (n - p) as f64;
         let sigma2_e = quad / dof;
         let two_pi = std::f64::consts::TAU;
-        let neg2 =
-            (n as f64 - p as f64) * (two_pi.ln() + sigma2_e.ln()) + log_det_v0 + log_det_xtvix + dof;
+        let neg2 = (n as f64 - p as f64) * (two_pi.ln() + sigma2_e.ln())
+            + log_det_v0
+            + log_det_xtvix
+            + dof;
         Ok(neg2)
     };
     // σ²_e for a given λ.

@@ -37,10 +37,7 @@ fn test_m3610_multi_response_prints_block_per_dependent() {
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
-    let ast = parse_reg(
-        "proc reg data=work.t; model y1 y2 = x; mtest x; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=work.t; model y1 y2 = x; mtest x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
 
@@ -144,9 +141,7 @@ fn test_m3610_single_response_reduces_to_anova_f() {
     let y = [3.0_f64, 5.0, 8.0, 9.0, 13.0, 14.0, 18.0, 20.0];
     let n = y.len();
     // Design with intercept.
-    let x_mat: Vec<Vec<f64>> = (0..n)
-        .map(|i| vec![1.0, x1[i], x2[i]])
-        .collect();
+    let x_mat: Vec<Vec<f64>> = (0..n).map(|i| vec![1.0, x1[i], x2[i]]).collect();
     let fit = ols_fit(&x_mat, &y).unwrap();
     let p_eff = 3usize;
     let intercept = true;
@@ -217,13 +212,15 @@ fn test_m3610_mtest_execute_prints_table() {
     .unwrap();
     let ds = SasDataset {
         df: frame,
-        vars: vec![num_meta("y1"), num_meta("y2"), num_meta("x1"), num_meta("x2")],
+        vars: vec![
+            num_meta("y1"),
+            num_meta("y2"),
+            num_meta("x1"),
+            num_meta("x2"),
+        ],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t; model y1 y2 = x1 x2; mymt: mtest; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=work.t; model y1 y2 = x1 x2; mymt: mtest; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("Multivariate Test: mymt"), "{listing}");
@@ -250,10 +247,7 @@ fn test_m3610_add_delete_applied_to_fit() {
         vars: vec![num_meta("y"), num_meta("x1"), num_meta("x2")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t; model y = x1; add x2; delete x1; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=work.t; model y = x1; add x2; delete x1; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     let listing = session.listing.into_string();
@@ -278,10 +272,9 @@ fn test_m3610_deferred_notes() {
         vars: vec![num_meta("y"), num_meta("x")],
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast = parse_reg(
-        "proc reg data=work.t; model y = x; reweight x > 3; refit; paint obs; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=work.t; model y = x; reweight x > 3; refit; paint obs; run;")
+            .unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("REWEIGHT statement"), "log: {log}");
@@ -331,11 +324,21 @@ fn plots_request_renders_images_under_graphics() {
     };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
     let mut ast = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         basic_model("y", &["x"]),
     );
-    ast.plot_requests = PlotRequests { all: true, explicit: true, ..Default::default() };
-    ast.plot_statements = vec![PlotPair { y: PlotVar::Residual, x: PlotVar::Predicted }];
+    ast.plot_requests = PlotRequests {
+        all: true,
+        explicit: true,
+        ..Default::default()
+    };
+    ast.plot_statements = vec![PlotPair {
+        y: PlotVar::Residual,
+        x: PlotVar::Predicted,
+    }];
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("written"), "log: {log}");
@@ -352,7 +355,10 @@ fn plots_request_renders_images_under_graphics() {
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn plot_statement_defers_under_default_build() {
-    let pairs = vec![PlotPair { y: PlotVar::Residual, x: PlotVar::Predicted }];
+    let pairs = vec![PlotPair {
+        y: PlotVar::Residual,
+        x: PlotVar::Predicted,
+    }];
     let log = run_plots(false, false, PlotRequests::default(), pairs);
     assert!(log.contains("REG PLOT statement"), "log: {log}");
     assert!(log.contains("deferred"), "log: {log}");

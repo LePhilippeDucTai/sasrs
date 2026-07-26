@@ -37,7 +37,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         } else if ts.peek().is_kw("compare") {
             ts.next();
             if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse("expected '=' after COMPARE", ts.peek().span));
+                return Err(SasError::parse(
+                    "expected '=' after COMPARE",
+                    ts.peek().span,
+                ));
             }
             ts.next();
             compare = Some(ts.parse_dataset_ref()?);
@@ -78,8 +81,18 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         ts.skip_to_semi();
     }
 
-    let base = base.ok_or_else(|| SasError::parse("BASE= is required for PROC COMPARE", crate::token::Span::default()))?;
-    let compare = compare.ok_or_else(|| SasError::parse("COMPARE= is required for PROC COMPARE", crate::token::Span::default()))?;
+    let base = base.ok_or_else(|| {
+        SasError::parse(
+            "BASE= is required for PROC COMPARE",
+            crate::token::Span::default(),
+        )
+    })?;
+    let compare = compare.ok_or_else(|| {
+        SasError::parse(
+            "COMPARE= is required for PROC COMPARE",
+            crate::token::Span::default(),
+        )
+    })?;
 
     Ok(CompareAst {
         base,

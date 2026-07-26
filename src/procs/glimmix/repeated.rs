@@ -37,8 +37,7 @@ pub(super) fn build_v_rep(
             for i in 0..n {
                 for j in 0..n {
                     if subj_of[i] == subj_of[j] {
-                        let d =
-                            (within_idx[i] as i64 - within_idx[j] as i64).unsigned_abs();
+                        let d = (within_idx[i] as i64 - within_idx[j] as i64).unsigned_abs();
                         v[i][j] = s2 * rho.powi(d as i32);
                     }
                 }

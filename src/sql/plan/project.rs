@@ -45,7 +45,9 @@ pub(super) fn output_name(it: &SelectItem, _query: &SelectStmt) -> Result<String
     match &it.expr {
         SqlExpr::Base(SasExpr::Var(name)) => Ok(name.clone()),
         SqlExpr::Qualified { column, .. } => Ok(column.clone()),
-        SqlExpr::Aggregate { func, arg, star, .. } => {
+        SqlExpr::Aggregate {
+            func, arg, star, ..
+        } => {
             // COUNT(*) → _TEMA001 façon SAS ; on garde un nom simple.
             if *star {
                 Ok(func.to_ascii_uppercase())

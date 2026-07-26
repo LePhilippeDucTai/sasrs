@@ -8,7 +8,12 @@ pub(super) fn make_class_var_name(label: &str) -> String {
     let trimmed = label.trim();
     if trimmed.is_empty() {
         "_".to_string()
-    } else if trimmed.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+    } else if trimmed
+        .chars()
+        .next()
+        .map(|c| c.is_alphabetic())
+        .unwrap_or(false)
+    {
         trimmed.to_string()
     } else {
         format!("_{trimmed}")

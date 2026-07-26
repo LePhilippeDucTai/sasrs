@@ -73,7 +73,10 @@ fn in_subquery_string_values() {
     write_people(&mut s);
     let keep = df!["s" => ["F"]].unwrap();
     write_table(&mut s, "KEEP", keep, vec![chr("s", 1)]);
-    let out = run("select name from t where sex in (select s from keep);", &mut s);
+    let out = run(
+        "select name from t where sex in (select s from keep);",
+        &mut s,
+    );
     // Seules Cy et Di sont F.
     assert_eq!(out.height(), 2);
     assert_eq!(sorted_strs(&out, "name"), vec!["Cy", "Di"]);
@@ -116,7 +119,10 @@ fn exists_subquery_true_keeps_all() {
     let other = df!["y" => [9.0_f64]].unwrap();
     write_table(&mut s, "T", t, vec![num("x")]);
     write_table(&mut s, "OTHER", other, vec![num("y")]);
-    let out = run("select x from t where exists (select y from other);", &mut s);
+    let out = run(
+        "select x from t where exists (select y from other);",
+        &mut s,
+    );
     assert_eq!(out.height(), 3);
 }
 
@@ -189,8 +195,20 @@ fn dictionary_tables_lists_datasets() {
     assert_eq!(strs(&out, "memname"), vec!["T", "U"]);
     assert_eq!(strs(&out, "libname"), vec!["WORK", "WORK"]);
     // T : 4 lignes / 4 variables ; U : 2 lignes / 1 variable.
-    let nobs: Vec<f64> = out.column("nobs").unwrap().f64().unwrap().into_no_null_iter().collect();
-    let nvar: Vec<f64> = out.column("nvar").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let nobs: Vec<f64> = out
+        .column("nobs")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    let nvar: Vec<f64> = out
+        .column("nvar")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(nobs, vec![4.0, 2.0]);
     assert_eq!(nvar, vec![4.0, 1.0]);
 }
@@ -206,16 +224,29 @@ fn dictionary_columns_lists_variables() {
     );
     assert_eq!(strs(&out, "name"), vec!["name", "sex", "age", "height"]);
     assert_eq!(strs(&out, "type"), vec!["char", "char", "num", "num"]);
-    let length: Vec<f64> = out.column("length").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let length: Vec<f64> = out
+        .column("length")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(length, vec![8.0, 1.0, 8.0, 8.0]);
-    let varnum: Vec<f64> = out.column("varnum").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let varnum: Vec<f64> = out
+        .column("varnum")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     assert_eq!(varnum, vec![1.0, 2.0, 3.0, 4.0]);
 }
 
 #[test]
 fn dictionary_macros_lists_globals() {
     let mut s = make_session();
-    s.macro_engine.set_symbol_global("MYVAR", "hello".to_string());
+    s.macro_engine
+        .set_symbol_global("MYVAR", "hello".to_string());
     let out = run(
         "select scope, name, value from dictionary.macros \
          where name = 'MYVAR';",
@@ -262,8 +293,8 @@ fn dictionary_columns_column_order() {
     assert_eq!(
         names,
         vec![
-            "libname", "memname", "name", "type", "length", "npos",
-            "varnum", "label", "format", "informat",
+            "libname", "memname", "name", "type", "length", "npos", "varnum", "label", "format",
+            "informat",
         ]
     );
 }

@@ -70,12 +70,8 @@ pub(crate) fn build_outest_entry(
     let covb = covb_matrix(&fit.xtx_inv, mse);
     let se: Vec<f64> = (0..p_eff).map(|j| covb[j][j].max(0.0).sqrt()).collect();
     let t_crit = t_quantile(1.0 - alpha / 2.0, edf);
-    let lb: Vec<f64> = (0..p_eff)
-        .map(|j| fit.beta[j] - t_crit * se[j])
-        .collect();
-    let ub: Vec<f64> = (0..p_eff)
-        .map(|j| fit.beta[j] + t_crit * se[j])
-        .collect();
+    let lb: Vec<f64> = (0..p_eff).map(|j| fit.beta[j] - t_crit * se[j]).collect();
+    let ub: Vec<f64> = (0..p_eff).map(|j| fit.beta[j] + t_crit * se[j]).collect();
     OutEstEntry {
         model_label: model_label.to_string(),
         depvar: dep_name.to_string(),
@@ -156,7 +152,9 @@ pub(crate) fn write_outest(
 
     // Helper: index of a parameter name within an entry (case-insensitive).
     let entry_param = |e: &OutEstEntry, nm: &str| -> Option<usize> {
-        e.param_names.iter().position(|p| p.eq_ignore_ascii_case(nm))
+        e.param_names
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case(nm))
     };
 
     for e in entries {

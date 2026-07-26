@@ -24,11 +24,10 @@ use crate::token::TokenKind;
 use crate::value::VarType;
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 
-
 mod ast;
+mod format;
 mod run;
 mod sections;
-mod format;
 
 pub use ast::LinEq;
 pub use ast::OutEst;
@@ -46,9 +45,9 @@ pub use ast::RegTest;
 pub use ast::SelMethod;
 pub use ast::Selection;
 
+use format::*;
 use run::*;
 use sections::*;
-use format::*;
 
 mod diagnostics;
 

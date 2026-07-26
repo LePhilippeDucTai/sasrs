@@ -17,20 +17,27 @@ fn parse_compare_src(src: &str) -> Result<CompareAst> {
     parse(&mut ts)
 }
 
-fn write_numeric_ds(
-    session: &mut Session,
-    name: &str,
-    x_vals: &[f64],
-    y_vals: &[f64],
-) {
+fn write_numeric_ds(session: &mut Session, name: &str, x_vals: &[f64], y_vals: &[f64]) {
     let df = df![
         "x" => x_vals.to_vec(),
         "y" => y_vals.to_vec()
     ]
     .unwrap();
     let vars = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "y".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        VarMeta {
+            name: "x".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "y".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
@@ -38,9 +45,13 @@ fn write_numeric_ds(
 
 fn write_char_ds(session: &mut Session, name: &str, vals: &[&str]) {
     let df = df!["name" => vals.to_vec()].unwrap();
-    let vars = vec![
-        VarMeta { name: "name".into(), ty: VarType::Char, length: 8, format: None, label: None },
-    ];
+    let vars = vec![VarMeta {
+        name: "name".into(),
+        ty: VarType::Char,
+        length: 8,
+        format: None,
+        label: None,
+    }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
 }
@@ -89,8 +100,14 @@ fn execute_identical_datasets_no_diffs() {
     write_numeric_ds(&mut session, "B", &[1.0, 2.0, 3.0], &[10.0, 20.0, 30.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "A".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "B".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "A".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "B".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -112,8 +129,14 @@ fn execute_with_differences() {
     write_numeric_ds(&mut session, "COMP1", &[1.0, 9.0], &[10.0, 20.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE1".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "COMP1".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE1".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "COMP1".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -133,19 +156,63 @@ fn execute_variable_only_in_base() {
     // BASE has x and z; COMPARE has only x
     let df_base = df!["x" => [1.0_f64, 2.0], "z" => [5.0_f64, 6.0]].unwrap();
     let vars_base = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "z".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        VarMeta {
+            name: "x".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "z".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     let df_comp = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let vars_comp = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-    ];
-    session.libs.get("WORK").unwrap().write("BASE2", &SasDataset { df: df_base, vars: vars_base }).unwrap();
-    session.libs.get("WORK").unwrap().write("COMP2", &SasDataset { df: df_comp, vars: vars_comp }).unwrap();
+    let vars_comp = vec![VarMeta {
+        name: "x".into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }];
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "BASE2",
+            &SasDataset {
+                df: df_base,
+                vars: vars_base,
+            },
+        )
+        .unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "COMP2",
+            &SasDataset {
+                df: df_comp,
+                vars: vars_comp,
+            },
+        )
+        .unwrap();
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE2".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "COMP2".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE2".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "COMP2".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -153,7 +220,10 @@ fn execute_variable_only_in_base() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("BASE only") || listing.contains("Z"), "listing: {listing}");
+    assert!(
+        listing.contains("BASE only") || listing.contains("Z"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -161,19 +231,55 @@ fn execute_type_mismatch_reported() {
     let mut session = make_session();
     // BASE has x as Num, COMP has x as Char
     let df_base = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let vars_base = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-    ];
+    let vars_base = vec![VarMeta {
+        name: "x".into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }];
     let df_comp = df!["x" => ["a", "b"]].unwrap();
-    let vars_comp = vec![
-        VarMeta { name: "x".into(), ty: VarType::Char, length: 1, format: None, label: None },
-    ];
-    session.libs.get("WORK").unwrap().write("BASE3", &SasDataset { df: df_base, vars: vars_base }).unwrap();
-    session.libs.get("WORK").unwrap().write("COMP3", &SasDataset { df: df_comp, vars: vars_comp }).unwrap();
+    let vars_comp = vec![VarMeta {
+        name: "x".into(),
+        ty: VarType::Char,
+        length: 1,
+        format: None,
+        label: None,
+    }];
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "BASE3",
+            &SasDataset {
+                df: df_base,
+                vars: vars_base,
+            },
+        )
+        .unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "COMP3",
+            &SasDataset {
+                df: df_comp,
+                vars: vars_comp,
+            },
+        )
+        .unwrap();
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE3".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "COMP3".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE3".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "COMP3".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -181,7 +287,10 @@ fn execute_type_mismatch_reported() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Different Types") || listing.contains("Num") || listing.contains("Char"), "listing: {listing}");
+    assert!(
+        listing.contains("Different Types") || listing.contains("Num") || listing.contains("Char"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -191,8 +300,14 @@ fn execute_different_nobs() {
     write_numeric_ds(&mut session, "COMP4", &[1.0, 2.0], &[0.0, 0.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BASE4".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "COMP4".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BASE4".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "COMP4".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -200,7 +315,10 @@ fn execute_different_nobs() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Not Compared") || listing.contains("2"), "listing: {listing}");
+    assert!(
+        listing.contains("Not Compared") || listing.contains("2"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -210,8 +328,14 @@ fn execute_char_trailing_blanks_equivalent() {
     write_char_ds(&mut session, "CCOMP", &["abc   ", "xyz "]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "CBASE".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "CCOMP".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CBASE".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CCOMP".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -229,15 +353,47 @@ fn execute_missing_equality() {
     // Both have missing values at the same position → equal
     let df_base = df!["x" => Series::new("x".into(), &[Some(1.0_f64), None])].unwrap();
     let df_comp = df!["x" => Series::new("x".into(), &[Some(1.0_f64), None])].unwrap();
-    let vars = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-    ];
-    session.libs.get("WORK").unwrap().write("MISS1", &SasDataset { df: df_base, vars: vars.clone() }).unwrap();
-    session.libs.get("WORK").unwrap().write("MISS2", &SasDataset { df: df_comp, vars: vars }).unwrap();
+    let vars = vec![VarMeta {
+        name: "x".into(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }];
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "MISS1",
+            &SasDataset {
+                df: df_base,
+                vars: vars.clone(),
+            },
+        )
+        .unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write(
+            "MISS2",
+            &SasDataset {
+                df: df_comp,
+                vars: vars,
+            },
+        )
+        .unwrap();
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "MISS1".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "MISS2".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "MISS1".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "MISS2".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: false,
@@ -255,9 +411,18 @@ fn execute_out_dataset_created() {
     write_numeric_ds(&mut session, "OCOMP", &[1.0, 9.0], &[10.0, 20.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "OBASE".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "OCOMP".into() },
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "DIFFS".into() }),
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "OBASE".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "OCOMP".into(),
+        },
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "DIFFS".into(),
+        }),
         novalues: false,
         briefsummary: false,
     };
@@ -277,8 +442,14 @@ fn execute_briefsummary() {
     write_numeric_ds(&mut session, "BS2", &[1.0], &[3.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "BS1".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "BS2".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BS1".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "BS2".into(),
+        },
         out: None,
         novalues: false,
         briefsummary: true,
@@ -286,7 +457,10 @@ fn execute_briefsummary() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Brief Summary") || listing.contains("WORK.BS1"), "listing: {listing}");
+    assert!(
+        listing.contains("Brief Summary") || listing.contains("WORK.BS1"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -296,8 +470,14 @@ fn execute_novalues_omits_values_section() {
     write_numeric_ds(&mut session, "NV2", &[1.0, 9.0], &[0.0, 0.0]);
 
     let ast = CompareAst {
-        base: DatasetRef { libref: Some("WORK".into()), name: "NV1".into() },
-        compare: DatasetRef { libref: Some("WORK".into()), name: "NV2".into() },
+        base: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "NV1".into(),
+        },
+        compare: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "NV2".into(),
+        },
         out: None,
         novalues: true,
         briefsummary: false,
@@ -306,5 +486,8 @@ fn execute_novalues_omits_values_section() {
 
     let listing = session.listing.into_string();
     // The values section header should be absent
-    assert!(!listing.contains("Values Comparison Summary"), "listing should not have values section: {listing}");
+    assert!(
+        !listing.contains("Values Comparison Summary"),
+        "listing should not have values section: {listing}"
+    );
 }

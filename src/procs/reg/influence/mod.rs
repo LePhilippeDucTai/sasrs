@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 mod report;
 
 pub(crate) use report::*;

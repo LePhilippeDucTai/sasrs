@@ -1,11 +1,10 @@
-
+mod concat;
 mod search;
 mod transform;
-mod concat;
 
+pub(crate) use concat::*;
 pub(crate) use search::*;
 pub(crate) use transform::*;
-pub(crate) use concat::*;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Character functions

@@ -52,7 +52,9 @@ pub(super) fn execute_across(
         .filter(|(_, c)| matches!(c.usage, Usage::Group | Usage::Order))
         .map(|(i, _)| i)
         .collect();
-    let analysis_pos = plan.iter().position(|c| matches!(c.usage, Usage::Analysis(_)));
+    let analysis_pos = plan
+        .iter()
+        .position(|c| matches!(c.usage, Usage::Analysis(_)));
     let (apos, stat) = match analysis_pos {
         Some(p) => match &plan[p].usage {
             Usage::Analysis(s) => (p, s.clone()),
@@ -101,7 +103,10 @@ pub(super) fn execute_across(
     });
 
     // Headers: the GROUP/ORDER columns, then one column per across value.
-    let mut headers: Vec<String> = group_positions.iter().map(|&p| plan[p].header.clone()).collect();
+    let mut headers: Vec<String> = group_positions
+        .iter()
+        .map(|&p| plan[p].header.clone())
+        .collect();
     let stat_label = stat.to_uppercase();
     for av in &across_vals {
         headers.push(format!("{} {}", value_to_disp(av), stat_label));
@@ -198,9 +203,7 @@ pub(super) fn render_after_lines(
                                 None => Value::missing(),
                             };
                             match fmt.as_deref().and_then(crate::formats::FormatSpec::parse) {
-                                Some(spec) => {
-                                    line.push_str(catalog.format(&v, &spec).trim_start())
-                                }
+                                Some(spec) => line.push_str(catalog.format(&v, &spec).trim_start()),
                                 None => line.push_str(&value_to_disp(&v)),
                             }
                         }

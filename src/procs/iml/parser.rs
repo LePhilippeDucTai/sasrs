@@ -7,9 +7,9 @@ pub(super) struct Parser {
     pub(super) pos: usize,
 }
 
-mod stmt;
 mod control;
 mod expr;
+mod stmt;
 
 impl Parser {
     pub(super) fn peek(&self) -> &Tok {
@@ -47,14 +47,18 @@ impl Parser {
     pub(super) fn expect_ident(&mut self, what: &str) -> Result<String> {
         match self.next() {
             Tok::Ident(s) => Ok(s),
-            other => Err(SasError::runtime(format!("IML: expected {what}, found {other:?}"))),
+            other => Err(SasError::runtime(format!(
+                "IML: expected {what}, found {other:?}"
+            ))),
         }
     }
 
     pub(super) fn expect_number(&mut self) -> Result<f64> {
         match self.next() {
             Tok::Num(v) => Ok(v),
-            other => Err(SasError::runtime(format!("IML: expected a number, found {other:?}"))),
+            other => Err(SasError::runtime(format!(
+                "IML: expected a number, found {other:?}"
+            ))),
         }
     }
 }
@@ -73,7 +77,10 @@ pub fn parse(ts: &mut crate::parser::StatementStream) -> Result<ImlProgram> {
     // Le statement `proc iml;` se termine par `;` : le consommer. PROC IML
     // n'accepte pas d'options dans notre périmètre, donc tout token avant le
     // `;` est ignoré (best-effort).
-    while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::ImlBody(_) | TokenKind::Eof) {
+    while !matches!(
+        ts.peek().kind,
+        TokenKind::Semi | TokenKind::ImlBody(_) | TokenKind::Eof
+    ) {
         ts.next();
     }
     if ts.peek().kind == TokenKind::Semi {
@@ -91,4 +98,3 @@ pub fn parse(ts: &mut crate::parser::StatementStream) -> Result<ImlProgram> {
         ))
     }
 }
-

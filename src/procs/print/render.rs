@@ -66,9 +66,13 @@ pub(crate) fn render_plain(session: &mut Session, ctx: &RenderCtx<'_>, n_obs: us
     let rows: Vec<Vec<String>> = (0..n_obs).map(|r| ctx.build_row(r)).collect();
     let all: Vec<usize> = (0..n_obs).collect();
     let totals = ctx.build_totals(&all);
-    session
-        .listing
-        .write_table_ext(&ctx.headers, &ctx.aligns, &rows, ctx.double, totals.as_ref());
+    session.listing.write_table_ext(
+        &ctx.headers,
+        &ctx.aligns,
+        &rows,
+        ctx.double,
+        totals.as_ref(),
+    );
     if ctx.n_flag {
         session.listing.blank();
         session.listing.write_line(&format!("N = {}", n_obs));
@@ -110,12 +114,18 @@ pub(crate) fn render_by_groups(
 
         let rows: Vec<Vec<String>> = rows_idx.iter().map(|&r| ctx.build_row(r)).collect();
         let totals = ctx.build_totals(rows_idx);
-        session
-            .listing
-            .write_table_ext(&ctx.headers, &ctx.aligns, &rows, ctx.double, totals.as_ref());
+        session.listing.write_table_ext(
+            &ctx.headers,
+            &ctx.aligns,
+            &rows,
+            ctx.double,
+            totals.as_ref(),
+        );
         if ctx.n_flag {
             session.listing.blank();
-            session.listing.write_line(&format!("N = {}", rows_idx.len()));
+            session
+                .listing
+                .write_line(&format!("N = {}", rows_idx.len()));
         }
     }
 
@@ -139,7 +149,11 @@ pub(crate) fn render_by_groups(
                         any = true;
                     }
                 }
-                let cell = if any { format_best(acc, 12) } else { ".".to_string() };
+                let cell = if any {
+                    format_best(acc, 12)
+                } else {
+                    ".".to_string()
+                };
                 format!("{}={}", ds.vars[si].name, cell)
             })
             .collect();
@@ -153,7 +167,10 @@ pub(crate) fn render_by_groups(
 
 /// Resolve a list of variable names to dataset column indices, erroring with
 /// the SAS "Variable XXXX not found." message on the first unknown name.
-pub(crate) fn resolve_names(ds: &crate::dataset::SasDataset, names: &[String]) -> Result<Vec<usize>> {
+pub(crate) fn resolve_names(
+    ds: &crate::dataset::SasDataset,
+    names: &[String],
+) -> Result<Vec<usize>> {
     let mut idxs = Vec::with_capacity(names.len());
     for vname in names {
         match ds

@@ -9,7 +9,10 @@ use polars::df;
 fn execute_replace_no_ranks() {
     let mut session = make_session();
     let df = df!["x" => [30.0_f64, 10.0, 20.0], "g" => ["a", "b", "c"]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), char_meta("g")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), char_meta("g")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -46,7 +49,10 @@ fn execute_replace_no_ranks() {
 fn execute_ranks_appends_new_columns() {
     let mut session = make_session();
     let df = df!["x" => [30.0_f64, 10.0, 20.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -75,7 +81,10 @@ fn execute_ranks_appends_new_columns() {
 fn execute_ranks_length_mismatch_errors() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0], "y" => [3.0_f64, 4.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -132,7 +141,10 @@ fn execute_default_var_all_numeric() {
 fn execute_missing_rank_and_note() {
     let mut session = make_session();
     let df = df!["x" => [Some(10.0_f64), None, Some(30.0), Some(20.0)]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -165,7 +177,10 @@ fn execute_missing_rank_and_note() {
 fn execute_groups_output() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -190,7 +205,10 @@ fn execute_groups_output() {
 fn execute_out_omitted_overwrites_input() {
     let mut session = make_session();
     let df = df!["x" => [30.0_f64, 10.0, 20.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -223,7 +241,10 @@ fn execute_by_independent_groups() {
         "x" => [10.0_f64, 30.0, 20.0, 5.0, 15.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -253,7 +274,10 @@ fn execute_by_fraction_per_group() {
         "x" => [10.0_f64, 20.0, 10.0, 20.0, 30.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -283,7 +307,10 @@ fn execute_by_not_sorted_errors() {
         "x" => [10.0_f64, 20.0, 30.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = RankAst {
@@ -327,7 +354,13 @@ fn method_percent() {
 fn method_normal_blom() {
     // y = (r - 0.375)/4.25 for r=1..4, then Phi^-1.
     let data = nums(&[10.0, 20.0, 30.0, 40.0]);
-    let out = rank_column(&data, false, Ties::Mean, None, Method::Normal(NormalScore::Blom));
+    let out = rank_column(
+        &data,
+        false,
+        Ties::Mean,
+        None,
+        Method::Normal(NormalScore::Blom),
+    );
     let exp: Vec<f64> = (1..=4)
         .map(|r| phi_inv((r as f64 - 0.375) / 4.25))
         .collect();
@@ -342,7 +375,13 @@ fn method_normal_blom() {
 fn method_normal_vw() {
     // van der Waerden: y = r/(n+1) = r/5.
     let data = nums(&[10.0, 20.0, 30.0, 40.0]);
-    let out = rank_column(&data, false, Ties::Mean, None, Method::Normal(NormalScore::Vw));
+    let out = rank_column(
+        &data,
+        false,
+        Ties::Mean,
+        None,
+        Method::Normal(NormalScore::Vw),
+    );
     let exp: Vec<f64> = (1..=4).map(|r| phi_inv(r as f64 / 5.0)).collect();
     approx_eq(&out, &exp);
 }
@@ -358,7 +397,10 @@ fn method_savage_no_ties() {
     let s4 = 1.0 / 4.0 + 1.0 / 3.0 + 1.0 / 2.0 + 1.0 - 1.0;
     approx_eq(&out, &[s1, s2, s3, s4]);
     // Savage scores sum to ~0.
-    let sum: f64 = out.iter().map(|v| if let Value::Num(x) = v { *x } else { 0.0 }).sum();
+    let sum: f64 = out
+        .iter()
+        .map(|v| if let Value::Num(x) = v { *x } else { 0.0 })
+        .sum();
     assert!(sum.abs() < 1e-9);
 }
 

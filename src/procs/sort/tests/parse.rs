@@ -30,8 +30,7 @@ fn parse_noduprecs_alias() {
 
 #[test]
 fn parse_descending_multiple() {
-    let ast =
-        parse_sort("proc sort data=a; by descending x y descending z; run;").unwrap();
+    let ast = parse_sort("proc sort data=a; by descending x y descending z; run;").unwrap();
     assert_eq!(
         ast.by,
         vec![
@@ -92,7 +91,10 @@ fn parse_sortseq_unknown_errors() {
     let result = parse_sort("proc sort data=a sortseq=ebcdic; by x; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("EBCDIC") || msg.contains("Unknown"), "msg: {msg}");
+    assert!(
+        msg.contains("EBCDIC") || msg.contains("Unknown"),
+        "msg: {msg}"
+    );
 }
 
 #[test]
@@ -111,10 +113,7 @@ fn parse_key_descending() {
 
 #[test]
 fn parse_multiple_key_statements() {
-    let ast = parse_sort(
-        "proc sort data=a; key=sex; key=age / descending; run;",
-    )
-    .unwrap();
+    let ast = parse_sort("proc sort data=a; key=sex; key=age / descending; run;").unwrap();
     assert_eq!(
         ast.by,
         vec![("sex".to_string(), false), ("age".to_string(), true)]
@@ -124,10 +123,7 @@ fn parse_multiple_key_statements() {
 #[test]
 fn parse_key_overrides_by() {
     // If both BY and KEY are present, KEY takes precedence.
-    let ast = parse_sort(
-        "proc sort data=a; by name; key=age / descending; run;",
-    )
-    .unwrap();
+    let ast = parse_sort("proc sort data=a; by name; key=age / descending; run;").unwrap();
     // KEY wins: only age (descending) is in the effective key list.
     assert_eq!(ast.by, vec![("age".to_string(), true)]);
 }

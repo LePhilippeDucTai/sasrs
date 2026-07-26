@@ -46,7 +46,8 @@ fn length_empty_returns_1() {
     // %put emits the value on its own line; check for a line that is exactly "1".
     assert!(
         out.log.lines().any(|l| l == "1"),
-        "expected a line '1' in log:\n{}", out.log
+        "expected a line '1' in log:\n{}",
+        out.log
     );
 }
 
@@ -57,7 +58,8 @@ fn length_single_char_returns_1() {
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
     assert!(
         out.log.lines().any(|l| l == "1"),
-        "expected a line '1' in log:\n{}", out.log
+        "expected a line '1' in log:\n{}",
+        out.log
     );
 }
 
@@ -68,7 +70,8 @@ fn length_abc_returns_3() {
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
     assert!(
         out.log.lines().any(|l| l == "3"),
-        "expected a line '3' in log:\n{}", out.log
+        "expected a line '3' in log:\n{}",
+        out.log
     );
 }
 
@@ -81,7 +84,11 @@ fn auto_vars_status_codes_zero() {
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
     // Both %put emit "0" — at least two occurrences of a standalone 0.
     let count = out.log.lines().filter(|l| l.trim() == "0").count();
-    assert!(count >= 2, "expected at least 2 lines of '0' in log:\n{}", out.log);
+    assert!(
+        count >= 2,
+        "expected at least 2 lines of '0' in log:\n{}",
+        out.log
+    );
 }
 
 /// &SYSPROCESSNAME resolves to "DMS Process".
@@ -105,5 +112,9 @@ fn syslast_initial_null() {
 fn syslast_updated_after_data_step() {
     let out = run_det("data a; x=1; run;\n%put &syslast;");
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
-    assert!(out.log.contains("WORK.A"), "expected WORK.A in log:\n{}", out.log);
+    assert!(
+        out.log.contains("WORK.A"),
+        "expected WORK.A in log:\n{}",
+        out.log
+    );
 }

@@ -64,8 +64,7 @@ pub(super) fn fit_pql(
             z[i] = eta + (y[i] - mu) / d;
         }
         // Solve the weighted mixed model on (z, w): gives β, σ²_u, σ²_e, û.
-        let (s2u, s2e, beta_new, cov, n2) =
-            fit_vc(&z, x, subj_of, n_subjects, Some(&w))?;
+        let (s2u, s2e, beta_new, cov, n2) = fit_vc(&z, x, subj_of, n_subjects, Some(&w))?;
         // Recover û (EBLUP) for the next linearisation:
         // û_s = σ²_u Σ_{i∈s} w_i (z_i - x_i'β) / (σ²_e + σ²_u Σ w_i).
         let mut num = vec![0.0; n_subjects];
@@ -113,27 +112,33 @@ pub(super) fn fit_pql(
     let mu: Vec<f64> = (0..n)
         .map(|i| inv_link(dot(&x[i], &beta) + u[subj_of[i]], lf))
         .collect();
-    let (s2u, s2e, _, cov_beta, n2) = fit_vc(&{
-        // recompute z one more time for variance estimates
-        let mut z = vec![0.0; n];
-        for i in 0..n {
-            let eta = dot(&x[i], &beta) + u[subj_of[i]];
-            let mu_i = inv_link(eta, lf);
-            let d = dmu_deta(eta, lf).max(1e-12);
-            z[i] = eta + (y[i] - mu_i) / d;
-        }
-        z
-    }, x, subj_of, n_subjects, Some(&{
-        let mut w = vec![0.0; n];
-        for i in 0..n {
-            let eta = dot(&x[i], &beta) + u[subj_of[i]];
-            let mu_i = inv_link(eta, lf);
-            let d = dmu_deta(eta, lf).max(1e-12);
-            let v = variance(mu_i, dist);
-            w[i] = freq[i] * d * d / v;
-        }
-        w
-    }))?;
+    let (s2u, s2e, _, cov_beta, n2) = fit_vc(
+        &{
+            // recompute z one more time for variance estimates
+            let mut z = vec![0.0; n];
+            for i in 0..n {
+                let eta = dot(&x[i], &beta) + u[subj_of[i]];
+                let mu_i = inv_link(eta, lf);
+                let d = dmu_deta(eta, lf).max(1e-12);
+                z[i] = eta + (y[i] - mu_i) / d;
+            }
+            z
+        },
+        x,
+        subj_of,
+        n_subjects,
+        Some(&{
+            let mut w = vec![0.0; n];
+            for i in 0..n {
+                let eta = dot(&x[i], &beta) + u[subj_of[i]];
+                let mu_i = inv_link(eta, lf);
+                let d = dmu_deta(eta, lf).max(1e-12);
+                let v = variance(mu_i, dist);
+                w[i] = freq[i] * d * d / v;
+            }
+            w
+        }),
+    )?;
     Ok(GlimmixFit {
         beta,
         cov_beta,

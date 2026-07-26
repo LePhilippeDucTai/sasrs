@@ -39,9 +39,7 @@ fn parse_vbar_sumvar_implies_sum() {
     let ast = parse_gchart("proc gchart data=a; vbar category / sumvar=count; run;").unwrap();
     match &ast.charts[0] {
         GchartStmt::VBar {
-            sumvar,
-            chart_type,
-            ..
+            sumvar, chart_type, ..
         } => {
             assert_eq!(sumvar.as_deref(), Some("count"));
             assert_eq!(*chart_type, ChartType::Sum);
@@ -113,7 +111,10 @@ fn execute_pie_defers() {
     let ast = parse_gchart("proc gchart data=a; pie category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
-    assert!(log.contains("PIE chart deferred in PROC GCHART."), "log: {log}");
+    assert!(
+        log.contains("PIE chart deferred in PROC GCHART."),
+        "log: {log}"
+    );
 }
 
 #[cfg(not(feature = "graphics"))]
@@ -191,7 +192,10 @@ fn execute_pie_with_graphics_writes_image() {
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("written"), "log: {log}");
-    assert!(!log.contains("PIE chart deferred"), "should not defer: {log}");
+    assert!(
+        !log.contains("PIE chart deferred"),
+        "should not defer: {log}"
+    );
     let p = std::env::temp_dir().join("gcharttest_pie_1.png");
     assert!(p.exists(), "pie image not created: {p:?}");
     assert!(p.metadata().unwrap().len() > 0);
@@ -223,5 +227,8 @@ fn pie_aggregate_proportional_to_totals() {
     // A (3) doit occuper 3x l'arc de B (1).
     let span_a = angles[0].1 - angles[0].0;
     let span_b = angles[1].1 - angles[1].0;
-    assert!((span_a - 3.0 * span_b).abs() < 1e-9, "a={span_a} b={span_b}");
+    assert!(
+        (span_a - 3.0 * span_b).abs() < 1e-9,
+        "a={span_a} b={span_b}"
+    );
 }

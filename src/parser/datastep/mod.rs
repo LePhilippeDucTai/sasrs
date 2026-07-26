@@ -72,7 +72,7 @@
 
 #![allow(unused_variables, dead_code)]
 
-use super::{is_block_head_kw, validate_sas_name, StatementStream};
+use super::{StatementStream, is_block_head_kw, validate_sas_name};
 use crate::ast::{
     AttribItem, DataStepAst, DoListItem, DsStmt, Expr, InfileOptions, InfileSource, InputItem,
     LengthSpec, PutDest, PutItem, WhenClause,
@@ -91,16 +91,16 @@ mod io;
 #[cfg(test)]
 mod tests;
 
+pub(super) use self::array::expand_numbered_range;
 use self::array::{parse_array, parse_assign_indexed_tail};
 use self::attrs::{parse_attrib, parse_format, parse_label, parse_length, parse_retain};
 use self::control::{parse_do, parse_goto, parse_if, parse_link, parse_select};
+pub(crate) use self::hash::parse_hash_args;
 use self::hash::{parse_declare, parse_hash_method};
 use self::io::{
-    parse_by, parse_datalines, parse_file, parse_infile, parse_input, parse_merge,
-    parse_modify, parse_put, parse_set, parse_update,
+    parse_by, parse_datalines, parse_file, parse_infile, parse_input, parse_merge, parse_modify,
+    parse_put, parse_set, parse_update,
 };
-pub(crate) use self::hash::parse_hash_args;
-pub(super) use self::array::expand_numbered_range;
 
 pub fn parse_data_step(ts: &mut StatementStream) -> Result<DataStepAst> {
     let start = ts.peek().span.start;
@@ -156,10 +156,7 @@ pub fn parse_data_step(ts: &mut StatementStream) -> Result<DataStepAst> {
             }
             _ => {
                 // Tête de statement inattendue (ex. `=`, `(`...).
-                let e = SasError::parse(
-                    "expected a DATA step statement",
-                    tok.span,
-                );
+                let e = SasError::parse("expected a DATA step statement", tok.span);
                 if first_err.is_none() {
                     first_err = Some(e);
                 }
@@ -216,10 +213,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
     let head = match tok.ident() {
         Some(s) => s.to_ascii_lowercase(),
         None => {
-            return Err(SasError::parse(
-                "expected a DATA step statement",
-                tok.span,
-            ));
+            return Err(SasError::parse("expected a DATA step statement", tok.span));
         }
     };
 
@@ -325,10 +319,7 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "put" => parse_put(ts),
         "datalines" | "cards" | "datalines4" | "cards4" => parse_datalines(ts),
         // `end` ne devrait pas apparaître en tête hors d'un bloc `do`.
-        "end" => Err(SasError::parse(
-            "no matching DO for END.",
-            tok.span,
-        )),
+        "end" => Err(SasError::parse("no matching DO for END.", tok.span)),
         _ => parse_assign_or_sum_tail(ts, &tok, &head),
     }
 }
@@ -371,8 +362,7 @@ fn parse_assign_or_sum_tail(
         // `arr{i} = e;` / `arr[i] = e;` / `arr{i,j} = e;` :
         // assignation indexée (mono- ou multi-dimensionnelle).
         TokenKind::LBrace | TokenKind::LBracket => {
-            let Expr::Index { name, indices } = super::expr::parse_index(ts, var)?
-            else {
+            let Expr::Index { name, indices } = super::expr::parse_index(ts, var)? else {
                 unreachable!("parse_index always returns Expr::Index");
             };
             parse_assign_indexed_tail(ts, name, indices)
@@ -404,10 +394,7 @@ fn parse_assign_or_sum_tail(
             parse_assign_indexed_tail(ts, var, indices)
         }
         _ => Err(SasError::parse(
-            format!(
-                "Statement {} is not yet implemented.",
-                head.to_uppercase()
-            ),
+            format!("Statement {} is not yet implemented.", head.to_uppercase()),
             tok.span,
         )),
     }

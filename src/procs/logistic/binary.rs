@@ -132,10 +132,7 @@ pub(super) fn fit_binary(
     let wald_chi2: Vec<f64> = (0..p_param)
         .map(|j| (beta[j] / se_beta[j]).powi(2))
         .collect();
-    let wald_p: Vec<f64> = wald_chi2
-        .iter()
-        .map(|&w| chisq_sf(w, 1.0))
-        .collect();
+    let wald_p: Vec<f64> = wald_chi2.iter().map(|&w| chisq_sf(w, 1.0)).collect();
 
     Ok(BinaryFit {
         beta,

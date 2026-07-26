@@ -76,7 +76,11 @@ pub(super) fn print_class_level_info(session: &mut Session, class_name: &str, mo
 }
 
 /// Per-class Within-Class covariance matrices + the pooled matrix.
-pub(super) fn print_covariance_matrices(session: &mut Session, var_vars: &[String], model: &LdaModel) {
+pub(super) fn print_covariance_matrices(
+    session: &mut Session,
+    var_vars: &[String],
+    model: &LdaModel,
+) {
     let n = model.n_total;
     let g = model.n_groups;
 
@@ -129,7 +133,11 @@ pub(super) fn print_pairwise_distances(session: &mut Session, model: &LdaModel) 
 }
 
 /// "Linear Discriminant Function Coefficients" table.
-pub(super) fn print_discrim_coefficients(session: &mut Session, var_vars: &[String], model: &LdaModel) {
+pub(super) fn print_discrim_coefficients(
+    session: &mut Session,
+    var_vars: &[String],
+    model: &LdaModel,
+) {
     let g = model.n_groups;
     centered(session, "Linear Discriminant Function Coefficients");
     session.listing.blank();
@@ -217,7 +225,11 @@ pub(super) fn print_classification_results(
 }
 
 /// "Error Count Estimates for Training Data" (Rate/Priors rows).
-pub(super) fn print_error_estimates(session: &mut Session, model: &LdaModel, error_count: &[usize]) {
+pub(super) fn print_error_estimates(
+    session: &mut Session,
+    model: &LdaModel,
+    error_count: &[usize],
+) {
     let g = model.n_groups;
     centered(session, "Error Count Estimates for Training Data");
     session.listing.blank();

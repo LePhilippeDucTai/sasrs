@@ -6,7 +6,10 @@ use crate::value::Value;
 
 #[test]
 fn substr_nominal() {
-    assert_eq!(invoke("SUBSTR", &[chr("Hello"), num(2.0), num(3.0)]), chr("ell"));
+    assert_eq!(
+        invoke("SUBSTR", &[chr("Hello"), num(2.0), num(3.0)]),
+        chr("ell")
+    );
 }
 
 #[test]
@@ -26,7 +29,10 @@ fn substr_out_of_bounds_flags_error() {
 
 #[test]
 fn index_found() {
-    assert_eq!(invoke("INDEX", &[chr("Hello World"), chr("World")]), num(7.0));
+    assert_eq!(
+        invoke("INDEX", &[chr("Hello World"), chr("World")]),
+        num(7.0)
+    );
 }
 
 #[test]
@@ -38,12 +44,18 @@ fn index_not_found() {
 
 #[test]
 fn cat_concatenates_raw() {
-    assert_eq!(invoke("CAT", &[chr("Hello "), chr("World")]), chr("Hello World"));
+    assert_eq!(
+        invoke("CAT", &[chr("Hello "), chr("World")]),
+        chr("Hello World")
+    );
 }
 
 #[test]
 fn cats_strips_each() {
-    assert_eq!(invoke("CATS", &[chr("  Hello  "), chr("  World  ")]), chr("HelloWorld"));
+    assert_eq!(
+        invoke("CATS", &[chr("  Hello  "), chr("  World  ")]),
+        chr("HelloWorld")
+    );
 }
 
 #[test]
@@ -64,7 +76,10 @@ fn compress_default_removes_spaces() {
 
 #[test]
 fn compress_custom_chars() {
-    assert_eq!(invoke("COMPRESS", &[chr("hello123"), chr("123")]), chr("hello"));
+    assert_eq!(
+        invoke("COMPRESS", &[chr("hello123"), chr("123")]),
+        chr("hello")
+    );
 }
 
 // ── TRANWRD ───────────────────────────────────────────────────────────────
@@ -81,18 +96,27 @@ fn tranwrd_replaces_substring() {
 
 #[test]
 fn scan_first_word() {
-    assert_eq!(invoke("SCAN", &[chr("hello world foo"), num(1.0)]), chr("hello"));
+    assert_eq!(
+        invoke("SCAN", &[chr("hello world foo"), num(1.0)]),
+        chr("hello")
+    );
 }
 
 #[test]
 fn scan_second_word() {
-    assert_eq!(invoke("SCAN", &[chr("hello world foo"), num(2.0)]), chr("world"));
+    assert_eq!(
+        invoke("SCAN", &[chr("hello world foo"), num(2.0)]),
+        chr("world")
+    );
 }
 
 #[test]
 fn scan_negative_index_from_end() {
     // n=-1 → last word
-    assert_eq!(invoke("SCAN", &[chr("hello world foo"), num(-1.0)]), chr("foo"));
+    assert_eq!(
+        invoke("SCAN", &[chr("hello world foo"), num(-1.0)]),
+        chr("foo")
+    );
 }
 
 #[test]
@@ -200,10 +224,7 @@ fn put_dollar_format_returns_char() {
     // PUT(1234.5, dollar10.2) → "$1,234.50".
     let r = invoke("PUT", &[num(1234.5), chr("dollar10.2")]);
     match r {
-        Value::Char(s) => assert!(
-            s.contains("$1,234.50"),
-            "expected '$1,234.50' inside {s:?}"
-        ),
+        Value::Char(s) => assert!(s.contains("$1,234.50"), "expected '$1,234.50' inside {s:?}"),
         _ => panic!("PUT must return character, got {r:?}"),
     }
 }
@@ -211,13 +232,13 @@ fn put_dollar_format_returns_char() {
 #[test]
 fn put_date_format_returns_char() {
     // 2020-01-01 = 21915 jours après 1960-01-01 (croise avec MDY).
-    assert_eq!(invoke("MDY", &[num(1.0), num(1.0), num(2020.0)]), num(21915.0));
+    assert_eq!(
+        invoke("MDY", &[num(1.0), num(1.0), num(2020.0)]),
+        num(21915.0)
+    );
     let r = invoke("PUT", &[num(21915.0), chr("date9.")]);
     match r {
-        Value::Char(s) => assert!(
-            s.contains("01JAN2020"),
-            "expected '01JAN2020' inside {s:?}"
-        ),
+        Value::Char(s) => assert!(s.contains("01JAN2020"), "expected '01JAN2020' inside {s:?}"),
         _ => panic!("PUT must return character, got {r:?}"),
     }
 }
@@ -261,10 +282,22 @@ fn put_user_format_via_function() {
             other: Some("Unknown".to_string()),
         },
     );
-    let mut c = EvalCtx { format_catalog: cat, ..EvalCtx::default() };
-    assert_eq!(invoke_ctx("PUT", &[num(1.0), chr("sexfmt.")], &mut c), chr("Male"));
-    assert_eq!(invoke_ctx("PUT", &[num(2.0), chr("sexfmt.")], &mut c), chr("Female"));
-    assert_eq!(invoke_ctx("PUT", &[num(99.0), chr("sexfmt.")], &mut c), chr("Unknown"));
+    let mut c = EvalCtx {
+        format_catalog: cat,
+        ..EvalCtx::default()
+    };
+    assert_eq!(
+        invoke_ctx("PUT", &[num(1.0), chr("sexfmt.")], &mut c),
+        chr("Male")
+    );
+    assert_eq!(
+        invoke_ctx("PUT", &[num(2.0), chr("sexfmt.")], &mut c),
+        chr("Female")
+    );
+    assert_eq!(
+        invoke_ctx("PUT", &[num(99.0), chr("sexfmt.")], &mut c),
+        chr("Unknown")
+    );
 }
 
 #[test]
@@ -276,7 +309,10 @@ fn input_implicit_decimal() {
 #[test]
 fn input_date_informat() {
     // INPUT("01JAN2020", date9.) → 21915.
-    assert_eq!(invoke("INPUT", &[chr("01JAN2020"), chr("date9.")]), num(21915.0));
+    assert_eq!(
+        invoke("INPUT", &[chr("01JAN2020"), chr("date9.")]),
+        num(21915.0)
+    );
 }
 
 #[test]
@@ -288,16 +324,28 @@ fn input_wrong_arity_returns_missing() {
 fn input_user_informat_numeric_via_function() {
     // INPUT("A", grade.) → 4.0 using user-defined informat.
     let mut c = make_ctx_with_grade_informat();
-    assert_eq!(invoke_ctx("INPUT", &[chr("A"), chr("grade.")], &mut c), num(4.0));
-    assert_eq!(invoke_ctx("INPUT", &[chr("B"), chr("grade.")], &mut c), num(3.0));
-    assert_eq!(invoke_ctx("INPUT", &[chr("F"), chr("grade.")], &mut c), num(0.0));
+    assert_eq!(
+        invoke_ctx("INPUT", &[chr("A"), chr("grade.")], &mut c),
+        num(4.0)
+    );
+    assert_eq!(
+        invoke_ctx("INPUT", &[chr("B"), chr("grade.")], &mut c),
+        num(3.0)
+    );
+    assert_eq!(
+        invoke_ctx("INPUT", &[chr("F"), chr("grade.")], &mut c),
+        num(0.0)
+    );
 }
 
 #[test]
 fn input_user_informat_unmatched_returns_missing() {
     // "X" not in grade informat; other=. → missing.
     let mut c = make_ctx_with_grade_informat();
-    assert_eq!(invoke_ctx("INPUT", &[chr("X"), chr("grade.")], &mut c), miss());
+    assert_eq!(
+        invoke_ctx("INPUT", &[chr("X"), chr("grade.")], &mut c),
+        miss()
+    );
 }
 
 #[test]
@@ -351,16 +399,25 @@ fn intck_year() {
 #[test]
 fn intck_week_boundary() {
     // SAS day 0 = Friday; day 2 (1960-01-03) = Sunday → new SAS week.
-    assert_eq!(invoke("INTCK", &[chr("week"), num(0.0), num(2.0)]), num(1.0));
+    assert_eq!(
+        invoke("INTCK", &[chr("week"), num(0.0), num(2.0)]),
+        num(1.0)
+    );
     // days 0..6 within the SAS week of day 0: day 0 (Fri) → day 1 (Sat)
     // are in the same week (Sunday boundary not crossed).
-    assert_eq!(invoke("INTCK", &[chr("week"), num(0.0), num(1.0)]), num(0.0));
+    assert_eq!(
+        invoke("INTCK", &[chr("week"), num(0.0), num(1.0)]),
+        num(0.0)
+    );
 }
 
 #[test]
 fn intck_week_negative() {
     // Going backward across a Sunday boundary.
-    assert_eq!(invoke("INTCK", &[chr("week"), num(2.0), num(0.0)]), num(-1.0));
+    assert_eq!(
+        invoke("INTCK", &[chr("week"), num(2.0), num(0.0)]),
+        num(-1.0)
+    );
 }
 
 #[test]

@@ -80,7 +80,11 @@ pub(super) fn visible_names(query: &SelectStmt) -> Vec<String> {
 
 /// Réécrit en place les sous-requêtes d'une expression. `outer` = noms visibles
 /// dans la requête englobante (pour détecter la corrélation).
-pub(super) fn rewrite_sql_expr(e: &mut SqlExpr, outer: &[String], session: &mut Session) -> Result<()> {
+pub(super) fn rewrite_sql_expr(
+    e: &mut SqlExpr,
+    outer: &[String],
+    session: &mut Session,
+) -> Result<()> {
     match e {
         SqlExpr::Subquery(q) => {
             ensure_not_correlated(q, outer)?;
@@ -252,7 +256,10 @@ pub(super) fn eval_scalar_subquery(query: &SelectStmt, session: &mut Session) ->
 
 /// Évalue une sous-requête de colonne (membre droit d'un IN) en une liste de
 /// littéraux `Expr`. Les nulls sont ignorés.
-pub(super) fn eval_column_subquery(query: &SelectStmt, session: &mut Session) -> Result<Vec<SasExpr>> {
+pub(super) fn eval_column_subquery(
+    query: &SelectStmt,
+    session: &mut Session,
+) -> Result<Vec<SasExpr>> {
     let df = lower_select(query, session)?.collect()?;
     if df.width() != 1 {
         return Err(SasError::runtime(

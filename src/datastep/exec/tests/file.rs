@@ -22,11 +22,7 @@ fn file_print_routes_to_listing() {
 #[test]
 fn file_log_explicit_routes_to_log() {
     let mut s = session();
-    run(
-        "data _null_; x = 7; file log; put 'val' x; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data _null_; x = 7; file log; put 'val' x; run;", &mut s).unwrap();
     let lines = put_log_lines(&s.log.into_string());
     assert_eq!(lines, vec!["val 7"]);
 }
@@ -38,9 +34,7 @@ fn file_path_writes_external_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("report.txt");
     let path_str = path.to_str().unwrap();
-    let src = format!(
-        "data _null_; set inp; file '{path_str}'; put name age; run;"
-    );
+    let src = format!("data _null_; set inp; file '{path_str}'; put name age; run;");
     run(&src, &mut s).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     assert_eq!(content, "Alfred 14\nAlice .\nBarbara 13\n");
@@ -354,5 +348,8 @@ fn unknown_call_routine_errors() {
     let mut s = session();
     let res = run("data _null_; call frobnicate(1); run;", &mut s);
     let err = res.err().expect("expected error for unknown CALL routine");
-    assert!(err.to_string().contains("not yet implemented"), "got: {err}");
+    assert!(
+        err.to_string().contains("not yet implemented"),
+        "got: {err}"
+    );
 }

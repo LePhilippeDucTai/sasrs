@@ -20,21 +20,20 @@ use crate::stat::{f_cdf, student_t_cdf};
 use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 
-
-mod parse;
-mod oneway;
-mod oneway_report;
-mod oneway_means;
 mod design;
 mod multiway;
 mod multiway_report;
-pub use parse::parse;
-use oneway::*;
-use oneway_report::*;
-use oneway_means::*;
+mod oneway;
+mod oneway_means;
+mod oneway_report;
+mod parse;
 use design::*;
 use multiway::*;
 use multiway_report::*;
+use oneway::*;
+use oneway_means::*;
+use oneway_report::*;
+pub use parse::parse;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -97,7 +96,6 @@ fn fmt6(v: f64) -> String {
 
 use crate::procs::common::fmt_p;
 
-
 // ───────────────────────── Listing helpers ─────────────────────────
 
 use crate::procs::common::centered;
@@ -126,8 +124,7 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
     // term, multiple effect terms, or multiple CLASS vars) goes to the general
     // multiway engine. This keeps the one-way path byte-identical.
     let has_interaction = model.effect_terms.iter().any(|t| t.len() > 1);
-    let is_multiway =
-        has_interaction || model.effect_terms.len() > 1 || ast.class_vars.len() > 1;
+    let is_multiway = has_interaction || model.effect_terms.len() > 1 || ast.class_vars.len() > 1;
     if is_multiway {
         return execute_multiway(ast, model, session);
     }
@@ -178,10 +175,7 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
 
         // --- LSMEANS ---
         let show_lsmeans = !ast.lsmeans_vars.is_empty()
-            && ast
-                .lsmeans_vars
-                .iter()
-                .any(|v| v.eq_ignore_ascii_case(eff));
+            && ast.lsmeans_vars.iter().any(|v| v.eq_ignore_ascii_case(eff));
 
         if show_lsmeans {
             print_oneway_lsmeans(session, dep_var, eff, &stats);
@@ -192,10 +186,7 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
 
         // --- MEANS section ---
         let show_means = !ast.means_vars.is_empty()
-            && ast
-                .means_vars
-                .iter()
-                .any(|m| m.eq_ignore_ascii_case(eff));
+            && ast.means_vars.iter().any(|m| m.eq_ignore_ascii_case(eff));
 
         if show_means {
             print_oneway_means(session, eff, &stats);

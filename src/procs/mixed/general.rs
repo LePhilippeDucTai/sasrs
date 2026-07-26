@@ -161,9 +161,7 @@ pub(super) fn neg2_loglik_gen(
 
     let two_pi = std::f64::consts::TAU;
     let neg2 = match method {
-        Method::Reml => {
-            (n as f64 - p as f64) * two_pi.ln() + log_det_v + log_det_xtvix + quad
-        }
+        Method::Reml => (n as f64 - p as f64) * two_pi.ln() + log_det_v + log_det_xtvix + quad,
         Method::Ml => n as f64 * two_pi.ln() + log_det_v + quad,
     };
     Ok((neg2, beta, xtvix_inv))
@@ -222,8 +220,7 @@ pub(super) fn fit_gen(
     let mut converged = false;
     let mut step = 0.5_f64;
     for restart in 0..6 {
-        let (u_r, f_r, it, conv) =
-            nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
+        let (u_r, f_r, it, conv) = nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
         total_iters += it;
         if f_r <= f_best {
             f_best = f_r;
@@ -263,15 +260,15 @@ pub(super) fn initial_cov_params(plan: &Plan, y: &[f64], max_obs: usize) -> (Gen
         Plan::RandomVc(_, _) => {
             // Use the variance of y as a scale.
             let mean = y.iter().sum::<f64>() / n_used as f64;
-            let var = y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                / (n_used as f64 - 1.0).max(1.0);
+            let var =
+                y.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n_used as f64 - 1.0).max(1.0);
             let v0 = var.max(1e-3);
             (GenCov::RandomVc, vec![(v0 / 2.0).ln(), (v0 / 2.0).ln()])
         }
         Plan::Repeated(CovType::Ar1, _) => {
             let mean = y.iter().sum::<f64>() / n_used as f64;
-            let var = y.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                / (n_used as f64 - 1.0).max(1.0);
+            let var =
+                y.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n_used as f64 - 1.0).max(1.0);
             // u[0]=atanh(0.1)≈0.1, u[1]=ln(var).
             (GenCov::RepeatedAr1, vec![0.1_f64, var.max(1e-3).ln()])
         }

@@ -46,19 +46,23 @@ pub(crate) fn fn_translate(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let to_chars: Vec<char> = to.chars().collect();
     let from_chars: Vec<char> = from.chars().collect();
 
-    let result: String = s.chars().map(|c| {
-        match from_chars.iter().position(|&fc| fc == c) {
-            Some(pos) => {
-                if pos < to_chars.len() {
-                    to_chars[pos]
-                } else {
-                    // char in from beyond len(to) → remove it
-                    return '\0';  // placeholder, will be filtered
+    let result: String = s
+        .chars()
+        .map(|c| {
+            match from_chars.iter().position(|&fc| fc == c) {
+                Some(pos) => {
+                    if pos < to_chars.len() {
+                        to_chars[pos]
+                    } else {
+                        // char in from beyond len(to) → remove it
+                        return '\0'; // placeholder, will be filtered
+                    }
                 }
+                None => c,
             }
-            None => c,
-        }
-    }).filter(|&c| c != '\0').collect();
+        })
+        .filter(|&c| c != '\0')
+        .collect();
 
     Value::Char(result)
 }
@@ -151,10 +155,7 @@ pub(crate) fn fn_compbl(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     }
     let s = coerce_char(&args[0]);
     let trimmed = s.trim();
-    let result: String = trimmed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let result: String = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
     Value::Char(result)
 }
 
@@ -219,7 +220,7 @@ pub(crate) fn fn_char(args: &[Value], ctx: &mut EvalCtx) -> Value {
                     }
                 }
             }
-        }
+        },
     }
 }
 

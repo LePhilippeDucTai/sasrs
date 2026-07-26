@@ -308,11 +308,12 @@ fn unknown_variable_is_fatal() {
     let (v, ctx) = ev(&var("nosuch"), &pdv);
     assert_eq!(v, Value::missing());
     assert!(ctx.fatal.is_some());
-    assert!(ctx
-        .fatal
-        .unwrap()
-        .to_string()
-        .contains("program data vector"));
+    assert!(
+        ctx.fatal
+            .unwrap()
+            .to_string()
+            .contains("program data vector")
+    );
 }
 
 // ── IN ───────────────────────────────────────────────────────────────

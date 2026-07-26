@@ -93,7 +93,11 @@ impl Compiler<'_> {
             // (NON-temporaires) connues au point du statement, du type voulu.
             let want_char = matches!(kind, ArraySpecial::Character)
                 || (matches!(kind, ArraySpecial::All) && char_len.is_some());
-            let want = if want_char { VarType::Char } else { VarType::Num };
+            let want = if want_char {
+                VarType::Char
+            } else {
+                VarType::Num
+            };
             let picked: Vec<usize> = self
                 .pdv
                 .vars()

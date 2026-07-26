@@ -84,10 +84,7 @@ pub(crate) fn parse_select(ts: &mut StatementStream) -> Result<DsStmt> {
             TokenKind::Ident(s) => {
                 let lower = s.to_ascii_lowercase();
                 if lower == "run" || lower == "quit" || is_block_head_kw(&lower) {
-                    return Err(SasError::parse(
-                        "missing END for SELECT block.",
-                        tok.span,
-                    ));
+                    return Err(SasError::parse("missing END for SELECT block.", tok.span));
                 }
                 return Err(SasError::parse(
                     "expected WHEN, OTHERWISE or END inside the SELECT block",
@@ -107,13 +104,13 @@ pub(crate) fn parse_select(ts: &mut StatementStream) -> Result<DsStmt> {
 /// `( v1 [, v2 ...] )` après un WHEN. En forme booléenne (sans sélecteur),
 /// une seule expression (la condition) est autorisée. La liste vide `when ()`
 /// est rejetée.
-pub(crate) fn parse_when_values(ts: &mut StatementStream, selector_form: bool) -> Result<Vec<Expr>> {
+pub(crate) fn parse_when_values(
+    ts: &mut StatementStream,
+    selector_form: bool,
+) -> Result<Vec<Expr>> {
     let open = ts.peek().clone();
     if open.kind != TokenKind::LParen {
-        return Err(SasError::parse(
-            "expected '(' after WHEN",
-            open.span,
-        ));
+        return Err(SasError::parse("expected '(' after WHEN", open.span));
     }
     ts.next(); // `(`
     if ts.peek().kind == TokenKind::RParen {

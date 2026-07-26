@@ -10,8 +10,16 @@ pub(super) fn eval_expr(e: &ImlExpr, env: &Env) -> Result<Matrix> {
             .vars
             .get(&name.to_ascii_uppercase())
             .cloned()
-            .ok_or_else(|| SasError::runtime(format!("IML: matrix {} has not been set to a value.", name.to_uppercase()))),
-        ImlExpr::Unary { op: UnaryOp::Neg, expr } => {
+            .ok_or_else(|| {
+                SasError::runtime(format!(
+                    "IML: matrix {} has not been set to a value.",
+                    name.to_uppercase()
+                ))
+            }),
+        ImlExpr::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => {
             let m = eval_expr(expr, env)?;
             Ok(m.iter().map(|r| r.iter().map(|v| -v).collect()).collect())
         }
@@ -46,7 +54,9 @@ pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
             // Division par scalaire (ou élément par élément si même dim).
             if rr == 1 && rc == 1 {
                 let d = r[0][0];
-                Ok(l.iter().map(|row| row.iter().map(|v| v / d).collect()).collect())
+                Ok(l.iter()
+                    .map(|row| row.iter().map(|v| v / d).collect())
+                    .collect())
             } else {
                 elementwise(l, r, |a, b| a / b)
             }
@@ -55,11 +65,17 @@ pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
             // Produit matriciel ; si l'un est scalaire, multiplication scalaire.
             if lr == 1 && lc == 1 {
                 let s = l[0][0];
-                return Ok(r.iter().map(|row| row.iter().map(|v| v * s).collect()).collect());
+                return Ok(r
+                    .iter()
+                    .map(|row| row.iter().map(|v| v * s).collect())
+                    .collect());
             }
             if rr == 1 && rc == 1 {
                 let s = r[0][0];
-                return Ok(l.iter().map(|row| row.iter().map(|v| v * s).collect()).collect());
+                return Ok(l
+                    .iter()
+                    .map(|row| row.iter().map(|v| v * s).collect())
+                    .collect());
             }
             if lc != rr {
                 return Err(SasError::runtime(format!(
@@ -99,7 +115,12 @@ pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
     }
 }
 
-pub(super) fn eval_subscript(m: &Matrix, row: &ImlIndex, col: &ImlIndex, env: &Env) -> Result<Matrix> {
+pub(super) fn eval_subscript(
+    m: &Matrix,
+    row: &ImlIndex,
+    col: &ImlIndex,
+    env: &Env,
+) -> Result<Matrix> {
     let (nr, nc) = dims(m);
     // Resolve an index expression to the explicit (0-based) list of positions.
     let resolve = |idx: &ImlIndex, max: usize| -> Result<Vec<usize>> {
@@ -147,7 +168,12 @@ pub(super) fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix>
     let lname = name.to_ascii_lowercase();
     let arg = |i: usize| -> Result<Matrix> {
         args.get(i)
-            .ok_or_else(|| SasError::runtime(format!("IML: {} requires more arguments.", name.to_uppercase())))
+            .ok_or_else(|| {
+                SasError::runtime(format!(
+                    "IML: {} requires more arguments.",
+                    name.to_uppercase()
+                ))
+            })
             .and_then(|e| eval_expr(e, env))
     };
     match lname.as_str() {
@@ -180,7 +206,9 @@ pub(super) fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix>
         "std" => {
             let v = all_elems(&arg(0)?);
             if v.len() < 2 {
-                return Err(SasError::runtime("IML: STD requires at least two elements."));
+                return Err(SasError::runtime(
+                    "IML: STD requires at least two elements.",
+                ));
             }
             let m = v.iter().sum::<f64>() / v.len() as f64;
             let ss: f64 = v.iter().map(|x| (x - m) * (x - m)).sum();
@@ -188,13 +216,17 @@ pub(super) fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix>
         }
         "min" => {
             let v = all_elems(&arg(0)?);
-            v.iter().cloned().fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.min(x))))
+            v.iter()
+                .cloned()
+                .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.min(x))))
                 .map(scalar)
                 .ok_or_else(|| SasError::runtime("IML: MIN of an empty matrix."))
         }
         "max" => {
             let v = all_elems(&arg(0)?);
-            v.iter().cloned().fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.max(x))))
+            v.iter()
+                .cloned()
+                .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.max(x))))
                 .map(scalar)
                 .ok_or_else(|| SasError::runtime("IML: MAX of an empty matrix."))
         }

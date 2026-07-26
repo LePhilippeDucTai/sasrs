@@ -19,11 +19,7 @@ pub(crate) fn t_cdf(t: f64, df: f64) -> f64 {
     }
     let x = df / (df + t * t);
     let ib = 0.5 * betai(0.5 * df, 0.5, x);
-    if t >= 0.0 {
-        1.0 - ib
-    } else {
-        ib
-    }
+    if t >= 0.0 { 1.0 - ib } else { ib }
 }
 
 /// F CDF with `ndf` numerator and `ddf` denominator degrees of freedom.

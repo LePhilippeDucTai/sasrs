@@ -46,10 +46,7 @@ fn data_without_output_name_errors() {
 
 #[test]
 fn data_with_keep_drop_rename_where_options() {
-    let ast = parse(
-        "data out(keep=a b drop=c rename=(a=aa) where=(a > 1)); run;",
-    )
-    .unwrap();
+    let ast = parse("data out(keep=a b drop=c rename=(a=aa) where=(a > 1)); run;").unwrap();
     assert_eq!(ast.outputs.len(), 1);
     let spec = &ast.outputs[0];
     assert_eq!(spec.dref, dsref("out"));
@@ -90,10 +87,9 @@ fn multiple_outputs() {
 
 #[test]
 fn if_then_else_nested() {
-    let ast = parse(
-        "data o; set i; if x = 1 then y = 10; else if x = 2 then y = 20; else y = 0; run;",
-    )
-    .unwrap();
+    let ast =
+        parse("data o; set i; if x = 1 then y = 10; else if x = 2 then y = 20; else y = 0; run;")
+            .unwrap();
     // Structure : Set, puis un If avec else=If(else=Assign).
     assert_eq!(ast.stmts.len(), 2);
     let DsStmt::If {
@@ -192,10 +188,7 @@ fn output_targeted_one_and_two_names() {
     let ast = parse("data a b; output a; output a b; output; run;").unwrap();
     assert_eq!(ast.outputs, vec![dspec("a"), dspec("b")]);
     assert_eq!(ast.stmts[0], DsStmt::Output(vec![dsref("a")]));
-    assert_eq!(
-        ast.stmts[1],
-        DsStmt::Output(vec![dsref("a"), dsref("b")])
-    );
+    assert_eq!(ast.stmts[1], DsStmt::Output(vec![dsref("a"), dsref("b")]));
     assert_eq!(ast.stmts[2], DsStmt::Output(vec![]));
 }
 
@@ -216,10 +209,8 @@ fn set_two_datasets_parses() {
 
 #[test]
 fn set_with_options_parses() {
-    let ast = parse(
-        "data o; set inp(keep=name age where=(age > 13) rename=(age=years)); run;",
-    )
-    .unwrap();
+    let ast =
+        parse("data o; set inp(keep=name age where=(age > 13) rename=(age=years)); run;").unwrap();
     let DsStmt::Set { specs, .. } = &ast.stmts[0] else {
         panic!("expected a SET statement");
     };
@@ -287,19 +278,13 @@ fn set_without_options_has_default() {
 #[test]
 fn set_unknown_option_errors() {
     let err = parse("data o; set a bogus=z; run;").unwrap_err();
-    assert!(
-        err.to_string().contains("unknown SET option"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("unknown SET option"), "got: {err}");
 }
 
 #[test]
 fn set_duplicate_option_errors() {
     let err = parse("data o; set a end=e1 end=e2; run;").unwrap_err();
-    assert!(
-        err.to_string().contains("more than once"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("more than once"), "got: {err}");
 }
 
 // ── BY + FIRST./LAST. (M3) ───────────────────────────────────────────
@@ -316,19 +301,13 @@ fn by_two_variables_with_descending() {
     let ast = parse("data o; set a; by grp descending age; run;").unwrap();
     assert_eq!(
         ast.stmts[1],
-        DsStmt::By(vec![
-            ("grp".to_string(), false),
-            ("age".to_string(), true),
-        ])
+        DsStmt::By(vec![("grp".to_string(), false), ("age".to_string(), true),])
     );
     // DESCENDING ne porte que sur la variable qui le SUIT.
     let ast = parse("data o; set a; by descending grp age; run;").unwrap();
     assert_eq!(
         ast.stmts[1],
-        DsStmt::By(vec![
-            ("grp".to_string(), true),
-            ("age".to_string(), false),
-        ])
+        DsStmt::By(vec![("grp".to_string(), true), ("age".to_string(), false),])
     );
 }
 
@@ -379,8 +358,7 @@ fn unimplemented_statement_errors_but_resyncs() {
     // `proklamation` n'est pas un statement connu (ni assignation, ni sum) :
     // l'étape doit échouer MAIS le stream doit être positionné après le
     // `run;` pour le bloc suivant (test de resynchronisation du parser).
-    let file =
-        SourceFile::new("data o; proklamation target; set i; run; data b; run;");
+    let file = SourceFile::new("data o; proklamation target; set i; run; data b; run;");
     let mut ts = StatementStream::new(&file).unwrap();
     assert!(ts.next().is_kw("data"));
     let err = parse_data_step(&mut ts).unwrap_err();
@@ -397,10 +375,7 @@ fn unimplemented_statement_errors_but_resyncs() {
 #[test]
 fn merge_two_datasets_parses() {
     let ast = parse("data o; merge a b; by id; run;").unwrap();
-    assert_eq!(
-        ast.stmts[0],
-        DsStmt::Merge(vec![dspec("a"), dspec("b")])
-    );
+    assert_eq!(ast.stmts[0], DsStmt::Merge(vec![dspec("a"), dspec("b")]));
     assert_eq!(ast.stmts[1], DsStmt::By(vec![("id".to_string(), false)]));
 }
 

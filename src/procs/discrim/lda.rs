@@ -23,12 +23,12 @@ pub(super) struct LdaModel {
     pub(super) class_labels: Vec<String>,
     pub(super) counts: Vec<usize>,
     pub(super) priors: Vec<f64>,
-    pub(super) means: Vec<Vec<f64>>,         // means[k] = centroid of class k (length p)
+    pub(super) means: Vec<Vec<f64>>, // means[k] = centroid of class k (length p)
     pub(super) within_cov: Vec<Vec<Vec<f64>>>, // within_cov[k] = S_k (p×p)
-    pub(super) pooled_inv: Vec<Vec<f64>>,   // Σ_pooled⁻¹ (p×p)
-    pub(super) pooled: Vec<Vec<f64>>,       // Σ_pooled (p×p)
-    pub(super) coefs: Vec<Vec<f64>>,        // coefs[k] = Σ⁻¹ μ_k (length p)
-    pub(super) constants: Vec<f64>,         // constants[k]
+    pub(super) pooled_inv: Vec<Vec<f64>>, // Σ_pooled⁻¹ (p×p)
+    pub(super) pooled: Vec<Vec<f64>>, // Σ_pooled (p×p)
+    pub(super) coefs: Vec<Vec<f64>>, // coefs[k] = Σ⁻¹ μ_k (length p)
+    pub(super) constants: Vec<f64>,  // constants[k]
     pub(super) n_total: usize,
     pub(super) n_groups: usize,
     pub(super) p: usize,
@@ -156,10 +156,7 @@ pub(super) fn fit_lda(
     // Priors.
     let priors: Vec<f64> = match priors_mode {
         Priors::Equal => vec![1.0 / n_groups as f64; n_groups],
-        Priors::Proportional => counts
-            .iter()
-            .map(|&c| c as f64 / n_total as f64)
-            .collect(),
+        Priors::Proportional => counts.iter().map(|&c| c as f64 / n_total as f64).collect(),
     };
 
     // Coefficients and constants.

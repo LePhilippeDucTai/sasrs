@@ -122,7 +122,10 @@ pub(super) fn parse_proc_options(ts: &mut StatementStream) -> Result<ProcOptions
     })
 }
 
-pub(super) fn parse_output_stmt(ts: &mut StatementStream, models: &mut [RegModelEntry]) -> Result<()> {
+pub(super) fn parse_output_stmt(
+    ts: &mut StatementStream,
+    models: &mut [RegModelEntry],
+) -> Result<()> {
     ts.next();
     let mut out: Option<DatasetRef> = None;
     let mut predicted: Option<String> = None;

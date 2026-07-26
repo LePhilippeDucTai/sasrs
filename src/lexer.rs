@@ -36,8 +36,8 @@ pub struct Lexer<'a> {
     pending_iml_body: Option<String>,
 }
 
-mod token;
 mod literal;
+mod token;
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Self {
@@ -113,4 +113,3 @@ impl<'a> Lexer<'a> {
 
 #[cfg(test)]
 mod tests;
-

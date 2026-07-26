@@ -40,10 +40,9 @@ use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::VarType;
 
-
-mod parse;
 mod agglomerate;
 mod output;
+mod parse;
 
 pub use agglomerate::MergeStep;
 pub use agglomerate::agglomerate;
@@ -76,7 +75,7 @@ pub fn execute(ast: &ClusterAst, session: &mut Session) -> Result<()> {
                 return Err(SasError::runtime(format!(
                     "Variable '{}' not found in dataset '{}'.",
                     nm, display
-                )))
+                )));
             }
         }
     }

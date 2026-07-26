@@ -56,7 +56,12 @@ fn write_test_dataset(session: &mut Session) {
         },
     ];
     let ds = SasDataset { df, vars };
-    session.libs.get("WORK").unwrap().write("MYDATA", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("MYDATA", &ds)
+        .unwrap();
     session.last_dataset = Some("WORK.MYDATA".to_string());
 }
 
@@ -99,8 +104,20 @@ fn write_grouped(session: &mut Session) {
     ]
     .unwrap();
     let vars = vec![
-        VarMeta { name: "grp".into(), ty: VarType::Char, length: 1, format: None, label: None },
-        VarMeta { name: "v".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        VarMeta {
+            name: "grp".into(),
+            ty: VarType::Char,
+            length: 1,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "v".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write("G", &ds).unwrap();
@@ -109,7 +126,10 @@ fn write_grouped(session: &mut Session) {
 
 fn base_ast() -> PrintAst {
     PrintAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "G".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "G".into(),
+        }),
         vars: None,
         noobs: false,
         label: false,

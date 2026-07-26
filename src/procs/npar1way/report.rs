@@ -52,7 +52,14 @@ pub(super) fn emit_by_heading(session: &mut Session, by_names: &[String], by_key
 }
 
 /// Write a 2-sample statistic table (Wilcoxon-shaped).
-pub(super) fn write_two_sample_table(session: &mut Session, stat: f64, mean: f64, sd: f64, z: f64, p: f64) {
+pub(super) fn write_two_sample_table(
+    session: &mut Session,
+    stat: f64,
+    mean: f64,
+    sd: f64,
+    z: f64,
+    p: f64,
+) {
     let headers: Vec<String> = vec![
         "Statistic".into(),
         "Mean Under H0".into(),
@@ -83,9 +90,10 @@ pub(super) fn write_one_way_table(session: &mut Session, chisq: f64, df: usize, 
 pub(super) fn write_exact_block(session: &mut Session, ex: &ExactWilcoxon) {
     centered(session, "Exact Test");
     session.listing.blank();
-    session
-        .listing
-        .write_line(&format!("One-Sided Pr <= S            {}", fmt_p(ex.p_lower)));
+    session.listing.write_line(&format!(
+        "One-Sided Pr <= S            {}",
+        fmt_p(ex.p_lower)
+    ));
     session
         .listing
         .write_line(&format!("Two-Sided Pr >= |S - Mean|   {}", fmt_p(ex.p_two)));

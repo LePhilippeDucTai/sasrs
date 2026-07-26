@@ -19,10 +19,11 @@ fn create_table_as_select_writes_and_notes() {
     assert_eq!(ds.n_obs(), 2);
     assert_eq!(ds.n_vars(), 2);
     // count(*) came back as u32 → must be coerced to f64 num.
-    assert!(ds
-        .vars
-        .iter()
-        .all(|v| matches!(v.ty, VarType::Num | VarType::Char)));
+    assert!(
+        ds.vars
+            .iter()
+            .all(|v| matches!(v.ty, VarType::Num | VarType::Char))
+    );
     let n_col = ds.df.column("n").unwrap();
     assert_eq!(n_col.dtype(), &DataType::Float64);
     let log = s.log.into_string();
@@ -177,8 +178,8 @@ fn insert_select_with_scalar_subquery() {
 fn insert_select_with_in_subquery() {
     let mut s = make_session();
     write_people(&mut s);
-    let dest = df!["name" => ["zz"], "sex" => ["M"], "age" => [0.0_f64], "height" => [0.0_f64]]
-        .unwrap();
+    let dest =
+        df!["name" => ["zz"], "sex" => ["M"], "age" => [0.0_f64], "height" => [0.0_f64]].unwrap();
     write_table(
         &mut s,
         "DEST",
@@ -198,8 +199,8 @@ fn insert_select_with_in_subquery() {
 fn insert_select_with_exists() {
     let mut s = make_session();
     write_people(&mut s);
-    let dest = df!["name" => ["zz"], "sex" => ["M"], "age" => [0.0_f64], "height" => [0.0_f64]]
-        .unwrap();
+    let dest =
+        df!["name" => ["zz"], "sex" => ["M"], "age" => [0.0_f64], "height" => [0.0_f64]].unwrap();
     write_table(
         &mut s,
         "DEST",
@@ -275,10 +276,7 @@ fn drop_table_removes_it() {
     run_sql("drop table t;", &mut s);
     assert!(!s.libs.get("WORK").unwrap().exists("T"));
     let log = s.log.into_string();
-    assert!(
-        log.contains("Table WORK.T has been dropped."),
-        "log: {log}"
-    );
+    assert!(log.contains("Table WORK.T has been dropped."), "log: {log}");
 }
 
 #[test]
@@ -301,10 +299,7 @@ fn drop_view() {
     run_sql("drop view v;", &mut s);
     assert!(!s.views.contains_key("V"));
     let log = s.log.into_string();
-    assert!(
-        log.contains("View WORK.V has been dropped."),
-        "log: {log}"
-    );
+    assert!(log.contains("View WORK.V has been dropped."), "log: {log}");
 }
 
 #[test]

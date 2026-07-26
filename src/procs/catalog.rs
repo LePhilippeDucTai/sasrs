@@ -213,7 +213,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<CatalogAst> {
 pub fn execute(ast: &CatalogAst, session: &mut Session) -> Result<()> {
     session.log.note(&format!(
         "Processing catalog: {}.",
-        if ast.catalog.is_empty() { "(none)" } else { &ast.catalog }
+        if ast.catalog.is_empty() {
+            "(none)"
+        } else {
+            &ast.catalog
+        }
     ));
 
     for stmt in &ast.stmts {
@@ -228,7 +232,9 @@ pub fn execute(ast: &CatalogAst, session: &mut Session) -> Result<()> {
                     .collect();
 
                 session.listing.page_header();
-                session.listing.write_line(&format!("Catalog: {}", ast.catalog));
+                session
+                    .listing
+                    .write_line(&format!("Catalog: {}", ast.catalog));
                 session.listing.blank();
 
                 if format_names.is_empty() {
@@ -265,7 +271,9 @@ pub fn execute(ast: &CatalogAst, session: &mut Session) -> Result<()> {
                     ));
                 }
                 if entries.is_empty() {
-                    session.log.note("CATALOG: DELETE statement (no entries specified) — no-op.");
+                    session
+                        .log
+                        .note("CATALOG: DELETE statement (no entries specified) — no-op.");
                 }
             }
 

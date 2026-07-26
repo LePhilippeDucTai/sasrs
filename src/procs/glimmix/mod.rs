@@ -28,33 +28,32 @@ use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::decode_column;
 use crate::session::Session;
-use crate::stat::{f_cdf, invert_matrix, student_t_cdf};
 use crate::stat::dists::probnorm;
+use crate::stat::{f_cdf, invert_matrix, student_t_cdf};
 use crate::token::TokenKind;
-use crate::value::{format_best, Value};
-
+use crate::value::{Value, format_best};
 
 use crate::procs::lincom::build_design;
 
-mod parse;
-mod link;
-mod linalg;
-mod glm_fit;
-mod repeated;
-mod laplace;
-mod pql;
 mod data;
+mod glm_fit;
+mod laplace;
+mod linalg;
+mod link;
+mod parse;
+mod pql;
+mod repeated;
 mod report;
 
 pub use parse::parse;
 
-use link::*;
-use linalg::*;
-use glm_fit::*;
-use repeated::*;
-use laplace::*;
-use pql::*;
 use data::*;
+use glm_fit::*;
+use laplace::*;
+use linalg::*;
+use link::*;
+use pql::*;
+use repeated::*;
 use report::*;
 
 // ───────────────────────── AST ─────────────────────────

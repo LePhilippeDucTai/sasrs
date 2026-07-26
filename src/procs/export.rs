@@ -103,9 +103,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
             let tok = ts.peek().clone();
             let name = tok
                 .ident()
-                .ok_or_else(|| {
-                    SasError::parse("expected a DBMS name after DBMS=", tok.span)
-                })?
+                .ok_or_else(|| SasError::parse("expected a DBMS name after DBMS=", tok.span))?
                 .to_ascii_uppercase();
             ts.next();
             dbms = Some(parse_dbms(&name, tok.span)?);
@@ -158,9 +156,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
         }
     }
 
-    let outfile = outfile.ok_or_else(|| {
-        SasError::runtime("PROC EXPORT: OUTFILE= is required.")
-    })?;
+    let outfile = outfile.ok_or_else(|| SasError::runtime("PROC EXPORT: OUTFILE= is required."))?;
     let dbms = dbms.unwrap_or(ExportDbms::Csv);
 
     Ok(ExportAst {
@@ -189,10 +185,7 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
     // --- Écrire le fichier CSV (chemin relatif résolu sous base_dir) ---
     let out_path = session.resolve_path(&ast.outfile);
     let mut file = File::create(&out_path).map_err(|e| {
-        SasError::runtime(format!(
-            "PROC EXPORT: cannot create '{}': {e}",
-            ast.outfile
-        ))
+        SasError::runtime(format!("PROC EXPORT: cannot create '{}': {e}", ast.outfile))
     })?;
 
     let mut df_clone = ds.df.clone();
@@ -201,10 +194,7 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
         .with_separator(sep)
         .finish(&mut df_clone)
         .map_err(|e| {
-            SasError::runtime(format!(
-                "PROC EXPORT: error writing '{}': {e}",
-                ast.outfile
-            ))
+            SasError::runtime(format!("PROC EXPORT: error writing '{}': {e}", ast.outfile))
         })?;
 
     // --- NOTE de fin ---
@@ -265,9 +255,7 @@ fn parse_delimiter_char(s: &str, span: crate::token::Span) -> Result<Option<u8>>
         return Ok(Some(bytes[0]));
     }
     Err(SasError::parse(
-        format!(
-            "DELIMITER value '{s}' must be a single ASCII character or a recognized mnemonic."
-        ),
+        format!("DELIMITER value '{s}' must be a single ASCII character or a recognized mnemonic."),
         span,
     ))
 }

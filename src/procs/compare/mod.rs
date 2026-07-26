@@ -49,18 +49,17 @@ use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType};
 
-
-mod parse;
 mod analyze;
-mod report;
 mod output;
+mod parse;
+mod report;
 
 pub use parse::CompareAst;
 pub use parse::parse;
 
 use analyze::*;
-use report::*;
 use output::*;
+use report::*;
 
 /// Execute PROC COMPARE.
 pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {

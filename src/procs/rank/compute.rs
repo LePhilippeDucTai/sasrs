@@ -31,11 +31,7 @@ pub(super) fn rank_column(
     // Stable sort the non-missing indices via sas_cmp (DESCENDING reverses).
     idx.sort_by(|&a, &b| {
         let c = col[a].sas_cmp(&col[b]);
-        if descending {
-            c.reverse()
-        } else {
-            c
-        }
+        if descending { c.reverse() } else { c }
     });
 
     // Output buffer; missing cells stay missing.

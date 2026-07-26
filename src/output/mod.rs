@@ -26,19 +26,17 @@
 //! destinations riches (HTML/Excel) sans casser ce chemin. Réexporté pour les
 //! destinations : [`Align`].
 
-
-mod text;
-mod html;
-mod rtf;
 mod excel;
+mod html;
 mod pdf;
+mod rtf;
+mod text;
 
 pub use excel::ExcelDestination;
 pub use html::HtmlDestination;
 pub use pdf::PdfDestination;
 pub use rtf::RtfDestination;
 pub use text::TextListing;
-
 
 pub use crate::listing::Align;
 

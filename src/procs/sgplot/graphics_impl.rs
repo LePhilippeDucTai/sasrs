@@ -1,7 +1,7 @@
 use super::execute::stmt_kind;
 use super::*;
 use crate::graphics::render::{
-    draw_to_file_ext, Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
+    Decorations, DrawingSpec, Overlay, PlotType, SeriesColor, draw_to_file_ext,
 };
 use crate::missing::value_to_num;
 use crate::ods_graphics::ImageFmt;
@@ -14,12 +14,7 @@ use crate::value::VarType;
 ///
 /// Renvoie une liste `(x, yhat)` triée par x croissant. Si trop peu de points
 /// ou plage nulle, renvoie un vecteur vide.
-pub fn loess_curve(
-    xs: &[f64],
-    ys: &[f64],
-    frac: f64,
-    npoints: usize,
-) -> Vec<(f64, f64)> {
+pub fn loess_curve(xs: &[f64], ys: &[f64], frac: f64, npoints: usize) -> Vec<(f64, f64)> {
     // Paires finies, triées par x.
     let mut pts: Vec<(f64, f64)> = xs
         .iter()
@@ -154,17 +149,12 @@ pub fn kernel_density_curve(xs: &[f64], npoints: usize) -> Vec<(f64, f64)> {
 }
 
 /// Extrait une colonne numérique par nom (erreur propre si absente / non num).
-fn numeric_column(
-    ds: &crate::dataset::SasDataset,
-    name: &str,
-) -> Result<Vec<f64>> {
+fn numeric_column(ds: &crate::dataset::SasDataset, name: &str) -> Result<Vec<f64>> {
     let idx = ds
         .vars
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| {
-            SasError::runtime(format!("Variable {} not found.", name.to_uppercase()))
-        })?;
+        .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", name.to_uppercase())))?;
     if ds.vars[idx].ty != VarType::Num {
         return Err(SasError::runtime(format!(
             "Variable {} must be numeric for PROC SGPLOT.",
@@ -300,7 +290,7 @@ fn build_primary_spec(
             return Err(SasError::runtime(format!(
                 "{} plot not yet rendered in PROC SGPLOT.",
                 stmt_kind(stmt)
-            )))
+            )));
         }
     };
     Ok(spec)
@@ -308,18 +298,20 @@ fn build_primary_spec(
 
 /// Bornes d'axe forcées par XAXIS/YAXIS VALUES=.
 fn axis_ranges(ast: &SgplotAst) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
-    let x = ast.xaxis.as_ref().and_then(|ax| {
-        match (ax.values_min, ax.values_max) {
+    let x = ast
+        .xaxis
+        .as_ref()
+        .and_then(|ax| match (ax.values_min, ax.values_max) {
             (Some(lo), Some(hi)) => Some((lo, hi)),
             _ => None,
-        }
-    });
-    let y = ast.yaxis.as_ref().and_then(|ax| {
-        match (ax.values_min, ax.values_max) {
+        });
+    let y = ast
+        .yaxis
+        .as_ref()
+        .and_then(|ax| match (ax.values_min, ax.values_max) {
             (Some(lo), Some(hi)) => Some((lo, hi)),
             _ => None,
-        }
-    });
+        });
     (x, y)
 }
 

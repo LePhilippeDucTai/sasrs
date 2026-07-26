@@ -114,10 +114,9 @@ fn parse_xaxis_yaxis() {
 
 #[test]
 fn parse_xaxis_values_range() {
-    let ast = parse_sgplot(
-        "proc sgplot data=a; scatter x=age y=h; xaxis values=(0 to 100 by 10); run;",
-    )
-    .unwrap();
+    let ast =
+        parse_sgplot("proc sgplot data=a; scatter x=age y=h; xaxis values=(0 to 100 by 10); run;")
+            .unwrap();
     let x = ast.xaxis.as_ref().unwrap();
     assert_eq!(x.values_min, Some(0.0));
     assert_eq!(x.values_max, Some(100.0));
@@ -143,8 +142,7 @@ fn parse_reg_degree2() {
 
 #[test]
 fn parse_loess() {
-    let ast =
-        parse_sgplot("proc sgplot data=a; loess x=age y=height / smooth=0.5; run;").unwrap();
+    let ast = parse_sgplot("proc sgplot data=a; loess x=age y=height / smooth=0.5; run;").unwrap();
     match &ast.plot_stmts[0] {
         SgplotStmt::Loess { smooth, .. } => assert_eq!(*smooth, 0.5),
         other => panic!("expected Loess, got {other:?}"),
@@ -174,8 +172,7 @@ fn parse_density_default_normal() {
 
 #[test]
 fn parse_vbox() {
-    let ast =
-        parse_sgplot("proc sgplot data=a; vbox response / category=group; run;").unwrap();
+    let ast = parse_sgplot("proc sgplot data=a; vbox response / category=group; run;").unwrap();
     match &ast.plot_stmts[0] {
         SgplotStmt::VBox { category, response } => {
             assert_eq!(response, "response");
@@ -199,10 +196,7 @@ fn execute_without_ods_on_notes_not_enabled() {
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
-    assert!(
-        log.contains("ODS GRAPHICS is not enabled"),
-        "log: {log}"
-    );
+    assert!(log.contains("ODS GRAPHICS is not enabled"), "log: {log}");
 }
 
 #[cfg(not(feature = "graphics"))]
@@ -221,8 +215,7 @@ fn execute_with_ods_on_no_feature_defers() {
 fn execute_loess_defers() {
     let mut session = make_session();
     session.ods_graphics.enabled = true;
-    let ast =
-        parse_sgplot("proc sgplot data=a; loess x=age y=h / smooth=0.5; run;").unwrap();
+    let ast = parse_sgplot("proc sgplot data=a; loess x=age y=h / smooth=0.5; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("LOESS plot deferred"), "log: {log}");
@@ -289,8 +282,7 @@ fn execute_with_graphics_writes_image() {
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_single".into());
     write_heights(&mut session, "H");
-    let ast =
-        parse_sgplot("proc sgplot data=work.h; scatter x=age y=height; run;").unwrap();
+    let ast = parse_sgplot("proc sgplot data=work.h; scatter x=age y=height; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("written"), "log: {log}");
@@ -308,8 +300,7 @@ fn execute_sequential_naming() {
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_seq".into());
     write_heights(&mut session, "H");
-    let ast =
-        parse_sgplot("proc sgplot data=work.h; scatter x=age y=height; run;").unwrap();
+    let ast = parse_sgplot("proc sgplot data=work.h; scatter x=age y=height; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     execute(&ast, &mut session).unwrap();
     let p1 = std::env::temp_dir().join("sgtest_seq_1.png");
@@ -363,10 +354,11 @@ fn normal_density_peaks_at_mean_and_integrates_to_one() {
     }
     assert!((area - 1.0).abs() < 0.05, "area={area}");
     // pdf au mode ≈ 1/(sd*sqrt(2π)) ; vérifie que le max est près de x=mean=0.
-    let (mode_x, _) = curve
-        .iter()
-        .cloned()
-        .fold((0.0, f64::NEG_INFINITY), |acc, p| if p.1 > acc.1 { p } else { acc });
+    let (mode_x, _) =
+        curve.iter().cloned().fold(
+            (0.0, f64::NEG_INFINITY),
+            |acc, p| if p.1 > acc.1 { p } else { acc },
+        );
     assert!(mode_x.abs() < 0.5, "mode_x={mode_x}");
 }
 
@@ -374,7 +366,9 @@ fn normal_density_peaks_at_mean_and_integrates_to_one() {
 #[test]
 fn kernel_density_integrates_to_one() {
     use graphics_impl::kernel_density_curve;
-    let xs: Vec<f64> = (0..200).map(|i| (i as f64 * 0.137).sin() * 3.0 + 5.0).collect();
+    let xs: Vec<f64> = (0..200)
+        .map(|i| (i as f64 * 0.137).sin() * 3.0 + 5.0)
+        .collect();
     let curve = kernel_density_curve(&xs, 500);
     let mut area = 0.0;
     for w in curve.windows(2) {
@@ -398,7 +392,10 @@ fn execute_loess_writes_image() {
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("written"), "log: {log}");
-    assert!(!log.contains("LOESS plot deferred"), "should not defer: {log}");
+    assert!(
+        !log.contains("LOESS plot deferred"),
+        "should not defer: {log}"
+    );
     let p = std::env::temp_dir().join("sgtest_loess_1.png");
     assert!(p.exists(), "image not created: {p:?}");
     assert!(p.metadata().unwrap().len() > 0);
@@ -413,14 +410,15 @@ fn execute_density_writes_image() {
     session.ods_graphics.output_dir = std::env::temp_dir();
     session.ods_graphics.file_stem = Some("sgtest_density".into());
     write_heights(&mut session, "H");
-    let ast = parse_sgplot(
-        "proc sgplot data=work.h; histogram height; density height; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_sgplot("proc sgplot data=work.h; histogram height; density height; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(log.contains("written"), "log: {log}");
-    assert!(!log.contains("DENSITY plot deferred"), "should not defer: {log}");
+    assert!(
+        !log.contains("DENSITY plot deferred"),
+        "should not defer: {log}"
+    );
     let p = std::env::temp_dir().join("sgtest_density_1.png");
     assert!(p.exists(), "image not created: {p:?}");
     let _ = std::fs::remove_file(&p);

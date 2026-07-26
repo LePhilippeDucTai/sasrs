@@ -25,23 +25,22 @@ use crate::stat::{eigenvectors_jacobi, invert_matrix};
 use crate::token::TokenKind;
 use crate::value::VarType;
 
-
-mod parse;
-mod rotate;
 mod analysis;
-mod report;
 mod output;
+mod parse;
+mod report;
+mod rotate;
 
 pub use parse::parse;
 pub use rotate::PromaxResult;
 pub use rotate::promax;
 pub use rotate::varimax;
 
-use parse::*;
-use rotate::*;
 use analysis::*;
-use report::*;
 use output::*;
+use parse::*;
+use report::*;
+use rotate::*;
 
 // ───────────────────────── AST ─────────────────────────
 
@@ -128,7 +127,11 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
 
     // Compute loadings: L[i][j] = V[i][j] * sqrt(λ[j])  for j in 0..k
     let loadings: Vec<Vec<f64>> = (0..p)
-        .map(|i| (0..k).map(|j| v[i][j] * lambda[j].max(0.0).sqrt()).collect())
+        .map(|i| {
+            (0..k)
+                .map(|j| v[i][j] * lambda[j].max(0.0).sqrt())
+                .collect()
+        })
         .collect();
 
     // Initial communalities: h²[i] = Σⱼ L[i][j]²

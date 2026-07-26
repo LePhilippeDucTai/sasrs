@@ -54,9 +54,9 @@ use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::parser::StatementStream;
-use crate::token::TokenKind;
 use crate::procs::common::{self, decode_column};
 use crate::session::Session;
+use crate::token::TokenKind;
 use crate::value::Value;
 use polars::prelude::*;
 use std::cmp::Ordering;
@@ -243,11 +243,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     })?;
 
     // KEY= présent → remplace BY (comportement SAS 9.4 : KEY prend le dessus).
-    let effective_keys = if saw_key {
-        key_vars
-    } else {
-        by
-    };
+    let effective_keys = if saw_key { key_vars } else { by };
 
     if !saw_by && !saw_key {
         return Err(SasError::runtime(
@@ -393,9 +389,9 @@ pub fn execute(ast: &SortAst, session: &mut Session) -> Result<()> {
                 "{deleted} observations with duplicate key values were deleted."
             ));
         } else {
-            session.log.note(&format!(
-                "{deleted} duplicate observations were deleted."
-            ));
+            session
+                .log
+                .note(&format!("{deleted} duplicate observations were deleted."));
         }
     }
 

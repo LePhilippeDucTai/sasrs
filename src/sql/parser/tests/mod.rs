@@ -35,5 +35,5 @@ fn qual(t: &str, c: &str) -> SqlExpr {
     }
 }
 
-mod select;
 mod exists;
+mod select;

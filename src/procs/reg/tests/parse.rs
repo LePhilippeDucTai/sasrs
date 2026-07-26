@@ -45,10 +45,8 @@ fn test_parse_output() {
 
 #[test]
 fn test_parse_selection_forward() {
-    let ast = parse_reg(
-        "proc reg data=a; model y = x1 x2 / selection=forward slentry=0.3; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2 / selection=forward slentry=0.3; run;")
+        .unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::Forward);
     assert!((sel.slentry - 0.3).abs() < 1e-12);
@@ -57,10 +55,9 @@ fn test_parse_selection_forward() {
 #[test]
 fn test_parse_selection_synonyms() {
     // sle=/sls= synonyms and stepwise.
-    let ast = parse_reg(
-        "proc reg data=a; model y = x1 x2 / selection=stepwise sle=0.2 sls=0.25; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=a; model y = x1 x2 / selection=stepwise sle=0.2 sls=0.25; run;")
+            .unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::Stepwise);
     assert!((sel.slentry - 0.2).abs() < 1e-12);
@@ -69,8 +66,7 @@ fn test_parse_selection_synonyms() {
 
 #[test]
 fn test_parse_selection_defaults() {
-    let ast =
-        parse_reg("proc reg data=a; model y = x1 / selection=backward; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 / selection=backward; run;").unwrap();
     let sel = ast.models[0].model.selection.unwrap();
     assert_eq!(sel.method, SelMethod::Backward);
     assert!((sel.slstay - 0.10).abs() < 1e-12);
@@ -123,44 +119,32 @@ fn test_parse_restrict_sum() {
 #[test]
 fn test_parse_restrict_coefficients() {
     // 2*x1 - x2 = 0
-    let ast =
-        parse_reg("proc reg data=a; model y = x1 x2; restrict 2*x1 - x2 = 0; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2; restrict 2*x1 - x2 = 0; run;").unwrap();
     let e = &ast.models[0].restricts[0].equations[0];
-    assert_eq!(
-        eq_terms(e),
-        vec![(2.0, "X1".into()), (-1.0, "X2".into())]
-    );
+    assert_eq!(eq_terms(e), vec![(2.0, "X1".into()), (-1.0, "X2".into())]);
     assert!(e.rhs.abs() < 1e-12);
 }
 
 #[test]
 fn test_parse_coef_no_star() {
     // `2 x1` (no star) is also a coefficient form.
-    let ast =
-        parse_reg("proc reg data=a; model y = x1 x2; restrict 2 x1 = x2 + 3; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2; restrict 2 x1 = x2 + 3; run;").unwrap();
     let e = &ast.models[0].restricts[0].equations[0];
     // 2*x1 - x2 = 3
-    assert_eq!(
-        eq_terms(e),
-        vec![(2.0, "X1".into()), (-1.0, "X2".into())]
-    );
+    assert_eq!(eq_terms(e), vec![(2.0, "X1".into()), (-1.0, "X2".into())]);
     assert!((e.rhs - 3.0).abs() < 1e-12);
 }
 
 #[test]
 fn test_parse_intercept_keyword() {
-    let ast = parse_reg(
-        "proc reg data=a; model y = x1 x2; restrict intercept = 0; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x1 x2; restrict intercept = 0; run;").unwrap();
     let e = &ast.models[0].restricts[0].equations[0];
     assert_eq!(eq_terms(e), vec![(1.0, "INTERCEPT".into())]);
 }
 
 #[test]
 fn test_parse_model_cl_options() {
-    let ast =
-        parse_reg("proc reg data=a; model y=x / clb alpha=0.10 cli clm; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x / clb alpha=0.10 cli clm; run;").unwrap();
     let m = &ast.models[0].model;
     assert!(m.clb);
     assert!(m.cli);
@@ -221,10 +205,9 @@ fn test_parse_output_influence_keywords() {
 /// Parse: all collinearity / spec diagnostic options on one MODEL.
 #[test]
 fn test_parse_model_diagnostics() {
-    let ast = parse_reg(
-        "proc reg data=a; model y=x1 x2 / vif tol collin spec dw dwprob acov; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_reg("proc reg data=a; model y=x1 x2 / vif tol collin spec dw dwprob acov; run;")
+            .unwrap();
     let m = &ast.models[0].model;
     assert!(m.vif);
     assert!(m.tol);
@@ -238,8 +221,7 @@ fn test_parse_model_diagnostics() {
 
 #[test]
 fn test_parse_collinoint_and_hcc_synonym() {
-    let ast =
-        parse_reg("proc reg data=a; model y=x1 x2 / collinoint hcc; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x1 x2 / collinoint hcc; run;").unwrap();
     let m = &ast.models[0].model;
     assert!(m.collinoint);
     assert!(!m.collin);
@@ -272,10 +254,8 @@ fn test_parse_m365_default_off() {
 
 #[test]
 fn test_parse_weight_freq_by_id() {
-    let ast = parse_reg(
-        "proc reg data=a; model y = x; weight wv; freq fv; by grp; id name; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x; weight wv; freq fv; by grp; id name; run;")
+        .unwrap();
     assert_eq!(ast.weight.as_deref(), Some("wv"));
     assert_eq!(ast.freq.as_deref(), Some("fv"));
     assert_eq!(ast.by, vec!["grp".to_string()]);
@@ -306,8 +286,7 @@ fn test_parse_simple_corr_all() {
 
 #[test]
 fn test_parse_model_matrix_options() {
-    let ast =
-        parse_reg("proc reg data=a; model y = x / xpx i covb corrb; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y = x / xpx i covb corrb; run;").unwrap();
     let m = &ast.models[0].model;
     assert!(m.xpx && m.inv && m.covb && m.corrb);
     // Untouched flags stay off (byte-identity guard).
@@ -316,9 +295,7 @@ fn test_parse_model_matrix_options() {
 
 #[test]
 fn test_parse_outest_modifiers() {
-    let ast =
-        parse_reg("proc reg data=a outest=e covout outseb edf; model y = x; run;")
-            .unwrap();
+    let ast = parse_reg("proc reg data=a outest=e covout outseb edf; model y = x; run;").unwrap();
     let oe = ast.data_options.outest.as_ref().unwrap();
     assert_eq!(oe.out.name, "e");
     assert!(oe.covout && oe.outseb && oe.edf);
@@ -397,8 +374,7 @@ fn parse_plots_at_proc_level() {
 
 #[test]
 fn parse_plots_unknown_keyword_ignored() {
-    let ast =
-        parse_reg("proc reg data=a; model y=x; plots=(diagnostics bogusplot); run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x; plots=(diagnostics bogusplot); run;").unwrap();
     assert!(ast.plot_requests.diagnostics);
     // Bogus keyword consumed cleanly, no other family flipped.
     assert!(!ast.plot_requests.residuals && !ast.plot_requests.fit);
@@ -406,8 +382,7 @@ fn parse_plots_unknown_keyword_ignored() {
 
 #[test]
 fn parse_plot_statement_simple() {
-    let ast = parse_reg("proc reg data=a; model weight=height; plot weight*height; run;")
-        .unwrap();
+    let ast = parse_reg("proc reg data=a; model weight=height; plot weight*height; run;").unwrap();
     assert_eq!(ast.plot_statements.len(), 1);
     assert_eq!(ast.plot_statements[0].y, PlotVar::Named("WEIGHT".into()));
     assert_eq!(ast.plot_statements[0].x, PlotVar::Named("HEIGHT".into()));
@@ -415,8 +390,7 @@ fn parse_plot_statement_simple() {
 
 #[test]
 fn parse_plot_statement_keyword_vars() {
-    let ast =
-        parse_reg("proc reg data=a; model y=x; plot residual.*predicted.; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x; plot residual.*predicted.; run;").unwrap();
     assert_eq!(ast.plot_statements.len(), 1);
     assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
     assert_eq!(ast.plot_statements[0].x, PlotVar::Predicted);
@@ -431,10 +405,7 @@ fn parse_plot_statement_short_keyword_vars() {
 
 #[test]
 fn parse_plot_statement_multiple_pairs() {
-    let ast = parse_reg(
-        "proc reg data=a; model y=x z; plot y*x z*y / overlay; run;",
-    )
-    .unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x z; plot y*x z*y / overlay; run;").unwrap();
     assert_eq!(ast.plot_statements.len(), 2);
     assert_eq!(ast.plot_statements[0].y, PlotVar::Named("Y".into()));
     assert_eq!(ast.plot_statements[0].x, PlotVar::Named("X".into()));
@@ -444,8 +415,7 @@ fn parse_plot_statement_multiple_pairs() {
 
 #[test]
 fn parse_plot_statement_with_symbol() {
-    let ast =
-        parse_reg("proc reg data=a; model y=x; plot residual.*predicted.='*'; run;").unwrap();
+    let ast = parse_reg("proc reg data=a; model y=x; plot residual.*predicted.='*'; run;").unwrap();
     assert_eq!(ast.plot_statements.len(), 1);
     assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
 }

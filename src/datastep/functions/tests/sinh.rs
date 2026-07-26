@@ -306,19 +306,31 @@ fn range_negative() {
 #[test]
 fn largest_second() {
     // 2nd largest of (3, 1, 5, 2)
-    assert_eq!(invoke("LARGEST", &[num(2.0), num(3.0), num(1.0), num(5.0), num(2.0)]), num(3.0));
+    assert_eq!(
+        invoke(
+            "LARGEST",
+            &[num(2.0), num(3.0), num(1.0), num(5.0), num(2.0)]
+        ),
+        num(3.0)
+    );
 }
 
 #[test]
 fn largest_first() {
     // 1st largest of (3, 1, 5)
-    assert_eq!(invoke("LARGEST", &[num(1.0), num(3.0), num(1.0), num(5.0)]), num(5.0));
+    assert_eq!(
+        invoke("LARGEST", &[num(1.0), num(3.0), num(1.0), num(5.0)]),
+        num(5.0)
+    );
 }
 
 #[test]
 fn largest_out_of_range() {
     // 10th largest of only 3 values
-    assert_eq!(invoke("LARGEST", &[num(10.0), num(1.0), num(2.0), num(3.0)]), miss());
+    assert_eq!(
+        invoke("LARGEST", &[num(10.0), num(1.0), num(2.0), num(3.0)]),
+        miss()
+    );
 }
 
 #[test]
@@ -331,19 +343,31 @@ fn largest_k_zero() {
 #[test]
 fn smallest_second() {
     // 2nd smallest of (3, 1, 5, 2)
-    assert_eq!(invoke("SMALLEST", &[num(2.0), num(3.0), num(1.0), num(5.0), num(2.0)]), num(2.0));
+    assert_eq!(
+        invoke(
+            "SMALLEST",
+            &[num(2.0), num(3.0), num(1.0), num(5.0), num(2.0)]
+        ),
+        num(2.0)
+    );
 }
 
 #[test]
 fn smallest_first() {
     // 1st smallest of (3, 1, 5)
-    assert_eq!(invoke("SMALLEST", &[num(1.0), num(3.0), num(1.0), num(5.0)]), num(1.0));
+    assert_eq!(
+        invoke("SMALLEST", &[num(1.0), num(3.0), num(1.0), num(5.0)]),
+        num(1.0)
+    );
 }
 
 #[test]
 fn smallest_out_of_range() {
     // 10th smallest of only 3 values
-    assert_eq!(invoke("SMALLEST", &[num(10.0), num(1.0), num(2.0), num(3.0)]), miss());
+    assert_eq!(
+        invoke("SMALLEST", &[num(10.0), num(1.0), num(2.0), num(3.0)]),
+        miss()
+    );
 }
 
 #[test]

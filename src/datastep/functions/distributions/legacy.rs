@@ -41,9 +41,7 @@ pub(crate) fn fn_probf(args: &[Value], ctx: &mut EvalCtx) -> Value {
         coerce_num(&args[1], ctx),
         coerce_num(&args[2], ctx),
     ) {
-        (Some(f), Some(ndf), Some(ddf)) if ndf > 0.0 && ddf > 0.0 => {
-            Value::Num(f_cdf(f, ndf, ddf))
-        }
+        (Some(f), Some(ndf), Some(ddf)) if ndf > 0.0 && ddf > 0.0 => Value::Num(f_cdf(f, ndf, ddf)),
         (None, _, _) | (_, None, _) | (_, _, None) => Value::missing(),
         _ => {
             ctx.error_flag = true;
@@ -133,9 +131,7 @@ pub(crate) fn fn_poisson(args: &[Value], ctx: &mut EvalCtx) -> Value {
         return Value::missing();
     }
     match (coerce_num(&args[0], ctx), coerce_num(&args[1], ctx)) {
-        (Some(lambda), Some(k)) if lambda >= 0.0 && k >= 0.0 => {
-            Value::Num(poisson_cdf(lambda, k))
-        }
+        (Some(lambda), Some(k)) if lambda >= 0.0 && k >= 0.0 => Value::Num(poisson_cdf(lambda, k)),
         (None, _) | (_, None) => Value::missing(),
         _ => {
             ctx.error_flag = true;

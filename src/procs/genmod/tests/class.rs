@@ -18,7 +18,12 @@ fn test_class_two_level_equals_manual_dummy() {
         df: frame_c,
         vars: vec![num_meta("y"), char_meta("g")],
     };
-    session.libs.get("WORK").unwrap().write("CLS", &ds_c).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("CLS", &ds_c)
+        .unwrap();
     let ast_c = GenmodAst {
         data_options: GenmodDataOptions {
             input: Some(DatasetRef {
@@ -55,7 +60,12 @@ fn test_class_two_level_equals_manual_dummy() {
         df: frame_d,
         vars: vec![num_meta("y"), num_meta("d")],
     };
-    session2.libs.get("WORK").unwrap().write("DUM", &ds_d).unwrap();
+    session2
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("DUM", &ds_d)
+        .unwrap();
     let ast_d = GenmodAst {
         data_options: GenmodDataOptions {
             input: Some(DatasetRef {

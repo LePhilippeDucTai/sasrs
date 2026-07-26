@@ -51,9 +51,7 @@ pub(super) fn compute_oneway_stats(
         .vars
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(eff))
-        .ok_or_else(|| {
-            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
-        })?;
+        .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", eff.to_uppercase())))?;
     let class_col = decode_column(ds, class_col_idx)?;
 
     // Listwise deletion
@@ -123,9 +121,21 @@ pub(super) fn compute_oneway_stats(
     let df_error = (n as f64 - k as f64).max(0.0);
     let df_total = (n as f64 - 1.0).max(0.0);
 
-    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-    let mse = if df_error > 0.0 { sse / df_error } else { f64::NAN };
-    let f_stat = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let msm = if df_model > 0.0 {
+        ssm / df_model
+    } else {
+        f64::NAN
+    };
+    let mse = if df_error > 0.0 {
+        sse / df_error
+    } else {
+        f64::NAN
+    };
+    let f_stat = if mse > 0.0 && !mse.is_nan() {
+        msm / mse
+    } else {
+        f64::NAN
+    };
     let p_f = if f_stat.is_nan() {
         None
     } else {
@@ -140,7 +150,9 @@ pub(super) fn compute_oneway_stats(
         f64::NAN
     };
 
-    session.log.note(&format!("There were {} observations used.", n));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n));
 
     Ok(OneWayStats {
         k,

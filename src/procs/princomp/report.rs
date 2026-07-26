@@ -1,7 +1,12 @@
 use super::*;
 
 /// "Simple Statistics" table: rows Mean / StdDev, columns = variables.
-pub(super) fn print_simple_statistics(session: &mut Session, names: &[String], means: &[f64], stds: &[f64]) {
+pub(super) fn print_simple_statistics(
+    session: &mut Session,
+    names: &[String],
+    means: &[f64],
+    stds: &[f64],
+) {
     let p = names.len();
     centered(session, "Simple Statistics");
     session.listing.blank();
@@ -26,7 +31,12 @@ pub(super) fn print_simple_statistics(session: &mut Session, names: &[String], m
 }
 
 /// Correlation / Covariance Matrix table.
-pub(super) fn print_analysis_matrix(session: &mut Session, cov: bool, names: &[String], amat: &[Vec<f64>]) {
+pub(super) fn print_analysis_matrix(
+    session: &mut Session,
+    cov: bool,
+    names: &[String],
+    amat: &[Vec<f64>],
+) {
     let p = names.len();
     let matrix_title = if cov {
         "Covariance Matrix"
@@ -93,7 +103,11 @@ pub(super) fn print_eigenvalue_table(
             ".".to_string()
         };
         let proportion = if trace != 0.0 { lambda[i] / trace } else { 0.0 };
-        let cumul = if trace != 0.0 { cumulative / trace } else { 0.0 };
+        let cumul = if trace != 0.0 {
+            cumulative / trace
+        } else {
+            0.0
+        };
         rows.push(vec![
             format!("PRIN{}", i + 1),
             format!("{:.4}", lambda[i]),
@@ -107,7 +121,12 @@ pub(super) fn print_eigenvalue_table(
 }
 
 /// Eigenvectors table (6 decimals, first k columns).
-pub(super) fn print_eigenvectors(session: &mut Session, names: &[String], v: &[Vec<f64>], k: usize) {
+pub(super) fn print_eigenvectors(
+    session: &mut Session,
+    names: &[String],
+    v: &[Vec<f64>],
+    k: usize,
+) {
     let p = names.len();
     centered(session, "Eigenvectors");
     session.listing.blank();

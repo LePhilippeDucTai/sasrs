@@ -31,7 +31,9 @@ pub(super) fn print_class_level_info_multiway(
             values_str.join(" "),
         ]);
     }
-    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session
+        .listing
+        .write_table(&cli_headers, &cli_aligns, &cli_rows);
     session.listing.blank();
     session.listing.write_line(&format!(
         "               Number of Observations Read     {}",
@@ -111,8 +113,15 @@ pub(super) fn fit_multiway(
     let n = usable.len();
 
     // y vector and corrected total.
-    let y: Vec<f64> = usable.iter().map(|&r| value_to_num(&dep_col[r]).unwrap()).collect();
-    let y_bar = if n > 0 { y.iter().sum::<f64>() / n as f64 } else { f64::NAN };
+    let y: Vec<f64> = usable
+        .iter()
+        .map(|&r| value_to_num(&dep_col[r]).unwrap())
+        .collect();
+    let y_bar = if n > 0 {
+        y.iter().sum::<f64>() / n as f64
+    } else {
+        f64::NAN
+    };
     let sst: f64 = y.iter().map(|&v| (v - y_bar).powi(2)).sum();
 
     // Levels per used CLASS var (sas_cmp order over usable rows).
@@ -121,8 +130,7 @@ pub(super) fn fit_multiway(
     for c in used_classes {
         let col = &class_cols[c].1;
         // Usable rows are non-missing by construction (listwise deletion).
-        let levels =
-            crate::procs::lincom::class_levels(usable.iter().map(|&r| &col[r]));
+        let levels = crate::procs::lincom::class_levels(usable.iter().map(|&r| &col[r]));
         var_levels.insert(c.clone(), levels);
     }
 
@@ -215,9 +223,7 @@ pub(super) fn fit_multiway(
         }
         x
     };
-    let build_design = |include: &[bool]| -> Vec<Vec<f64>> {
-        build_from(&term_blocks, include)
-    };
+    let build_design = |include: &[bool]| -> Vec<Vec<f64>> { build_from(&term_blocks, include) };
 
     let n_terms = model.terms.len();
     let all_true = vec![true; n_terms];
@@ -228,9 +234,21 @@ pub(super) fn fit_multiway(
     let df_model = (full_cols - 1) as f64;
     let df_error = (n as f64 - full_cols as f64).max(0.0);
     let df_total = (n as f64 - 1.0).max(0.0);
-    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-    let mse = if df_error > 0.0 { sse_full / df_error } else { f64::NAN };
-    let f_model = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let msm = if df_model > 0.0 {
+        ssm / df_model
+    } else {
+        f64::NAN
+    };
+    let mse = if df_error > 0.0 {
+        sse_full / df_error
+    } else {
+        f64::NAN
+    };
+    let f_model = if mse > 0.0 && !mse.is_nan() {
+        msm / mse
+    } else {
+        f64::NAN
+    };
     let p_model = if f_model.is_nan() {
         None
     } else {
@@ -280,7 +298,9 @@ pub(super) fn fit_multiway(
         type3.push(sse - sse_full_eff);
     }
 
-    session.log.note(&format!("There were {} observations used.", n));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n));
 
     Ok(MultiwayFit {
         y,

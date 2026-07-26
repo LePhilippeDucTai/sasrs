@@ -80,7 +80,10 @@ impl MacroEngine {
                     MacroParam::Positional(n) => n,
                     MacroParam::Keyword { name, .. } => name,
                 };
-                let val = scope.get(&pname.to_uppercase()).cloned().unwrap_or_default();
+                let val = scope
+                    .get(&pname.to_uppercase())
+                    .cloned()
+                    .unwrap_or_default();
                 self.log_line(format!(
                     "MLOGIC({label}):  Parameter {} has value {}",
                     pname.to_uppercase(),
@@ -193,7 +196,9 @@ impl MacroEngine {
                         .next()
                         .map(|c| c.is_ascii_alphabetic() || c == '_')
                         .unwrap_or(false)
-                    && key_trim.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && key_trim
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_')
                 {
                     is_keyword = true;
                     let val: String = chars[eq + 1..seg_end].iter().collect();
@@ -271,7 +276,12 @@ impl MacroEngine {
     /// sont consommées sans effet (note SAS-like). N'émet RIEN dans le flux.
     /// Rend l'index après le `;` (un `\n` final préservé), ou `None` si la
     /// syntaxe ne tient pas.
-    pub(crate) fn consume_macro_call(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_macro_call(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%call".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;

@@ -42,16 +42,11 @@ pub(super) fn parse_base_primary(ts: &mut StatementStream) -> Result<SqlExpr> {
         // Littéraux / missing / parenthèses : parse_expr lit exactement un
         // atome ici puisqu'aucun opérateur ne suit dans un contexte d'atome.
         // On délègue le primaire à parse_expr en l'isolant : un littéral seul.
-        TokenKind::Num(_)
-        | TokenKind::Str { .. }
-        | TokenKind::Dot => {
+        TokenKind::Num(_) | TokenKind::Str { .. } | TokenKind::Dot => {
             let e = parse_base_literal(ts)?;
             Ok(SqlExpr::Base(e))
         }
-        _ => Err(SasError::parse(
-            "expected an expression",
-            tok.span,
-        )),
+        _ => Err(SasError::parse("expected an expression", tok.span)),
     }
 }
 

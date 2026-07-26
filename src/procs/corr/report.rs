@@ -112,12 +112,18 @@ pub(super) fn emit_correlations(
 
     let nr = row_cols.len();
     let nc = col_cols.len();
-    let rmat: Vec<Vec<Option<f64>>> =
-        cells.iter().map(|row| row.iter().map(|c| c.r).collect()).collect();
-    let pmat: Vec<Vec<Option<f64>>> =
-        cells.iter().map(|row| row.iter().map(|c| c.p).collect()).collect();
-    let nmat: Vec<Vec<usize>> =
-        cells.iter().map(|row| row.iter().map(|c| c.n).collect()).collect();
+    let rmat: Vec<Vec<Option<f64>>> = cells
+        .iter()
+        .map(|row| row.iter().map(|c| c.r).collect())
+        .collect();
+    let pmat: Vec<Vec<Option<f64>>> = cells
+        .iter()
+        .map(|row| row.iter().map(|c| c.p).collect())
+        .collect();
+    let nmat: Vec<Vec<usize>> = cells
+        .iter()
+        .map(|row| row.iter().map(|c| c.n).collect())
+        .collect();
 
     // Decide whether to print the per-cell N line: only when pairwise N
     // differs across the matrix (SAS prints N only when observations vary).

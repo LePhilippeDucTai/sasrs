@@ -180,7 +180,10 @@ impl<'a> Lexer<'a> {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => return Ok(self.lex_ident()),
             b'%' => {
                 self.pos += 1;
-                if self.peek().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_') {
+                if self
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+                {
                     let name_start = self.pos;
                     while self
                         .peek()

@@ -26,8 +26,7 @@ use crate::missing::num_to_value;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::session::Session;
-use crate::value::{format_best, Value};
-
+use crate::value::{Value, format_best};
 
 mod render;
 
@@ -323,9 +322,7 @@ fn format_column(
                     None => match v {
                         // Ordinary missing `.` uses the session MISSING= char.
                         // Special missings keep their SAS suffix (._/.A..Z).
-                        Value::Missing(crate::value::MissingKind::Dot) => {
-                            missing_char.to_string()
-                        }
+                        Value::Missing(crate::value::MissingKind::Dot) => missing_char.to_string(),
                         Value::Missing(kind) => kind.display(),
                         Value::Num(f) => format_best(f, 12),
                         Value::Char(_) => unreachable!("num column decoded to char"),

@@ -32,9 +32,9 @@
 //!   - **Ordre des NOTEs** identique à `exec::execute` : (missing generated) →
 //!     "N observations read" → "has N observations and M variables".
 
-use super::pdv::Pdv;
 use super::StepProgram;
 use super::exec::{self, StepStats};
+use super::pdv::Pdv;
 use crate::ast::{BinaryOp, DsStmt, Expr};
 use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
@@ -95,9 +95,7 @@ fn stmt_ok(stmt: &DsStmt, pdv: &Pdv) -> bool {
         DsStmt::Assign { var, expr } => {
             // Cible numérique existante + RHS entièrement lowerable.
             match pdv.slot(var) {
-                Some(slot) if pdv.vars()[slot].ty == VarType::Num => {
-                    lower_rhs(expr, pdv).is_some()
-                }
+                Some(slot) if pdv.vars()[slot].ty == VarType::Num => lower_rhs(expr, pdv).is_some(),
                 _ => false,
             }
         }

@@ -17,8 +17,7 @@ pub(crate) fn f_pdf(x: f64, ndf: f64, ddf: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
-    let ln = 0.5 * ndf * (ndf / ddf).ln()
-        + (0.5 * ndf - 1.0) * x.ln()
+    let ln = 0.5 * ndf * (ndf / ddf).ln() + (0.5 * ndf - 1.0) * x.ln()
         - 0.5 * (ndf + ddf) * (1.0 + ndf * x / ddf).ln()
         - (ln_gamma(0.5 * ndf) + ln_gamma(0.5 * ddf) - ln_gamma(0.5 * (ndf + ddf)));
     ln.exp()
@@ -67,7 +66,13 @@ pub(crate) fn binomial_pmf(p: f64, n: f64, k: f64) -> f64 {
     }
     let ln_coeff = ln_gamma(n + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n - k + 1.0);
     let ln = ln_coeff
-        + (if p > 0.0 { k * p.ln() } else if k == 0.0 { 0.0 } else { return 0.0 })
+        + (if p > 0.0 {
+            k * p.ln()
+        } else if k == 0.0 {
+            0.0
+        } else {
+            return 0.0;
+        })
         + (if p < 1.0 {
             (n - k) * (1.0 - p).ln()
         } else if (n - k) == 0.0 {

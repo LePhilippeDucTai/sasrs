@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 mod outest;
 mod plots;
 
@@ -45,7 +44,15 @@ pub(super) fn write_outputs(
             || o.uclm.is_some()
     });
     let obs_stats: Option<Vec<ObsStat>> = if needs_stats {
-        Some(compute_obs_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, alpha, weighting))
+        Some(compute_obs_stats(
+            x_mat,
+            &reconstruct_y(fit),
+            fit,
+            n,
+            p_eff,
+            alpha,
+            weighting,
+        ))
     } else {
         None
     };
@@ -63,7 +70,14 @@ pub(super) fn write_outputs(
             || o.dfbetas.is_some()
     });
     let infl_stats: Option<Vec<InfluenceStat>> = if needs_infl {
-        Some(compute_influence_stats(x_mat, &reconstruct_y(fit), fit, n, p_eff, weighting))
+        Some(compute_influence_stats(
+            x_mat,
+            &reconstruct_y(fit),
+            fit,
+            n,
+            p_eff,
+            weighting,
+        ))
     } else {
         None
     };
@@ -141,11 +155,7 @@ pub(super) fn write_outputs(
                         .iter()
                         .map(|s| {
                             let v = f(s);
-                            if v.is_finite() {
-                                Some(v)
-                            } else {
-                                None
-                            }
+                            if v.is_finite() { Some(v) } else { None }
                         })
                         .collect();
                     columns.push(Series::new(nm.as_str().into(), data).into());
@@ -177,11 +187,7 @@ pub(super) fn write_outputs(
                         .iter()
                         .map(|s| {
                             let v = s.dfbetas[j];
-                            if v.is_finite() {
-                                Some(v)
-                            } else {
-                                None
-                            }
+                            if v.is_finite() { Some(v) } else { None }
                         })
                         .collect();
                     columns.push(Series::new(col_name.as_str().into(), data).into());

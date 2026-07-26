@@ -17,10 +17,7 @@ pub(crate) fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
             ts.next();
             let inner = parse_expr(ts)?;
             if ts.peek().kind != TokenKind::RParen {
-                return Err(SasError::parse(
-                    "expected ')'",
-                    ts.peek().span,
-                ));
+                return Err(SasError::parse("expected ')'", ts.peek().span));
             }
             ts.next();
             Ok(inner)
@@ -53,8 +50,7 @@ pub(crate) fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
                     .to_string();
                 ts.next(); // méthode
                 ts.next(); // `(`
-                let args =
-                    crate::parser::datastep::parse_hash_args(ts, &name, &method)?;
+                let args = crate::parser::datastep::parse_hash_args(ts, &name, &method)?;
                 return Ok(Expr::HashMethod(Box::new(crate::ast::HashMethodCall {
                     object: name,
                     method,
@@ -87,10 +83,7 @@ pub(crate) fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
                 let var_tok = ts.peek().clone();
                 let Some(v) = var_tok.ident().map(str::to_string) else {
                     return Err(SasError::parse(
-                        format!(
-                            "expected a BY variable name after {}.",
-                            name.to_uppercase()
-                        ),
+                        format!("expected a BY variable name after {}.", name.to_uppercase()),
                         var_tok.span,
                     ));
                 };
@@ -109,10 +102,7 @@ pub(crate) fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
                 _ => Ok(Expr::Var(name)),
             }
         }
-        _ => Err(SasError::parse(
-            "expected an expression",
-            tok.span,
-        )),
+        _ => Err(SasError::parse("expected an expression", tok.span)),
     }
 }
 
@@ -251,7 +241,11 @@ pub(crate) fn parse_index(ts: &mut StatementStream, name: String) -> Result<Expr
         return Err(SasError::parse(
             format!(
                 "expected '{}' to close the array subscript of {}",
-                if closer == TokenKind::RBrace { "}" } else { "]" },
+                if closer == TokenKind::RBrace {
+                    "}"
+                } else {
+                    "]"
+                },
                 name.to_uppercase()
             ),
             ts.peek().span,

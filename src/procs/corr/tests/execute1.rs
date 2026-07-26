@@ -20,7 +20,10 @@ fn execute_perfect_correlation_listing() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: false,
         noprob: false,
         nocorr: false,
@@ -41,7 +44,10 @@ fn execute_perfect_correlation_listing() {
     let listing = session.listing.into_string();
     assert!(listing.contains("The CORR Procedure"), "{listing}");
     assert!(listing.contains("Simple Statistics"), "{listing}");
-    assert!(listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
     // Diagonal 1.00000 and off-diagonal 1.00000 (perfectly correlated).
     assert!(listing.contains("1.00000"), "{listing}");
     // Variable summary line.
@@ -63,7 +69,10 @@ fn execute_nosimple_noprob_toggles() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: true,
         noprob: true,
         nocorr: false,
@@ -82,9 +91,15 @@ fn execute_nosimple_noprob_toggles() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(!listing.contains("Simple Statistics"), "nosimple: {listing}");
+    assert!(
+        !listing.contains("Simple Statistics"),
+        "nosimple: {listing}"
+    );
     assert!(!listing.contains("Prob > |r|"), "noprob: {listing}");
-    assert!(listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
 }
 
 #[test]
@@ -105,7 +120,10 @@ fn execute_missing_pairwise_n_line() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: true,
         noprob: true,
         nocorr: false,
@@ -144,7 +162,10 @@ fn execute_constant_variable_missing_r() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: true,
         noprob: true,
         nocorr: false,
@@ -183,7 +204,10 @@ fn execute_with_statement_shapes_matrix() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: true,
         noprob: true,
         nocorr: false,
@@ -225,7 +249,10 @@ fn execute_default_var_all_numeric() {
     write_dataset(&mut session, "T", ds);
 
     let ast = CorrAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         nosimple: false,
         noprob: true,
         nocorr: false,
@@ -259,7 +286,10 @@ fn execute_spearman_block() {
         "y" => [1.0_f64, 3.0, 2.0, 4.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
@@ -267,9 +297,15 @@ fn execute_spearman_block() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Spearman Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Spearman Correlation Coefficients"),
+        "{listing}"
+    );
     // No Pearson block when only spearman requested.
-    assert!(!listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    assert!(
+        !listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
     // r_s off-diagonal = 0.80000.
     assert!(listing.contains("0.80000"), "{listing}");
 }
@@ -282,7 +318,10 @@ fn execute_kendall_block() {
         "y" => [1.0_f64, 3.0, 2.0, 4.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
@@ -304,7 +343,10 @@ fn execute_all_three_methods() {
         "y" => [2.0_f64, 1.0, 4.0, 3.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
@@ -314,8 +356,14 @@ fn execute_all_three_methods() {
     execute(&ast, &mut session).unwrap();
 
     let listing = session.listing.into_string();
-    assert!(listing.contains("Pearson Correlation Coefficients"), "{listing}");
-    assert!(listing.contains("Spearman Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("Spearman Correlation Coefficients"),
+        "{listing}"
+    );
     assert!(listing.contains("Kendall Tau b Coefficients"), "{listing}");
 }
 
@@ -329,11 +377,17 @@ fn execute_outp_dataset_structure() {
         "y" => [2.0_f64, 4.0, 6.0, 8.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
-    ast.outp = Some(DatasetRef { libref: Some("WORK".into()), name: "C".into() });
+    ast.outp = Some(DatasetRef {
+        libref: Some("WORK".into()),
+        name: "C".into(),
+    });
     execute(&ast, &mut session).unwrap();
 
     // Read back the produced TYPE=CORR dataset.
@@ -381,14 +435,23 @@ fn execute_outs_outk_methods() {
         "y" => [1.0_f64, 3.0, 2.0, 4.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), num_meta("y")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let mut ast = base_ast("T");
     ast.spearman = true;
     ast.kendall = true;
-    ast.outs = Some(DatasetRef { libref: Some("WORK".into()), name: "S".into() });
-    ast.outk = Some(DatasetRef { libref: Some("WORK".into()), name: "K".into() });
+    ast.outs = Some(DatasetRef {
+        libref: Some("WORK".into()),
+        name: "S".into(),
+    });
+    ast.outk = Some(DatasetRef {
+        libref: Some("WORK".into()),
+        name: "K".into(),
+    });
     execute(&ast, &mut session).unwrap();
 
     // Spearman OUTS: corr(x,y) row for x = 0.8.
@@ -396,13 +459,21 @@ fn execute_outs_outk_methods() {
     let sx = decode_column(&s, 2).unwrap(); // column x
     // row 4 (index 4) is CORR y; row 3 is CORR x → off-diag at col y.
     let sy = decode_column(&s, 3).unwrap(); // column y, CORR x row
-    assert!((value_to_num(&sy[3]).unwrap() - 0.8).abs() < 1e-9, "{:?}", sy[3]);
+    assert!(
+        (value_to_num(&sy[3]).unwrap() - 0.8).abs() < 1e-9,
+        "{:?}",
+        sy[3]
+    );
     assert!((value_to_num(&sx[3]).unwrap() - 1.0).abs() < 1e-9);
 
     // Kendall OUTK: corr(x,y) = 0.6667.
     let (kd, _) = session.libs.get("WORK").unwrap().read("K").unwrap();
     let ky = decode_column(&kd, 3).unwrap();
-    assert!((value_to_num(&ky[3]).unwrap() - 4.0 / 6.0).abs() < 1e-9, "{:?}", ky[3]);
+    assert!(
+        (value_to_num(&ky[3]).unwrap() - 4.0 / 6.0).abs() < 1e-9,
+        "{:?}",
+        ky[3]
+    );
 }
 
 #[test]
@@ -428,5 +499,8 @@ fn execute_weighted_listing_runs() {
     let listing = session.listing.into_string();
     // With w=1 the weighted r equals the unweighted perfect correlation.
     assert!(listing.contains("1.00000"), "{listing}");
-    assert!(listing.contains("Pearson Correlation Coefficients"), "{listing}");
+    assert!(
+        listing.contains("Pearson Correlation Coefficients"),
+        "{listing}"
+    );
 }

@@ -62,7 +62,9 @@ pub(super) fn print_ordinal_response_profile(
             ]
         })
         .collect();
-    session.listing.write_table(&rp_headers, &rp_aligns, &rp_rows);
+    session
+        .listing
+        .write_table(&rp_headers, &rp_aligns, &rp_rows);
     session.listing.blank();
 }
 
@@ -140,8 +142,7 @@ pub(super) fn print_ordinal_odds_ratios(
         "Lower".into(),
         "Upper".into(),
     ];
-    let ore_aligns =
-        vec![Align::Left, Align::Right, Align::Right, Align::Right];
+    let ore_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     let mut col = n_int;
     let mut ore_rows: Vec<Vec<String>> = Vec::new();
     for eff in &design.effects {
@@ -234,21 +235,16 @@ pub(super) fn execute_ordinal(
         se,
         wald,
         wald_p,
-    } = fit_ordinal(session, &cat_vec, &x_mat, &freq_vec, n_total, n_int, nb_cols, k);
+    } = fit_ordinal(
+        session, &cat_vec, &x_mat, &freq_vec, n_total, n_int, nb_cols, k,
+    );
     let sigma = |z: f64| 1.0 / (1.0 + (-z).exp());
 
     // ── Listing ───────────────────────────────────────────────────────────
     if !model.noprint {
         print_ordinal_model_information(session, in_libref, in_table, resp_name, k);
         write_class_level_info(session, design);
-        print_ordinal_response_profile(
-            session,
-            resp_name,
-            &cat_vec,
-            &freq_vec,
-            &ordered_levels,
-            k,
-        );
+        print_ordinal_response_profile(session, resp_name, &cat_vec, &freq_vec, &ordered_levels, k);
 
         session
             .log
@@ -277,13 +273,22 @@ pub(super) fn execute_ordinal(
     let predicted: Vec<f64> = x_mat
         .iter()
         .map(|xi| {
-            let xb: f64 = xi.iter().zip(theta[n_int..].iter()).map(|(x, b)| x * b).sum();
+            let xb: f64 = xi
+                .iter()
+                .zip(theta[n_int..].iter())
+                .map(|(x, b)| x * b)
+                .sum();
             sigma(theta[0] + xb)
         })
         .collect();
     let xbeta: Vec<f64> = x_mat
         .iter()
-        .map(|xi| xi.iter().zip(theta[n_int..].iter()).map(|(x, b)| x * b).sum())
+        .map(|xi| {
+            xi.iter()
+                .zip(theta[n_int..].iter())
+                .map(|(x, b)| x * b)
+                .sum()
+        })
         .collect();
     write_outputs(
         &ast.outputs,

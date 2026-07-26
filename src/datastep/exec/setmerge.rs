@@ -93,7 +93,11 @@ impl Runner {
         let mut found = false;
         'outer: for d in self.set_cursor.cur_ds..input.datasets.len() {
             let ds = &input.datasets[d];
-            let start = if d == self.set_cursor.cur_ds { self.set_cursor.cursors[d] } else { 0 };
+            let start = if d == self.set_cursor.cur_ds {
+                self.set_cursor.cursors[d]
+            } else {
+                0
+            };
             for row in start..ds.n_rows {
                 match &ds.where_ {
                     None => {
@@ -175,7 +179,9 @@ impl Runner {
         if idx < 1 || (idx as usize) > total {
             self.input = Some(input);
             self.pdv.error_ = true;
-            return Err(SasError::runtime(format!("Error in variable {point_name}.")));
+            return Err(SasError::runtime(format!(
+                "Error in variable {point_name}."
+            )));
         }
 
         // Localiser l'observation globale `idx` (1-based) dans la concaténation.
@@ -216,14 +222,20 @@ impl Runner {
         let idx = match coerce_num(&idx_val, &mut self.ctx) {
             Some(f) => f.round() as i64,
             None => {
-                state.error = Some(format!("Invalid POINT= value for the data set {}.", state.display));
+                state.error = Some(format!(
+                    "Invalid POINT= value for the data set {}.",
+                    state.display
+                ));
                 self.modify_state = Some(state);
                 self.pdv.error_ = true;
                 return Ok(Flow::EndStep);
             }
         };
         if idx < 1 || (idx as usize) > state.n_rows {
-            state.error = Some(format!("Invalid POINT= value for the data set {}.", state.display));
+            state.error = Some(format!(
+                "Invalid POINT= value for the data set {}.",
+                state.display
+            ));
             self.modify_state = Some(state);
             self.pdv.error_ = true;
             return Ok(Flow::EndStep);
@@ -243,7 +255,10 @@ impl Runner {
 
 /// Clés BY de la ligne `row` d'un dataset (dans l'ordre du BY).
 pub(super) fn keys_at(ds: &InputDataset, row: usize) -> Vec<Value> {
-    ds.by_cols.iter().map(|&c| ds.columns[c][row].clone()).collect()
+    ds.by_cols
+        .iter()
+        .map(|&c| ds.columns[c][row].clone())
+        .collect()
 }
 
 /// Comparaison de deux jeux de clés BY : `sas_cmp` clé par clé (les
@@ -295,5 +310,3 @@ fn choose_next(
     }
     best
 }
-
-

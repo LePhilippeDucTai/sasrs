@@ -7,7 +7,10 @@ use polars::df;
 fn no_output_dataset_set() {
     let mut session = make_session();
     let df = df!["region" => ["E", "W"]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region")],
+    };
     write_dataset(&mut session, "T", ds);
     let before = session.last_dataset.clone();
 
@@ -44,7 +47,10 @@ fn stored_varmeta_label_is_default_header() {
     .unwrap();
     let mut hmeta = num_meta("height");
     hmeta.label = Some("Height (in)".to_string());
-    let ds = SasDataset { df, vars: vec![char_meta("sex"), hmeta] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("sex"), hmeta],
+    };
     write_dataset(&mut session, "T", ds);
     // No explicit label on `height`, but its stored LABEL is the default.
     let listing = run(
@@ -114,7 +120,10 @@ fn out_dataset_shape_and_values() {
         "sales"  => [10.0_f64, 20.0, 8.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region"), num_meta("sales")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region"), num_meta("sales")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = parse_src(
@@ -154,13 +163,14 @@ fn out_dataset_shape_and_values() {
 fn out_dataset_frequency_stat_name() {
     let mut session = make_session();
     let df = df!["region" => ["E", "E", "W"]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region")],
+    };
     write_dataset(&mut session, "T", ds);
 
-    let ast = parse_src(
-        "proc tabulate data=work.t out=work.o; class region; table region; run;",
-    )
-    .unwrap();
+    let ast = parse_src("proc tabulate data=work.t out=work.o; class region; table region; run;")
+        .unwrap();
     execute(&ast, &mut session).unwrap();
     let (out, _n) = session.libs.get("WORK").unwrap().read("O").unwrap();
     // Pure-frequency cell → stat column named "N" (no analysis VAR).

@@ -30,9 +30,8 @@
 
 use crate::value::Value;
 
-
-mod picture;
 mod informat;
+mod picture;
 
 pub use informat::InformatRange;
 pub use informat::InformatValue;
@@ -40,7 +39,6 @@ pub use informat::UserInformat;
 pub use picture::PictureDirectives;
 pub use picture::PictureRange;
 pub use picture::UserPicture;
-
 
 /// The three kinds of user-defined format object that PROC FORMAT can build.
 ///
@@ -144,7 +142,11 @@ impl UserFormat {
                 Bound::Low => true,
                 Bound::High => false,
                 Bound::Num(lo) => {
-                    if range.from_exclusive { n > *lo } else { n >= *lo }
+                    if range.from_exclusive {
+                        n > *lo
+                    } else {
+                        n >= *lo
+                    }
                 }
                 Bound::Char(_) => false,
             };
@@ -155,7 +157,11 @@ impl UserFormat {
                 Bound::High => true,
                 Bound::Low => false,
                 Bound::Num(hi) => {
-                    if range.to_exclusive { n < *hi } else { n <= *hi }
+                    if range.to_exclusive {
+                        n < *hi
+                    } else {
+                        n <= *hi
+                    }
                 }
                 Bound::Char(_) => false,
             };

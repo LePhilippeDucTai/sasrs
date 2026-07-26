@@ -5,7 +5,14 @@ use super::*;
 /// `(x, y, group, markerattrs, degree, smooth)`. Les inconnues sont ignorées.
 pub(super) fn parse_xy_stmt(
     ts: &mut StatementStream,
-) -> Result<(String, String, Option<String>, Option<MarkerAttrs>, Option<u32>, Option<f64>)> {
+) -> Result<(
+    String,
+    String,
+    Option<String>,
+    Option<MarkerAttrs>,
+    Option<u32>,
+    Option<f64>,
+)> {
     let mut x: Option<String> = None;
     let mut y: Option<String> = None;
     let mut group: Option<String> = None;
@@ -110,7 +117,9 @@ pub(super) fn parse_xy_stmt(
 }
 
 /// Parse un statement de barres (VBAR/HBAR) : `vbar category / response= stat=`.
-pub(super) fn parse_bar_stmt(ts: &mut StatementStream) -> Result<(String, Option<String>, BarStat)> {
+pub(super) fn parse_bar_stmt(
+    ts: &mut StatementStream,
+) -> Result<(String, Option<String>, BarStat)> {
     let category = expect_ident(ts, "after VBAR/HBAR")?;
     let mut response: Option<String> = None;
     let mut stat = BarStat::Freq;
@@ -156,7 +165,9 @@ pub(super) fn parse_bar_stmt(ts: &mut StatementStream) -> Result<(String, Option
 }
 
 /// Parse un statement HISTOGRAM : `histogram var / binwidth= scale=`.
-pub(super) fn parse_histogram_stmt(ts: &mut StatementStream) -> Result<(String, Option<f64>, HistScale)> {
+pub(super) fn parse_histogram_stmt(
+    ts: &mut StatementStream,
+) -> Result<(String, Option<f64>, HistScale)> {
     let var = expect_ident(ts, "after HISTOGRAM")?;
     let mut binwidth: Option<f64> = None;
     let mut scale = HistScale::Count;

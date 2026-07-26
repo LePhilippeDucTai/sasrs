@@ -43,7 +43,12 @@ fn test_two_way_balanced_type1_eq_type3() {
     // Type I should sum (with interaction omitted) to the model SS of the
     // two-main-effect model: SSM = SST - SSE_full.
     let ssm = sst - sse_full;
-    assert!((t1a + t1b - ssm).abs() < 1e-7, "t1 sum {} != ssm {}", t1a + t1b, ssm);
+    assert!(
+        (t1a + t1b - ssm).abs() < 1e-7,
+        "t1 sum {} != ssm {}",
+        t1a + t1b,
+        ssm
+    );
 }
 
 #[test]
@@ -95,8 +100,7 @@ fn test_unbalanced_2x2_type3_effect_coding() {
     let b = vec![0usize, 1, 1, 0, 0, 1, 1];
     let y = vec![5.0, 9.0, 11.0, 20.0, 22.0, 30.0, 34.0];
 
-    let (t3_a, t3_b, t3_ab, sse_ref, sse_eff) =
-        two_way_full_type3_effect(&a, 2, &b, 2, &y);
+    let (t3_a, t3_b, t3_ab, sse_ref, sse_eff) = two_way_full_type3_effect(&a, 2, &b, 2, &y);
 
     // SSE_full invariance: same fit, different basis.
     assert!(

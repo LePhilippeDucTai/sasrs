@@ -130,9 +130,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
 /// Guards (CLASS/VAR required) + NOTEs for parse-accepted, unimplemented
 /// options. Returns the CLASS variable name.
 pub(super) fn check_options<'a>(ast: &'a DiscrimAst, session: &mut Session) -> Result<&'a String> {
-    let class_name = ast.class_var.as_ref().ok_or_else(|| {
-        SasError::runtime("CLASS statement required in PROC DISCRIM")
-    })?;
+    let class_name = ast
+        .class_var
+        .as_ref()
+        .ok_or_else(|| SasError::runtime("CLASS statement required in PROC DISCRIM"))?;
 
     if ast.var_vars.is_empty() {
         return Err(SasError::runtime(

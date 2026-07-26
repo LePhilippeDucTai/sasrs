@@ -99,8 +99,10 @@ pub(super) fn write_out_dataset(
         let meta = &ds.vars[*col_idx];
         let series = match meta.ty {
             VarType::Num => {
-                let vals: Vec<Option<f64>> =
-                    out_rows.iter().map(|r| value_to_num(&r.class_cells[ci])).collect();
+                let vals: Vec<Option<f64>> = out_rows
+                    .iter()
+                    .map(|r| value_to_num(&r.class_cells[ci]))
+                    .collect();
                 Series::new(meta.name.as_str().into(), vals)
             }
             VarType::Char => {
@@ -121,8 +123,10 @@ pub(super) fn write_out_dataset(
 
     // _TYPE_ (char 0/1 pattern).
     let type_len = class_cols.len().max(1);
-    let type_vals: Vec<Option<String>> =
-        out_rows.iter().map(|r| Some(r.type_pattern.clone())).collect();
+    let type_vals: Vec<Option<String>> = out_rows
+        .iter()
+        .map(|r| Some(r.type_pattern.clone()))
+        .collect();
     columns.push(Series::new("_TYPE_".into(), type_vals).into());
     vars.push(VarMeta {
         name: "_TYPE_".to_string(),

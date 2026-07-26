@@ -51,23 +51,22 @@ use super::ast::{
 };
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::error::{Result, SasError};
-use crate::parser::expr::parse_expr;
 use crate::parser::StatementStream;
+use crate::parser::expr::parse_expr;
 use crate::token::TokenKind;
 
-
-mod stmt;
-mod select;
-mod expr;
 mod base;
 mod continuation;
+mod expr;
+mod select;
+mod stmt;
 
 pub use stmt::parse_sql_program;
 
-use select::*;
-use expr::*;
 use base::*;
 use continuation::*;
+use expr::*;
+use select::*;
 
 #[cfg(test)]
 mod tests;

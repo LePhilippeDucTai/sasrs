@@ -15,10 +15,9 @@ fn parse_minimal_table() {
 
 #[test]
 fn parse_two_dimensions() {
-    let ast = parse_src(
-        "proc tabulate data=a; class region; var sales; table region, sales*mean; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_src("proc tabulate data=a; class region; var sales; table region, sales*mean; run;")
+            .unwrap();
     assert!(ast.row.is_some());
 }
 
@@ -35,7 +34,10 @@ fn parse_unknown_proc_option_errors() {
 fn one_dimension_frequency() {
     let mut session = make_session();
     let df = df!["region" => ["E", "E", "W"]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let listing = run(
@@ -60,7 +62,10 @@ fn row_classvar_col_var_mean() {
         "sales"  => [10.0_f64, 20.0, 8.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region"), num_meta("sales")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region"), num_meta("sales")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let listing = run(
@@ -72,7 +77,10 @@ fn row_classvar_col_var_mean() {
     assert!(listing.contains("15"), "{listing}");
     assert!(listing.contains("8"), "{listing}");
     // Header includes sales*Mean.
-    assert!(listing.contains("sales") && listing.contains("Mean"), "{listing}");
+    assert!(
+        listing.contains("sales") && listing.contains("Mean"),
+        "{listing}"
+    );
 }
 
 #[test]
@@ -83,7 +91,10 @@ fn class_cross_class() {
         "b" => ["p", "q", "p"]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("a"), char_meta("b")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("a"), char_meta("b")],
+    };
     write_dataset(&mut session, "T", ds);
 
     // a on rows, a*b crossing on columns gives nested category cells.
@@ -106,7 +117,10 @@ fn multistat_list_with_group() {
         "sales"  => [10.0_f64, 20.0, 8.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region"), num_meta("sales")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region"), num_meta("sales")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let listing = run(
@@ -131,7 +145,10 @@ fn missing_in_var_excluded_from_mean_counted_in_nmiss() {
         "sales"  => [Some(10.0_f64), Some(20.0), None]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region"), num_meta("sales")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region"), num_meta("sales")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let listing = run(
@@ -175,7 +192,10 @@ fn unsupported_construct_clean_error() {
 fn unknown_name_clean_error() {
     let mut session = make_session();
     let df = df!["region" => ["E", "W"]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let r = run(
@@ -237,8 +257,14 @@ fn page_dimension_renders_per_page_subtables() {
     assert!(listing.contains("grp=A"), "{listing}");
     assert!(listing.contains("grp=B"), "{listing}");
     // Page A: E=10, W=20 ; page B: E=30, W=40.
-    assert!(listing.contains("10") && listing.contains("20"), "{listing}");
-    assert!(listing.contains("30") && listing.contains("40"), "{listing}");
+    assert!(
+        listing.contains("10") && listing.contains("20"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("30") && listing.contains("40"),
+        "{listing}"
+    );
 }
 
 #[test]
@@ -250,7 +276,12 @@ fn four_dimensions_clean_error() {
     .unwrap();
     let ds = SasDataset {
         df,
-        vars: vec![char_meta("a"), char_meta("b"), char_meta("c"), char_meta("d")],
+        vars: vec![
+            char_meta("a"),
+            char_meta("b"),
+            char_meta("c"),
+            char_meta("d"),
+        ],
     };
     write_dataset(&mut session, "T", ds);
 
@@ -259,7 +290,12 @@ fn four_dimensions_clean_error() {
         "proc tabulate data=work.t; class a b c d; table a, b, c, d; run;",
     );
     assert!(r.is_err());
-    assert!(r.err().unwrap().to_string().contains("at most 3 dimensions"));
+    assert!(
+        r.err()
+            .unwrap()
+            .to_string()
+            .contains("at most 3 dimensions")
+    );
 }
 
 // ─────────────── M21.4: ALL (universal class) ───────────────
@@ -333,7 +369,10 @@ fn pctn_empty_cell_is_dot_not_panic() {
     let mut session = make_session();
     // No observations at all → grand total N = 0 → "." (no div-by-zero).
     let df = df!["region" => [""; 0]].unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("region")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("region")],
+    };
     write_dataset(&mut session, "T", ds);
     let listing = run(
         session,
@@ -420,8 +459,14 @@ fn multi_var_separate_column_analyses() {
          table sex, height*mean weight*sum; run;",
     )
     .unwrap();
-    assert!(listing.contains("height") && listing.contains("Mean"), "{listing}");
-    assert!(listing.contains("weight") && listing.contains("Sum"), "{listing}");
+    assert!(
+        listing.contains("height") && listing.contains("Mean"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("weight") && listing.contains("Sum"),
+        "{listing}"
+    );
     // M weights sum = 112.5 + 83 + 84 = 279.5.
     assert!(listing.contains("279.5"), "{listing}");
 }

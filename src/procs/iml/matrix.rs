@@ -17,11 +17,17 @@ pub(super) fn elementwise(l: &Matrix, r: &Matrix, f: impl Fn(f64, f64) -> f64) -
     // Diffusion scalaire.
     if rr == 1 && rc == 1 {
         let s = r[0][0];
-        return Ok(l.iter().map(|row| row.iter().map(|v| f(*v, s)).collect()).collect());
+        return Ok(l
+            .iter()
+            .map(|row| row.iter().map(|v| f(*v, s)).collect())
+            .collect());
     }
     if lr == 1 && lc == 1 {
         let s = l[0][0];
-        return Ok(r.iter().map(|row| row.iter().map(|v| f(s, *v)).collect()).collect());
+        return Ok(r
+            .iter()
+            .map(|row| row.iter().map(|v| f(s, *v)).collect())
+            .collect());
     }
     if lr != rr || lc != rc {
         return Err(SasError::runtime(format!(
@@ -58,7 +64,9 @@ pub(super) fn all_elems(m: &Matrix) -> Vec<f64> {
 }
 
 pub(super) fn map_elems(m: &Matrix, f: impl Fn(f64) -> f64) -> Matrix {
-    m.iter().map(|r| r.iter().map(|v| f(*v)).collect()).collect()
+    m.iter()
+        .map(|r| r.iter().map(|v| f(*v)).collect())
+        .collect()
 }
 
 // ───────────────────────── M28a.3 : algèbre linéaire ─────────────────────────
@@ -139,7 +147,9 @@ pub(super) fn iml_shape(src: &Matrix, nrow: i64, ncol: i64) -> Result<Matrix> {
     let elems = all_elems(src);
     let cnt = elems.len();
     if nrow < 0 || ncol < 0 {
-        return Err(SasError::runtime("IML: SHAPE dimensions must be non-negative."));
+        return Err(SasError::runtime(
+            "IML: SHAPE dimensions must be non-negative.",
+        ));
     }
     let (nr, nc) = match (nrow, ncol) {
         (0, 0) => {
@@ -150,7 +160,9 @@ pub(super) fn iml_shape(src: &Matrix, nrow: i64, ncol: i64) -> Result<Matrix> {
         (r, 0) => {
             let r = r as usize;
             if r == 0 {
-                return Err(SasError::runtime("IML: SHAPE row count cannot be zero here."));
+                return Err(SasError::runtime(
+                    "IML: SHAPE row count cannot be zero here.",
+                ));
             }
             // ncol inferred: ceil(cnt / r) so all elements fit.
             let c = cnt.div_ceil(r).max(1);

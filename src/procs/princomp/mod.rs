@@ -41,7 +41,6 @@ use crate::stat::eigenvectors_jacobi;
 use crate::token::TokenKind;
 use crate::value::VarType;
 
-
 mod analysis;
 mod report;
 
@@ -225,7 +224,9 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
     // eigenvalue_j. Observations with any missing analysis variable receive
     // missing scores (rows are kept in input order, mirroring SAS).
     if let Some(out_ref) = &ast.out {
-        write_out_dataset(session, &ds, &decoded, &means, &stds, &v, ast.cov, p, k, out_ref)?;
+        write_out_dataset(
+            session, &ds, &decoded, &means, &stds, &v, ast.cov, p, k, out_ref,
+        )?;
     }
 
     Ok(())

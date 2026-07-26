@@ -106,20 +106,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
     })?;
 
     let base = base.ok_or_else(|| {
-        SasError::runtime(
-            "The BASE= option is required on the PROC APPEND statement.",
-        )
+        SasError::runtime("The BASE= option is required on the PROC APPEND statement.")
     })?;
     let data = data.ok_or_else(|| {
-        SasError::runtime(
-            "The DATA= option is required on the PROC APPEND statement.",
-        )
+        SasError::runtime("The DATA= option is required on the PROC APPEND statement.")
     })?;
 
     // Consume through run;/quit; (sub-statements loop) (combinateur M31).
     common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
-    Ok(AppendAst { base, data, force, nowarn, appendver })
+    Ok(AppendAst {
+        base,
+        data,
+        force,
+        nowarn,
+        appendver,
+    })
 }
 
 /// Truncate a string to at most `max_chars` Unicode characters.
@@ -154,15 +156,15 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     let base_provider = session.libs.get(&base_libref)?;
     let base_exists = base_provider.exists(&base_table);
 
-    session.log.note(&format!(
-        "Appending {data_disp} to {base_disp}."
-    ));
+    session
+        .log
+        .note(&format!("Appending {data_disp} to {base_disp}."));
 
     if !base_exists {
         // BASE does not exist: copy DATA to BASE verbatim.
-        session.log.note(
-            "BASE data set does not exist. DATA file is being copied to BASE file.",
-        );
+        session
+            .log
+            .note("BASE data set does not exist. DATA file is being copied to BASE file.");
         base_provider.write(&base_table, &data_ds)?;
         session.last_dataset = Some(format!("{base_libref}.{base_table}"));
         let n = data_ds.n_obs();
@@ -202,9 +204,9 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
             match base_idx.get(&key) {
                 None => {
                     // Variable in DATA not in BASE.
-                    session.log.error(&format!(
-                        "Variable {key} was not found on the BASE file."
-                    ));
+                    session
+                        .log
+                        .error(&format!("Variable {key} was not found on the BASE file."));
                     anomalies = true;
                 }
                 Some(&bi) => {
@@ -263,9 +265,7 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     for (bi, bv) in base_ds.vars.iter().enumerate() {
         let key = bv.name.to_uppercase();
         // Get the DATA column if present (by name, case-insensitive).
-        let data_col_opt: Option<&Vec<Value>> = data_idx
-            .get(&key)
-            .map(|&di| &data_cols[di]);
+        let data_col_opt: Option<&Vec<Value>> = data_idx.get(&key).map(|&di| &data_cols[di]);
 
         match bv.ty {
             VarType::Num => {
@@ -287,7 +287,8 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
                         }
                     }
                 }
-                let ca = Float64Chunked::from_iter_options(bv.name.as_str().into(), vals.into_iter());
+                let ca =
+                    Float64Chunked::from_iter_options(bv.name.as_str().into(), vals.into_iter());
                 new_columns.push(ca.into_series().into());
             }
             VarType::Char => {

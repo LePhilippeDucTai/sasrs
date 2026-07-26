@@ -90,11 +90,41 @@ pub(super) fn write_outtree(
         .map_err(|e| SasError::runtime(format!("CLUSTER OUTTREE= build failed: {e}")))?;
 
     let mut vars: Vec<VarMeta> = vec![
-        VarMeta { name: "_NAME_".into(), ty: VarType::Char, length: 32, format: None, label: None },
-        VarMeta { name: "_PARENT_".into(), ty: VarType::Char, length: 32, format: None, label: None },
-        VarMeta { name: "_NCL_".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "_FREQ_".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "_HEIGHT_".into(), ty: VarType::Num, length: 8, format: None, label: None },
+        VarMeta {
+            name: "_NAME_".into(),
+            ty: VarType::Char,
+            length: 32,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "_PARENT_".into(),
+            ty: VarType::Char,
+            length: 32,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "_NCL_".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "_FREQ_".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "_HEIGHT_".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     for name in var_names {
         vars.push(VarMeta {
@@ -122,7 +152,7 @@ pub(super) fn write_outtree(
 }
 
 pub(super) fn label_of_value(v: &crate::value::Value) -> String {
-    use crate::value::{format_best, Value};
+    use crate::value::{Value, format_best};
     match v {
         Value::Char(s) => s.trim().to_string(),
         Value::Num(f) => format_best(*f, 12).trim().to_string(),

@@ -41,16 +41,22 @@ fn array_auto_named_elements() {
 #[test]
 fn array_size_mismatch_errors() {
     let mut s = session();
-    let err = compile_src("data o; array a{3} x y; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; array a{3} x y; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("does not match"), "got: {err}");
-    let err = compile_src("data o; array a{2} x y z; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; array a{2} x y z; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("does not match"), "got: {err}");
 }
 
 #[test]
 fn array_star_without_vars_errors() {
     let mut s = session();
-    let err = compile_src("data o; array a{*}; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; array a{*}; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("zero elements"), "got: {err}");
 }
 
@@ -69,9 +75,11 @@ fn array_redeclaration_errors() {
 #[test]
 fn array_indexed_assignment_marks_elements_initialized() {
     let mut s = session();
-    let prog =
-        compile_src("data o; array a{3} x y z; do i = 1 to 3; a{i} = i; end; run;", &mut s)
-            .unwrap();
+    let prog = compile_src(
+        "data o; array a{3} x y z; do i = 1 to 3; a{i} = i; end; run;",
+        &mut s,
+    )
+    .unwrap();
     // x, y, z assignés via l'indice : pas de NOTE uninitialized.
     assert!(prog.uninitialized.is_empty());
 }
@@ -97,13 +105,17 @@ fn array_indexed_rvalue_infers_element_type() {
 fn undeclared_array_lvalue_errors() {
     let mut s = session();
     // Forme accolades.
-    let err = compile_src("data o; nosuch{1} = 0; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; nosuch{1} = 0; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(
         err.to_string().contains("Undeclared array referenced"),
         "got: {err}"
     );
     // Forme parenthèses : validée array à la COMPILATION.
-    let err = compile_src("data o; nosuch(1) = 0; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; nosuch(1) = 0; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(
         err.to_string().contains("Undeclared array referenced"),
         "got: {err}"
@@ -113,7 +125,9 @@ fn undeclared_array_lvalue_errors() {
 #[test]
 fn undeclared_array_rvalue_errors() {
     let mut s = session();
-    let err = compile_src("data o; x = nosuch{1}; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; x = nosuch{1}; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(
         err.to_string().contains("Undeclared array referenced"),
         "got: {err}"
@@ -135,9 +149,13 @@ fn dim_of_array_does_not_create_variable() {
 fn bare_array_name_reference_errors() {
     let mut s = session();
     // Un nom d'array n'est pas une variable : référence nue illégale.
-    let err = compile_src("data o; array a{2} x y; z = a; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; array a{2} x y; z = a; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("Illegal reference"), "got: {err}");
-    let err = compile_src("data o; array a{2} x y; a = 1; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; array a{2} x y; a = 1; run;", &mut s)
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("Illegal reference"), "got: {err}");
 }
 
@@ -148,9 +166,18 @@ fn put_width_parsing() {
     assert_eq!(put_width(&[Expr::Num(1.0), Expr::Var("words".into())]), 200);
     assert_eq!(put_width(&[Expr::Num(1.0)]), 200);
     // Forme w.d : la largeur est `w`, pas le nombre de décimales.
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("dollar10.2".into())]), 10);
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("percent8.1".into())]), 8);
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("comma12.".into())]), 12);
+    assert_eq!(
+        put_width(&[Expr::Num(1.0), Expr::Str("dollar10.2".into())]),
+        10
+    );
+    assert_eq!(
+        put_width(&[Expr::Num(1.0), Expr::Str("percent8.1".into())]),
+        8
+    );
+    assert_eq!(
+        put_width(&[Expr::Num(1.0), Expr::Str("comma12.".into())]),
+        12
+    );
 }
 
 // ── Options de dataset + OUTPUT ciblé (M2, lot 4) ────────────────────
@@ -182,8 +209,11 @@ fn input_drop_filters_pdv() {
 fn input_rename_renames_pdv_slot() {
     let mut s = session();
     write_class(&s, "inp");
-    let prog = compile_src("data o; set inp(rename=(age=years)); x = years; run;", &mut s)
-        .unwrap();
+    let prog = compile_src(
+        "data o; set inp(rename=(age=years)); x = years; run;",
+        &mut s,
+    )
+    .unwrap();
     assert!(prog.pdv.slot("years").is_some());
     assert!(prog.pdv.slot("age").is_none());
     // Le slot renommé reste from_input (pas de reset par itération).
@@ -210,7 +240,8 @@ fn input_where_unknown_variable_errors() {
         .err()
         .unwrap();
     assert!(
-        err.to_string().contains("Variable nosuch is not on file WORK.INP."),
+        err.to_string()
+            .contains("Variable nosuch is not on file WORK.INP."),
         "got: {err}"
     );
 }
@@ -329,7 +360,9 @@ fn incompatible_types_across_set_datasets_error() {
         .unwrap()
         .write("cage", &SasDataset { df, vars })
         .unwrap();
-    let err = compile_src("data o; set a cage; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; set a cage; run;", &mut s)
+        .err()
+        .unwrap();
     assert_eq!(
         err.to_string(),
         "Variable Age has been defined as both character and numeric."
@@ -339,7 +372,9 @@ fn incompatible_types_across_set_datasets_error() {
 #[test]
 fn by_without_set_errors() {
     let mut s = session();
-    let err = compile_src("data o; by x; x = 1; run;", &mut s).err().unwrap();
+    let err = compile_src("data o; by x; x = 1; run;", &mut s)
+        .err()
+        .unwrap();
     assert_eq!(
         err.to_string(),
         "No SET, MERGE, UPDATE, or MODIFY statement."
@@ -363,7 +398,8 @@ fn by_variable_missing_from_one_dataset_errors() {
         .err()
         .unwrap();
     assert!(
-        err.to_string().contains("BY variable nosuch is not on input data set"),
+        err.to_string()
+            .contains("BY variable nosuch is not on input data set"),
         "got: {err}"
     );
 }
@@ -374,8 +410,7 @@ fn renamed_but_dropped_input_variable_is_ignored() {
     write_class(&s, "inp");
     // age est dropée : le rename la concernant est ignoré (pas d'erreur,
     // pas de variable years).
-    let prog = compile_src("data o; set inp(drop=age rename=(age=years)); run;", &mut s)
-        .unwrap();
+    let prog = compile_src("data o; set inp(drop=age rename=(age=years)); run;", &mut s).unwrap();
     assert!(prog.pdv.slot("years").is_none());
     assert!(prog.pdv.slot("age").is_none());
     assert!(prog.pdv.slot("name").is_some());

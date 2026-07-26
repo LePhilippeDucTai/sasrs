@@ -47,10 +47,8 @@ fn test_one_way_anova_simple() {
 
 #[test]
 fn test_parse_model_multi_dep() {
-    let ast = parse_anova(
-        "proc anova; class sex; model height weight = sex; means sex; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_anova("proc anova; class sex; model height weight = sex; means sex; run;").unwrap();
     let m = ast.model.unwrap();
     assert_eq!(m.dependents, vec!["height", "weight"]);
     assert_eq!(m.effects, vec!["sex"]);
@@ -69,10 +67,7 @@ fn test_parse_class() {
 
 #[test]
 fn test_parse_interaction_terms() {
-    let ast = parse_anova(
-        "proc anova; class a b; model y = a b a*b; run;",
-    )
-    .unwrap();
+    let ast = parse_anova("proc anova; class a b; model y = a b a*b; run;").unwrap();
     let m = ast.model.unwrap();
     assert_eq!(m.effects, vec!["a", "b", "a*b"]);
     assert_eq!(
@@ -90,5 +85,8 @@ fn test_parse_three_way_interaction() {
     let ast = parse_anova("proc anova; class a b c; model y = a*b*c; run;").unwrap();
     let m = ast.model.unwrap();
     assert_eq!(m.effects, vec!["a*b*c"]);
-    assert_eq!(m.terms, vec![vec!["a".to_string(), "b".to_string(), "c".to_string()]]);
+    assert_eq!(
+        m.terms,
+        vec![vec!["a".to_string(), "b".to_string(), "c".to_string()]]
+    );
 }

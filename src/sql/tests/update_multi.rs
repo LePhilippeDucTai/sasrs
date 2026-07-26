@@ -12,10 +12,7 @@ fn update_basic() {
     let ds = read_work(&mut s, "T");
     assert!(ages(&ds).iter().all(|a| *a == 0.0));
     let log = s.log.into_string();
-    assert!(
-        log.contains("4 rows were updated in WORK.T."),
-        "log: {log}"
-    );
+    assert!(log.contains("4 rows were updated in WORK.T."), "log: {log}");
 }
 
 #[test]
@@ -48,10 +45,7 @@ fn update_with_where() {
     assert!(a.contains(&10.0)); // Al unchanged
     assert!(a.contains(&11.0)); // Di unchanged
     let log = s.log.into_string();
-    assert!(
-        log.contains("2 rows were updated in WORK.T."),
-        "log: {log}"
-    );
+    assert!(log.contains("2 rows were updated in WORK.T."), "log: {log}");
 }
 
 #[test]
@@ -87,10 +81,7 @@ fn update_nonexistent_table() {
     let mut ts = StatementStream::new(&file).unwrap();
     let prog = parse_sql_program(&mut ts).unwrap();
     let err = execute(&prog, &mut s).unwrap_err();
-    assert!(
-        err.to_string().contains("does not exist"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("does not exist"), "got: {err}");
 }
 
 #[test]
@@ -134,10 +125,7 @@ fn update_all_rows() {
     assert_eq!(heights.len(), 4);
     assert!(heights.iter().all(|h| *h == 1.0));
     let log = s.log.into_string();
-    assert!(
-        log.contains("4 rows were updated in WORK.T."),
-        "log: {log}"
-    );
+    assert!(log.contains("4 rows were updated in WORK.T."), "log: {log}");
 }
 
 #[test]

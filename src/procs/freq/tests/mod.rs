@@ -84,12 +84,18 @@ fn read_col(session: &Session, table: &str, col: &str) -> Vec<Value> {
 fn one_way_listing(opts: impl Fn(&mut TableRequest)) -> String {
     let mut session = make_session();
     let df = df!["x" => [Some(1.0_f64), Some(1.0), Some(2.0)]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let mut req = tr(&["x"], false, None);
     opts(&mut req);
     let ast = FreqAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         tables: vec![req],
         weight: None,
         by: Vec::new(),
@@ -105,12 +111,18 @@ fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
         "c" => [1.0_f64, 2.0, 1.0, 1.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("r"), num_meta("c")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("r"), num_meta("c")],
+    };
     write_dataset(&mut session, "T", ds);
     let mut req = tr(&["r", "c"], false, None);
     opts(&mut req);
     let ast = FreqAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         tables: vec![req],
         weight: None,
         by: Vec::new(),
@@ -137,6 +149,6 @@ fn margins(freq: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, usize) {
     (row_tot, col_tot, grand)
 }
 
-mod parse;
 mod crosstab;
 mod list_n_way;
+mod parse;

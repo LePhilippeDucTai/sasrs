@@ -42,7 +42,12 @@ fn make_oracle_session() -> (Session, LogisticAst) {
         df: frame,
         vars: vec![num_meta("y"), num_meta("x"), num_meta("count")],
     };
-    session.libs.get("WORK").unwrap().write("COUNTS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("COUNTS", &ds)
+        .unwrap();
 
     let ast = LogisticAst {
         data_options: LogisticDataOptions {
@@ -190,7 +195,12 @@ fn test_execute_class_reproduces_binary_or() {
         df: frame,
         vars: vec![num_meta("y"), char_meta("x"), num_meta("count")],
     };
-    session.libs.get("WORK").unwrap().write("CCLASS", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("CCLASS", &ds)
+        .unwrap();
 
     let ast = LogisticAst {
         data_options: LogisticDataOptions {
@@ -241,7 +251,12 @@ fn tiny_link_session(link: Link) -> (Session, LogisticAst) {
         df: frame,
         vars: vec![num_meta("y"), num_meta("x")],
     };
-    session.libs.get("WORK").unwrap().write("TINY", &ds).unwrap();
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("TINY", &ds)
+        .unwrap();
     let ast = LogisticAst {
         data_options: LogisticDataOptions {
             input: Some(DatasetRef {
@@ -271,7 +286,10 @@ fn test_execute_probit_converges() {
     let listing = session.listing.into_string();
     assert!(listing.contains("binary probit"), "model line: {listing}");
     // Estimates must be finite (no NaN/inf printed).
-    assert!(!listing.contains("NaN") && !listing.contains("inf"), "{listing}");
+    assert!(
+        !listing.contains("NaN") && !listing.contains("inf"),
+        "{listing}"
+    );
     // No odds-ratio table for non-logit links.
     assert!(
         !listing.contains("Odds Ratio Estimates"),
@@ -285,7 +303,10 @@ fn test_execute_cloglog_converges() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("binary cloglog"), "model line: {listing}");
-    assert!(!listing.contains("NaN") && !listing.contains("inf"), "{listing}");
+    assert!(
+        !listing.contains("NaN") && !listing.contains("inf"),
+        "{listing}"
+    );
 }
 
 #[test]

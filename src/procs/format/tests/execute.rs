@@ -57,9 +57,7 @@ fn execute_round_trip_parse_and_execute() {
     use crate::value::Value;
 
     let mut session = make_session();
-    let source = SourceFile::new(
-        "proc format; value sexfmt 1='Male' 2='Female' other='?'; run;",
-    );
+    let source = SourceFile::new("proc format; value sexfmt 1='Male' 2='Female' other='?'; run;");
     let mut ts = StatementStream::new(&source).unwrap();
     ts.next(); // proc
     ts.next(); // format
@@ -75,10 +73,7 @@ fn execute_round_trip_parse_and_execute() {
         session.format_catalog.format(&Value::Num(2.0), &spec),
         "Female"
     );
-    assert_eq!(
-        session.format_catalog.format(&Value::Num(99.0), &spec),
-        "?"
-    );
+    assert_eq!(session.format_catalog.format(&Value::Num(99.0), &spec), "?");
 }
 
 #[test]
@@ -86,9 +81,7 @@ fn execute_invalue_numeric_registered_in_catalog() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;",
-    );
+    let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
     assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
@@ -97,7 +90,10 @@ fn execute_invalue_numeric_registered_in_catalog() {
 
     // NOTE logged for informat.
     let log = session.log.into_string();
-    assert!(log.contains("Informat GRADE has been output."), "log: {log}");
+    assert!(
+        log.contains("Informat GRADE has been output."),
+        "log: {log}"
+    );
 }
 
 #[test]
@@ -105,14 +101,22 @@ fn execute_invalue_char_dollar_registered() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;",
-    );
+    let session =
+        run_format_src("proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;");
 
     let spec = FormatSpec::parse("$SIZE.").unwrap();
-    assert_eq!(session.format_catalog.informat("S", &spec), Value::Char("Small".to_string()));
-    assert_eq!(session.format_catalog.informat("M", &spec), Value::Char("Medium".to_string()));
-    assert_eq!(session.format_catalog.informat("L", &spec), Value::Char("Large".to_string()));
+    assert_eq!(
+        session.format_catalog.informat("S", &spec),
+        Value::Char("Small".to_string())
+    );
+    assert_eq!(
+        session.format_catalog.informat("M", &spec),
+        Value::Char("Medium".to_string())
+    );
+    assert_eq!(
+        session.format_catalog.informat("L", &spec),
+        Value::Char("Large".to_string())
+    );
 }
 
 #[test]
@@ -120,13 +124,14 @@ fn execute_invalue_unmatched_returns_missing() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; invalue grade 'A'=4 'B'=3; run;",
-    );
+    let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
     // "X" not matched, no other → missing.
-    assert_eq!(session.format_catalog.informat("X", &spec), Value::missing());
+    assert_eq!(
+        session.format_catalog.informat("X", &spec),
+        Value::missing()
+    );
 }
 
 #[test]
@@ -134,13 +139,14 @@ fn execute_invalue_other_fallback() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; invalue grade 'A'=4 'B'=3 other=.; run;",
-    );
+    let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 other=.; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
     assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
-    assert_eq!(session.format_catalog.informat("Z", &spec), Value::missing());
+    assert_eq!(
+        session.format_catalog.informat("Z", &spec),
+        Value::missing()
+    );
 }
 
 #[test]
@@ -157,11 +163,17 @@ fn execute_invalue_and_value_coexist() {
 
     // VALUE format still works.
     let fspec = FormatSpec::parse("SEXFMT.").unwrap();
-    assert_eq!(session.format_catalog.format(&Value::Num(1.0), &fspec), "Male");
+    assert_eq!(
+        session.format_catalog.format(&Value::Num(1.0), &fspec),
+        "Male"
+    );
 
     // INVALUE informat also works.
     let ispec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &ispec), Value::Num(4.0));
+    assert_eq!(
+        session.format_catalog.informat("A", &ispec),
+        Value::Num(4.0)
+    );
 }
 
 // ── PICTURE execute tests (M18.3) ─────────────────────────────────────────
@@ -182,7 +194,10 @@ fn execute_picture_registered_and_applies() {
     );
     // NOTE logged.
     let log = session.log.into_string();
-    assert!(log.contains("Format DOLLARPIC has been output."), "log: {log}");
+    assert!(
+        log.contains("Format DOLLARPIC has been output."),
+        "log: {log}"
+    );
 }
 
 #[test]
@@ -190,11 +205,12 @@ fn execute_picture_mult_directive() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; picture pct low-high = '009.9%' (mult=100); run;",
-    );
+    let session = run_format_src("proc format; picture pct low-high = '009.9%' (mult=100); run;");
     let spec = FormatSpec::parse("PCT.").unwrap();
-    assert_eq!(session.format_catalog.format(&Value::Num(0.125), &spec), "  1.3%");
+    assert_eq!(
+        session.format_catalog.format(&Value::Num(0.125), &spec),
+        "  1.3%"
+    );
 }
 
 #[test]
@@ -202,9 +218,7 @@ fn execute_picture_with_width_right_justifies() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; picture p low-high = '009'; run;",
-    );
+    let session = run_format_src("proc format; picture p low-high = '009'; run;");
     let spec = FormatSpec::parse("P10.").unwrap();
     // Rendered "  5" then right-justified to width 10.
     let out = session.format_catalog.format(&Value::Num(5.0), &spec);
@@ -217,12 +231,13 @@ fn execute_picture_missing_value() {
     use crate::formats::FormatSpec;
     use crate::value::Value;
 
-    let session = run_format_src(
-        "proc format; picture p low-high = '009.99'; run;",
-    );
+    let session = run_format_src("proc format; picture p low-high = '009.99'; run;");
     let spec = FormatSpec::parse("P5.").unwrap();
     // Numeric missing intercepted before picture → missing char, right-justified.
-    assert_eq!(session.format_catalog.format(&Value::missing(), &spec), "    .");
+    assert_eq!(
+        session.format_catalog.format(&Value::missing(), &spec),
+        "    ."
+    );
 }
 
 #[test]
@@ -231,12 +246,13 @@ fn execute_picture_shadows_builtin_name() {
     use crate::value::Value;
 
     // Define a picture named COMMA (a builtin format name) — user picture wins.
-    let session = run_format_src(
-        "proc format; picture comma low-high = '009'; run;",
-    );
+    let session = run_format_src("proc format; picture comma low-high = '009'; run;");
     let spec = FormatSpec::parse("COMMA.").unwrap();
     // Builtin COMMA on 5 would give "5"; our picture '009' gives "  5".
-    assert_eq!(session.format_catalog.format(&Value::Num(5.0), &spec), "  5");
+    assert_eq!(
+        session.format_catalog.format(&Value::Num(5.0), &spec),
+        "  5"
+    );
 }
 
 #[test]

@@ -12,7 +12,9 @@ impl Runner {
         let Some(input) = &self.input else {
             return Err(SasError::runtime("SET statement without input data."));
         };
-        let Some((d, cur_keys)) = choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors) else {
+        let Some((d, cur_keys)) =
+            choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors)
+        else {
             // Tous les datasets épuisés : fin d'étape immédiate.
             return Ok(Flow::EndStep);
         };
@@ -40,7 +42,8 @@ impl Runner {
         // FIRST.var_i : première obs, ou clé j ≤ i différente de l'obs
         // précédente. LAST.var_i : dernière obs, ou clé j ≤ i différente
         // de l'obs SUIVANTE (la tête du prochain choix d'interclassement).
-        let next_keys = choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors).map(|(_, k)| k);
+        let next_keys =
+            choose_next(input, &self.set_cursor.filtered, &self.set_cursor.cursors).map(|(_, k)| k);
         for (i, flags) in self.ctx.by_flags.iter_mut().enumerate() {
             flags.1 = match &self.set_cursor.prev_keys {
                 None => true,
@@ -200,9 +203,8 @@ impl Runner {
                     continue;
                 }
                 for &slot in &input.datasets[d].var_slots {
-                    let owned_by_participant = (0..n_ds).any(|p| {
-                        n[p] > 0 && input.datasets[p].var_slots.contains(&slot)
-                    });
+                    let owned_by_participant =
+                        (0..n_ds).any(|p| n[p] > 0 && input.datasets[p].var_slots.contains(&slot));
                     if !owned_by_participant && !blank_slots.contains(&slot) {
                         blank_slots.push(slot);
                     }
@@ -253,17 +255,15 @@ impl Runner {
                         // j >= len : PERSISTANCE (pas de chargement).
                     }
                 }
-                let first: Vec<bool> = first_flags
-                    .iter()
-                    .map(|&f| f && j == 0)
-                    .collect();
-                let last: Vec<bool> = last_flags
-                    .iter()
-                    .map(|&l| l && j + 1 == max)
-                    .collect();
+                let first: Vec<bool> = first_flags.iter().map(|&f| f && j == 0).collect();
+                let last: Vec<bool> = last_flags.iter().map(|&l| l && j + 1 == max).collect();
                 plan.push(MergeObs {
                     // Blanchiment seulement à la 1re obs du groupe.
-                    blank_slots: if j == 0 { blank_slots.clone() } else { Vec::new() },
+                    blank_slots: if j == 0 {
+                        blank_slots.clone()
+                    } else {
+                        Vec::new()
+                    },
                     loads,
                     in_active: in_active.clone(),
                     first,

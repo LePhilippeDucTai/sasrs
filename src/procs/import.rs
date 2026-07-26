@@ -110,9 +110,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
             let tok = ts.peek().clone();
             let name = tok
                 .ident()
-                .ok_or_else(|| {
-                    SasError::parse("expected a DBMS name after DBMS=", tok.span)
-                })?
+                .ok_or_else(|| SasError::parse("expected a DBMS name after DBMS=", tok.span))?
                 .to_ascii_uppercase();
             ts.next();
             dbms = Some(parse_dbms(&name, tok.span)?);
@@ -192,12 +190,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
         }
     }
 
-    let datafile = datafile.ok_or_else(|| {
-        SasError::runtime("PROC IMPORT: DATAFILE= is required.")
-    })?;
-    let out = out.ok_or_else(|| {
-        SasError::runtime("PROC IMPORT: OUT= is required.")
-    })?;
+    let datafile =
+        datafile.ok_or_else(|| SasError::runtime("PROC IMPORT: DATAFILE= is required."))?;
+    let out = out.ok_or_else(|| SasError::runtime("PROC IMPORT: OUT= is required."))?;
     let dbms = dbms.unwrap_or(ImportDbms::Csv);
 
     Ok(ImportAst {
@@ -224,13 +219,21 @@ pub fn execute(ast: &ImportAst, session: &mut Session) -> Result<()> {
     let path = session.resolve_path(&ast.datafile);
     let df = CsvReadOptions::default()
         .with_has_header(ast.getnames)
-        .with_parse_options(
-            CsvParseOptions::default().with_separator(sep),
-        )
+        .with_parse_options(CsvParseOptions::default().with_separator(sep))
         .try_into_reader_with_file_path(Some(path))
-        .map_err(|e| SasError::runtime(format!("PROC IMPORT: cannot open '{}': {}", ast.datafile, e)))?
+        .map_err(|e| {
+            SasError::runtime(format!(
+                "PROC IMPORT: cannot open '{}': {}",
+                ast.datafile, e
+            ))
+        })?
         .finish()
-        .map_err(|e| SasError::runtime(format!("PROC IMPORT: error reading '{}': {}", ast.datafile, e)))?;
+        .map_err(|e| {
+            SasError::runtime(format!(
+                "PROC IMPORT: error reading '{}': {}",
+                ast.datafile, e
+            ))
+        })?;
 
     // --- Renommer les colonnes si GETNAMES=NO (Polars → VAR1, VAR2, …) ---
     let df = if !ast.getnames {
@@ -339,9 +342,7 @@ fn parse_delimiter_char(s: &str, span: crate::token::Span) -> Result<Option<u8>>
         return Ok(Some(bytes[0]));
     }
     Err(SasError::parse(
-        format!(
-            "DELIMITER value '{s}' must be a single ASCII character or a recognized mnemonic."
-        ),
+        format!("DELIMITER value '{s}' must be a single ASCII character or a recognized mnemonic."),
         span,
     ))
 }

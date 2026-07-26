@@ -58,7 +58,11 @@ impl Runner {
     }
 
     /// `replace()` (M17.2) — remplace les données de la clé courante (ou ajoute).
-    pub(super) fn hash_replace(&mut self, upper: &str, args: &[crate::ast::HashArg]) -> Result<i64> {
+    pub(super) fn hash_replace(
+        &mut self,
+        upper: &str,
+        args: &[crate::ast::HashArg],
+    ) -> Result<i64> {
         let named = self.hash_named_args(args)?;
         let key_vals = self.hash_key_values(upper, &named)?;
         let data_vals = self.hash_data_values(upper, &named)?;
@@ -193,7 +197,9 @@ impl Runner {
         let mut vars = Vec::with_capacity(col_names.len());
         for name in &col_names {
             let slot = self.pdv.slot(name).ok_or_else(|| {
-                SasError::runtime(format!("Hash variable {name} is not in the PDV for output."))
+                SasError::runtime(format!(
+                    "Hash variable {name} is not in the PDV for output."
+                ))
             })?;
             let v = &self.pdv.vars()[slot];
             vars.push(VarMeta {
@@ -227,13 +233,15 @@ impl Runner {
                 }
             }
         }
-        self.ctx.hash_outputs.push(crate::datastep::eval::HashOutput {
-            libref,
-            table,
-            display,
-            vars,
-            rows,
-        });
+        self.ctx
+            .hash_outputs
+            .push(crate::datastep::eval::HashOutput {
+                libref,
+                table,
+                display,
+                vars,
+                rows,
+            });
         Ok(0)
     }
 
@@ -300,7 +308,11 @@ impl Runner {
             }
         }
         if flat.is_empty() {
-            self.ctx.hash_iters.get_mut(iter_upper).expect("checked").pos = None;
+            self.ctx
+                .hash_iters
+                .get_mut(iter_upper)
+                .expect("checked")
+                .pos = None;
             return Ok(1);
         }
         let cur = self.ctx.hash_iters.get(iter_upper).expect("checked").pos;
@@ -327,13 +339,20 @@ impl Runner {
         };
         match new_pos {
             Some(p) => {
-                self.ctx.hash_iters.get_mut(iter_upper).expect("checked").pos = Some(p);
+                self.ctx
+                    .hash_iters
+                    .get_mut(iter_upper)
+                    .expect("checked")
+                    .pos = Some(p);
                 let (key, idx) = flat[p].clone();
                 let (key_vals, data_vals) = {
                     let obj = self.hash(&hash);
                     (
                         obj.key_values.get(&key).cloned().unwrap_or_default(),
-                        obj.rows.get(&key).map(|e| e[idx].clone()).unwrap_or_default(),
+                        obj.rows
+                            .get(&key)
+                            .map(|e| e[idx].clone())
+                            .unwrap_or_default(),
                     )
                 };
                 // Copie des clés puis des données dans le PDV.

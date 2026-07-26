@@ -1,4 +1,3 @@
-
 // ───────────────────────── AST ─────────────────────────
 
 #[derive(Debug, Clone)]
@@ -8,27 +7,66 @@ pub struct ImlProgram {
 
 #[derive(Debug, Clone)]
 pub enum ImlStmt {
-    Assign { var: String, expr: ImlExpr },
-    Print { items: Vec<ImlPrintItem> },
-    If { cond: ImlExpr, then_body: Vec<ImlStmt>, else_body: Vec<ImlStmt> },
-    DoLoop { var: String, from: ImlExpr, to: ImlExpr, by: Option<ImlExpr>, body: Vec<ImlStmt> },
-    DoWhile { cond: ImlExpr, body: Vec<ImlStmt> },
-    DoUntil { cond: ImlExpr, body: Vec<ImlStmt> },
+    Assign {
+        var: String,
+        expr: ImlExpr,
+    },
+    Print {
+        items: Vec<ImlPrintItem>,
+    },
+    If {
+        cond: ImlExpr,
+        then_body: Vec<ImlStmt>,
+        else_body: Vec<ImlStmt>,
+    },
+    DoLoop {
+        var: String,
+        from: ImlExpr,
+        to: ImlExpr,
+        by: Option<ImlExpr>,
+        body: Vec<ImlStmt>,
+    },
+    DoWhile {
+        cond: ImlExpr,
+        body: Vec<ImlStmt>,
+    },
+    DoUntil {
+        cond: ImlExpr,
+        body: Vec<ImlStmt>,
+    },
     /// CALL routine(args). Les arguments de sortie (CALL QR/SVDCD/EIGEN) sont
     /// des lvalues (noms de matrices à affecter) — résolus à l'exécution.
-    Call { func: String, args: Vec<ImlExpr> },
+    Call {
+        func: String,
+        args: Vec<ImlExpr>,
+    },
     /// `CREATE ds FROM mat [COLNAME=cn];`
-    Create { ds: String, from: String, colname: Option<ImlExpr> },
+    Create {
+        ds: String,
+        from: String,
+        colname: Option<ImlExpr>,
+    },
     /// `APPEND FROM mat;`
-    Append { from: String },
+    Append {
+        from: String,
+    },
     /// `CLOSE ds;`
-    Close { ds: String },
+    Close {
+        ds: String,
+    },
     /// `USE ds;`
-    Use { ds: String },
+    Use {
+        ds: String,
+    },
     /// `READ ALL VAR {vars} INTO mat;`
-    ReadAll { vars: Vec<String>, into: String },
+    ReadAll {
+        vars: Vec<String>,
+        into: String,
+    },
     /// Statements I/O non encore implémentés (erreur propre à l'exécution).
-    UnsupportedIo { msg: String },
+    UnsupportedIo {
+        msg: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -43,11 +81,25 @@ pub enum ImlExpr {
     /// Littéral de liste de chaînes : `{"x" "y"}`. Utilisé pour COLNAME=.
     StrList(Vec<String>),
     Var(String),
-    BinOp { op: ImlOp, left: Box<ImlExpr>, right: Box<ImlExpr> },
-    Unary { op: UnaryOp, expr: Box<ImlExpr> },
+    BinOp {
+        op: ImlOp,
+        left: Box<ImlExpr>,
+        right: Box<ImlExpr>,
+    },
+    Unary {
+        op: UnaryOp,
+        expr: Box<ImlExpr>,
+    },
     Transpose(Box<ImlExpr>),
-    Subscript { mat: Box<ImlExpr>, row: ImlIndex, col: ImlIndex },
-    FnCall { name: String, args: Vec<ImlExpr> },
+    Subscript {
+        mat: Box<ImlExpr>,
+        row: ImlIndex,
+        col: ImlIndex,
+    },
+    FnCall {
+        name: String,
+        args: Vec<ImlExpr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -60,8 +112,18 @@ pub enum ImlIndex {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImlOp {
-    Add, Sub, Mul, Hadamard, Div, Kronecker,
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Add,
+    Sub,
+    Mul,
+    Hadamard,
+    Div,
+    Kronecker,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

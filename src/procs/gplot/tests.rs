@@ -79,8 +79,7 @@ fn execute_without_ods_on_notes_not_enabled() {
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
     assert!(
-        log.contains("ODS GRAPHICS is not enabled")
-            && log.contains("PROC GPLOT"),
+        log.contains("ODS GRAPHICS is not enabled") && log.contains("PROC GPLOT"),
         "log: {log}"
     );
 }
@@ -201,8 +200,7 @@ fn build_series_two_y_vars_makes_two_series() {
         vars: vec![mk("x"), mk("y1"), mk("y2")],
     };
     let ast = parse_gplot("proc gplot data=work.m; plot (y1 y2)*x; run;").unwrap();
-    let series =
-        graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
+    let series = graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
     assert_eq!(series.len(), 2, "expected one series per Y var");
     assert_eq!(series[0].0.len(), 3);
     assert_eq!(series[1].0.len(), 3);
@@ -236,8 +234,7 @@ fn build_series_group_makes_one_series_per_level() {
         ],
     };
     let ast = parse_gplot("proc gplot data=work.m; plot y*x=g; run;").unwrap();
-    let series =
-        graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
+    let series = graphics_impl::build_series(&ds, &ast.plots[0], &ast.symbols).unwrap();
     assert_eq!(series.len(), 2, "expected one series per group level");
     // 2 niveaux (a, b) avec 2 points chacun.
     assert_eq!(series[0].0.len(), 2);

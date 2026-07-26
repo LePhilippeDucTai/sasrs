@@ -32,7 +32,10 @@ pub(super) fn scan_normalized(session: &Session, lib: &str, table: &str) -> Resu
 /// est abaissée récursivement. Une vue est reconnue dans l'espace WORK
 /// (libref absent / `WORK`) par son nom UPPERCASE présent dans
 /// `Session.views`. Sinon → `scan_normalized` (table physique / dictionnaire).
-pub(super) fn scan_source(session: &mut Session, item: &crate::sql::ast::FromItem) -> Result<LazyFrame> {
+pub(super) fn scan_source(
+    session: &mut Session,
+    item: &crate::sql::ast::FromItem,
+) -> Result<LazyFrame> {
     if let Some(sub) = &item.subquery {
         return lower_select(sub, session);
     }
@@ -74,7 +77,11 @@ pub(super) fn build_from(query: &SelectStmt, session: &mut Session) -> Result<La
     Ok(lf)
 }
 
-pub(super) fn apply_join(lf: LazyFrame, rhs: LazyFrame, join: &crate::sql::ast::Join) -> Result<LazyFrame> {
+pub(super) fn apply_join(
+    lf: LazyFrame,
+    rhs: LazyFrame,
+    join: &crate::sql::ast::Join,
+) -> Result<LazyFrame> {
     let how = match join.kind {
         JoinKind::Inner => JoinType::Inner,
         JoinKind::Left => JoinType::Left,
@@ -109,7 +116,9 @@ pub(super) fn apply_join(lf: LazyFrame, rhs: LazyFrame, join: &crate::sql::ast::
         // ON non-equi : cross join puis filter.
         let pred = sql_expr_to_polars(on, &Ctx::empty())?;
         let args = JoinArgs::new(JoinType::Cross);
-        Ok(lf.join(rhs, [] as [Expr; 0], [] as [Expr; 0], args).filter(pred))
+        Ok(lf
+            .join(rhs, [] as [Expr; 0], [] as [Expr; 0], args)
+            .filter(pred))
     }
 }
 

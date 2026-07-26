@@ -113,7 +113,12 @@ impl MacroEngine {
     /// `%sysmexist`, `%sysget`). Résout les `&refs` de l'argument puis rogne les
     /// blancs et un éventuel `&` de tête (SAS accepte `%symexist(&x)`). Rend
     /// `(nom, index après la `)`)`, ou `None` si la parenthèse manque.
-    pub(super) fn read_name_arg(&mut self, chars: &[char], i: usize, kw: &str) -> Option<(String, usize)> {
+    pub(super) fn read_name_arg(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        kw: &str,
+    ) -> Option<(String, usize)> {
         let mut j = i + 1 + kw.len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -129,7 +134,12 @@ impl MacroEngine {
 
     /// Consomme `%symexist ( name )`. Rend `1` si la variable macro existe (dans
     /// une portée locale OU globale), `0` sinon. Rend l'index après la `)`.
-    pub(super) fn consume_symexist(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_symexist(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let (name, after) = self.read_name_arg(chars, i, "symexist")?;
         let exists = self.lookup(&name).is_some();
         out.push_str(if exists { "1" } else { "0" });
@@ -138,7 +148,12 @@ impl MacroEngine {
 
     /// Consomme `%sysmexist ( name )`. Rend `1` si la macro (définie via
     /// `%macro`) existe, `0` sinon. Rend l'index après la `)`.
-    pub(super) fn consume_sysmexist(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_sysmexist(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let (name, after) = self.read_name_arg(chars, i, "sysmexist")?;
         let exists = self.macros.contains_key(&name.to_uppercase());
         out.push_str(if exists { "1" } else { "0" });
@@ -149,7 +164,12 @@ impl MacroEngine {
     /// nommée. Une variable inexistante rend la CHAÎNE VIDE (SAS émet un WARNING ;
     /// on se contente de produire vide pour rester déterministe). Cf. la note de
     /// déterminisme dans l'en-tête du module. Rend l'index après la `)`.
-    pub(super) fn consume_sysget(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(super) fn consume_sysget(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let (name, after) = self.read_name_arg(chars, i, "sysget")?;
         if let Ok(v) = std::env::var(&name) {
             out.push_str(&v);
@@ -240,12 +260,30 @@ pub(super) struct MacroFn {
 /// L'ordre n'est pas sémantique (lookup linéaire par nom exact) ; il suit
 /// l'ordre des anciens bras `match` pour la lisibilité.
 static STRING_FNS: &[MacroFn] = &[
-    MacroFn { name: "upcase", eval: fn_upcase },
-    MacroFn { name: "lowcase", eval: fn_lowcase },
-    MacroFn { name: "substr", eval: fn_substr },
-    MacroFn { name: "scan", eval: fn_scan },
-    MacroFn { name: "index", eval: fn_index },
-    MacroFn { name: "length", eval: fn_length },
+    MacroFn {
+        name: "upcase",
+        eval: fn_upcase,
+    },
+    MacroFn {
+        name: "lowcase",
+        eval: fn_lowcase,
+    },
+    MacroFn {
+        name: "substr",
+        eval: fn_substr,
+    },
+    MacroFn {
+        name: "scan",
+        eval: fn_scan,
+    },
+    MacroFn {
+        name: "index",
+        eval: fn_index,
+    },
+    MacroFn {
+        name: "length",
+        eval: fn_length,
+    },
 ];
 
 /// Recherche une fonction chaîne macro par son nom logique (déjà q-strippé,

@@ -37,12 +37,11 @@ use crate::error::SasError;
 use crate::value::Value;
 use std::collections::HashMap;
 
-
-mod ops;
 mod call;
+mod ops;
 
-pub(crate) use ops::*;
 use call::*;
+pub(crate) use ops::*;
 
 pub struct EvalCtx {
     pub missing_generated: u32,

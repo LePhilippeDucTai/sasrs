@@ -29,8 +29,20 @@ fn write_input(session: &Session) {
     )
     .unwrap();
     let vars = vec![
-        VarMeta { name: "Age".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "Name".into(), ty: VarType::Char, length: 7, format: None, label: None },
+        VarMeta {
+            name: "Age".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "Name".into(),
+            ty: VarType::Char,
+            length: 7,
+            format: None,
+            label: None,
+        },
     ];
     session
         .libs
@@ -57,7 +69,10 @@ fn run_capture(src: &str, vectorize: bool) -> (SasDataset, String) {
     write_input(&s);
     let prog = parse_compile(src, &mut s);
     if vectorize {
-        assert!(eligible(&prog), "étape attendue éligible au fast-path : {src}");
+        assert!(
+            eligible(&prog),
+            "étape attendue éligible au fast-path : {src}"
+        );
     }
     execute(prog, &mut s).unwrap();
     let out = s.libs.get("WORK").unwrap().read("out").unwrap().0;
@@ -205,5 +220,8 @@ fn ineligible_step_falls_back_under_flag() {
     let out = s.libs.get("WORK").unwrap().read("out").unwrap().0;
     // age > 13 : seul Alfred (14) ; `.`, `.A` et 13 sont faux.
     assert_eq!(out.n_obs(), 1);
-    assert_eq!(out.df.column("Name").unwrap().str().unwrap().get(0), Some("Alfred"));
+    assert_eq!(
+        out.df.column("Name").unwrap().str().unwrap().get(0),
+        Some("Alfred")
+    );
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::ast::{BinaryOp, Expr, UnaryOp};
-use crate::value::{MissingKind, VarType, Value};
 use crate::datastep::pdv::PdvVar;
+use crate::value::{MissingKind, Value, VarType};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

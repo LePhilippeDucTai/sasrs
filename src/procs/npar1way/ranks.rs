@@ -48,7 +48,11 @@ pub(super) struct NparResult {
 pub(super) fn midranks(values: &[f64]) -> (Vec<f64>, Vec<usize>) {
     let n = values.len();
     let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_by(|&a, &b| values[a].partial_cmp(&values[b]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&a, &b| {
+        values[a]
+            .partial_cmp(&values[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut ranks = vec![0.0_f64; n];
     let mut tie_sizes: Vec<usize> = Vec::new();
@@ -129,7 +133,11 @@ pub(super) fn analyze(groups: &[Vec<f64>]) -> NparResult {
         } else {
             f64::NAN
         };
-        let h = if tie_factor > 0.0 { h_raw / tie_factor } else { h_raw };
+        let h = if tie_factor > 0.0 {
+            h_raw / tie_factor
+        } else {
+            h_raw
+        };
         let df = k.saturating_sub(1);
         let p = if df >= 1 && h.is_finite() {
             (1.0 - chisq_cdf(h, df as f64)).clamp(0.0, 1.0)

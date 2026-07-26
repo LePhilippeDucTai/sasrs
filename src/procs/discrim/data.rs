@@ -12,9 +12,7 @@ pub(super) fn resolve_and_decode(
         ds.vars
             .iter()
             .position(|m| m.name.eq_ignore_ascii_case(nm))
-            .ok_or_else(|| {
-                SasError::runtime(format!("Variable {} not found.", nm.to_uppercase()))
-            })
+            .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", nm.to_uppercase())))
     };
 
     let class_idx = find_col(class_name)?;

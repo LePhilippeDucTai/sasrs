@@ -96,10 +96,7 @@ fn set_two_datasets_without_by_concatenates() {
     write_num_ds(&s, "b", &[("x", some(&[2.0, 3.0, 4.0]))]);
     let stats = run("data out; set a b; run;", &mut s).unwrap();
     // Tout a, puis tout b.
-    assert_eq!(
-        col(&s, "out", "x"),
-        some(&[1.0, 3.0, 5.0, 2.0, 3.0, 4.0])
-    );
+    assert_eq!(col(&s, "out", "x"), some(&[1.0, 3.0, 5.0, 2.0, 3.0, 4.0]));
     assert_eq!(
         stats.read,
         vec![("WORK.A".to_string(), 3), ("WORK.B".to_string(), 3)]
@@ -116,12 +113,18 @@ fn set_by_interleaves_sorted_datasets_with_union_and_retained_vars() {
     write_num_ds(
         &s,
         "a",
-        &[("x", some(&[1.0, 3.0, 5.0])), ("u", some(&[10.0, 30.0, 50.0]))],
+        &[
+            ("x", some(&[1.0, 3.0, 5.0])),
+            ("u", some(&[10.0, 30.0, 50.0])),
+        ],
     );
     write_num_ds(
         &s,
         "b",
-        &[("x", some(&[2.0, 3.0, 4.0])), ("v", some(&[200.0, 300.0, 400.0]))],
+        &[
+            ("x", some(&[2.0, 3.0, 4.0])),
+            ("v", some(&[200.0, 300.0, 400.0])),
+        ],
     );
     let stats = run(
         "data out; set a b; by x; f = first.x; l = last.x; run;",
@@ -130,31 +133,36 @@ fn set_by_interleaves_sorted_datasets_with_union_and_retained_vars() {
     .unwrap();
     // Interclassement par x croissant ; égalité (x=3) → a (premier du
     // SET) avant b.
-    assert_eq!(
-        col(&s, "out", "x"),
-        some(&[1.0, 2.0, 3.0, 3.0, 4.0, 5.0])
-    );
+    assert_eq!(col(&s, "out", "x"), some(&[1.0, 2.0, 3.0, 3.0, 4.0, 5.0]));
     // u/v : RETAIN implicite des variables de SET — une variable
     // absente du dataset de l'obs courante GARDE sa valeur précédente
     // (et reste missing avant sa première lecture).
     assert_eq!(
         col(&s, "out", "u"),
-        vec![Some(10.0), Some(10.0), Some(30.0), Some(30.0), Some(30.0), Some(50.0)]
+        vec![
+            Some(10.0),
+            Some(10.0),
+            Some(30.0),
+            Some(30.0),
+            Some(30.0),
+            Some(50.0)
+        ]
     );
     assert_eq!(
         col(&s, "out", "v"),
-        vec![None, Some(200.0), Some(200.0), Some(300.0), Some(400.0), Some(400.0)]
+        vec![
+            None,
+            Some(200.0),
+            Some(200.0),
+            Some(300.0),
+            Some(400.0),
+            Some(400.0)
+        ]
     );
     // FIRST.x / LAST.x : le groupe x=3 a deux obs ; LAST. de la
     // dernière obs globale vaut 1.
-    assert_eq!(
-        col(&s, "out", "f"),
-        some(&[1.0, 1.0, 1.0, 0.0, 1.0, 1.0])
-    );
-    assert_eq!(
-        col(&s, "out", "l"),
-        some(&[1.0, 1.0, 0.0, 1.0, 1.0, 1.0])
-    );
+    assert_eq!(col(&s, "out", "f"), some(&[1.0, 1.0, 1.0, 0.0, 1.0, 1.0]));
+    assert_eq!(col(&s, "out", "l"), some(&[1.0, 1.0, 0.0, 1.0, 1.0, 1.0]));
     assert_eq!(
         stats.read,
         vec![("WORK.A".to_string(), 3), ("WORK.B".to_string(), 3)]
@@ -222,11 +230,7 @@ fn stop_ends_step_without_output() {
 fn stop_inside_do_ends_step() {
     let mut s = session();
     write_class(&s, "inp");
-    let stats = run(
-        "data out; set inp; do i = 1 to 10; stop; end; run;",
-        &mut s,
-    )
-    .unwrap();
+    let stats = run("data out; set inp; do i = 1 to 10; stop; end; run;", &mut s).unwrap();
     // STOP au premier tour de la première itération : rien d'écrit,
     // une seule ligne lue.
     assert_eq!(stats.read, vec![("WORK.INP".to_string(), 1)]);
@@ -241,10 +245,7 @@ fn no_input_runs_single_iteration() {
     assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 1, 2)]);
     let ds = read_work(&s, "out");
     assert_eq!(ds.n_obs(), 1);
-    assert_eq!(
-        ds.df.column("y").unwrap().str().unwrap().get(0),
-        Some("ab")
-    );
+    assert_eq!(ds.df.column("y").unwrap().str().unwrap().get(0), Some("ab"));
 }
 
 #[test]
@@ -335,11 +336,21 @@ fn special_missings_keep_identity_through_parquet_roundtrip() {
     assert!(at("y").is_some_and(f64::is_nan));
     assert_eq!(at("z"), None);
     // Et chaque missing garde SON IDENTITÉ au décodage.
-    assert_eq!(num_to_value(at("x")), Value::Missing(MissingKind::Letter(0)));
-    assert_eq!(num_to_value(at("y")), Value::Missing(MissingKind::Underscore));
+    assert_eq!(
+        num_to_value(at("x")),
+        Value::Missing(MissingKind::Letter(0))
+    );
+    assert_eq!(
+        num_to_value(at("y")),
+        Value::Missing(MissingKind::Underscore)
+    );
     assert_eq!(num_to_value(at("z")), Value::missing());
     // x ≠ y ≠ z par sas_cmp (ordre total : ._ < . < .a).
-    let (x, y, z) = (num_to_value(at("x")), num_to_value(at("y")), num_to_value(at("z")));
+    let (x, y, z) = (
+        num_to_value(at("x")),
+        num_to_value(at("y")),
+        num_to_value(at("z")),
+    );
     assert_ne!(x.sas_cmp(&y), std::cmp::Ordering::Equal);
     assert_ne!(x.sas_cmp(&z), std::cmp::Ordering::Equal);
     assert_ne!(y.sas_cmp(&z), std::cmp::Ordering::Equal);

@@ -45,11 +45,20 @@ fn dataset_ref_one_and_two_level() {
     let src = SourceFile::new("a mylib.b ;");
     let mut ts = stream(&src);
     let r1 = ts.parse_dataset_ref().unwrap();
-    assert_eq!(r1, DatasetRef { libref: None, name: "a".into() });
+    assert_eq!(
+        r1,
+        DatasetRef {
+            libref: None,
+            name: "a".into()
+        }
+    );
     let r2 = ts.parse_dataset_ref().unwrap();
     assert_eq!(
         r2,
-        DatasetRef { libref: Some("mylib".into()), name: "b".into() }
+        DatasetRef {
+            libref: Some("mylib".into()),
+            name: "b".into()
+        }
     );
     assert_eq!(ts.peek().kind, TokenKind::Semi);
 }
@@ -100,7 +109,9 @@ fn macro_call_errors_and_recovers() {
     let src = SourceFile::new("%let x = 1; run;");
     let mut ts = stream(&src);
     let (block, _) = ts.next_block().unwrap();
-    let Err(err) = block else { panic!("expected an error") };
+    let Err(err) = block else {
+        panic!("expected an error")
+    };
     assert!(err.to_string().contains("macro facility"));
     // Récupération : le bloc suivant est le run; isolé.
     let (block, _) = ts.next_block().unwrap();
@@ -112,7 +123,9 @@ fn unknown_statement_errors_and_recovers() {
     let src = SourceFile::new("frobnicate a b; run;");
     let mut ts = stream(&src);
     let (block, _) = ts.next_block().unwrap();
-    let Err(err) = block else { panic!("expected an error") };
+    let Err(err) = block else {
+        panic!("expected an error")
+    };
     assert!(err.to_string().contains("FROBNICATE"));
     let (block, _) = ts.next_block().unwrap();
     assert!(matches!(block.unwrap(), Block::Empty));

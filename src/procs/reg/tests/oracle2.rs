@@ -166,7 +166,10 @@ fn test_oracle_press_statistic() {
 #[test]
 fn test_oracle_weight_ones_equals_ols() {
     let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 1.5 + 2.0 * a + (a * 0.3).cos())
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1], n);
     let ols = ols_fit(&x, &y).unwrap();
@@ -203,7 +206,11 @@ fn test_oracle_weighted_normal_equations() {
     }
     for a in 0..p {
         let lhs: f64 = (0..p).map(|b| xtwx[a][b] * fit.beta[b]).sum();
-        assert!((lhs - xtwy[a]).abs() < 1e-7, "normal eq row {a}: {lhs} vs {}", xtwy[a]);
+        assert!(
+            (lhs - xtwy[a]).abs() < 1e-7,
+            "normal eq row {a}: {lhs} vs {}",
+            xtwy[a]
+        );
     }
 }
 
@@ -211,7 +218,10 @@ fn test_oracle_weighted_normal_equations() {
 #[test]
 fn test_oracle_weight_constant_scale_invariance() {
     let x1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let y: Vec<f64> = x1.iter().map(|&a| 3.0 - 0.7 * a + (a * 0.4).sin()).collect();
+    let y: Vec<f64> = x1
+        .iter()
+        .map(|&a| 3.0 - 0.7 * a + (a * 0.4).sin())
+        .collect();
     let n = y.len();
     let x = design(true, &[&x1], n);
     let ols = ols_fit(&x, &y).unwrap();
@@ -241,7 +251,10 @@ fn test_oracle_freq_two_doubles_df() {
         };
         session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
         let mut ast = single_model_ast(
-            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
             basic_model("y", &["x"]),
         );
         if with_freq {
@@ -254,8 +267,14 @@ fn test_oracle_freq_two_doubles_df() {
     let freq = render(true);
     // No FREQ: error df = n − 2 = 4; Corrected Total df = 5.
     // FREQ=2: error df = 2n − 2 = 10; Corrected Total df = 11; Used = 12.
-    assert!(plain.contains("Number of Observations Used         6"), "{plain}");
-    assert!(freq.contains("Number of Observations Used         12"), "{freq}");
+    assert!(
+        plain.contains("Number of Observations Used         6"),
+        "{plain}"
+    );
+    assert!(
+        freq.contains("Number of Observations Used         12"),
+        "{freq}"
+    );
     assert!(freq.contains("Corrected Total"), "{freq}");
 }
 
@@ -280,7 +299,10 @@ fn test_oracle_freq_ones_equals_none() {
     mk(&mut s1);
     mk(&mut s2);
     let base = single_model_ast(
-        DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+        DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        },
         basic_model("y", &["x"]),
     );
     let mut with_freq = base.clone();
@@ -310,7 +332,10 @@ fn test_oracle_by_single_group_matches_body() {
         };
         session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
         let mut ast = single_model_ast(
-            DatasetRef { libref: Some("WORK".into()), name: "T".into() },
+            DatasetRef {
+                libref: Some("WORK".into()),
+                name: "T".into(),
+            },
             basic_model("y", &["x"]),
         );
         if with_by {
@@ -410,8 +435,7 @@ fn test_oracle_simple_stats() {
 #[test]
 fn test_oracle_outest_parms_row() {
     let (_x, _y, fit, names, n) = m368_setup();
-    let entry =
-        build_outest_entry("MODEL1", "y", &names, &fit, true, n as f64, 0.05);
+    let entry = build_outest_entry("MODEL1", "y", &names, &fit, true, n as f64, 0.05);
     // Parameter estimates equal fit.beta.
     for j in 0..fit.beta.len() {
         assert!((entry.beta[j] - fit.beta[j]).abs() < 1e-12);

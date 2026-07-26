@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 mod model;
 mod options;
 mod plots;
@@ -105,7 +104,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
                 ts.expect_semi()?;
             }
             if let Some(entry) = models.last_mut() {
-                entry.mtests.push(RegMtest { label: None, equations });
+                entry.mtests.push(RegMtest {
+                    label: None,
+                    equations,
+                });
             }
             Ok(true)
         } else if kw == "add" {

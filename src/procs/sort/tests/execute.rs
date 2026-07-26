@@ -13,15 +13,18 @@ fn execute_ascending_missing_collation() {
     let mut session = make_session();
     let xs = vec![
         Some(5.0),
-        None,                                   // .
-        Some(encode_special(MissingKind::Letter(0))), // .A
+        None,                                          // .
+        Some(encode_special(MissingKind::Letter(0))),  // .A
         Some(encode_special(MissingKind::Underscore)), // ._
         Some(2.0),
     ];
     write_num_dataset(&mut session, "T", "x", xs);
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -55,7 +58,10 @@ fn execute_descending() {
     );
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), true)],
         nodupkey: false,
@@ -78,14 +84,29 @@ fn execute_multikey_num_then_char() {
     ]
     .unwrap();
     let vars = vec![
-        VarMeta { name: "g".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "s".into(), ty: VarType::Char, length: 1, format: None, label: None },
+        VarMeta {
+            name: "g".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "s".into(),
+            ty: VarType::Char,
+            length: 1,
+            format: None,
+            label: None,
+        },
     ];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("g".to_string(), false), ("s".to_string(), false)],
         nodupkey: false,
@@ -96,7 +117,14 @@ fn execute_multikey_num_then_char() {
     execute(&ast, &mut session).unwrap();
 
     let (out, _) = session.libs.get("WORK").unwrap().read("T").unwrap();
-    let g: Vec<f64> = out.df.column("g").unwrap().f64().unwrap().into_no_null_iter().collect();
+    let g: Vec<f64> = out
+        .df
+        .column("g")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
     let s: Vec<String> = out
         .df
         .column("s")
@@ -122,7 +150,10 @@ fn execute_nodupkey_deletes_and_notes() {
     );
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: true,
@@ -153,14 +184,29 @@ fn execute_noduprecs_whole_row() {
     ]
     .unwrap();
     let vars = vec![
-        VarMeta { name: "x".into(), ty: VarType::Num, length: 8, format: None, label: None },
-        VarMeta { name: "y".into(), ty: VarType::Char, length: 1, format: None, label: None },
+        VarMeta {
+            name: "x".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "y".into(),
+            ty: VarType::Char,
+            length: 1,
+            format: None,
+            label: None,
+        },
     ];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -174,7 +220,10 @@ fn execute_noduprecs_whole_row() {
     // After sort by x: rows (1,a),(1,b),(1,b) => drop the 3rd (full dup of 2nd).
     assert_eq!(out.n_obs(), 2);
     let log = session.log.into_string();
-    assert!(log.contains("1 duplicate observations were deleted."), "log: {log}");
+    assert!(
+        log.contains("1 duplicate observations were deleted."),
+        "log: {log}"
+    );
 }
 
 #[test]
@@ -188,8 +237,14 @@ fn execute_out_creates_new_leaves_input() {
     );
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "IN".into() }),
-        out: Some(DatasetRef { libref: Some("WORK".into()), name: "OUT".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "IN".into(),
+        }),
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "OUT".into(),
+        }),
         by: vec![("x".to_string(), false)],
         nodupkey: false,
         noduprecs: false,
@@ -219,7 +274,10 @@ fn execute_no_out_replaces_input() {
     );
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -236,12 +294,7 @@ fn execute_no_out_replaces_input() {
 #[test]
 fn execute_uses_last_when_no_data() {
     let mut session = make_session();
-    write_num_dataset(
-        &mut session,
-        "LASTONE",
-        "x",
-        vec![Some(2.0), Some(1.0)],
-    );
+    write_num_dataset(&mut session, "LASTONE", "x", vec![Some(2.0), Some(1.0)]);
     // last_dataset = WORK.LASTONE set by helper.
 
     let ast = SortAst {
@@ -265,7 +318,10 @@ fn execute_unknown_by_var_errors() {
     write_num_dataset(&mut session, "T", "x", vec![Some(1.0)]);
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("nope".to_string(), false)],
         nodupkey: false,
@@ -276,7 +332,10 @@ fn execute_unknown_by_var_errors() {
     let result = execute(&ast, &mut session);
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("NOPE") && msg.contains("not found"), "msg: {msg}");
+    assert!(
+        msg.contains("NOPE") && msg.contains("not found"),
+        "msg: {msg}"
+    );
 }
 
 #[test]
@@ -290,7 +349,10 @@ fn execute_tagsort_identical_output() {
 
     // Plain sort.
     let plain = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -302,7 +364,10 @@ fn execute_tagsort_identical_output() {
 
     // TAGSORT sort.
     let tagged = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -329,7 +394,10 @@ fn execute_sortseq_ascii_identical_output() {
     write_num_dataset(&mut s2, "T", "x", xs);
 
     let plain = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -340,7 +408,10 @@ fn execute_sortseq_ascii_identical_output() {
     execute(&plain, &mut s1).unwrap();
 
     let ascii = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         out: None,
         by: vec![("x".to_string(), false)],
         nodupkey: false,
@@ -370,14 +441,29 @@ fn execute_key_descending_order() {
     use crate::dataset::VarMeta;
     use crate::value::VarType;
     let vars = vec![
-        VarMeta { name: "name".into(), ty: VarType::Char, length: 10, format: None, label: None },
-        VarMeta { name: "age".into(),  ty: VarType::Num,  length: 8,  format: None, label: None },
+        VarMeta {
+            name: "name".into(),
+            ty: VarType::Char,
+            length: 10,
+            format: None,
+            label: None,
+        },
+        VarMeta {
+            name: "age".into(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+        },
     ];
     let ds = crate::dataset::SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write("CLS", &ds).unwrap();
 
     let ast = SortAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "CLS".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLS".into(),
+        }),
         out: None,
         // KEY=age / descending (set programmatically as already resolved).
         by: vec![("age".to_string(), true)],

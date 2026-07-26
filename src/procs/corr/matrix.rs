@@ -22,7 +22,6 @@ impl Method {
             Method::Hoeffding => "Hoeffding Dependence Coefficients",
         }
     }
-
 }
 
 /// `_TYPE_` value written in the TYPE=CORR output dataset's CORR rows. SAS uses
@@ -46,7 +45,17 @@ pub(super) fn compute_matrix(
     decoded: &std::collections::HashMap<usize, Vec<Value>>,
     weight: Option<&[Value]>,
 ) -> Vec<Vec<Cell>> {
-    let mut out = vec![vec![Cell { r: None, p: None, n: 0 }; col_cols.len()]; row_cols.len()];
+    let mut out = vec![
+        vec![
+            Cell {
+                r: None,
+                p: None,
+                n: 0
+            };
+            col_cols.len()
+        ];
+        row_cols.len()
+    ];
     for (i, &rc) in row_cols.iter().enumerate() {
         for (j, &cc) in col_cols.iter().enumerate() {
             out[i][j] = compute_cell(method, &decoded[&rc], &decoded[&cc], rc == cc, weight);
@@ -85,7 +94,11 @@ pub(super) fn compute_cell(
                 xs.len()
             }
         };
-        return Cell { r: Some(1.0), p: None, n };
+        return Cell {
+            r: Some(1.0),
+            p: None,
+            n,
+        };
     }
     match method {
         Method::Pearson => {
@@ -209,11 +222,25 @@ pub(super) fn partial_pearson_matrix(
         resid.insert(c, residual(c));
     }
 
-    let mut out = vec![vec![Cell { r: None, p: None, n }; col_cols.len()]; row_cols.len()];
+    let mut out = vec![
+        vec![
+            Cell {
+                r: None,
+                p: None,
+                n
+            };
+            col_cols.len()
+        ];
+        row_cols.len()
+    ];
     for (i, &rc) in row_cols.iter().enumerate() {
         for (j, &cc) in col_cols.iter().enumerate() {
             if rc == cc {
-                out[i][j] = Cell { r: Some(1.0), p: None, n };
+                out[i][j] = Cell {
+                    r: Some(1.0),
+                    p: None,
+                    n,
+                };
                 continue;
             }
             let rx = resid.get(&rc).and_then(|o| o.as_ref());
@@ -224,7 +251,11 @@ pub(super) fn partial_pearson_matrix(
                     let p = r.and_then(|rv| partial_pvalue(rv, n, k));
                     Cell { r, p, n }
                 }
-                _ => Cell { r: None, p: None, n },
+                _ => Cell {
+                    r: None,
+                    p: None,
+                    n,
+                },
             };
         }
     }

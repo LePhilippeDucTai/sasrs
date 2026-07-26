@@ -48,10 +48,9 @@ fn test_parse_method_ml() {
 
 #[test]
 fn test_parse_type_cs_and_ar() {
-    let ast = parse_mixed(
-        "proc mixed; class s; model y = ; random intercept / subject=s type=cs; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_mixed("proc mixed; class s; model y = ; random intercept / subject=s type=cs; run;")
+            .unwrap();
     assert_eq!(ast.random.unwrap().cov_type, CovType::Cs);
 
     let ast2 = parse_mixed(
@@ -86,16 +85,32 @@ fn test_parse_lsmeans_estimate_contrast() {
 fn test_reml_variance_components() {
     let (y, x, subj_of) = oracle();
     let fit = fit_mixed(&y, &x, &subj_of, 2, Method::Reml, false).unwrap();
-    assert!((fit.sigma2_u - 7.0).abs() < 1e-6, "sigma2_u={}", fit.sigma2_u);
-    assert!((fit.sigma2_e - 2.0).abs() < 1e-6, "sigma2_e={}", fit.sigma2_e);
+    assert!(
+        (fit.sigma2_u - 7.0).abs() < 1e-6,
+        "sigma2_u={}",
+        fit.sigma2_u
+    );
+    assert!(
+        (fit.sigma2_e - 2.0).abs() < 1e-6,
+        "sigma2_e={}",
+        fit.sigma2_e
+    );
 }
 
 #[test]
 fn test_ml_variance_components() {
     let (y, x, subj_of) = oracle();
     let fit = fit_mixed(&y, &x, &subj_of, 2, Method::Ml, false).unwrap();
-    assert!((fit.sigma2_u - 3.0).abs() < 1e-6, "sigma2_u={}", fit.sigma2_u);
-    assert!((fit.sigma2_e - 2.0).abs() < 1e-6, "sigma2_e={}", fit.sigma2_e);
+    assert!(
+        (fit.sigma2_u - 3.0).abs() < 1e-6,
+        "sigma2_u={}",
+        fit.sigma2_u
+    );
+    assert!(
+        (fit.sigma2_e - 2.0).abs() < 1e-6,
+        "sigma2_e={}",
+        fit.sigma2_e
+    );
 }
 
 #[test]
@@ -135,10 +150,7 @@ fn test_ar1_random_intercept_defers_to_repeated() {
     )
     .unwrap();
     let err = execute(&ast, &mut session).unwrap_err();
-    assert!(
-        err.to_string().contains("REPEATED"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("REPEATED"), "got: {err}");
 }
 
 /// Build a small Session with a WORK.B dataset and return it.
@@ -159,9 +171,27 @@ fn small_ds() -> (crate::session::Session, ()) {
     let ds = SasDataset {
         df: frame,
         vars: vec![
-            VarMeta { name: "subj".into(), ty: VarType::Char, length: 1, format: None, label: None },
-            VarMeta { name: "t".into(), ty: VarType::Num, length: 8, format: None, label: None },
-            VarMeta { name: "y".into(), ty: VarType::Num, length: 8, format: None, label: None },
+            VarMeta {
+                name: "subj".into(),
+                ty: VarType::Char,
+                length: 1,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "t".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "y".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
         ],
     };
     session.libs.get("WORK").unwrap().write("B", &ds).unwrap();
@@ -230,9 +260,21 @@ fn test_un_saturated_equals_sample_cov() {
     )
     .unwrap();
     // theta order: UN(1,1), UN(2,1), UN(2,2).
-    assert!((fit.theta[0] - 5.0).abs() < 1e-4, "UN(1,1)={}", fit.theta[0]);
-    assert!((fit.theta[1] - 3.0).abs() < 1e-4, "UN(2,1)={}", fit.theta[1]);
-    assert!((fit.theta[2] - 5.0).abs() < 1e-4, "UN(2,2)={}", fit.theta[2]);
+    assert!(
+        (fit.theta[0] - 5.0).abs() < 1e-4,
+        "UN(1,1)={}",
+        fit.theta[0]
+    );
+    assert!(
+        (fit.theta[1] - 3.0).abs() < 1e-4,
+        "UN(2,1)={}",
+        fit.theta[1]
+    );
+    assert!(
+        (fit.theta[2] - 5.0).abs() < 1e-4,
+        "UN(2,2)={}",
+        fit.theta[2]
+    );
     assert!((fit.beta[0] - 4.0).abs() < 1e-4, "beta={}", fit.beta[0]);
 
     // The listing reports covariance parameters to 4 decimals; confirm the
@@ -284,7 +326,10 @@ fn test_un_execute_runs() {
     .unwrap();
     execute(&ast, &mut session).unwrap();
     let listing = take_listing(&mut session);
-    assert!(listing.contains("UN(1,1)"), "listing missing UN rows:\n{listing}");
+    assert!(
+        listing.contains("UN(1,1)"),
+        "listing missing UN rows:\n{listing}"
+    );
     assert!(listing.contains("Unstructured"));
 }
 

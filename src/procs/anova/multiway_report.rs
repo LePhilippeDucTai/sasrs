@@ -49,7 +49,11 @@ pub(super) fn print_multiway_anova_and_fit(
         Align::Right,
         Align::Right,
     ];
-    let f_str = if f_model.is_nan() { ".".to_string() } else { fmt2(f_model) };
+    let f_str = if f_model.is_nan() {
+        ".".to_string()
+    } else {
+        fmt2(f_model)
+    };
     let anova_rows: Vec<Vec<String>> = vec![
         vec![
             "Model".into(),
@@ -76,7 +80,9 @@ pub(super) fn print_multiway_anova_and_fit(
             "".into(),
         ],
     ];
-    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session
+        .listing
+        .write_table(&anova_headers, &anova_aligns, &anova_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -89,13 +95,10 @@ pub(super) fn print_multiway_anova_and_fit(
         dep_mean_header,
     ];
     let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-    let fit_rows: Vec<Vec<String>> = vec![vec![
-        fmt6(r2),
-        fmt6(cv),
-        fmt6(root_mse),
-        fmt6(y_bar),
-    ]];
-    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    let fit_rows: Vec<Vec<String>> = vec![vec![fmt6(r2), fmt6(cv), fmt6(root_mse), fmt6(y_bar)]];
+    session
+        .listing
+        .write_table(&fit_headers, &fit_aligns, &fit_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -103,9 +106,7 @@ pub(super) fn print_multiway_anova_and_fit(
     let term_labels: Vec<String> = model.terms.iter().map(|t| t.join("*")).collect();
 
     // Type I SS and Type III SS tables, one row per term.
-    for (ss_label, ss_vals) in
-        [("Type I SS", &type1), ("Type III SS", &type3)]
-    {
+    for (ss_label, ss_vals) in [("Type I SS", &type1), ("Type III SS", &type3)] {
         let t_headers: Vec<String> = vec![
             "Source".into(),
             "DF".into(),
@@ -178,21 +179,18 @@ pub(super) fn print_multiway_means(
         centered(session, &format!("Level of {}", disp));
         session.listing.blank();
 
-        let means_headers: Vec<String> = vec![
-            disp.clone(),
-            "N".into(),
-            "Mean".into(),
-            "Std Dev".into(),
-        ];
+        let means_headers: Vec<String> =
+            vec![disp.clone(), "N".into(), "Mean".into(), "Std Dev".into()];
         let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
         let mut means_rows: Vec<Vec<String>> = Vec::new();
         for (li, level) in levels.iter().enumerate() {
-            let vals: Vec<f64> = (0..n)
-                .filter(|&i| codes[i] == li)
-                .map(|i| y[i])
-                .collect();
+            let vals: Vec<f64> = (0..n).filter(|&i| codes[i] == li).map(|i| y[i]).collect();
             let ni = vals.len();
-            let mean_i = if ni > 0 { vals.iter().sum::<f64>() / ni as f64 } else { f64::NAN };
+            let mean_i = if ni > 0 {
+                vals.iter().sum::<f64>() / ni as f64
+            } else {
+                f64::NAN
+            };
             let std_i = sample_std(&vals);
             means_rows.push(vec![
                 value_label(level),
@@ -204,7 +202,9 @@ pub(super) fn print_multiway_means(
                 },
             ]);
         }
-        session.listing.write_table(&means_headers, &means_aligns, &means_rows);
+        session
+            .listing
+            .write_table(&means_headers, &means_aligns, &means_rows);
         session.listing.blank();
         session.listing.blank();
     }

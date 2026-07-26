@@ -2,7 +2,11 @@ use super::*;
 
 impl Compiler<'_> {
     /// Compile un `DECLARE HASH` (bras `DsStmt::DeclareHash` de `walk_stmt`).
-    pub(super) fn compile_hash_decl(&mut self, name: &str, options: &[(String, String)]) -> Result<()> {
+    pub(super) fn compile_hash_decl(
+        &mut self,
+        name: &str,
+        options: &[(String, String)],
+    ) -> Result<()> {
         let mut obj = HashObject::default();
         for (key, value) in options {
             match key.as_str() {

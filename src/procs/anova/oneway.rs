@@ -52,7 +52,9 @@ pub(super) fn print_class_level_info_oneway(
         class_col_data.push((ds.vars[col_idx].name.clone(), col));
     }
 
-    session.listing.write_table(&cli_headers, &cli_aligns, &cli_rows);
+    session
+        .listing
+        .write_table(&cli_headers, &cli_aligns, &cli_rows);
     session.listing.blank();
 
     // Number of Observations
@@ -116,9 +118,7 @@ pub(super) fn compute_oneway_stats(
         .vars
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(eff))
-        .ok_or_else(|| {
-            SasError::runtime(format!("Variable {} not found.", eff.to_uppercase()))
-        })?;
+        .ok_or_else(|| SasError::runtime(format!("Variable {} not found.", eff.to_uppercase())))?;
     let class_col = decode_column(ds, class_col_idx)?;
 
     // Listwise deletion: keep rows where both dep_var and class_var are non-missing
@@ -136,8 +136,7 @@ pub(super) fn compute_oneway_stats(
     let n = usable_rows.len();
 
     // Group by CLASS levels (usable rows are non-missing by construction).
-    let levels =
-        crate::procs::lincom::class_levels(usable_rows.iter().map(|&r| &class_col[r]));
+    let levels = crate::procs::lincom::class_levels(usable_rows.iter().map(|&r| &class_col[r]));
     let k = levels.len();
 
     // Collect values per group
@@ -179,9 +178,21 @@ pub(super) fn compute_oneway_stats(
     let df_error = (n as f64 - k as f64).max(0.0);
     let df_total = (n as f64 - 1.0).max(0.0);
 
-    let msm = if df_model > 0.0 { ssm / df_model } else { f64::NAN };
-    let mse = if df_error > 0.0 { sse / df_error } else { f64::NAN };
-    let f_stat = if mse > 0.0 && !mse.is_nan() { msm / mse } else { f64::NAN };
+    let msm = if df_model > 0.0 {
+        ssm / df_model
+    } else {
+        f64::NAN
+    };
+    let mse = if df_error > 0.0 {
+        sse / df_error
+    } else {
+        f64::NAN
+    };
+    let f_stat = if mse > 0.0 && !mse.is_nan() {
+        msm / mse
+    } else {
+        f64::NAN
+    };
     let p_f = if f_stat.is_nan() {
         None
     } else {
@@ -196,10 +207,9 @@ pub(super) fn compute_oneway_stats(
         f64::NAN
     };
 
-    session.log.note(&format!(
-        "There were {} observations used.",
-        n
-    ));
+    session
+        .log
+        .note(&format!("There were {} observations used.", n));
 
     Ok(OneWayStats {
         levels,
@@ -267,7 +277,11 @@ pub(super) fn print_oneway_anova_and_fit(
         Align::Right,
         Align::Right,
     ];
-    let f_str = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+    let f_str = if f_stat.is_nan() {
+        ".".to_string()
+    } else {
+        fmt2(f_stat)
+    };
     let anova_rows: Vec<Vec<String>> = vec![
         vec![
             "Model".into(),
@@ -294,7 +308,9 @@ pub(super) fn print_oneway_anova_and_fit(
             "".into(),
         ],
     ];
-    session.listing.write_table(&anova_headers, &anova_aligns, &anova_rows);
+    session
+        .listing
+        .write_table(&anova_headers, &anova_aligns, &anova_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -307,13 +323,10 @@ pub(super) fn print_oneway_anova_and_fit(
         dep_mean_header,
     ];
     let fit_aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-    let fit_rows: Vec<Vec<String>> = vec![vec![
-        fmt6(r2),
-        fmt6(cv),
-        fmt6(root_mse),
-        fmt6(y_bar),
-    ]];
-    session.listing.write_table(&fit_headers, &fit_aligns, &fit_rows);
+    let fit_rows: Vec<Vec<String>> = vec![vec![fmt6(r2), fmt6(cv), fmt6(root_mse), fmt6(y_bar)]];
+    session
+        .listing
+        .write_table(&fit_headers, &fit_aligns, &fit_rows);
     session.listing.blank();
     session.listing.blank();
 
@@ -335,7 +348,11 @@ pub(super) fn print_oneway_anova_and_fit(
             Align::Right,
             Align::Right,
         ];
-        let f_str2 = if f_stat.is_nan() { ".".to_string() } else { fmt2(f_stat) };
+        let f_str2 = if f_stat.is_nan() {
+            ".".to_string()
+        } else {
+            fmt2(f_stat)
+        };
         let t_rows: Vec<Vec<String>> = vec![vec![
             eff.to_string(),
             format!("{}", df_model as usize),
@@ -358,12 +375,8 @@ pub(super) fn print_oneway_means(session: &mut Session, eff: &str, stats: &OneWa
     centered(session, &format!("Level of {}", eff));
     session.listing.blank();
 
-    let means_headers: Vec<String> = vec![
-        eff.to_string(),
-        "N".into(),
-        "Mean".into(),
-        "Std Dev".into(),
-    ];
+    let means_headers: Vec<String> =
+        vec![eff.to_string(), "N".into(), "Mean".into(), "Std Dev".into()];
     let means_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     let mut means_rows: Vec<Vec<String>> = Vec::new();
 
@@ -391,7 +404,9 @@ pub(super) fn print_oneway_means(session: &mut Session, eff: &str, stats: &OneWa
         ]);
     }
 
-    session.listing.write_table(&means_headers, &means_aligns, &means_rows);
+    session
+        .listing
+        .write_table(&means_headers, &means_aligns, &means_rows);
     session.listing.blank();
     session.listing.blank();
 }

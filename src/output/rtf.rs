@@ -17,12 +17,24 @@ pub struct RtfDestination {
 impl RtfDestination {
     /// Crée la destination RTF sans fichier cible.
     pub fn new(ls: usize) -> Self {
-        RtfDestination { buf: String::new(), titles: Vec::new(), footnotes: Vec::new(), ls, file: None }
+        RtfDestination {
+            buf: String::new(),
+            titles: Vec::new(),
+            footnotes: Vec::new(),
+            ls,
+            file: None,
+        }
     }
 
     /// Crée la destination RTF avec un fichier cible.
     pub fn with_file(ls: usize, file: std::path::PathBuf) -> Self {
-        RtfDestination { buf: String::new(), titles: Vec::new(), footnotes: Vec::new(), ls, file: Some(file) }
+        RtfDestination {
+            buf: String::new(),
+            titles: Vec::new(),
+            footnotes: Vec::new(),
+            ls,
+            file: Some(file),
+        }
     }
 
     /// Échappe les caractères spéciaux RTF.
@@ -35,8 +47,7 @@ impl RtfDestination {
                 '}' => out.push_str("\\}"),
                 c if c.is_ascii() => out.push(c),
                 c if (c as u32) <= 0xFF => {
-                    out.push_str(&format!("\\'{}",
-                        format!("{:02x}", c as u32)));
+                    out.push_str(&format!("\\'{}", format!("{:02x}", c as u32)));
                 }
                 c => {
                     out.push_str(&format!("\\u{}?", c as u32));
@@ -66,14 +77,17 @@ impl OutputDestination for RtfDestination {
 
     fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
         // Compute column widths in twips
-        let col_widths: Vec<usize> = (0..headers.len()).map(|i| {
-            let header_len = headers.get(i).map(|s| s.len()).unwrap_or(0);
-            let max_data_len = rows.iter()
-                .map(|r| r.get(i).map(|s| s.len()).unwrap_or(0))
-                .max()
-                .unwrap_or(0);
-            (header_len.max(max_data_len) * 120).max(720)
-        }).collect();
+        let col_widths: Vec<usize> = (0..headers.len())
+            .map(|i| {
+                let header_len = headers.get(i).map(|s| s.len()).unwrap_or(0);
+                let max_data_len = rows
+                    .iter()
+                    .map(|r| r.get(i).map(|s| s.len()).unwrap_or(0))
+                    .max()
+                    .unwrap_or(0);
+                (header_len.max(max_data_len) * 120).max(720)
+            })
+            .collect();
 
         // Build header row
         let mut cum_widths: Vec<usize> = Vec::with_capacity(col_widths.len());
@@ -92,7 +106,10 @@ impl OutputDestination for RtfDestination {
             buf.push('\n');
             for (i, cell) in cells.iter().enumerate() {
                 let align = aligns.get(i).copied().unwrap_or(Align::Left);
-                let align_ctrl = match align { Align::Right => "\\qr", Align::Left => "\\ql" };
+                let align_ctrl = match align {
+                    Align::Right => "\\qr",
+                    Align::Left => "\\ql",
+                };
                 if is_header {
                     buf.push_str(&format!(
                         "\\pard\\intbl{} \\b {}\\b0\\cell ",
@@ -118,7 +135,8 @@ impl OutputDestination for RtfDestination {
     }
 
     fn write_line(&mut self, line: &str) {
-        self.buf.push_str(&format!("\\pard {}\\par\n", Self::rtf_escape(line)));
+        self.buf
+            .push_str(&format!("\\pard {}\\par\n", Self::rtf_escape(line)));
     }
 
     fn blank(&mut self) {
@@ -147,10 +165,8 @@ impl OutputDestination for RtfDestination {
         }
         // Footnotes actives rendues (centrées) en fin de document.
         for f in &self.footnotes {
-            self.buf.push_str(&format!(
-                "\\pard\\qc {}\\par\n",
-                Self::rtf_escape(f)
-            ));
+            self.buf
+                .push_str(&format!("\\pard\\qc {}\\par\n", Self::rtf_escape(f)));
         }
         let body = std::mem::take(&mut self.buf);
         format!(

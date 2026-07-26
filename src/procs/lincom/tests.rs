@@ -64,7 +64,12 @@ fn test_contrast_f_eq_t_squared() {
     let eng = engine_ab();
     let est = eng.estimate(&[0.0, 1.0], 0.0);
     let con = eng.contrast(&[0.0, 1.0], 0.0);
-    assert!((con.f - est.t * est.t).abs() < 1e-6, "f={} t^2={}", con.f, est.t * est.t);
+    assert!(
+        (con.f - est.t * est.t).abs() < 1e-6,
+        "f={} t^2={}",
+        con.f,
+        est.t * est.t
+    );
     assert!((con.f - 121.5).abs() < 0.5, "f={}", con.f);
     assert_eq!(con.df1, 1.0);
     assert_eq!(con.df2, 4.0);
@@ -79,8 +84,16 @@ fn test_lsmeans_group_means() {
     // sas_cmp order: A then B.
     assert_eq!(lsm[0].level_label, "A");
     assert_eq!(lsm[1].level_label, "B");
-    assert!((lsm[0].estimate - 2.0).abs() < 1e-9, "A={}", lsm[0].estimate);
-    assert!((lsm[1].estimate - 11.0).abs() < 1e-9, "B={}", lsm[1].estimate);
+    assert!(
+        (lsm[0].estimate - 2.0).abs() < 1e-9,
+        "A={}",
+        lsm[0].estimate
+    );
+    assert!(
+        (lsm[1].estimate - 11.0).abs() < 1e-9,
+        "B={}",
+        lsm[1].estimate
+    );
     assert!(lsm[0].se > 0.0 && lsm[1].se > 0.0);
 }
 
@@ -103,11 +116,14 @@ fn test_class_coding_ref_matches_manual() {
     let lv = levels(&["A", "B", "C"]); // already sas_cmp order
     let coding = class_coding(&lv, Param::Ref);
     // 3 rows, 2 columns each.
-    assert_eq!(coding, vec![
-        vec![1.0, 0.0], // A
-        vec![0.0, 1.0], // B
-        vec![0.0, 0.0], // C = reference
-    ]);
+    assert_eq!(
+        coding,
+        vec![
+            vec![1.0, 0.0], // A
+            vec![0.0, 1.0], // B
+            vec![0.0, 0.0], // C = reference
+        ]
+    );
     // Manual oracle: column j is the indicator of levels[j] (j < L−1).
     let l = lv.len();
     for (li, _) in lv.iter().enumerate() {
@@ -145,7 +161,12 @@ fn test_class_coding_glm_one_hot() {
     assert_eq!(coding.len(), 3);
     for (i, row) in coding.iter().enumerate() {
         assert_eq!(row.len(), 3, "L columns");
-        let ones: Vec<usize> = row.iter().enumerate().filter(|&(_, &v)| v == 1.0).map(|(k, _)| k).collect();
+        let ones: Vec<usize> = row
+            .iter()
+            .enumerate()
+            .filter(|&(_, &v)| v == 1.0)
+            .map(|(k, _)| k)
+            .collect();
         assert_eq!(ones, vec![i], "row {i} must be one-hot at i");
         let sum: f64 = row.iter().sum();
         assert_eq!(sum, 1.0);
@@ -166,7 +187,10 @@ fn test_class_coding_poly_orthogonal() {
     // Pairwise orthogonality (and orthogonality to the constant).
     for a in 0..ncol {
         let dot_const: f64 = (0..l).map(|k| coding[k][a]).sum();
-        assert!(dot_const.abs() < 1e-9, "col {a} not orthogonal to constant: {dot_const}");
+        assert!(
+            dot_const.abs() < 1e-9,
+            "col {a} not orthogonal to constant: {dot_const}"
+        );
         for b in (a + 1)..ncol {
             let dot: f64 = (0..l).map(|k| coding[k][a] * coding[k][b]).sum();
             assert!(dot.abs() < 1e-9, "cols {a},{b} not orthogonal: {dot}");
@@ -180,7 +204,10 @@ fn test_class_coding_poly_orthogonal() {
     let step = col0[1] - col0[0];
     assert!(step > 0.0, "linear trend must increase: step={step}");
     for k in 1..l {
-        assert!((col0[k] - col0[k - 1] - step).abs() < 1e-9, "col0 not equally spaced at {k}");
+        assert!(
+            (col0[k] - col0[k - 1] - step).abs() < 1e-9,
+            "col0 not equally spaced at {k}"
+        );
     }
 }
 
@@ -209,7 +236,11 @@ fn identity(k: usize) -> Vec<Vec<f64>> {
 fn test_score_identity() {
     let u = vec![1.0, -2.0, 3.0];
     let st = score_test(&u, &identity(3));
-    assert!((st.chi_square - (1.0 + 4.0 + 9.0)).abs() < 1e-12, "chi2={}", st.chi_square);
+    assert!(
+        (st.chi_square - (1.0 + 4.0 + 9.0)).abs() < 1e-12,
+        "chi2={}",
+        st.chi_square
+    );
     assert_eq!(st.df, 3.0);
     let p = st.p.unwrap();
     assert!((0.0..=1.0).contains(&p));
@@ -224,11 +255,19 @@ fn test_score_2x2() {
     let u = vec![1.0, 0.0];
     let info = vec![vec![2.0, 1.0], vec![1.0, 2.0]];
     let st = score_test(&u, &info);
-    assert!((st.chi_square - 2.0 / 3.0).abs() < 1e-10, "chi2={}", st.chi_square);
+    assert!(
+        (st.chi_square - 2.0 / 3.0).abs() < 1e-10,
+        "chi2={}",
+        st.chi_square
+    );
     assert_eq!(st.df, 2.0);
     // Full U = [1, 2]: Uᵀ I⁻¹ U = (1/3)(2·1 −1·2 −2·1 +2·4) = (1/3)(2−2−2+8)=2.
     let st2 = score_test(&[1.0, 2.0], &info);
-    assert!((st2.chi_square - 2.0).abs() < 1e-10, "chi2={}", st2.chi_square);
+    assert!(
+        (st2.chi_square - 2.0).abs() < 1e-10,
+        "chi2={}",
+        st2.chi_square
+    );
 }
 
 /// Singular information ⇒ NaN statistic, p = None.

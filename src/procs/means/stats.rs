@@ -122,7 +122,10 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alp
     };
     // Weighted corrected sum of squares: Σ w_i (x_i − x̄_w)^2.
     let css_w = match mean_w {
-        Some(m) => pairs.iter().map(|(x, w)| w * (x - m) * (x - m)).sum::<f64>(),
+        Some(m) => pairs
+            .iter()
+            .map(|(x, w)| w * (x - m) * (x - m))
+            .sum::<f64>(),
         None => 0.0,
     };
     // Variance = CSS_w / (n − 1) using the COUNT of usable obs.

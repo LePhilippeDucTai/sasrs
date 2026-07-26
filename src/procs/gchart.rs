@@ -282,9 +282,9 @@ pub fn execute(ast: &GchartAst, session: &mut Session) -> Result<()> {
             GchartStmt::VBar { .. } | GchartStmt::HBar { .. } => {
                 #[cfg(not(feature = "graphics"))]
                 {
-                    session.log.note(
-                        "ODS GRAPHICS: image deferred (compile with --features graphics).",
-                    );
+                    session
+                        .log
+                        .note("ODS GRAPHICS: image deferred (compile with --features graphics).");
                 }
                 #[cfg(feature = "graphics")]
                 {
@@ -302,7 +302,7 @@ pub fn execute(ast: &GchartAst, session: &mut Session) -> Result<()> {
 #[cfg(feature = "graphics")]
 pub(crate) mod graphics_impl {
     use super::*;
-    use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+    use crate::graphics::render::{DrawingSpec, PlotType, draw_to_file};
     use crate::missing::value_to_num;
     use crate::ods_graphics::ImageFmt;
     use crate::procs::common::{self, decode_column};
@@ -419,7 +419,11 @@ pub(crate) mod graphics_impl {
             title: "The GCHART Procedure".to_string(),
             x_label: category.clone(),
             y_label,
-            plot_type: if is_pie { PlotType::Pie } else { PlotType::VBar },
+            plot_type: if is_pie {
+                PlotType::Pie
+            } else {
+                PlotType::VBar
+            },
             data: vec![],
             x_categorical,
         };

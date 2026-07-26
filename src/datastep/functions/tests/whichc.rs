@@ -28,20 +28,14 @@ fn whichc_first_is_match() {
 
 #[test]
 fn whichc_empty_needle() {
-    assert_eq!(
-        invoke("WHICHC", &[chr(""), chr(""), chr("b")]),
-        num(1.0)
-    );
+    assert_eq!(invoke("WHICHC", &[chr(""), chr(""), chr("b")]), num(1.0));
 }
 
 // ── CATQ ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn catq_no_quoting_needed() {
-    assert_eq!(
-        invoke("CATQ", &[chr(","), chr("a"), chr("b")]),
-        chr("a,b")
-    );
+    assert_eq!(invoke("CATQ", &[chr(","), chr("a"), chr("b")]), chr("a,b"));
 }
 
 #[test]
@@ -115,7 +109,10 @@ fn timepart_midnight() {
 fn datetime_combine_nominal() {
     // date 21915 + time 45045 → datetime.
     let expected = 21915.0 * SECONDS_PER_DAY + 45045.0;
-    assert_eq!(invoke("DATETIME", &[num(21915.0), num(45045.0)]), num(expected));
+    assert_eq!(
+        invoke("DATETIME", &[num(21915.0), num(45045.0)]),
+        num(expected)
+    );
 }
 
 #[test]
@@ -131,13 +128,19 @@ fn datetime_combine_default_time() {
 #[test]
 fn hms_nominal() {
     // 12:30:45 = 45045 seconds.
-    assert_eq!(invoke("HMS", &[num(12.0), num(30.0), num(45.0)]), num(45045.0));
+    assert_eq!(
+        invoke("HMS", &[num(12.0), num(30.0), num(45.0)]),
+        num(45045.0)
+    );
 }
 
 #[test]
 fn hms_large_hours_ok() {
     // h ≥ 0 may exceed 23 (HMS allows large hour counts).
-    assert_eq!(invoke("HMS", &[num(25.0), num(0.0), num(0.0)]), num(90000.0));
+    assert_eq!(
+        invoke("HMS", &[num(25.0), num(0.0), num(0.0)]),
+        num(90000.0)
+    );
 }
 
 #[test]
@@ -316,12 +319,18 @@ fn nldate_en_default() {
 
 #[test]
 fn nldate_fr_same_as_en() {
-    assert_eq!(invoke("NLDATE", &[num(21915.0), chr("FR")]), chr("01JAN2020"));
+    assert_eq!(
+        invoke("NLDATE", &[num(21915.0), chr("FR")]),
+        chr("01JAN2020")
+    );
 }
 
 #[test]
 fn nldate_unknown_language_defaults_en() {
-    assert_eq!(invoke("NLDATE", &[num(21915.0), chr("ZZ")]), chr("01JAN2020"));
+    assert_eq!(
+        invoke("NLDATE", &[num(21915.0), chr("ZZ")]),
+        chr("01JAN2020")
+    );
 }
 
 #[test]

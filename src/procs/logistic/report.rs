@@ -236,12 +236,7 @@ pub(super) fn print_odds_ratios(
         "Lower".into(),
         "Upper".into(),
     ];
-    let ore_aligns = vec![
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
+    let ore_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     let mut ore_rows: Vec<Vec<String>> = Vec::with_capacity(nb_cols);
     // Walk the design columns effect-by-effect so CLASS rows can be
     // labelled "var level vs reflevel".
@@ -253,12 +248,7 @@ pub(super) fn print_odds_ratios(
                 let ci_lower = (beta[col] - 1.96 * se_beta[col]).exp();
                 let ci_upper = (beta[col] + 1.96 * se_beta[col]).exp();
                 ore_rows.push(vec![
-                    format!(
-                        "{} {} vs {}",
-                        eff.name,
-                        value_label(lv),
-                        eff.ref_label
-                    ),
+                    format!("{} {} vs {}", eff.name, value_label(lv), eff.ref_label),
                     fmt4(or_j),
                     fmt4(ci_lower),
                     fmt4(ci_upper),

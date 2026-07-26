@@ -153,11 +153,7 @@ fn autocall_basic() {
 #[test]
 fn autocall_with_args() {
     let dir = tempfile::tempdir().unwrap();
-    write_file(
-        dir.path(),
-        "dbl.sas",
-        "%macro dbl(x); &x&x %mend;",
-    );
+    write_file(dir.path(), "dbl.sas", "%macro dbl(x); &x&x %mend;");
     let mut e = MacroEngine::new(true);
     e.set_sasautos_path(vec![dir.path().to_path_buf()]);
     let out = e.expand_open_code("%dbl(ab)");
@@ -169,11 +165,7 @@ fn autocall_nested() {
     let dir = tempfile::tempdir().unwrap();
     // outer appelle inner ; les deux sont des fichiers autocall.
     write_file(dir.path(), "inner.sas", "%macro inner; IN %mend;");
-    write_file(
-        dir.path(),
-        "outer.sas",
-        "%macro outer; [%inner] %mend;",
-    );
+    write_file(dir.path(), "outer.sas", "%macro outer; [%inner] %mend;");
     let mut e = MacroEngine::new(true);
     e.set_sasautos_path(vec![dir.path().to_path_buf()]);
     let out = e.expand_open_code("%outer");
@@ -289,7 +281,12 @@ fn symbolgen_flag_echoes_symbol_resolution() {
     // SYMBOLGEN traces when a symbol is USED in the expansion, not just defined
     let _out = e.expand_open_code("%let x=abc; data &x;");
     let logs = e.take_pending_log_lines();
-    assert!(logs.iter().any(|l| l.contains("Macro variable X resolves to abc")), "got logs: {:?}", logs);
+    assert!(
+        logs.iter()
+            .any(|l| l.contains("Macro variable X resolves to abc")),
+        "got logs: {:?}",
+        logs
+    );
 }
 
 #[test]
@@ -304,7 +301,8 @@ fn call_execute_queues_code() {
 #[test]
 fn call_execute_resolves_symbols() {
     let mut e = MacroEngine::new(true);
-    let _out = e.expand_open_code("%let step=SET x; %macro m; %call execute(&step run;); %mend; %m");
+    let _out =
+        e.expand_open_code("%let step=SET x; %macro m; %call execute(&step run;); %mend; %m");
     let queue = e.take_pending_call_execute();
     assert_eq!(queue.len(), 1);
     assert_eq!(queue[0], "SET x run;");
@@ -316,14 +314,24 @@ fn multiple_trace_flags_interact() {
     e.set_mprint(true);
     e.set_mlogic(true);
     e.set_symbolgen(true);
-    let _out = e.expand_open_code(
-        "%let x=5; %macro m; %if &x > 3 %then YES; %mend; %m"
-    );
+    let _out = e.expand_open_code("%let x=5; %macro m; %if &x > 3 %then YES; %mend; %m");
     let logs = e.take_pending_log_lines();
     // Should have logs from MLOGIC and MPRINT at minimum
-    assert!(logs.iter().any(|l| l.contains("MLOGIC")), "got logs: {:?}", logs);
-    assert!(logs.iter().any(|l| l.contains("is TRUE")), "got logs: {:?}", logs);
-    assert!(logs.iter().any(|l| l.contains("MPRINT")), "got logs: {:?}", logs);
+    assert!(
+        logs.iter().any(|l| l.contains("MLOGIC")),
+        "got logs: {:?}",
+        logs
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("is TRUE")),
+        "got logs: {:?}",
+        logs
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("MPRINT")),
+        "got logs: {:?}",
+        logs
+    );
 }
 
 // --- M35.4 : %return / %goto / %abort / hors-périmètre ---
@@ -346,7 +354,10 @@ fn return_honours_if_branch() {
 #[test]
 fn return_in_open_code_notes_and_continues() {
     let out = run("X %return; Y");
-    assert!(out.contains("NOTE: %RETURN is not valid in open code"), "got: {out}");
+    assert!(
+        out.contains("NOTE: %RETURN is not valid in open code"),
+        "got: {out}"
+    );
     assert!(out.contains('X') && out.contains('Y'), "got: {out}");
 }
 
@@ -372,7 +383,10 @@ fn goto_bounded_loop() {
                %top: [&i] %let i=%eval(&i+1); %if &i < 3 %then %goto top; \
                done %mend; %m";
     let out = run(src);
-    assert!(out.contains("[0]") && out.contains("[1]") && out.contains("[2]"), "got: {out}");
+    assert!(
+        out.contains("[0]") && out.contains("[1]") && out.contains("[2]"),
+        "got: {out}"
+    );
     assert!(out.contains("done"), "got: {out}");
     assert!(!out.contains("[3]"), "got: {out}");
 }
@@ -380,13 +394,19 @@ fn goto_bounded_loop() {
 #[test]
 fn goto_missing_label_notes() {
     let out = run("%macro m; A %goto nope; B %mend; %m");
-    assert!(out.contains("NOTE: %GOTO target label %nope: not found"), "got: {out}");
+    assert!(
+        out.contains("NOTE: %GOTO target label %nope: not found"),
+        "got: {out}"
+    );
 }
 
 #[test]
 fn goto_in_open_code_notes() {
     let out = run("%goto x;");
-    assert!(out.contains("NOTE: %GOTO is not valid in open code"), "got: {out}");
+    assert!(
+        out.contains("NOTE: %GOTO is not valid in open code"),
+        "got: {out}"
+    );
 }
 
 #[test]
@@ -418,9 +438,13 @@ fn abort_variants_parsed() {
 #[test]
 fn abort_propagates_to_caller() {
     // `%abort` dans une macro interne stoppe AUSSI l'expansion de l'appelant.
-    let out = run("%macro inner; III %abort; JJJ %mend; %macro outer; PPP %inner QQQ %mend; %outer RRR");
+    let out =
+        run("%macro inner; III %abort; JJJ %mend; %macro outer; PPP %inner QQQ %mend; %outer RRR");
     assert!(out.contains("PPP") && out.contains("III"), "got: {out}");
-    assert!(!out.contains("JJJ") && !out.contains("QQQ") && !out.contains("RRR"), "got: {out}");
+    assert!(
+        !out.contains("JJJ") && !out.contains("QQQ") && !out.contains("RRR"),
+        "got: {out}"
+    );
 }
 
 #[test]
@@ -438,8 +462,14 @@ fn abort_reentrancy_reset_between_segments() {
 #[test]
 fn sysexec_noted_and_consumed() {
     let out = run("before %sysexec(rm -rf x); after");
-    assert!(out.contains("%SYSEXEC") && out.contains("not supported in this build"), "got: {out}");
-    assert!(out.contains("before") && out.contains("after"), "got: {out}");
+    assert!(
+        out.contains("%SYSEXEC") && out.contains("not supported in this build"),
+        "got: {out}"
+    );
+    assert!(
+        out.contains("before") && out.contains("after"),
+        "got: {out}"
+    );
 }
 
 #[test]
@@ -447,5 +477,8 @@ fn sysexec_inner_semicolon_not_a_cutoff() {
     // Le `;` à l'intérieur des parenthèses ne doit pas couper prématurément.
     let out = run("%sysexec(echo a; echo b); tail");
     assert!(out.contains("not supported"), "got: {out}");
-    assert!(out.contains("tail") && !out.contains("echo b"), "got: {out}");
+    assert!(
+        out.contains("tail") && !out.contains("echo b"),
+        "got: {out}"
+    );
 }

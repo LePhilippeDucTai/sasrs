@@ -105,7 +105,9 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
             .to_string();
         match std::fs::write(&path, &bytes) {
             Ok(()) => {
-                session.log.note(&format!("Writing {} file: {}", label, file_name));
+                session
+                    .log
+                    .note(&format!("Writing {} file: {}", label, file_name));
             }
             Err(e) => {
                 session.log.note(&format!(
@@ -123,7 +125,9 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
             .to_string();
         match std::fs::write(&path, &content) {
             Ok(()) => {
-                session.log.note(&format!("Writing {} file: {}", label, file_name));
+                session
+                    .log
+                    .note(&format!("Writing {} file: {}", label, file_name));
             }
             Err(e) => {
                 session.log.note(&format!(

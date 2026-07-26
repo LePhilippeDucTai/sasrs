@@ -15,7 +15,7 @@ pub(crate) fn reg_diagnostic_plot(session: &mut Session, y_hat: &[f64], resid: &
 
     #[cfg(feature = "graphics")]
     {
-        use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+        use crate::graphics::render::{DrawingSpec, PlotType, draw_to_file};
 
         let data: Vec<(f64, f64)> = y_hat
             .iter()
@@ -92,7 +92,17 @@ pub(crate) fn render_plot_requests(
 
     #[cfg(not(feature = "graphics"))]
     {
-        let _ = (x_mat, y, fit, n, p_eff, alpha, sel_reg_names, intercept, weighting);
+        let _ = (
+            x_mat,
+            y,
+            fit,
+            n,
+            p_eff,
+            alpha,
+            sel_reg_names,
+            intercept,
+            weighting,
+        );
         let count = [want_diag, want_resid, want_fit]
             .iter()
             .filter(|b| **b)
@@ -106,9 +116,7 @@ pub(crate) fn render_plot_requests(
 
     #[cfg(feature = "graphics")]
     {
-        use crate::graphics::render::{
-            Decorations, DrawingSpec, Overlay, PlotType, SeriesColor,
-        };
+        use crate::graphics::render::{Decorations, DrawingSpec, Overlay, PlotType, SeriesColor};
 
         let obs = compute_obs_stats(x_mat, y, fit, n, p_eff, alpha, weighting);
         let infl = compute_influence_stats(x_mat, y, fit, n, p_eff, weighting);
@@ -175,7 +183,12 @@ pub(crate) fn render_plot_requests(
             );
 
             // (4) Normal QQ-plot of residuals: sorted residuals vs normal scores.
-            let mut rs: Vec<f64> = fit.resid.iter().copied().filter(|r| r.is_finite()).collect();
+            let mut rs: Vec<f64> = fit
+                .resid
+                .iter()
+                .copied()
+                .filter(|r| r.is_finite())
+                .collect();
             rs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let m = rs.len();
             let qq: Vec<(f64, f64)> = rs
@@ -240,25 +253,44 @@ pub(crate) fn render_plot_requests(
                     .collect();
                 pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-                let data: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.y)).collect();
-                let fit_line: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.y_hat)).collect();
-                let clm_lo: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.lclm)).collect();
-                let clm_hi: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.uclm)).collect();
-                let cli_lo: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.lcl)).collect();
-                let cli_hi: Vec<(f64, f64)> =
-                    pts.iter().map(|(x, o)| (*x, o.ucl)).collect();
+                let data: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.y)).collect();
+                let fit_line: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.y_hat)).collect();
+                let clm_lo: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.lclm)).collect();
+                let clm_hi: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.uclm)).collect();
+                let cli_lo: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.lcl)).collect();
+                let cli_hi: Vec<(f64, f64)> = pts.iter().map(|(x, o)| (*x, o.ucl)).collect();
                 let deco = Decorations {
                     overlays: vec![
-                        Overlay { data: fit_line, color: SeriesColor::Blue, line: true, marker: false },
-                        Overlay { data: clm_lo, color: SeriesColor::Green, line: true, marker: false },
-                        Overlay { data: clm_hi, color: SeriesColor::Green, line: true, marker: false },
-                        Overlay { data: cli_lo, color: SeriesColor::Orange, line: true, marker: false },
-                        Overlay { data: cli_hi, color: SeriesColor::Orange, line: true, marker: false },
+                        Overlay {
+                            data: fit_line,
+                            color: SeriesColor::Blue,
+                            line: true,
+                            marker: false,
+                        },
+                        Overlay {
+                            data: clm_lo,
+                            color: SeriesColor::Green,
+                            line: true,
+                            marker: false,
+                        },
+                        Overlay {
+                            data: clm_hi,
+                            color: SeriesColor::Green,
+                            line: true,
+                            marker: false,
+                        },
+                        Overlay {
+                            data: cli_lo,
+                            color: SeriesColor::Orange,
+                            line: true,
+                            marker: false,
+                        },
+                        Overlay {
+                            data: cli_hi,
+                            color: SeriesColor::Orange,
+                            line: true,
+                            marker: false,
+                        },
                     ],
                     x_range: None,
                     y_range: None,
@@ -406,7 +438,12 @@ pub(crate) fn render_reg_image(
         .clone()
         .unwrap_or_else(|| "reg".to_string());
     let fmt = session.ods_graphics.image_format;
-    let name = format!("{}_{}.{}", stem, session.graphics_image_count, fmt.extension());
+    let name = format!(
+        "{}_{}.{}",
+        stem,
+        session.graphics_image_count,
+        fmt.extension()
+    );
     let path = session.ods_graphics.output_dir.join(&name);
     match draw_to_file_ext(
         spec,
@@ -438,19 +475,32 @@ pub(crate) fn normal_quantile(p: f64) -> f64 {
     let p = p.clamp(1e-9, 1.0 - 1e-9);
     // Rational approximation (Acklam) — relative error < 1.15e-9.
     const A: [f64; 6] = [
-        -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
-        1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00,
+        -3.969683028665376e+01,
+        2.209460984245205e+02,
+        -2.759285104469687e+02,
+        1.383577518672690e+02,
+        -3.066479806614716e+01,
+        2.506628277459239e+00,
     ];
     const B: [f64; 5] = [
-        -5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
-        6.680131188771972e+01, -1.328068155288572e+01,
+        -5.447609879822406e+01,
+        1.615858368580409e+02,
+        -1.556989798598866e+02,
+        6.680131188771972e+01,
+        -1.328068155288572e+01,
     ];
     const C: [f64; 6] = [
-        -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
-        -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00,
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e+00,
+        -2.549732539343734e+00,
+        4.374664141464968e+00,
+        2.938163982698783e+00,
     ];
     const D: [f64; 4] = [
-        7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e+00,
         3.754408661907416e+00,
     ];
     let plow = 0.02425;

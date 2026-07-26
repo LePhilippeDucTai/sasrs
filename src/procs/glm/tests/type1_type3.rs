@@ -46,12 +46,18 @@ fn test_type1_vs_type3_unbalanced() {
     for (name, col) in &class_cols {
         let mut levels: Vec<Value> = Vec::new();
         for v in col {
-            if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+            if !levels
+                .iter()
+                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            {
                 levels.push(v.clone());
             }
         }
         levels.sort_by(|a, b| a.sas_cmp(b));
-        factors.push(Factor { name: name.clone(), levels });
+        factors.push(Factor {
+            name: name.clone(),
+            levels,
+        });
     }
     let term_factor_idxs = vec![vec![0usize], vec![1usize]]; // a, b main effects
     let col_specs = term_column_specs(&term_factor_idxs, &factors);
@@ -65,10 +71,14 @@ fn test_type1_vs_type3_unbalanced() {
                 .collect()
         })
         .collect();
-    let dummy_cache: Vec<Vec<Vec<f64>>> =
-        row_levels.iter().map(|rl| row_dummies(&factors, rl)).collect();
+    let dummy_cache: Vec<Vec<Vec<f64>>> = row_levels
+        .iter()
+        .map(|rl| row_dummies(&factors, rl))
+        .collect();
     let col_value = |row: usize, spec: &[(usize, usize)]| -> f64 {
-        spec.iter().map(|&(fi, dj)| dummy_cache[row][fi][dj]).product()
+        spec.iter()
+            .map(|&(fi, dj)| dummy_cache[row][fi][dj])
+            .product()
     };
     let build = |subset: &[usize]| -> Vec<Vec<f64>> {
         let mut d: Vec<Vec<f64>> = vec![vec![1.0]; n];
@@ -134,7 +144,10 @@ fn test_type1_vs_type3_unbalanced() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
     assert!(listing.contains("Type I SS"), "missing Type I: {listing}");
-    assert!(listing.contains("Type III SS"), "missing Type III: {listing}");
+    assert!(
+        listing.contains("Type III SS"),
+        "missing Type III: {listing}"
+    );
 }
 
 // ── M34.5 fix: effect-coded Type III on an UNBALANCED 2×2 WITH interaction ─
@@ -172,12 +185,18 @@ fn test_type3_effect_coding_2x2_interaction() {
     for (name, col) in &class_cols {
         let mut levels: Vec<Value> = Vec::new();
         for v in col {
-            if !levels.iter().any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal) {
+            if !levels
+                .iter()
+                .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            {
                 levels.push(v.clone());
             }
         }
         levels.sort_by(|a, b| a.sas_cmp(b));
-        factors.push(Factor { name: name.clone(), levels });
+        factors.push(Factor {
+            name: name.clone(),
+            levels,
+        });
     }
     // Terms: a, b, a*b.
     let term_factor_idxs = vec![vec![0usize], vec![1usize], vec![0usize, 1usize]];
@@ -192,10 +211,14 @@ fn test_type3_effect_coding_2x2_interaction() {
                 .collect()
         })
         .collect();
-    let dummy_cache: Vec<Vec<Vec<f64>>> =
-        row_levels.iter().map(|rl| row_dummies(&factors, rl)).collect();
-    let effect_cache: Vec<Vec<Vec<f64>>> =
-        row_levels.iter().map(|rl| row_effects(&factors, rl)).collect();
+    let dummy_cache: Vec<Vec<Vec<f64>>> = row_levels
+        .iter()
+        .map(|rl| row_dummies(&factors, rl))
+        .collect();
+    let effect_cache: Vec<Vec<Vec<f64>>> = row_levels
+        .iter()
+        .map(|rl| row_effects(&factors, rl))
+        .collect();
 
     // Build a design (intercept + given terms) from a chosen coding cache.
     let build = |subset: &[usize], cache: &[Vec<Vec<f64>>]| -> Vec<Vec<f64>> {

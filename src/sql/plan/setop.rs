@@ -4,7 +4,12 @@ use super::*;
 // 9. SET OPS
 // ----------------------------------------------------------------------------
 
-pub(super) fn apply_set_op(lhs: LazyFrame, rhs: LazyFrame, op: &SetOp, all: bool) -> Result<LazyFrame> {
+pub(super) fn apply_set_op(
+    lhs: LazyFrame,
+    rhs: LazyFrame,
+    op: &SetOp,
+    all: bool,
+) -> Result<LazyFrame> {
     match op {
         SetOp::Union => {
             let out = concat([lhs, rhs], UnionArgs::default())?;

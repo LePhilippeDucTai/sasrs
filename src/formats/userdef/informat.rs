@@ -70,7 +70,11 @@ impl UserInformat {
             Bound::High => false,
             Bound::Char(c) => {
                 let c = c.trim_end();
-                if range.from_exclusive { trimmed > c } else { trimmed >= c }
+                if range.from_exclusive {
+                    trimmed > c
+                } else {
+                    trimmed >= c
+                }
             }
             Bound::Num(_) => false,
         };
@@ -82,7 +86,11 @@ impl UserInformat {
             Bound::Low => false,
             Bound::Char(c) => {
                 let c = c.trim_end();
-                if range.to_exclusive { trimmed < c } else { trimmed <= c }
+                if range.to_exclusive {
+                    trimmed < c
+                } else {
+                    trimmed <= c
+                }
             }
             Bound::Num(_) => false,
         }

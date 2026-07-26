@@ -108,19 +108,80 @@ pub(super) fn write_out_dataset(
     let finite = |v: f64| if v.is_finite() { Some(v) } else { None };
 
     if has_wil {
-        push_num(&mut columns, &mut vars, "_WIL_", rows.iter().map(|r| r.wil.map(|w| w.0).and_then(finite)).collect());
-        push_num(&mut columns, &mut vars, "Z_WIL", rows.iter().map(|r| r.wil.map(|w| w.1).and_then(finite)).collect());
-        push_num(&mut columns, &mut vars, "P2_WIL", rows.iter().map(|r| r.wil.map(|w| w.2).and_then(finite)).collect());
-        push_num(&mut columns, &mut vars, "P1_WIL", rows.iter().map(|r| r.wil.map(|w| w.3).and_then(finite)).collect());
+        push_num(
+            &mut columns,
+            &mut vars,
+            "_WIL_",
+            rows.iter()
+                .map(|r| r.wil.map(|w| w.0).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "Z_WIL",
+            rows.iter()
+                .map(|r| r.wil.map(|w| w.1).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "P2_WIL",
+            rows.iter()
+                .map(|r| r.wil.map(|w| w.2).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "P1_WIL",
+            rows.iter()
+                .map(|r| r.wil.map(|w| w.3).and_then(finite))
+                .collect(),
+        );
     }
     if has_exact {
-        push_num(&mut columns, &mut vars, "XP1_WIL", rows.iter().map(|r| r.exact.map(|e| e.0).and_then(finite)).collect());
-        push_num(&mut columns, &mut vars, "XP2_WIL", rows.iter().map(|r| r.exact.map(|e| e.1).and_then(finite)).collect());
+        push_num(
+            &mut columns,
+            &mut vars,
+            "XP1_WIL",
+            rows.iter()
+                .map(|r| r.exact.map(|e| e.0).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "XP2_WIL",
+            rows.iter()
+                .map(|r| r.exact.map(|e| e.1).and_then(finite))
+                .collect(),
+        );
     }
     if has_kw {
-        push_num(&mut columns, &mut vars, "_KW_", rows.iter().map(|r| r.kw.map(|w| w.0).and_then(finite)).collect());
-        push_num(&mut columns, &mut vars, "DF_KW", rows.iter().map(|r| r.kw.map(|w| w.1 as f64)).collect());
-        push_num(&mut columns, &mut vars, "P_KW", rows.iter().map(|r| r.kw.map(|w| w.2).and_then(finite)).collect());
+        push_num(
+            &mut columns,
+            &mut vars,
+            "_KW_",
+            rows.iter()
+                .map(|r| r.kw.map(|w| w.0).and_then(finite))
+                .collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "DF_KW",
+            rows.iter().map(|r| r.kw.map(|w| w.1 as f64)).collect(),
+        );
+        push_num(
+            &mut columns,
+            &mut vars,
+            "P_KW",
+            rows.iter()
+                .map(|r| r.kw.map(|w| w.2).and_then(finite))
+                .collect(),
+        );
     }
 
     // Generic per-score-method emission.
@@ -139,18 +200,101 @@ pub(super) fn write_out_dataset(
                 return;
             }
             // _STAT_ = 2-sample statistic (only meaningful when k == 2).
-            push_num(columns, vars, stat_name, rows.iter().map(|r| get(r).and_then(|(t, _)| t.as_ref()).map(|t| t.stat).and_then(finite)).collect());
+            push_num(
+                columns,
+                vars,
+                stat_name,
+                rows.iter()
+                    .map(|r| {
+                        get(r)
+                            .and_then(|(t, _)| t.as_ref())
+                            .map(|t| t.stat)
+                            .and_then(finite)
+                    })
+                    .collect(),
+            );
             if has_z {
-                push_num(columns, vars, z_name, rows.iter().map(|r| get(r).and_then(|(t, _)| t.as_ref()).map(|t| t.z).and_then(finite)).collect());
-                push_num(columns, vars, p2_name, rows.iter().map(|r| get(r).and_then(|(t, _)| t.as_ref()).map(|t| t.p2).and_then(finite)).collect());
+                push_num(
+                    columns,
+                    vars,
+                    z_name,
+                    rows.iter()
+                        .map(|r| {
+                            get(r)
+                                .and_then(|(t, _)| t.as_ref())
+                                .map(|t| t.z)
+                                .and_then(finite)
+                        })
+                        .collect(),
+                );
+                push_num(
+                    columns,
+                    vars,
+                    p2_name,
+                    rows.iter()
+                        .map(|r| {
+                            get(r)
+                                .and_then(|(t, _)| t.as_ref())
+                                .map(|t| t.p2)
+                                .and_then(finite)
+                        })
+                        .collect(),
+                );
             }
-            push_num(columns, vars, p_name, rows.iter().map(|r| get(r).map(|(_, o)| o.p).and_then(finite)).collect());
-            push_num(columns, vars, df_name, rows.iter().map(|r| get(r).map(|(_, o)| o.df as f64)).collect());
+            push_num(
+                columns,
+                vars,
+                p_name,
+                rows.iter()
+                    .map(|r| get(r).map(|(_, o)| o.p).and_then(finite))
+                    .collect(),
+            );
+            push_num(
+                columns,
+                vars,
+                df_name,
+                rows.iter()
+                    .map(|r| get(r).map(|(_, o)| o.df as f64))
+                    .collect(),
+            );
         };
 
-    emit_score(&mut columns, &mut vars, has_med, has_med_z, "_MED_", "Z_MED", "P2_MED", "P_MED", "DF_MED", &|r| r.med.as_ref());
-    emit_score(&mut columns, &mut vars, has_sav, has_sav_z, "_SAV_", "Z_SAV", "P2_SAV", "P_SAV", "DF_SAV", &|r| r.sav.as_ref());
-    emit_score(&mut columns, &mut vars, has_vw, has_vw_z, "_VW_", "Z_VW", "P2_VW", "P_VW", "DF_VW", &|r| r.vw.as_ref());
+    emit_score(
+        &mut columns,
+        &mut vars,
+        has_med,
+        has_med_z,
+        "_MED_",
+        "Z_MED",
+        "P2_MED",
+        "P_MED",
+        "DF_MED",
+        &|r| r.med.as_ref(),
+    );
+    emit_score(
+        &mut columns,
+        &mut vars,
+        has_sav,
+        has_sav_z,
+        "_SAV_",
+        "Z_SAV",
+        "P2_SAV",
+        "P_SAV",
+        "DF_SAV",
+        &|r| r.sav.as_ref(),
+    );
+    emit_score(
+        &mut columns,
+        &mut vars,
+        has_vw,
+        has_vw_z,
+        "_VW_",
+        "Z_VW",
+        "P2_VW",
+        "P_VW",
+        "DF_VW",
+        &|r| r.vw.as_ref(),
+    );
 
     let n_vars = vars.len();
     let df = DataFrame::new(columns)?;

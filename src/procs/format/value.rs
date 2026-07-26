@@ -53,10 +53,7 @@ pub(super) fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, User
         if ts.peek().is_kw("other") {
             ts.next(); // consume "other"
             if ts.peek().kind != TokenKind::Eq {
-                return Err(SasError::parse(
-                    "expected '=' after OTHER",
-                    ts.peek().span,
-                ));
+                return Err(SasError::parse("expected '=' after OTHER", ts.peek().span));
             }
             ts.next(); // consume `=`
             let lbl = parse_string_literal(ts)?;
@@ -86,7 +83,11 @@ pub(super) fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, User
         }
     }
 
-    let uf = UserFormat { is_char, ranges, other };
+    let uf = UserFormat {
+        is_char,
+        ranges,
+        other,
+    };
     Ok((name, uf))
 }
 

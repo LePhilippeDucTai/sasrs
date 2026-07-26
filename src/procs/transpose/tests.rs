@@ -68,8 +68,7 @@ fn data_ref(name: &str) -> Option<DatasetRef> {
 #[test]
 fn parse_full_statement() {
     let ast =
-        parse_transpose("proc transpose data=a out=b prefix=p; by g; id k; var x y; run;")
-            .unwrap();
+        parse_transpose("proc transpose data=a out=b prefix=p; by g; id k; var x y; run;").unwrap();
     assert_eq!(ast.data.as_ref().unwrap().name, "a");
     assert_eq!(ast.out.as_ref().unwrap().name, "b");
     assert_eq!(ast.prefix.as_deref(), Some("p"));
@@ -95,8 +94,7 @@ fn parse_unknown_option_errors() {
 #[test]
 fn parse_unknown_substatement_skipped() {
     // The DELETE substatement is unrecognized and should be skipped.
-    let ast =
-        parse_transpose("proc transpose data=a out=b; delete foo; var x; run;").unwrap();
+    let ast = parse_transpose("proc transpose data=a out=b; delete foo; var x; run;").unwrap();
     assert_eq!(ast.var, vec!["x".to_string()]);
 }
 
@@ -117,7 +115,10 @@ fn normalize_name_rules() {
 fn execute_simple_no_by_no_id() {
     let mut session = make_session();
     let df = df!["x" => [10.0_f64, 20.0, 30.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -146,7 +147,10 @@ fn execute_simple_no_by_no_id() {
 fn execute_prefix_renames_cols() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -173,7 +177,10 @@ fn execute_with_by_pads_shorter_group() {
         "x" => [10.0_f64, 11.0, 20.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("g"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("g"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -208,7 +215,10 @@ fn execute_with_id_names_columns() {
         "x" => [1.0_f64, 2.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("k", 4), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("k", 4), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -241,7 +251,10 @@ fn execute_with_id_numeric_values_normalized() {
         "x" => [7.0_f64, 8.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("k"), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("k"), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -274,7 +287,10 @@ fn execute_duplicate_id_in_group_errors() {
         "x" => [1.0_f64, 2.0]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![char_meta("k", 1), num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![char_meta("k", 1), num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -304,7 +320,10 @@ fn execute_mixing_char_and_numeric_makes_char_cols() {
         "y" => ["a", "b"]
     ]
     .unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x"), char_meta("y", 1)] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), char_meta("y", 1)],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -337,10 +356,7 @@ fn execute_mixing_char_and_numeric_makes_char_cols() {
 
     // _NAME_ rows are the source names x, y.
     let name = read_col(&session, "O", "_NAME_");
-    assert_eq!(
-        name,
-        vec![Value::Char("x".into()), Value::Char("y".into())]
-    );
+    assert_eq!(name, vec![Value::Char("x".into()), Value::Char("y".into())]);
 }
 
 #[test]
@@ -381,7 +397,10 @@ fn execute_default_var_all_numeric_excludes_by_and_id() {
 fn execute_name_option_renames_name_col() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -405,7 +424,10 @@ fn execute_name_option_renames_name_col() {
 fn execute_missing_out_errors() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {
@@ -427,7 +449,10 @@ fn execute_missing_out_errors() {
 fn execute_emits_dataset_note() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
 
     let ast = TransposeAst {

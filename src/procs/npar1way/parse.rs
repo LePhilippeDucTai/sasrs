@@ -143,9 +143,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
         })
     })?;
 
-    let class_var = class_var.ok_or_else(|| {
-        SasError::runtime("PROC NPAR1WAY requires a CLASS statement.")
-    })?;
+    let class_var =
+        class_var.ok_or_else(|| SasError::runtime("PROC NPAR1WAY requires a CLASS statement."))?;
 
     // SAS default: with NO test/score option at all, run Wilcoxon (k=2) and
     // Kruskal-Wallis (k≥2). Enabling both flags reproduces that behaviour. A

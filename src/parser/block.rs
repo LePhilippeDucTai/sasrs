@@ -3,7 +3,10 @@ use super::*;
 pub enum Block {
     Global(GlobalStmt),
     DataStep(DataStepAst),
-    Proc { name: String, ast: ProcAst },
+    Proc {
+        name: String,
+        ast: ProcAst,
+    },
     /// `run;` isolé ou statement vide : écho dans le log, aucune action.
     Empty,
 }
@@ -34,15 +37,20 @@ pub(super) fn level_after_prefix(name: &str, prefix: &str) -> Option<u8> {
 /// Mot-clé qui ouvre un bloc (frontière de step implicite). Les statements
 /// globaux sont des frontières de step en SAS, au même titre que DATA/PROC.
 pub(super) fn is_block_head_kw(lower: &str) -> bool {
-    matches!(lower, "data" | "proc" | "libname" | "filename" | "options" | "ods")
-        || title_level(lower).is_some()
+    matches!(
+        lower,
+        "data" | "proc" | "libname" | "filename" | "options" | "ods"
+    ) || title_level(lower).is_some()
         || footnote_level(lower).is_some()
 }
 
 pub(super) fn validate_sas_name(name: &str, span: Span) -> Result<()> {
     if name.len() > 32 {
         return Err(SasError::parse(
-            format!("The name {} exceeds the SAS maximum of 32 characters.", name.to_uppercase()),
+            format!(
+                "The name {} exceeds the SAS maximum of 32 characters.",
+                name.to_uppercase()
+            ),
             span,
         ));
     }

@@ -75,7 +75,10 @@ fn parse_method(ts: &mut StatementStream) -> Result<DistMethod> {
         "cosine" => Ok(DistMethod::Cosine),
         "corr" | "correlation" => Ok(DistMethod::Corr),
         other => Err(SasError::parse(
-            format!("Unknown METHOD= value '{}' on PROC DISTANCE.", other.to_uppercase()),
+            format!(
+                "Unknown METHOD= value '{}' on PROC DISTANCE.",
+                other.to_uppercase()
+            ),
             span,
         )),
     }
@@ -216,7 +219,7 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
                 return Err(SasError::runtime(format!(
                     "Variable '{}' not found in dataset '{}'.",
                     nm, display
-                )))
+                )));
             }
         }
     }

@@ -47,7 +47,10 @@ pub(super) fn parse_method(ts: &mut StatementStream) -> Result<LinkMethod> {
         "single" => Ok(LinkMethod::Single),
         "complete" | "com" => Ok(LinkMethod::Complete),
         other => Err(SasError::parse(
-            format!("Unknown METHOD= value '{}' on PROC CLUSTER.", other.to_uppercase()),
+            format!(
+                "Unknown METHOD= value '{}' on PROC CLUSTER.",
+                other.to_uppercase()
+            ),
             span,
         )),
     }

@@ -45,9 +45,11 @@ impl SourceFile {
             return Vec::new();
         }
         let first = self.line_of(span.start.min(self.text.len().saturating_sub(1)));
-        let last = self.line_of(span.end.saturating_sub(1).min(self.text.len().saturating_sub(1)));
-        (first..=last)
-            .map(|l| (l + 1, self.line_text(l)))
-            .collect()
+        let last = self.line_of(
+            span.end
+                .saturating_sub(1)
+                .min(self.text.len().saturating_sub(1)),
+        );
+        (first..=last).map(|l| (l + 1, self.line_text(l))).collect()
     }
 }

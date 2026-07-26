@@ -73,5 +73,5 @@ fn approx_eq(out: &[Value], exp: &[f64]) {
     }
 }
 
-mod parse_rank;
 mod execute_method;
+mod parse_rank;

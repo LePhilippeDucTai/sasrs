@@ -18,14 +18,22 @@ pub(crate) fn fn_tan(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// ARSIN(x): arcsine (domain -1 to +1, result in radians).
 pub(crate) fn fn_arsin(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num_checked(args, ctx, |f| {
-        if f < -1.0 || f > 1.0 { None } else { Some(f.asin()) }
+        if f < -1.0 || f > 1.0 {
+            None
+        } else {
+            Some(f.asin())
+        }
     })
 }
 
 /// ARCOS(x): arccosine (domain -1 to +1, result in radians).
 pub(crate) fn fn_arcos(args: &[Value], ctx: &mut EvalCtx) -> Value {
     unary_num_checked(args, ctx, |f| {
-        if f < -1.0 || f > 1.0 { None } else { Some(f.acos()) }
+        if f < -1.0 || f > 1.0 {
+            None
+        } else {
+            Some(f.acos())
+        }
     })
 }
 

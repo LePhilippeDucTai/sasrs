@@ -128,10 +128,7 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
 
         let headers = vec!["Member Name".to_string()];
         let aligns = vec![Align::Left];
-        let rows: Vec<Vec<String>> = tables
-            .into_iter()
-            .map(|t| vec![t.to_uppercase()])
-            .collect();
+        let rows: Vec<Vec<String>> = tables.into_iter().map(|t| vec![t.to_uppercase()]).collect();
         session.listing.write_table(&headers, &aligns, &rows);
         return Ok(());
     }
@@ -289,7 +286,7 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
                 VarType::Char => "Char",
             };
             vec![
-                (i + 1).to_string(),                              // creation-order #
+                (i + 1).to_string(), // creation-order #
                 v.name.clone(),
                 type_str.to_string(),
                 v.length.to_string(),
@@ -313,10 +310,12 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
     let types: Vec<Option<f64>> = ds
         .vars
         .iter()
-        .map(|v| Some(match v.ty {
-            VarType::Num => 1.0,
-            VarType::Char => 2.0,
-        }))
+        .map(|v| {
+            Some(match v.ty {
+                VarType::Num => 1.0,
+                VarType::Char => 2.0,
+            })
+        })
         .collect();
     let lengths: Vec<Option<f64>> = ds.vars.iter().map(|v| Some(v.length as f64)).collect();
     let varnums: Vec<Option<f64>> = (0..ds.vars.len()).map(|i| Some((i + 1) as f64)).collect();

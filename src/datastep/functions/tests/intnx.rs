@@ -131,7 +131,10 @@ fn intnx_missing_date_is_missing() {
 
 #[test]
 fn find_basic() {
-    assert_eq!(invoke("FIND", &[chr("hello world"), chr("world")]), num(7.0));
+    assert_eq!(
+        invoke("FIND", &[chr("hello world"), chr("world")]),
+        num(7.0)
+    );
 }
 
 #[test]
@@ -142,12 +145,21 @@ fn find_not_found() {
 #[test]
 fn find_with_start_pos() {
     // Find "o" starting from position 5 in "hello world"
-    assert_eq!(invoke("FIND", &[chr("hello world"), chr("o"), num(5.0)]), num(8.0));
+    assert_eq!(
+        invoke("FIND", &[chr("hello world"), chr("o"), num(5.0)]),
+        num(8.0)
+    );
 }
 
 #[test]
 fn find_case_insensitive() {
-    assert_eq!(invoke("FIND", &[chr("Hello World"), chr("WORLD"), num(1.0), chr("i")]), num(7.0));
+    assert_eq!(
+        invoke(
+            "FIND",
+            &[chr("Hello World"), chr("WORLD"), num(1.0), chr("i")]
+        ),
+        num(7.0)
+    );
 }
 
 #[test]
@@ -169,19 +181,28 @@ fn findc_not_found() {
 
 #[test]
 fn findc_with_start_pos() {
-    assert_eq!(invoke("FINDC", &[chr("hello"), chr("lo"), num(4.0)]), num(4.0));
+    assert_eq!(
+        invoke("FINDC", &[chr("hello"), chr("lo"), num(4.0)]),
+        num(4.0)
+    );
 }
 
 #[test]
 fn findc_case_insensitive() {
-    assert_eq!(invoke("FINDC", &[chr("Hello"), chr("EL"), num(1.0), chr("i")]), num(2.0));
+    assert_eq!(
+        invoke("FINDC", &[chr("Hello"), chr("EL"), num(1.0), chr("i")]),
+        num(2.0)
+    );
 }
 
 // ── COUNT ────────────────────────────────────────────────────────────────
 
 #[test]
 fn count_basic() {
-    assert_eq!(invoke("COUNT", &[chr("hello hello"), chr("hello")]), num(2.0));
+    assert_eq!(
+        invoke("COUNT", &[chr("hello hello"), chr("hello")]),
+        num(2.0)
+    );
 }
 
 #[test]
@@ -196,7 +217,10 @@ fn count_overlapping() {
 
 #[test]
 fn count_case_insensitive() {
-    assert_eq!(invoke("COUNT", &[chr("Hello hello"), chr("HELLO"), chr("i")]), num(2.0));
+    assert_eq!(
+        invoke("COUNT", &[chr("Hello hello"), chr("HELLO"), chr("i")]),
+        num(2.0)
+    );
 }
 
 // ── COUNTC ───────────────────────────────────────────────────────────────
@@ -218,7 +242,10 @@ fn countc_all_chars_in_set() {
 
 #[test]
 fn countc_case_insensitive() {
-    assert_eq!(invoke("COUNTC", &[chr("Hello"), chr("EL"), chr("i")]), num(3.0));
+    assert_eq!(
+        invoke("COUNTC", &[chr("Hello"), chr("EL"), chr("i")]),
+        num(3.0)
+    );
 }
 
 // ── VERIFY ───────────────────────────────────────────────────────────────
@@ -235,7 +262,10 @@ fn verify_first_not_in_set() {
 
 #[test]
 fn verify_middle_not_in_set() {
-    assert_eq!(invoke("VERIFY", &[chr("hello world"), chr("hello")]), num(6.0));
+    assert_eq!(
+        invoke("VERIFY", &[chr("hello world"), chr("hello")]),
+        num(6.0)
+    );
 }
 
 #[test]
@@ -248,22 +278,34 @@ fn verify_empty_target() {
 
 #[test]
 fn translate_basic() {
-    assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("HELLO"), chr("hello")]), chr("HELLO"));
+    assert_eq!(
+        invoke("TRANSLATE", &[chr("hello"), chr("HELLO"), chr("hello")]),
+        chr("HELLO")
+    );
 }
 
 #[test]
 fn translate_partial_mapping() {
-    assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("12"), chr("he")]), chr("12llo"));
+    assert_eq!(
+        invoke("TRANSLATE", &[chr("hello"), chr("12"), chr("he")]),
+        chr("12llo")
+    );
 }
 
 #[test]
 fn translate_removal() {
-    assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("1"), chr("helo")]), chr("1"));
+    assert_eq!(
+        invoke("TRANSLATE", &[chr("hello"), chr("1"), chr("helo")]),
+        chr("1")
+    );
 }
 
 #[test]
 fn translate_no_change() {
-    assert_eq!(invoke("TRANSLATE", &[chr("hello"), chr("abc"), chr("xyz")]), chr("hello"));
+    assert_eq!(
+        invoke("TRANSLATE", &[chr("hello"), chr("abc"), chr("xyz")]),
+        chr("hello")
+    );
 }
 
 // ── REVERSE ───────────────────────────────────────────────────────────────
@@ -314,17 +356,26 @@ fn repeat_truncates_decimal() {
 
 #[test]
 fn propcase_basic() {
-    assert_eq!(invoke("PROPCASE", &[chr("hello world")]), chr("Hello World"));
+    assert_eq!(
+        invoke("PROPCASE", &[chr("hello world")]),
+        chr("Hello World")
+    );
 }
 
 #[test]
 fn propcase_mixed_case() {
-    assert_eq!(invoke("PROPCASE", &[chr("HELLO world")]), chr("Hello World"));
+    assert_eq!(
+        invoke("PROPCASE", &[chr("HELLO world")]),
+        chr("Hello World")
+    );
 }
 
 #[test]
 fn propcase_custom_delimiter() {
-    assert_eq!(invoke("PROPCASE", &[chr("hello-world"), chr("-")]), chr("Hello-World"));
+    assert_eq!(
+        invoke("PROPCASE", &[chr("hello-world"), chr("-")]),
+        chr("Hello-World")
+    );
 }
 
 #[test]
@@ -341,17 +392,26 @@ fn propcase_single_word() {
 
 #[test]
 fn compbl_multiple_spaces() {
-    assert_eq!(invoke("COMPBL", &[chr("hello    world")]), chr("hello world"));
+    assert_eq!(
+        invoke("COMPBL", &[chr("hello    world")]),
+        chr("hello world")
+    );
 }
 
 #[test]
 fn compbl_leading_trailing() {
-    assert_eq!(invoke("COMPBL", &[chr("  hello world  ")]), chr("hello world"));
+    assert_eq!(
+        invoke("COMPBL", &[chr("  hello world  ")]),
+        chr("hello world")
+    );
 }
 
 #[test]
 fn compbl_mixed_whitespace() {
-    assert_eq!(invoke("COMPBL", &[chr("hello  \t  world")]), chr("hello world"));
+    assert_eq!(
+        invoke("COMPBL", &[chr("hello  \t  world")]),
+        chr("hello world")
+    );
 }
 
 #[test]
@@ -363,7 +423,10 @@ fn compbl_empty() {
 
 #[test]
 fn substrn_basic() {
-    assert_eq!(invoke("SUBSTRN", &[chr("hello"), num(2.0), num(3.0)]), chr("ell"));
+    assert_eq!(
+        invoke("SUBSTRN", &[chr("hello"), num(2.0), num(3.0)]),
+        chr("ell")
+    );
 }
 
 #[test]
@@ -376,7 +439,7 @@ fn substrn_out_of_bounds_no_error() {
     let mut c = ctx();
     let r = invoke_ctx("SUBSTRN", &[chr("abc"), num(10.0)], &mut c);
     assert_eq!(r, chr(""));
-    assert!(!c.error_flag);  // Unlike SUBSTR, no error flag
+    assert!(!c.error_flag); // Unlike SUBSTR, no error flag
 }
 
 #[test]

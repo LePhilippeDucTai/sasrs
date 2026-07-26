@@ -7,9 +7,15 @@ use polars::df;
 fn phi_inv_known_quantiles() {
     // Standard probit reference values.
     assert!((phi_inv(0.5)).abs() < 1e-12, "phi_inv(0.5)");
-    assert!((phi_inv(0.975) - 1.959963985).abs() < 1e-7, "phi_inv(0.975)");
+    assert!(
+        (phi_inv(0.975) - 1.959963985).abs() < 1e-7,
+        "phi_inv(0.975)"
+    );
     assert!((phi_inv(0.95) - 1.644853627).abs() < 1e-7, "phi_inv(0.95)");
-    assert!((phi_inv(0.025) + 1.959963985).abs() < 1e-7, "phi_inv(0.025)");
+    assert!(
+        (phi_inv(0.025) + 1.959963985).abs() < 1e-7,
+        "phi_inv(0.025)"
+    );
     // Round-trip with probnorm.
     for &p in &[0.01, 0.1, 0.3, 0.6, 0.9, 0.99] {
         let z = phi_inv(p);
@@ -37,7 +43,11 @@ fn shapiro_wilk_low_w_for_outlier() {
     let (wn, _) = shapiro_wilk(&normalish);
     let (ws, ps) = shapiro_wilk(&skewed);
     assert!(ws.unwrap() < wn.unwrap(), "outlier W should be smaller");
-    assert!(ps.unwrap() < 0.2, "p for skewed sample should be small: {:?}", ps);
+    assert!(
+        ps.unwrap() < 0.2,
+        "p for skewed sample should be small: {:?}",
+        ps
+    );
 }
 
 #[test]
@@ -108,10 +118,16 @@ fn cvm_pvalue_monotone() {
 fn normality_block_emitted_only_with_normal() {
     let mut session = make_session();
     let df = df!["x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: None,
@@ -121,7 +137,10 @@ fn normality_block_emitted_only_with_normal() {
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("Tests for Normality"), "listing: {listing}");
+    assert!(
+        listing.contains("Tests for Normality"),
+        "listing: {listing}"
+    );
     assert!(listing.contains("Shapiro-Wilk"), "listing: {listing}");
     assert!(listing.contains("Anderson-Darling"), "listing: {listing}");
     assert!(listing.contains("Cramer-von Mises"), "listing: {listing}");
@@ -133,10 +152,16 @@ fn normality_degenerate_note_no_panic() {
     let mut session = make_session();
     // Constant column → zero variance → NOTE, no panic, no table.
     let df = df!["x" => [5.0_f64, 5.0, 5.0, 5.0]].unwrap();
-    let ds = SasDataset { df, vars: vec![num_meta("x")] };
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
     write_dataset(&mut session, "T", ds);
     let ast = UnivariateAst {
-        data: Some(DatasetRef { libref: Some("WORK".into()), name: "T".into() }),
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
         var: vec!["x".into()],
         by: vec![],
         weight: None,
@@ -146,8 +171,14 @@ fn normality_degenerate_note_no_panic() {
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.into_string();
-    assert!(listing.contains("Tests for Normality"), "listing: {listing}");
-    assert!(listing.contains("at least 3 nonmissing"), "listing: {listing}");
+    assert!(
+        listing.contains("Tests for Normality"),
+        "listing: {listing}"
+    );
+    assert!(
+        listing.contains("at least 3 nonmissing"),
+        "listing: {listing}"
+    );
 }
 
 #[test]
@@ -165,10 +196,8 @@ fn parse_normal_option_on_var() {
 
 #[test]
 fn parse_graphics_statements_skipped() {
-    let ast = parse_univ(
-        "proc univariate data=a; var x; histogram x / normal; qqplot x; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_univ("proc univariate data=a; var x; histogram x / normal; qqplot x; run;").unwrap();
     assert_eq!(ast.plots.len(), 2);
     assert_eq!(ast.plots[0].kind, UnivariatePlotKind::Histogram);
     assert_eq!(ast.plots[0].var.as_deref(), Some("x"));
@@ -186,8 +215,7 @@ fn parse_data_and_var() {
 
 #[test]
 fn parse_by_statement_captured() {
-    let ast =
-        parse_univ("proc univariate data=work.t; by g descending h; var x y; run;").unwrap();
+    let ast = parse_univ("proc univariate data=work.t; by g descending h; var x y; run;").unwrap();
     assert_eq!(ast.var, vec!["x", "y"]);
     assert_eq!(
         ast.by,
@@ -204,10 +232,9 @@ fn parse_noprint_and_default_var() {
 
 #[test]
 fn parse_output_statement() {
-    let ast = parse_univ(
-        "proc univariate data=a noprint; var x; output out=o mean=mx n=nx q1=q1x; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_univ("proc univariate data=a noprint; var x; output out=o mean=mx n=nx q1=q1x; run;")
+            .unwrap();
     let out = ast.output.as_ref().unwrap();
     assert_eq!(out.out.name, "o");
     assert_eq!(

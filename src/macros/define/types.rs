@@ -1,4 +1,3 @@
-
 /// Définition d'une macro capturée par `%macro name(params); <body> %mend;`.
 ///
 /// `body` est le texte VERBATIM entre le `;` qui clôt la liste de paramètres et

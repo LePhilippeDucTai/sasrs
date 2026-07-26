@@ -6,7 +6,12 @@ impl MacroEngine {
     /// tour) et avale le `;` terminal. En OPEN CODE (hors d'une macro), `%return`
     /// est sans objet : SAS émet un avertissement ; on émet une NOTE propre et on
     /// NE pose PAS le drapeau (rien à interrompre). Rend l'index après le `;`.
-    pub(crate) fn consume_return(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_return(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%return".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
@@ -30,7 +35,12 @@ impl MacroEngine {
     /// (l'appelant l'observe et stoppe à son tour) — il n'est PAS réinitialisé par
     /// `expand_invocation`. On NE fait jamais `process::exit`/`panic`. Rend
     /// l'index après le `;`.
-    pub(crate) fn consume_abort(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_abort(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%abort".len();
         // Lire les options/arguments jusqu'au `;`.
         let arg_start = j;
@@ -80,7 +90,12 @@ impl MacroEngine {
     /// (le `%goto` peut sauter vers une étiquette du corps englobant). `budget`
     /// partagé décrémenté à chaque saut ; épuisé → NOTE d'erreur (anti-boucle).
     /// Open code → NOTE propre. Rend l'index après le `;`.
-    pub(crate) fn consume_goto(&mut self, chars: &[char], i: usize, out: &mut String) -> Option<usize> {
+    pub(crate) fn consume_goto(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let mut j = i + "%goto".len();
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;

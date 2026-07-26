@@ -9,7 +9,14 @@ fn select_star() {
     assert_eq!(sel.items.len(), 1);
     assert_eq!(sel.items[0].expr, SqlExpr::Star);
     assert_eq!(sel.items[0].alias, None);
-    assert_eq!(sel.from, vec![FromItem { table: dref("a"), alias: None, subquery: None }]);
+    assert_eq!(
+        sel.from,
+        vec![FromItem {
+            table: dref("a"),
+            alias: None,
+            subquery: None
+        }]
+    );
     assert!(!sel.distinct);
 }
 
@@ -45,8 +52,9 @@ fn select_cols_where() {
 
 #[test]
 fn create_table_group_having_count_star() {
-    let stmt =
-        one("create table b as select a.x, count(*) as n from t as a group by 1 having count(*) > 1;");
+    let stmt = one(
+        "create table b as select a.x, count(*) as n from t as a group by 1 having count(*) > 1;",
+    );
     let SqlStmt::CreateTableAs { table, query } = stmt else {
         panic!("expected CreateTableAs");
     };
@@ -302,9 +310,7 @@ fn delete_with_missing_compare() {
         Some(SqlExpr::Binary {
             op: BinaryOp::Eq,
             left: Box::new(var("x")),
-            right: Box::new(SqlExpr::Base(Expr::Missing(
-                crate::value::MissingKind::Dot
-            ))),
+            right: Box::new(SqlExpr::Base(Expr::Missing(crate::value::MissingKind::Dot))),
         })
     );
 }
@@ -351,7 +357,14 @@ fn union_all_set_op() {
     assert_eq!(op, SetOp::Union);
     assert!(all);
     assert_eq!(rhs.items[0].expr, var("x"));
-    assert_eq!(rhs.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
+    assert_eq!(
+        rhs.from,
+        vec![FromItem {
+            table: dref("b"),
+            alias: None,
+            subquery: None
+        }]
+    );
 }
 
 #[test]
@@ -423,7 +436,14 @@ fn subquery_in_where_parses() {
     assert_eq!(*expr, var("x"));
     assert!(!negated);
     assert_eq!(query.items[0].expr, var("y"));
-    assert_eq!(query.from, vec![FromItem { table: dref("b"), alias: None, subquery: None }]);
+    assert_eq!(
+        query.from,
+        vec![FromItem {
+            table: dref("b"),
+            alias: None,
+            subquery: None
+        }]
+    );
 }
 
 #[test]

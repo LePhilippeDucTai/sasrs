@@ -31,8 +31,8 @@ pub(super) fn determine_plan(ast: &MixedAst) -> Result<Plan> {
             }
         }
     } else if let Some(rnd) = random {
-        let is_intercept = rnd.effects.len() == 1
-            && rnd.effects[0].eq_ignore_ascii_case("intercept");
+        let is_intercept =
+            rnd.effects.len() == 1 && rnd.effects[0].eq_ignore_ascii_case("intercept");
         if !is_intercept {
             return Err(SasError::runtime(
                 "Only RANDOM INTERCEPT is implemented in PROC MIXED.",
@@ -167,7 +167,9 @@ pub(super) fn build_observations_gen(
     levels.sort_by(|a, b| a.sas_cmp(b));
     let n_subjects = levels.len();
     if n_subjects < 2 {
-        return Err(SasError::runtime("PROC MIXED requires at least 2 subjects."));
+        return Err(SasError::runtime(
+            "PROC MIXED requires at least 2 subjects.",
+        ));
     }
     let level_index = |v: &Value| -> usize {
         levels

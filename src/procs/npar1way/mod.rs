@@ -112,24 +112,23 @@ use crate::procs::common::{self, decode_column, phi_inv};
 use crate::session::Session;
 use crate::stat::{chisq_cdf, probnorm};
 use crate::token::TokenKind;
-use crate::value::{format_best, Value, VarType};
+use crate::value::{Value, VarType, format_best};
 use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 
-
+mod exact;
+mod output;
 mod parse;
 mod ranks;
-mod scores;
-mod exact;
 mod report;
-mod output;
+mod scores;
 
 pub use parse::parse;
 
-use ranks::*;
-use scores::*;
 use exact::*;
-use report::*;
 use output::*;
+use ranks::*;
+use report::*;
+use scores::*;
 
 #[derive(Debug, Clone)]
 pub struct NparAst {
@@ -212,7 +211,10 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
         .iter()
         .position(|m| m.name.eq_ignore_ascii_case(&ast.class_var))
         .ok_or_else(|| {
-            SasError::runtime(format!("Variable {} not found.", ast.class_var.to_uppercase()))
+            SasError::runtime(format!(
+                "Variable {} not found.",
+                ast.class_var.to_uppercase()
+            ))
         })?;
     let class_vals = decode_column(&ds, class_idx)?;
 
@@ -278,8 +280,7 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
         }
 
         // Distinct non-missing CLASS levels within this BY group (sas_cmp order).
-        let levels =
-            crate::procs::lincom::class_levels(grp_rows.iter().map(|&r| &class_vals[r]));
+        let levels = crate::procs::lincom::class_levels(grp_rows.iter().map(|&r| &class_vals[r]));
         if levels.len() < 2 {
             return Err(SasError::runtime(format!(
                 "The CLASS variable {} must have at least 2 levels.",
@@ -329,14 +330,7 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
                 if let Some(w) = &res.wilcoxon {
                     centered(session, "Wilcoxon Two-Sample Test");
                     session.listing.blank();
-                    write_two_sample_table(
-                        session,
-                        w.w,
-                        w.ew,
-                        w.var_w.sqrt(),
-                        w.z,
-                        w.p,
-                    );
+                    write_two_sample_table(session, w.w, w.ew, w.var_w.sqrt(), w.z, w.p);
                     session.listing.blank();
                     out_row.wil = Some((w.w, w.z, w.p, normal_p1(w.z)));
 

@@ -71,7 +71,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<OptionsAst> {
     // Parse sub-statements until `run;` or `quit;` (combinateur partagé M31).
     common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
 
-    Ok(OptionsAst { option_names, short, long })
+    Ok(OptionsAst {
+        option_names,
+        short,
+        long,
+    })
 }
 
 /// A known SAS option with its canonical name and how to render it.
@@ -88,17 +92,50 @@ enum OptionValue<'a> {
 fn all_known_options(session: &Session) -> Vec<(&'static str, OptionValue<'_>)> {
     vec![
         ("OBS", OptionValue::NumOrMax(session.options.obs)),
-        ("FIRSTOBS", OptionValue::Num(session.options.firstobs.to_string())),
+        (
+            "FIRSTOBS",
+            OptionValue::Num(session.options.firstobs.to_string()),
+        ),
         ("LINESIZE", OptionValue::Num(session.options.ls.to_string())),
         // PAGESIZE: not in SasOptions yet; use a reasonable default
         ("PAGESIZE", OptionValue::Num("60".to_string())),
         // CENTER/NOCENTER: not in SasOptions yet; default NOCENTER (like SAS listing mode)
-        ("CENTER", OptionValue::Bool { name: "CENTER", value: false }),
+        (
+            "CENTER",
+            OptionValue::Bool {
+                name: "CENTER",
+                value: false,
+            },
+        ),
         // DATE/NODATE: not in SasOptions yet; default NODATE
-        ("DATE", OptionValue::Bool { name: "DATE", value: false }),
-        ("MPRINT", OptionValue::Bool { name: "MPRINT", value: session.options.mprint }),
-        ("MLOGIC", OptionValue::Bool { name: "MLOGIC", value: session.options.mlogic }),
-        ("SYMBOLGEN", OptionValue::Bool { name: "SYMBOLGEN", value: session.options.symbolgen }),
+        (
+            "DATE",
+            OptionValue::Bool {
+                name: "DATE",
+                value: false,
+            },
+        ),
+        (
+            "MPRINT",
+            OptionValue::Bool {
+                name: "MPRINT",
+                value: session.options.mprint,
+            },
+        ),
+        (
+            "MLOGIC",
+            OptionValue::Bool {
+                name: "MLOGIC",
+                value: session.options.mlogic,
+            },
+        ),
+        (
+            "SYMBOLGEN",
+            OptionValue::Bool {
+                name: "SYMBOLGEN",
+                value: session.options.symbolgen,
+            },
+        ),
     ]
 }
 
@@ -108,8 +145,14 @@ fn render_option(name: &str, val: &OptionValue<'_>) -> String {
         OptionValue::Num(v) => format!("{name}={v}"),
         OptionValue::NumOrMax(None) => format!("{name}=MAX"),
         OptionValue::NumOrMax(Some(n)) => format!("{name}={n}"),
-        OptionValue::Bool { name: opt_name, value: true } => opt_name.to_string(),
-        OptionValue::Bool { name: opt_name, value: false } => format!("NO{opt_name}"),
+        OptionValue::Bool {
+            name: opt_name,
+            value: true,
+        } => opt_name.to_string(),
+        OptionValue::Bool {
+            name: opt_name,
+            value: false,
+        } => format!("NO{opt_name}"),
     }
 }
 
@@ -133,7 +176,8 @@ pub fn execute(ast: &OptionsAst, session: &mut Session) -> Result<()> {
             for req in &ast.option_names {
                 let canon = req.as_str();
                 let found = known_map.get(canon).or_else(|| {
-                    canon.strip_prefix("NO")
+                    canon
+                        .strip_prefix("NO")
                         .and_then(|stripped| known_map.get(stripped))
                 });
                 if let Some(val) = found {

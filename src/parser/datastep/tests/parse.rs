@@ -102,7 +102,10 @@ fn parse_retain_date_literal_bare() {
     let ast = parse("data o; retain d 21710d; run;").unwrap();
     assert_eq!(
         ast.stmts,
-        vec![DsStmt::Retain(vec![("d".to_string(), Some(Expr::Num(21710.0)))])]
+        vec![DsStmt::Retain(vec![(
+            "d".to_string(),
+            Some(Expr::Num(21710.0))
+        )])]
     );
 }
 
@@ -112,7 +115,10 @@ fn parse_retain_date_literal_quoted() {
     let ast = parse("data o; retain d '02JAN1960'd; run;").unwrap();
     assert_eq!(
         ast.stmts,
-        vec![DsStmt::Retain(vec![("d".to_string(), Some(Expr::Num(1.0)))])]
+        vec![DsStmt::Retain(vec![(
+            "d".to_string(),
+            Some(Expr::Num(1.0))
+        )])]
     );
 }
 
@@ -122,7 +128,10 @@ fn parse_retain_datetime_literal() {
     let ast = parse("data o; retain dt '01JAN1960 00:01:00'dt; run;").unwrap();
     assert_eq!(
         ast.stmts,
-        vec![DsStmt::Retain(vec![("dt".to_string(), Some(Expr::Num(60.0)))])]
+        vec![DsStmt::Retain(vec![(
+            "dt".to_string(),
+            Some(Expr::Num(60.0))
+        )])]
     );
 }
 

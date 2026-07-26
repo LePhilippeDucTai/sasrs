@@ -203,6 +203,6 @@ fn two_way_full_type3_effect(
     (t3_a, t3_b, t3_ab, sse_full_ref, sse_full_eff)
 }
 
-mod one_parse;
 mod execute;
+mod one_parse;
 mod two_unbalanced;

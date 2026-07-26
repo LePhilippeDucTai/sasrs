@@ -131,7 +131,10 @@ fn char_single_value_format() {
     };
     assert_eq!(uf.lookup(&Value::Char("PAR".to_string())), Some("Paris"));
     assert_eq!(uf.lookup(&Value::Char("NYC".to_string())), Some("New York"));
-    assert_eq!(uf.lookup(&Value::Char("LON".to_string())), Some("Unknown City"));
+    assert_eq!(
+        uf.lookup(&Value::Char("LON".to_string())),
+        Some("Unknown City")
+    );
     // trailing-blank insensitive
     assert_eq!(uf.lookup(&Value::Char("PAR   ".to_string())), Some("Paris"));
 }

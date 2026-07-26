@@ -40,5 +40,5 @@ fn run_det(src: &str) -> crate::RunOutcome {
     )
 }
 
-mod parse;
 mod execute;
+mod parse;

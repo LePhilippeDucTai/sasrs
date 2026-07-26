@@ -1,5 +1,5 @@
 use super::*;
-use crate::graphics::render::{draw_to_file, DrawingSpec, PlotType};
+use crate::graphics::render::{DrawingSpec, PlotType, draw_to_file};
 
 pub fn render(
     session: &mut Session,
@@ -97,7 +97,11 @@ pub fn render(
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
             let n = sorted.len();
             let nf = n as f64;
-            let mean = if n > 0 { sorted.iter().sum::<f64>() / nf } else { 0.0 };
+            let mean = if n > 0 {
+                sorted.iter().sum::<f64>() / nf
+            } else {
+                0.0
+            };
             let std = sample_std(&sorted).unwrap_or(1.0);
             let std = if std > 0.0 { std } else { 1.0 };
             let data: Vec<(f64, f64)> = sorted

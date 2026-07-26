@@ -178,8 +178,20 @@ fn parse_ods_output_two_mappings() {
         stmt,
         GlobalStmt::OdsOutput {
             mappings: vec![
-                ("a".into(), DatasetRef { libref: None, name: "x".into() }),
-                ("b".into(), DatasetRef { libref: None, name: "y".into() }),
+                (
+                    "a".into(),
+                    DatasetRef {
+                        libref: None,
+                        name: "x".into()
+                    }
+                ),
+                (
+                    "b".into(),
+                    DatasetRef {
+                        libref: None,
+                        name: "y".into()
+                    }
+                ),
             ],
             close: false,
         }

@@ -294,7 +294,10 @@ pub(super) fn fit_and_print_ridge_ipc(
                 session.listing.blank();
                 session.listing.blank();
             }
-            centered(session, "Incomplete Principal Components Parameter Estimates");
+            centered(
+                session,
+                "Incomplete Principal Components Parameter Estimates",
+            );
             session.listing.blank();
         }
         let (headers, aligns) = build_headers("PCOMIT");

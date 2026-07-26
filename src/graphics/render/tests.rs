@@ -46,7 +46,10 @@ fn pie_angles_sum_to_tau_and_proportional() {
     assert_eq!(angles.len(), 4);
     // Somme des arcs = 2π.
     let total: f64 = angles.iter().map(|(s, e)| e - s).sum();
-    assert!((total - std::f64::consts::TAU).abs() < 1e-9, "total={total}");
+    assert!(
+        (total - std::f64::consts::TAU).abs() < 1e-9,
+        "total={total}"
+    );
     // Part proportionnelle : 10/80 du tour pour la 1re.
     let sum: f64 = vals.iter().sum();
     let span0 = angles[0].1 - angles[0].0;
@@ -66,11 +69,7 @@ fn pie_angles_all_zero_no_panic() {
 #[test]
 fn draw_pie_creates_nonempty_png() {
     let mut spec = DrawingSpec::new("Pie", "cat", "freq", PlotType::Pie);
-    spec.x_categorical = vec![
-        ("A".into(), 10.0),
-        ("B".into(), 25.0),
-        ("C".into(), 15.0),
-    ];
+    spec.x_categorical = vec![("A".into(), 10.0), ("B".into(), 25.0), ("C".into(), 15.0)];
     let path = tmp_path("sasrs_test_pie.png");
     let _ = std::fs::remove_file(&path);
     let res = draw_to_file(&spec, &path, 600, 500, ImageFmt::Png).unwrap();

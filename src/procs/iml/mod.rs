@@ -38,14 +38,13 @@ use crate::error::{Result, SasError};
 use crate::session::Session;
 use std::collections::HashMap;
 
-
 mod ast;
-mod lexer;
-mod parser;
 mod env;
-mod matrix;
 mod eval;
 mod exec;
+mod lexer;
+mod matrix;
+mod parser;
 mod render;
 
 pub use ast::ImlExpr;
@@ -58,11 +57,11 @@ pub use ast::UnaryOp;
 pub use parser::parse;
 pub use parser::parse_body;
 
-use lexer::*;
 use env::*;
-use matrix::*;
 use eval::*;
 use exec::*;
+use lexer::*;
+use matrix::*;
 use render::*;
 
 // ───────────────────────── Évaluateur ─────────────────────────

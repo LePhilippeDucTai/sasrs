@@ -42,7 +42,6 @@
 //! `parse_dataset_ref` : `ident [ . ident ]` → `DatasetRef` (libref None =
 //! WORK). Les noms SAS font ≤ 32 caractères — valider, sinon ERROR.
 
-
 // Certains helpers ne sont consommés que par les sous-parsers livrés plus
 // tard dans M1 (datastep, global, procs).
 #![allow(dead_code)]
@@ -285,4 +284,3 @@ impl<'a> StatementStream<'a> {
 
 #[cfg(test)]
 mod tests;
-

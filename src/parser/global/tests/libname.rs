@@ -248,7 +248,13 @@ fn title3() {
 #[test]
 fn title9() {
     let stmt = parse("title9 'Footer';").unwrap();
-    assert_eq!(stmt, GlobalStmt::Title { n: 9, text: Some("Footer".into()) });
+    assert_eq!(
+        stmt,
+        GlobalStmt::Title {
+            n: 9,
+            text: Some("Footer".into())
+        }
+    );
 }
 
 #[test]
@@ -262,7 +268,13 @@ fn title5_without_text_clears() {
 #[test]
 fn footnote_simple() {
     let stmt = parse("footnote 'My Note';").unwrap();
-    assert_eq!(stmt, GlobalStmt::Footnote { n: 1, text: Some("My Note".into()) });
+    assert_eq!(
+        stmt,
+        GlobalStmt::Footnote {
+            n: 1,
+            text: Some("My Note".into())
+        }
+    );
 }
 
 #[test]
@@ -284,7 +296,13 @@ fn footnote_unquoted_text_is_error() {
 #[test]
 fn footnote3() {
     let stmt = parse("footnote3 'Third';").unwrap();
-    assert_eq!(stmt, GlobalStmt::Footnote { n: 3, text: Some("Third".into()) });
+    assert_eq!(
+        stmt,
+        GlobalStmt::Footnote {
+            n: 3,
+            text: Some("Third".into())
+        }
+    );
 }
 
 #[test]

@@ -27,13 +27,8 @@ pub(crate) fn run_rsq_improvement(
         if (n as f64) - p_eff <= 0.0 {
             return None;
         }
-        subset_sse(xcols, y, cols, intercept).map(|sse| {
-            if sst > 0.0 {
-                1.0 - sse / sst
-            } else {
-                f64::NAN
-            }
-        })
+        subset_sse(xcols, y, cols, intercept)
+            .map(|sse| if sst > 0.0 { 1.0 - sse / sst } else { f64::NAN })
     };
 
     let maximise = matches!(sel.method, SelMethod::MaxR);

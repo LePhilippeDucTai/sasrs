@@ -194,10 +194,7 @@ pub fn qr_decomposition(a: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>)
     }
 
     // Reduce Q to m×n (first n columns) and R to n×n (first n rows).
-    let q_reduced: Vec<Vec<f64>> = q
-        .iter()
-        .map(|row| row[..n].to_vec())
-        .collect();
+    let q_reduced: Vec<Vec<f64>> = q.iter().map(|row| row[..n].to_vec()).collect();
     let r_reduced: Vec<Vec<f64>> = r[..n].iter().map(|row| row.clone()).collect();
     Ok((q_reduced, r_reduced))
 }
@@ -400,7 +397,11 @@ pub(crate) fn matrix_mult(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 /// Frobenius norm: ‖A‖_F = sqrt(Σ a_ij²).
 fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
-    a.iter().flat_map(|row| row.iter()).map(|&x| x * x).sum::<f64>().sqrt()
+    a.iter()
+        .flat_map(|row| row.iter())
+        .map(|&x| x * x)
+        .sum::<f64>()
+        .sqrt()
 }
 
 /// Solve upper triangular system R @ x = y.
@@ -413,7 +414,9 @@ fn solve_upper_triangular(r: &[Vec<f64>], y: &[f64]) -> Result<Vec<f64>> {
             sum -= r[i][j] * x[j];
         }
         if r[i][i].abs() < 1e-14 {
-            return Err(SasError::Numerical("Singular matrix in back-substitution".into()));
+            return Err(SasError::Numerical(
+                "Singular matrix in back-substitution".into(),
+            ));
         }
         x[i] = sum / r[i][i];
     }

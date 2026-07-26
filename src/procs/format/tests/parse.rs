@@ -10,10 +10,7 @@ fn parse_minimal_empty() {
 
 #[test]
 fn parse_single_value_numeric() {
-    let ast = parse_format_src(
-        "proc format; value sexfmt 1='Male' 2='Female'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value sexfmt 1='Male' 2='Female'; run;").unwrap();
     assert_eq!(ast.values.len(), 1);
     let (name, uf) = &ast.values[0];
     assert_eq!(name, "sexfmt");
@@ -25,10 +22,8 @@ fn parse_single_value_numeric() {
 
 #[test]
 fn parse_char_format_with_dollar() {
-    let ast = parse_format_src(
-        "proc format; value $cityfmt 'PAR'='Paris' 'NYC'='New York'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value $cityfmt 'PAR'='Paris' 'NYC'='New York'; run;")
+        .unwrap();
     assert_eq!(ast.values.len(), 1);
     let (name, uf) = &ast.values[0];
     assert_eq!(name, "$cityfmt");
@@ -59,10 +54,8 @@ fn parse_inclusive_range() {
 #[test]
 fn parse_low_exclusive_upper() {
     // low-<5='Below5'
-    let ast = parse_format_src(
-        "proc format; value f low-<5='Below5' 5-high='AtLeast5'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; value f low-<5='Below5' 5-high='AtLeast5'; run;").unwrap();
     let (_, uf) = &ast.values[0];
     assert!(matches!(uf.ranges[0].from, Bound::Low));
     assert!(matches!(uf.ranges[0].to, Bound::Num(n) if n == 5.0));
@@ -73,10 +66,8 @@ fn parse_low_exclusive_upper() {
 #[test]
 fn parse_exclusive_lower_to_high() {
     // 5<-high='Above5'
-    let ast = parse_format_src(
-        "proc format; value f low-5='AtMost5' 5<-high='Above5'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; value f low-5='AtMost5' 5<-high='Above5'; run;").unwrap();
     let (_, uf) = &ast.values[0];
     // Second range: 5<-high
     assert!(matches!(uf.ranges[1].from, Bound::Num(n) if n == 5.0));
@@ -88,10 +79,7 @@ fn parse_exclusive_lower_to_high() {
 #[test]
 fn parse_both_exclusive() {
     // 1<-<10='Middle'
-    let ast = parse_format_src(
-        "proc format; value f 1<-<10='Middle'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value f 1<-<10='Middle'; run;").unwrap();
     let (_, uf) = &ast.values[0];
     assert!(uf.ranges[0].from_exclusive);
     assert!(uf.ranges[0].to_exclusive);
@@ -100,10 +88,7 @@ fn parse_both_exclusive() {
 #[test]
 fn parse_comma_list() {
     // 1,2,3='Group'  → 3 ranges with same label
-    let ast = parse_format_src(
-        "proc format; value f 1,2,3='Group'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value f 1,2,3='Group'; run;").unwrap();
     let (_, uf) = &ast.values[0];
     assert_eq!(uf.ranges.len(), 3);
     for r in &uf.ranges {
@@ -113,10 +98,7 @@ fn parse_comma_list() {
 
 #[test]
 fn parse_other() {
-    let ast = parse_format_src(
-        "proc format; value f 1='One' other='Unknown'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value f 1='One' other='Unknown'; run;").unwrap();
     let (_, uf) = &ast.values[0];
     assert_eq!(uf.other, Some("Unknown".to_string()));
     assert_eq!(uf.ranges.len(), 1);
@@ -124,10 +106,7 @@ fn parse_other() {
 
 #[test]
 fn parse_multiple_value_stmts() {
-    let ast = parse_format_src(
-        "proc format; value a 1='x'; value b 2='y'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; value a 1='x'; value b 2='y'; run;").unwrap();
     assert_eq!(ast.values.len(), 2);
     assert_eq!(ast.values[0].0, "a");
     assert_eq!(ast.values[1].0, "b");
@@ -136,10 +115,8 @@ fn parse_multiple_value_stmts() {
 #[test]
 fn parse_invalue_numeric_basic() {
     // INVALUE without $ → numeric result.
-    let ast = parse_format_src(
-        "proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;").unwrap();
     assert_eq!(ast.invalues.len(), 1);
     let (name, ui) = &ast.invalues[0];
     assert_eq!(name, "grade");
@@ -155,10 +132,9 @@ fn parse_invalue_numeric_basic() {
 #[test]
 fn parse_invalue_char_with_dollar() {
     // INVALUE with $ → character result.
-    let ast = parse_format_src(
-        "proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; invalue $size 'S'='Small' 'M'='Medium' 'L'='Large'; run;")
+            .unwrap();
     assert_eq!(ast.invalues.len(), 1);
     let (name, ui) = &ast.invalues[0];
     assert_eq!(name, "$size");
@@ -171,10 +147,7 @@ fn parse_invalue_char_with_dollar() {
 #[test]
 fn parse_invalue_other_and_same() {
     // `_same_` → Same variant; `other=.` (unquoted dot) → Missing.
-    let ast = parse_format_src(
-        "proc format; invalue $code low-'Z'=_same_ other=.; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; invalue $code low-'Z'=_same_ other=.; run;").unwrap();
     let (_, ui) = &ast.invalues[0];
     assert!(matches!(ui.ranges[0].result, InformatValue::Same));
     assert!(matches!(ui.other, Some(InformatValue::Missing(_))));
@@ -183,20 +156,14 @@ fn parse_invalue_other_and_same() {
 #[test]
 fn parse_invalue_quoted_string_other() {
     // `other='?'` → Char variant (quoted string result).
-    let ast = parse_format_src(
-        "proc format; invalue $code 'A'='Alpha' other='?'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; invalue $code 'A'='Alpha' other='?'; run;").unwrap();
     let (_, ui) = &ast.invalues[0];
     assert!(matches!(&ui.other, Some(InformatValue::Char(s)) if s == "?"));
 }
 
 #[test]
 fn parse_invalue_range_with_exclusion() {
-    let ast = parse_format_src(
-        "proc format; invalue f 'A'-<'Z'=1; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; invalue f 'A'-<'Z'=1; run;").unwrap();
     let (_, ui) = &ast.invalues[0];
     assert!(!ui.ranges[0].from_exclusive);
     assert!(ui.ranges[0].to_exclusive);
@@ -205,10 +172,8 @@ fn parse_invalue_range_with_exclusion() {
 #[test]
 fn parse_invalue_mixed_with_value() {
     // Can have both VALUE and INVALUE in same PROC FORMAT.
-    let ast = parse_format_src(
-        "proc format; value sexfmt 1='Male'; invalue grade 'A'=4; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; value sexfmt 1='Male'; invalue grade 'A'=4; run;").unwrap();
     assert_eq!(ast.values.len(), 1);
     assert_eq!(ast.invalues.len(), 1);
 }
@@ -218,18 +183,14 @@ fn parse_invalue_mixed_with_value() {
 #[test]
 fn parse_picture_string_bounds_rejected() {
     // PICTURE is numeric-only: quoted (string) bounds are a parse error.
-    let ast = parse_format_src(
-        "proc format; picture mmddyy '01'-'12' = '99/99/9999'; run;",
-    );
+    let ast = parse_format_src("proc format; picture mmddyy '01'-'12' = '99/99/9999'; run;");
     assert!(ast.is_err());
 }
 
 #[test]
 fn parse_picture_numeric_range_template() {
-    let ast = parse_format_src(
-        "proc format; picture mmddyy low-high = '99/99/9999'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; picture mmddyy low-high = '99/99/9999'; run;").unwrap();
     assert_eq!(ast.pictures.len(), 1);
     let (name, up) = &ast.pictures[0];
     assert_eq!(name, "mmddyy");
@@ -253,10 +214,9 @@ fn parse_picture_with_prefix_directive() {
 
 #[test]
 fn parse_picture_with_mult_and_fill() {
-    let ast = parse_format_src(
-        "proc format; picture pct other = '009.9%' (mult=100 fill='*'); run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; picture pct other = '009.9%' (mult=100 fill='*'); run;")
+            .unwrap();
     let (_, up) = &ast.pictures[0];
     assert!(up.ranges.is_empty());
     let (tpl, dir) = up.other.as_ref().unwrap();
@@ -267,10 +227,7 @@ fn parse_picture_with_mult_and_fill() {
 
 #[test]
 fn parse_picture_multiple_ranges() {
-    let ast = parse_format_src(
-        "proc format; picture p 0-9='9' 10-high='999'; run;",
-    )
-    .unwrap();
+    let ast = parse_format_src("proc format; picture p 0-9='9' 10-high='999'; run;").unwrap();
     let (_, up) = &ast.pictures[0];
     assert_eq!(up.ranges.len(), 2);
     assert_eq!(up.ranges[0].template, "9");
@@ -279,10 +236,9 @@ fn parse_picture_multiple_ranges() {
 
 #[test]
 fn parse_picture_coexists_with_value() {
-    let ast = parse_format_src(
-        "proc format; value sexfmt 1='Male'; picture p low-high='009'; run;",
-    )
-    .unwrap();
+    let ast =
+        parse_format_src("proc format; value sexfmt 1='Male'; picture p low-high='009'; run;")
+            .unwrap();
     assert_eq!(ast.values.len(), 1);
     assert_eq!(ast.pictures.len(), 1);
 }

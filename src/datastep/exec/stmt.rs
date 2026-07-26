@@ -112,9 +112,7 @@ impl Runner {
                     // validé qu'elles existent).
                     for t in targets {
                         let disp = t.display();
-                        let Some(o) =
-                            self.outputs.iter().position(|s| s.display == disp)
-                        else {
+                        let Some(o) = self.outputs.iter().position(|s| s.display == disp) else {
                             // Impossible après compile() ; garde-fou.
                             return Err(SasError::runtime(format!(
                                 "Output dataset {disp} is not in the DATA statement output list."
@@ -227,9 +225,10 @@ impl Runner {
     pub(super) fn resolve_lvalue_slot(&mut self, arg: &crate::ast::Expr) -> Result<usize> {
         use crate::ast::Expr;
         match arg {
-            Expr::Var(name) => self.pdv.slot(name).ok_or_else(|| {
-                SasError::runtime(format!("Variable {name} is not addressable."))
-            }),
+            Expr::Var(name) => self
+                .pdv
+                .slot(name)
+                .ok_or_else(|| SasError::runtime(format!("Variable {name} is not addressable."))),
             Expr::Index { name, indices } => {
                 let mut idx_vals = Vec::with_capacity(indices.len());
                 for index in indices {
@@ -239,8 +238,8 @@ impl Runner {
             }
             // `arr(i)` / `arr(i,j)` se parse en Call ; si le nom est un array,
             // c'est une référence d'élément.
-            Expr::Call { name, args } if !args.is_empty()
-                && self.ctx.arrays.contains_key(&name.to_uppercase()) =>
+            Expr::Call { name, args }
+                if !args.is_empty() && self.ctx.arrays.contains_key(&name.to_uppercase()) =>
             {
                 let mut idx_vals = Vec::with_capacity(args.len());
                 for a in args {

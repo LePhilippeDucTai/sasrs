@@ -16,10 +16,7 @@ fn input_list_mode_dollar() {
         ]
     );
     // Le bloc datalines est capturé.
-    assert_eq!(
-        ast.stmts[1],
-        DsStmt::Datalines(vec!["x 1 2".to_string()])
-    );
+    assert_eq!(ast.stmts[1], DsStmt::Datalines(vec!["x 1 2".to_string()]));
 }
 
 #[test]
@@ -51,8 +48,7 @@ fn input_column_mode() {
 
 #[test]
 fn input_formatted_mode() {
-    let ast =
-        parse("data o; input name $char10. d date9. x 8.2; datalines;\n;\nrun;").unwrap();
+    let ast = parse("data o; input name $char10. d date9. x 8.2; datalines;\n;\nrun;").unwrap();
     let DsStmt::Input(items) = &ast.stmts[0] else {
         panic!("expected an INPUT statement");
     };
@@ -169,7 +165,8 @@ fn infile_path_with_numeric_options() {
 fn infile_unknown_option_errors() {
     let err = parse("data o; infile datalines frobnicate; input x; run;").unwrap_err();
     assert!(
-        err.to_string().contains("INFILE option FROBNICATE is not supported."),
+        err.to_string()
+            .contains("INFILE option FROBNICATE is not supported."),
         "got: {err}"
     );
 }
@@ -188,10 +185,7 @@ fn datalines_without_infile_parses() {
 #[test]
 fn cards4_terminator_variant() {
     let ast = parse("data o; input x; cards4;\n1;2\n;;;;\nrun;").unwrap();
-    assert_eq!(
-        ast.stmts[1],
-        DsStmt::Datalines(vec!["1;2".to_string()])
-    );
+    assert_eq!(ast.stmts[1], DsStmt::Datalines(vec!["1;2".to_string()]));
 }
 
 // ── FILE / PUT (M14.2) ───────────────────────────────────────────────
@@ -199,7 +193,12 @@ fn cards4_terminator_variant() {
 #[test]
 fn file_destinations() {
     let ast = parse("data _null_; file print; file log; file 'out.txt'; run;").unwrap();
-    assert_eq!(ast.stmts[0], DsStmt::File { dest: PutDest::Print });
+    assert_eq!(
+        ast.stmts[0],
+        DsStmt::File {
+            dest: PutDest::Print
+        }
+    );
     assert_eq!(ast.stmts[1], DsStmt::File { dest: PutDest::Log });
     assert_eq!(
         ast.stmts[2],
@@ -291,10 +290,9 @@ fn put_empty_is_blank_line() {
 
 #[test]
 fn select_selector_form_parses() {
-    let ast = parse(
-        "data o; select (x); when (1, 2) y = 1; when (3) y = 2; otherwise y = 0; end; run;",
-    )
-    .unwrap();
+    let ast =
+        parse("data o; select (x); when (1, 2) y = 1; when (3) y = 2; otherwise y = 0; end; run;")
+            .unwrap();
     let DsStmt::Select {
         selector,
         whens,
@@ -320,10 +318,7 @@ fn select_selector_form_parses() {
 
 #[test]
 fn select_boolean_form_parses() {
-    let ast = parse(
-        "data o; select; when (x < 1) y = 1; otherwise y = 0; end; run;",
-    )
-    .unwrap();
+    let ast = parse("data o; select; when (x < 1) y = 1; otherwise y = 0; end; run;").unwrap();
     let DsStmt::Select {
         selector, whens, ..
     } = &ast.stmts[0]
@@ -345,10 +340,7 @@ fn select_boolean_form_parses() {
 
 #[test]
 fn select_do_block_body_parses() {
-    let ast = parse(
-        "data o; select (x); when (1) do; a = 1; b = 2; end; end; run;",
-    )
-    .unwrap();
+    let ast = parse("data o; select (x); when (1) do; a = 1; b = 2; end; end; run;").unwrap();
     let DsStmt::Select { whens, .. } = &ast.stmts[0] else {
         panic!("expected a SELECT statement");
     };
@@ -362,10 +354,7 @@ fn select_do_block_body_parses() {
 fn select_boolean_when_rejects_value_list() {
     // En forme booléenne, une liste de valeurs `when (a, b)` est illégale.
     let err = parse("data o; select; when (1, 2) y = 1; end; run;").unwrap_err();
-    assert!(
-        err.to_string().contains("single expression"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("single expression"), "got: {err}");
 }
 
 #[test]
@@ -377,8 +366,5 @@ fn select_missing_end_is_error() {
 #[test]
 fn select_empty_when_list_is_error() {
     let err = parse("data o; select (x); when () y = 1; end; run;").unwrap_err();
-    assert!(
-        err.to_string().contains("at least one value"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("at least one value"), "got: {err}");
 }

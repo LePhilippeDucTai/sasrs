@@ -24,12 +24,11 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column};
-use crate::procs::distance::{distance, DistMethod};
+use crate::procs::distance::{DistMethod, distance};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::VarType;
 use polars::prelude::*;
-
 
 mod kmeans;
 
@@ -60,7 +59,10 @@ fn parse_num(ts: &mut StatementStream, opt: &str) -> Result<f64> {
             ts.next();
             Ok(v)
         }
-        _ => Err(SasError::parse(format!("expected a number after {opt}="), span)),
+        _ => Err(SasError::parse(
+            format!("expected a number after {opt}="),
+            span,
+        )),
     }
 }
 
@@ -175,7 +177,7 @@ pub fn execute(ast: &FastclusAst, session: &mut Session) -> Result<()> {
                 return Err(SasError::runtime(format!(
                     "Variable '{}' not found in dataset '{}'.",
                     nm, display
-                )))
+                )));
             }
         }
     }

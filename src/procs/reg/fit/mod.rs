@@ -3,15 +3,13 @@
 
 use super::*;
 
-
 mod anova;
-mod report;
 mod estimates;
+mod report;
 
 use anova::*;
-use report::*;
 use estimates::*;
-
+use report::*;
 
 mod ols;
 
@@ -279,7 +277,11 @@ pub(super) fn fit_and_print(
     };
 
     // y vector reconstructed from ŷ + resid (avoids threading it in).
-    let y: Vec<f64> = y_hat.iter().zip(resid.iter()).map(|(yh, r)| yh + r).collect();
+    let y: Vec<f64> = y_hat
+        .iter()
+        .zip(resid.iter())
+        .map(|(yh, r)| yh + r)
+        .collect();
     // Per-row weights (w_i·f_i). All-ones in the plain OLS / default path so the
     // weighted formulas below collapse to the original ones byte-for-byte.
     let ones = vec![1.0; n];

@@ -116,10 +116,7 @@ fn link_resets_per_iteration() {
     .unwrap();
     // Chaque itération : link dbl (d=2x), retour, goto past (saute rien),
     // output implicite. d = 2,4,6 sur les 3 obs.
-    assert_eq!(
-        col(&s, "out", "d"),
-        vec![Some(2.0), Some(4.0), Some(6.0)]
-    );
+    assert_eq!(col(&s, "out", "d"), vec![Some(2.0), Some(4.0), Some(6.0)]);
 }
 
 /// GOTO : saut inconditionnel (les statements entre le GOTO et la cible
@@ -227,11 +224,7 @@ fn label_on_various_statements() {
 #[test]
 fn return_without_link_ends_iteration() {
     let mut s = session();
-    let stats = run(
-        "data out; x = 1; return; x = 2; run;",
-        &mut s,
-    )
-    .unwrap();
+    let stats = run("data out; x = 1; return; x = 2; run;", &mut s).unwrap();
     // RETURN sans LINK → fin d'itération avec output implicite : x=1.
     assert_eq!(stats.written, vec![("WORK.OUT".to_string(), 1, 1)]);
     assert_eq!(col(&s, "out", "x"), vec![Some(1.0)]);
@@ -242,7 +235,10 @@ fn return_without_link_ends_iteration() {
 fn duplicate_label_compile_error() {
     let mut s = session();
     let e = run_err("data out; lbl: x = 1; lbl: x = 2; goto lbl; run;", &mut s);
-    assert!(e.contains("LBL") && e.contains("more than once"), "got: {e}");
+    assert!(
+        e.contains("LBL") && e.contains("more than once"),
+        "got: {e}"
+    );
 }
 
 /// Variable créée APRÈS RETAIN _ALL_ : NON retenue automatiquement (remise à
@@ -266,10 +262,6 @@ fn variable_created_after_retain_all_not_retained() {
 #[test]
 fn go_to_two_word_form() {
     let mut s = session();
-    run(
-        "data out; x = 1; go to skip; x = 999; skip: ; run;",
-        &mut s,
-    )
-    .unwrap();
+    run("data out; x = 1; go to skip; x = 999; skip: ; run;", &mut s).unwrap();
     assert_eq!(col(&s, "out", "x"), vec![Some(1.0)]);
 }

@@ -1,4 +1,3 @@
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Tests
 // ──────────────────────────────────────────────────────────────────────────────
@@ -70,7 +69,10 @@ fn make_ctx_with_grade_informat() -> EvalCtx {
             other: Some(InformatValue::Missing(".".to_string())),
         },
     );
-    EvalCtx { format_catalog: cat, ..EvalCtx::default() }
+    EvalCtx {
+        format_catalog: cat,
+        ..EvalCtx::default()
+    }
 }
 
 fn make_ctx_with_size_char_informat() -> EvalCtx {
@@ -99,7 +101,10 @@ fn make_ctx_with_size_char_informat() -> EvalCtx {
             other: Some(InformatValue::Char("Unknown".to_string())),
         },
     );
-    EvalCtx { format_catalog: cat, ..EvalCtx::default() }
+    EvalCtx {
+        format_catalog: cat,
+        ..EvalCtx::default()
+    }
 }
 
 // ── INTCK ─────────────────────────────────────────────────────────────────
@@ -133,9 +138,9 @@ fn num_val(v: Value) -> f64 {
     }
 }
 
-mod unknown;
+mod intnx;
+mod probbnml;
 mod sinh;
 mod substr;
-mod intnx;
+mod unknown;
 mod whichc;
-mod probbnml;

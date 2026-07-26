@@ -7,7 +7,11 @@ fn test_wilcoxon_basic() {
     // With SAS continuity correction: Z = -(|6-10.5|-0.5)/sqrt(5.25) = -4.0/2.2913 ≈ -1.7458.
     let res = analyze(&[vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     assert_eq!(res.n, 6);
-    assert!((res.tie_factor - 1.0).abs() < 1e-12, "tie_factor={}", res.tie_factor);
+    assert!(
+        (res.tie_factor - 1.0).abs() < 1e-12,
+        "tie_factor={}",
+        res.tie_factor
+    );
     let w = res.wilcoxon.expect("wilcoxon present for k=2");
     assert!((w.w - 6.0).abs() < 1e-12, "W={}", w.w);
     assert!((w.ew - 10.5).abs() < 1e-12, "E(W)={}", w.ew);
@@ -36,12 +40,23 @@ fn test_ties_correction() {
     // W (rank sum of A = [1.0, 2.5]) = 3.5; Var(W)_corrected = (20/12)*0.9 = 1.5.
     let res = analyze(&[vec![1.0, 2.0], vec![2.0, 3.0]]);
     assert_eq!(res.n, 4);
-    assert!((res.tie_factor - 0.9).abs() < 1e-12, "tie_factor={}", res.tie_factor);
+    assert!(
+        (res.tie_factor - 0.9).abs() < 1e-12,
+        "tie_factor={}",
+        res.tie_factor
+    );
     let w = res.wilcoxon.expect("wilcoxon present for k=2");
     assert!((w.w - 3.5).abs() < 1e-12, "W={}", w.w);
-    assert!((w.var_w - 1.5).abs() < 1e-12, "Var(W)_corrected={}", w.var_w);
+    assert!(
+        (w.var_w - 1.5).abs() < 1e-12,
+        "Var(W)_corrected={}",
+        w.var_w
+    );
     // Confirm the correction actually changed the variance from the uncorrected 20/12.
-    assert!((w.var_w - 20.0 / 12.0).abs() > 1e-6, "variance should be tie-corrected");
+    assert!(
+        (w.var_w - 20.0 / 12.0).abs() > 1e-6,
+        "variance should be tie-corrected"
+    );
 }
 
 // ───────────── generic linear-rank score framework ─────────────
@@ -67,9 +82,7 @@ fn test_raw_scores_known_vector() {
     // Normal: Φ⁻¹(p/(n+1)); middle p=3 → Φ⁻¹(0.5) = 0.
     assert!(raw_score(ScoreKind::Normal, 3, n).abs() < 1e-9);
     // Symmetry: s(1) = -s(5).
-    assert!(
-        (raw_score(ScoreKind::Normal, 1, n) + raw_score(ScoreKind::Normal, 5, n)).abs() < 1e-9
-    );
+    assert!((raw_score(ScoreKind::Normal, 1, n) + raw_score(ScoreKind::Normal, 5, n)).abs() < 1e-9);
 }
 
 #[test]
@@ -97,7 +110,12 @@ fn test_two_sample_z_reproduces_wilcoxon() {
     let t = score_two_sample(&sa).expect("two-sample present");
     assert!((t.stat - w.w).abs() < 1e-9, "stat {} vs {}", t.stat, w.w);
     assert!((t.mean - w.ew).abs() < 1e-9, "mean {} vs {}", t.mean, w.ew);
-    assert!((t.sd - w.var_w.sqrt()).abs() < 1e-9, "sd {} vs {}", t.sd, w.var_w.sqrt());
+    assert!(
+        (t.sd - w.var_w.sqrt()).abs() < 1e-9,
+        "sd {} vs {}",
+        t.sd,
+        w.var_w.sqrt()
+    );
     assert!((t.z - w.z).abs() < 1e-9, "z {} vs {}", t.z, w.z);
     assert!((t.p2 - w.p).abs() < 1e-9, "p {} vs {}", t.p2, w.p);
 }
@@ -139,7 +157,12 @@ fn test_one_way_chisq_equals_kruskal_for_wilcoxon() {
     let sa = score_analysis(&groups, ScoreKind::Wilcoxon);
     let ow = score_one_way(&sa);
     assert_eq!(ow.df, res.kruskal.df);
-    assert!((ow.chisq - res.kruskal.h).abs() < 1e-9, "chisq {} vs H {}", ow.chisq, res.kruskal.h);
+    assert!(
+        (ow.chisq - res.kruskal.h).abs() < 1e-9,
+        "chisq {} vs H {}",
+        ow.chisq,
+        res.kruskal.h
+    );
 }
 
 #[test]

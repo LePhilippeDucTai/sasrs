@@ -225,7 +225,11 @@ fn eval_or() {
 #[test]
 fn eval_non_integer_operand_errors() {
     let e = eval("abc + 1").unwrap_err();
-    assert!(e.message.contains("character operand"), "got: {}", e.message);
+    assert!(
+        e.message.contains("character operand"),
+        "got: {}",
+        e.message
+    );
 }
 
 #[test]
@@ -272,8 +276,14 @@ fn if_with_do_groups() {
 
 #[test]
 fn if_condition_uses_macro_var() {
-    assert_eq!(run("%let n = 5; %if &n ge 5 %then big; %else small;"), "big;");
-    assert_eq!(run("%let n = 1; %if &n ge 5 %then big; %else small;"), "small;");
+    assert_eq!(
+        run("%let n = 5; %if &n ge 5 %then big; %else small;"),
+        "big;"
+    );
+    assert_eq!(
+        run("%let n = 1; %if &n ge 5 %then big; %else small;"),
+        "small;"
+    );
 }
 
 #[test]
@@ -354,7 +364,8 @@ fn do_while_zero_iterations() {
 
 #[test]
 fn do_while_inside_macro_body() {
-    let src = "%macro m; %let i=1; %do %while(&i <= 3); v&i=&i; %let i=%eval(&i+1); %end; %mend; %m";
+    let src =
+        "%macro m; %let i=1; %do %while(&i <= 3); v&i=&i; %let i=%eval(&i+1); %end; %mend; %m";
     let out = run(src);
     assert_eq!(out.trim(), "v1=1; v2=2; v3=3;");
 }

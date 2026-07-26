@@ -59,12 +59,7 @@ pub(crate) fn print_output_statistics(
             if let Some(ids) = id_first {
                 row.push(ids.get(i).cloned().unwrap_or_default());
             }
-            row.extend([
-                format!("{}", i + 1),
-                fmt5(s.y),
-                fmt5(s.y_hat),
-                fmt5(s.stdp),
-            ]);
+            row.extend([format!("{}", i + 1), fmt5(s.y), fmt5(s.y_hat), fmt5(s.stdp)]);
             if model.clm {
                 row.push(fmt5(s.lclm));
                 row.push(fmt5(s.uclm));
@@ -221,10 +216,9 @@ pub(crate) fn print_r_statistics(
         "Sum of Squared Residuals     {}",
         fmt5(sum_sq_resid)
     ));
-    session.listing.write_line(&format!(
-        "Predicted Residual SS (PRESS)    {}",
-        fmt5(press)
-    ));
+    session
+        .listing
+        .write_line(&format!("Predicted Residual SS (PRESS)    {}", fmt5(press)));
 }
 
 /// Print the MODEL INFLUENCE diagnostics table (M36.3): Obs, Residual,

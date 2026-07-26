@@ -1249,8 +1249,9 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
 
 ## MQ7 — hygiène et scories de scission (risque nul, sortie inchangée)
 - [x] MQ7.0 — Section Phase Q3 dans PROGRESS.md (ce commit) (Sonnet, faible)
-- [ ] MQ7.1 — `rustfmt.toml` + `cargo fmt` sur tout le dépôt (453 fichiers) ; commit isolé
-  « format-only », aucun autre changement (Sonnet, faible)
+- [x] MQ7.1 — `rustfmt.toml` + `cargo fmt` sur tout le dépôt (453 fichiers) ; commit isolé
+  « format-only », aucun autre changement (Sonnet, faible) : 453 fichiers reformatés
+  (+8540/-4554), `cargo fmt --check` VERT, 2669 tests verts, zéro `.snap.new`.
 - [ ] MQ7.2 — résorber les 357 diagnostics clippy, par sous-lots : (a) auto-fixables
   (`collapsible_if` 56, `doc_lazy_continuation` 42, `needless_borrow` 30, `doc_overindented`
   9, `needless_return`, `redundant_closure`, `let_and_return`, `match_like_matches_macro`) ;

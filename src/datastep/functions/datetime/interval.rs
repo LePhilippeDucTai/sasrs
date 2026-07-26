@@ -135,9 +135,9 @@ pub(crate) fn fn_intnx(args: &[Value], ctx: &mut EvalCtx) -> Value {
             let target_sunday = start_sunday + inc * 7;
             let day = match align {
                 Align::Beginning => target_sunday,
-                Align::End => target_sunday + 6,         // samedi
+                Align::End => target_sunday + 6, // samedi
                 Align::Same => target_sunday + (start - start_sunday), // même jour de semaine
-                Align::Middle => target_sunday + 3,      // milieu : mercredi
+                Align::Middle => target_sunday + 3, // milieu : mercredi
             };
             return Value::Num(day as f64);
         }

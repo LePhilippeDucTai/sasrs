@@ -97,9 +97,7 @@ pub(super) fn neg2_loglik(
 
     let two_pi = std::f64::consts::TAU;
     let neg2 = match method {
-        Method::Reml => {
-            (n as f64 - p as f64) * two_pi.ln() + log_det_v + log_det_xtvix + quad
-        }
+        Method::Reml => (n as f64 - p as f64) * two_pi.ln() + log_det_v + log_det_xtvix + quad,
         Method::Ml => n as f64 * two_pi.ln() + log_det_v + quad,
     };
 
@@ -142,8 +140,7 @@ pub(super) fn fit_mixed(
     }
 
     // Final β̂, Var(β̂), and -2 logL at the estimated variances.
-    let (neg2ll, beta, cov_beta) =
-        neg2_loglik(y, x, subj_of, sigma2_u, sigma2_e, method)?;
+    let (neg2ll, beta, cov_beta) = neg2_loglik(y, x, subj_of, sigma2_u, sigma2_e, method)?;
 
     Ok(MixedFit {
         sigma2_u,
@@ -195,9 +192,7 @@ pub(super) fn closed_form_vc(
     let sigma2_e = ms_within;
     let sigma2_u = match method {
         Method::Reml => (ms_between - ms_within) / n_i as f64,
-        Method::Ml => {
-            (((a as f64 - 1.0) / a as f64) * ms_between - ms_within) / n_i as f64
-        }
+        Method::Ml => (((a as f64 - 1.0) / a as f64) * ms_between - ms_within) / n_i as f64,
     };
     (sigma2_u, sigma2_e)
 }

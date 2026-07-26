@@ -172,7 +172,11 @@ pub(crate) fn fn_datejul(args: &[Value], ctx: &mut EvalCtx) -> Value {
         let cutoff = ctx.yearcutoff as i64;
         let base = (cutoff / 100) * 100;
         let candidate = base + year_part;
-        if candidate < cutoff { candidate + 100 } else { candidate }
+        if candidate < cutoff {
+            candidate + 100
+        } else {
+            candidate
+        }
     } else if year_part < 200 {
         2000 + (year_part - 100)
     } else {

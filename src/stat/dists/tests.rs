@@ -11,7 +11,11 @@ fn test_ln_gamma() {
     // Γ(1)=1, Γ(5)=24, Γ(0.5)=√π.
     assert!(approx(ln_gamma(1.0), 0.0, 1e-10));
     assert!(approx(ln_gamma(5.0), 24f64.ln(), 1e-10));
-    assert!(approx(ln_gamma(0.5), std::f64::consts::PI.sqrt().ln(), 1e-10));
+    assert!(approx(
+        ln_gamma(0.5),
+        std::f64::consts::PI.sqrt().ln(),
+        1e-10
+    ));
 }
 
 #[test]
@@ -19,7 +23,11 @@ fn test_betai() {
     // I_x(a,b) edge cases and symmetry I_x(a,b) = 1 - I_{1-x}(b,a).
     assert_eq!(betai(2.0, 3.0, 0.0), 0.0);
     assert_eq!(betai(2.0, 3.0, 1.0), 1.0);
-    assert!(approx(betai(2.0, 3.0, 0.5), 1.0 - betai(3.0, 2.0, 0.5), 1e-12));
+    assert!(approx(
+        betai(2.0, 3.0, 0.5),
+        1.0 - betai(3.0, 2.0, 0.5),
+        1e-12
+    ));
     // I_0.5(1,1) = 0.5 (uniform).
     assert!(approx(betai(1.0, 1.0, 0.5), 0.5, 1e-12));
 }
@@ -31,7 +39,11 @@ fn test_student_t_cdf() {
     // df=10, t=2.228 → ~0.975 (two-tailed 0.05 critical value).
     assert!(approx(student_t_cdf(2.228138852, 10.0), 0.975, 1e-6));
     // Symmetry: CDF(-t) = 1 - CDF(t).
-    assert!(approx(student_t_cdf(-1.5, 7.0), 1.0 - student_t_cdf(1.5, 7.0), 1e-12));
+    assert!(approx(
+        student_t_cdf(-1.5, 7.0),
+        1.0 - student_t_cdf(1.5, 7.0),
+        1e-12
+    ));
 }
 
 #[test]
@@ -124,7 +136,11 @@ fn test_f_quantile() {
     // df1=5, df2=20, 0.95 → 2.71089.
     assert!(approx(f_quantile(0.95, 5.0, 20.0), 2.71089, 1e-3));
     // Round-trip.
-    assert!(approx(f_cdf(f_quantile(0.4, 3.0, 12.0), 3.0, 12.0), 0.4, 1e-7));
+    assert!(approx(
+        f_cdf(f_quantile(0.4, 3.0, 12.0), 3.0, 12.0),
+        0.4,
+        1e-7
+    ));
 }
 
 #[test]
@@ -143,7 +159,11 @@ fn test_t_quantile() {
     assert!(approx(t_quantile(0.025, 10.0), -2.228138852, 1e-6));
     assert_eq!(t_quantile(0.5, 7.0), 0.0);
     // Round-trip against the CDF.
-    assert!(approx(student_t_cdf(t_quantile(0.8, 12.0), 12.0), 0.8, 1e-7));
+    assert!(approx(
+        student_t_cdf(t_quantile(0.8, 12.0), 12.0),
+        0.8,
+        1e-7
+    ));
     assert!(approx(student_t_cdf(t_quantile(0.3, 4.0), 4.0), 0.3, 1e-7));
     // Large df → standard normal quantile.
     assert!(approx(t_quantile(0.975, 1.0e6), 1.959963985, 1e-4));
@@ -162,18 +182,38 @@ fn test_t_edge() {
 fn test_gamma_cdf() {
     assert_eq!(gamma_cdf(0.0, 2.0, 1.0), 0.0);
     // Gamma(1, scale) = Exponential(1/scale): CDF = 1 - exp(-x/scale).
-    assert!(approx(gamma_cdf(2.0, 1.0, 1.0), 1.0 - (-2.0f64).exp(), 1e-10));
+    assert!(approx(
+        gamma_cdf(2.0, 1.0, 1.0),
+        1.0 - (-2.0f64).exp(),
+        1e-10
+    ));
     // Gamma(2,1) at x=2: 1 - exp(-2)(1+2) = 1 - 3e^-2.
-    assert!(approx(gamma_cdf(2.0, 2.0, 1.0), 1.0 - 3.0 * (-2.0f64).exp(), 1e-9));
+    assert!(approx(
+        gamma_cdf(2.0, 2.0, 1.0),
+        1.0 - 3.0 * (-2.0f64).exp(),
+        1e-9
+    ));
 }
 
 #[test]
 fn test_gamma_quantile() {
     // Round-trip.
-    assert!(approx(gamma_cdf(gamma_quantile(0.5, 2.0, 1.5), 2.0, 1.5), 0.5, 1e-9));
-    assert!(approx(gamma_cdf(gamma_quantile(0.9, 3.0, 2.0), 3.0, 2.0), 0.9, 1e-9));
+    assert!(approx(
+        gamma_cdf(gamma_quantile(0.5, 2.0, 1.5), 2.0, 1.5),
+        0.5,
+        1e-9
+    ));
+    assert!(approx(
+        gamma_cdf(gamma_quantile(0.9, 3.0, 2.0), 3.0, 2.0),
+        0.9,
+        1e-9
+    ));
     // Exponential(scale=2): quantile(p) = -2 ln(1-p).
-    assert!(approx(gamma_quantile(0.5, 1.0, 2.0), -2.0 * 0.5f64.ln(), 1e-7));
+    assert!(approx(
+        gamma_quantile(0.5, 1.0, 2.0),
+        -2.0 * 0.5f64.ln(),
+        1e-7
+    ));
 }
 
 #[test]
@@ -202,7 +242,11 @@ fn test_beta_quantile() {
     // Uniform: quantile(p)=p.
     assert!(approx(beta_quantile(0.42, 1.0, 1.0), 0.42, 1e-9));
     // Round-trip.
-    assert!(approx(beta_cdf(beta_quantile(0.7, 3.0, 5.0), 3.0, 5.0), 0.7, 1e-8));
+    assert!(approx(
+        beta_cdf(beta_quantile(0.7, 3.0, 5.0), 3.0, 5.0),
+        0.7,
+        1e-8
+    ));
 }
 
 #[test]
@@ -225,7 +269,11 @@ const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
 #[test]
 fn test_digamma_at_one() {
     // ψ(1) = −γ.
-    assert!(approx(digamma(1.0), -EULER_GAMMA, 1e-3), "digamma(1)={}", digamma(1.0));
+    assert!(
+        approx(digamma(1.0), -EULER_GAMMA, 1e-3),
+        "digamma(1)={}",
+        digamma(1.0)
+    );
 }
 
 #[test]
@@ -243,7 +291,11 @@ fn test_digamma_recurrence() {
 fn test_trigamma_at_one() {
     // ψ′(1) = π²/6.
     let pi2_6 = std::f64::consts::PI * std::f64::consts::PI / 6.0;
-    assert!(approx(trigamma(1.0), pi2_6, 1e-8), "trigamma(1)={}", trigamma(1.0));
+    assert!(
+        approx(trigamma(1.0), pi2_6, 1e-8),
+        "trigamma(1)={}",
+        trigamma(1.0)
+    );
 }
 
 #[test]
@@ -251,7 +303,11 @@ fn test_trigamma_recurrence() {
     // ψ′(x) − ψ′(x+1) = 1/x².
     for &x in &[2.5_f64, 7.0, 0.75, 13.2, 0.3] {
         let lhs = trigamma(x) - trigamma(x + 1.0);
-        assert!(approx(lhs, 1.0 / (x * x), 1e-8), "x={x}: {lhs} vs {}", 1.0 / (x * x));
+        assert!(
+            approx(lhs, 1.0 / (x * x), 1e-8),
+            "x={x}: {lhs} vs {}",
+            1.0 / (x * x)
+        );
     }
 }
 
@@ -259,6 +315,14 @@ fn test_trigamma_recurrence() {
 fn test_trigamma_known_values() {
     // ψ′(2) = π²/6 − 1; ψ′(0.5) = π²/2.
     let pi = std::f64::consts::PI;
-    assert!(approx(trigamma(2.0), pi * pi / 6.0 - 1.0, 1e-8), "trigamma(2)={}", trigamma(2.0));
-    assert!(approx(trigamma(0.5), pi * pi / 2.0, 1e-8), "trigamma(0.5)={}", trigamma(0.5));
+    assert!(
+        approx(trigamma(2.0), pi * pi / 6.0 - 1.0, 1e-8),
+        "trigamma(2)={}",
+        trigamma(2.0)
+    );
+    assert!(
+        approx(trigamma(0.5), pi * pi / 2.0, 1e-8),
+        "trigamma(0.5)={}",
+        trigamma(0.5)
+    );
 }

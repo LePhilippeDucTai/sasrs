@@ -31,11 +31,7 @@ pub(super) fn inv_link(eta: f64, lf: &LinkFunction) -> f64 {
                 1e12
             } else {
                 let mu = 1.0 / eta;
-                if mu > 0.0 {
-                    mu
-                } else {
-                    1e-10
-                }
+                if mu > 0.0 { mu } else { 1e-10 }
             }
         }
     }

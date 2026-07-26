@@ -57,10 +57,7 @@ impl Parser {
                 }
                 self.expect(&Tok::Semi, "';'")?;
                 Ok(ImlStmt::UnsupportedIo {
-                    msg: format!(
-                        "{} is not yet implemented in PROC IML",
-                        kw.to_uppercase()
-                    ),
+                    msg: format!("{} is not yet implemented in PROC IML", kw.to_uppercase()),
                 })
             }
             // Autres statements de gestion : consommés sans effet (best-effort).
@@ -94,7 +91,11 @@ impl Parser {
         let first = self.expect_ident(what)?;
         if self.eat(&Tok::Dot) {
             let second = self.expect_ident("a dataset name after '.'")?;
-            Ok(format!("{}.{}", first.to_uppercase(), second.to_uppercase()))
+            Ok(format!(
+                "{}.{}",
+                first.to_uppercase(),
+                second.to_uppercase()
+            ))
         } else {
             Ok(first.to_uppercase())
         }
@@ -106,9 +107,13 @@ impl Parser {
         let ds = self.parse_dataset_name("a dataset name after CREATE")?;
         let from_kw = self.expect_ident("FROM")?;
         if !from_kw.eq_ignore_ascii_case("from") {
-            return Err(SasError::runtime("IML: expected FROM in a CREATE statement"));
+            return Err(SasError::runtime(
+                "IML: expected FROM in a CREATE statement",
+            ));
         }
-        let from = self.expect_ident("a matrix name after FROM")?.to_uppercase();
+        let from = self
+            .expect_ident("a matrix name after FROM")?
+            .to_uppercase();
         // Option [COLNAME=cn] ou [colname=cn].
         let mut colname = None;
         if self.eat(&Tok::LBracket) {
@@ -131,9 +136,13 @@ impl Parser {
         self.next(); // append
         let from_kw = self.expect_ident("FROM")?;
         if !from_kw.eq_ignore_ascii_case("from") {
-            return Err(SasError::runtime("IML: expected FROM in an APPEND statement"));
+            return Err(SasError::runtime(
+                "IML: expected FROM in an APPEND statement",
+            ));
         }
-        let from = self.expect_ident("a matrix name after FROM")?.to_uppercase();
+        let from = self
+            .expect_ident("a matrix name after FROM")?
+            .to_uppercase();
         self.expect(&Tok::Semi, "';' after APPEND")?;
         Ok(ImlStmt::Append { from })
     }
@@ -188,9 +197,13 @@ impl Parser {
             });
         }
         if !kw.eq_ignore_ascii_case("into") {
-            return Err(SasError::runtime("IML: expected INTO after the variable list"));
+            return Err(SasError::runtime(
+                "IML: expected INTO after the variable list",
+            ));
         }
-        let into = self.expect_ident("a matrix name after INTO")?.to_uppercase();
+        let into = self
+            .expect_ident("a matrix name after INTO")?
+            .to_uppercase();
         self.expect(&Tok::Semi, "';' after READ")?;
         Ok(ImlStmt::ReadAll { vars, into })
     }

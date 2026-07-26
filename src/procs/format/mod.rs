@@ -29,14 +29,13 @@ use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
 
-
-mod value;
-mod picture;
 mod invalue;
+mod picture;
+mod value;
 
-use value::*;
-use picture::*;
 use invalue::*;
+use picture::*;
+use value::*;
 
 pub struct FormatAst {
     /// (nom, définition brute à parser en UserFormat)
@@ -104,23 +103,33 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         }
     }
 
-    Ok(FormatAst { values, invalues, pictures })
+    Ok(FormatAst {
+        values,
+        invalues,
+        pictures,
+    })
 }
 
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
     for (name, uf) in &ast.values {
         let uname = name.to_uppercase();
-        session.log.note(&format!("Format {} has been output.", uname));
+        session
+            .log
+            .note(&format!("Format {} has been output.", uname));
         session.format_catalog.define(&uname, uf.clone());
     }
     for (name, ui) in &ast.invalues {
         let uname = name.to_uppercase();
-        session.log.note(&format!("Informat {} has been output.", uname));
+        session
+            .log
+            .note(&format!("Informat {} has been output.", uname));
         session.format_catalog.define_informat(&uname, ui.clone());
     }
     for (name, up) in &ast.pictures {
         let uname = name.to_uppercase();
-        session.log.note(&format!("Format {} has been output.", uname));
+        session
+            .log
+            .note(&format!("Format {} has been output.", uname));
         session.format_catalog.define_picture(&uname, up.clone());
     }
     Ok(())
