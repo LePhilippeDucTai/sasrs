@@ -9,6 +9,26 @@
 //! (corps identiques, seul le tuple de retour de `nelder_mead` différait) ;
 //! elles sont centralisées ici.
 
+use std::cmp::Ordering;
+
+/// Ordonne deux valeurs d'objectif, un NaN étant TOUJOURS le pire.
+///
+/// MQ9.1 — c'était `partial_cmp(..).unwrap()`, seul site du dépôt à ne pas
+/// gérer le cas `None` (les 25 autres comparaisons de flottants utilisent
+/// `unwrap_or(Ordering::Equal)`). Une vraisemblance divergente sur les données
+/// de l'utilisateur — cas banal en PROC MIXED / GLIMMIX — produit un objectif
+/// NaN et tuait le process, au lieu de laisser la proc conclure à une
+/// non-convergence. Trier le NaN en dernier garantit en prime qu'un sommet
+/// NaN n'est jamais retenu comme meilleur point.
+fn cmp_objective(a: f64, b: f64) -> Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
+    }
+}
+
 /// One run of Nelder-Mead from `start` with per-dimension initial step `step`.
 /// Minimises `eval` over `np`-dimensional unconstrained space. Returns the best
 /// point found, its function value, the number of iterations consumed, and
@@ -44,7 +64,7 @@ pub(crate) fn nelder_mead<F: Fn(&[f64]) -> f64>(
         iters += 1;
         // Order by function value.
         let mut order: Vec<usize> = (0..=np).collect();
-        order.sort_by(|&a, &b| fvals[a].partial_cmp(&fvals[b]).unwrap());
+        order.sort_by(|&a, &b| cmp_objective(fvals[a], fvals[b]));
         let s: Vec<Vec<f64>> = order.iter().map(|&i| simplex[i].clone()).collect();
         let f: Vec<f64> = order.iter().map(|&i| fvals[i]).collect();
         simplex = s;
@@ -198,3 +218,6 @@ pub(crate) fn polish_coord<F: Fn(&[f64]) -> f64>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

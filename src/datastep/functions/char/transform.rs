@@ -93,8 +93,16 @@ pub(crate) fn fn_repeat(args: &[Value], ctx: &mut EvalCtx) -> Value {
             if n < 0 {
                 Value::Char(String::new())
             } else {
-                let result = s.repeat(n as usize);
-                Value::Char(result)
+                // MQ9.1 — `s.repeat(n)` alloue `s.len() * n` octets : sans
+                // borne, `repeat('a', 1e12)` demande 1 To et tue le process
+                // (capacity overflow / OOM), au lieu de produire une valeur.
+                // Une variable caractère SAS ne dépasse pas 32 767 octets et
+                // la valeur serait tronquée à l'affectation de toute façon :
+                // on borne donc le NOMBRE DE COPIES, ce qui garde le résultat
+                // sur une frontière de caractère.
+                const MAX_CHAR_LEN: usize = 32_767;
+                let max_copies = (MAX_CHAR_LEN / s.len().max(1)).max(1);
+                Value::Char(s.repeat((n as usize).min(max_copies)))
             }
         }
     }

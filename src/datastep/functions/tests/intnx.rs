@@ -343,6 +343,19 @@ fn repeat_negative_times() {
 }
 
 #[test]
+fn repeat_huge_count_is_bounded_not_a_crash() {
+    // MQ9.1 — `repeat('a', 1e12)` demandait 1 To de mémoire : capacity
+    // overflow / OOM, donc mort du process au lieu d'une NOTE SAS. La
+    // longueur est désormais bornée par la longueur maximale d'une variable
+    // caractère SAS (32 767) ; le résultat est tronqué, pas fatal.
+    let out = invoke("REPEAT", &[chr("a"), num(1e12)]);
+    match out {
+        Value::Char(s) => assert_eq!(s.len(), 32_767, "longueur bornée"),
+        other => panic!("attendu Char, obtenu {other:?}"),
+    }
+}
+
+#[test]
 fn repeat_single_time() {
     assert_eq!(invoke("REPEAT", &[chr("hello"), num(1.0)]), chr("hello"));
 }

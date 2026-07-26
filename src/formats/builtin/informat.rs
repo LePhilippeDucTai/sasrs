@@ -147,6 +147,15 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
 // Date parsing helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// MQ9.1 — les branches sans séparateur ci-dessous découpent `s` sur des
+// OFFSETS D'OCTETS (`s[..2]`, `s[2..4]`, …) alors que leur garde de longueur
+// est elle aussi en octets. Une donnée multi-octets (par exemple « €€€€ », 12
+// octets pour 4 caractères) passait donc la garde puis faisait paniquer le
+// process sur « byte index is not a char boundary ». Le `&& s.is_ascii()`
+// ferme la brèche sans rien changer pour une date valide, qui n'est faite que
+// de chiffres et de séparateurs ASCII : une entrée non-ASCII part dans la
+// branche `None`, c'est-à-dire une valeur manquante, comme toute date invalide.
+
 /// Parse MM/DD/YYYY or MMDDYYYY or MMDDYY (returns (month, day, year)).
 pub(super) fn parse_mdy_variants(s: &str) -> Option<(u32, u32, i32)> {
     if s.contains('/') {
@@ -159,7 +168,7 @@ pub(super) fn parse_mdy_variants(s: &str) -> Option<(u32, u32, i32)> {
         let dd: u32 = parts[1].parse().ok()?;
         let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len());
         Some((mm, dd, yyyy))
-    } else if s.len() >= 8 {
+    } else if s.len() >= 8 && s.is_ascii() {
         let mm: u32 = s[..2].parse().ok()?;
         let dd: u32 = s[2..4].parse().ok()?;
         let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4);
@@ -180,7 +189,7 @@ pub(super) fn parse_dmy_variants(s: &str) -> Option<(u32, u32, i32)> {
         let mm: u32 = parts[1].parse().ok()?;
         let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len());
         Some((dd, mm, yyyy))
-    } else if s.len() >= 8 {
+    } else if s.len() >= 8 && s.is_ascii() {
         let dd: u32 = s[..2].parse().ok()?;
         let mm: u32 = s[2..4].parse().ok()?;
         let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4);
@@ -201,12 +210,12 @@ pub(super) fn parse_ymd_variants(s: &str) -> Option<(i32, u32, u32)> {
         let mm: u32 = parts[1].parse().ok()?;
         let dd: u32 = parts[2].parse().ok()?;
         Some((yyyy, mm, dd))
-    } else if s.len() >= 8 {
+    } else if s.len() >= 8 && s.is_ascii() {
         let yyyy: i32 = expand_year(s[..4].parse().ok()?, 4);
         let mm: u32 = s[4..6].parse().ok()?;
         let dd: u32 = s[6..8].parse().ok()?;
         Some((yyyy, mm, dd))
-    } else if s.len() == 6 {
+    } else if s.len() == 6 && s.is_ascii() {
         // yymmdd
         let yy: i32 = s[..2].parse().ok()?;
         let mm: u32 = s[2..4].parse().ok()?;

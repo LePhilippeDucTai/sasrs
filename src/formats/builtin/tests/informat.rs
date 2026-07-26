@@ -81,6 +81,21 @@ fn informat_mmddyy10() {
 }
 
 #[test]
+fn informat_date_non_ascii_is_rejected_not_a_crash() {
+    // MQ9.1 — la garde était `s.len() >= 8` (OCTETS) alors que les découpes
+    // `s[..2]`/`s[2..4]` supposent de l'ASCII : une donnée multi-octets de
+    // 8 octets ou plus faisait paniquer sur « byte index is not a char
+    // boundary ». Attendu : valeur manquante, comme toute date invalide.
+    for spec_name in ["MMDDYY", "DDMMYY", "YYMMDD"] {
+        let v = informat_builtin("€€€€", &spec(spec_name, Some(8), None));
+        assert!(
+            v.is_none() || v == Some(Value::missing()),
+            "{spec_name} sur du non-ASCII doit être manquant, obtenu {v:?}"
+        );
+    }
+}
+
+#[test]
 fn informat_ddmmyy10() {
     let d = day_num(2020, 3, 15);
     let v = informat_builtin("15/03/2020", &spec("DDMMYY", Some(10), None)).unwrap();

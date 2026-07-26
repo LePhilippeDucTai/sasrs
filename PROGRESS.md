@@ -1363,7 +1363,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   (les 4 `too_many_arguments` restants sont traités par MQ9.5) ; **fin de MQ8** ; → MQ9.
 
 ## MQ9 — robustesse, conception, docs
-- [ ] MQ9.1 — crashs atteignables depuis un `.sas` (sortie inchangée) : borner `REPEAT`
+- [x] MQ9.1 — crashs atteignables depuis un `.sas` (sortie inchangée) : borner `REPEAT`
   (`functions/char/transform.rs`) ; `partial_cmp().unwrap()` → `unwrap_or(Ordering::Equal)`
   (`stat/optim.rs`, seul site du dépôt à ne pas le faire) ; découpes `s[..2]`/`s[2..4]` sur
   OCTETS avec garde en `len()` (`formats/builtin/informat.rs` ×9 + `formats/mod.rs` ×3) →
