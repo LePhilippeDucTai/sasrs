@@ -1,3 +1,10 @@
+//! Tokens et spans produits par le lexer.
+//!
+//! [`Span`] est un intervalle d'octets dans le source soumis ; il voyage dans
+//! chaque token et jusque dans `SasError::Parse` (cf. `error.rs` pour savoir
+//! pourquoi il n'est pas imprimé). [`TokenKind`] porte les littéraux, y
+//! compris les suffixes SAS de date/heure (`d`, `t`, `dt`) et de nom (`n`).
+
 /// Byte span into the submitted source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {

@@ -1188,9 +1188,15 @@ les digits imprimés par TTEST/REG/ANOVA en dépendent) ; perf des clones hash s
 - [x] MQ4.5 — Dispatch fonctions O(n) + `to_uppercase()` par appel → map statique `LazyLock`,
   normalisation unique ; diff des tables avant/après (même gagnant pour tout alias), messages
   « unknown function » inchangés ; commit isolé (Opus, moyen)
-- [x] MQ4.6 — Trait `Proc` + `common::parse_model_effects` (squelette MODEL recopié dans
+- [x] MQ4.6 — `common::parse_model_effects` (squelette MODEL recopié dans
   mixed/glimmix/glm/anova/genmod/logistic) ; migrer les 2 match géants de `procs/mod.rs` par
   paquets ; coordonner avec la Phase G (re-phaser après M66 si BLOC 2 démarré) (Opus, élevé)
+  — **CORRECTION (MQ9.7)** : cette case annonçait un « trait `Proc` ». Il n'a jamais été
+  écrit. Ce qui a été livré est un `macro_rules! procs_registry` (`procs/mod.rs`) qui
+  GÉNÈRE l'enum `ProcAst` et les deux match à partir d'une table déclarative d'une ligne
+  par proc. Le résultat est bon — la charge d'édition disparaît, une proc régulière tient
+  en une ligne — mais ce n'est pas un trait : les 41 procs restent dispatchées par un
+  match, simplement engendré au lieu d'être recopié à la main. L'entrée disait faux.
 - [x] DoD MQ4 : cargo test vert (2669 tests), zéro `.snap.new`, clippy 285 warnings (316 en base, aucun type nouveau) ; **fin de Phase Q**.
 
 # Phase Q2 — reliquat qualité (post-revue), jalons MQ5–MQ6
@@ -1414,7 +1420,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   n'est couvert ni par `cargo test` ni par `cargo clippy` par défaut, et la scission l'a
   cassé (résolution de `SasError` via `use super::*`) sans qu'aucune vérification
   habituelle ne le voie → **les deux builds de feature entrent dans la DoD**.
-- [ ] MQ9.7 — docs : corriger les 5 doc-comments périmés (`lib.rs` M1–M8, `procs/mod.rs`
+- [x] MQ9.7 — docs : corriger les 5 doc-comments périmés (`lib.rs` M1–M8, `procs/mod.rs`
   « PRINT (M1) », `common/parse.rs` « aucun appelant », `common/mod.rs` chemins disparus,
   `tests/snapshot.rs` `#[ignore]` inexistant) ; `//!` sur les modules cœur qui n'en ont pas
   (session, dataset, value, error, log, token, source, library) ; **corriger l'entrée MQ4.6

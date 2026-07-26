@@ -1,3 +1,9 @@
+//! Le texte source soumis et la conversion span → lignes.
+//!
+//! [`SourceFile`] garde le texte et sait rendre les lignes couvertes par un
+//! [`Span`], ce dont l'exécuteur a besoin pour écho­ter le source dans le log
+//! avec sa numérotation SAS.
+
 use crate::token::Span;
 
 /// A submitted SAS source file, with byte-offset → line mapping used for

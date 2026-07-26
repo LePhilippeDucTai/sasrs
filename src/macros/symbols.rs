@@ -15,10 +15,6 @@ impl MacroEngine {
         self.lookup(name)
     }
 
-    /// Instantané (clés MAJUSCULES → valeur) de la table macro VISIBLE en
-    /// open code, pour alimenter `SYMGET` (M11.5). On aplatit la pile de
-    /// portées (plus interne d'abord) puis la table globale ; en open code la
-    /// pile est vide, donc seule `table` contribue.
     /// Variables macro GLOBALES (table globale uniquement, hors portées
     /// locales), pour `DICTIONARY.MACROS` / `sashelp.vmacro` (M20.3). Clés en
     /// MAJUSCULES → valeur. Le classement scope GLOBAL/AUTOMATIC est laissé à
@@ -27,6 +23,10 @@ impl MacroEngine {
         self.table.clone()
     }
 
+    /// Instantané (clés MAJUSCULES → valeur) de la table macro VISIBLE en
+    /// open code, pour alimenter `SYMGET` (M11.5). On aplatit la pile de
+    /// portées (plus interne d'abord) puis la table globale ; en open code la
+    /// pile est vide, donc seule `table` contribue.
     pub fn symbols_snapshot(&self) -> std::collections::HashMap<String, String> {
         let mut snap = self.table.clone();
         // La table globale est la base ; les portées locales (s'il y en a)

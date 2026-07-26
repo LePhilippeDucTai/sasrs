@@ -1,3 +1,13 @@
+//! La valeur SAS scalaire et sa comparaison.
+//!
+//! [`Value`] est numérique, caractère ou manquante. SAS distingue 28 valeurs
+//! manquantes (`.`, `._`, `.A` à `.Z`) qui s'ORDONNENT entre elles et sont
+//! toutes inférieures à n'importe quel nombre.
+//!
+//! **Piège central du projet** : en SAS `. = .` est VRAI et `. < -1` aussi.
+//! Toute comparaison doit donc passer par [`Value::sas_cmp`], jamais par les
+//! opérateurs Rust (cf. PLAN.md §Checklist).
+
 use std::cmp::Ordering;
 
 /// SAS numeric missing values. Sort order: `._` < `.` < `.A` < ... < `.Z`,

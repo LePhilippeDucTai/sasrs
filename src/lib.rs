@@ -1,8 +1,8 @@
 //! `sas_interpreter` — interpréteur du langage SAS (référence SAS 9.4
 //! classique) sur Polars, tables au format Parquet.
 //!
-//! Voir PLAN.md pour l'architecture complète, les jalons M1–M8 et la
-//! répartition implémenté/squelette.
+//! Voir PLAN.md pour l'architecture et les décisions actées, PROGRESS.md pour
+//! l'état d'avancement jalon par jalon.
 
 pub mod ast;
 pub mod dataset;

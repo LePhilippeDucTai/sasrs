@@ -1,3 +1,15 @@
+//! État vivant d'une exécution : librefs, log, listing, options, moteur macro.
+//!
+//! [`Session`] est le seul objet traversé par toutes les couches (parser,
+//! étape DATA, PROCs, SQL) : elle porte le [`LibraryManager`] (libref →
+//! stockage), le [`LogWriter`], la destination de sortie courante
+//! (`Box<dyn OutputDestination>`), les options globales (LS=, MISSING=…), les
+//! titres/footnotes, le catalogue de formats, le `MacroEngine` et la file
+//! CALL EXECUTE.
+//!
+//! `last_dataset` matérialise le `_LAST_` de SAS : la dernière table écrite,
+//! utilisée quand une PROC omet `DATA=`.
+
 use crate::ast::DatasetRef;
 use crate::library::LibraryManager;
 use crate::log::LogWriter;

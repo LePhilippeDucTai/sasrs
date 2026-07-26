@@ -1,3 +1,13 @@
+//! Table SAS en mémoire : DataFrame Polars + métadonnées de variables.
+//!
+//! [`SasDataset`] associe le `DataFrame` et un `Vec<VarMeta>` (nom, type SAS,
+//! longueur, format, label) dans l'ORDRE des colonnes — le modèle SAS n'a que
+//! deux types, numérique (f64) et caractère, et les colonnes Parquet natives
+//! (entiers, dates, booléens) sont coercées à la lecture.
+//!
+//! Les métadonnées qui n'ont pas d'équivalent Parquet (format, label) voyagent
+//! dans un fichier annexe JSON à côté du `.parquet`.
+
 use crate::error::{Result, SasError};
 use crate::value::VarType;
 use polars::prelude::*;

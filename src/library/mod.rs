@@ -1,3 +1,10 @@
+//! Bibliothèques SAS : `libref` → stockage des tables.
+//!
+//! Le trait [`LibraryProvider`] abstrait le stockage ; [`LibraryManager`]
+//! tient la table des librefs. `WORK` est un répertoire temporaire détruit
+//! avec la session ; un LIBNAME classique pointe un dossier local où chaque
+//! table est un `<nom>.parquet`. Le backend S3 vit derrière la feature `s3`.
+
 use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use polars::prelude::*;

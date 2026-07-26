@@ -1,3 +1,10 @@
+//! Écriture du log SAS : écho du source, NOTE/WARNING/ERROR, temps d'étape.
+//!
+//! [`LogWriter`] numérote les lignes du source comme SAS, compte les warnings
+//! et les erreurs (ils déterminent le code retour) et met en forme les NOTEs
+//! de fin d'étape. `StepTimer` fournit les temps réel/CPU, figés sous
+//! `--deterministic` pour que les snapshots soient stables.
+
 use std::time::Instant;
 
 /// SAS-style log writer: numbered source echo, NOTE/WARNING/ERROR lines

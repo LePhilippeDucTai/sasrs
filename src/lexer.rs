@@ -1,3 +1,10 @@
+//! Lexer SAS : découpe le source en [`Token`]s porteurs de leur span.
+//!
+//! Écrit à la main, car la lexicalisation SAS ne se réduit pas à une grammaire
+//! régulière ordinaire : opérateurs-mots (`EQ`, `NE`, `AND`…), littéraux datés
+//! (`'01JAN2020'd`), commentaires `*…;` et `/* … */`, chaînes à quotes simples
+//! ou doubles.
+
 use crate::error::{Result, SasError};
 use crate::token::{Span, StrSuffix, Token, TokenKind};
 

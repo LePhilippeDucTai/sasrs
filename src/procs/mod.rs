@@ -91,11 +91,11 @@ macro_rules! procs_registry {
         }
 
         /// Parse a PROC block. Called AFTER `proc <name>` has been consumed.
-        /// Dispatches to the appropriate sub-parser by proc name.
+        /// Dispatches to the sub-parser of the proc, by name.
         ///
-        /// - PRINT (M1): fully implemented.
-        /// - Known procs not yet implemented: skip to step boundary, return Err.
-        /// - Unknown proc name: return Err "Procedure XXX not found."
+        /// Nom de proc inconnu : `skip_to_semi()` puis
+        /// `Err("Procedure XXX not found.")` — l'appelant
+        /// (`parser::parse_block`) saute ensuite jusqu'à la frontière d'étape.
         pub fn parse_proc($name: &str, $ts: &mut StatementStream) -> Result<ProcAst> {
             match $name.to_ascii_lowercase().as_str() {
                 $( $kw => Ok(ProcAst::$variant($module::parse($ts)?)), )*

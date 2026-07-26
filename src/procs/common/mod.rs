@@ -102,9 +102,14 @@ pub use stats::two_sided_p;
 // The distribution machinery (ln_gamma / betai / incomplete gamma / normal
 // CDF and probit / log-combinatorics) lives in `crate::stat::dists`; the
 // re-exports below keep the historical `procs::common::{...}` paths working.
-// The private copies in `corr.rs` and `datastep/functions.rs` are NOT folded
-// here on purpose: their algorithms differ (constants, iteration counts) and
-// the printed digits in their listings depend on them.
+// MQ8.9 — cette note affirmait que les copies privées « de corr.rs et
+// datastep/functions.rs » gardaient des algorithmes différents. Vérification
+// faite, c'était FAUX pour `betai`/`betacf`/`ln_gamma`, byte-identiques : elles
+// ont été supprimées. Ce qui reste diverge réellement et est documenté sur
+// place — `procs/corr/special.rs` (erfc de Numerical Recipes vs erf par la
+// gamma incomplète) et `datastep/functions/distributions/special.rs`. Les deux
+// chemins cités n'existaient d'ailleurs plus : ce sont des dossiers depuis
+// MQ3.1/MQ3.4.
 
 use crate::stat::dists::{gammq, student_t_cdf};
 

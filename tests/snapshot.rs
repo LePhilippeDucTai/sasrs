@@ -1,9 +1,9 @@
 //! Harnais de snapshots : chaque fixture .sas est exécutée en mode
 //! déterministe et le couple log + listing est verrouillé par insta.
 //!
-//! RÉACTIVER (retirer #[ignore]) dès que executor::run_program est
-//! implémenté (fin du jalon M1) ; puis `cargo insta review` pour
-//! accepter les snapshots initiaux.
+//! Ajouter une fixture : déposer le `.sas` sous `tests/fixtures/<jalon>/`,
+//! lancer `cargo test`, VÉRIFIER À LA MAIN la plausibilité SAS du `.snap.new`
+//! produit, puis `cargo insta accept`.
 
 mod common;
 
