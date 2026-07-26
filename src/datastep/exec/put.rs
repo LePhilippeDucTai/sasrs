@@ -202,10 +202,10 @@ impl Runner {
         let fmt_tok = format
             .map(str::to_string)
             .or_else(|| self.pdv.vars()[slot].format.clone());
-        if let Some(tok) = fmt_tok {
-            if let Some(spec) = crate::formats::FormatSpec::parse(&tok) {
-                return self.format_catalog.format(&value, &spec).trim().to_string();
-            }
+        if let Some(tok) = fmt_tok
+            && let Some(spec) = crate::formats::FormatSpec::parse(&tok)
+        {
+            return self.format_catalog.format(&value, &spec).trim().to_string();
         }
         // Défaut : pas de format.
         match value {

@@ -305,12 +305,12 @@ impl Compiler<'_> {
             // Une variable déjà au PDV avec un type INCOMPATIBLE (présente
             // dans un autre dataset du SET, ou référencée avant) → erreur
             // de compilation, comme SAS.
-            if let Some(slot) = self.pdv.slot(&pdv_name) {
-                if self.pdv.vars()[slot].ty != meta.ty {
-                    return Err(SasError::runtime(format!(
-                        "Variable {pdv_name} has been defined as both character and numeric."
-                    )));
-                }
+            if let Some(slot) = self.pdv.slot(&pdv_name)
+                && self.pdv.vars()[slot].ty != meta.ty
+            {
+                return Err(SasError::runtime(format!(
+                    "Variable {pdv_name} has been defined as both character and numeric."
+                )));
             }
             let slot = self.pdv.add_var(PdvVar {
                 name: pdv_name,

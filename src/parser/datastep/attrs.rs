@@ -86,13 +86,13 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
             // lettre/`_` est ADJACENT (spans jointifs, comme expr.rs).
             let dot_end = tok.span.end;
             ts.next(); // `.`
-            if let TokenKind::Ident(s) = &ts.peek().kind {
-                if ts.peek().span.start == dot_end && s.chars().count() == 1 {
-                    if let Some(kind) = MissingKind::from_letter(s.chars().next().unwrap()) {
-                        ts.next();
-                        return Ok(Some(Expr::Missing(kind)));
-                    }
-                }
+            if let TokenKind::Ident(s) = &ts.peek().kind
+                && ts.peek().span.start == dot_end
+                && s.chars().count() == 1
+                && let Some(kind) = MissingKind::from_letter(s.chars().next().unwrap())
+            {
+                ts.next();
+                return Ok(Some(Expr::Missing(kind)));
             }
             Ok(Some(Expr::Missing(MissingKind::Dot)))
         }

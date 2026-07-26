@@ -60,22 +60,22 @@ impl Parser {
             });
         }
         // DO WHILE (cond) / DO UNTIL (cond)
-        if let Tok::Ident(s) = self.peek().clone() {
-            if s.eq_ignore_ascii_case("while") || s.eq_ignore_ascii_case("until") {
-                let is_while = s.eq_ignore_ascii_case("while");
-                self.next();
-                self.expect(&Tok::LParen, "'(' after DO WHILE/UNTIL")?;
-                let cond = self.parse_expr()?;
-                self.expect(&Tok::RParen, "')'")?;
-                self.expect(&Tok::Semi, "';' after DO WHILE/UNTIL")?;
-                let body = self.parse_block_until_end()?;
-                self.expect(&Tok::Semi, "';' after END")?;
-                return Ok(if is_while {
-                    ImlStmt::DoWhile { cond, body }
-                } else {
-                    ImlStmt::DoUntil { cond, body }
-                });
-            }
+        if let Tok::Ident(s) = self.peek().clone()
+            && (s.eq_ignore_ascii_case("while") || s.eq_ignore_ascii_case("until"))
+        {
+            let is_while = s.eq_ignore_ascii_case("while");
+            self.next();
+            self.expect(&Tok::LParen, "'(' after DO WHILE/UNTIL")?;
+            let cond = self.parse_expr()?;
+            self.expect(&Tok::RParen, "')'")?;
+            self.expect(&Tok::Semi, "';' after DO WHILE/UNTIL")?;
+            let body = self.parse_block_until_end()?;
+            self.expect(&Tok::Semi, "';' after END")?;
+            return Ok(if is_while {
+                ImlStmt::DoWhile { cond, body }
+            } else {
+                ImlStmt::DoUntil { cond, body }
+            });
         }
         // DO i = from TO to [BY by];
         let var = self.expect_ident("a loop variable after DO")?;

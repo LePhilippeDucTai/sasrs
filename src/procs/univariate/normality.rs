@@ -150,7 +150,7 @@ pub(super) fn compute_normality_tests(
 /// when n is out of range. `sorted` must be ascending with positive variance.
 pub(super) fn shapiro_wilk(sorted: &[f64]) -> (Option<f64>, Option<f64>) {
     let n = sorted.len();
-    if n < 3 || n > 2000 {
+    if !(3..=2000).contains(&n) {
         return (None, None);
     }
     let nf = n as f64;

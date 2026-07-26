@@ -94,15 +94,15 @@ pub(super) fn build_summary_rows(
     }
 
     // RBREAK AFTER / SUMMARIZE: grand-total line over all surviving rows.
-    if let Some(rb) = &ast.rbreak {
-        if rb.summarize {
-            let all: Vec<usize> = (0..n_obs).collect();
-            let rvals = break_row_values(plan, decoded, &all, usize::MAX);
-            value_rows.push(RowOut {
-                kind: RowKind::Rbreak,
-                vals: rvals,
-            });
-        }
+    if let Some(rb) = &ast.rbreak
+        && rb.summarize
+    {
+        let all: Vec<usize> = (0..n_obs).collect();
+        let rvals = break_row_values(plan, decoded, &all, usize::MAX);
+        value_rows.push(RowOut {
+            kind: RowKind::Rbreak,
+            vals: rvals,
+        });
     }
     value_rows
 }

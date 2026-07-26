@@ -134,10 +134,10 @@ pub(super) fn sql_expr_with_aggs(
     ctx: &Ctx,
     aggs: &[(SqlExpr, String)],
 ) -> Result<Expr> {
-    if let SqlExpr::Aggregate { .. } = e {
-        if let Some((_, name)) = aggs.iter().find(|(a, _)| a == e) {
-            return Ok(col(name.clone()));
-        }
+    if let SqlExpr::Aggregate { .. } = e
+        && let Some((_, name)) = aggs.iter().find(|(a, _)| a == e)
+    {
+        return Ok(col(name.clone()));
     }
     match e {
         SqlExpr::Binary { op, left, right } => {
@@ -269,11 +269,7 @@ pub(super) fn item_has_aggregate(e: &SqlExpr) -> bool {
 /// Vrai si CHAQUE item du select-list est soit un agrégat, soit une clé du
 /// GROUP BY (cas standard sans remerge).
 pub(super) fn all_items_aggregated(query: &SelectStmt) -> bool {
-    let group_cols: Vec<String> = query
-        .group_by
-        .iter()
-        .filter_map(|g| as_column_name(g))
-        .collect();
+    let group_cols: Vec<String> = query.group_by.iter().filter_map(as_column_name).collect();
     query.items.iter().all(|it| {
         if item_has_aggregate(&it.expr) {
             return true;

@@ -199,10 +199,10 @@ pub(super) fn out_num_meta(name: &str) -> VarMeta {
 /// Best-effort name of the page dimension for the page-label line: the first
 /// CLASS variable that appears in the page expression, else "Page".
 pub(super) fn page_dim_name(ast: &TabulateAst, ds: &SasDataset) -> String {
-    if let Some(p) = &ast.page {
-        if let Some(name) = first_class_name(p, ds) {
-            return name;
-        }
+    if let Some(p) = &ast.page
+        && let Some(name) = first_class_name(p, ds)
+    {
+        return name;
     }
     "Page".to_string()
 }

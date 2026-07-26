@@ -24,17 +24,16 @@ pub(crate) fn parse_do(ts: &mut StatementStream) -> Result<DsStmt> {
             // `do over arr;` : boucle implicite sur un array. `over` n'est pas
             // un mot réservé — on ne le reconnaît que s'il est suivi d'un
             // identifiant d'array et d'un `;` (sinon `over` serait un index).
-            if lower == "over" {
-                if let TokenKind::Ident(arr) = &ts.peek_nth(1).kind {
-                    if ts.peek_nth(2).kind == TokenKind::Semi {
-                        let arr = arr.clone();
-                        ts.next(); // `over`
-                        ts.next(); // nom d'array
-                        ts.expect_semi()?;
-                        let body = parse_do_body(ts)?;
-                        return Ok(DsStmt::DoOver { array: arr, body });
-                    }
-                }
+            if lower == "over"
+                && let TokenKind::Ident(arr) = &ts.peek_nth(1).kind
+                && ts.peek_nth(2).kind == TokenKind::Semi
+            {
+                let arr = arr.clone();
+                ts.next(); // `over`
+                ts.next(); // nom d'array
+                ts.expect_semi()?;
+                let body = parse_do_body(ts)?;
+                return Ok(DsStmt::DoOver { array: arr, body });
             }
             ts.next(); // l'ident (index potentiel, ou while/until)
             if ts.peek().kind == TokenKind::Eq {
@@ -183,13 +182,13 @@ pub(crate) fn parse_iterative_do(ts: &mut StatementStream, index_name: String) -
         items.push(make_do_list_item(v, t, b, ts.peek().span)?);
     }
     // WHILE/UNTIL en fin de liste (`do i = 1, 3 while(x);`) sont illégaux.
-    if let Some(kw) = ts.peek().ident().map(str::to_ascii_lowercase) {
-        if kw == "while" || kw == "until" {
-            return Err(SasError::parse(
-                "WHILE/UNTIL are not allowed in a DO statement over a list of values.",
-                ts.peek().span,
-            ));
-        }
+    if let Some(kw) = ts.peek().ident().map(str::to_ascii_lowercase)
+        && (kw == "while" || kw == "until")
+    {
+        return Err(SasError::parse(
+            "WHILE/UNTIL are not allowed in a DO statement over a list of values.",
+            ts.peek().span,
+        ));
     }
     ts.expect_semi()?;
     let body = parse_do_body(ts)?;

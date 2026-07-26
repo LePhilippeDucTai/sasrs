@@ -227,11 +227,11 @@ pub(super) fn build_observations(
             continue;
         }
         // Subject.
-        if let Some(sc) = &subj_col {
-            if sc[i].is_missing() {
-                n_not_used += 1;
-                continue;
-            }
+        if let Some(sc) = &subj_col
+            && sc[i].is_missing()
+        {
+            n_not_used += 1;
+            continue;
         }
         // Response encoding.
         let yi = if model.dist == Distribution::Binary {

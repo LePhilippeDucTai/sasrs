@@ -70,7 +70,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
             let year: i32 = year_str.parse().ok()?;
             // 2-digit year: 00-99 → 2000-2099 (simple heuristic matching SAS)
             let year = if year_str.len() == 2 {
-                if year >= 0 && year < 100 {
+                if (0..100).contains(&year) {
                     2000 + year
                 } else {
                     year

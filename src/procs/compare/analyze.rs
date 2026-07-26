@@ -156,12 +156,12 @@ pub(super) fn compare_observations(
                 var_diffs[cp.cv_idx].n_diffs += 1;
 
                 // Compute numeric difference for max_diff
-                if cp.var_type == VarType::Num {
-                    if let (Value::Num(b), Value::Num(c)) = (&base_val, &comp_val) {
-                        let diff = (b - c).abs();
-                        if diff > var_diffs[cp.cv_idx].max_diff {
-                            var_diffs[cp.cv_idx].max_diff = diff;
-                        }
+                if cp.var_type == VarType::Num
+                    && let (Value::Num(b), Value::Num(c)) = (&base_val, &comp_val)
+                {
+                    let diff = (b - c).abs();
+                    if diff > var_diffs[cp.cv_idx].max_diff {
+                        var_diffs[cp.cv_idx].max_diff = diff;
                     }
                 }
             }

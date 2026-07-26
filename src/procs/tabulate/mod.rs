@@ -301,7 +301,7 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         if let Some(pc) = page {
             session.listing.write_line(&format!(
                 "{}={}",
-                page_dim_name(&ast, &ds),
+                page_dim_name(ast, &ds),
                 cell_label(pc, &ds)
             ));
             session.listing.blank();

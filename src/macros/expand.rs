@@ -197,11 +197,11 @@ impl MacroEngine {
                 // handler qui rend `None` (syntaxe non conforme) laisse la main
                 // au candidat suivant, puis aux cas irréguliers ci-dessous.
                 for &(kw, matcher, handler) in DISPATCH {
-                    if matcher(&chars, i, kw) {
-                        if let Some(next) = handler(self, &chars, i, &mut out) {
-                            i = next;
-                            continue 'scan;
-                        }
+                    if matcher(&chars, i, kw)
+                        && let Some(next) = handler(self, &chars, i, &mut out)
+                    {
+                        i = next;
+                        continue 'scan;
                     }
                 }
 

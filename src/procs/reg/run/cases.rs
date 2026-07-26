@@ -185,7 +185,7 @@ pub(crate) fn compute_press_stat(
     weighting: Option<&Weighting>,
 ) -> Option<f64> {
     if model.press_opt && !model.noprint {
-        let h0 = leverages(&x_mat, &fit.xtx_inv);
+        let h0 = leverages(x_mat, &fit.xtx_inv);
         let ones = vec![1.0; h0.len()];
         let wf: &[f64] = weighting.as_ref().map(|w| w.wf.as_slice()).unwrap_or(&ones);
         let h: Vec<f64> = h0.iter().zip(wf.iter()).map(|(&hi, &wi)| hi * wi).collect();

@@ -122,6 +122,9 @@ pub(super) fn parse_proc_options(ts: &mut StatementStream) -> Result<ProcOptions
     })
 }
 
+/// MQ5.1 — parse an `OUTPUT OUT=… keyword=name …;` statement (the `output`
+/// keyword has not been consumed yet) and attach the result to the last
+/// MODEL seen, if any.
 pub(super) fn parse_output_stmt(
     ts: &mut StatementStream,
     models: &mut [RegModelEntry],

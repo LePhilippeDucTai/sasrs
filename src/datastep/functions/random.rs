@@ -144,31 +144,31 @@ pub(super) fn fn_rand(args: &[Value], ctx: &mut EvalCtx) -> Value {
 /// RANUNI([seed]) — Uniform(0,1) random variate.
 /// If seed is provided and non-missing, reinitialise the RNG.
 pub(super) fn fn_ranuni(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    if let Some(v) = args.first() {
-        if let Some(seed) = coerce_num(v, ctx) {
-            ctx.rng_state = seed_to_state(seed as i64);
-        }
+    if let Some(v) = args.first()
+        && let Some(seed) = coerce_num(v, ctx)
+    {
+        ctx.rng_state = seed_to_state(seed as i64);
     }
     Value::Num(lcg_uniform(ctx))
 }
 
 /// RANNOR([seed]) — Standard Normal(0,1) random variate.
 pub(super) fn fn_rannor(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    if let Some(v) = args.first() {
-        if let Some(seed) = coerce_num(v, ctx) {
-            ctx.rng_state = seed_to_state(seed as i64);
-            ctx.rng_spare = None; // invalidate cached spare after re-seed
-        }
+    if let Some(v) = args.first()
+        && let Some(seed) = coerce_num(v, ctx)
+    {
+        ctx.rng_state = seed_to_state(seed as i64);
+        ctx.rng_spare = None; // invalidate cached spare after re-seed
     }
     Value::Num(rng_normal(ctx))
 }
 
 /// RANEXP([seed]) — Exponential(1) random variate.
 pub(super) fn fn_ranexp(args: &[Value], ctx: &mut EvalCtx) -> Value {
-    if let Some(v) = args.first() {
-        if let Some(seed) = coerce_num(v, ctx) {
-            ctx.rng_state = seed_to_state(seed as i64);
-        }
+    if let Some(v) = args.first()
+        && let Some(seed) = coerce_num(v, ctx)
+    {
+        ctx.rng_state = seed_to_state(seed as i64);
     }
     let u = lcg_uniform(ctx);
     Value::Num(-u.ln())
@@ -191,10 +191,10 @@ pub(super) fn fn_ranbin(args: &[Value], ctx: &mut EvalCtx) -> Value {
         },
     };
     // Optional seed in 3rd position.
-    if let Some(sv) = args.get(2) {
-        if let Some(seed) = coerce_num(sv, ctx) {
-            ctx.rng_state = seed_to_state(seed as i64);
-        }
+    if let Some(sv) = args.get(2)
+        && let Some(seed) = coerce_num(sv, ctx)
+    {
+        ctx.rng_state = seed_to_state(seed as i64);
     }
     if !(0.0..=1.0).contains(&prob) {
         ctx.error_flag = true;

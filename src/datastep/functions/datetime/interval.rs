@@ -160,7 +160,8 @@ pub(crate) fn fn_intnx(args: &[Value], ctx: &mut EvalCtx) -> Value {
             let ny = total_q.div_euclid(4);
             let nq = total_q.rem_euclid(4); // 0..3
             let first_month = nq * 3 + 1;
-            let d = match align {
+
+            match align {
                 Align::Beginning => (ny, first_month, 1),
                 Align::End => {
                     let last_month = first_month + 2;
@@ -177,8 +178,7 @@ pub(crate) fn fn_intnx(args: &[Value], ctx: &mut EvalCtx) -> Value {
                     // Milieu du trimestre ≈ 15 du mois central.
                     (ny, first_month + 1, 15)
                 }
-            };
-            d
+            }
         }
         Interval::Year => {
             let ny = sy + inc;

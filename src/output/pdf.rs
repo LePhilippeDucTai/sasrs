@@ -141,7 +141,7 @@ impl PdfDestination {
     }
 
     pub(super) fn build_pdf_document(content: String) -> Vec<u8> {
-        let content_bytes = content.as_bytes().len();
+        let content_bytes = content.len();
 
         let obj1 = "<<\n/Type /Catalog\n/Pages 2 0 R\n>>".to_string();
         let obj2 = "<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>".to_string();

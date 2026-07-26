@@ -176,10 +176,10 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         // Hold de ligne (M14) : un `@` simple est relâché au DÉBUT de
         // l'itération suivante (le prochain INPUT lira un nouvel
         // enregistrement) ; un `@@` survit.
-        if let Some(h) = &r.text_io.held {
-            if !h.double {
-                r.text_io.held = None;
-            }
+        if let Some(h) = &r.text_io.held
+            && !h.double
+        {
+            r.text_io.held = None;
         }
         // Hold de ligne PUT (M14.2) : un `@` simple relâche la ligne au DÉBUT
         // de l'itération suivante (flush + clear) ; un `@@` la conserve.
@@ -237,14 +237,14 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     // UNIQUEMENT pour un fichier externe. Pour les données instream
     // DATALINES/CARDS, SAS n'émet aucune NOTE de ce type (elle est réservée
     // aux fichiers physiques).
-    if let Some(text) = &r.text_io.src {
-        if text.is_file {
-            session.log.note(&format!(
-                "{} records were read from {}.",
-                r.text_io.read, text.display
-            ));
-            stats.read.push((text.display.clone(), r.text_io.read));
-        }
+    if let Some(text) = &r.text_io.src
+        && text.is_file
+    {
+        session.log.note(&format!(
+            "{} records were read from {}.",
+            r.text_io.read, text.display
+        ));
+        stats.read.push((text.display.clone(), r.text_io.read));
     }
 
     // Écriture des sorties (ordre du statement DATA ; _LAST_ = la dernière).

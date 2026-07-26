@@ -120,7 +120,8 @@ impl UserFormat {
             if !from_ok {
                 return false;
             }
-            let to_ok = match &range.to {
+
+            match &range.to {
                 Bound::High => true,
                 Bound::Low => false,
                 Bound::Char(c) => {
@@ -128,8 +129,7 @@ impl UserFormat {
                     if range.to_exclusive { s < c } else { s <= c }
                 }
                 Bound::Num(_) => false,
-            };
-            to_ok
+            }
         } else {
             // Numeric format: match Value::Num against numeric bounds.
             // Missing values don't match numeric ranges unless there is a
@@ -153,7 +153,8 @@ impl UserFormat {
             if !from_ok {
                 return false;
             }
-            let to_ok = match &range.to {
+
+            match &range.to {
                 Bound::High => true,
                 Bound::Low => false,
                 Bound::Num(hi) => {
@@ -164,8 +165,7 @@ impl UserFormat {
                     }
                 }
                 Bound::Char(_) => false,
-            };
-            to_ok
+            }
         }
     }
 }

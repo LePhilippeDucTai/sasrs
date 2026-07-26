@@ -201,10 +201,10 @@ pub(super) fn write_output(
 
             // WAYS / TYPES restriction (M33.3): skip _TYPE_ rows not requested.
             // None → no restriction (default path, every _TYPE_ emitted).
-            if let Some(set) = allowed_types {
-                if !set.contains(&ty) {
-                    continue;
-                }
+            if let Some(set) = allowed_types
+                && !set.contains(&ty)
+            {
+                continue;
             }
 
             // Group this BY group's rows by the active class variables.

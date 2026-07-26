@@ -176,10 +176,10 @@ impl Runner {
                 continue;
             }
             // OBS= : borne supérieure (1-based, inclusive).
-            if let Some(o) = obs {
-                if self.text_io.next_line + 1 > o {
-                    return Ok(None);
-                }
+            if let Some(o) = obs
+                && self.text_io.next_line + 1 > o
+            {
+                return Ok(None);
             }
             let Some(line) = text.lines.get(self.text_io.next_line) else {
                 return Ok(None);
@@ -244,7 +244,7 @@ impl Runner {
                 let stop = (*cursor + w).min(chars.len());
                 // TRUNCOVER/MISSOVER : un champ partiel est lu tel quel.
                 let field: String = chars[*cursor..stop].iter().collect();
-                *cursor = *cursor + w;
+                *cursor += w;
                 self.apply_field(slot, &field, is_char, informat);
                 return Ok(ReadOutcome::Ok);
             }

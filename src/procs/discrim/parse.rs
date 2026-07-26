@@ -142,13 +142,13 @@ pub(super) fn check_options<'a>(ast: &'a DiscrimAst, session: &mut Session) -> R
     }
 
     // Parse-accepted options that are not implemented → NOTE.
-    if let Some(m) = &ast.method {
-        if m != "NORMAL" {
-            session.log.note(&format!(
-                "METHOD={} is not implemented; using NORMAL (LDA).",
-                m
-            ));
-        }
+    if let Some(m) = &ast.method
+        && m != "NORMAL"
+    {
+        session.log.note(&format!(
+            "METHOD={} is not implemented; using NORMAL (LDA).",
+            m
+        ));
     }
     match ast.pool {
         Pool::No => session

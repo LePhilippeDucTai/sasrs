@@ -68,11 +68,7 @@ pub(super) fn exact_wilcoxon(groups: &[Vec<f64>]) -> Option<ExactWilcoxon> {
     let obs2: u64 = w[..n0].iter().sum();
     // 2·mean rank-sum = n_0·(n+1).
     let mean2 = (n0 as u64) * (n as u64 + 1);
-    let dist = if obs2 >= mean2 {
-        obs2 - mean2
-    } else {
-        mean2 - obs2
-    };
+    let dist = obs2.abs_diff(mean2);
 
     let mut lower = 0.0_f64;
     let mut two = 0.0_f64;
@@ -84,7 +80,7 @@ pub(super) fn exact_wilcoxon(groups: &[Vec<f64>]) -> Option<ExactWilcoxon> {
         if s2 <= obs2 {
             lower += cnt;
         }
-        let d = if s2 >= mean2 { s2 - mean2 } else { mean2 - s2 };
+        let d = s2.abs_diff(mean2);
         if d >= dist {
             two += cnt;
         }

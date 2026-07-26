@@ -203,46 +203,47 @@ pub fn execute(ast: &RegAst, session: &mut Session) -> Result<()> {
         // over the FIRST model's analysis variables (regressors + dependent),
         // using the same listwise deletion as that model. Gated on the PROC
         // flags so a PROC without SIMPLE/CORR is byte-identical to before.
-        if (ast.simple || ast.corr) && !ast.models.is_empty() {
-            if let Some((names, cols)) = gather_simple_corr(
+        if (ast.simple || ast.corr)
+            && !ast.models.is_empty()
+            && let Some((names, cols)) = gather_simple_corr(
                 &ds,
                 &ast.models[0].model,
                 grp_rows,
                 weight_col.as_deref(),
                 freq_col.as_deref(),
-            ) {
-                if ast.simple {
-                    print_simple_stats(&names, &cols, session);
-                }
-                if ast.corr {
-                    print_corr_matrix(&names, &cols, session);
-                }
+            )
+        {
+            if ast.simple {
+                print_simple_stats(&names, &cols, session);
+            }
+            if ast.corr {
+                print_corr_matrix(&names, &cols, session);
             }
         }
         // OUTSSCP= (M36.8): one SSCP matrix per BY group, built from the FIRST
         // model's analysis variables (Intercept + regressors + dependent) over
         // the same complete-case rows. Gated so a PROC without OUTSSCP= is
         // byte-identical to before.
-        if let Some(out) = &ast.data_options.outsscp {
-            if let Some((_, cols)) = gather_simple_corr(
+        if let Some(out) = &ast.data_options.outsscp
+            && let Some((_, cols)) = gather_simple_corr(
                 &ds,
                 &ast.models[0].model,
                 grp_rows,
                 weight_col.as_deref(),
                 freq_col.as_deref(),
-            ) {
-                // `gather_simple_corr` returns the regressor columns then the
-                // dependent column; `write_outsscp` consumes them in that order.
-                let m0 = &ast.models[0].model;
-                write_outsscp(
-                    out,
-                    &m0.regressors,
-                    m0.dependent(),
-                    &cols,
-                    !m0.noint,
-                    session,
-                )?;
-            }
+            )
+        {
+            // `gather_simple_corr` returns the regressor columns then the
+            // dependent column; `write_outsscp` consumes them in that order.
+            let m0 = &ast.models[0].model;
+            write_outsscp(
+                out,
+                &m0.regressors,
+                m0.dependent(),
+                &cols,
+                !m0.noint,
+                session,
+            )?;
         }
         for (mi, entry) in ast.models.iter().enumerate() {
             let model_label = format!("Model: MODEL{}", mi + 1);

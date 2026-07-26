@@ -1260,6 +1260,11 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   → alias `type`, `field_reassign_with_default` 6, `derivable_impls` 2, `excessive_precision`
   3 ; (d) les 3 `approx_constant` de niveau *error* (valeurs attendues de test) → `#[allow]`
   local justifié. Cible : `cargo clippy --all-targets -- -D warnings` VERT (Opus, moyen)
+  - [x] MQ7.2a — lot auto-applicable (`cargo clippy --fix`, 60 fichiers) : 357 → 238.
+    Débloqué d'abord à la main les 4 fichiers qui faisaient échouer le lot entier
+    (`empty_line_after_doc_comments` ×3 + `map_entry`) ; le doc-comment orphelin de
+    `reg/parse/model/lineq.rs` (il documentait `parse_output_stmt`, parti dans
+    `options.rs` lors de MQ5.1) a été REMIS sur sa fonction au lieu d'être supprimé.
 - [ ] MQ7.3 — scories des scissions Q/Q2 : `procs/common/mod.rs` (434 l dont 330 de tests
   inline + 85 de `pub use` un-par-ligne) → `common/tests.rs` + re-exports groupés ;
   `library/mod.rs::csv_tests` → `library/tests.rs` ; `macros/macro_tests/` et

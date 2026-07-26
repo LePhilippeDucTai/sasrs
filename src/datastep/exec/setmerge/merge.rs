@@ -22,13 +22,13 @@ impl Runner {
         // Détection de désordre : l'interclassement choisit toujours la
         // plus petite clé disponible ; si elle régresse, c'est qu'un input
         // n'est pas trié selon le BY.
-        if let Some(prev) = &self.set_cursor.prev_keys {
-            if compare_keys(&cur_keys, prev, &input.by) == Ordering::Less {
-                return Err(SasError::runtime(format!(
-                    "BY variables are not properly sorted on data set {}.",
-                    ds.display
-                )));
-            }
+        if let Some(prev) = &self.set_cursor.prev_keys
+            && compare_keys(&cur_keys, prev, &input.by) == Ordering::Less
+        {
+            return Err(SasError::runtime(format!(
+                "BY variables are not properly sorted on data set {}.",
+                ds.display
+            )));
         }
         let row = self.set_cursor.filtered[d][self.set_cursor.cursors[d]];
         // Les variables absentes du dataset servi GARDENT leur valeur
@@ -140,13 +140,13 @@ impl Runner {
                     _ => {
                         // Nouvelle clé : doit être STRICTEMENT supérieure à la
                         // précédente (sinon dataset non trié).
-                        if let Some(prev) = &prev_key {
-                            if compare_keys(&key, prev, &input.by) == Ordering::Less {
-                                return Err(SasError::runtime(format!(
-                                    "BY variables are not properly sorted on data set {}.",
-                                    ds.display
-                                )));
-                            }
+                        if let Some(prev) = &prev_key
+                            && compare_keys(&key, prev, &input.by) == Ordering::Less
+                        {
+                            return Err(SasError::runtime(format!(
+                                "BY variables are not properly sorted on data set {}.",
+                                ds.display
+                            )));
                         }
                         prev_key = Some(key.clone());
                         groups.push((key, pos, 1));
@@ -182,12 +182,12 @@ impl Runner {
             let mut participate: Vec<Option<(usize, usize)>> = vec![None; n_ds];
             let mut n = vec![0usize; n_ds];
             for d in 0..n_ds {
-                if let Some((key, start, len)) = ds_groups[d].get(g_cursors[d]) {
-                    if compare_keys(key, &group_key, &input.by) == Ordering::Equal {
-                        participate[d] = Some((*start, *len));
-                        n[d] = *len;
-                        g_cursors[d] += 1;
-                    }
+                if let Some((key, start, len)) = ds_groups[d].get(g_cursors[d])
+                    && compare_keys(key, &group_key, &input.by) == Ordering::Equal
+                {
+                    participate[d] = Some((*start, *len));
+                    n[d] = *len;
+                    g_cursors[d] += 1;
                 }
             }
             let in_active: Vec<bool> = n.iter().map(|&c| c > 0).collect();
@@ -246,14 +246,14 @@ impl Runner {
             for j in 0..max {
                 let mut loads: Vec<(usize, usize)> = Vec::new();
                 for d in 0..n_ds {
-                    if let Some((start, len)) = participate[d] {
-                        if j < len {
-                            // j-ème ligne du groupe dans `filtered`.
-                            let row = self.set_cursor.filtered[d][start + j];
-                            loads.push((d, row));
-                        }
-                        // j >= len : PERSISTANCE (pas de chargement).
+                    if let Some((start, len)) = participate[d]
+                        && j < len
+                    {
+                        // j-ème ligne du groupe dans `filtered`.
+                        let row = self.set_cursor.filtered[d][start + j];
+                        loads.push((d, row));
                     }
+                    // j >= len : PERSISTANCE (pas de chargement).
                 }
                 let first: Vec<bool> = first_flags.iter().map(|&f| f && j == 0).collect();
                 let last: Vec<bool> = last_flags.iter().map(|&l| l && j + 1 == max).collect();

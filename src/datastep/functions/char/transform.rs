@@ -55,7 +55,7 @@ pub(crate) fn fn_translate(args: &[Value], _ctx: &mut EvalCtx) -> Value {
                         to_chars[pos]
                     } else {
                         // char in from beyond len(to) → remove it
-                        return '\0'; // placeholder, will be filtered
+                        '\0' // placeholder, will be filtered
                     }
                 }
                 None => c,

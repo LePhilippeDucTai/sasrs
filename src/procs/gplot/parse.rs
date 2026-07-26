@@ -273,10 +273,10 @@ pub(super) fn parse_axis_stmt(ts: &mut StatementStream) -> AxisDef {
                     ts.next();
                     let mut lab: Option<String> = None;
                     while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Eof {
-                        if lab.is_none() {
-                            if let TokenKind::Str { value, .. } = &ts.peek().kind {
-                                lab = Some(value.clone());
-                            }
+                        if lab.is_none()
+                            && let TokenKind::Str { value, .. } = &ts.peek().kind
+                        {
+                            lab = Some(value.clone());
                         }
                         ts.next();
                     }

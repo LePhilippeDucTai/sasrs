@@ -252,25 +252,23 @@ pub(super) fn fit_and_print_ridge_ipc(
                 values: vals,
             });
             // OUTVIF: ridge VIF row (no intercept value).
-            if outvif {
-                if let Ok(vif) = ridge_vif(&std.r, k) {
-                    let mut vrow = vec![fmt_ridge_sel(k)];
-                    for v in &vif {
-                        vrow.push(fmt5(*v));
-                    }
-                    vif_rows.push(vrow);
-                    let mut vvals: Vec<Option<f64>> = Vec::with_capacity(p + 1);
-                    vvals.push(None); // intercept slot
-                    for v in &vif {
-                        vvals.push(Some(*v));
-                    }
-                    rows.push(RidgeIpcRow {
-                        kind: "RIDGEVIF",
-                        ridge_k: Some(k),
-                        pcomit_m: None,
-                        values: vvals,
-                    });
+            if outvif && let Ok(vif) = ridge_vif(&std.r, k) {
+                let mut vrow = vec![fmt_ridge_sel(k)];
+                for v in &vif {
+                    vrow.push(fmt5(*v));
                 }
+                vif_rows.push(vrow);
+                let mut vvals: Vec<Option<f64>> = Vec::with_capacity(p + 1);
+                vvals.push(None); // intercept slot
+                for v in &vif {
+                    vvals.push(Some(*v));
+                }
+                rows.push(RidgeIpcRow {
+                    kind: "RIDGEVIF",
+                    ridge_k: Some(k),
+                    pcomit_m: None,
+                    values: vvals,
+                });
             }
         }
         if !model.noprint {

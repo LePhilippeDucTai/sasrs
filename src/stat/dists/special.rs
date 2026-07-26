@@ -188,7 +188,7 @@ pub fn ln_choose(n: u64, k: u64) -> f64 {
     ln_factorial(n) - ln_factorial(k) - ln_factorial(n - k)
 }
 
-/// ─────────────────────────── M37.3 additions ───────────────────────────
+// ─────────────────────────── M37.3 additions ───────────────────────────
 
 /// Digamma function ψ(x) = d/dx ln Γ(x).
 ///

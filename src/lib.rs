@@ -33,6 +33,7 @@ use session::Session;
 use source::SourceFile;
 use std::path::PathBuf;
 
+#[derive(Default)]
 pub struct RunOptions {
     /// Répertoire WORK ; None = répertoire temporaire détruit en fin de
     /// session.
@@ -45,17 +46,6 @@ pub struct RunOptions {
     /// Active le fast-path vectorisé OPTIONNEL des étapes DATA simples
     /// (cf. `datastep::fastpath`). OFF par défaut.
     pub vectorize: bool,
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        RunOptions {
-            work_dir: None,
-            base_dir: None,
-            deterministic: false,
-            vectorize: false,
-        }
-    }
 }
 
 pub struct RunOutcome {

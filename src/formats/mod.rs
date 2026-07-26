@@ -153,24 +153,24 @@ impl FormatCatalog {
 
         // 1. Try user VALUE format.
         let uname = spec.name.to_uppercase();
-        if let Some(uf) = self.user.get(&uname) {
-            if let Some(label) = uf.lookup(v) {
-                let s = label.to_string();
-                return match spec.w {
-                    Some(w) => right_justify(&s, w as usize),
-                    None => s,
-                };
-            }
+        if let Some(uf) = self.user.get(&uname)
+            && let Some(label) = uf.lookup(v)
+        {
+            let s = label.to_string();
+            return match spec.w {
+                Some(w) => right_justify(&s, w as usize),
+                None => s,
+            };
         }
 
         // 1b. Try user PICTURE format (M18.3) — numeric only, before builtins.
-        if let Some(pic) = self.user_pictures.get(&uname) {
-            if let Some(rendered) = pic.render(v) {
-                return match spec.w {
-                    Some(w) => right_justify(&rendered, w as usize),
-                    None => rendered,
-                };
-            }
+        if let Some(pic) = self.user_pictures.get(&uname)
+            && let Some(rendered) = pic.render(v)
+        {
+            return match spec.w {
+                Some(w) => right_justify(&rendered, w as usize),
+                None => rendered,
+            };
         }
 
         // 2. Try builtin.

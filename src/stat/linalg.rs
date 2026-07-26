@@ -195,7 +195,7 @@ pub fn qr_decomposition(a: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>)
 
     // Reduce Q to m×n (first n columns) and R to n×n (first n rows).
     let q_reduced: Vec<Vec<f64>> = q.iter().map(|row| row[..n].to_vec()).collect();
-    let r_reduced: Vec<Vec<f64>> = r[..n].iter().map(|row| row.clone()).collect();
+    let r_reduced: Vec<Vec<f64>> = r[..n].to_vec();
     Ok((q_reduced, r_reduced))
 }
 

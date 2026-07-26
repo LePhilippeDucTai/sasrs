@@ -111,7 +111,6 @@ pub(crate) fn render_plot_requests(
             "REG PLOTS= request: {} plot(s) deferred (compile with --features graphics).",
             count
         ));
-        return;
     }
 
     #[cfg(feature = "graphics")]
@@ -353,7 +352,6 @@ pub(crate) fn render_plot_statements(
             "REG PLOT statement: {} scatter(s) deferred (compile with --features graphics).",
             pairs.len()
         ));
-        return;
     }
 
     #[cfg(feature = "graphics")]

@@ -119,7 +119,7 @@ pub(super) fn execute_across(
             VarType::Char => Align::Left,
         })
         .collect();
-    aligns.extend(std::iter::repeat(Align::Right).take(across_vals.len()));
+    aligns.extend(std::iter::repeat_n(Align::Right, across_vals.len()));
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(groups.len());
     for (_key, grp_rows) in &groups {

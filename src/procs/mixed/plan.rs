@@ -76,13 +76,13 @@ pub(super) fn note_deferred_features(ast: &MixedAst, model: &ModelSpec, session:
             .log
             .note("NOBOUND is parse-accepted but not implemented in PROC MIXED.");
     }
-    if let Some(d) = &model.ddfm {
-        if d != "contain" {
-            session.log.note(&format!(
-                "DDFM={} is parse-accepted but not implemented; using CONTAIN.",
-                d.to_uppercase()
-            ));
-        }
+    if let Some(d) = &model.ddfm
+        && d != "contain"
+    {
+        session.log.note(&format!(
+            "DDFM={} is parse-accepted but not implemented; using CONTAIN.",
+            d.to_uppercase()
+        ));
     }
     for lbl in &ast.estimate_labels {
         session.log.note(&format!(
@@ -177,7 +177,7 @@ pub(super) fn build_observations_gen(
             .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
             .unwrap()
     };
-    let subj_of: Vec<usize> = subj_values.iter().map(|v| level_index(v)).collect();
+    let subj_of: Vec<usize> = subj_values.iter().map(level_index).collect();
 
     // Within-subject position (order of appearance) and per-subject counts.
     let mut counts = vec![0usize; n_subjects];

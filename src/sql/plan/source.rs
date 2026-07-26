@@ -41,10 +41,10 @@ pub(super) fn scan_source(
     }
     let lib = item.table.libref_or_work();
     let name = item.table.name.to_uppercase();
-    if lib == "WORK" {
-        if let Some(view_query) = session.views.get(&name).cloned() {
-            return lower_select(&view_query, session);
-        }
+    if lib == "WORK"
+        && let Some(view_query) = session.views.get(&name).cloned()
+    {
+        return lower_select(&view_query, session);
     }
     scan_normalized(session, &lib, &name)
 }

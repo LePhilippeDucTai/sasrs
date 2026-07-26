@@ -392,10 +392,10 @@ impl MacroEngine {
         while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
             j += 1;
         }
-        if chars.get(j) == Some(&'(') {
-            if let Some((_, after)) = Self::read_balanced_parens(chars, j) {
-                j = after;
-            }
+        if chars.get(j) == Some(&'(')
+            && let Some((_, after)) = Self::read_balanced_parens(chars, j)
+        {
+            j = after;
         }
         // Consommer le reste jusqu'au `;` terminal (options/arguments ignorés).
         while j < chars.len() && chars[j] != ';' {

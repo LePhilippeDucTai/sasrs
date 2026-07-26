@@ -137,17 +137,17 @@ impl MacroEngine {
     pub(crate) fn find_label(chars: &[char], label: &str) -> Option<usize> {
         let mut k = 0;
         while k < chars.len() {
-            if chars[k] == '%' {
-                if let Some((name, after)) = Self::read_name(chars, k + 1) {
-                    // Un marqueur d'étiquette est `%name` immédiatement suivi de
-                    // `:` (blancs optionnels), ce que confirme `skip_label_marker`.
-                    let mut m = after;
-                    while matches!(chars.get(m), Some(c) if c.is_whitespace()) {
-                        m += 1;
-                    }
-                    if chars.get(m) == Some(&':') && name.eq_ignore_ascii_case(label) {
-                        return Some(m + 1);
-                    }
+            if chars[k] == '%'
+                && let Some((name, after)) = Self::read_name(chars, k + 1)
+            {
+                // Un marqueur d'étiquette est `%name` immédiatement suivi de
+                // `:` (blancs optionnels), ce que confirme `skip_label_marker`.
+                let mut m = after;
+                while matches!(chars.get(m), Some(c) if c.is_whitespace()) {
+                    m += 1;
+                }
+                if chars.get(m) == Some(&':') && name.eq_ignore_ascii_case(label) {
+                    return Some(m + 1);
                 }
             }
             k += 1;

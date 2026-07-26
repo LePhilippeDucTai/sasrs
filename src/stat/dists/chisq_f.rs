@@ -1,6 +1,6 @@
 use super::*;
 
-/// ─────────────────────────── M24.1 additions ───────────────────────────
+// ─────────────────────────── M24.1 additions ───────────────────────────
 
 /// Chi-squared cumulative distribution function.
 /// CDF of χ²(df) for x ≥ 0. Implemented as 1 - gammq(df/2, x/2).

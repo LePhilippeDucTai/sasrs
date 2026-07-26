@@ -81,10 +81,10 @@ pub(super) fn order_output_name(e: &SqlExpr, query: &SelectStmt) -> Option<Strin
         _ => return None,
     };
     for it in &query.items {
-        if let Ok(n) = output_name(it, query) {
-            if n.eq_ignore_ascii_case(&target) {
-                return Some(n);
-            }
+        if let Ok(n) = output_name(it, query)
+            && n.eq_ignore_ascii_case(&target)
+        {
+            return Some(n);
         }
     }
     None
@@ -118,12 +118,10 @@ pub(super) fn apply_order_by(
             )));
         }
         // Référence par alias de sortie (après projection) : col(alias).
-        if !pre_projection {
-            if let Some(name) = order_output_name(e, query) {
-                by.push(col(name));
-                desc.push(*d);
-                continue;
-            }
+        if !pre_projection && let Some(name) = order_output_name(e, query) {
+            by.push(col(name));
+            desc.push(*d);
+            continue;
         }
         by.push(sql_expr_to_polars(e, ctx)?);
         desc.push(*d);

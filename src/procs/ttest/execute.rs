@@ -172,12 +172,11 @@ pub(super) fn execute_two_sample(
             } else {
                 None
             };
-            if let Some(g) = group {
-                if let Some(x) = crate::missing::value_to_num(&col[r]) {
-                    if !x.is_nan() {
-                        g.push(x);
-                    }
-                }
+            if let Some(g) = group
+                && let Some(x) = crate::missing::value_to_num(&col[r])
+                && !x.is_nan()
+            {
+                g.push(x);
             }
         }
         let res = two_sample(&a, &b, alpha, sides);

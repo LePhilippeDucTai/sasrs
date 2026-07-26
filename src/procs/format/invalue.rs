@@ -184,11 +184,11 @@ pub(super) fn parse_invalue_bound(ts: &mut StatementStream) -> Result<Bound> {
 ///   `.` / `._` / `.A`..`.Z` → `InformatValue::Missing`
 pub(super) fn parse_informat_value(ts: &mut StatementStream) -> Result<InformatValue> {
     // `_SAME_` keyword (identifier).
-    if let Some(id) = ts.peek().ident() {
-        if id.eq_ignore_ascii_case("_same_") {
-            ts.next();
-            return Ok(InformatValue::Same);
-        }
+    if let Some(id) = ts.peek().ident()
+        && id.eq_ignore_ascii_case("_same_")
+    {
+        ts.next();
+        return Ok(InformatValue::Same);
     }
 
     // Missing value: starts with `.`

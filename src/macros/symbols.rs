@@ -59,8 +59,8 @@ impl MacroEngine {
     pub(super) fn assign(&mut self, name: &str, value: String) {
         let key = name.to_uppercase();
         for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(&key) {
-                scope.insert(key, value);
+            if let Some(slot) = scope.get_mut(&key) {
+                *slot = value;
                 return;
             }
         }
@@ -108,18 +108,18 @@ impl MacroEngine {
         let chars: Vec<char> = current.chars().collect();
         let mut i = 0;
         while i < chars.len() {
-            if chars[i] == '&' {
-                if let Some((name, after)) = Self::read_name(&chars, i + 1) {
-                    if let Some(v) = self.lookup(&name) {
-                        self.log_line(format!(
-                            "SYMBOLGEN:  Macro variable {} resolves to {}",
-                            name.to_uppercase(),
-                            v
-                        ));
-                    }
-                    i = after;
-                    continue;
+            if chars[i] == '&'
+                && let Some((name, after)) = Self::read_name(&chars, i + 1)
+            {
+                if let Some(v) = self.lookup(&name) {
+                    self.log_line(format!(
+                        "SYMBOLGEN:  Macro variable {} resolves to {}",
+                        name.to_uppercase(),
+                        v
+                    ));
                 }
+                i = after;
+                continue;
             }
             i += 1;
         }

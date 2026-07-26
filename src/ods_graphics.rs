@@ -21,9 +21,10 @@ use std::path::PathBuf;
 /// Vit dans ce module NON gardé par la feature afin que le parsing et l'état
 /// de session restent disponibles dans le build par défaut. Le moteur de
 /// rendu (gardé par `#[cfg(feature = "graphics")]`) l'importe d'ici.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageFmt {
     /// PNG (défaut SAS).
+    #[default]
     Png,
     /// SVG (vectoriel).
     Svg,
@@ -36,12 +37,6 @@ impl ImageFmt {
             ImageFmt::Png => "png",
             ImageFmt::Svg => "svg",
         }
-    }
-}
-
-impl Default for ImageFmt {
-    fn default() -> Self {
-        ImageFmt::Png
     }
 }
 

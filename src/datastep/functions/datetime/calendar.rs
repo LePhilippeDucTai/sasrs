@@ -10,7 +10,7 @@ pub(crate) fn today_sas() -> f64 {
 
 /// Checks if a year/month/day combination is valid.
 pub(crate) fn is_valid_date(year: i64, month: i64, day: i64) -> bool {
-    if month < 1 || month > 12 || day < 1 {
+    if !(1..=12).contains(&month) || day < 1 {
         return false;
     }
     let days_in_month = match month {

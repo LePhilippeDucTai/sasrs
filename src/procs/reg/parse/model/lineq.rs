@@ -1,9 +1,5 @@
 use super::*;
 
-/// MQ5.1 — parse an `OUTPUT OUT=… keyword=name …;` statement (the `output`
-/// keyword has not been consumed yet) and attach the result to the last
-/// MODEL seen, if any.
-
 /// MQ5.1 — parse the value of a `SELECTION=method` MODEL option (the
 /// `selection` keyword has not been consumed yet) and build the initial
 /// `Selection` request with the method's default SLE/SLS.

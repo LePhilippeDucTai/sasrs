@@ -281,10 +281,12 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                     for &row in grp_rows {
                         let v = value_to_num(&var_values[vi][row]);
                         let w = value_to_num(&wv[row]);
-                        if let (Some(vf), Some(wf)) = (v, w) {
-                            if !vf.is_nan() && !wf.is_nan() && wf > 0.0 {
-                                obs_pairs.push((vf, row + 1));
-                            }
+                        if let (Some(vf), Some(wf)) = (v, w)
+                            && !vf.is_nan()
+                            && !wf.is_nan()
+                            && wf > 0.0
+                        {
+                            obs_pairs.push((vf, row + 1));
                         }
                     }
                     emit_variable_weighted(

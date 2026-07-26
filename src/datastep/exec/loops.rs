@@ -51,10 +51,10 @@ impl Runner {
                 }
             }
             // (2) Test WHILE (avant le corps).
-            if let Some(cond) = while_ {
-                if !self.eval_checked(cond)?.truthy() {
-                    break;
-                }
+            if let Some(cond) = while_
+                && !self.eval_checked(cond)?.truthy()
+            {
+                break;
             }
             // (3) Corps : un Flow non Normal traverse le DO et remonte.
             for s in body {
@@ -64,18 +64,18 @@ impl Runner {
                 }
             }
             // (4) Test UNTIL (après le corps : au moins un tour exécuté).
-            if let Some(cond) = until {
-                if self.eval_checked(cond)?.truthy() {
-                    break;
-                }
+            if let Some(cond) = until
+                && self.eval_checked(cond)?.truthy()
+            {
+                break;
             }
             // (5) Incrément de l'index (missing + by = missing, comme
             // l'arithmétique SAS).
-            if let Some(slot) = idx_slot {
-                if let Value::Num(f) = self.pdv.get(slot) {
-                    let next = f + by_v;
-                    self.pdv.set(slot, Value::Num(next));
-                }
+            if let Some(slot) = idx_slot
+                && let Value::Num(f) = self.pdv.get(slot)
+            {
+                let next = f + by_v;
+                self.pdv.set(slot, Value::Num(next));
             }
             iters += 1;
             if iters > 10_000_000 {

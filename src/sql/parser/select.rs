@@ -106,46 +106,46 @@ pub(super) fn parse_select_item(ts: &mut StatementStream) -> Result<SelectItem> 
     }
 
     // `alias.*` : ident `.` `*`.
-    if let TokenKind::Ident(name) = &ts.peek().kind {
-        if ts.peek2().kind == TokenKind::Dot {
-            let name = name.clone();
-            // Lookahead manuel : ident `.` `*` ?
-            // On clone pour inspecter le 3e token sans le consommer : pas de
-            // peek3, donc on consomme prudemment l'ident + dot puis on teste.
-            // Pour éviter une mauvaise consommation, on bascule plutôt vers
-            // l'expression qui gère déjà `a.col` ; le cas `a.*` est traité ici
-            // en vérifiant le `*` après avoir consommé ident et dot.
-            // -> Implémenté dans parse_sql_atom via un drapeau ? Plus simple :
-            //    on consomme ident + dot puis on regarde `*`.
-            ts.next(); // ident
-            ts.next(); // dot
-            if ts.peek().kind == TokenKind::Star {
-                ts.next(); // *
-                let alias = maybe_alias(ts)?;
-                return Ok(SelectItem {
-                    expr: SqlExpr::QualifiedStar(name),
-                    alias,
-                });
-            }
-            // Sinon c'est `a.col` : on a déjà consommé ident + dot, il reste
-            // la colonne. On la lit et on construit un Qualified, puis on
-            // poursuit l'expression via la suite postfixée.
-            let col_tok = ts.peek().clone();
-            let Some(col) = col_tok.ident().map(str::to_string) else {
-                return Err(SasError::parse(
-                    "expected a column name after '.'",
-                    col_tok.span,
-                ));
-            };
-            ts.next();
-            let base = SqlExpr::Qualified {
-                table: name,
-                column: col,
-            };
-            let expr = continue_expr_from(ts, base)?;
+    if let TokenKind::Ident(name) = &ts.peek().kind
+        && ts.peek2().kind == TokenKind::Dot
+    {
+        let name = name.clone();
+        // Lookahead manuel : ident `.` `*` ?
+        // On clone pour inspecter le 3e token sans le consommer : pas de
+        // peek3, donc on consomme prudemment l'ident + dot puis on teste.
+        // Pour éviter une mauvaise consommation, on bascule plutôt vers
+        // l'expression qui gère déjà `a.col` ; le cas `a.*` est traité ici
+        // en vérifiant le `*` après avoir consommé ident et dot.
+        // -> Implémenté dans parse_sql_atom via un drapeau ? Plus simple :
+        //    on consomme ident + dot puis on regarde `*`.
+        ts.next(); // ident
+        ts.next(); // dot
+        if ts.peek().kind == TokenKind::Star {
+            ts.next(); // *
             let alias = maybe_alias(ts)?;
-            return Ok(SelectItem { expr, alias });
+            return Ok(SelectItem {
+                expr: SqlExpr::QualifiedStar(name),
+                alias,
+            });
         }
+        // Sinon c'est `a.col` : on a déjà consommé ident + dot, il reste
+        // la colonne. On la lit et on construit un Qualified, puis on
+        // poursuit l'expression via la suite postfixée.
+        let col_tok = ts.peek().clone();
+        let Some(col) = col_tok.ident().map(str::to_string) else {
+            return Err(SasError::parse(
+                "expected a column name after '.'",
+                col_tok.span,
+            ));
+        };
+        ts.next();
+        let base = SqlExpr::Qualified {
+            table: name,
+            column: col,
+        };
+        let expr = continue_expr_from(ts, base)?;
+        let alias = maybe_alias(ts)?;
+        return Ok(SelectItem { expr, alias });
     }
 
     let expr = parse_sql_expr(ts)?;
@@ -169,12 +169,12 @@ pub(super) fn maybe_alias(ts: &mut StatementStream) -> Result<Option<String>> {
         return Ok(Some(name));
     }
     // Alias nu : un ident qui n'est pas un mot-clé de clause/jointure.
-    if let TokenKind::Ident(s) = &ts.peek().kind {
-        if !is_clause_kw(s) {
-            let name = s.clone();
-            ts.next();
-            return Ok(Some(name));
-        }
+    if let TokenKind::Ident(s) = &ts.peek().kind
+        && !is_clause_kw(s)
+    {
+        let name = s.clone();
+        ts.next();
+        return Ok(Some(name));
     }
     Ok(None)
 }
@@ -263,12 +263,12 @@ pub(super) fn maybe_table_alias(ts: &mut StatementStream) -> Result<Option<Strin
         ts.next();
         return Ok(Some(name));
     }
-    if let TokenKind::Ident(s) = &ts.peek().kind {
-        if !is_clause_kw(s) {
-            let name = s.clone();
-            ts.next();
-            return Ok(Some(name));
-        }
+    if let TokenKind::Ident(s) = &ts.peek().kind
+        && !is_clause_kw(s)
+    {
+        let name = s.clone();
+        ts.next();
+        return Ok(Some(name));
     }
     Ok(None)
 }

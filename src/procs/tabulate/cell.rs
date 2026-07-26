@@ -83,10 +83,10 @@ pub(super) fn compute_cell_value(
     let mut cell_format: Option<String> = None;
 
     for a in atoms {
-        if cell_format.is_none() {
-            if let Some(f) = a.format() {
-                cell_format = Some(f.to_string());
-            }
+        if cell_format.is_none()
+            && let Some(f) = a.format()
+        {
+            cell_format = Some(f.to_string());
         }
         match a {
             Atom::Var { col, .. } => {

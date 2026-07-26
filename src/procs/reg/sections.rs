@@ -29,22 +29,22 @@ pub(super) fn print_matrix_options(rf: &RespFit, session: &mut Session) {
             f64::NAN
         };
         if model.xpx {
-            let xpx = build_xpx(&x_mat, &y_vec);
-            print_xpx(&xpx, &sel_reg_names, dep_name, intercept, session);
+            let xpx = build_xpx(x_mat, y_vec);
+            print_xpx(&xpx, sel_reg_names, dep_name, intercept, session);
         }
         if model.inv {
             print_inverse(
                 &fit.xtx_inv,
                 &fit.beta,
                 fit.sse,
-                &sel_reg_names,
+                sel_reg_names,
                 dep_name,
                 intercept,
                 session,
             );
         }
         if model.covb || model.corrb {
-            print_estimate_matrices(model, &fit.xtx_inv, mse, &sel_reg_names, intercept, session);
+            print_estimate_matrices(model, &fit.xtx_inv, mse, sel_reg_names, intercept, session);
         }
     }
 }
@@ -70,30 +70,30 @@ pub(super) fn print_diagnostic_options(rf: &RespFit, session: &mut Session) {
     // All gated on the corresponding flags (and !noprint), so a MODEL without
     // any of these options is byte-identical to before.
     if (model.collin || model.collinoint) && !model.noprint {
-        if model.collin {
-            if let Ok(c) = compute_collin(&x_mat, &sel_reg_names, intercept, false) {
-                print_collin(&c, false, session);
-            }
+        if model.collin
+            && let Ok(c) = compute_collin(x_mat, sel_reg_names, intercept, false)
+        {
+            print_collin(&c, false, session);
         }
-        if model.collinoint {
-            if let Ok(c) = compute_collin(&x_mat, &sel_reg_names, intercept, true) {
-                print_collin(&c, true, session);
-            }
+        if model.collinoint
+            && let Ok(c) = compute_collin(x_mat, sel_reg_names, intercept, true)
+        {
+            print_collin(&c, true, session);
         }
     }
     if model.spec && !model.noprint {
-        print_spec_test(&sel_cols, &fit.resid, session);
+        print_spec_test(sel_cols, &fit.resid, session);
     }
     if model.dw && !model.noprint {
-        let dwr = durbin_watson(&fit.resid, &x_mat, &fit.xtx_inv, model.dwprob);
+        let dwr = durbin_watson(&fit.resid, x_mat, &fit.xtx_inv, model.dwprob);
         print_durbin_watson(&dwr, session);
     }
     if model.acov && !model.noprint {
-        let cov = acov_hc0(&x_mat, &fit.resid, &fit.xtx_inv);
+        let cov = acov_hc0(x_mat, &fit.resid, &fit.xtx_inv);
         print_acov(
             &cov,
             &fit.beta,
-            &sel_reg_names,
+            sel_reg_names,
             intercept,
             (n - p_eff) as f64,
             session,
@@ -104,19 +104,19 @@ pub(super) fn print_diagnostic_options(rf: &RespFit, session: &mut Session) {
     // off the (unrestricted) OLS fit, gated on the CLM/CLI model options.
     if (model.clm || model.cli) && !model.noprint {
         print_output_statistics(
-            model, dep_name, &x_mat, &y_vec, &fit, n, p_eff, weighting, id_first, session,
+            model, dep_name, x_mat, y_vec, fit, n, p_eff, weighting, id_first, session,
         );
     }
 
     // --- Residual / influence diagnostics (M36.3): MODEL R and INFLUENCE.
     // Computed lazily once off the OLS fit, shared by both listings.
     if (model.r || model.influence) && !model.noprint {
-        let infl = compute_influence_stats(&x_mat, &y_vec, &fit, n, p_eff, weighting);
+        let infl = compute_influence_stats(x_mat, y_vec, fit, n, p_eff, weighting);
         if model.r {
             print_r_statistics(model, &infl, id_first, weighting, session);
         }
         if model.influence {
-            print_influence_statistics(&infl, &sel_reg_names, intercept, id_first, session);
+            print_influence_statistics(&infl, sel_reg_names, intercept, id_first, session);
         }
     }
 }
@@ -150,7 +150,7 @@ pub(super) fn run_test_section(
         };
         run_tests(
             &entry.tests,
-            &sel_reg_names,
+            sel_reg_names,
             intercept,
             dep_name,
             t_beta,
@@ -197,13 +197,13 @@ pub(super) fn render_model_plots(ast: &RegAst, rf: &RespFit, session: &mut Sessi
     if ast.plot_requests.any() {
         render_plot_requests(
             &ast.plot_requests,
-            &x_mat,
-            &y_vec,
-            &fit,
+            x_mat,
+            y_vec,
+            fit,
             n,
             p_eff,
             model.alpha,
-            &sel_reg_names,
+            sel_reg_names,
             intercept,
             weighting,
             session,
@@ -213,9 +213,9 @@ pub(super) fn render_model_plots(ast: &RegAst, rf: &RespFit, session: &mut Sessi
         render_plot_statements(
             &ast.plot_statements,
             dep_name,
-            &x_mat,
-            &fit,
-            &sel_reg_names,
+            x_mat,
+            fit,
+            sel_reg_names,
             intercept,
             session,
         );

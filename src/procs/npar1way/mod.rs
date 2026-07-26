@@ -302,10 +302,10 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
                     .iter()
                     .position(|l| l.sas_cmp(lv) == std::cmp::Ordering::Equal);
                 let Some(gi) = gi else { continue };
-                if let Some(x) = value_to_num(&col[r]) {
-                    if !x.is_nan() {
-                        groups[gi].push(x);
-                    }
+                if let Some(x) = value_to_num(&col[r])
+                    && !x.is_nan()
+                {
+                    groups[gi].push(x);
                 }
             }
 
@@ -326,28 +326,28 @@ pub fn execute(ast: &NparAst, session: &mut Session) -> Result<()> {
             let mut out_row = OutRow::new(by_key.clone(), vname.clone());
 
             // Wilcoxon (k == 2).
-            if ast.test_options.wilcoxon {
-                if let Some(w) = &res.wilcoxon {
-                    centered(session, "Wilcoxon Two-Sample Test");
-                    session.listing.blank();
-                    write_two_sample_table(session, w.w, w.ew, w.var_w.sqrt(), w.z, w.p);
-                    session.listing.blank();
-                    out_row.wil = Some((w.w, w.z, w.p, normal_p1(w.z)));
+            if ast.test_options.wilcoxon
+                && let Some(w) = &res.wilcoxon
+            {
+                centered(session, "Wilcoxon Two-Sample Test");
+                session.listing.blank();
+                write_two_sample_table(session, w.w, w.ew, w.var_w.sqrt(), w.z, w.p);
+                session.listing.blank();
+                out_row.wil = Some((w.w, w.z, w.p, normal_p1(w.z)));
 
-                    // Exact Wilcoxon (k == 2 only).
-                    if ast.test_options.exact {
-                        match exact_wilcoxon(&groups) {
-                            Some(ex) => {
-                                write_exact_block(session, &ex);
-                                session.listing.blank();
-                                out_row.exact = Some((ex.p_lower, ex.p_two));
-                            }
-                            None => {
-                                session.log.note(&format!(
-                                    "The exact Wilcoxon test was not computed for {vname} \
+                // Exact Wilcoxon (k == 2 only).
+                if ast.test_options.exact {
+                    match exact_wilcoxon(&groups) {
+                        Some(ex) => {
+                            write_exact_block(session, &ex);
+                            session.listing.blank();
+                            out_row.exact = Some((ex.p_lower, ex.p_two));
+                        }
+                        None => {
+                            session.log.note(&format!(
+                                "The exact Wilcoxon test was not computed for {vname} \
                                      because the sample size exceeds the limit of {EXACT_N_CAP}."
-                                ));
-                            }
+                            ));
                         }
                     }
                 }

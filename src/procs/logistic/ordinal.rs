@@ -184,7 +184,7 @@ pub(super) fn fit_ordinal(
             if c <= n_int {
                 grad[c - 1] += inv * d_c;
             }
-            if c - 1 >= 1 {
+            if c > 1 {
                 grad[c - 2] += inv * (-d_cm1);
             }
             // ∂prob/∂β = (d_c − d_{c-1}) * x.
@@ -200,7 +200,7 @@ pub(super) fn fit_ordinal(
             if c <= n_int {
                 dp[c - 1] += d_c;
             }
-            if c - 1 >= 1 {
+            if c > 1 {
                 dp[c - 2] += -d_cm1;
             }
             for (m, &xm) in xi.iter().enumerate() {
@@ -310,7 +310,7 @@ pub(super) fn ordinal_varcov(
         if c <= n_int {
             dp[c - 1] += d_c;
         }
-        if c - 1 >= 1 {
+        if c > 1 {
             dp[c - 2] += -d_cm1;
         }
         let dprob_db = d_c - d_cm1;
