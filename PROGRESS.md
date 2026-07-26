@@ -1386,10 +1386,15 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   ne peuvent pas échouer ; (b) `executor::run_program` n'a JAMAIS eu de chemin `Err`, le
   `let _ =` ne jetait qu'un `Ok` systématique. Sa signature passe à `-> ()` pour que la
   lecture ne trompe plus (c'est exactement ce qui avait trompé la revue).
-- [ ] MQ9.4 — `SasError` : `Parse.span` est WRITE-ONLY (rempli 30×, lu 0×) → supprimer le
-  champ mort (log inchangé) ; retirer `Numerical`/`InvalidInput` (12 constructions, jamais
-  matchés). Câbler le span vers `log.error` reste une case OPTIONNELLE (change le log)
-  (Opus, moyen)
+- [x] MQ9.4 — `SasError` (Opus, moyen) : **constat corrigé, RIEN à supprimer**, et
+  `error.rs` documente désormais pourquoi. (a) `Parse.span` n'est effectivement jamais
+  imprimé, mais le retirer serait une perte : le log SAS 9.4 n'affiche ni ligne ni colonne
+  ni caret (l'imprimer serait une infidélité), les tests de `procs::common` VÉRIFIENT le
+  span — seul garde-fou contre un helper qui pointerait le mauvais token — et l'information
+  serait impossible à reconstruire après coup. (b) `Numerical`/`InvalidInput` ne sont jamais
+  matchés mais leur PRÉFIXE de message (« numerical error: », « invalid input: ») est
+  exactement ce que l'utilisateur lit : les retirer changerait le log. Décision : garder,
+  documenter, ne pas imprimer.
 - [ ] MQ9.5 — listes de paramètres : struct de contexte pour la famille `write_out*`
   (9 signatures pour le même bundle), `reg::run_model` (15 params/356 l),
   `exec/input.rs::read_one_var` (11 params dont 3 Option + 3 bool),
