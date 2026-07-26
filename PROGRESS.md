@@ -1221,3 +1221,124 @@ nouveau. Non bloquant pour la Phase G ; MQ5.3 à faire avant M56–M58 (factor/d
 - [x] MQ6.3 — sortir les tests inline des gros fichiers procs (glimmix, report, means,
   univariate, corr, freq) en modules `tests` dédiés (move-only, multiset) (Sonnet, moyen)
 - [x] DoD MQ6 : cargo test vert (2669), zéro `.snap.new`, clippy 313 warnings sans type nouveau vs base ; **fin de Phase Q2**.
+
+# Phase Q3 — revue de code 2026-07 (axes DRY / robustesse), jalons MQ7–MQ9
+
+Les Phases Q et Q2 ont traité **l'axe longueur** : plus aucun fichier non-test au-dessus de
+493 lignes, plus aucune fonction au-dessus de 356. La revue de code demandée après MQ6 montre
+que **l'axe DRY et l'axe robustesse n'ont jamais été traités**, et que les scissions
+mécaniques ont laissé des scories. Constats vérifiés sur l'arbre `f6086f9` :
+
+| Constat | Mesure |
+|---|---|
+| Helpers dupliqués verbatim entre procs | `num_var_meta` ×11, `fmt2/4/5/6` ×18, `expect_ident` ×6, `expect_eq` ×7, `char_var_meta` ×5, `mat_vec`/`dot` ×5 |
+| `expect_eq` : deux contrats OPPOSÉS sous le même nom | `procs/common/parse.rs:114` consomme le nom d'option, les 6 autres copies non → migrer une proc vers le helper « canonique » avale un token |
+| Clones de modules entiers | `mixed/linalg.rs` ≈ `glimmix/linalg.rs` ; `macros/eval/mod.rs` ≈ `macros/eval/parser.rs` (~190 l, seul `i64`/`f64` diffère) |
+| Diagnostics clippy | 357, dont 3 de niveau `error` (`approx_constant`, deny-by-default) → `clippy -D warnings` est ROUGE |
+| Formatage | 453 / 542 fichiers échouent `cargo fmt --check` ; pas de `rustfmt.toml` |
+| Panics atteignables depuis un `.sas` | `REPEAT('a',1e12)` → OOM/abort ; `partial_cmp().unwrap()` sur objectif NaN (Nelder–Mead) |
+| Erreurs avalées | 13 `let _ = expect_eq/expect_semi` (mixed/glimmix) ; `DIST=`/`LINK=` inconnu → défaut silencieux ; `corr/mod.rs` `unwrap_or_default()` → colonne vide → statistiques fausses SANS ERROR |
+| Docs périmées | `lib.rs` (« jalons M1–M8 »), `procs/mod.rs` (« PRINT (M1) » sur un dispatcher de 41 procs), `common/parse.rs` (« AUCUN appelant n'existe encore » sur 10 helpers ayant 2–31 appelants) |
+
+**Règles** (héritées de M31/M32 et des Phases Q/Q2) : une case = un commit, `cargo test` vert,
+`cargo clippy` sans type de warning nouveau, **sortie octet-identique → zéro `.snap.new`**.
+**Exception explicite** : MQ9.2 et MQ9.3 corrigent des erreurs aujourd'hui avalées et
+ÉMETTENT donc de nouvelles `ERROR:` — pour ces deux cases seulement, les snapshots impactés
+sont régénérés puis **revalidés à la main** (plausibilité SAS 9.4, pas auto-cohérence).
+Décidé avec l'utilisateur : pas de CI (validation locale).
+
+## MQ7 — hygiène et scories de scission (risque nul, sortie inchangée)
+- [x] MQ7.0 — Section Phase Q3 dans PROGRESS.md (ce commit) (Sonnet, faible)
+- [ ] MQ7.1 — `rustfmt.toml` + `cargo fmt` sur tout le dépôt (453 fichiers) ; commit isolé
+  « format-only », aucun autre changement (Sonnet, faible)
+- [ ] MQ7.2 — résorber les 357 diagnostics clippy, par sous-lots : (a) auto-fixables
+  (`collapsible_if` 56, `doc_lazy_continuation` 42, `needless_borrow` 30, `doc_overindented`
+  9, `needless_return`, `redundant_closure`, `let_and_return`, `match_like_matches_macro`) ;
+  (b) `needless_range_loop` (~60 sites, `stat/` + procs matricielles) — **danger flottant** :
+  ordre de sommation strictement conservé, rollback si `.snap.new` ; (c) `type_complexity` 9
+  → alias `type`, `field_reassign_with_default` 6, `derivable_impls` 2, `excessive_precision`
+  3 ; (d) les 3 `approx_constant` de niveau *error* (valeurs attendues de test) → `#[allow]`
+  local justifié. Cible : `cargo clippy --all-targets -- -D warnings` VERT (Opus, moyen)
+- [ ] MQ7.3 — scories des scissions Q/Q2 : `procs/common/mod.rs` (434 l dont 330 de tests
+  inline + 85 de `pub use` un-par-ligne) → `common/tests.rs` + re-exports groupés ;
+  `library/mod.rs::csv_tests` → `library/tests.rs` ; `macros/macro_tests/` et
+  `procs/reg/tests_stmt/` → `tests/` (convention des 71 autres) ; supprimer les 10
+  `#[allow(dead_code)]` périmés + le commentaire mensonger de `common/parse.rs` ; supprimer
+  `frobenius_norm` mort (`stat/linalg.rs`) (Sonnet, moyen)
+- [ ] DoD MQ7 : cargo test vert, zéro `.snap.new`, `cargo fmt --check` vert, clippy
+  `-D warnings` vert ; → MQ8.
+
+## MQ8 — déduplication (move-only / extract-helper, byte-identique)
+- [ ] MQ8.1 — `common::dataset::{num_var_meta, char_var_meta}` ; supprimer les 11 + 5 copies
+  (means, ttest, reg, corr, logistic, rank, transpose, distance, npar1way, univariate, freq)
+  (Sonnet, faible)
+- [ ] MQ8.2 — `common::format::fmt_dp(v, n)` (+ alias `fmt2/4/5/6` si plus lisible aux sites
+  d'appel) ; supprimer les ~18 copies (ttest, genmod, reg, glm, logistic, mixed, discrim,
+  npar1way, glimmix, anova) (Sonnet, faible)
+- [ ] MQ8.3 — algèbre partagée `dot`/`mat_vec`/`log_det_spd`/`un_block` → foyer unique
+  (`stat/linalg.rs`) ; supprimer `mixed/linalg.rs` ≈ `glimmix/linalg.rs` + copies genmod/
+  logistic/discrim. **Garde-fou** : même ordre de sommation (les digits REG/MIXED/GLIMMIX en
+  dépendent) (Opus, moyen)
+- [ ] MQ8.4 — helpers de parsing des procs graphiques → `common/parse.rs` : `expect_ident` ×6,
+  `read_value` ×3, `parse_string_or_ident` ×2 (Sonnet, faible)
+- [ ] MQ8.5 — **piège `expect_eq`** : renommer la variante de `common/parse.rs` en
+  `consume_option_eq` (elle consomme le nom d'option), exposer un `expect_eq` au contrat
+  majoritaire, migrer les 6 copies (means, sgplot, export, import, `parser/datastep/io/
+  infile.rs`, `parser/global/titles.rs`) ; vérification message d'erreur par message d'erreur
+  (Opus, moyen)
+- [ ] MQ8.6 — `StatementStream::skip_balanced_parens()` (à côté de `skip_to_semi`) ; supprime
+  les 3 sites à profondeur ~9 (sgplot ×2, gplot) et rapproche `parse_axis_stmt` sgplot ⇄ gplot
+  (65 l sur ~96 identiques) (Sonnet, moyen)
+- [ ] MQ8.7 — `macros/eval/mod.rs` (`EvalParser` i64) vs `macros/eval/parser.rs` (f64) : un
+  seul parseur, ~190 l de clone supprimées (Opus, moyen)
+- [ ] MQ8.8 — `output/{html,rtf,pdf,excel}.rs` : `set_titles`/`set_footnotes`/`set_ls`/`ls`
+  (16 fonctions de 3 l) → méthodes par défaut du trait `OutputDestination` (Sonnet, faible)
+- [ ] MQ8.9 — `factor/analysis.rs` ≈ `princomp/analysis.rs` (`complete_case_rows`,
+  `apply_sign_convention`) → `common` ; `procs/corr/special.rs::betai` : fusionné avec
+  `stat/dists/special.rs` OU commentaire justifiant l'écart d'algorithme — pas de troisième
+  option (Sonnet, moyen)
+- [ ] MQ8.10 — `#[cfg(test)] pub mod testkit` : `make_session` ×41, `num_meta` ×23,
+  `char_meta` ×17, `write_dataset` ×14 → foyer unique (Sonnet, moyen)
+- [ ] DoD MQ8 : cargo test vert, zéro `.snap.new`, clippy `-D warnings` vert ; → MQ9.
+
+## MQ9 — robustesse, conception, docs
+- [ ] MQ9.1 — crashs atteignables depuis un `.sas` (sortie inchangée) : borner `REPEAT`
+  (`functions/char/transform.rs`) ; `partial_cmp().unwrap()` → `unwrap_or(Ordering::Equal)`
+  (`stat/optim.rs`, seul site du dépôt à ne pas le faire) ; découpes `s[..2]`/`s[2..4]` sur
+  OCTETS avec garde en `len()` (`formats/builtin/informat.rs` ×9 + `formats/mod.rs` ×3) →
+  char-safe. Un test de non-régression par correctif (Opus, moyen)
+- [ ] MQ9.2 — **change la sortie** : erreurs de syntaxe avalées — 13 `let _ = expect_eq(...)`/
+  `let _ = ts.expect_semi()` (mixed/glimmix) → `?` ; `DIST=`/`LINK=` inconnu → ERROR au lieu
+  du défaut silencieux ; 12 `let _ = parse_paren_attrs(...)` (sgplot/gplot) → diagnostic ou
+  commentaire justifiant l'ignorance délibérée. Snapshots régénérés ET revalidés à la main
+  (Opus, élevé)
+- [ ] MQ9.3 — **change la sortie** : résultats faux sans diagnostic — `corr/mod.rs`
+  `unwrap_or_default()` → `?` (colonne indécodable = `Vec` vide qui alimente la matrice de
+  corrélation) ; idem `sql/convert.rs` ×3 + `sql/select.rs` ×2 ; `executor/mod.rs`
+  `let _ = run_program(...)` (CALL EXECUTE) → propager/compter les erreurs (Opus, élevé)
+- [ ] MQ9.4 — `SasError` : `Parse.span` est WRITE-ONLY (rempli 30×, lu 0×) → supprimer le
+  champ mort (log inchangé) ; retirer `Numerical`/`InvalidInput` (12 constructions, jamais
+  matchés). Câbler le span vers `log.error` reste une case OPTIONNELLE (change le log)
+  (Opus, moyen)
+- [ ] MQ9.5 — listes de paramètres : struct de contexte pour la famille `write_out*`
+  (9 signatures pour le même bundle), `reg::run_model` (15 params/356 l),
+  `exec/input.rs::read_one_var` (11 params dont 3 Option + 3 bool),
+  `compile_control.rs::compile_do_loop` (5 Option). Cible : diviser par 2 les 47
+  `#[allow(clippy::too_many_arguments)]` (Opus, élevé)
+- [ ] MQ9.6 — derniers fichiers « AST + parse + execute + render » en un seul fichier →
+  dossiers (convention des ~30 autres procs) : `plot.rs` (493), `gchart.rs` (458, avec un
+  `mod graphics_impl` INLINE de 155 l), `sort.rs`, `contents.rs`, `import.rs`, `distance.rs`,
+  `append.rs`, `export.rs`, `catalog.rs` ; `executor/global.rs` (452 l, 6 sujets sans
+  rapport) → `global/{options,libname,ods,graphics,trace}.rs` (Sonnet, moyen)
+- [ ] MQ9.7 — docs : corriger les 5 doc-comments périmés (`lib.rs` M1–M8, `procs/mod.rs`
+  « PRINT (M1) », `common/parse.rs` « aucun appelant », `common/mod.rs` chemins disparus,
+  `tests/snapshot.rs` `#[ignore]` inexistant) ; `//!` sur les modules cœur qui n'en ont pas
+  (session, dataset, value, error, log, token, source, library) ; **corriger l'entrée MQ4.6
+  ci-dessus** : le trait `Proc` n'a jamais été écrit, c'est un `macro_rules! procs_registry`
+  qui GÉNÈRE les deux match (résultat propre, entrée fausse) (Sonnet, faible)
+- [ ] MQ9.8 — chemin chaud (sortie inchangée) : `eval_var` fait un `to_uppercase()` que
+  `Pdv::slot` refait, par lecture de variable ET par ligne, puis `clone()` la `Value` ;
+  `FormatCatalog` deep-cloné 2× par étape DATA → `Rc`. En DERNIER, mesure avant/après
+  (Opus, élevé)
+- [ ] DoD MQ9 : cargo test vert, `cargo fmt --check` vert, clippy `-D warnings` vert,
+  `.snap.new` = 0 hors MQ9.2/MQ9.3 (snapshots revalidés à la main) ; **fin de Phase Q3**.
