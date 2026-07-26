@@ -1,5 +1,3 @@
-use super::*;
-
 // ───────────────────────── Formatting helpers ─────────────────────────
 
 pub(super) fn fmt5(v: f64) -> String {
@@ -27,16 +25,6 @@ pub(super) fn fmt_level(v: f64) -> String {
 }
 
 // ───────────────────────── VarMeta helper ─────────────────────────
-
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
 
 /// Build a PROC REG BY-group heading line (`<var>=<value> ...`), matching the
 /// standard SAS BY-line used by the other procs (M36.7). Centered and emitted by

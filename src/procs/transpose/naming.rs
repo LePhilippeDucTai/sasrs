@@ -121,23 +121,3 @@ pub(crate) fn char_cell(v: &Value) -> Option<String> {
         Value::Num(_) => None,
     }
 }
-
-pub(crate) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
-pub(crate) fn char_var_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
-}

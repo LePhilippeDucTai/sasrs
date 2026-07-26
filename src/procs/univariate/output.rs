@@ -181,14 +181,3 @@ pub(super) fn write_output(
 
     Ok(())
 }
-
-/// VarMeta for a numeric output column.
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}

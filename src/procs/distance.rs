@@ -29,6 +29,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::decode_column;
+use crate::procs::common::{char_var_meta, num_var_meta};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::VarType;
@@ -305,7 +306,9 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
 
             // _NAME_ : Row<i>.
             let name_vals: Vec<String> = (0..n).map(|i| format!("Row{}", i + 1)).collect();
-            let name_len = name_vals.iter().map(|s| s.len()).max().unwrap_or(1);
+            // `.max(1)` : une longueur char SAS vaut au moins 1, même si toutes
+            // les valeurs sont vides (garde portée par l'ancien helper local).
+            let name_len = name_vals.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
             columns.push(
                 Series::new(
                     "_NAME_".into(),
@@ -341,26 +344,6 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn num_var_meta(name: &str) -> crate::dataset::VarMeta {
-    crate::dataset::VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
-fn char_var_meta(name: &str, len: usize) -> crate::dataset::VarMeta {
-    crate::dataset::VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length: len.max(1),
-        format: None,
-        label: None,
-    }
 }
 
 use crate::dataset::SasDataset;

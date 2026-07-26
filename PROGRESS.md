@@ -1282,7 +1282,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   clippy **357 → 4** (les 4 restants sont des `too_many_arguments` traités par MQ9.5) ; → MQ8.
 
 ## MQ8 — déduplication (move-only / extract-helper, byte-identique)
-- [ ] MQ8.1 — `common::dataset::{num_var_meta, char_var_meta}` ; supprimer les 11 + 5 copies
+- [x] MQ8.1 — `common::dataset::{num_var_meta, char_var_meta}` ; supprimer les 11 + 5 copies
   (means, ttest, reg, corr, logistic, rank, transpose, distance, npar1way, univariate, freq)
   (Sonnet, faible)
 - [ ] MQ8.2 — `common::format::fmt_dp(v, n)` (+ alias `fmt2/4/5/6` si plus lisible aux sites

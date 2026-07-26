@@ -66,3 +66,29 @@ pub fn open_resolved(in_ref: &DatasetRef, session: &mut Session) -> Result<SasDa
     }
     Ok(ds)
 }
+
+/// Métadonnée d'une variable NUMÉRIQUE de sortie : longueur SAS 8, ni format
+/// ni label. C'est la forme par défaut de toute colonne numérique créée par
+/// une PROC (MQ8.1 — unifie 11 copies identiques).
+pub fn num_var_meta(name: &str) -> VarMeta {
+    VarMeta {
+        name: name.to_string(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+    }
+}
+
+/// Métadonnée d'une variable CARACTÈRE de sortie de longueur `length`, ni
+/// format ni label (MQ8.1 — unifie 5 copies identiques). `length` est repris
+/// tel quel : à l'appelant de garantir `>= 1` s'il calcule une largeur.
+pub fn char_var_meta(name: &str, length: usize) -> VarMeta {
+    VarMeta {
+        name: name.to_string(),
+        ty: VarType::Char,
+        length,
+        format: None,
+        label: None,
+    }
+}

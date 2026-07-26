@@ -2,16 +2,6 @@ use super::*;
 
 // ───────────────────────── CLASS / OUTPUT helpers ─────────────────────────
 
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
 /// Print "Class Level Information" (one row per CLASS variable, listing levels
 /// in `sas_cmp` order). No-op when no CLASS variable is present, so the binary
 /// no-CLASS listing is byte-identical to the pre-M34.6 output.

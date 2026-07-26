@@ -109,6 +109,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column, phi_inv};
+use crate::procs::common::{char_var_meta, num_var_meta};
 use crate::session::Session;
 use crate::stat::{chisq_cdf, probnorm};
 use crate::token::TokenKind;

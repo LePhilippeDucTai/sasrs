@@ -6,7 +6,7 @@
 //! premier site d'apparition ; aucune logique n'est modifiée.
 
 use crate::ast::DatasetRef;
-use crate::dataset::SasDataset;
+use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::{num_to_value, value_to_num};
 use crate::parser::StatementStream;
@@ -40,6 +40,10 @@ pub use by::by_groups;
 pub use by::group_by_keys;
 
 pub use by::resolve_by_cols;
+
+pub use dataset::char_var_meta;
+
+pub use dataset::num_var_meta;
 
 pub use dataset::open_input;
 

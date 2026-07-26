@@ -90,6 +90,7 @@ use crate::dataset::{SasDataset, VarMeta};
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::num_var_meta;
 use crate::procs::common::{self, by_groups, decode_column, phi_inv, resolve_by_cols};
 use crate::session::Session;
 use crate::token::TokenKind;

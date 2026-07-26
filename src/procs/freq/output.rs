@@ -11,13 +11,3 @@ pub(super) fn emit_by_heading(session: &mut Session, by_names: &[String], by_key
     session.listing.write_line(&parts.join(" "));
     session.listing.blank();
 }
-
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}

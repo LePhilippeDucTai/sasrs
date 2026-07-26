@@ -39,26 +39,6 @@ impl OutRow {
     }
 }
 
-pub(super) fn char_var_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
-}
-
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
 /// Build and persist the OUT= dataset, set `_LAST_`, and emit the creation NOTE.
 pub(super) fn write_out_dataset(
     session: &mut Session,

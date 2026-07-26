@@ -86,6 +86,7 @@ use crate::parser::StatementStream;
 use crate::procs::common::{
     self, decode_column, partition_numeric, partition_weighted, sample_std,
 };
+use crate::procs::common::{char_var_meta, num_var_meta};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType, format_best};

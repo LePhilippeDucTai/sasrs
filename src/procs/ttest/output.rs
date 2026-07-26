@@ -2,26 +2,6 @@ use super::*;
 
 // ───────────────────────── ODS / OUT= datasets ─────────────────────────
 
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}
-
-pub(super) fn char_var_meta(name: &str, length: usize) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Char,
-        length,
-        format: None,
-        label: None,
-    }
-}
-
 /// Resolve the destination for the TTest output (ODS OUTPUT TTest, else OUT=).
 pub(super) fn output_target(ast: &TTestAst, session: &Session) -> Option<DatasetRef> {
     session

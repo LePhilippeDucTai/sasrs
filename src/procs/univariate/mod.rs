@@ -51,6 +51,7 @@ use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
+use crate::procs::common::num_var_meta;
 use crate::procs::common::{
     self, by_groups, centered, decode_column, partition_weighted, phi_inv, probnorm,
     resolve_by_cols, sample_std,

@@ -23,6 +23,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::num_var_meta;
 use crate::procs::common::{chisq_sf, decode_column, probnorm};
 use crate::session::Session;
 use crate::stat::invert_matrix;

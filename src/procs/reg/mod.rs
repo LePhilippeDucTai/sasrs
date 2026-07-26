@@ -17,6 +17,7 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::decode_column;
+use crate::procs::common::num_var_meta;
 use crate::session::Session;
 use crate::stat::linalg;
 use crate::stat::{f_cdf, t_quantile};

@@ -143,13 +143,3 @@ pub(super) fn rank_series(name: &str, values: &[Value], n_obs: usize) -> Series 
     let data: Vec<Option<f64>> = values.iter().map(value_to_num).collect();
     Series::new(name.into(), data)
 }
-
-pub(super) fn num_var_meta(name: &str) -> VarMeta {
-    VarMeta {
-        name: name.to_string(),
-        ty: VarType::Num,
-        length: 8,
-        format: None,
-        label: None,
-    }
-}

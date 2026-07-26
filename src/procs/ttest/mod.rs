@@ -116,11 +116,12 @@
 //! - ODS output dataset structure (column names, types, values)
 
 use crate::ast::DatasetRef;
-use crate::dataset::{SasDataset, VarMeta};
+use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column, partition_numeric, sample_std};
+use crate::procs::common::{char_var_meta, num_var_meta};
 use crate::session::Session;
 use crate::stat::{f_cdf, student_t_cdf};
 use crate::token::TokenKind;
