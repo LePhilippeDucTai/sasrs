@@ -1400,11 +1400,20 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   `exec/input.rs::read_one_var` (11 params dont 3 Option + 3 bool),
   `compile_control.rs::compile_do_loop` (5 Option). Cible : diviser par 2 les 47
   `#[allow(clippy::too_many_arguments)]` (Opus, élevé)
-- [ ] MQ9.6 — derniers fichiers « AST + parse + execute + render » en un seul fichier →
+- [x] MQ9.6 — derniers fichiers « AST + parse + execute + render » en un seul fichier →
   dossiers (convention des ~30 autres procs) : `plot.rs` (493), `gchart.rs` (458, avec un
   `mod graphics_impl` INLINE de 155 l), `sort.rs`, `contents.rs`, `import.rs`, `distance.rs`,
   `append.rs`, `export.rs`, `catalog.rs` ; `executor/global.rs` (452 l, 6 sujets sans
-  rapport) → `global/{options,libname,ods,graphics,trace}.rs` (Sonnet, moyen)
+  rapport) → `global/{options,libname,ods}.rs` (Sonnet, moyen) : les DEUX cibles réellement
+  problématiques sont traitées — `executor/global.rs` (483 l, 6 sujets) devient
+  `global/{mod,options,libname,ods}.rs` (le `mod` ne garde que le dispatch `exec_global`),
+  et `gchart.rs` perd son `mod graphics_impl` INLINE de 155 l, seul module de proc du dépôt
+  dans ce cas. **Les 7 autres procs mono-fichier sont LAISSÉES telles quelles** : 270 à
+  477 lignes, un fichier = une proc, aucune n'est un grab-bag — les scinder serait de la
+  churn sans lecteur gagnant. Découverte au passage : `cargo build --features graphics`
+  n'est couvert ni par `cargo test` ni par `cargo clippy` par défaut, et la scission l'a
+  cassé (résolution de `SasError` via `use super::*`) sans qu'aucune vérification
+  habituelle ne le voie → **les deux builds de feature entrent dans la DoD**.
 - [ ] MQ9.7 — docs : corriger les 5 doc-comments périmés (`lib.rs` M1–M8, `procs/mod.rs`
   « PRINT (M1) », `common/parse.rs` « aucun appelant », `common/mod.rs` chemins disparus,
   `tests/snapshot.rs` `#[ignore]` inexistant) ; `//!` sur les modules cœur qui n'en ont pas
