@@ -1338,10 +1338,16 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   (`output/mod.rs`), portée aussi par `ListingWriter`. Une destination n'expose plus que
   `page_state()`/`page_state_mut()` et hérite des quatre accesseurs : 20 méthodes → 10, et
   une nouvelle destination n'a plus 4 fonctions de boilerplate à recopier.
-- [ ] MQ8.9 — `factor/analysis.rs` ≈ `princomp/analysis.rs` (`complete_case_rows`,
+- [x] MQ8.9 — `factor/analysis.rs` ≈ `princomp/analysis.rs` (`complete_case_rows`,
   `apply_sign_convention`) → `common` ; `procs/corr/special.rs::betai` : fusionné avec
   `stat/dists/special.rs` OU commentaire justifiant l'écart d'algorithme — pas de troisième
-  option (Sonnet, moyen)
+  option (Sonnet, moyen) : les deux fonctions partent dans `common/model.rs`. Et pour
+  `betai` la réponse est nette — **la note de MQ1.2 était FAUSSE** : `betai`, `betacf` et
+  `ln_gamma` de `corr/special.rs` étaient BYTE-IDENTIQUES à celles de `stat/dists/special.rs`
+  (aucune constante ni itération ne différait), elles sont donc supprimées. Ce qui reste
+  dans `corr/special.rs` diffère RÉELLEMENT et est maintenant documenté comme tel : `erfc`
+  y est l'approximation rationnelle de Numerical Recipes, là où `stat::dists::erf` passe par
+  la gamma incomplète.
 - [ ] MQ8.10 — `#[cfg(test)] pub mod testkit` : `make_session` ×41, `num_meta` ×23,
   `char_meta` ×17, `write_dataset` ×14 → foyer unique (Sonnet, moyen)
 - [ ] DoD MQ8 : cargo test vert, zéro `.snap.new`, clippy `-D warnings` vert ; → MQ9.

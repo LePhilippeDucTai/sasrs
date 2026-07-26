@@ -1,6 +1,8 @@
 use super::super::*;
 use super::*;
 
+use crate::stat::dists::betai;
+
 // ───────────── parse tests ─────────────
 
 #[test]

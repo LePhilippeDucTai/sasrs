@@ -36,6 +36,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::{self, decode_column};
+use crate::procs::common::{apply_sign_convention, complete_case_rows};
 use crate::session::Session;
 use crate::stat::eigenvectors_jacobi;
 use crate::token::TokenKind;

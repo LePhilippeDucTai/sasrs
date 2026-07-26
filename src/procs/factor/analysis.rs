@@ -35,18 +35,6 @@ pub(super) fn resolve_var_columns(
     Ok(cols)
 }
 
-/// Complete-case rows (all analysis values finite), input order preserved.
-pub(super) fn complete_case_rows(decoded: &[Vec<f64>], n_read: usize) -> Vec<Vec<f64>> {
-    let mut data_rows: Vec<Vec<f64>> = Vec::new();
-    for r in 0..n_read {
-        let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
-        if row.iter().all(|v| v.is_finite()) {
-            data_rows.push(row);
-        }
-    }
-    data_rows
-}
-
 /// Means, sample stds (n-1) and the analysis matrix — covariance if `cov`,
 /// else correlation — symmetrized exactly before the Jacobi eigen-solver.
 pub(super) fn compute_analysis_matrix(
@@ -121,24 +109,4 @@ pub(super) fn compute_analysis_matrix(
         }
     }
     (means, stds, amat)
-}
-
-/// Sign convention: per column, if the abs-max element is negative, flip.
-pub(super) fn apply_sign_convention(v: &mut [Vec<f64>], p: usize) {
-    for col in 0..p {
-        let mut max_abs = 0.0_f64;
-        let mut max_val = 0.0_f64;
-        for row in 0..p {
-            let a = v[row][col].abs();
-            if a > max_abs {
-                max_abs = a;
-                max_val = v[row][col];
-            }
-        }
-        if max_val < 0.0 {
-            for row in 0..p {
-                v[row][col] = -v[row][col];
-            }
-        }
-    }
 }

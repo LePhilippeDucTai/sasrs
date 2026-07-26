@@ -174,3 +174,46 @@ pub(crate) fn un_block(theta: &[f64], t: usize) -> Vec<Vec<f64>> {
     }
     m
 }
+
+/// Lignes COMPLÈTES (aucune valeur manquante) des colonnes décodées, dans
+/// l'ordre des observations : `decoded` est en colonne-major, le résultat en
+/// ligne-major. Une ligne portant un missing (donc un `f64` non fini) est
+/// écartée entièrement — c'est la règle « complete case » de PROC PRINCOMP et
+/// PROC FACTOR (MQ8.9 — les deux en avaient une copie identique).
+pub(crate) fn complete_case_rows(decoded: &[Vec<f64>], n_read: usize) -> Vec<Vec<f64>> {
+    let mut data_rows: Vec<Vec<f64>> = Vec::new();
+    for r in 0..n_read {
+        let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
+        if row.iter().all(|v| v.is_finite()) {
+            data_rows.push(row);
+        }
+    }
+    data_rows
+}
+
+/// Convention de signe SAS sur une matrice de vecteurs propres (colonnes) :
+/// chaque colonne est orientée pour que son élément de plus GRANDE valeur
+/// absolue soit positif. Sans cela le signe des composantes/facteurs dépend de
+/// l'algorithme et le listing n'est pas reproductible.
+///
+/// MQ8.9 — copie identique dans `factor/analysis.rs` et `princomp/analysis.rs`.
+// Indices explicites : `row`/`col` parcourent une matrice carrée (cf. MQ7.2c).
+#[allow(clippy::needless_range_loop)]
+pub(crate) fn apply_sign_convention(v: &mut [Vec<f64>], p: usize) {
+    for col in 0..p {
+        let mut max_abs = 0.0_f64;
+        let mut max_val = 0.0_f64;
+        for row in 0..p {
+            let a = v[row][col].abs();
+            if a > max_abs {
+                max_abs = a;
+                max_val = v[row][col];
+            }
+        }
+        if max_val < 0.0 {
+            for row in 0..p {
+                v[row][col] = -v[row][col];
+            }
+        }
+    }
+}
