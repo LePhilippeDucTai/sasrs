@@ -122,9 +122,9 @@ pub(super) fn eval_comparison(op: BinaryOp, l: &Value, r: &Value) -> Value {
 }
 
 /// Arithmétique fidèle SAS. Un opérande missing (ou char vide/invalide
-/// converti à `None`) → `.` + `missing_generated`. Division par zéro → `.`
-/// + `division_by_zero` + `error_flag`. `0 ** 0 = 1`. Base négative avec
-/// exposant non entier → `.` + `missing_generated` (note SAS).
+/// converti à `None`) → `.` + `missing_generated`. Division par zéro →
+/// `.` + `division_by_zero` + `error_flag`. `0 ** 0 = 1`. Base négative
+/// avec exposant non entier → `.` + `missing_generated` (note SAS).
 pub(super) fn eval_arith(op: BinaryOp, l: &Value, r: &Value, ctx: &mut EvalCtx) -> Value {
     let a = coerce_num(l, ctx);
     let b = coerce_num(r, ctx);

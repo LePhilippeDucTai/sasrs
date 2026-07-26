@@ -43,6 +43,7 @@
 //!
 //! Listing section: "Two-Sample t Tests" with columns:
 //!   - Variable, Class1, Class2, Method (pooled/Satterthwaite), N, Mean, StdDev, SE, t, Pr>|t|, 95% CL
+//!
 //! Subscript: "Equality of Variances" row if requested (F test)
 //!
 //! Output dataset Ttest (if ODS):

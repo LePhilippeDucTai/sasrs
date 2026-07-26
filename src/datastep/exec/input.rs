@@ -3,15 +3,9 @@
 use super::*;
 
 impl Runner {
-    /// INPUT (M14) : lit un enregistrement de la source texte et applique la
-    /// spécification INPUT au PDV. Gère les modes liste/colonne/formaté, les
-    /// pointeurs `@n`/`+n`/`/`, et les holds `@`/`@@`.
-    ///
-    /// Sémantique de fin de source (comme SET) : si aucun enregistrement
-    /// n'est disponible quand on doit en lire un nouveau → EndStep.
     /// Résout les items AST d'un statement INPUT en `InputAction` (slots PDV
-    /// + informats parsés). Plusieurs INPUT par étape sont ainsi gérés (chacun
-    /// avec ses propres items).
+    /// et informats parsés). Plusieurs INPUT par étape sont ainsi gérés
+    /// (chacun avec ses propres items).
     fn resolve_input_items(&self, ast_items: &[crate::ast::InputItem]) -> Result<Vec<InputAction>> {
         use crate::ast::InputItem;
         let mut out = Vec::with_capacity(ast_items.len());
@@ -55,6 +49,12 @@ impl Runner {
         Ok(out)
     }
 
+    /// INPUT (M14) : lit un enregistrement de la source texte et applique la
+    /// spécification INPUT au PDV. Gère les modes liste/colonne/formaté, les
+    /// pointeurs `@n`/`+n`/`/`, et les holds `@`/`@@`.
+    ///
+    /// Sémantique de fin de source (comme SET) : si aucun enregistrement
+    /// n'est disponible quand on doit en lire un nouveau → EndStep.
     pub(super) fn exec_input(&mut self, ast_items: &[crate::ast::InputItem]) -> Result<Flow> {
         // Récupérer la ligne de travail : soit un hold actif (avec encore des
         // données après le curseur), soit la prochaine ligne de la source. Un

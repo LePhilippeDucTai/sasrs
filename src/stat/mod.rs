@@ -19,6 +19,7 @@
 //!   - Moindres carrés : résoudre `(X'X)b = X'y` via Cholesky ou QR
 //!   - Inversion matricielle (via QR ou Cholesky)
 //!   - Valeurs/vecteurs propres symétriques via Jacobi (rotations planes)
+//!
 //!   Tous les algorithmes sont testés contre matrices de référence.
 //!
 //! ## Intégration

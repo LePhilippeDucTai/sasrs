@@ -71,6 +71,7 @@ pub(super) const OCC_RANK_COL: &str = "# sasrs occ rank #";
 ///     soit `max(0, n_gauche - n_droite)` copies ;
 ///   - `Semi` (INTERSECT ALL) → gardent les (ligne, rang) présents à droite,
 ///     soit `min(n_gauche, n_droite)` copies.
+///
 /// La colonne de rang est retirée du résultat. `join_nulls(true)` assure que
 /// `. = .` matche (sémantique SAS).
 pub(super) fn set_op_all(

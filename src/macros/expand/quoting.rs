@@ -52,6 +52,7 @@ impl MacroEngine {
     ///      `&`/`%` précédemment masqué ;
     ///   3. ré-`process_impl` le texte dé-masqué → les `&`/`%` ressuscités sont
     ///      maintenant résolus comme des déclencheurs normaux.
+    ///
     /// La passe `unmask` finale de `expand_open_code` ne fait alors plus rien sur
     /// ce fragment (déjà dé-masqué). Rend l'index après la `)`.
     pub(crate) fn consume_unquote(
@@ -89,6 +90,7 @@ impl MacroEngine {
     /// - `FLOOR`   → plancher, formaté en entier ;
     /// - `INTEGER` → troncature vers zéro, formaté en entier ;
     /// - absent    → le flottant formaté (entier sans décimales si exact).
+    ///
     /// `&refs`/macros imbriquées dans `expr` sont résolues d'abord. Erreur de
     /// syntaxe → note d'erreur (pas de panic). Rend l'index après la `)`.
     pub(crate) fn consume_sysevalf(
@@ -162,6 +164,7 @@ impl MacroEngine {
     ///   résiduel non défini reste tel quel) ;
     /// - `%nrbquote` masque EN PLUS `&`/`%` du résultat (empêche toute
     ///   résolution ultérieure).
+    ///
     /// Les quotes/parenthèses NON APPARIÉES de l'entrée ne posent pas de
     /// problème : on ne fait pas d'analyse appariée du contenu — `read_balanced_parens`
     /// borne sur la `)` de `%bquote(...)` et tout `'`/`(` interne est traité

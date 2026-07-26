@@ -15,6 +15,7 @@
 //!   discontinuités) et PAS l'interpolation linéaire par défaut de
 //!   Polars : implémenter à la main sur la colonne triée non-missing.
 //! - Extreme Observations : 5 plus basses / 5 plus hautes avec n° d'obs.
+//!
 //! Les missings sont exclus (compter et afficher la section Missing
 //! Values si présents).
 //!

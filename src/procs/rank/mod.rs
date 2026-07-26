@@ -67,6 +67,7 @@
 //!   `s_m = (Σ_{j=k-m+1}^{k} 1/j) − 1`. Les ties reçoivent l'agrégat de leurs
 //!   scores ordinaux selon TIES (MEAN → moyenne, LOW → premier, HIGH →
 //!   dernier, DENSE → score de l'ordinal LOW du groupe d'égalité).
+//!
 //! GROUPS= a priorité sur les méthodes (émet le numéro de groupe). Les méthodes
 //! sont mutuellement exclusives (deux options → erreur claire).
 //!

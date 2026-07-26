@@ -11,8 +11,8 @@
 //!
 //! ## Statements du corps (boucle jusqu'à `run;` ou frontière implicite)
 //! - `set spec [spec]* ;`         → `DsStmt::Set` (M3 : un ou plusieurs
-//!                                  datasets, options de dataset
-//!                                  acceptées sur chacun)
+//!   datasets, options de dataset
+//!   acceptées sur chacun)
 //! - `by [descending] v ... ;`    → `DsStmt::By` (M3)
 //! - `ident = expr ;`             → `DsStmt::Assign`
 //! - `if expr then stmt [else stmt]` → `DsStmt::If` ; les branches sont

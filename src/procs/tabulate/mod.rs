@@ -70,6 +70,7 @@
 //!   - AU PLUS une variable VAR (analyse).
 //!   - AU PLUS une statistique explicite.
 //!   - zéro ou plusieurs variables CLASS (croisées = catégories imbriquées).
+//!
 //! Une cellule qui viole ces règles (p. ex. deux VAR croisées, ou deux
 //! stats) → erreur « PROC TABULATE: <construct> not yet supported ».
 //!
@@ -117,6 +118,7 @@
 //!     VAR d'analyse est présente (p. ex. `height_Mean`), sinon `<STAT>` seul
 //!     pour les cellules de pure fréquence (p. ex. `N`, `PctN`). `<STAT>` est
 //!     le libellé renvoyé par `tab_stat_header` (Mean, Sum, N, …).
+//!
 //! Simplification documentée vs SAS : SAS génère un dataset très large avec
 //! des colonnes `_TYPE_`/`_PAGE_`/`_TABLE_` et un nommage de stat parfois
 //! différent ; ici on fixe une forme faithful et hand-verifiable — une ligne

@@ -13,12 +13,14 @@
 //! - `MEAN`, `MIN`, `MAX`, `N` (nb non-missings), `NMISS`
 //! - `COALESCE(a,b,...)` premier non-missing
 //! - `MISSING(x)` → 1.0/0.0 (marche aussi sur char blanc)
+//!
 //! Math :
 //! - `ABS`, `SQRT` (négatif → `.` + invalid note), `EXP`,
 //!   `LOG`/`LOG2`/`LOG10` (≤0 → `.` + note), `INT` (troncature vers 0),
 //!   `ROUND(x[,unit])` — ATTENTION : round SAS = demi-arrondi loin de
 //!   zéro (`(x/unit).round()` Rust fait déjà half-away-from-zero),
 //!   `MOD(a,b)` — signe du résultat = signe de a (comme `%` Rust f64).
+//!
 //! Caractères (les longueurs/blancs comptent — relire la doc SAS !) :
 //! - `UPCASE`, `LOWCASE`, `TRIM` (blancs finaux ; chaîne blanche → ""),
 //!   `STRIP`, `LEFT` (M1 : équivalent trim_start), `LENGTH` (sans blancs
@@ -29,11 +31,13 @@
 //!   args blancs sautés), `COMPRESS(s[,chars])` (défaut : enlève les
 //!   espaces), `TRANWRD(s, from, to)`, `SCAN(s, n[, delims])` (n<0 =
 //!   depuis la fin ; délimiteurs par défaut SAS : ` .<>()+&!$*);^-/,%|`).
+//!
 //! Dates (M4 affinera avec les formats) :
 //! - `TODAY()`/`DATE()` → jours depuis 1960 (sous --deterministic,
 //!   l'exécuteur peut figer la date — passer l'info via EvalCtx si
 //!   nécessaire), `MDY(m,d,y)` (invalide → `.` + note), `YEAR`, `MONTH`,
 //!   `DAY`, `WEEKDAY` (dimanche=1).
+//!
 //! Conversion :
 //! - `INPUT(s, informat)` / `PUT(v, format)` → DÉLÉGUER au moteur
 //!   formats/ (M4) ; M1-M3 : non disponibles (None).

@@ -59,7 +59,7 @@
 //!   Calcule valeurs propres ET vecteurs propres d'une matrice symétrique.
 //!   Algoriithme : Jacobi avec accumulation des rotations.
 //!   Retour : (V, λ) où V = colonnes = vecteurs propres (orthonormés),
-//!            λ = valeurs propres en ordre DÉCROISSANT.
+//!   λ = valeurs propres en ordre DÉCROISSANT.
 //!   Validation : A @ V = V @ diag(λ) (dans les limites numériques).
 //!   Tests : comme eigenvalues_jacobi + assertion orthonormalité V.
 //!

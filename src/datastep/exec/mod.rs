@@ -84,6 +84,7 @@
 //! 2. par output : "The data set WORK.A has N observations and M
 //!    variables."  (M = nb de slots conservés ; SAS ne met jamais le
 //!    singulier — garder "variables" même pour 1 !)
+//!
 //! L'appelant (executor) ajoute ensuite la NOTE de timing.
 //!
 //! ## Choix d'implémentation

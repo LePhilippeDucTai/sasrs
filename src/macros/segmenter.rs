@@ -19,6 +19,7 @@ use super::*;
 ///   définition de macro NE termine PAS un segment) ;
 /// - coupant un segment juste APRÈS le `;` qui suit un mot-clé `run` ou
 ///   `quit` de niveau supérieur (fin d'étape DATA/PROC).
+///
 /// Le reliquat après le dernier `run;` (open code final : `%put`, `%let`,
 /// etc.) forme le dernier segment. Les instructions d'open code situées
 /// AVANT une étape sont donc regroupées avec cette étape dans un même

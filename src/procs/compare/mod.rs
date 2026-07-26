@@ -111,9 +111,9 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
 
     // ── NOTE log ────────────────────────────────────────────────────────────
     if n_with_diffs == 0 {
-        session.log.note(
-            "No unequal values were found. All values compared are exactly equal.",
-        );
+        session
+            .log
+            .note("No unequal values were found. All values compared are exactly equal.");
     } else {
         session.log.note(&format!(
             "There were {} observations with at least one unequal value.",

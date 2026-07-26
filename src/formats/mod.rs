@@ -141,8 +141,8 @@ impl FormatCatalog {
     ///   1. User format (spec.name upcased) — consults the HashMap
     ///   2. builtin::format_builtin
     ///   3. Fallback: Char → left-justified/truncated to w;
-    ///                Missing → right-justified missing char to w;
-    ///                Num → format_best right-justified to w (default 12).
+    ///      Missing → right-justified missing char to w;
+    ///      Num → format_best right-justified to w (default 12).
     pub fn format(&self, v: &Value, spec: &FormatSpec) -> String {
         // Intercept numeric missings first — applies before ANY numeric format.
         if let Value::Missing(k) = v {

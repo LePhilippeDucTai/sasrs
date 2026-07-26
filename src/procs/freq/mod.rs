@@ -31,6 +31,7 @@
 //!   IC 95 %). Table non carrée → note propre.
 //! - **TREND** : test de tendance de Cochran-Armitage pour une table 2×c ou
 //!   r×2 (scores 1..k, statistique Z, p uni/bilatérale via `probnorm`).
+//!
 //! Les blocs ne s'impriment que si leur option est demandée : la sortie par
 //! défaut (et le CHISQ deux voies) restent byte-identiques.
 //!

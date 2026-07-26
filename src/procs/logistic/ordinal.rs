@@ -16,6 +16,7 @@ use super::*;
 ///   deferral NOTE is emitted instead.
 /// - OUTPUT predicted = P(Y in lowest modeled cumulative category) = P(Y = 1).
 #[allow(clippy::too_many_arguments)]
+///
 /// Listwise deletion + design build for the ordinal model: category indices
 /// (1..=k), design rows (NO intercept column), frequencies, and the
 /// complete-case mask (for OUTPUT OUT=).

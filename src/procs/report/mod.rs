@@ -15,7 +15,7 @@
 //!   - `ORDER`    : variable de tri ; chaque valeur distincte → une ligne.
 //!   - `GROUP`    : comme ORDER mais regroupe (collapse) les doublons.
 //!   - `ANALYSIS` : variable d'agrégat ; statistique optionnelle parmi
-//!                  SUM MEAN MIN MAX N STD (défaut SUM).
+//!     SUM MEAN MIN MAX N STD (défaut SUM).
 //!
 //! Défauts d'usage (variable SANS define, comme SAS) :
 //!   - numérique → ANALYSIS SUM
@@ -77,6 +77,7 @@
 //!     gauche).
 //!   - `SPACING=<n>` : nombre d'espaces avant la colonne (défaut 2). Modifie le
 //!     gap inter-colonnes du listing.
+//!
 //!   Le rendu width/spacing n'est activé que si AU MOINS un DEFINE porte
 //!   WIDTH=/SPACING= ; sinon le chemin `ListingWriter::write_table` historique
 //!   reste byte-identique.
@@ -90,8 +91,7 @@
 //!     partiellement couvert (l'évaluateur d'expression local gère les fonctions
 //!     déjà disponibles ; le reste est différé).
 //!   - options PROC autres que nowd/nowindow/noheader/headline/headskip/out=
-//!                                  → "Unexpected option 'XXX' on PROC REPORT
-//!                                     statement."
+//!     → "Unexpected option 'XXX' on PROC REPORT statement."
 
 use crate::ast::{DatasetRef, Expr};
 use crate::error::{Result, SasError};

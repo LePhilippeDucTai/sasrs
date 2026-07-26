@@ -9,7 +9,7 @@
 //! - RANDOM intercept / SUBJECT=<var> TYPE=VC|CS : random intercept per
 //!   subject. VC and CS are identical for a single random intercept (balanced
 //!   or not), so both map to the same variance-components model:
-//!       V = σ²_u · Z Z' + σ²_e · I
+//!   V = σ²_u · Z Z' + σ²_e · I
 //! - METHOD=REML (default) and METHOD=ML.
 //!
 //! Estimation: for a single random intercept the REML/ML estimates have a
