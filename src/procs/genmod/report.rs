@@ -304,9 +304,9 @@ pub(super) fn print_parameter_estimates(
             }
             DesignTerm::Class { name, levels, .. } => {
                 let nref = levels.len() - 1;
-                for li in 0..nref {
+                for (li, level) in levels.iter().enumerate().take(nref) {
                     let j = col + li;
-                    let lbl = format!("{} {}", name, class_level_label(&levels[li]));
+                    let lbl = format!("{} {}", name, class_level_label(level));
                     let ci_lower = beta[j] - 1.96 * se_beta[j];
                     let ci_upper = beta[j] + 1.96 * se_beta[j];
                     amle_rows.push(vec![

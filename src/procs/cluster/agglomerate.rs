@@ -115,10 +115,13 @@ pub fn agglomerate(coords: &[Vec<f64>], method: LinkMethod, labels: &[String]) -
         let mut members = ci.members.clone();
         members.extend_from_slice(&cj.members);
         let new_n = members.len() as f64;
-        let mut centroid = vec![0.0_f64; p];
-        for k in 0..p {
-            centroid[k] = (ni * ci.centroid[k] + nj * cj.centroid[k]) / new_n;
-        }
+        let centroid: Vec<f64> = ci
+            .centroid
+            .iter()
+            .zip(cj.centroid.iter())
+            .take(p)
+            .map(|(a, b)| (ni * a + nj * b) / new_n)
+            .collect();
         let label = if ncl_after == 0 {
             "CL1".to_string()
         } else {

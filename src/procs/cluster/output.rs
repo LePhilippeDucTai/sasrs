@@ -71,8 +71,8 @@ pub(super) fn write_outtree(
         // Join height: cumulative within-cluster SS as a fraction of the total
         // (1 - RSQ). This is monotone increasing along successive merges.
         height_vals.push((1.0 - step.rsq).max(0.0));
-        for v in 0..n_var {
-            coord_vals[v].push(None);
+        for col in coord_vals.iter_mut().take(n_var) {
+            col.push(None);
         }
     }
 

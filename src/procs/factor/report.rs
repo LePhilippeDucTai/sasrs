@@ -105,9 +105,9 @@ pub(super) fn print_variance_explained(session: &mut Session, factor_variance: &
     }
     let mut weighted_row = vec!["Weighted".to_string()];
     let mut unweighted_row = vec!["Unweighted".to_string()];
-    for j in 0..k {
-        weighted_row.push(format!("{:.4}", factor_variance[j]));
-        unweighted_row.push(format!("{:.4}", factor_variance[j]));
+    for v in factor_variance.iter().take(k) {
+        weighted_row.push(format!("{v:.4}"));
+        unweighted_row.push(format!("{v:.4}"));
     }
     session
         .listing
@@ -174,8 +174,8 @@ pub(super) fn print_varimax_section(
             aligns.push(Align::Right);
         }
         let mut rot_row: Vec<String> = vec![String::new()];
-        for j in 0..k {
-            rot_row.push(format!("{:.4}", rot_variance[j]));
+        for v in rot_variance.iter().take(k) {
+            rot_row.push(format!("{v:.4}"));
         }
         session.listing.write_table(&headers, &aligns, &[rot_row]);
         session.listing.blank();

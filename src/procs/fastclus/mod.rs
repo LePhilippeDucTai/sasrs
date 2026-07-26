@@ -213,10 +213,10 @@ pub fn execute(ast: &FastclusAst, session: &mut Session) -> Result<()> {
     // Per-cluster stats.
     let mut freq = vec![0usize; k];
     let mut max_seed_dist = vec![0.0_f64; k];
-    for i in 0..n {
-        let c = res.assign[i] - 1;
+    for (assign, coord) in res.assign.iter().zip(coords.iter()).take(n) {
+        let c = assign - 1;
         freq[c] += 1;
-        let d = distance(DistMethod::Euclid, &coords[i], &res.centroids[c]);
+        let d = distance(DistMethod::Euclid, coord, &res.centroids[c]);
         max_seed_dist[c] = max_seed_dist[c].max(d);
     }
 

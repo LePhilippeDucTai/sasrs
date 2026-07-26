@@ -288,13 +288,13 @@ pub(super) fn print_fixed_solutions_gen(
     // Containment df: subjects − fixed parameters (approximate).
     let df = (n_subjects as i64 - p as i64).max(1);
     let mut rows: Vec<Vec<String>> = Vec::new();
-    for a in 0..p {
+    for (a, label) in labels.iter().enumerate().take(p) {
         let est = fit.beta[a];
         let se = fit.cov_beta[a][a].max(0.0).sqrt();
         let t = if se > 0.0 { est / se } else { 0.0 };
         let pv = 2.0 * (1.0 - student_t_cdf(t.abs(), df as f64));
         rows.push(vec![
-            labels[a].clone(),
+            label.clone(),
             fmt4(est),
             fmt4(se),
             df.to_string(),

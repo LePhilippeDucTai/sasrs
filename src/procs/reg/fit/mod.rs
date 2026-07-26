@@ -146,8 +146,8 @@ pub(super) fn compute_seq_stats(
         for k in 1..=p_eff {
             // Design matrix over columns 0..k.
             let mut xpre: Vec<Vec<f64>> = Vec::with_capacity(n);
-            for i in 0..n {
-                xpre.push(x_mat[i][0..k].to_vec());
+            for row in x_mat.iter().take(n) {
+                xpre.push(row[0..k].to_vec());
             }
             match ols_fit(&xpre, y) {
                 Ok(f) => {

@@ -70,8 +70,7 @@ pub(super) fn execute_across(
     // Distinct across values (sorted via sas_cmp, honoring direction).
     let across_dir = plan[across_pos].dir;
     let mut across_vals: Vec<Value> = Vec::new();
-    for r in 0..n_obs {
-        let v = &decoded[across_pos][r];
+    for v in decoded[across_pos].iter().take(n_obs) {
         if !across_vals.iter().any(|e| e.sas_cmp(v) == Ordering::Equal) {
             across_vals.push(v.clone());
         }

@@ -213,8 +213,8 @@ pub(super) fn print_classification_results(
             model.class_labels[from].clone(),
             model.class_labels[into].clone(),
         ];
-        for k in 0..g {
-            row.push(fmt4(post[k]));
+        for prob in post.iter().take(g) {
+            row.push(fmt4(*prob));
         }
         rows.push(row);
     }
@@ -245,9 +245,9 @@ pub(super) fn print_error_estimates(
     // Rate row.
     let mut rate_row = vec!["Rate".to_string()];
     let mut total_err = 0usize;
-    for k in 0..g {
+    for (k, &errors) in error_count.iter().enumerate().take(g) {
         let rate = if model.counts[k] > 0 {
-            error_count[k] as f64 / model.counts[k] as f64
+            errors as f64 / model.counts[k] as f64
         } else {
             0.0
         };

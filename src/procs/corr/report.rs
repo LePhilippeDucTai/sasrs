@@ -146,23 +146,23 @@ pub(super) fn emit_correlations(
     for i in 0..nr {
         // r line, labelled with the row variable.
         let mut rline = vec![ds.vars[row_cols[i]].name.clone()];
-        for j in 0..nc {
-            rline.push(fmt_r(rmat[i][j]));
+        for r in rmat[i].iter().take(nc) {
+            rline.push(fmt_r(*r));
         }
         rows.push(rline);
 
         if !noprob {
             let mut pline = vec![String::new()];
-            for j in 0..nc {
-                pline.push(fmt_p(pmat[i][j]));
+            for p in pmat[i].iter().take(nc) {
+                pline.push(fmt_p(*p));
             }
             rows.push(pline);
         }
 
         if any_n_differs {
             let mut nline = vec![String::new()];
-            for j in 0..nc {
-                nline.push(format!("{}", nmat[i][j]));
+            for n in nmat[i].iter().take(nc) {
+                nline.push(format!("{n}"));
             }
             rows.push(nline);
         }

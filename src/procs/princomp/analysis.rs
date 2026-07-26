@@ -1,3 +1,9 @@
+// MQ7.2c — `needless_range_loop` assumé dans ce module : l'indice EST le
+// langage du domaine (`a[i][j] * b[j][k]`, parcours colonne-major, triangle
+// d'une matrice symétrique). La forme itérateur y coûte plus en lisibilité
+// qu'elle n'en rend, et la revue a préféré garder les indices explicites.
+#![allow(clippy::needless_range_loop)]
+
 use super::*;
 
 /// Resolve VAR columns (user order preserved), validating existence + type.

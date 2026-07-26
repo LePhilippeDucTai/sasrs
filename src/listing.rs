@@ -119,9 +119,8 @@ impl ListingWriter {
 
         let fmt_row = |cells: &[String], widths: &[usize]| -> String {
             let mut parts = Vec::with_capacity(ncol);
-            for i in 0..ncol {
+            for (i, &w) in widths.iter().enumerate().take(ncol) {
                 let cell = cells.get(i).map(String::as_str).unwrap_or("");
-                let w = widths[i];
                 match aligns.get(i).copied().unwrap_or(Align::Left) {
                     Align::Left => parts.push(format!("{cell:<w$}")),
                     Align::Right => parts.push(format!("{cell:>w$}")),
@@ -171,9 +170,8 @@ impl ListingWriter {
 
         let fmt_row = |cells: &[String], widths: &[usize]| -> String {
             let mut parts = Vec::with_capacity(ncol);
-            for i in 0..ncol {
+            for (i, &w) in widths.iter().enumerate().take(ncol) {
                 let cell = cells.get(i).map(String::as_str).unwrap_or("");
-                let w = widths[i];
                 match aligns.get(i).copied().unwrap_or(Align::Left) {
                     Align::Left => parts.push(format!("{cell:<w$}")),
                     Align::Right => parts.push(format!("{cell:>w$}")),

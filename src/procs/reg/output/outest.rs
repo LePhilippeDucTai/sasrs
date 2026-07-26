@@ -1,3 +1,9 @@
+// MQ7.2c — `needless_range_loop` assumé dans ce module : l'indice EST le
+// langage du domaine (`a[i][j] * b[j][k]`, parcours colonne-major, triangle
+// d'une matrice symétrique). La forme itérateur y coûte plus en lisibilité
+// qu'elle n'en rend, et la revue a préféré garder les indices explicites.
+#![allow(clippy::needless_range_loop)]
+
 use super::*;
 
 // ───────────────────────── OUTEST= / OUTSSCP= datasets (M36.8) ─────────────────────────
@@ -198,8 +204,8 @@ pub(crate) fn write_outest(
                 for (ci, cn) in param_cols.iter().enumerate() {
                     param_vals[ci].push(entry_param(e, cn).map(|k| src[k]));
                 }
-                for ci in 0..dep_cols.len() {
-                    dep_vals[ci].push(None);
+                for col in dep_vals.iter_mut().take(dep_cols.len()) {
+                    col.push(None);
                 }
                 lb_c.push(None);
                 ub_c.push(None);
@@ -221,8 +227,8 @@ pub(crate) fn write_outest(
                 for (ci, cn) in param_cols.iter().enumerate() {
                     param_vals[ci].push(entry_param(e, cn).map(|j| e.covb[k][j]));
                 }
-                for ci in 0..dep_cols.len() {
-                    dep_vals[ci].push(None);
+                for col in dep_vals.iter_mut().take(dep_cols.len()) {
+                    col.push(None);
                 }
                 lb_c.push(None);
                 ub_c.push(None);
@@ -242,8 +248,8 @@ pub(crate) fn write_outest(
             for (ci, cn) in param_cols.iter().enumerate() {
                 param_vals[ci].push(entry_param(e, cn).map(|k| e.se[k]));
             }
-            for ci in 0..dep_cols.len() {
-                dep_vals[ci].push(None);
+            for col in dep_vals.iter_mut().take(dep_cols.len()) {
+                col.push(None);
             }
             lb_c.push(None);
             ub_c.push(None);
@@ -279,8 +285,8 @@ pub(crate) fn write_outest(
                     let v = entry_param(e, cn).and_then(|k| rr.values.get(k).copied().flatten());
                     param_vals[ci].push(v);
                 }
-                for ci in 0..dep_cols.len() {
-                    dep_vals[ci].push(None);
+                for col in dep_vals.iter_mut().take(dep_cols.len()) {
+                    col.push(None);
                 }
                 lb_c.push(None);
                 ub_c.push(None);

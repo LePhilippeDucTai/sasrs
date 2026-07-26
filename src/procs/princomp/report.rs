@@ -17,12 +17,12 @@ pub(super) fn print_simple_statistics(
         aligns.push(Align::Right);
     }
     let mut mean_row = vec!["Mean".to_string()];
-    for j in 0..p {
-        mean_row.push(format!("{:.4}", means[j]));
+    for m in means.iter().take(p) {
+        mean_row.push(format!("{m:.4}"));
     }
     let mut std_row = vec!["StdDev".to_string()];
-    for j in 0..p {
-        std_row.push(format!("{:.4}", stds[j]));
+    for s in stds.iter().take(p) {
+        std_row.push(format!("{s:.4}"));
     }
     session
         .listing
@@ -54,8 +54,8 @@ pub(super) fn print_analysis_matrix(
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
     for i in 0..p {
         let mut row = vec![names[i].clone()];
-        for j in 0..p {
-            row.push(format!("{:.4}", amat[i][j]));
+        for a in amat[i].iter().take(p) {
+            row.push(format!("{a:.4}"));
         }
         rows.push(row);
     }
@@ -139,8 +139,8 @@ pub(super) fn print_eigenvectors(
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
     for row in 0..p {
         let mut r = vec![names[row].clone()];
-        for col in 0..k {
-            r.push(format!("{:.6}", v[row][col]));
+        for val in v[row].iter().take(k) {
+            r.push(format!("{val:.6}"));
         }
         rows.push(r);
     }
@@ -193,17 +193,17 @@ pub(super) fn write_out_dataset(
                 score_cols[comp].push(Some(score));
             }
         } else {
-            for comp in 0..k {
-                score_cols[comp].push(None);
+            for col in score_cols.iter_mut().take(k) {
+                col.push(None);
             }
         }
     }
 
     let mut out_df = ds.df.clone();
-    for comp in 0..k {
+    for (comp, col) in score_cols.iter().enumerate().take(k) {
         let name = format!("Prin{}", comp + 1);
         out_df
-            .with_column(Series::new(name.into(), score_cols[comp].clone()))
+            .with_column(Series::new(name.into(), col.clone()))
             .map_err(|e| SasError::runtime(format!("PRINCOMP OUT= build failed: {e}")))?;
     }
 

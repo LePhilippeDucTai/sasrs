@@ -245,8 +245,8 @@ impl Runner {
             // (j==max-1) — combiné au changement de préfixe vs groupe voisin.
             for j in 0..max {
                 let mut loads: Vec<(usize, usize)> = Vec::new();
-                for d in 0..n_ds {
-                    if let Some((start, len)) = participate[d]
+                for (d, part) in participate.iter().enumerate().take(n_ds) {
+                    if let Some((start, len)) = *part
                         && j < len
                     {
                         // j-ème ligne du groupe dans `filtered`.
@@ -271,8 +271,8 @@ impl Runner {
                 });
             }
             // Compte des lignes lues (toutes les obs participantes du groupe).
-            for d in 0..n_ds {
-                self.rows_read[d] += n[d];
+            for (d, &count) in n.iter().enumerate().take(n_ds) {
+                self.rows_read[d] += count;
             }
             prev_group_key = Some(group_key);
         }

@@ -195,9 +195,9 @@ pub(super) fn render_two_way(
     // Total row (column totals + grand total): Frequency + Percent only.
     let mut tot_freq = vec!["Total".to_string()];
     let mut tot_pct = vec![String::new()];
-    for c in 0..nc {
-        tot_freq.push(fmt_freq(col_tot[c]));
-        tot_pct.push(pct_of(col_tot[c], grand));
+    for &tot in col_tot.iter().take(nc) {
+        tot_freq.push(fmt_freq(tot));
+        tot_pct.push(pct_of(tot, grand));
     }
     tot_freq.push(fmt_freq(grand));
     tot_pct.push(pct_of(grand, grand));

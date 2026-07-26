@@ -32,8 +32,8 @@ pub(super) fn write_matrix(session: &mut Session, var_names: &[String], mat: &[V
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(p);
     for i in 0..p {
         let mut row = vec![var_names[i].clone()];
-        for j in 0..p {
-            row.push(fmt4(mat[i][j]));
+        for v in mat[i].iter().take(p) {
+            row.push(fmt4(*v));
         }
         rows.push(row);
     }
@@ -92,8 +92,8 @@ pub(super) fn write_out_dataset(
                 Some(value_label(&class_col[i]))
             });
             into_vals.push(None);
-            for k in 0..g {
-                post_cols[k].push(None);
+            for col in post_cols.iter_mut().take(g) {
+                col.push(None);
             }
         }
     }
@@ -103,10 +103,10 @@ pub(super) fn write_out_dataset(
         .with_column(Series::new("_FROM_".into(), from_vals))
         .and_then(|df| df.with_column(Series::new("_INTO_".into(), into_vals)))
         .map_err(|e| SasError::runtime(format!("DISCRIM OUT= build failed: {e}")))?;
-    for k in 0..g {
+    for (k, col) in post_cols.iter().enumerate().take(g) {
         let col_name = format!("_{}", model.class_labels[k]);
         out_df
-            .with_column(Series::new(col_name.into(), post_cols[k].clone()))
+            .with_column(Series::new(col_name.into(), col.clone()))
             .map_err(|e| SasError::runtime(format!("DISCRIM OUT= build failed: {e}")))?;
     }
 

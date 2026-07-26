@@ -16,6 +16,12 @@
 //!   colonnes Row<i>/Col<j>.
 //! - `out=` : dataset avec `_TYPE_`="DISTANCE", `_NAME_`=Row<i>, puis Col1..Coln.
 
+// MQ7.2c — `needless_range_loop` assumé dans ce module : l'indice EST le
+// langage du domaine (`a[i][j] * b[j][k]`, parcours colonne-major, triangle
+// d'une matrice symétrique). La forme itérateur y coûte plus en lisibilité
+// qu'elle n'en rend, et la revue a préféré garder les indices explicites.
+#![allow(clippy::needless_range_loop)]
+
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
@@ -270,10 +276,10 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
             aligns.push(Align::Right);
         }
         let mut rows: Vec<Vec<String>> = Vec::with_capacity(n);
-        for i in 0..n {
+        for (i, dist_row) in dist.iter().enumerate().take(n) {
             let mut row = vec![format!("Row{}", i + 1)];
-            for j in 0..n {
-                row.push(format!("{:.4}", dist[i][j]));
+            for d in dist_row.iter().take(n) {
+                row.push(format!("{d:.4}"));
             }
             rows.push(row);
         }

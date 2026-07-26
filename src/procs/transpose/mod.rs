@@ -339,7 +339,7 @@ pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
     if any_char {
         // CHAR columns. Length = max char-cell length across all cells.
         let mut char_len = 1usize;
-        for ci in 0..trans_names.len() {
+        for (ci, name) in trans_names.iter().enumerate() {
             let vals: Vec<Option<String>> = out_rows
                 .iter()
                 .map(|r| value_to_char(&r.cells[ci]))
@@ -347,20 +347,20 @@ pub fn execute(ast: &TransposeAst, session: &mut Session) -> Result<()> {
             for s in vals.iter().flatten() {
                 char_len = char_len.max(s.len());
             }
-            columns.push(Series::new(trans_names[ci].as_str().into(), vals).into());
+            columns.push(Series::new(name.as_str().into(), vals).into());
         }
         for nm in &trans_names {
             vars.push(char_var_meta(nm, char_len));
         }
     } else {
         // NUMERIC columns.
-        for ci in 0..trans_names.len() {
+        for (ci, name) in trans_names.iter().enumerate() {
             let vals: Vec<Option<f64>> = out_rows
                 .iter()
                 .map(|r| value_to_num(&r.cells[ci]))
                 .collect();
-            columns.push(Series::new(trans_names[ci].as_str().into(), vals).into());
-            vars.push(num_var_meta(&trans_names[ci]));
+            columns.push(Series::new(name.as_str().into(), vals).into());
+            vars.push(num_var_meta(name));
         }
     }
 

@@ -48,17 +48,17 @@ pub(super) fn write_out_dataset(
                 score_cols[f].push(Some(score));
             }
         } else {
-            for f in 0..k {
-                score_cols[f].push(None);
+            for col in score_cols.iter_mut().take(k) {
+                col.push(None);
             }
         }
     }
 
     let mut out_df = ds.df.clone();
-    for f in 0..k {
+    for (f, col) in score_cols.iter().enumerate().take(k) {
         let name = format!("Factor{}", f + 1);
         out_df
-            .with_column(Series::new(name.into(), score_cols[f].clone()))
+            .with_column(Series::new(name.into(), col.clone()))
             .map_err(|e| SasError::runtime(format!("FACTOR OUT= build failed: {e}")))?;
     }
 
