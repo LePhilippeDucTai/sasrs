@@ -102,7 +102,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         pdv,
         input,
         text_io: TextIo::new(text_input),
-        format_catalog: session.format_catalog.clone(),
+        format_catalog: std::rc::Rc::clone(&session.format_catalog),
         set_cursor: SetCursor::new(n_datasets),
         rows_read: vec![0; n_datasets],
         ctx: EvalCtx {
@@ -113,7 +113,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             macro_symbols,
             hashes: hash_objects,
             hash_iters,
-            format_catalog: session.format_catalog.clone(),
+            format_catalog: std::rc::Rc::clone(&session.format_catalog),
             yearcutoff: session.options.yearcutoff,
             ..EvalCtx::default()
         },

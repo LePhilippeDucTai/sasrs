@@ -111,26 +111,30 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
 }
 
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
+    // MQ9.8 — le catalogue est partagé par `Rc` (les étapes DATA le lisent
+    // sans le copier). PROC FORMAT est le SEUL à le muter : `make_mut` clone
+    // ici, et seulement ici, s'il reste des lecteurs.
+    let catalog = std::rc::Rc::make_mut(&mut session.format_catalog);
     for (name, uf) in &ast.values {
         let uname = name.to_uppercase();
         session
             .log
             .note(&format!("Format {} has been output.", uname));
-        session.format_catalog.define(&uname, uf.clone());
+        catalog.define(&uname, uf.clone());
     }
     for (name, ui) in &ast.invalues {
         let uname = name.to_uppercase();
         session
             .log
             .note(&format!("Informat {} has been output.", uname));
-        session.format_catalog.define_informat(&uname, ui.clone());
+        catalog.define_informat(&uname, ui.clone());
     }
     for (name, up) in &ast.pictures {
         let uname = name.to_uppercase();
         session
             .log
             .note(&format!("Format {} has been output.", uname));
-        session.format_catalog.define_picture(&uname, up.clone());
+        catalog.define_picture(&uname, up.clone());
     }
     Ok(())
 }

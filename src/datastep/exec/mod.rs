@@ -207,7 +207,7 @@ struct Runner {
     /// Catalogue de formats/informats (clone de session) pour appliquer les
     /// informats de l'INPUT (M14) et les formats des PUT. Partagé entre les
     /// modes — laissé à plat.
-    format_catalog: crate::formats::FormatCatalog,
+    format_catalog: std::rc::Rc<crate::formats::FormatCatalog>,
     /// Curseurs du statement SET (concaténation / interclassement / POINT=).
     set_cursor: SetCursor,
     /// Lignes lues au sens SAS, PAR dataset : celles qui PASSENT le WHERE=.

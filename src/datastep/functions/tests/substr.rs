@@ -283,7 +283,7 @@ fn put_user_format_via_function() {
         },
     );
     let mut c = EvalCtx {
-        format_catalog: cat,
+        format_catalog: std::rc::Rc::new(cat),
         ..EvalCtx::default()
     };
     assert_eq!(

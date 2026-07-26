@@ -70,14 +70,14 @@ pub(super) fn build_um_runner(cfg: RunnerConfig, by: &[ByVar], session: &Session
         pdv,
         input: None,
         text_io: TextIo::new(None),
-        format_catalog: session.format_catalog.clone(),
+        format_catalog: std::rc::Rc::clone(&session.format_catalog),
         set_cursor: SetCursor::new(0),
         rows_read: vec![0; 1],
         ctx: EvalCtx {
             arrays,
             by_flags,
             macro_symbols: session.macro_engine.symbols_snapshot(),
-            format_catalog: session.format_catalog.clone(),
+            format_catalog: std::rc::Rc::clone(&session.format_catalog),
             yearcutoff: session.options.yearcutoff,
             ..EvalCtx::default()
         },

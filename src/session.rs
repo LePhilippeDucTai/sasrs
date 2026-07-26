@@ -158,7 +158,10 @@ pub struct Session {
     pub views: std::collections::HashMap<String, crate::sql::ast::SelectStmt>,
     pub deterministic: bool,
     /// User-defined format catalog (populated by PROC FORMAT).
-    pub format_catalog: crate::formats::FormatCatalog,
+    /// Catalogue des formats définis par PROC FORMAT. Partagé par `Rc` : chaque
+    /// étape DATA en prenait deux copies PROFONDES (trois `HashMap`) à
+    /// l'ouverture, une pour le `Runner` et une pour l'`EvalCtx` (MQ9.8).
+    pub format_catalog: std::rc::Rc<crate::formats::FormatCatalog>,
     /// Processeur macro de la session (M11) : table des symboles `%let`/`&var`.
     /// Sous le build par défaut c'est une identité pure (cf. `MacroEngine`).
     pub macro_engine: crate::preprocess::MacroEngine,
@@ -271,7 +274,7 @@ impl Session {
             last_dataset: None,
             views: std::collections::HashMap::new(),
             deterministic,
-            format_catalog: crate::formats::FormatCatalog::default(),
+            format_catalog: std::rc::Rc::new(crate::formats::FormatCatalog::default()),
             macro_engine,
             vectorize: false,
             call_execute_queue: Vec::new(),

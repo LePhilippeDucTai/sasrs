@@ -1426,9 +1426,23 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   (session, dataset, value, error, log, token, source, library) ; **corriger l'entrée MQ4.6
   ci-dessus** : le trait `Proc` n'a jamais été écrit, c'est un `macro_rules! procs_registry`
   qui GÉNÈRE les deux match (résultat propre, entrée fausse) (Sonnet, faible)
-- [ ] MQ9.8 — chemin chaud (sortie inchangée) : `eval_var` fait un `to_uppercase()` que
+- [x] MQ9.8 — chemin chaud (sortie inchangée) : `eval_var` fait un `to_uppercase()` que
   `Pdv::slot` refait, par lecture de variable ET par ligne, puis `clone()` la `Value` ;
   `FormatCatalog` deep-cloné 2× par étape DATA → `Rc`. En DERNIER, mesure avant/après
-  (Opus, élevé)
-- [ ] DoD MQ9 : cargo test vert, `cargo fmt --check` vert, clippy `-D warnings` vert,
-  `.snap.new` = 0 hors MQ9.2/MQ9.3 (snapshots revalidés à la main) ; **fin de Phase Q3**.
+  (Opus, élevé) : **une des deux hypothèses est RÉFUTÉE par la mesure.**
+  - `Rc<FormatCatalog>` : **RETENU**. 200 étapes DATA + 60 formats utilisateur :
+    82 ms → 60 ms (**−27 %**). Sur un programme sans format et à 2 étapes : 1184 → 1220 ms
+    (+3 %, bruit) — le catalogue vide n'a rien à copier, l'indirection ne rapporte rien.
+    PROC FORMAT reste le seul mutateur, via `Rc::make_mut`.
+  - normalisation sans allocation (`Cow`) dans `eval_var`/`Pdv::slot` : **REJETÉ**.
+    L'idée paraissait sûre (l'idiome existe déjà dans `functions::call`), mais mesurée sur
+    400 000 lignes × 2 étapes elle donne 1184 → 1305 ms, soit **10 % de PLUS**. Le scan
+    `is_ascii()` + le `Cow` coûtent plus que le `to_uppercase()` d'un nom court déjà en
+    majuscules. Annulé. Le vrai gain est la résolution `Expr::Var` → slot À LA COMPILATION
+    (la machinerie existe dans `fastpath.rs`) : c'est un changement d'AST, pas une case de
+    revue — à ouvrir comme jalon dédié.
+- [x] DoD MQ9 : cargo test vert (2678), `cargo fmt --check` vert,
+  **`cargo clippy --all-targets -- -D warnings` VERT (357 → 0)**, `.snap.new` = 0 —
+  y compris pour MQ9.2/MQ9.3, dont l'invariant avait été levé par précaution mais qu'aucune
+  fixture n'a exercé ; builds `--features graphics` et `--features s3` verts ;
+  **fin de Phase Q3**.

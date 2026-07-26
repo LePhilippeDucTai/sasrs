@@ -70,7 +70,7 @@ fn make_ctx_with_grade_informat() -> EvalCtx {
         },
     );
     EvalCtx {
-        format_catalog: cat,
+        format_catalog: std::rc::Rc::new(cat),
         ..EvalCtx::default()
     }
 }
@@ -102,7 +102,7 @@ fn make_ctx_with_size_char_informat() -> EvalCtx {
         },
     );
     EvalCtx {
-        format_catalog: cat,
+        format_catalog: std::rc::Rc::new(cat),
         ..EvalCtx::default()
     }
 }

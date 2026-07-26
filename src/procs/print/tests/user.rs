@@ -43,7 +43,7 @@ fn user_format_end_to_end_via_session_catalog() {
         ],
         other: Some("Unknown".to_string()),
     };
-    session.format_catalog.define("SEXFMT", uf);
+    std::rc::Rc::make_mut(&mut session.format_catalog).define("SEXFMT", uf);
 
     // 2. Write a dataset whose `sex` column has format="SEXFMT."
     let df = df!["sex" => [1.0_f64, 2.0, 3.0]].unwrap();
