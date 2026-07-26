@@ -48,19 +48,27 @@ pub(super) fn laplace_subject_ll(
     hval - 0.5 * s2u.ln() - 0.5 * neg_hpp.ln()
 }
 
+/// Données et spécification de modèle d'un ajustement Laplace : tout ce qui
+/// est CONSTANT pendant l'optimisation. Seuls `beta`, `sigma2_u` et `scale`
+/// varient d'une évaluation à l'autre et restent donc des paramètres.
+///
+/// MQ9.5 — `laplace_neg2` prenait 10 paramètres positionnels dont cinq
+/// tranches de `f64` : un `&[f64]` passé à la place d'un autre compilait sans
+/// broncher.
+pub(super) struct LaplaceModel<'a> {
+    pub(super) y: &'a [f64],
+    pub(super) x: &'a [Vec<f64>],
+    pub(super) freq: &'a [f64],
+    pub(super) subj_of: &'a [usize],
+    pub(super) n_subjects: usize,
+    pub(super) dist: Distribution,
+    pub(super) lf: LinkFunction,
+}
+
 /// Total Laplace −2 log-likelihood for the single-random-intercept GLMM.
-pub(super) fn laplace_neg2(
-    y: &[f64],
-    x: &[Vec<f64>],
-    freq: &[f64],
-    subj_of: &[usize],
-    n_subjects: usize,
-    beta: &[f64],
-    sigma2_u: f64,
-    dist: Distribution,
-    lf: LinkFunction,
-    scale: f64,
-) -> f64 {
+pub(super) fn laplace_neg2(m: &LaplaceModel<'_>, beta: &[f64], sigma2_u: f64, scale: f64) -> f64 {
+    let (y, x, freq, subj_of, n_subjects, dist, lf) =
+        (m.y, m.x, m.freq, m.subj_of, m.n_subjects, m.dist, m.lf);
     // Group rows by subject.
     let mut groups: Vec<Vec<usize>> = vec![Vec::new(); n_subjects];
     for (i, &s) in subj_of.iter().enumerate() {
@@ -103,6 +111,15 @@ pub(super) fn fit_laplace(
     let n = y.len();
     let p = x[0].len();
     let is_normal = dist == Distribution::Normal;
+    let model = LaplaceModel {
+        y,
+        x,
+        freq,
+        subj_of,
+        n_subjects,
+        dist,
+        lf,
+    };
 
     // Starting values from the no-random GLM.
     let glm0 = fit_glm(y, x, freq, dist, lf)?;
@@ -124,7 +141,7 @@ pub(super) fn fit_laplace(
         let beta = &u[..p];
         let s2u = u[p].exp();
         let scale = if is_normal { u[p + 1].exp() } else { 1.0 };
-        let v = laplace_neg2(y, x, freq, subj_of, n_subjects, beta, s2u, dist, lf, scale);
+        let v = laplace_neg2(&model, beta, s2u, scale);
         if v.is_finite() { v } else { 1e30 }
     };
 
@@ -150,11 +167,7 @@ pub(super) fn fit_laplace(
 
     // Var(β̂) ≈ inverse of the observed information = Hessian of (−2logL/2)=−logL
     // w.r.t. β, by central finite differences (σ's held at the optimum).
-    let neg_ll = |b: &[f64]| -> f64 {
-        0.5 * laplace_neg2(
-            y, x, freq, subj_of, n_subjects, b, sigma2_u, dist, lf, sigma2_e,
-        )
-    };
+    let neg_ll = |b: &[f64]| -> f64 { 0.5 * laplace_neg2(&model, b, sigma2_u, sigma2_e) };
     let h = 1e-4;
     let mut hess = vec![vec![0.0; p]; p];
     let f0 = neg_ll(&beta);

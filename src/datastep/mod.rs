@@ -129,21 +129,32 @@ use pdv::{Pdv, PdvVar};
 
 use std::collections::{HashMap, HashSet};
 
+/// Spécification de lecture d'UNE variable d'un statement INPUT.
+///
+/// MQ9.5 — ces cinq champs étaient dépliés en autant de paramètres positionnels
+/// de `Runner::read_one_var`, qui en comptait onze (dont trois `bool`
+/// consécutifs : `is_char`, `list_modifier`, `dsd`). Les regrouper rend
+/// l'inversion de deux booléens impossible.
+#[derive(Debug, Clone)]
+pub struct InputVarSpec {
+    /// Slot PDV cible.
+    pub slot: usize,
+    /// Type cible : caractère ou numérique.
+    pub is_char: bool,
+    /// Colonnes 1-based inclusives (mode colonne).
+    pub cols: Option<(usize, usize)>,
+    /// `FormatSpec` du mode formaté.
+    pub informat: Option<crate::formats::FormatSpec>,
+    /// Informat appliqué en mode liste.
+    pub list_modifier: bool,
+}
+
 /// Item INPUT compilé (M14) : un item AST dont les noms de variable sont
 /// résolus en slots PDV et les informats en `FormatSpec`.
 #[derive(Clone)]
 pub enum InputAction {
-    /// Lire une variable. `slot` = slot PDV ; `is_char` = type cible ;
-    /// `cols` = colonnes 1-based inclusives (mode colonne) ; `informat` =
-    /// `FormatSpec` (mode formaté) ; `list_modifier` = informat appliqué en
-    /// mode liste.
-    Var {
-        slot: usize,
-        is_char: bool,
-        cols: Option<(usize, usize)>,
-        informat: Option<crate::formats::FormatSpec>,
-        list_modifier: bool,
-    },
+    /// Lire une variable (cf. [`InputVarSpec`]).
+    Var(InputVarSpec),
     /// `@n` : pointeur de colonne absolu (1-based).
     ColumnPointer(usize),
     /// `+n` : avance relative du curseur.

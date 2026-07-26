@@ -226,14 +226,17 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     }
 
     // ── 9. IRLS / Newton-Raphson ──────────────────────────────────────────
-    let (beta, h_inv, final_mu) = fit_irls(
-        session, &y_vec, &x_mat, &freq_vec, dist, lf, n_total, p_param,
-    )?;
+    let data = GenmodData {
+        y: &y_vec,
+        x: &x_mat,
+        freq: &freq_vec,
+        n_total,
+        p_param,
+    };
+    let (beta, h_inv, final_mu) = fit_irls(session, &data, dist, lf)?;
 
     // ── 10. Scale / Dispersion ────────────────────────────────────────────
-    let scale = compute_scale(
-        model, dist, &y_vec, &final_mu, &freq_vec, h_inv, n_total, p_param,
-    );
+    let scale = compute_scale(model, dist, &data, &final_mu, h_inv);
 
     // ── 11. SE, Wald chi², CI ─────────────────────────────────────────────
     let var_beta = &scale.var_beta;

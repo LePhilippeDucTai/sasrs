@@ -94,16 +94,33 @@ pub(super) fn emit_simple_statistics(
     session.listing.blank();
 }
 
+/// Le bloc de corrélations à imprimer : son titre, sa ligne « Prob > … », ses
+/// cellules et la suppression éventuelle des p-values.
+///
+/// MQ9.5 — `emit_correlations` prenait ces quatre valeurs en plus des colonnes
+/// et de la session, soit 8 paramètres positionnels dont deux `&str`
+/// consécutifs (`heading`, `prob_line`) qu'une inversion aurait échangés sans
+/// erreur de compilation.
+pub(super) struct CorrBlock<'a> {
+    pub(super) heading: &'a str,
+    pub(super) prob_line: &'a str,
+    pub(super) cells: &'a [Vec<Cell>],
+    pub(super) noprob: bool,
+}
+
 pub(super) fn emit_correlations(
     session: &mut Session,
     ds: &crate::dataset::SasDataset,
     row_cols: &[usize],
     col_cols: &[usize],
-    heading: &str,
-    prob_line: &str,
-    cells: &[Vec<Cell>],
-    noprob: bool,
+    block: &CorrBlock<'_>,
 ) {
+    let CorrBlock {
+        heading,
+        prob_line,
+        cells,
+        noprob,
+    } = *block;
     centered(session, heading);
     if !noprob {
         centered(session, prob_line);

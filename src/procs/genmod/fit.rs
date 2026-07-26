@@ -3,17 +3,30 @@ use super::*;
 /// Résultat d'un ajustement IRLS : `(β, (X'WX)⁻¹ à convergence, μ ajusté)`.
 type IrlsFit = (Vec<f64>, Vec<Vec<f64>>, Vec<f64>);
 
+/// Données d'ajustement d'un modèle GENMOD : réponse, plan, fréquences et
+/// tailles dérivées. Constantes pendant tout l'ajustement, elles étaient
+/// jusqu'ici passées une par une à `fit_irls` PUIS à `compute_scale`
+/// (8 paramètres positionnels chacun, dont trois `&[f64]` interchangeables à
+/// la compilation).
+pub(super) struct GenmodData<'a> {
+    pub(super) y: &'a [f64],
+    pub(super) x: &'a [Vec<f64>],
+    pub(super) freq: &'a [f64],
+    /// Somme des fréquences (≠ nombre de lignes quand FREQ= est utilisé).
+    pub(super) n_total: f64,
+    /// Nombre de paramètres du modèle.
+    pub(super) p_param: usize,
+}
+
 /// IRLS / Newton-Raphson fit. Returns `(β, (X'WX)⁻¹ at convergence, fitted μ)`.
 pub(super) fn fit_irls(
     session: &mut Session,
-    y_vec: &[f64],
-    x_mat: &[Vec<f64>],
-    freq_vec: &[f64],
+    data: &GenmodData<'_>,
     dist: &Distribution,
     lf: &LinkFunction,
-    n_total: f64,
-    p_param: usize,
 ) -> Result<IrlsFit> {
+    let (y_vec, x_mat, freq_vec, n_total, p_param) =
+        (data.y, data.x, data.freq, data.n_total, data.p_param);
     let n_obs = y_vec.len();
 
     // Initialize β
@@ -178,13 +191,11 @@ pub(super) struct ScaleInfo {
 pub(super) fn compute_scale(
     model: &GenmodModel,
     dist: &Distribution,
-    y_vec: &[f64],
+    data: &GenmodData<'_>,
     final_mu: &[f64],
-    freq_vec: &[f64],
     h_inv: Vec<Vec<f64>>,
-    n_total: f64,
-    p_param: usize,
 ) -> ScaleInfo {
+    let (y_vec, freq_vec, n_total, p_param) = (data.y, data.freq, data.n_total, data.p_param);
     let n_obs = y_vec.len();
 
     let scale_est: f64;

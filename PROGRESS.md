@@ -1395,7 +1395,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
   matchés mais leur PRÉFIXE de message (« numerical error: », « invalid input: ») est
   exactement ce que l'utilisateur lit : les retirer changerait le log. Décision : garder,
   documenter, ne pas imprimer.
-- [ ] MQ9.5 — listes de paramètres : struct de contexte pour la famille `write_out*`
+- [x] MQ9.5 — listes de paramètres : struct de contexte pour la famille `write_out*`
   (9 signatures pour le même bundle), `reg::run_model` (15 params/356 l),
   `exec/input.rs::read_one_var` (11 params dont 3 Option + 3 bool),
   `compile_control.rs::compile_do_loop` (5 Option). Cible : diviser par 2 les 47

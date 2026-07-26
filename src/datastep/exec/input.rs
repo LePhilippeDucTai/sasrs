@@ -1,6 +1,7 @@
 //! Lecture INPUT/INFILE texte (méthodes de `Runner`).
 
 use super::*;
+use crate::datastep::InputVarSpec;
 
 impl Runner {
     /// Résout les items AST d'un statement INPUT en `InputAction` (slots PDV
@@ -30,13 +31,13 @@ impl Runner {
                         None => None,
                     };
                     let pdv_is_char = self.pdv.vars()[slot].ty == VarType::Char;
-                    InputAction::Var {
+                    InputAction::Var(InputVarSpec {
                         slot,
                         is_char: pdv_is_char || *is_char,
                         cols: *cols,
                         informat: spec,
                         list_modifier: *list_modifier,
-                    }
+                    })
                 }
                 InputItem::ColumnPointer(n) => InputAction::ColumnPointer(*n),
                 InputItem::SkipColumns(n) => InputAction::SkipColumns(*n),
@@ -81,9 +82,14 @@ impl Runner {
         // résout depuis l'AST de CE statement INPUT pour gérer plusieurs INPUT
         // par étape (chacun partage la même source mais a ses propres items).
         let items = self.resolve_input_items(ast_items)?;
-        let short = self.text_io.src.as_ref().unwrap().options.short;
-        let dsd = self.text_io.src.as_ref().unwrap().options.dsd;
-        let delim = self.text_io.src.as_ref().unwrap().options.delimiter.clone();
+        let list_opts = {
+            let opts = &self.text_io.src.as_ref().unwrap().options;
+            ListReadOptions {
+                delim: opts.delimiter.clone(),
+                dsd: opts.dsd,
+                short: opts.short,
+            }
+        };
 
         let mut hold_after = false;
         let mut hold_double = false;
@@ -111,25 +117,8 @@ impl Runner {
                     hold_after = true;
                     hold_double = true;
                 }
-                InputAction::Var {
-                    slot,
-                    is_char,
-                    cols,
-                    informat,
-                    list_modifier,
-                } => {
-                    let outcome = self.read_one_var(
-                        &line,
-                        &mut cursor,
-                        *slot,
-                        *is_char,
-                        *cols,
-                        informat,
-                        *list_modifier,
-                        &delim,
-                        dsd,
-                        short,
-                    )?;
+                InputAction::Var(var) => {
+                    let outcome = self.read_one_var(&line, &mut cursor, var, &list_opts)?;
                     match outcome {
                         ReadOutcome::Ok => {}
                         ReadOutcome::ShortMissover => {
@@ -195,20 +184,25 @@ impl Runner {
     /// Couvre les trois modes (colonne / formaté / liste) et applique la
     /// coercition vers le slot PDV. Renvoie le devenir de la lecture (OK /
     /// ligne trop courte selon MISSOVER/TRUNCOVER/STOPOVER).
-    #[allow(clippy::too_many_arguments)]
     fn read_one_var(
         &mut self,
         line: &str,
         cursor: &mut usize,
-        slot: usize,
-        is_char: bool,
-        cols: Option<(usize, usize)>,
-        informat: &Option<crate::formats::FormatSpec>,
-        list_modifier: bool,
-        delim: &Option<String>,
-        dsd: bool,
-        short: ShortMode,
+        var: &InputVarSpec,
+        opts: &ListReadOptions,
     ) -> Result<ReadOutcome> {
+        let InputVarSpec {
+            slot,
+            is_char,
+            cols,
+            ref informat,
+            list_modifier,
+        } = *var;
+        let ListReadOptions {
+            ref delim,
+            dsd,
+            short,
+        } = *opts;
         let chars: Vec<char> = line.chars().collect();
 
         // ── Mode COLONNE : champ fixe `a-b` (1-based inclusif). ──────────────

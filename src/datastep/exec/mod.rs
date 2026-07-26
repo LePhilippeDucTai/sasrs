@@ -177,6 +177,17 @@ enum PutDestKind {
     Print,
 }
 
+/// Options INFILE qui pilotent la lecture en mode LISTE : délimiteur, DSD et
+/// politique de ligne trop courte. Constantes pour tout un statement INPUT.
+///
+/// MQ9.5 — passées une par une, elles portaient `read_one_var` à onze
+/// paramètres avec deux `bool` voisins (`list_modifier`, `dsd`).
+pub(crate) struct ListReadOptions {
+    pub(crate) delim: Option<String>,
+    pub(crate) dsd: bool,
+    pub(crate) short: ShortMode,
+}
+
 /// Résultat de la lecture d'UNE variable d'INPUT (M14).
 enum ReadOutcome {
     /// Lecture normale (valeur posée au PDV, missing inclus).

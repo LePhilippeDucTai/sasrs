@@ -330,7 +330,16 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
             let _ = k; // df = n − k − 2 is applied inside partial_pvalue
             let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
             emit_correlations(
-                session, &ds, &row_cols, &col_cols, &heading, &prob_line, &cells, ast.noprob,
+                session,
+                &ds,
+                &row_cols,
+                &col_cols,
+                &CorrBlock {
+                    heading: &heading,
+                    prob_line: &prob_line,
+                    cells: &cells,
+                    noprob: ast.noprob,
+                },
             );
         } else {
             for &method in &methods {
@@ -345,10 +354,12 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
                     &ds,
                     &row_cols,
                     &col_cols,
-                    method.heading(),
-                    prob_line,
-                    &cells,
-                    ast.noprob,
+                    &CorrBlock {
+                        heading: method.heading(),
+                        prob_line,
+                        cells: &cells,
+                        noprob: ast.noprob,
+                    },
                 );
             }
         }
