@@ -70,14 +70,12 @@ pub(crate) fn parse_by(ts: &mut StatementStream) -> Result<Vec<(String, bool)>> 
 }
 
 /// `weight var ;` — raccourci de `parse_single_var(ts, "WEIGHT")`.
-#[allow(dead_code)]
 pub(crate) fn parse_weight(ts: &mut StatementStream) -> Result<String> {
     parse_single_var(ts, "WEIGHT")
 }
 
 /// Parse une liste de noms de variables terminée par `;` (`v1 v2 … ;`), comme
 /// le statement VAR de `print.rs` (`parse_name_list()` + `expect_semi()`).
-#[allow(dead_code)]
 pub(crate) fn parse_var_list(ts: &mut StatementStream) -> Result<Vec<String>> {
     let names = ts.parse_name_list()?;
     ts.expect_semi()?;
@@ -85,7 +83,6 @@ pub(crate) fn parse_var_list(ts: &mut StatementStream) -> Result<Vec<String>> {
 }
 
 /// `class v1 v2 … ;` — même grammaire qu'une liste de noms (`parse_var_list`).
-#[allow(dead_code)]
 pub(crate) fn parse_class(ts: &mut StatementStream) -> Result<Vec<String>> {
     parse_var_list(ts)
 }

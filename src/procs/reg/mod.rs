@@ -65,7 +65,7 @@ mod ridge;
 
 mod selection;
 
-mod tests_stmt;
+mod hypothesis;
 
 pub use self::parse::parse;
 
@@ -83,7 +83,7 @@ use self::ridge::*;
 
 use self::selection::*;
 
-use self::tests_stmt::*;
+use self::hypothesis::*;
 
 use crate::procs::common::fmt_p;
 

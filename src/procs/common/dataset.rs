@@ -4,7 +4,6 @@ use super::*;
 /// utilisé par `print.rs`, `sort.rs`, `means.rs` (`resolve_input`) : la chaîne
 /// `_LAST_` a la forme « LIBREF.NAME » et est décodée via `splitn(2, '.')`.
 /// Forme verbatim de la copie canonique (aucune divergence connue entre procs).
-#[allow(dead_code)]
 pub fn resolve_last_dataset(data: &Option<DatasetRef>, session: &Session) -> Result<DatasetRef> {
     match data {
         Some(r) => Ok(r.clone()),

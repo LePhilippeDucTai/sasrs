@@ -397,4 +397,4 @@ impl MacroEngine {
 }
 
 #[cfg(test)]
-mod macro_tests;
+mod tests;

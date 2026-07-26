@@ -1252,7 +1252,7 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
 - [x] MQ7.1 — `rustfmt.toml` + `cargo fmt` sur tout le dépôt (453 fichiers) ; commit isolé
   « format-only », aucun autre changement (Sonnet, faible) : 453 fichiers reformatés
   (+8540/-4554), `cargo fmt --check` VERT, 2669 tests verts, zéro `.snap.new`.
-- [ ] MQ7.2 — résorber les 357 diagnostics clippy, par sous-lots : (a) auto-fixables
+- [x] MQ7.2 — résorber les 357 diagnostics clippy, par sous-lots : (a) auto-fixables
   (`collapsible_if` 56, `doc_lazy_continuation` 42, `needless_borrow` 30, `doc_overindented`
   9, `needless_return`, `redundant_closure`, `let_and_return`, `match_like_matches_macro`) ;
   (b) `needless_range_loop` (~60 sites, `stat/` + procs matricielles) — **danger flottant** :
@@ -1265,14 +1265,21 @@ Décidé avec l'utilisateur : pas de CI (validation locale).
     (`empty_line_after_doc_comments` ×3 + `map_entry`) ; le doc-comment orphelin de
     `reg/parse/model/lineq.rs` (il documentait `parse_output_stmt`, parti dans
     `options.rs` lors de MQ5.1) a été REMIS sur sa fonction au lieu d'être supprimé.
-- [ ] MQ7.3 — scories des scissions Q/Q2 : `procs/common/mod.rs` (434 l dont 330 de tests
+- [x] MQ7.3 — scories des scissions Q/Q2 : `procs/common/mod.rs` (434 l dont 330 de tests
   inline + 85 de `pub use` un-par-ligne) → `common/tests.rs` + re-exports groupés ;
   `library/mod.rs::csv_tests` → `library/tests.rs` ; `macros/macro_tests/` et
   `procs/reg/tests_stmt/` → `tests/` (convention des 71 autres) ; supprimer les 10
   `#[allow(dead_code)]` périmés + le commentaire mensonger de `common/parse.rs` ; supprimer
-  `frobenius_norm` mort (`stat/linalg.rs`) (Sonnet, moyen)
-- [ ] DoD MQ7 : cargo test vert, zéro `.snap.new`, `cargo fmt --check` vert, clippy
-  `-D warnings` vert ; → MQ8.
+  `frobenius_norm` mort (`stat/linalg.rs`) (Sonnet, moyen) : tests inline sortis
+  (`common/mod.rs` 434 → 98 l, `library/mod.rs` 403 → 172 l) ; `macros/macro_tests/` →
+  `macros/tests/` ; **`procs/reg/tests_stmt/` → `procs/reg/hypothesis/`** — ce module n'a
+  jamais contenu de tests, il implémente les statements TEST/RESTRICT/MTEST : son nom le
+  faisait passer pour du code de test. 10 `#[allow(dead_code)]` retirés + l'en-tête qui
+  affirmait « AUCUN appelant n'existe encore » (les helpers ont 2 à 31 appelants).
+  `frobenius_norm` supprimé AVEC son test : jamais appelé en production, le test ne
+  couvrait que lui-même.
+- [x] DoD MQ7 : cargo test vert (2669), zéro `.snap.new`, `cargo fmt --check` vert,
+  clippy **357 → 4** (les 4 restants sont des `too_many_arguments` traités par MQ9.5) ; → MQ8.
 
 ## MQ8 — déduplication (move-only / extract-helper, byte-identique)
 - [ ] MQ8.1 — `common::dataset::{num_var_meta, char_var_meta}` ; supprimer les 11 + 5 copies

@@ -404,15 +404,6 @@ pub(crate) fn matrix_mult(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     c
 }
 
-/// Frobenius norm: ‖A‖_F = sqrt(Σ a_ij²).
-fn frobenius_norm(a: &[Vec<f64>]) -> f64 {
-    a.iter()
-        .flat_map(|row| row.iter())
-        .map(|&x| x * x)
-        .sum::<f64>()
-        .sqrt()
-}
-
 /// Solve upper triangular system R @ x = y.
 fn solve_upper_triangular(r: &[Vec<f64>], y: &[f64]) -> Result<Vec<f64>> {
     let n = r.len();

@@ -2,17 +2,14 @@ use super::*;
 
 // ───────────────────── couche de parsing partagée (M31.1) ─────────────────────
 //
-// Combinateurs réutilisables pour le parsing des statements PROC. Ils
-// centralisent les boucles d'options / de sous-statements, la résolution
-// `expect_eq` / `OUT=` / `DATA=`, le message « Unexpected option » et la
-// résolution `_LAST_`, aujourd'hui dupliqués à l'identique dans la quarantaine
-// de fichiers `procs/<proc>.rs`. Reproduits VERBATIM depuis `print.rs`
-// (boucles) et `sort.rs`/`means.rs` (`expect_eq`, résolution `_LAST_`) afin de
-// garantir l'identité octet-à-octet lors de la future migration.
+// Combinateurs réutilisables pour le parsing des statements PROC : boucles
+// d'options et de sous-statements, résolution `OUT=`/`DATA=`, message
+// « Unexpected option ». Ils ont été extraits VERBATIM de `print.rs` (boucles)
+// et de `sort.rs`/`means.rs` (`expect_eq`, résolution `_LAST_`) pour garantir
+// l'identité octet-à-octet lors de la migration des procs.
 //
-// `#[allow(dead_code)]` car AUCUN appelant n'existe encore (M31.1 est purement
-// additif) : ces fonctions seront câblées aux procs lors des incréments
-// suivants (M31.2+).
+// La migration n'est PAS terminée : `parse_proc_options` n'est adopté que par
+// une partie des procs, les autres réimplémentent encore la même boucle.
 
 /// Pilote la boucle d'options d'un statement PROC, jusqu'au `;` (consommé) ou
 /// `Eof`. Pour chaque token de tête, calcule le mot-clé minuscule via
@@ -26,7 +23,6 @@ use super::*;
 /// Reproduit EXACTEMENT la boucle d'en-tête de `print.rs` (même flux, même
 /// message+span d'erreur). Le handler garde la liberté d'implémenter des
 /// branches spécifiques (cf. la branche « stat keyword » de PROC MEANS).
-#[allow(dead_code)]
 pub fn parse_proc_options<F>(ts: &mut StatementStream, proc_name: &str, mut handle: F) -> Result<()>
 where
     F: FnMut(&mut StatementStream, &str) -> Result<bool>,
@@ -65,7 +61,6 @@ where
 ///
 /// Reproduit EXACTEMENT la boucle de sous-statements de `print.rs` (y compris
 /// la gestion de `run`/`quit` et de leur `;` terminal).
-#[allow(dead_code)]
 pub fn parse_proc_body<F>(ts: &mut StatementStream, mut handle: F) -> Result<()>
 where
     F: FnMut(&mut StatementStream, &str) -> Result<bool>,
@@ -110,7 +105,6 @@ where
 ///
 /// `opt` est l'étiquette affichée dans le message (par convention déjà en
 /// majuscules côté appelant, ex. « DATA », « OUT »).
-#[allow(dead_code)]
 pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
     // Consomme le nom d'option (le mot-clé courant).
     ts.next();
@@ -126,14 +120,12 @@ pub fn expect_eq(ts: &mut StatementStream, opt: &str) -> Result<()> {
 
 /// `option = <dataset-ref>` : `expect_eq` puis `parse_dataset_ref()`.
 /// Appelé avec le token courant positionné sur le nom d'option (`opt`).
-#[allow(dead_code)]
 pub fn parse_dataset_opt(ts: &mut StatementStream, opt: &str) -> Result<DatasetRef> {
     expect_eq(ts, opt)?;
     ts.parse_dataset_ref()
 }
 
 /// `out = <dataset-ref>` : raccourci de `parse_dataset_opt(ts, "OUT")`.
-#[allow(dead_code)]
 pub fn parse_out_opt(ts: &mut StatementStream) -> Result<DatasetRef> {
     parse_dataset_opt(ts, "OUT")
 }
@@ -143,7 +135,6 @@ pub fn parse_out_opt(ts: &mut StatementStream) -> Result<DatasetRef> {
 /// majuscules (`?` si non-identifiant), `NAME` = `proc_name` (déjà en
 /// majuscules par convention d'appel — `print.rs` passe le littéral « PRINT »),
 /// span = `ts.peek().span`.
-#[allow(dead_code)]
 pub fn unknown_option_error(ts: &StatementStream, proc_name: &str) -> SasError {
     let span = ts.peek().span;
     let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
