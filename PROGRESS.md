@@ -6,6 +6,12 @@ COMMIT que le code livré. Ne cocher une case que si : implémentation
 complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `cargo test -p sasrs` vert.
 
+**État du dépôt vérifié (2026-08-11)** : branche unique `main` (les branches de revue
+`claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
+nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
+-- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M38.3**.
+
 Jalon courant : **M38 (Phase G)**. **Phase Q3 (MQ7–MQ9) TERMINÉE** — revue de code sur les
 axes DRY et robustesse : clippy 357 → **0** (`-D warnings` vert), `cargo fmt --check` vert
 (453 fichiers reformatés, `rustfmt.toml` posé), ~60 helpers dupliqués supprimés (≈ −1 500
