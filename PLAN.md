@@ -203,31 +203,31 @@ option/statement neuf). Détail des cases dans `PROGRESS.md`.
 | Tâche | Jalon | État | Modèle | Effort | Notes |
 |---|---|---|---|---|---|
 | Bloc 0 — moteur linéaire partagé `lincom` + digamma/trigamma | M37 | ✅ | **Opus** | élevé | `LinCombEngine`, `class_coding(Param)`, `score_test` (extrait de `glm.rs`) |
-| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | 🔶 | **Opus** | élevé | **jalon courant** — M38.1–.2 faits ; reprendre à M38.3 (reste M38.3–.5 + DoD) |
-| Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ⬜ | **Opus** | moyen | — |
-| Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ⬜ | **Opus** | très élevé | — |
-| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ⬜ | **Opus** | élevé | — |
-| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ⬜ | **Opus** | élevé | — |
+| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | 🔶 | **Fable** | moyen-élevé | **jalon courant** — M38.1–.2 faits ; reprendre à M38.3 (reste M38.3–.5 + DoD) ; fidélité des noms/colonnes des tables ODS OUTPUT = SAS pointu |
+| Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ⬜ | **Sonnet** | moyen | mécanique : le pattern sidecar existe déjà (`.sasmeta.json` de VarMeta) |
+| Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ⬜ | **Fable** | élevé | sémantique de la boucle implicite (EOF par site de `SET`) — zone historiquement Fable |
+| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ⬜ | **Fable** | moyen-élevé | le quoting macro est la zone la plus subtile du langage |
+| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ⬜ | **Opus** | moyen | ajouts cadrés au parser/plan SQL existants |
 | Bloc 1 — PROC FORMAT : complétion totale | M43 | ⬜ | **Sonnet** | moyen | — |
-| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ⬜ | **Opus** | très élevé | — |
+| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ⬜ | **Fable** | élevé | algorithme réseau (Mehta-Patel) — numérique délicate |
 | Bloc 1 — PROC UNIVARIATE : pondération + plots | M45 | ⬜ | **Opus** | moyen | — |
-| Bloc 1 — PROC TABULATE : `PCTN<dim>` | M46 | ⬜ | **Opus** | élevé | — |
-| Bloc 1 — PROC REPORT : DEFINE FLOW + COMPUTE riche | M47 | ⬜ | **Opus** | élevé | — |
+| Bloc 1 — PROC TABULATE : `PCTN<dim>` | M46 | ⬜ | **Fable** | moyen-élevé | règles de dénominateur PCTN — SAS pointu |
+| Bloc 1 — PROC REPORT : DEFINE FLOW + COMPUTE riche | M47 | ⬜ | **Fable** | moyen-élevé | ordre d'évaluation des COMPUTE + variables automatiques — SAS pointu |
 | Bloc 1 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR | M48 | ⬜ | **Sonnet** | moyen | — |
-| Bloc 1 — PROC CATALOG : catalogues réels | M49 | ⬜ | **Opus** | moyen | — |
-| Bloc 1 — PROC PRINTTO : routage fichier réel | M50 | ⬜ | **Opus** | moyen | — |
+| Bloc 1 — PROC CATALOG : catalogues réels | M49 | ⬜ | **Sonnet** | moyen | mécanique une fois le store M39 posé |
+| Bloc 1 — PROC PRINTTO : routage fichier réel | M50 | ⬜ | **Sonnet** | moyen | plomberie de redirection log/listing |
 | Bloc 1 — PROC OPTIONS : détail par option | M51 | ⬜ | **Sonnet** | faible | — |
-| Bloc 2 — PROC LOGISTIC : complétion totale | M52 | ⬜ | **Opus** | très élevé | réutilise M37 `lincom` (comme tout le bloc 2) |
-| Bloc 2 — PROC GENMOD : complétion totale (GEE) | M53 | ⬜ | **Opus** | très élevé | — |
-| Bloc 2 — PROC MIXED : complétion totale (Kenward-Roger) | M54 | ⬜ | **Opus** | très élevé | — |
-| Bloc 2 — PROC GLIMMIX : complétion totale (QUAD) | M55 | ⬜ | **Opus** | très élevé | — |
+| Bloc 2 — PROC LOGISTIC : complétion totale | M52 | ⬜ | **Fable** | élevé | réutilise M37 `lincom` (comme tout le bloc 2) |
+| Bloc 2 — PROC GENMOD : complétion totale (GEE) | M53 | ⬜ | **Fable** | élevé | équations d'estimation généralisées — numérique délicate |
+| Bloc 2 — PROC MIXED : complétion totale (Kenward-Roger) | M54 | ⬜ | **Fable** | très élevé | ajustement KR des ddl — le plus dur du bloc, reste très élevé même pour Fable |
+| Bloc 2 — PROC GLIMMIX : complétion totale (QUAD) | M55 | ⬜ | **Fable** | très élevé | quadrature adaptative — idem M54 |
 | Bloc 3 — PROC PRINCOMP : complétion totale | M56 | ⬜ | **Opus** | élevé | — |
-| Bloc 3 — PROC FACTOR : complétion totale (ML) | M57 | ⬜ | **Opus** | très élevé | — |
-| Bloc 3 — PROC DISCRIM : complétion totale | M58 | ⬜ | **Opus** | très élevé | — |
+| Bloc 3 — PROC FACTOR : complétion totale (ML) | M57 | ⬜ | **Fable** | élevé | extraction ML + rotations — numérique délicate |
+| Bloc 3 — PROC DISCRIM : complétion totale | M58 | ⬜ | **Fable** | élevé | quadratique/kernel/validation croisée |
 | Bloc 3 — PROC DISTANCE : complétion totale | M59 | ⬜ | **Opus** | moyen | — |
 | Bloc 3 — PROC CLUSTER : complétion totale (CCC) | M60 | ⬜ | **Opus** | élevé | — |
 | Bloc 3 — PROC FASTCLUS : complétion totale | M61 | ⬜ | **Opus** | moyen | — |
-| Bloc 3 — PROC IML : complétion totale | M62 | ⬜ | **Opus** | très élevé | — |
+| Bloc 3 — PROC IML : complétion totale | M62 | ⬜ | **Fable** | élevé | complétion d'un langage dans le langage — sémantique dense |
 | Bloc 4 — PROC GPLOT : complétion totale | M63 | ⬜ | **Opus** | élevé | réutilise `src/graphics/render.rs` ; testé `--features graphics` (comme tout le bloc 4) |
 | Bloc 4 — PROC GCHART : complétion totale | M64 | ⬜ | **Opus** | moyen | — |
 | Bloc 4 — PROC PLOT : complétion totale | M65 | ⬜ | **Opus** | moyen | — |
@@ -240,6 +240,14 @@ digamma/trigamma (`stat/dists.rs`). Ordre dur : Bloc 0 avant ses consommateurs ;
 
 **Curseur (2026-08-11)** : M1–M37 terminés ; **jalon courant M38** (reprendre à M38.3) ;
 M39–M66 à faire — le détail case par case est dans `PROGRESS.md`.
+
+**MAJ modèles (2026-08-11)** : **Fable est de nouveau disponible** → les colonnes
+Modèle/Effort des jalons restants ont été recalibrées ci-dessus : Fable sur les jalons à
+sémantique SAS pointue (M38, M40, M41, M46, M47) et à numérique délicate (M44, M52–M55,
+M57, M58, M62), Sonnet sur ce qui est devenu mécanique (M39, M49, M50), Opus pour le reste.
+L'effort affiché est celui du modèle retenu (confier un jalon à un modèle inférieur remonte
+l'effort d'un cran). En cas d'écart avec les annotations par case de `PROGRESS.md`
+(antérieures), ce tableau fait foi pour le choix du modèle.
 
 ### Phases Q — revue de code (intercalées, terminées)
 

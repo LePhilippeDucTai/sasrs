@@ -12,6 +12,12 @@ nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy -
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
 0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M38.3**.
 
+**MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
+restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
+`PLAN.md`, qui fait foi** pour le choix du modèle. Les annotations par case `(Modèle,
+effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
+Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
+
 Jalon courant : **M38 (Phase G)**. **Phase Q3 (MQ7–MQ9) TERMINÉE** — revue de code sur les
 axes DRY et robustesse : clippy 357 → **0** (`-D warnings` vert), `cargo fmt --check` vert
 (453 fichiers reformatés, `rustfmt.toml` posé), ~60 helpers dupliqués supprimés (≈ −1 500
