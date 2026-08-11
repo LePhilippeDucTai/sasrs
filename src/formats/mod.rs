@@ -40,6 +40,16 @@
 //! ([`FormatCatalog::merge_missing_from`]) : toute définition WORK explicite
 //! (avant ou après le LIBNAME, car `PROC FORMAT` sans LIB= écrase toujours
 //! sans condition) l'emporte sur la valeur chargée depuis un libref.
+//!
+//! ## M39.2 — `CNTLOUT=`/`CNTLIN=`
+//!
+//! `PROC FORMAT` peut aussi échanger son catalogue avec un DATASET (pas un
+//! sidecar JSON) : `CNTLOUT=ds` dépose une observation par plage de chaque
+//! format VALUE/INVALUE dans `ds` (colonnes FMTNAME/START/END/LABEL/TYPE +
+//! SEXCL/EEXCL/HLO) ; `CNTLIN=ds` fait l'inverse. Voir `procs::format::cntl`
+//! pour le détail des colonnes et le round-trip. Les formats PICTURE ne sont
+//! PAS couverts (leurs directives PREFIX/MULT/FILL n'ont pas de colonne dans
+//! ce jeu minimal) — déferral documenté, pas un oubli.
 
 #![allow(unused_variables, dead_code)]
 
@@ -161,6 +171,28 @@ impl FormatCatalog {
         let mut names: Vec<&str> = self.user.keys().map(|s| s.as_str()).collect();
         names.sort();
         names
+    }
+
+    /// M39.2 — read-only iteration over VALUE-format entries (catalog key,
+    /// which includes the `$` prefix for character formats) for `CNTLOUT=`.
+    pub fn user_formats(&self) -> impl Iterator<Item = (&str, &userdef::UserFormat)> {
+        self.user.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// M39.2 — read-only iteration over INVALUE entries, symmetric to
+    /// [`FormatCatalog::user_formats`].
+    pub fn user_informats(&self) -> impl Iterator<Item = (&str, &userdef::UserInformat)> {
+        self.user_informats.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// M39.2 — number of PICTURE formats in this catalog. `CNTLOUT=`/`CNTLIN=`
+    /// do not round-trip PICTURE formats in this build (their PREFIX/MULT/FILL
+    /// directives have no column in the minimal CNTLOUT column set implemented
+    /// here — see `procs::format::cntl` module doc); this accessor lets the
+    /// CNTLOUT writer emit an honest NOTE about what it left out instead of
+    /// silently dropping them.
+    pub fn user_picture_count(&self) -> usize {
+        self.user_pictures.len()
     }
 
     /// True when no VALUE/INVALUE/PICTURE has EVER been registered. Used to

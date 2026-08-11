@@ -37,6 +37,8 @@ fn execute_registers_format_in_catalog() {
         )],
         invalues: vec![],
         pictures: vec![],
+        cntlout: None,
+        cntlin: None,
     };
 
     execute(&ast, &mut session).unwrap();

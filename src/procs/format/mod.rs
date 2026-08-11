@@ -20,6 +20,7 @@
 //! stored key is `$CITYFMT`. When `FormatSpec::parse` sees `$CITYFMT.` it
 //! produces `name="$CITYFMT"`, which matches the catalog key exactly.
 
+use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::formats::userdef::{
     Bound, InformatRange, InformatValue, PictureDirectives, PictureRange, Range, UserFormat,
@@ -29,6 +30,7 @@ use crate::parser::StatementStream;
 use crate::session::Session;
 use crate::token::TokenKind;
 
+mod cntl;
 mod invalue;
 mod picture;
 mod value;
@@ -48,6 +50,13 @@ pub struct FormatAst {
     pub invalues: Vec<(String, UserInformat)>,
     /// (nom, définition brute à parser en UserPicture) — M18.3
     pub pictures: Vec<(String, UserPicture)>,
+    /// M39.2 — `CNTLOUT=<ds>` : dépose le catalogue résultant (après ce step)
+    /// dans un dataset. `None` = pas demandé.
+    pub cntlout: Option<DatasetRef>,
+    /// M39.2 — `CNTLIN=<ds>` : (re)définit des formats/informats depuis un
+    /// dataset de contrôle, appliqué AVANT les sous-statements VALUE/INVALUE
+    /// de ce même step (qui peuvent donc l'écraser). `None` = pas demandé.
+    pub cntlin: Option<DatasetRef>,
 }
 
 /// Parse `proc format [library=<libref>] ; value ... ; [value ... ;] run;`
@@ -64,9 +73,11 @@ pub struct FormatAst {
 /// misrouted.
 pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
     let mut lib = "WORK".to_string();
+    let mut cntlout: Option<DatasetRef> = None;
+    let mut cntlin: Option<DatasetRef> = None;
     // Consume the trailing `;` of the `proc format` statement header,
-    // recognising `LIBRARY=`/`LIB=` along the way; any other header option is
-    // skipped token-by-token (none else supported yet).
+    // recognising `LIBRARY=`/`LIB=`/`CNTLOUT=`/`CNTLIN=` along the way; any
+    // other header option is skipped token-by-token (none else supported yet).
     loop {
         if ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -75,7 +86,27 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         if ts.peek().kind == TokenKind::Eof {
             break;
         }
-        if ts.peek().is_kw("lib") || ts.peek().is_kw("library") {
+        if ts.peek().is_kw("cntlout") {
+            ts.next(); // consume "cntlout"
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after CNTLOUT in PROC FORMAT",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // consume '='
+            cntlout = Some(ts.parse_dataset_ref()?);
+        } else if ts.peek().is_kw("cntlin") {
+            ts.next(); // consume "cntlin"
+            if ts.peek().kind != TokenKind::Eq {
+                return Err(SasError::parse(
+                    "expected '=' after CNTLIN in PROC FORMAT",
+                    ts.peek().span,
+                ));
+            }
+            ts.next(); // consume '='
+            cntlin = Some(ts.parse_dataset_ref()?);
+        } else if ts.peek().is_kw("lib") || ts.peek().is_kw("library") {
             ts.next(); // consume "lib"/"library"
             if ts.peek().kind != TokenKind::Eq {
                 return Err(SasError::parse(
@@ -107,7 +138,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
             lib = name.to_uppercase();
         } else {
             // Skip any other unrecognised proc-header option token (e.g. the
-            // future CNTLOUT=/CNTLIN=/FMTLIB of M39.2/M39.3).
+            // future FMTLIB of M39.3).
             ts.next();
         }
     }
@@ -157,10 +188,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         values,
         invalues,
         pictures,
+        cntlout,
+        cntlin,
     })
 }
 
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
+    // M39.2 — `CNTLIN=<ds>` : reconstruit des entrées VALUE/INVALUE depuis un
+    // dataset de contrôle AVANT les sous-statements VALUE/INVALUE de ce même
+    // step, pour qu'un `value`/`invalue` explicite du step garde le dernier
+    // mot (CNTLIN= se comporte comme une option d'en-tête — un préchargement
+    // — pas comme un sous-statement séquentiel). Lu ici (avant le
+    // `Rc::make_mut` ci-dessous) car `read_cntlin` a besoin d'un accès large à
+    // `session` (lecture de dataset via `session.libs`).
+    let (cntlin_values, cntlin_invalues) = match &ast.cntlin {
+        Some(cntlin_ref) => cntl::read_cntlin(cntlin_ref, session)?,
+        None => (Vec::new(), Vec::new()),
+    };
+
     // MQ9.8 — le catalogue est partagé par `Rc` (les étapes DATA le lisent
     // sans le copier). PROC FORMAT est le SEUL à le muter : `make_mut` clone
     // ici, et seulement ici, s'il reste des lecteurs.
@@ -173,14 +218,14 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
     // c'est cette seconde écriture, absente pour WORK, qui rend le catalogue
     // permanent.
     let catalog = std::rc::Rc::make_mut(&mut session.format_catalog);
-    for (name, uf) in &ast.values {
+    for (name, uf) in cntlin_values.iter().chain(ast.values.iter()) {
         let uname = name.to_uppercase();
         session
             .log
             .note(&format!("Format {} has been output.", uname));
         catalog.define(&uname, uf.clone());
     }
-    for (name, ui) in &ast.invalues {
+    for (name, ui) in cntlin_invalues.iter().chain(ast.invalues.iter()) {
         let uname = name.to_uppercase();
         session
             .log
@@ -196,8 +241,37 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
     }
 
     if ast.lib != "WORK" {
-        persist_library_catalog(session, ast)?;
+        persist_library_catalog(session, ast, &cntlin_values, &cntlin_invalues)?;
     }
+
+    // M39.2 — `CNTLOUT=<ds>` : dépose le catalogue RÉSULTANT (après CNTLIN=
+    // et les sous-statements ci-dessus) dans un dataset. Le catalogue à
+    // dumper est reconstruit indépendamment de `persist_library_catalog`
+    // (qui peut avoir sauté l'accumulation pour un libref cloud sans
+    // `catalog_dir()`) pour que CNTLOUT= reste correct dans tous les cas.
+    if let Some(cntlout_ref) = &ast.cntlout {
+        let dump = if ast.lib == "WORK" {
+            (*session.format_catalog).clone()
+        } else {
+            let mut base = session
+                .libref_format_catalogs
+                .get(&ast.lib)
+                .cloned()
+                .unwrap_or_default();
+            for (name, uf) in cntlin_values.iter().chain(ast.values.iter()) {
+                base.define(&name.to_uppercase(), uf.clone());
+            }
+            for (name, ui) in cntlin_invalues.iter().chain(ast.invalues.iter()) {
+                base.define_informat(&name.to_uppercase(), ui.clone());
+            }
+            for (name, up) in &ast.pictures {
+                base.define_picture(&name.to_uppercase(), up.clone());
+            }
+            base
+        };
+        cntl::write_cntlout(cntlout_ref, &dump, session)?;
+    }
+
     Ok(())
 }
 
@@ -210,7 +284,18 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
 /// (backend cloud) reçoit une NOTE au lieu d'une écriture disque — les
 /// formats restent utilisables pour la session en cours (déjà définis
 /// ci-dessus dans `session.format_catalog`), simplement pas persistés.
-fn persist_library_catalog(session: &mut Session, ast: &FormatAst) -> Result<()> {
+///
+/// M39.2 — `cntlin_values`/`cntlin_invalues` (les entrées reconstruites par
+/// `CNTLIN=`, si présent) sont accumulées AVANT `ast.values`/`ast.invalues`,
+/// dans le même ordre que la boucle principale de `execute` : un `LIBRARY=`
+/// non-WORK persiste donc aussi ce qu'un `CNTLIN=` a reconstruit — pas
+/// seulement ce qu'un `VALUE`/`INVALUE` explicite a défini.
+fn persist_library_catalog(
+    session: &mut Session,
+    ast: &FormatAst,
+    cntlin_values: &[(String, UserFormat)],
+    cntlin_invalues: &[(String, UserInformat)],
+) -> Result<()> {
     let provider = session.libs.get(&ast.lib)?;
     let dir = match provider.catalog_dir() {
         Some(d) => d.to_path_buf(),
@@ -229,10 +314,10 @@ fn persist_library_catalog(session: &mut Session, ast: &FormatAst) -> Result<()>
         .libref_format_catalogs
         .entry(ast.lib.clone())
         .or_default();
-    for (name, uf) in &ast.values {
+    for (name, uf) in cntlin_values.iter().chain(ast.values.iter()) {
         entry.define(&name.to_uppercase(), uf.clone());
     }
-    for (name, ui) in &ast.invalues {
+    for (name, ui) in cntlin_invalues.iter().chain(ast.invalues.iter()) {
         entry.define_informat(&name.to_uppercase(), ui.clone());
     }
     for (name, up) in &ast.pictures {
