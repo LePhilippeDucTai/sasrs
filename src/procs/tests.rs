@@ -234,3 +234,37 @@ fn execute_proc_print_full_pipeline() {
         "log: {log}"
     );
 }
+
+/// M38.4 — `ODS SELECT NONE`/`ODS EXCLUDE ALL` : `execute_proc` détourne la
+/// destination de sortie le temps du proc — AUCUNE sortie listing (même pour
+/// un proc aux tables anonymes comme PRINT), mais le LOG (NOTE de timing)
+/// reste émis et la destination réelle est restaurée pour le proc suivant.
+#[test]
+fn execute_proc_suppresses_all_listing_under_select_none() {
+    let mut session = make_session();
+    let df = df!["x" => [1.0_f64, 2.0]].unwrap();
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
+    write_dataset(&mut session, "T", ds);
+
+    session.set_ods_selection(false, &["none".to_string()]);
+    let (name, ast) = parse_proc_src("proc print data=work.t; run;").unwrap();
+    execute_proc(&name, &ast, &mut session).unwrap();
+    assert!(
+        session.listing.take_string().is_empty(),
+        "EXCLUDE ALL: no listing output at all"
+    );
+
+    // La destination réelle est restaurée : retour au défaut → PRINT s'affiche.
+    session.set_ods_selection(true, &["none".to_string()]);
+    let (name, ast) = parse_proc_src("proc print data=work.t; run;").unwrap();
+    execute_proc(&name, &ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(listing.contains("Obs"), "listing: {listing}");
+
+    // Le LOG a bien reçu les NOTEs de timing des deux procs.
+    let log = session.log.into_string();
+    assert_eq!(log.matches("PROCEDURE PRINT used").count(), 2, "log: {log}");
+}

@@ -16,9 +16,31 @@ pub(super) fn emit_variable(
     n_total: usize,
     normal: bool,
 ) -> Result<()> {
-    session.listing.blank();
-    centered(session, &format!("Variable: {name}"));
-    session.listing.blank();
+    // M38.4 — ODS SELECT/EXCLUDE : chaque section porte son nom d'objet ODS
+    // SAS ; seules les sections retenues par la liste de sélection sont
+    // affichées (les calculs et les captures ODS OUTPUT restent inchangés).
+    // L'en-tête « Variable: … » n'est émis que si au moins une section
+    // s'affiche ; la première section affichée n'a pas de blank de
+    // séparation (agencement historique préservé byte à byte par défaut).
+    let show_moments = session.ods_displays("Moments");
+    let show_basic = session.ods_displays("BasicMeasures");
+    let show_normal = normal && session.ods_displays("TestsForNormality");
+    let show_quantiles = session.ods_displays("Quantiles");
+    let show_extremes = session.ods_displays("ExtremeObs");
+    let show_missing = n_missing > 0 && session.ods_displays("MissingValues");
+    let show_any = show_moments
+        || show_basic
+        || show_normal
+        || show_quantiles
+        || show_extremes
+        || show_missing;
+    let mut first_section = true;
+
+    if show_any {
+        session.listing.blank();
+        centered(session, &format!("Variable: {name}"));
+        session.listing.blank();
+    }
 
     let n = data.len();
     // Plain non-missing values.
@@ -48,9 +70,7 @@ pub(super) fn emit_variable(
     let skew = skewness(&xs);
     let kurt = kurtosis(&xs);
 
-    // ── Moments ──
-    centered(session, "Moments");
-    session.listing.blank();
+    // ── Moments ── (objet ODS « Moments »)
     let moments: Vec<(&str, String, &str, String)> = vec![
         ("N", format!("{n}"), "Sum Weights", format!("{n}")),
         ("Mean", fmt_opt(mean), "Sum Observations", fmt_num(sum)),
@@ -64,20 +84,25 @@ pub(super) fn emit_variable(
             fmt_opt(std_err),
         ),
     ];
-    let m_rows: Vec<Vec<String>> = moments
-        .iter()
-        .map(|(la, va, lb, vb)| vec![la.to_string(), va.clone(), lb.to_string(), vb.clone()])
-        .collect();
-    session.listing.write_table(
-        &[
-            "Label1".into(),
-            "Value1".into(),
-            "Label2".into(),
-            "Value2".into(),
-        ],
-        &[Align::Left, Align::Right, Align::Left, Align::Right],
-        &m_rows,
-    );
+    if show_moments {
+        section_sep(session, &mut first_section);
+        centered(session, "Moments");
+        session.listing.blank();
+        let m_rows: Vec<Vec<String>> = moments
+            .iter()
+            .map(|(la, va, lb, vb)| vec![la.to_string(), va.clone(), lb.to_string(), vb.clone()])
+            .collect();
+        session.listing.write_table(
+            &[
+                "Label1".into(),
+                "Value1".into(),
+                "Label2".into(),
+                "Value2".into(),
+            ],
+            &[Align::Left, Align::Right, Align::Left, Align::Right],
+            &m_rows,
+        );
+    }
 
     // M38.3 — cette table porte le nom d'objet ODS « Moments ». Structure du
     // dataset SAS réel : VarName, Label1, cValue1 (valeur AFFICHÉE, celle du
@@ -92,10 +117,7 @@ pub(super) fn emit_variable(
         session.append_ods_output("Moments", part)?;
     }
 
-    // ── Basic Statistical Measures ──
-    session.listing.blank();
-    centered(session, "Basic Statistical Measures");
-    session.listing.blank();
+    // ── Basic Statistical Measures ── (objet ODS « BasicMeasures »)
     let median = quantile_def5(&sorted, 0.5);
     let mode_v = mode(&sorted);
     let range = if n > 0 {
@@ -109,42 +131,47 @@ pub(super) fn emit_variable(
         (Some(a), Some(b)) => Some(a - b),
         _ => None,
     };
-    let basic_rows: Vec<Vec<String>> = vec![
-        vec![
-            "Mean".into(),
-            fmt_opt(mean),
-            "Std Deviation".into(),
-            fmt_opt(s),
-        ],
-        vec![
-            "Median".into(),
-            fmt_opt(median),
-            "Variance".into(),
-            fmt_opt(variance),
-        ],
-        vec![
-            "Mode".into(),
-            fmt_opt(mode_v),
-            "Range".into(),
-            fmt_opt(range),
-        ],
-        vec![
-            "".into(),
-            "".into(),
-            "Interquartile Range".into(),
-            fmt_opt(iqr),
-        ],
-    ];
-    session.listing.write_table(
-        &[
-            "LocLabel".into(),
-            "LocValue".into(),
-            "VarLabel".into(),
-            "VarValue".into(),
-        ],
-        &[Align::Left, Align::Right, Align::Left, Align::Right],
-        &basic_rows,
-    );
+    if show_basic {
+        section_sep(session, &mut first_section);
+        centered(session, "Basic Statistical Measures");
+        session.listing.blank();
+        let basic_rows: Vec<Vec<String>> = vec![
+            vec![
+                "Mean".into(),
+                fmt_opt(mean),
+                "Std Deviation".into(),
+                fmt_opt(s),
+            ],
+            vec![
+                "Median".into(),
+                fmt_opt(median),
+                "Variance".into(),
+                fmt_opt(variance),
+            ],
+            vec![
+                "Mode".into(),
+                fmt_opt(mode_v),
+                "Range".into(),
+                fmt_opt(range),
+            ],
+            vec![
+                "".into(),
+                "".into(),
+                "Interquartile Range".into(),
+                fmt_opt(iqr),
+            ],
+        ];
+        session.listing.write_table(
+            &[
+                "LocLabel".into(),
+                "LocValue".into(),
+                "VarLabel".into(),
+                "VarValue".into(),
+            ],
+            &[Align::Left, Align::Right, Align::Left, Align::Right],
+            &basic_rows,
+        );
+    }
 
     // M38.3 — cette table porte le nom d'objet ODS « BasicMeasures ».
     // Structure du dataset SAS réel : VarName, LocMeasure (char), LocValue
@@ -164,80 +191,86 @@ pub(super) fn emit_variable(
     }
 
     // ── Tests for Normality (only when requested via NORMAL) ──
-    if normal {
+    // (objet ODS « TestsForNormality »)
+    if show_normal {
+        section_sep(session, &mut first_section);
         emit_normality_tests(session, &sorted, mean, s, n);
     }
 
-    // ── Quantiles (Definition 5) ──
-    session.listing.blank();
-    centered(session, "Quantiles (Definition 5)");
-    session.listing.blank();
-    let levels: &[(&str, f64)] = &[
-        ("100% Max", 1.0),
-        ("99%", 0.99),
-        ("95%", 0.95),
-        ("90%", 0.90),
-        ("75% Q3", 0.75),
-        ("50% Median", 0.50),
-        ("25% Q1", 0.25),
-        ("10%", 0.10),
-        ("5%", 0.05),
-        ("1%", 0.01),
-        ("0% Min", 0.0),
-    ];
-    let q_rows: Vec<Vec<String>> = levels
-        .iter()
-        .map(|(label, p)| vec![label.to_string(), fmt_opt(quantile_def5(&sorted, *p))])
-        .collect();
-    session.listing.write_table(
-        &["Quantile".into(), "Estimate".into()],
-        &[Align::Left, Align::Right],
-        &q_rows,
-    );
-
-    // ── Extreme Observations ──
-    session.listing.blank();
-    centered(session, "Extreme Observations");
-    session.listing.blank();
-    // Order data by value, then by obs number (stable for ties).
-    let mut by_val: Vec<(f64, usize)> = data.to_vec();
-    by_val.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(Ordering::Equal)
-            .then(a.1.cmp(&b.1))
-    });
-    let k = by_val.len().min(5);
-    let lowest = &by_val[..k];
-    let highest = &by_val[by_val.len().saturating_sub(5)..];
-    // Pair them up row-by-row (both columns show up to 5 entries).
-    let mut ext_rows: Vec<Vec<String>> = Vec::new();
-    for i in 0..5 {
-        let (lv, lo) = match lowest.get(i) {
-            Some((v, o)) => (fmt_num(*v), format!("{o}")),
-            None => (String::new(), String::new()),
-        };
-        // Highest displayed ascending too (SAS shows the top 5 in ascending
-        // order within the Highest column).
-        let (hv, ho) = match highest.get(i) {
-            Some((v, o)) => (fmt_num(*v), format!("{o}")),
-            None => (String::new(), String::new()),
-        };
-        ext_rows.push(vec![lv, lo, hv, ho]);
-    }
-    session.listing.write_table(
-        &[
-            "Lowest Value".into(),
-            "Lowest Obs".into(),
-            "Highest Value".into(),
-            "Highest Obs".into(),
-        ],
-        &[Align::Right, Align::Right, Align::Right, Align::Right],
-        &ext_rows,
-    );
-
-    // ── Missing Values ──
-    if n_missing > 0 {
+    // ── Quantiles (Definition 5) ── (objet ODS « Quantiles »)
+    if show_quantiles {
+        section_sep(session, &mut first_section);
+        centered(session, "Quantiles (Definition 5)");
         session.listing.blank();
+        let levels: &[(&str, f64)] = &[
+            ("100% Max", 1.0),
+            ("99%", 0.99),
+            ("95%", 0.95),
+            ("90%", 0.90),
+            ("75% Q3", 0.75),
+            ("50% Median", 0.50),
+            ("25% Q1", 0.25),
+            ("10%", 0.10),
+            ("5%", 0.05),
+            ("1%", 0.01),
+            ("0% Min", 0.0),
+        ];
+        let q_rows: Vec<Vec<String>> = levels
+            .iter()
+            .map(|(label, p)| vec![label.to_string(), fmt_opt(quantile_def5(&sorted, *p))])
+            .collect();
+        session.listing.write_table(
+            &["Quantile".into(), "Estimate".into()],
+            &[Align::Left, Align::Right],
+            &q_rows,
+        );
+    }
+
+    // ── Extreme Observations ── (objet ODS « ExtremeObs »)
+    if show_extremes {
+        section_sep(session, &mut first_section);
+        centered(session, "Extreme Observations");
+        session.listing.blank();
+        // Order data by value, then by obs number (stable for ties).
+        let mut by_val: Vec<(f64, usize)> = data.to_vec();
+        by_val.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+        let k = by_val.len().min(5);
+        let lowest = &by_val[..k];
+        let highest = &by_val[by_val.len().saturating_sub(5)..];
+        // Pair them up row-by-row (both columns show up to 5 entries).
+        let mut ext_rows: Vec<Vec<String>> = Vec::new();
+        for i in 0..5 {
+            let (lv, lo) = match lowest.get(i) {
+                Some((v, o)) => (fmt_num(*v), format!("{o}")),
+                None => (String::new(), String::new()),
+            };
+            // Highest displayed ascending too (SAS shows the top 5 in ascending
+            // order within the Highest column).
+            let (hv, ho) = match highest.get(i) {
+                Some((v, o)) => (fmt_num(*v), format!("{o}")),
+                None => (String::new(), String::new()),
+            };
+            ext_rows.push(vec![lv, lo, hv, ho]);
+        }
+        session.listing.write_table(
+            &[
+                "Lowest Value".into(),
+                "Lowest Obs".into(),
+                "Highest Value".into(),
+                "Highest Obs".into(),
+            ],
+            &[Align::Right, Align::Right, Align::Right, Align::Right],
+            &ext_rows,
+        );
+    }
+
+    // ── Missing Values ── (objet ODS « MissingValues »)
+    if show_missing {
+        section_sep(session, &mut first_section);
         centered(session, "Missing Values");
         session.listing.blank();
         let pct = if n_total > 0 {
@@ -257,6 +290,18 @@ pub(super) fn emit_variable(
     }
 
     Ok(())
+}
+
+/// M38.4 — séparateur entre sections AFFICHÉES d'une variable UNIVARIATE :
+/// une ligne blanche avant chaque section sauf la première (reproduit byte à
+/// byte l'agencement historique quand toutes les sections s'affichent, et
+/// garde un agencement serré — comme SAS — quand une liste ODS SELECT n'en
+/// retient qu'une partie).
+fn section_sep(session: &mut Session, first: &mut bool) {
+    if !*first {
+        session.listing.blank();
+    }
+    *first = false;
 }
 
 /// M38.3 — tranche typée de la table ODS « Moments » pour une variable :
@@ -368,9 +413,21 @@ pub(super) fn emit_variable_weighted(
     n_missing: usize,
     n_total: usize,
 ) {
-    session.listing.blank();
-    centered(session, &format!("Variable: {name}"));
-    session.listing.blank();
+    // M38.4 — même filtrage ODS SELECT/EXCLUDE par section que le chemin non
+    // pondéré (`emit_variable`) ; pas de section normalité sur ce chemin.
+    let show_moments = session.ods_displays("Moments");
+    let show_basic = session.ods_displays("BasicMeasures");
+    let show_quantiles = session.ods_displays("Quantiles");
+    let show_extremes = session.ods_displays("ExtremeObs");
+    let show_missing = n_missing > 0 && session.ods_displays("MissingValues");
+    let show_any = show_moments || show_basic || show_quantiles || show_extremes || show_missing;
+    let mut first_section = true;
+
+    if show_any {
+        session.listing.blank();
+        centered(session, &format!("Variable: {name}"));
+        session.listing.blank();
+    }
 
     let n = pairs.len();
     let nf = n as f64;
@@ -413,48 +470,49 @@ pub(super) fn emit_variable_weighted(
     let skew = skewness(&xs);
     let kurt = kurtosis(&xs);
 
-    // ── Moments ──
-    centered(session, "Moments");
-    session.listing.blank();
-    let moments: Vec<(&str, String, &str, String)> = vec![
-        ("N", format!("{n}"), "Sum Weights", fmt_num(sum_w)),
-        ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
-        ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
-        ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
-        (
-            "Uncorrected SS",
-            fmt_num(uss_w),
-            "Corrected SS",
-            fmt_num(css_w),
-        ),
-        (
-            "Coeff Variation",
-            fmt_opt(cv),
-            "Std Error Mean",
-            fmt_opt(std_err),
-        ),
-    ];
-    let m_rows: Vec<Vec<String>> = moments
-        .into_iter()
-        .map(|(la, va, lb, vb)| vec![la.to_string(), va, lb.to_string(), vb])
-        .collect();
-    session.listing.write_table(
-        &[
-            "Label1".into(),
-            "Value1".into(),
-            "Label2".into(),
-            "Value2".into(),
-        ],
-        &[Align::Left, Align::Right, Align::Left, Align::Right],
-        &m_rows,
-    );
+    // ── Moments ── (objet ODS « Moments »)
+    if show_moments {
+        section_sep(session, &mut first_section);
+        centered(session, "Moments");
+        session.listing.blank();
+        let moments: Vec<(&str, String, &str, String)> = vec![
+            ("N", format!("{n}"), "Sum Weights", fmt_num(sum_w)),
+            ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
+            ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
+            ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
+            (
+                "Uncorrected SS",
+                fmt_num(uss_w),
+                "Corrected SS",
+                fmt_num(css_w),
+            ),
+            (
+                "Coeff Variation",
+                fmt_opt(cv),
+                "Std Error Mean",
+                fmt_opt(std_err),
+            ),
+        ];
+        let m_rows: Vec<Vec<String>> = moments
+            .into_iter()
+            .map(|(la, va, lb, vb)| vec![la.to_string(), va, lb.to_string(), vb])
+            .collect();
+        session.listing.write_table(
+            &[
+                "Label1".into(),
+                "Value1".into(),
+                "Label2".into(),
+                "Value2".into(),
+            ],
+            &[Align::Left, Align::Right, Align::Left, Align::Right],
+            &m_rows,
+        );
+    }
 
     // ── Basic Statistical Measures ── (weighted mean/std/variance; weighted
     // median/Q1/Q3/range via the weighted Definition-5 quantiles; mode is the
-    // most frequent VALUE, as in the unweighted path).
-    session.listing.blank();
-    centered(session, "Basic Statistical Measures");
-    session.listing.blank();
+    // most frequent VALUE, as in the unweighted path). Objet ODS
+    // « BasicMeasures ».
     let median = weighted_quantile_def5(&sorted_pairs, 0.50);
     let q1 = weighted_quantile_def5(&sorted_pairs, 0.25);
     let q3 = weighted_quantile_def5(&sorted_pairs, 0.75);
@@ -469,115 +527,124 @@ pub(super) fn emit_variable_weighted(
     } else {
         None
     };
-    let basic_rows: Vec<Vec<String>> = vec![
-        vec![
-            "Mean".into(),
-            fmt_opt(mean_w),
-            "Std Deviation".into(),
-            fmt_opt(std),
-        ],
-        vec![
-            "Median".into(),
-            fmt_opt(median),
-            "Variance".into(),
-            fmt_opt(variance),
-        ],
-        vec![
-            "Mode".into(),
-            fmt_opt(mode_v),
-            "Range".into(),
-            fmt_opt(range),
-        ],
-        vec![
-            "".into(),
-            "".into(),
-            "Interquartile Range".into(),
-            fmt_opt(iqr),
-        ],
-    ];
-    session.listing.write_table(
-        &[
-            "LocLabel".into(),
-            "LocValue".into(),
-            "VarLabel".into(),
-            "VarValue".into(),
-        ],
-        &[Align::Left, Align::Right, Align::Left, Align::Right],
-        &basic_rows,
-    );
-
-    // ── Quantiles (Definition 5, weighted) ──
-    session.listing.blank();
-    centered(session, "Quantiles (Definition 5)");
-    session.listing.blank();
-    let levels: &[(&str, f64)] = &[
-        ("100% Max", 1.0),
-        ("99%", 0.99),
-        ("95%", 0.95),
-        ("90%", 0.90),
-        ("75% Q3", 0.75),
-        ("50% Median", 0.50),
-        ("25% Q1", 0.25),
-        ("10%", 0.10),
-        ("5%", 0.05),
-        ("1%", 0.01),
-        ("0% Min", 0.0),
-    ];
-    let q_rows: Vec<Vec<String>> = levels
-        .iter()
-        .map(|(label, p)| {
+    if show_basic {
+        section_sep(session, &mut first_section);
+        centered(session, "Basic Statistical Measures");
+        session.listing.blank();
+        let basic_rows: Vec<Vec<String>> = vec![
             vec![
-                label.to_string(),
-                fmt_opt(weighted_quantile_def5(&sorted_pairs, *p)),
-            ]
-        })
-        .collect();
-    session.listing.write_table(
-        &["Quantile".into(), "Estimate".into()],
-        &[Align::Left, Align::Right],
-        &q_rows,
-    );
+                "Mean".into(),
+                fmt_opt(mean_w),
+                "Std Deviation".into(),
+                fmt_opt(std),
+            ],
+            vec![
+                "Median".into(),
+                fmt_opt(median),
+                "Variance".into(),
+                fmt_opt(variance),
+            ],
+            vec![
+                "Mode".into(),
+                fmt_opt(mode_v),
+                "Range".into(),
+                fmt_opt(range),
+            ],
+            vec![
+                "".into(),
+                "".into(),
+                "Interquartile Range".into(),
+                fmt_opt(iqr),
+            ],
+        ];
+        session.listing.write_table(
+            &[
+                "LocLabel".into(),
+                "LocValue".into(),
+                "VarLabel".into(),
+                "VarValue".into(),
+            ],
+            &[Align::Left, Align::Right, Align::Left, Align::Right],
+            &basic_rows,
+        );
+    }
+
+    // ── Quantiles (Definition 5, weighted) ── (objet ODS « Quantiles »)
+    if show_quantiles {
+        section_sep(session, &mut first_section);
+        centered(session, "Quantiles (Definition 5)");
+        session.listing.blank();
+        let levels: &[(&str, f64)] = &[
+            ("100% Max", 1.0),
+            ("99%", 0.99),
+            ("95%", 0.95),
+            ("90%", 0.90),
+            ("75% Q3", 0.75),
+            ("50% Median", 0.50),
+            ("25% Q1", 0.25),
+            ("10%", 0.10),
+            ("5%", 0.05),
+            ("1%", 0.01),
+            ("0% Min", 0.0),
+        ];
+        let q_rows: Vec<Vec<String>> = levels
+            .iter()
+            .map(|(label, p)| {
+                vec![
+                    label.to_string(),
+                    fmt_opt(weighted_quantile_def5(&sorted_pairs, *p)),
+                ]
+            })
+            .collect();
+        session.listing.write_table(
+            &["Quantile".into(), "Estimate".into()],
+            &[Align::Left, Align::Right],
+            &q_rows,
+        );
+    }
 
     // ── Extreme Observations ── (raw extreme VALUES + obs numbers; extremes
-    // are not weighted, matching SAS).
-    session.listing.blank();
-    centered(session, "Extreme Observations");
-    session.listing.blank();
-    let mut by_val: Vec<(f64, usize)> = obs_pairs.to_vec();
-    by_val.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(Ordering::Equal)
-            .then(a.1.cmp(&b.1))
-    });
-    let k = by_val.len().min(5);
-    let lowest = &by_val[..k];
-    let highest = &by_val[by_val.len().saturating_sub(5)..];
-    let mut ext_rows: Vec<Vec<String>> = Vec::new();
-    for i in 0..5 {
-        let (lv, lo) = match lowest.get(i) {
-            Some((v, o)) => (fmt_num(*v), format!("{o}")),
-            None => (String::new(), String::new()),
-        };
-        let (hv, ho) = match highest.get(i) {
-            Some((v, o)) => (fmt_num(*v), format!("{o}")),
-            None => (String::new(), String::new()),
-        };
-        ext_rows.push(vec![lv, lo, hv, ho]);
-    }
-    session.listing.write_table(
-        &[
-            "Lowest Value".into(),
-            "Lowest Obs".into(),
-            "Highest Value".into(),
-            "Highest Obs".into(),
-        ],
-        &[Align::Right, Align::Right, Align::Right, Align::Right],
-        &ext_rows,
-    );
-
-    // ── Missing Values ──
-    if n_missing > 0 {
+    // are not weighted, matching SAS). Objet ODS « ExtremeObs ».
+    if show_extremes {
+        section_sep(session, &mut first_section);
+        centered(session, "Extreme Observations");
         session.listing.blank();
+        let mut by_val: Vec<(f64, usize)> = obs_pairs.to_vec();
+        by_val.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+        let k = by_val.len().min(5);
+        let lowest = &by_val[..k];
+        let highest = &by_val[by_val.len().saturating_sub(5)..];
+        let mut ext_rows: Vec<Vec<String>> = Vec::new();
+        for i in 0..5 {
+            let (lv, lo) = match lowest.get(i) {
+                Some((v, o)) => (fmt_num(*v), format!("{o}")),
+                None => (String::new(), String::new()),
+            };
+            let (hv, ho) = match highest.get(i) {
+                Some((v, o)) => (fmt_num(*v), format!("{o}")),
+                None => (String::new(), String::new()),
+            };
+            ext_rows.push(vec![lv, lo, hv, ho]);
+        }
+        session.listing.write_table(
+            &[
+                "Lowest Value".into(),
+                "Lowest Obs".into(),
+                "Highest Value".into(),
+                "Highest Obs".into(),
+            ],
+            &[Align::Right, Align::Right, Align::Right, Align::Right],
+            &ext_rows,
+        );
+    }
+
+    // ── Missing Values ── (objet ODS « MissingValues »)
+    if show_missing {
+        section_sep(session, &mut first_section);
         centered(session, "Missing Values");
         session.listing.blank();
         let pct = if n_total > 0 {

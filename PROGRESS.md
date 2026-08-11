@@ -10,7 +10,7 @@ complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
 nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
-0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M38.4**.
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M38.5**.
 
 **MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
 restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
@@ -928,7 +928,7 @@ Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS 
   au-delà du warning ; non reconnues gardent le warning (Sonnet, moyen)
 - [x] M38.3 — ODS OUTPUT **généralisé** : nommer chaque `write_table`, matérialiser en dataset via
   `ods_output_target` ; oracle : `ods output OneWayFreqs=f;` = colonnes du listing FREQ (Opus, élevé)
-- [ ] M38.4 — ODS SELECT/EXCLUDE : sets Session consultés dans `write_table` (remplace l'erreur différée
+- [x] M38.4 — ODS SELECT/EXCLUDE : sets Session consultés dans `write_table` (remplace l'erreur différée
   `parser/global.rs`) ; oracle : `ods exclude all;` supprime les tables, log inchangé (Opus, moyen)
 - [ ] M38.5 — `%INCLUDE *`/stdin + FILENAME device/pipe/URL reconnus (NOTE propre, sortis du 🟡) (Sonnet, faible)
 - [ ] DoD M38 : fixtures m38 (titres multiples, ODS OUTPUT depuis FREQ, ODS EXCLUDE) ; 6 cellules → ✅ ; → M39.

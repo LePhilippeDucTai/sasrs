@@ -263,11 +263,26 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
     };
     let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
 
-    session.listing.page_header();
-    centered(session, "The UNIVARIATE Procedure");
+    // M38.4 — ODS SELECT/EXCLUDE : les sections d'UNIVARIATE portent leurs
+    // noms d'objets ODS SAS (Moments, BasicMeasures, TestsForNormality,
+    // Quantiles, ExtremeObs, MissingValues). Si la liste de sélection ne
+    // laisse passer aucune section, l'en-tête de page et les en-têtes BY sont
+    // supprimés aussi (SAS ne produit pas de page vide). `MissingValues` entre
+    // dans ce test même sans missing dans les données (léger sur-affichage de
+    // l'en-tête dans ce cas limite, documenté).
+    let proc_shows = session.ods_displays("Moments")
+        || session.ods_displays("BasicMeasures")
+        || session.ods_displays("Quantiles")
+        || session.ods_displays("ExtremeObs")
+        || session.ods_displays("MissingValues")
+        || (ast.normal && session.ods_displays("TestsForNormality"));
+    if proc_shows {
+        session.listing.page_header();
+        centered(session, "The UNIVARIATE Procedure");
+    }
 
     for (by_key, grp_rows) in &by_groups_list {
-        if !by_names.is_empty() {
+        if proc_shows && !by_names.is_empty() {
             emit_by_heading(session, &by_names, by_key);
         }
         for (vi, &ci) in var_cols.iter().enumerate() {

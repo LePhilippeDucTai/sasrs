@@ -121,13 +121,92 @@ fn parse_ods_close_bare_defaults_listing() {
     );
 }
 
+// ── ODS SELECT / EXCLUDE (M38.4) ─────────────────────────────────────────
+
 #[test]
-fn parse_ods_select_is_deferred_error() {
-    let err = parse("ods html select foo;").unwrap_err();
-    let msg = err.to_string();
+fn parse_ods_select_names() {
+    let stmt = parse("ods select Moments BasicMeasures;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::OdsSelect {
+            exclude: false,
+            items: vec!["Moments".into(), "BasicMeasures".into()],
+        }
+    );
+}
+
+#[test]
+fn parse_ods_exclude_all_keyword() {
+    let stmt = parse("ODS EXCLUDE ALL;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::OdsSelect {
+            exclude: true,
+            items: vec!["ALL".into()],
+        }
+    );
+}
+
+#[test]
+fn parse_ods_select_none_keyword() {
+    let stmt = parse("ods select none;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::OdsSelect {
+            exclude: false,
+            items: vec!["none".into()],
+        }
+    );
+}
+
+/// `ODS <dest> SELECT ...` : la qualification de destination est acceptée ;
+/// la liste s'applique globalement (divergence documentée — sasrs n'a qu'une
+/// destination courante). Remplace l'ancien refus différé
+/// (`parse_ods_select_is_deferred_error`).
+#[test]
+fn parse_ods_destination_qualified_select() {
+    let stmt = parse("ods html select foo;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::OdsSelect {
+            exclude: false,
+            items: vec!["foo".into()],
+        }
+    );
+    let stmt = parse("ods listing exclude OneWayFreqs;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::OdsSelect {
+            exclude: true,
+            items: vec!["OneWayFreqs".into()],
+        }
+    );
+}
+
+#[test]
+fn parse_ods_select_requires_items() {
+    let err = parse("ods select;").unwrap_err();
     assert!(
-        msg.to_lowercase().contains("select") && msg.contains("M22.3"),
-        "unexpected error: {msg}"
+        err.to_string().contains("at least one"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_ods_select_persist_is_rejected() {
+    let err = parse("ods select Moments(persist);").unwrap_err();
+    assert!(
+        err.to_string().contains("PERSIST"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn parse_ods_select_all_mixed_with_names_is_rejected() {
+    let err = parse("ods exclude all Moments;").unwrap_err();
+    assert!(
+        err.to_string().contains("cannot be combined"),
+        "unexpected error: {err}"
     );
 }
 

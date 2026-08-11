@@ -147,18 +147,35 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
         common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
     };
 
-    session.listing.page_header();
-    // Centered procedure title line.
-    let title = "The FREQ Procedure";
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(title.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), title));
-    session.listing.blank();
+    // M38.4 — ODS SELECT/EXCLUDE : les tables une voie portent le nom d'objet
+    // ODS « OneWayFreqs » (et « OneWayChiSq » pour le bloc CHISQ une voie).
+    // Si la liste de sélection ne laisse passer AUCUN objet de ce proc,
+    // l'en-tête de page, le titre et les en-têtes BY sont supprimés aussi
+    // (comme SAS, qui ne produit pas de page vide). Les tables ≥ 2 voies ne
+    // sont pas encore nommées : elles s'affichent toujours (divergence
+    // documentée dans `session::ods_select`) et forcent donc l'en-tête.
+    let shows_anything = ast.tables.iter().any(|req| match req.vars.len() {
+        1 => {
+            session.ods_displays("OneWayFreqs")
+                || (req.chisq && session.ods_displays("OneWayChiSq"))
+        }
+        _ => true,
+    });
+
+    if shows_anything {
+        session.listing.page_header();
+        // Centered procedure title line.
+        let title = "The FREQ Procedure";
+        let ls = session.listing.ls();
+        let pad = ls.saturating_sub(title.len()) / 2;
+        session
+            .listing
+            .write_line(&format!("{}{}", " ".repeat(pad), title));
+        session.listing.blank();
+    }
 
     for (by_key, grp_rows) in &by_groups_list {
-        if !by_names.is_empty() {
+        if shows_anything && !by_names.is_empty() {
             emit_by_heading(session, &by_names, by_key);
         }
         for req in &ast.tables {

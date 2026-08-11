@@ -83,28 +83,37 @@ pub(super) fn one_way(
         out_rows.push(row);
     }
 
-    session.listing.write_table(&headers, &aligns, &out_rows);
+    // M38.4 — cette table porte le nom d'objet ODS « OneWayFreqs » : la liste
+    // ODS SELECT/EXCLUDE gouverne son AFFICHAGE (la ligne « Frequency
+    // Missing » fait partie du rendu de l'objet). Le filtrage ne touche que le
+    // listing — capture ODS OUTPUT et OUT= restent toujours produits.
+    let show_table = session.ods_displays("OneWayFreqs");
+    if show_table {
+        session.listing.write_table(&headers, &aligns, &out_rows);
+    }
 
     // M38.3 — cette table de listing porte le nom d'objet ODS « OneWayFreqs » :
     // si `ODS OUTPUT OneWayFreqs=…` est actif, une tranche TYPÉE s'accumule
     // (une par variable / groupe BY — union diagonale, comme SAS) et sera
     // matérialisée en dataset à la fin du proc. Inactif par défaut → aucun
-    // effet, listing byte-identique.
+    // effet, listing byte-identique. Capture MÊME si l'objet est exclu du
+    // listing (doc SAS : l'exclusion ne gouverne que l'affichage).
     if session.ods_output_active("OneWayFreqs") {
         let part = build_one_way_freqs(ds, col_idx, &cats, denom, req)?;
         session.append_ods_output("OneWayFreqs", part)?;
     }
 
     // Frequency Missing line (only when missings are excluded).
-    if !req.missing && n_missing > 0.0 {
+    if show_table && !req.missing && n_missing > 0.0 {
         session.listing.blank();
         session
             .listing
             .write_line(&format!("Frequency Missing = {}", fmt_freq(n_missing)));
     }
 
-    // CHISQ one-way: goodness-of-fit against equal proportions.
-    if req.chisq {
+    // CHISQ one-way: goodness-of-fit against equal proportions. Objet ODS
+    // « OneWayChiSq » (nom SAS réel), filtrable par ODS SELECT/EXCLUDE.
+    if req.chisq && session.ods_displays("OneWayChiSq") {
         chisq_one_way_block(session, &cats);
     }
 

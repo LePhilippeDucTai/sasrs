@@ -13,7 +13,8 @@ use super::*;
 /// - `ODS _ALL_ CLOSE ;`             → ferme tout (traité comme CLOSE générique)
 ///
 /// Options reconnues (parsées, stockées pour M22.4+) : `FILE='...'`,
-/// `STYLE=name`, `OPTIONS=...` (ignorée). `SELECT`/`EXCLUDE` → différés M22.3.
+/// `STYLE=name`, `OPTIONS=...` (ignorée). `ODS [dest] SELECT/EXCLUDE ...;` →
+/// liste de sélection ODS (M38.4, `parse_ods_select`).
 pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
     // `ODS ;` nu : no-op accepté.
     if ts.peek().kind == TokenKind::Semi {
@@ -48,6 +49,12 @@ pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
     if first == "graphics" {
         ts.next(); // consume `graphics`
         return parse_ods_graphics(ts);
+    }
+
+    // `ODS SELECT ...` / `ODS EXCLUDE ...` — liste de sélection ODS (M38.4).
+    if first == "select" || first == "exclude" {
+        ts.next(); // consume `select`/`exclude`
+        return parse_ods_select(ts, first == "exclude");
     }
 
     // `ODS CLOSE [name] ;` — verbe en tête, destination optionnelle après.
@@ -86,17 +93,15 @@ pub fn parse_ods_statement(ts: &mut StatementStream) -> Result<GlobalStmt> {
             ts.next();
             OdsAction::Open
         }
-        Some(ref a) if a == "select" => {
-            return Err(SasError::parse(
-                "ODS SELECT is not yet supported (deferred to M22.3)",
-                ts.peek().span,
-            ));
-        }
-        Some(ref a) if a == "exclude" => {
-            return Err(SasError::parse(
-                "ODS EXCLUDE is not yet supported (deferred to M22.3)",
-                ts.peek().span,
-            ));
+        Some(ref a) if a == "select" || a == "exclude" => {
+            // M38.4 — `ODS <dest> SELECT/EXCLUDE ...` : la qualification de
+            // destination est acceptée mais la liste s'applique GLOBALEMENT
+            // (divergence documentée : sasrs route toute la sortie vers la
+            // destination courante unique, « global » et « par destination »
+            // coïncident donc en pratique).
+            let exclude = a == "exclude";
+            ts.next(); // consume `select`/`exclude`
+            return parse_ods_select(ts, exclude);
         }
         _ => OdsAction::Open,
     };
@@ -171,6 +176,65 @@ pub(super) fn parse_ods_output(ts: &mut StatementStream) -> Result<GlobalStmt> {
         mappings,
         close: false,
     })
+}
+
+/// Parse la liste d'un `ODS SELECT`/`ODS EXCLUDE` (le verbe a déjà été
+/// consommé) — M38.4.
+///
+/// Grammaire : `ODS [dest] SELECT|EXCLUDE nom1 nom2 … ;` ou
+/// `ODS [dest] SELECT|EXCLUDE ALL|NONE ;`. Les mots-clés `ALL`/`NONE` doivent
+/// être SEULS (comme dans SAS, où ils remplacent la liste entière). La forme
+/// SAS `nom(PERSIST)` n'est pas supportée dans ce build (le cycle de vie
+/// par défaut — liste nominative consommée à la fin du step suivant — est
+/// implémenté dans `session::ods_select`) : une parenthèse lève une erreur de
+/// parse explicite.
+pub(super) fn parse_ods_select(ts: &mut StatementStream, exclude: bool) -> Result<GlobalStmt> {
+    let stmt_name = if exclude { "ODS EXCLUDE" } else { "ODS SELECT" };
+    let mut items: Vec<String> = Vec::new();
+    loop {
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::LParen => {
+                return Err(SasError::parse(
+                    format!("{stmt_name} (PERSIST) is not supported in this build."),
+                    tok.span,
+                ));
+            }
+            _ => match tok.ident() {
+                Some(name) => {
+                    items.push(name.to_string());
+                    ts.next();
+                }
+                None => {
+                    return Err(SasError::parse(
+                        format!("{stmt_name} expects output object names, ALL, or NONE"),
+                        tok.span,
+                    ));
+                }
+            },
+        }
+    }
+    if items.is_empty() {
+        return Err(SasError::parse(
+            format!("{stmt_name} requires at least one output object name, ALL, or NONE"),
+            ts.peek().span,
+        ));
+    }
+    // ALL/NONE remplacent la liste ENTIÈRE : ils ne se combinent pas avec des
+    // noms d'objets (même règle que SAS).
+    if items.len() > 1
+        && items
+            .iter()
+            .any(|i| i.eq_ignore_ascii_case("all") || i.eq_ignore_ascii_case("none"))
+    {
+        return Err(SasError::parse(
+            format!("{stmt_name} ALL/NONE cannot be combined with output object names"),
+            ts.peek().span,
+        ));
+    }
+    ts.expect_semi()?;
+    Ok(GlobalStmt::OdsSelect { exclude, items })
 }
 
 /// Parse `ODS GRAPHICS ...` (le mot-clé `GRAPHICS` a déjà été consommé) — M29.1.

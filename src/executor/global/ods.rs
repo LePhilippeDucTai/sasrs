@@ -140,9 +140,5 @@ pub(crate) fn exec_ods(
                 ));
             }
         },
-        OdsAction::Select | OdsAction::Exclude => {
-            // Différé M22.3 ; le parser rejette déjà ces formes, donc inatteignable.
-            session.log.note("ODS SELECT/EXCLUDE is deferred to M22.3.");
-        }
     }
 }

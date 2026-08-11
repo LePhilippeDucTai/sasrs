@@ -439,3 +439,53 @@ fn ods_output_summary_multiple_vars_one_row_each() {
         vec![Value::Num(2.0), Value::Num(15.0)]
     );
 }
+
+/// M38.4 — le rapport de MEANS porte le nom d'objet ODS « Summary » :
+/// `ods exclude Summary;` supprime tout le bloc listing (en-tête compris,
+/// comme NOPRINT) ; un `ods select` qui le retient l'affiche normalement.
+#[test]
+fn ods_exclude_summary_suppresses_the_report() {
+    let mk = || {
+        let mut session = make_session();
+        let df = df!["height" => [60.0_f64, 62.0, 64.0]].unwrap();
+        let ds = SasDataset {
+            df,
+            vars: vec![num_meta("height")],
+        };
+        write_dataset(&mut session, "T", ds);
+        session
+    };
+    let ast = MeansAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
+        summary: false,
+        noprint: false,
+        stats: vec![],
+        class: vec![],
+        var: vec![],
+        by: vec![],
+        weight: None,
+        alpha: 0.05,
+        printalltypes: false,
+        ways: vec![],
+        types: vec![],
+        output: None,
+    };
+
+    let mut session = mk();
+    session.set_ods_selection(true, &["Summary".to_string()]);
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(listing.is_empty(), "listing should be empty: {listing}");
+
+    let mut session = mk();
+    session.set_ods_selection(false, &["summary".to_string()]);
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(
+        listing.contains("The MEANS Procedure"),
+        "listing: {listing}"
+    );
+}

@@ -145,6 +145,14 @@ pub struct Session {
     /// M38.3 — séquence d'enregistrement des demandes `ODS OUTPUT` (ordre des
     /// statements), pour des NOTEs/WARNINGs déterministes.
     pub(crate) ods_output_seq: usize,
+    /// M38.4 — liste de sélection `ODS SELECT`/`ODS EXCLUDE` courante :
+    /// gouverne quels objets ODS nommés sont AFFICHÉS (émis vers la
+    /// destination de sortie). `All` par défaut → aucun filtrage, listing
+    /// byte-identique. Ne gouverne jamais les captures ODS OUTPUT ni les
+    /// datasets OUT=. Cycle de vie SAS (liste nominative consommée à la fin
+    /// du step de proc suivant, `ALL`/`NONE` persistants) : voir le module
+    /// [`ods_select`].
+    pub ods_selection: ods_select::OdsSelection,
     pub options: SasOptions,
     /// M29.1 — état ODS GRAPHICS (génération d'images PNG/SVG). `enabled=false`
     /// par défaut : tant que `ODS GRAPHICS ON` n'a pas été émis, aucun PROC
@@ -279,6 +287,7 @@ impl Session {
             ods_output_map: HashMap::new(),
             ods_output_pending: HashMap::new(),
             ods_output_seq: 0,
+            ods_selection: ods_select::OdsSelection::default(),
             options,
             ods_graphics: crate::ods_graphics::OdsGraphics::new(base_dir.clone()),
             graphics_image_count: 0,
@@ -434,6 +443,7 @@ impl Session {
 }
 
 pub mod ods_output;
+pub mod ods_select;
 
 #[cfg(test)]
 mod tests;

@@ -153,6 +153,13 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 session.set_ods_output(mappings);
             }
         }
+        GlobalStmt::OdsSelect { exclude, items } => {
+            // M38.4 — remplace la liste de sélection ODS de la session.
+            // Silencieux, comme SAS (aucune NOTE de log). Cycle de vie
+            // (consommation au step suivant, ALL/NONE persistants) :
+            // `session::ods_select`.
+            session.set_ods_selection(*exclude, items);
+        }
         GlobalStmt::OdsGraphics(stmt) => {
             exec_ods_graphics(session, stmt);
         }

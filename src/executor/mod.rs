@@ -152,6 +152,10 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
             // (APRÈS la NOTE de timing, position SAS), puis purge du registre
             // (la liste de sélection ODS OUTPUT ne survit pas au step).
             session.ods_output_step_boundary();
+            // M38.4 — cycle de vie ODS SELECT/EXCLUDE : une liste NOMINATIVE
+            // est consommée par le step de procédure qu'elle vient de filtrer
+            // (retour à SELECT ALL) ; les listes ALL/NONE persistent (doc SAS).
+            session.ods_select_step_boundary();
             // M35.3 — keep &SYSLAST in sync with session.last_dataset.
             let syslast = session
                 .last_dataset

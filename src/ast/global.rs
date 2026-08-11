@@ -81,6 +81,27 @@ pub enum GlobalStmt {
         /// `true` pour `ODS OUTPUT CLOSE ;` (purge des mappings).
         close: bool,
     },
+    /// M38.4 — statement `ODS SELECT`/`ODS EXCLUDE` : liste de sélection des
+    /// objets ODS affichés par les steps de procédure suivants.
+    ///
+    /// Formes reconnues :
+    /// - `ODS SELECT nom1 nom2 … ;` / `ODS EXCLUDE nom … ;` — liste nominative
+    ///   (noms d'objets ODS, insensibles à la casse) ;
+    /// - `ODS SELECT ALL|NONE ;` / `ODS EXCLUDE ALL|NONE ;` — mots-clés seuls
+    ///   (`SELECT NONE` ≡ `EXCLUDE ALL`, `EXCLUDE NONE` ≡ `SELECT ALL`) ;
+    /// - `ODS <destination> SELECT/EXCLUDE … ;` — la qualification de
+    ///   destination est acceptée mais la liste s'applique GLOBALEMENT
+    ///   (divergence documentée : sasrs n'a qu'une destination courante).
+    ///
+    /// Sémantique d'exécution (cycle de vie SAS, persistance ALL/NONE) : voir
+    /// `session::ods_select`.
+    OdsSelect {
+        /// `true` pour `ODS EXCLUDE`, `false` pour `ODS SELECT`.
+        exclude: bool,
+        /// Items tels que tapés : noms d'objets ODS, ou le mot-clé `ALL`/`NONE`
+        /// seul. Jamais vide (le parser l'exige).
+        items: Vec<String>,
+    },
     /// M29.1 — statement `ODS GRAPHICS` : active/désactive la génération d'images
     /// et configure les paramètres de rendu.
     ///
@@ -127,14 +148,13 @@ pub struct OdsGraphicsStmt {
 }
 
 /// M22.2 — action d'un statement `ODS` sur une destination.
+///
+/// `SELECT`/`EXCLUDE` ne sont PAS des actions de destination : depuis M38.4 ils
+/// portent leur propre variant [`GlobalStmt::OdsSelect`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OdsAction {
     /// Ouvre la destination (forme par défaut : `ODS HTML ;`).
     Open,
     /// Ferme la destination (`ODS HTML CLOSE ;` / `ODS CLOSE ...`).
     Close,
-    /// `ODS <dest> SELECT ...` — différé M22.3.
-    Select,
-    /// `ODS <dest> EXCLUDE ...` — différé M22.3.
-    Exclude,
 }

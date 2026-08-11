@@ -117,10 +117,33 @@ macro_rules! procs_registry {
         pub fn execute_proc($name: &str, $ast: &ProcAst, $session: &mut Session) -> Result<()> {
             let timer = StepTimer::start();
 
+            // M38.4 — `ODS SELECT NONE`/`ODS EXCLUDE ALL` : AUCUN objet ODS ne
+            // s'affiche. La destination courante est détournée vers un puits
+            // jetable le temps du proc : la sortie réelle reste intacte (pas
+            // même de séparateur inter-proc — SAS ne produit aucune page),
+            // tandis que le LOG, les datasets OUT= et les captures ODS OUTPUT
+            // sont émis normalement.
+            let saved_listing: Option<Box<dyn crate::output::OutputDestination>> =
+                if $session.ods_suppresses_all() {
+                    let ls = $session.listing.ls();
+                    Some(std::mem::replace(
+                        &mut $session.listing,
+                        Box::new(crate::output::TextListing::new(ls)),
+                    ))
+                } else {
+                    None
+                };
+
             let result = match $ast {
                 $( ProcAst::$variant(a) => $module::execute(a, $session), )*
                 $( $epat => $ebody, )*
             };
+
+            // Restaure la destination réelle (le puits et son contenu sont
+            // jetés), même quand le proc a échoué.
+            if let Some(original) = saved_listing {
+                $session.listing = original;
+            }
 
             // M38.3 — matérialise les captures ODS OUTPUT accumulées pendant
             // le proc (chemin générique). La NOTE « The data set … » précède

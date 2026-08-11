@@ -31,7 +31,9 @@ pub(super) fn emit_normality_tests(
     std: Option<f64>,
     n: usize,
 ) {
-    session.listing.blank();
+    // M38.4 : le blank de séparation avec la section précédente est émis par
+    // l'appelant (`section_sep` d'emit.rs), qui sait si cette section est la
+    // première affichée sous la liste ODS SELECT/EXCLUDE courante.
     centered(session, "Tests for Normality");
     session.listing.blank();
 

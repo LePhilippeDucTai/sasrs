@@ -265,7 +265,12 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
     };
 
     // --- Report ---
-    if !ast.noprint {
+    // M38.4 — le rapport de MEANS porte le nom d'objet ODS « Summary » : une
+    // liste ODS SELECT/EXCLUDE qui l'écarte supprime tout le bloc listing
+    // (en-tête compris — c'est le seul objet du proc, SAS ne produit alors
+    // aucune page), exactement comme NOPRINT. Les datasets OUTPUT OUT= et la
+    // capture ODS OUTPUT Summary= restent produits.
+    if !ast.noprint && session.ods_displays("Summary") {
         // Title printed once per proc invocation.
         session.listing.page_header();
         let title = "The MEANS Procedure";
