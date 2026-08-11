@@ -41,90 +41,93 @@ source .sas
 
 ## État, modèle suggéré et effort par fichier
 
-Légende état : ✅ implémenté + tests unitaires · 🦴 squelette (plan en tête de fichier, corps `todo!()`).
-Modèle suggéré : **Sonnet** (économique — tâche cadrée/mécanique), **Opus** (raisonnement
-soutenu), **Fable** (sémantique SAS pointue, risques d'erreurs subtiles). L'effort est celui
-du modèle suggéré. Un modèle supérieur peut toujours prendre la tâche d'un inférieur ;
-l'inverse est déconseillé pour les fichiers marqués Fable.
+Tous les tableaux de jalons partagent le même schéma :
+**Tâche | Jalon | État | Modèle | Effort | Notes**.
+Légende état : ✅ fait (implémenté + tests, cases cochées dans `PROGRESS.md`) · 🔶 en cours ·
+⬜ à faire. Modèle suggéré : **Sonnet** (économique — tâche cadrée/mécanique), **Opus**
+(raisonnement soutenu), **Fable** (sémantique SAS pointue, risques d'erreurs subtiles) ;
+« — » quand la tâche est faite et que la question ne se pose plus. L'effort est celui du
+modèle suggéré. Un modèle supérieur peut toujours prendre la tâche d'un inférieur ;
+l'inverse est déconseillé pour les tâches marquées Fable.
 
 ### Fondations (jalon M1 — faites)
 
-| Fichier | État | Rôle | Revue par |
-|---|---|---|---|
-| `Cargo.toml` (workspace + crate) | ✅ | Polars 0.46 (lazy, parquet, dtypes), clap, insta | — |
-| `src/error.rs` | ✅ | SasError (parse/runtime/io/polars) | — |
-| `src/source.rs` | ✅ | spans → lignes (écho log) | — |
-| `src/token.rs` | ✅ | tokens, spans, suffixes de littéraux `d/t/dt/n` | — |
-| `src/lexer.rs` | ✅ | lexer manuel : opérateurs-mots SAS, `'...'d`, commentaires | — |
-| `src/value.rs` | ✅ | `Value`, 28 missings, `sas_cmp` (`.=.` vrai !), BESTw. | — |
-| `src/missing.rs` | ✅ | NaN-payload ⇔ missings spéciaux, `nullify_specials` | — |
-| `src/dataset.rs` | ✅ | lecture/écriture parquet + coercition types→SAS (dates 1960) | — |
-| `src/library.rs` | ✅ | trait `LibraryProvider`, `DirLibrary`, WORK tempdir | — |
-| `src/log.rs` | ✅ | écho numéroté, NOTE/WARNING/ERROR, timing réel/CPU | — |
-| `src/listing.rs` | ✅ | titres centrés, tables monospace | — |
-| `src/session.rs` | ✅ | état de session (libs, log, listing, options, _LAST_) | — |
-| `src/preprocess.rs` | ✅ | `TextStage` (emplacement macro) | — |
-| `src/ast.rs` | ✅ | AST blocs/expressions/étape DATA | — |
-| `src/lib.rs`, `src/main.rs` | ✅ | API `run()`, CLI `sasrs` (clap) | — |
-| `tests/common/mod.rs` | ✅ | génération parquet sashelp.class | — |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| `Cargo.toml` (workspace + crate) | M1 | ✅ | — | — | Polars 0.46 (lazy, parquet, dtypes), clap, insta |
+| `src/error.rs` | M1 | ✅ | — | — | SasError (parse/runtime/io/polars) |
+| `src/source.rs` | M1 | ✅ | — | — | spans → lignes (écho log) |
+| `src/token.rs` | M1 | ✅ | — | — | tokens, spans, suffixes de littéraux `d/t/dt/n` |
+| `src/lexer.rs` | M1 | ✅ | — | — | lexer manuel : opérateurs-mots SAS, `'...'d`, commentaires |
+| `src/value.rs` | M1 | ✅ | — | — | `Value`, 28 missings, `sas_cmp` (`.=.` vrai !), BESTw. |
+| `src/missing.rs` | M1 | ✅ | — | — | NaN-payload ⇔ missings spéciaux, `nullify_specials` |
+| `src/dataset.rs` | M1 | ✅ | — | — | lecture/écriture parquet + coercition types→SAS (dates 1960) |
+| `src/library.rs` | M1 | ✅ | — | — | trait `LibraryProvider`, `DirLibrary`, WORK tempdir |
+| `src/log.rs` | M1 | ✅ | — | — | écho numéroté, NOTE/WARNING/ERROR, timing réel/CPU |
+| `src/listing.rs` | M1 | ✅ | — | — | titres centrés, tables monospace |
+| `src/session.rs` | M1 | ✅ | — | — | état de session (libs, log, listing, options, _LAST_) |
+| `src/preprocess.rs` | M1 | ✅ | — | — | `TextStage` (emplacement macro) |
+| `src/ast.rs` | M1 | ✅ | — | — | AST blocs/expressions/étape DATA |
+| `src/lib.rs`, `src/main.rs` | M1 | ✅ | — | — | API `run()`, CLI `sasrs` (clap) |
+| `tests/common/mod.rs` | M1 | ✅ | — | — | génération parquet sashelp.class |
 
 ### Jalon M1 — rendre le pipeline exécutable (fait)
 
-| Fichier | État | Modèle | Effort | Contenu |
-|---|---|---|---|---|
-| `src/parser/mod.rs` | ✅ | **Opus** | élevé | `StatementStream`, découpeur de blocs, récupération d'erreur — c'est la pièce architecturale (couture macro + grammaires par proc) |
-| `src/parser/expr.rs` | ✅ | **Opus** | élevé | Pratt avec la précédence SAS *inhabituelle* (`NOT` lie fort, `**` droite-associatif), littéraux date, missings spéciaux `.a` |
-| `src/parser/datastep.rs` | ✅ | **Opus** | moyen | statements M1 (SET/assign/IF/DO/OUTPUT/KEEP/DROP/STOP), erreurs "not yet implemented" propres |
-| `src/parser/global.rs` | ✅ | **Sonnet** | faible | LIBNAME / TITLE / OPTIONS |
-| `src/datastep/pdv.rs` | ✅ | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
-| `src/datastep/mod.rs` | ✅ | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
-| `src/datastep/exec.rs` | ✅ | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
-| `src/datastep/eval.rs` | ✅ | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
-| `src/datastep/functions.rs` | ✅ | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
-| `src/executor.rs` | ✅ | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
-| `src/procs/mod.rs` | ✅ | **Sonnet** | faible | registre parse/execute des procs |
-| `src/procs/print.rs` | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
-| `tests/snapshot.rs` | ✅ | **Sonnet** | faible | actif — les 3 fixtures m1/ sont verrouillées (log + listing + exit), vérifiées à la main |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| `src/parser/mod.rs` | M1 | ✅ | **Opus** | élevé | `StatementStream`, découpeur de blocs, récupération d'erreur — c'est la pièce architecturale (couture macro + grammaires par proc) |
+| `src/parser/expr.rs` | M1 | ✅ | **Opus** | élevé | Pratt avec la précédence SAS *inhabituelle* (`NOT` lie fort, `**` droite-associatif), littéraux date, missings spéciaux `.a` |
+| `src/parser/datastep.rs` | M1 | ✅ | **Opus** | moyen | statements M1 (SET/assign/IF/DO/OUTPUT/KEEP/DROP/STOP), erreurs "not yet implemented" propres |
+| `src/parser/global.rs` | M1 | ✅ | **Sonnet** | faible | LIBNAME / TITLE / OPTIONS |
+| `src/datastep/pdv.rs` | M1 | ✅ | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
+| `src/datastep/mod.rs` | M1 | ✅ | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
+| `src/datastep/exec.rs` | M1 | ✅ | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
+| `src/datastep/eval.rs` | M1 | ✅ | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
+| `src/datastep/functions.rs` | M1 | ✅ | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
+| `src/executor.rs` | M1 | ✅ | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
+| `src/procs/mod.rs` | M1 | ✅ | **Sonnet** | faible | registre parse/execute des procs |
+| `src/procs/print.rs` | M1 | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
+| `tests/snapshot.rs` | M1 | ✅ | **Sonnet** | faible | actif — les 3 fixtures m1/ sont verrouillées (log + listing + exit), vérifiées à la main |
 
 **Definition of done M1** : `cargo test -p sasrs` vert avec les snapshots activés ;
 `sasrs tests/fixtures/m1/set_filter.sas` affiche les ados de CLASS avec une log plausible.
 
 ### Jalons M2+ (faits)
 
-| Fichier / tâche | Jalon | Modèle | Effort | Notes |
-|---|---|---|---|---|
-| Étape DATA : RETAIN, DO itératif, arrays, sum statement, LENGTH, WHERE, options de dataset, sorties multiples | M2 | ✅ | élevé | étend parser/datastep + compile/exec ; missings spéciaux bout en bout |
-| `src/procs/sort.rs` | M3 | ✅ | moyen | collation : colonne compagnon de rang des missings (le piège est documenté dans le fichier) |
-| SET/MERGE avec BY, FIRST./LAST., IN= | M3 | ✅ | élevé | match-merge SAS exact (persistance du côté court) ; tests contre sorties SAS calculées à la main |
-| `src/formats/mod.rs` | M4 | ✅ | moyen | FormatSpec, catalogue, résolution user→builtin→fallback |
-| `src/formats/builtin.rs` | M4 | ✅ | moyen-élevé | table-driven, beaucoup de cas ; informat `5.2` piège des décimales implicites |
-| `src/formats/userdef.rs` + `src/procs/format.rs` | M4 | ✅ | moyen | plages low-<high, OTHER |
-| Persistance VarMeta (`dataset.rs`) | M4 | ✅ | moyen | ✅ FAIT (box 2). Polars 0.46 `ParquetWriter` n'expose **aucune** API KV parquet → format/label persistés dans un sidecar JSON `<table>.parquet.sasmeta.json` (écrit seulement si une var porte un format/label → round-trip identique sinon, snapshots stables). API isolée dans `dataset.rs`. |
-| `src/procs/contents.rs` | M4 | ✅ | faible | métadonnées seulement |
-| `src/procs/means.rs` | M5 | ✅ | élevé | combinatoire `_TYPE_`/`_FREQ_` de CLASS |
-| `src/procs/freq.rs` | M5 | ✅ | moyen | 1 et 2 voies, option MISSING |
-| `src/procs/univariate.rs` | M5 | ✅ | moyen-élevé | quantiles **définition 5** à la main (pas ceux de Polars) |
-| `src/sql/ast.rs` | M6 | ✅ | faible | types posés, compléter au fil du parser |
-| `src/sql/parser.rs` | M6 | ✅ | élevé | mots-clés contextuels, CALCULATED, BETWEEN/IS NULL/LIKE |
-| `src/sql/plan.rs` | M6 | ✅ | élevé | remerge + NOTE exacte, `= .` → is_null, join_nulls, ORDER BY missings premiers |
-| `src/procs/transpose.rs` | M7 | ✅ | moyen-élevé | nommage `_NAME_`/`COLn`/ID — ne pas utiliser le pivot Polars |
-| `src/procs/append.rs` | M7 | ✅ | moyen | règles FORCE |
-| `src/procs/datasets.rs` | M7 | ✅ | moyen | run-group, delete/change ; ajouter `rename` au trait LibraryProvider |
-| Préprocesseur macro (`preprocess.rs`) : %let, &var, %macro/%mend, %if/%do, CALL SYMPUT | M8 | ✅ | élevé | fait — puis complété (M11/M12/M19/M35/M41) et déplacé dans `src/macros/` (M32) |
-| `S3Library` derrière feature `s3` | M8 | ✅ | moyen | même trait `LibraryProvider`, scan parquet via URI `s3://` ; non branché ; cloud réel = features Polars `cloud`/`aws` (suite) |
-| `src/datastep/fastpath.rs` — fast-path vectorisé des steps simples (SET+assign → LazyFrame) | M8 | ✅ | élevé | opt-in (`Session.vectorize`/`--vectorize`), OFF par défaut ; v1 = SET simple + assignations numériques (littéraux/copies/+−*), prouvé équivalent au chemin ligne-à-ligne (tests bit-à-bit + log) ; subsetting IF / `/` / `**` / char repliés sur la boucle |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| Étape DATA : RETAIN, DO itératif, arrays, sum statement, LENGTH, WHERE, options de dataset, sorties multiples | M2 | ✅ | **Fable** | élevé | étend parser/datastep + compile/exec ; missings spéciaux bout en bout |
+| `src/procs/sort.rs` | M3 | ✅ | **Opus** | moyen | collation : colonne compagnon de rang des missings (le piège est documenté dans le fichier) |
+| SET/MERGE avec BY, FIRST./LAST., IN= | M3 | ✅ | **Fable** | élevé | match-merge SAS exact (persistance du côté court) ; tests contre sorties SAS calculées à la main |
+| `src/formats/mod.rs` | M4 | ✅ | **Sonnet** | moyen | FormatSpec, catalogue, résolution user→builtin→fallback |
+| `src/formats/builtin.rs` | M4 | ✅ | **Sonnet** | moyen-élevé | table-driven, beaucoup de cas ; informat `5.2` piège des décimales implicites |
+| `src/formats/userdef.rs` + `src/procs/format.rs` | M4 | ✅ | **Sonnet** | moyen | plages low-<high, OTHER |
+| Persistance VarMeta (`dataset.rs`) | M4 | ✅ | **Opus** | moyen | FAIT (box 2). Polars 0.46 `ParquetWriter` n'expose **aucune** API KV parquet → format/label persistés dans un sidecar JSON `<table>.parquet.sasmeta.json` (écrit seulement si une var porte un format/label → round-trip identique sinon, snapshots stables). API isolée dans `dataset.rs`. |
+| `src/procs/contents.rs` | M4 | ✅ | **Sonnet** | faible | métadonnées seulement |
+| `src/procs/means.rs` | M5 | ✅ | **Opus** | élevé | combinatoire `_TYPE_`/`_FREQ_` de CLASS |
+| `src/procs/freq.rs` | M5 | ✅ | **Opus** | moyen | 1 et 2 voies, option MISSING |
+| `src/procs/univariate.rs` | M5 | ✅ | **Opus** | moyen-élevé | quantiles **définition 5** à la main (pas ceux de Polars) |
+| `src/sql/ast.rs` | M6 | ✅ | **Sonnet** | faible | types posés, compléter au fil du parser |
+| `src/sql/parser.rs` | M6 | ✅ | **Opus** | élevé | mots-clés contextuels, CALCULATED, BETWEEN/IS NULL/LIKE |
+| `src/sql/plan.rs` | M6 | ✅ | **Fable** | élevé | remerge + NOTE exacte, `= .` → is_null, join_nulls, ORDER BY missings premiers |
+| `src/procs/transpose.rs` | M7 | ✅ | **Opus** | moyen-élevé | nommage `_NAME_`/`COLn`/ID — ne pas utiliser le pivot Polars |
+| `src/procs/append.rs` | M7 | ✅ | **Sonnet** | moyen | règles FORCE |
+| `src/procs/datasets.rs` | M7 | ✅ | **Sonnet** | moyen | run-group, delete/change ; ajouter `rename` au trait LibraryProvider |
+| Préprocesseur macro (`preprocess.rs`) : %let, &var, %macro/%mend, %if/%do, CALL SYMPUT | M8 | ✅ | **Fable** | élevé | fait — puis complété (M11/M12/M19/M35/M41) et déplacé dans `src/macros/` (M32) |
+| `S3Library` derrière feature `s3` | M8 | ✅ | — | moyen | même trait `LibraryProvider`, scan parquet via URI `s3://` ; non branché ; cloud réel = features Polars `cloud`/`aws` (suite) |
+| `src/datastep/fastpath.rs` — fast-path vectorisé des steps simples (SET+assign → LazyFrame) | M8 | ✅ | — | élevé | opt-in (`Session.vectorize`/`--vectorize`), OFF par défaut ; v1 = SET simple + assignations numériques (littéraux/copies/+−*), prouvé équivalent au chemin ligne-à-ligne (tests bit-à-bit + log) ; subsetting IF / `/` / `**` / char repliés sur la boucle |
 
 ### Jalons M9–M11 (extension — roadmap dans PROGRESS.md) — faits
 
-| Fichier / tâche | Jalon | Modèle | Effort | Notes |
-|---|---|---|---|---|
-| `src/procs/common.rs` | M9 | ✅ | moyen | `decode_column`/`sample_std`/`partition_numeric`/`group_by_keys` extraits (verbatim) ; means/freq/univariate/sort/transpose/append rebranchés ; refactor pur, sorties inchangées (`resolve_input` laissé par-proc) |
-| `src/procs/corr.rs` | M9 | ✅ | moyen | Pearson (VAR/WITH), Simple Statistics, matrice r + `Prob>|r|` (t-CDF via betai), N appariés ; NOSIMPLE/NOPROB/NOCORR ; OUT= = erreur (suite) ; réutilise common |
-| `src/procs/rank.rs` | M9 | ✅ | moyen | VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= ; collation `sas_cmp`, missing→missing ; BY + méthodes alt. = erreur (suite) |
-| `src/procs/tabulate.rs` | M9 | ✅ | élevé | v1 listing : CLASS/VAR, `table` 1–2 dims (empilement/croisement/parenthèses), stats N/NMISS/SUM/MEAN/MIN/MAX/STD ; en-têtes plats, 3ᵉ dim + croisements 2 VAR/stats + PCTN/formats différés (erreurs) |
-| `src/procs/report.rs` | M9 | ✅ | élevé | v1 listing : COLUMN + DEFINE (DISPLAY/ORDER/GROUP/ANALYSIS+stat) ; détail ou sommaire groupé ; ACROSS/COMPUTE/BREAK/RBREAK/LINE/WHERE/OUT= différés (erreurs) |
-| BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | ✅ | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
-| `src/macros/` (depuis `preprocess.rs`) — processeur macro complet | M11 | ✅ | élevé | voir §Macro M11 ci-dessous ; 7 unités incrémentales |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| `src/procs/common.rs` | M9 | ✅ | — | moyen | `decode_column`/`sample_std`/`partition_numeric`/`group_by_keys` extraits (verbatim) ; means/freq/univariate/sort/transpose/append rebranchés ; refactor pur, sorties inchangées (`resolve_input` laissé par-proc) |
+| `src/procs/corr.rs` | M9 | ✅ | — | moyen | Pearson (VAR/WITH), Simple Statistics, matrice r + `Prob>|r|` (t-CDF via betai), N appariés ; NOSIMPLE/NOPROB/NOCORR ; OUT= = erreur (suite) ; réutilise common |
+| `src/procs/rank.rs` | M9 | ✅ | — | moyen | VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= ; collation `sas_cmp`, missing→missing ; BY + méthodes alt. = erreur (suite) |
+| `src/procs/tabulate.rs` | M9 | ✅ | — | élevé | v1 listing : CLASS/VAR, `table` 1–2 dims (empilement/croisement/parenthèses), stats N/NMISS/SUM/MEAN/MIN/MAX/STD ; en-têtes plats, 3ᵉ dim + croisements 2 VAR/stats + PCTN/formats différés (erreurs) |
+| `src/procs/report.rs` | M9 | ✅ | — | élevé | v1 listing : COLUMN + DEFINE (DISPLAY/ORDER/GROUP/ANALYSIS+stat) ; détail ou sommaire groupé ; ACROSS/COMPUTE/BREAK/RBREAK/LINE/WHERE/OUT= différés (erreurs) |
+| BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | ✅ | **Opus** | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
+| `src/macros/` (depuis `preprocess.rs`) — processeur macro complet | M11 | ✅ | **Fable** | élevé | voir §Macro M11 ci-dessous ; 7 unités incrémentales |
 
 ### Macro M11 — architecture (décision actée)
 
@@ -167,13 +170,13 @@ des options** des procs partiellement supportés (M33, M34) ; (3) **support tota
 commits d'extraction « move-only ». Les jalons de complétion font rétrécir en miroir la colonne
 « non couvert » des tableaux de couverture de `README.md`.
 
-| Tâche | Jalon | Modèle | Effort | Notes |
-|---|---|---|---|---|
-| ✅ Couche de parsing PROC partagée (`src/procs/common.rs` : `parse_proc_options`/`parse_proc_body`/`expect_eq`/`parse_dataset_opt`/`unknown_option_error`/`resolve_last_dataset` + `parse_by`/`parse_var_list`/`parse_class`/`parse_weight`) puis migration des ~40 procs | M31 | **Opus** | élevé | **FAIT** : combinateurs purs pilotés par closure `FnMut(&mut StatementStream,&str)->Result<bool>` ; migration par tiers (canaris `print`/`sort` → Tier B 6/7 → Tier C 6/6 → Tier D 16/17) ; `unknown_option_error` reproduit message+span à l'octet ; messages divergents (`means`/`freq`/…), `iml`, `catalog`, `report` body gardés inline. ~−1500 lignes, 0 `.snap.new` |
-| ✅ Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | **Opus** | élevé | **FAIT** : `preprocess.rs` (4757 l.) → 12 fichiers `src/macros/` (façade `mod.rs` 1497 l. : struct + `new`/`expand_open_code`/`TextStage`/`RawSegmenter`) ; façade `preprocess` re-export (imports inchangés) ; déplacements verbatim via blocs `impl MacroEngine` en sous-module (0 changement d'appel) ; généralisations livrées : `apply_quoting` unifié (5 fns quoting + `%q*`), registre `functions::lookup` (string-fns) ; `tokenize_eval` déjà partagé. Octet-identique |
-| ✅ Complétion options procs Base/descriptifs : FREQ (BY/WEIGHT/LIST/≥3 voies/Fisher r×c), UNIVARIATE (probplot/cdfplot/pondéré), MEANS (WAYS/TYPES/percentiles), TABULATE (OUT=/4ᵉ dim/PCTN<>), REPORT (FORMAT=/COMPUTE complexe), PRINT/CONTENTS/DATASETS/SORT/APPEND | M33 | **Opus/Fable** | élevé | **FAIT** (détail dans PROGRESS.md) ; fixtures `tests/fixtures/m33/` ; README 🟡→✅ |
-| ✅ Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | **Opus/Fable** | très élevé | **FAIT** (détail dans PROGRESS.md) ; oracles vérifiés vs SAS 9.4 ; fixtures `tests/fixtures/m34/` |
-| ✅ Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | **Opus** | élevé | **FAIT** (détail dans PROGRESS.md) ; snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| Couche de parsing PROC partagée (`src/procs/common.rs` : `parse_proc_options`/`parse_proc_body`/`expect_eq`/`parse_dataset_opt`/`unknown_option_error`/`resolve_last_dataset` + `parse_by`/`parse_var_list`/`parse_class`/`parse_weight`) puis migration des ~40 procs | M31 | ✅ | **Opus** | élevé | combinateurs purs pilotés par closure `FnMut(&mut StatementStream,&str)->Result<bool>` ; migration par tiers (canaris `print`/`sort` → Tier B 6/7 → Tier C 6/6 → Tier D 16/17) ; `unknown_option_error` reproduit message+span à l'octet ; messages divergents (`means`/`freq`/…), `iml`, `catalog`, `report` body gardés inline. ~−1500 lignes, 0 `.snap.new` |
+| Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | ✅ | **Opus** | élevé | `preprocess.rs` (4757 l.) → 12 fichiers `src/macros/` (façade `mod.rs` 1497 l. : struct + `new`/`expand_open_code`/`TextStage`/`RawSegmenter`) ; façade `preprocess` re-export (imports inchangés) ; déplacements verbatim via blocs `impl MacroEngine` en sous-module (0 changement d'appel) ; généralisations livrées : `apply_quoting` unifié (5 fns quoting + `%q*`), registre `functions::lookup` (string-fns) ; `tokenize_eval` déjà partagé. Octet-identique |
+| Complétion options procs Base/descriptifs : FREQ (BY/WEIGHT/LIST/≥3 voies/Fisher r×c), UNIVARIATE (probplot/cdfplot/pondéré), MEANS (WAYS/TYPES/percentiles), TABULATE (OUT=/4ᵉ dim/PCTN<>), REPORT (FORMAT=/COMPUTE complexe), PRINT/CONTENTS/DATASETS/SORT/APPEND | M33 | ✅ | **Opus/Fable** | élevé | détail dans PROGRESS.md ; fixtures `tests/fixtures/m33/` ; README 🟡→✅ |
+| Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | ✅ | **Opus/Fable** | très élevé | détail dans PROGRESS.md ; oracles vérifiés vs SAS 9.4 ; fixtures `tests/fixtures/m34/` |
+| Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | ✅ | **Opus** | élevé | détail dans PROGRESS.md ; snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
 
 ### Phase F (M36) — `PROC REG` : complétion exhaustive (roadmap dans PROGRESS.md)
 
@@ -182,9 +185,9 @@ Jalon de complétion d'options ⇒ invariant d'octet-identité (snapshots m1–m
 OLS + NOINT/SELECTION= déjà livré reste tel quel ; nouveau comportement seulement sur la nouvelle
 syntaxe). 11 cases (M36.1–M36.11) + DoD, chacune rétrécissant la colonne « non couvert » du README REG.
 
-| Tâche | Jalon | Modèle | Effort | Notes |
-|---|---|---|---|---|
-| ✅ `TEST`/`RESTRICT` (hypothèses & restrictions linéaires sur β) ; `CLB`/`ALPHA=`/`CLI`/`CLM` + `OUTPUT` STDP/STDI/STDR/LCL/UCL/LCLM/UCLM ; diagnostics d'observation (`R`/`INFLUENCE` + STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS) ; colinéarité/spec (`COLLIN`/`VIF`/`TOL`/`SPEC`/`DW`/`ACOV`) ; SS partielles (`SS1`/`SS2`/`STB`/`PCORR`/`SCORR`/`SEQB`) ; `SELECTION=RSQUARE/ADJRSQ/CP/MAXR/MINR` (+BEST=/INCLUDE=/…) ; `WEIGHT`/`FREQ`/`BY`/`ID` ; `OUTEST=`/`OUTSSCP=`/`SIMPLE`/`CORR`/`COVB`/`XPX` ; `RIDGE=`/`PCOMIT=` ; `MTEST` + édition interactive (ADD/DELETE/REWEIGHT/REFIT/PAINT) ; panel `PLOTS=` complet | M36 | **Opus/Fable** | élevé→très élevé | **FAIT** (M36.1–M36.11, détail dans PROGRESS.md) ; fixtures `tests/fixtures/m36/` ; **README `REG` → ✅** |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| `TEST`/`RESTRICT` (hypothèses & restrictions linéaires sur β) ; `CLB`/`ALPHA=`/`CLI`/`CLM` + `OUTPUT` STDP/STDI/STDR/LCL/UCL/LCLM/UCLM ; diagnostics d'observation (`R`/`INFLUENCE` + STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS) ; colinéarité/spec (`COLLIN`/`VIF`/`TOL`/`SPEC`/`DW`/`ACOV`) ; SS partielles (`SS1`/`SS2`/`STB`/`PCORR`/`SCORR`/`SEQB`) ; `SELECTION=RSQUARE/ADJRSQ/CP/MAXR/MINR` (+BEST=/INCLUDE=/…) ; `WEIGHT`/`FREQ`/`BY`/`ID` ; `OUTEST=`/`OUTSSCP=`/`SIMPLE`/`CORR`/`COVB`/`XPX` ; `RIDGE=`/`PCOMIT=` ; `MTEST` + édition interactive (ADD/DELETE/REWEIGHT/REFIT/PAINT) ; panel `PLOTS=` complet | M36 | ✅ | **Opus/Fable** | élevé→très élevé | M36.1–M36.11, détail dans PROGRESS.md ; fixtures `tests/fixtures/m36/` ; **README `REG` → ✅** |
 
 ### Phase G (M37–M66) — tout 🟡 (+ 🔴 faisable) → ✅ (roadmap dans PROGRESS.md)
 
@@ -197,13 +200,38 @@ partagée** (M37–M42) construit une fois et réutilisé. Restent 🔴 document
 Invariant de complétion d'options : octet-identité des snapshots m1–m36 (tout gardé derrière une
 option/statement neuf). Détail des cases dans `PROGRESS.md`.
 
-| Bloc | Jalons | Modèle | Effort |
-|---|---|---|---|
-| 0 — Infra partagée | ✅ M37 `lincom`+digamma/trigamma · 🔶 M38 globals+ODS capture/select+titres (M38.1–.2 faits, reste M38.3–.5+DoD) · M39 store catalogue persistant · M40 DATA step (multiple SET/CALL/WHERE/INFORMAT) · M41 macro quoting (%SUPERQ/%BQUOTE/%NRBQUOTE/%SYSCALL/%SYSMACDELETE) · M42 SQL (dictionaries/CONTAINS/SOUNDS LIKE) | **Opus** | élevé→très élevé |
-| 1 — Base/descriptifs | M43 FORMAT · M44 FREQ (Fisher r×c) · M45 UNIVARIATE · M46 TABULATE · M47 REPORT · M48 DATASETS · M49 CATALOG · M50 PRINTTO · M51 OPTIONS | **Sonnet/Opus** | faible→très élevé |
-| 2 — Modélisation | M52 LOGISTIC · M53 GENMOD (GEE) · M54 MIXED (Kenward-Roger) · M55 GLIMMIX (QUAD) | **Opus** | très élevé |
-| 3 — Multivarié | M56 PRINCOMP · M57 FACTOR (ML) · M58 DISCRIM · M59 DISTANCE · M60 CLUSTER (CCC) · M61 FASTCLUS · M62 IML | **Opus** | moyen→très élevé |
-| 4 — Graphiques | M63 GPLOT · M64 GCHART · M65 PLOT · M66 SGPLOT (réutilisent `src/graphics/render.rs` ; testés `--features graphics`) | **Opus** | moyen→élevé |
+| Tâche | Jalon | État | Modèle | Effort | Notes |
+|---|---|---|---|---|---|
+| Bloc 0 — moteur linéaire partagé `lincom` + digamma/trigamma | M37 | ✅ | **Opus** | élevé | `LinCombEngine`, `class_coding(Param)`, `score_test` (extrait de `glm.rs`) |
+| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | 🔶 | **Opus** | élevé | **jalon courant** — M38.1–.2 faits ; reprendre à M38.3 (reste M38.3–.5 + DoD) |
+| Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ⬜ | **Opus** | moyen | — |
+| Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ⬜ | **Opus** | très élevé | — |
+| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ⬜ | **Opus** | élevé | — |
+| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ⬜ | **Opus** | élevé | — |
+| Bloc 1 — PROC FORMAT : complétion totale | M43 | ⬜ | **Sonnet** | moyen | — |
+| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ⬜ | **Opus** | très élevé | — |
+| Bloc 1 — PROC UNIVARIATE : pondération + plots | M45 | ⬜ | **Opus** | moyen | — |
+| Bloc 1 — PROC TABULATE : `PCTN<dim>` | M46 | ⬜ | **Opus** | élevé | — |
+| Bloc 1 — PROC REPORT : DEFINE FLOW + COMPUTE riche | M47 | ⬜ | **Opus** | élevé | — |
+| Bloc 1 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR | M48 | ⬜ | **Sonnet** | moyen | — |
+| Bloc 1 — PROC CATALOG : catalogues réels | M49 | ⬜ | **Opus** | moyen | — |
+| Bloc 1 — PROC PRINTTO : routage fichier réel | M50 | ⬜ | **Opus** | moyen | — |
+| Bloc 1 — PROC OPTIONS : détail par option | M51 | ⬜ | **Sonnet** | faible | — |
+| Bloc 2 — PROC LOGISTIC : complétion totale | M52 | ⬜ | **Opus** | très élevé | réutilise M37 `lincom` (comme tout le bloc 2) |
+| Bloc 2 — PROC GENMOD : complétion totale (GEE) | M53 | ⬜ | **Opus** | très élevé | — |
+| Bloc 2 — PROC MIXED : complétion totale (Kenward-Roger) | M54 | ⬜ | **Opus** | très élevé | — |
+| Bloc 2 — PROC GLIMMIX : complétion totale (QUAD) | M55 | ⬜ | **Opus** | très élevé | — |
+| Bloc 3 — PROC PRINCOMP : complétion totale | M56 | ⬜ | **Opus** | élevé | — |
+| Bloc 3 — PROC FACTOR : complétion totale (ML) | M57 | ⬜ | **Opus** | très élevé | — |
+| Bloc 3 — PROC DISCRIM : complétion totale | M58 | ⬜ | **Opus** | très élevé | — |
+| Bloc 3 — PROC DISTANCE : complétion totale | M59 | ⬜ | **Opus** | moyen | — |
+| Bloc 3 — PROC CLUSTER : complétion totale (CCC) | M60 | ⬜ | **Opus** | élevé | — |
+| Bloc 3 — PROC FASTCLUS : complétion totale | M61 | ⬜ | **Opus** | moyen | — |
+| Bloc 3 — PROC IML : complétion totale | M62 | ⬜ | **Opus** | très élevé | — |
+| Bloc 4 — PROC GPLOT : complétion totale | M63 | ⬜ | **Opus** | élevé | réutilise `src/graphics/render.rs` ; testé `--features graphics` (comme tout le bloc 4) |
+| Bloc 4 — PROC GCHART : complétion totale | M64 | ⬜ | **Opus** | moyen | — |
+| Bloc 4 — PROC PLOT : complétion totale | M65 | ⬜ | **Opus** | moyen | — |
+| Bloc 4 — PROC SGPLOT : complétion totale | M66 | ⬜ | **Opus** | élevé | — |
 
 Pièces transverses (construire UNE fois) : `src/procs/lincom.rs` (LSMEANS/ESTIMATE/CONTRAST/score,
 extrait de `glm.rs`) ; généralisation ODS OUTPUT + SELECT/EXCLUDE (`session.rs`/`output/mod.rs`) ;
