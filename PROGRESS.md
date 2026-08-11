@@ -10,7 +10,7 @@ complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
 nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
-0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **DoD M39**.
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M40.1**.
 
 **MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
 restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
@@ -18,7 +18,10 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M39 (Phase G)**. **M38 TERMINÉ** — langage global + ODS capture/sélection :
+Jalon courant : **M40 (Phase G)**. **M39 TERMINÉ** — store de catalogue de formats persistant :
+sidecar JSON par libref (`PROC FORMAT LIB=`, chargé au LIBNAME, round-trip inter-sessions),
+`CNTLOUT=`/`CNTLIN=` (round-trip exact), `FMTLIB`, `FMTSEARCH=` branchée ; 3 fixtures m39.
+**M38 TERMINÉ** — langage global + ODS capture/sélection :
 titres/footnotes multiples (TITLE1–9/FOOTNOTE1–9), OPTIONS appliquées, ODS OUTPUT généralisé
 par nom d'objet (OneWayFreqs/Moments/BasicMeasures/Summary/TTest), ODS SELECT/EXCLUDE (cycle
 de vie SAS), `%INCLUDE *`/FILENAME device différés proprement ; 3 fixtures m38.
@@ -949,7 +952,10 @@ Prérequis FORMAT/CATALOG/IML STORE.
 - [x] M39.2 — `CNTLOUT=` (catalogue→dataset FMTNAME/START/END/LABEL/TYPE) + `CNTLIN=` (dataset→catalogue) ;
   oracle CNTLOUT→CNTLIN round-trip identique (Opus, moyen)
 - [x] M39.3 — `FMTLIB`, `FMTSEARCH=` (lie M38.2) ; oracle : FMTLIB liste exactement les formats définis (Sonnet, faible)
-- [ ] DoD M39 : fixtures m39 ; README FORMAT/User formats préparés ; path in-memory octet-identique ; → M40.
+- [x] DoD M39 : fixtures m39 ; README FORMAT/User formats préparés ; path in-memory octet-identique ; → M40.
+  *Clôture* : 3 fixtures m39 (cntlout_cntlin, fmtlib, fmtsearch) ; FORMAT/User formats restent 🟡
+  avec reliquat documenté (catalogue 2 niveaux, PICTURE dans CNTL, MIN=/MAX=/FUZZ= → M43) ;
+  octet-identité vérifiée aux trois cases (0 `.snap.new`).
 
 ## M40 — DATA step : statements manquants + CALL routines
 Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
