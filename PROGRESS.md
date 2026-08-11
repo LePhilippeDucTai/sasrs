@@ -18,7 +18,14 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M40 (Phase G)**. **M39 TERMINÉ** — store de catalogue de formats persistant :
+Jalon courant : **M41 (Phase G)**. **M40 TERMINÉ** — DATA step complété :
+PRX complet via `fancy-regex` (5 fonctions + 6 CALL routines, cache par texte de pattern),
+SET multiples (sites de lecture indépendants, EOF par site au point du statement, END=/NOBS=
+par site), bare `SET;`/`MERGE;` → `_LAST_`, WHERE statement standalone (≡ WHERE= par
+dataset, tous sites), INFORMAT statement + ATTRIB informat= (modified list input) ;
+3 fixtures m40 ; 2 corrections de fidélité issues de la revue DoD (fuite END= des sites
+extra, fausses NOTEs uninitialized des arguments de sortie des CALL routines).
+**M39 TERMINÉ** — store de catalogue de formats persistant :
 sidecar JSON par libref (`PROC FORMAT LIB=`, chargé au LIBNAME, round-trip inter-sessions),
 `CNTLOUT=`/`CNTLIN=` (round-trip exact), `FMTLIB`, `FMTSEARCH=` branchée ; 3 fixtures m39.
 **M38 TERMINÉ** — langage global + ODS capture/sélection :
@@ -982,7 +989,14 @@ Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
   pré-passe déclarative (ordre indifférent, IF/DO/SELECT couverts) injectée dans l'INPUT
   liste comme « modified list input » ; informats non persistés en métadonnées (pas de
   colonne Informat dans CONTENTS — reliquat README).
-- [ ] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
+- [x] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
+  Fait : 3 fixtures (`prx_call_routines`, `multiple_set`, `where_informat`) + snapshots
+  vérifiés à la main. La revue DoD a détecté et corrigé 2 défauts de fidélité : la variable
+  END= d'un site SET supplémentaire fuyait dans le PDV/la sortie, et les arguments de
+  SORTIE des CALL routines (PRX*, SCAN, LABEL, VNAME, MISSING) déclenchaient de fausses
+  NOTEs « uninitialized » (le snapshot m15 en portait 3 parasites, purgées). README :
+  CALL routines ✅ (exotiques documentées), Not supported ne liste plus que les refus
+  honnêtes (BY/POINT= × SET multiples, WHERE × UPDATE/MODIFY, informats non persistés).
 
 ## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE
 Cellule README Macro Quoting 🟡→✅, Unsupported réduit.

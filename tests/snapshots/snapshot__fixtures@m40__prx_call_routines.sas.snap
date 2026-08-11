@@ -1,0 +1,184 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m40/prx_call_routines.sas
+---
+==== LOG ====
+
+1     data work.match;
+2       input text $20.;
+3       pos_cat = prxmatch('/cat/', text);
+4       pos_ci  = prxmatch('/CAT/i', text);
+5       datalines;
+6     concatenate
+7     dog
+8     Catalog
+9     ;
+10    run;
+NOTE: The data set WORK.MATCH has 3 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    title "PRXMATCH : position du motif (sensible et insensible a la casse)";
+
+12    proc print data=work.match noobs;
+13    run;
+NOTE: There were 3 observations read from the data set WORK.MATCH.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title;
+
+15    data work.swap;
+16      length swapped $20;
+17      input name $20.;
+18      /* Prenom Nom -> Nom, Prenom */
+19      swapped = prxchange('s/(\w+) (\w+)/$2, $1/', -1, name);
+20      datalines;
+21    John Smith
+22    Jane Doe
+23    ;
+24    run;
+NOTE: The data set WORK.SWAP has 2 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    title "PRXCHANGE : inversion Prenom Nom -> Nom, Prenom";
+
+26    proc print data=work.swap noobs;
+27    run;
+NOTE: There were 2 observations read from the data set WORK.SWAP.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    title;
+
+29    data work.phone;
+30      length area $3 exch $4;
+31      input text $30.;
+32      re = prxparse('/(\d{3})-(\d{4})/');
+33      call prxsubstr(re, text, pos, len);
+34      if pos > 0 then do;
+35        call prxposn(re, 1, p1, l1);
+36        area = substr(text, p1, l1);
+37        call prxposn(re, 2, p2, l2);
+38        exch = substr(text, p2, l2);
+39      end;
+40      drop re p1 l1 p2 l2;
+41      datalines;
+42    call 555-1234 now
+43    no phone here
+44    ;
+45    run;
+NOTE: The data set WORK.PHONE has 2 observations and 5 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+46    title "CALL PRXSUBSTR + CALL PRXPOSN : match et groupes captures";
+
+47    proc print data=work.phone noobs;
+48    run;
+NOTE: There were 2 observations read from the data set WORK.PHONE.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+49    title;
+
+50    data work.words;
+51      length word $10;
+52      text = 'one two three';
+53      re = prxparse('/\w+/');
+54      start = 1;
+55      lim = length(text);
+56      call prxnext(re, start, lim, text, pos, len);
+57      do while (pos > 0);
+58        word = substr(text, pos, len);
+59        output;
+60        call prxnext(re, start, lim, text, pos, len);
+61      end;
+62      keep word pos len;
+63    run;
+NOTE: The data set WORK.WORDS has 3 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+64    title "CALL PRXNEXT : tous les mots extraits en boucle";
+
+65    proc print data=work.words noobs;
+66    run;
+NOTE: There were 3 observations read from the data set WORK.WORDS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+67    title;
+
+68    data work.redact;
+69      length clean $30;
+70      text = 'card 1234 and 5678 end';
+71      re = prxparse('s/\d+/XXXX/');
+72      call prxchange(re, -1, text, clean, rlen, trunc, nchg);
+73      keep clean rlen trunc nchg;
+74    run;
+NOTE: The data set WORK.REDACT has 1 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+75    title "CALL PRXCHANGE : masquage des nombres + compteurs";
+
+76    proc print data=work.redact noobs;
+77    run;
+NOTE: There were 1 observations read from the data set WORK.REDACT.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+78    title;
+
+==== LISTING ====
+                PRXMATCH : position du motif (sensible et insensible a la casse)
+
+                                text           pos_cat    pos_ci
+
+                                concatenate          4         4
+                                dog                  0         0
+                                Catalog              0         1
+
+                        PRXCHANGE : inversion Prenom Nom -> Nom, Prenom
+
+                                   swapped        name
+
+                                   Smith, John    John Smith
+                                   Doe, Jane      Jane Doe
+
+                   CALL PRXSUBSTR + CALL PRXPOSN : match et groupes captures
+
+                        area    exch    text                 pos    len
+
+                        555     1234    call 555-1234 now      6      8
+                                        no phone here          0      0
+
+                        CALL PRXNEXT : tous les mots extraits en boucle
+
+                                      word     pos    len
+
+                                      one        1      3
+                                      two        5      3
+                                      three      9      5
+
+                       CALL PRXCHANGE : masquage des nombres + compteurs
+
+                        clean                     rlen    trunc    nchg
+
+                        card XXXX and XXXX end      22        0       2
+
+==== EXIT 0 ====

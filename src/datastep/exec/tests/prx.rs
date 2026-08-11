@@ -114,6 +114,35 @@ fn call_prxsubstr_no_match_gives_zeros() {
 }
 
 #[test]
+fn call_prx_output_args_are_not_uninitialized() {
+    // p/l (PRXSUBSTR), p2/l2 (PRXNEXT), r/rlen/tr/nc (PRXCHANGE) ne sont
+    // écrites QUE par les routines : SAS ne les note pas "uninitialized".
+    // `start` (PRXNEXT) est lu avant d'être écrit : assigné ici pour ne
+    // tester QUE les positions de sortie.
+    let mut s = session();
+    run(
+        "data out; length r $20; re = prxparse('/a/'); \
+         call prxsubstr(re, 'banana', p, l); \
+         start = 1; \
+         call prxnext(re, start, -1, 'banana', p2, l2); \
+         re2 = prxparse('s/a/o/'); \
+         call prxchange(re2, -1, 'banana', r, rlen, tr, nc); \
+         output; run;",
+        &mut s,
+    )
+    .unwrap();
+    let ds = read_work(&s, "out");
+    // Les valeurs prouvent que les routines ont bien écrit.
+    assert_eq!(num_col(&ds, "p"), vec![Some(2.0)]);
+    assert_eq!(num_col(&ds, "l"), vec![Some(1.0)]);
+    assert_eq!(num_col(&ds, "p2"), vec![Some(2.0)]);
+    assert_eq!(num_col(&ds, "l2"), vec![Some(1.0)]);
+    assert_eq!(str_col(&ds, "r"), vec!["bonono".to_string()]);
+    let log = s.log.into_string();
+    assert!(!log.contains("uninitialized"), "log was: {log}");
+}
+
+#[test]
 fn prxposn_function_after_call_prxsubstr() {
     // La fonction PRXPOSN relit le groupe mémorisé par CALL PRXSUBSTR.
     let mut s = session();

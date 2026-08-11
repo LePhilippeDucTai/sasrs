@@ -35,12 +35,17 @@ impl Compiler<'_> {
                 }
                 // Variable END= du SET (M16.4) : automatique temporaire 0/1,
                 // servie par EvalCtx — jamais de slot PDV (donc jamais écrite
-                // en sortie). On la reconnaît au nom déclaré sur le SET.
+                // en sortie). On la reconnaît au nom déclaré sur le SET —
+                // site 0 (`set_options`) comme sites supplémentaires (M40.2).
                 if self
                     .set_options
                     .end
                     .as_ref()
                     .is_some_and(|e| e.eq_ignore_ascii_case(name))
+                    || self
+                        .extra_set_sites
+                        .iter()
+                        .any(|(_, o)| o.end.as_ref().is_some_and(|e| e.eq_ignore_ascii_case(name)))
                 {
                     return Ok(());
                 }

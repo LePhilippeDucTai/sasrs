@@ -86,6 +86,14 @@ fn end_flag_is_per_site() {
     .unwrap();
     assert_eq!(col(&s, "out", "fa"), some(&[0.0, 0.0]));
     assert_eq!(col(&s, "out", "fb"), some(&[0.0, 1.0]));
+    // ea ET eb sont des automatiques temporaires (site 0 comme site
+    // extra) : jamais écrites en sortie, pas de NOTE "uninitialized".
+    let out_ds = read_work(&s, "out");
+    let cols: Vec<&str> = out_ds.df.get_column_names_str();
+    assert!(!cols.contains(&"ea"), "cols: {cols:?}");
+    assert!(!cols.contains(&"eb"), "cols: {cols:?}");
+    let log = s.log.into_string();
+    assert!(!log.contains("uninitialized"), "log was: {log}");
 }
 
 /// NOBS= PAR SITE : chaque variable reçoit le total de SON flux, AVANT la

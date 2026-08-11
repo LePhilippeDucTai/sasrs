@@ -263,6 +263,36 @@ impl Compiler<'_> {
             }
             self.walk_expr(a)?;
         }
+        // Arguments de SORTIE : une variable écrite par la routine est
+        // « assignée » (pas de NOTE "uninitialized" — comme SAS). Positions
+        // 0-based, alignées sur les signatures de `exec/call.rs`. Les
+        // arguments IN-OUT (lus avant d'être écrits : `start` de PRXNEXT,
+        // SORTN/SORTC/CATS, source in-place de PRXCHANGE) ne sont PAS
+        // marqués — la NOTE reste légitime s'ils ne sont jamais assignés.
+        // Un élément d'array en position de sortie réfère une variable
+        // d'array déjà déclarée : rien à marquer (seul `Expr::Var` l'est).
+        let out_positions: Vec<usize> = match name.to_ascii_uppercase().as_str() {
+            // PRXSUBSTR(id, source, position <, length>) /
+            // PRXPOSN(id, n, position <, length>).
+            "PRXSUBSTR" | "PRXPOSN" => vec![2, 3],
+            // PRXNEXT(id, start, stop, source, position, length).
+            "PRXNEXT" => vec![4, 5],
+            // PRXCHANGE(id, times, source <, result <, res-length
+            // <, trunc-value <, n-changes>>>).
+            "PRXCHANGE" => vec![3, 4, 5, 6],
+            // SCAN(string, n, result <, delims>) : seul `result` est écrit.
+            "SCAN" => vec![2],
+            // LABEL(var, result) / VNAME(var, result).
+            "LABEL" | "VNAME" => vec![1],
+            // MISSING : TOUS les arguments sont écrits.
+            "MISSING" => (0..args.len()).collect(),
+            _ => Vec::new(),
+        };
+        for i in out_positions {
+            if let Some(Expr::Var(n)) = args.get(i) {
+                self.assigned.insert(n.to_uppercase());
+            }
+        }
         Ok(())
     }
 

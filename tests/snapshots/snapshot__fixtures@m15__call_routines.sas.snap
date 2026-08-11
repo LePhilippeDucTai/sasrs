@@ -49,10 +49,7 @@ input_file: sas_interpreter/tests/fixtures/m15/call_routines.sas
 41      keep name lbl result word n1 n2 n3 c1 c2 c3;
 42      output;
 43    run;
-NOTE: Variable name is uninitialized.
-NOTE: Variable lbl is uninitialized.
 NOTE: Variable result is uninitialized.
-NOTE: Variable word is uninitialized.
 NOTE: The data set WORK.TEST has 1 observations and 10 variables.
 NOTE: DATA statement used (Total process time):
             real time           0.00 seconds

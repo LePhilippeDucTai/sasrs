@@ -81,6 +81,19 @@ fn call_missing_multiple_vars_mixed_types() {
     assert_eq!(str_col(&ds, "c"), vec![String::new()]);
 }
 
+#[test]
+fn call_missing_on_virgin_variable_is_not_uninitialized() {
+    // Une variable dont la SEULE référence est un argument de CALL
+    // MISSING est écrite par la routine : pas de NOTE "uninitialized"
+    // (comme SAS).
+    let mut s = session();
+    run("data out; call missing(x); output; run;", &mut s).unwrap();
+    let ds = read_work(&s, "out");
+    assert_eq!(num_col(&ds, "x"), vec![None]);
+    let log = s.log.into_string();
+    assert!(!log.contains("uninitialized"), "log was: {log}");
+}
+
 // ---- CALL EXECUTE ---------------------------------------------------
 
 #[test]
