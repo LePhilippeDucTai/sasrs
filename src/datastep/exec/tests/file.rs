@@ -343,6 +343,22 @@ fn call_vname_on_array_element() {
     assert_eq!(str_col(&ds, "nm"), vec!["a2".to_string()]);
 }
 
+// ---- CALL STREAMINIT ------------------------------------------------
+
+#[test]
+fn call_streaminit_makes_rand_reproducible() {
+    // Même graine → même flux RAND (M15.5) ; c'est l'oracle SAS de
+    // reproductibilité de CALL STREAMINIT.
+    let src = "data out; call streaminit(42); x = rand('uniform'); output; run;";
+    let mut s1 = session();
+    run(src, &mut s1).unwrap();
+    let mut s2 = session();
+    run(src, &mut s2).unwrap();
+    let x1 = num_at(&s1, "out", "x", 0);
+    assert!(x1.is_some_and(|v| (0.0..1.0).contains(&v)));
+    assert_eq!(x1, num_at(&s2, "out", "x", 0));
+}
+
 #[test]
 fn unknown_call_routine_errors() {
     let mut s = session();

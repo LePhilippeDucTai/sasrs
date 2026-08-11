@@ -123,6 +123,14 @@ pub struct EvalCtx {
     /// Used by date functions (e.g. DATEJUL) to interpret 2-digit years.
     /// Default 1900 preserves the pre-M38.2 behaviour (0–99 → 1900–1999).
     pub yearcutoff: u16,
+    /// Patterns PRX compilés (M40.1) : PRXPARSE y alloue des ids valables
+    /// pour la durée de l'étape ; fonctions et CALL routines PRX* y opèrent.
+    pub prx: functions::prx::PrxState,
+    /// ERREURs d'exécution NON fatales (M40.1 : pattern PRX invalide…).
+    /// L'évaluateur n'a pas accès au log — les messages sont rejoués en
+    /// `log.error` par `drain_runner_side_effects` en fin d'étape, comme
+    /// les NOTEs de conversion.
+    pub runtime_errors: Vec<String>,
 }
 
 /// Une sortie de hash en attente (M17.2). `vars` porte les `VarMeta` des
@@ -163,6 +171,8 @@ impl Default for EvalCtx {
             hash_outputs: Vec::new(),
             format_catalog: std::rc::Rc::new(crate::formats::FormatCatalog::default()),
             yearcutoff: 1900,
+            prx: functions::prx::PrxState::default(),
+            runtime_errors: Vec::new(),
         }
     }
 }

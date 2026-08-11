@@ -157,6 +157,11 @@ pub(super) fn drain_runner_side_effects(r: &mut Runner, session: &mut Session) -
     // « N records were read »/« data set has N obs » dans le log SAS).
     r.put_flush_at_step_end();
     r.put_replay(session)?;
+    // ERREURs non fatales collectées par l'évaluateur (M40.1 : pattern PRX
+    // invalide) — rejouées AVANT les NOTEs de conversion.
+    for msg in std::mem::take(&mut r.ctx.runtime_errors) {
+        session.log.error(&msg);
+    }
     // NOTEs d'erreurs/conversions collectées par l'évaluateur.
     if r.ctx.note_num_to_char {
         session

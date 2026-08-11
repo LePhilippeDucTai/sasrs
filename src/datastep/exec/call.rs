@@ -1,9 +1,10 @@
 use super::*;
 
 impl Runner {
-    /// Exécute une CALL routine. Routines supportées (M11.5 + M15.6) :
+    /// Exécute une CALL routine. Routines supportées (M11.5 + M15.6 + M40.1) :
     /// STREAMINIT, SYMPUT, SYMPUTX, MISSING, EXECUTE, SORTN, SORTC, CATS,
-    /// SCAN, LABEL, VNAME. Toute autre → erreur « not yet implemented ».
+    /// SCAN, LABEL, VNAME, PRXCHANGE, PRXSUBSTR, PRXNEXT, PRXPOSN, PRXFREE,
+    /// PRXDEBUG. Toute autre → erreur « not yet implemented ».
     ///
     /// Les routines qui ÉCRIVENT dans un argument (MISSING, SORTN/SORTC, CATS,
     /// SCAN, LABEL, VNAME) résolvent cet argument en lvalue (variable ou
@@ -41,6 +42,12 @@ impl Runner {
             "SCAN" => self.call_scan(args),
             "LABEL" => self.call_label(args),
             "VNAME" => self.call_vname(args),
+            "PRXCHANGE" => self.call_prxchange(args),
+            "PRXSUBSTR" => self.call_prxsubstr(args),
+            "PRXNEXT" => self.call_prxnext(args),
+            "PRXPOSN" => self.call_prxposn(args),
+            "PRXFREE" => self.call_prxfree(args),
+            "PRXDEBUG" => self.call_prxdebug(args),
             _ => Err(SasError::runtime(format!(
                 "CALL routine {upper} is not yet implemented."
             ))),
@@ -242,6 +249,204 @@ impl Runner {
         let var_name = self.pdv.vars()[var_slot].name.clone();
         let coerced = self.coerce_assign(Value::Char(var_name), self.pdv.vars()[result_slot].ty);
         self.pdv.set(result_slot, coerced);
+        Ok(Flow::Normal)
+    }
+
+    // ── Routines PRX (M40.1) ─────────────────────────────────────────────
+
+    /// Évalue un argument `regex-id` de routine PRX et le valide dans la
+    /// table des patterns. Id manquant, non numérique, inconnu ou libéré →
+    /// ERROR qui stoppe l'étape (comme SAS).
+    fn prx_id_arg(&mut self, arg: &crate::ast::Expr, routine: &str) -> Result<usize> {
+        let v = self.eval_checked(arg)?;
+        let f = coerce_num(&v, &mut self.ctx).ok_or_else(|| {
+            SasError::runtime(format!(
+                "Invalid regular expression id passed to the CALL routine {routine}."
+            ))
+        })?;
+        self.ctx.prx.check_id(f).ok_or_else(|| {
+            SasError::runtime(format!(
+                "Invalid regular expression id passed to the CALL routine {routine}."
+            ))
+        })
+    }
+
+    /// Évalue un argument en chaîne (conversion num→char BEST12. standard).
+    fn prx_char_arg(&mut self, arg: &crate::ast::Expr) -> Result<String> {
+        let v = self.eval_checked(arg)?;
+        match self.coerce_assign(v, VarType::Char) {
+            Value::Char(s) => Ok(s),
+            _ => Ok(String::new()),
+        }
+    }
+
+    /// Écrit une valeur numérique dans une lvalue (coercition standard).
+    fn prx_write_num(&mut self, arg: &crate::ast::Expr, value: f64) -> Result<()> {
+        let slot = self.resolve_lvalue_slot(arg)?;
+        let coerced = self.coerce_assign(Value::Num(value), self.pdv.vars()[slot].ty);
+        self.pdv.set(slot, coerced);
+        Ok(())
+    }
+
+    /// CALL PRXCHANGE(id, times, source <, result <, res-length <,
+    /// trunc-value <, n-changes>>>) — applique la substitution `s/…/…/` du
+    /// pattern `id`, `times` fois (-1 = toutes). Sans `result`, `source` est
+    /// modifié EN PLACE (il doit alors être une lvalue). `res-length` reçoit
+    /// la longueur du résultat stocké (sans blancs finaux), `trunc-value`
+    /// 1/0 selon que le résultat a été tronqué à la longueur de la variable,
+    /// `n-changes` le nombre de remplacements.
+    pub(super) fn call_prxchange(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if !(3..=7).contains(&args.len()) {
+            return Err(SasError::runtime(
+                "CALL PRXCHANGE requires three to seven arguments (id, times, source, result, ...).",
+            ));
+        }
+        let id = self.prx_id_arg(&args[0], "PRXCHANGE")?;
+        let times_v = self.eval_checked(&args[1])?;
+        let times = match coerce_num(&times_v, &mut self.ctx) {
+            Some(f) if f < 0.0 => -1i64,
+            Some(f) => f as i64,
+            None => {
+                return Err(SasError::runtime(
+                    "CALL PRXCHANGE requires a numeric times argument.",
+                ));
+            }
+        };
+        let source = self.prx_char_arg(&args[2])?;
+        let pat = self.ctx.prx.get_mut(id).expect("id validated");
+        if !crate::datastep::functions::prx::is_substitution(pat) {
+            return Err(SasError::runtime(
+                "The regular expression passed to CALL PRXCHANGE is not a substitution.",
+            ));
+        }
+        let (out, n_changes) = crate::datastep::functions::prx::change(pat, times, &source);
+        // Résultat : 4e argument, ou `source` en place s'il est absent.
+        let result_slot = self.resolve_lvalue_slot(args.get(3).unwrap_or(&args[2]))?;
+        let out_len = out.trim_end().chars().count();
+        let truncated = self.pdv.vars()[result_slot].ty == VarType::Char
+            && out_len > self.pdv.vars()[result_slot].length;
+        let coerced = self.coerce_assign(Value::Char(out), self.pdv.vars()[result_slot].ty);
+        self.pdv.set(result_slot, coerced);
+        if let Some(len_arg) = args.get(4) {
+            // Longueur STOCKÉE (donc après troncature), sans blancs finaux.
+            let stored_len = match self.pdv.get(result_slot) {
+                Value::Char(s) => s.chars().count(),
+                _ => out_len,
+            };
+            self.prx_write_num(len_arg, stored_len as f64)?;
+        }
+        if let Some(trunc_arg) = args.get(5) {
+            self.prx_write_num(trunc_arg, if truncated { 1.0 } else { 0.0 })?;
+        }
+        if let Some(n_arg) = args.get(6) {
+            self.prx_write_num(n_arg, n_changes as f64)?;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL PRXSUBSTR(id, source, position <, length>) — position (1-based)
+    /// et longueur du premier match dans `source` ; 0/0 si pas de match.
+    /// Mémorise les captures (pour PRXPOSN / CALL PRXPOSN).
+    pub(super) fn call_prxsubstr(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if !(3..=4).contains(&args.len()) {
+            return Err(SasError::runtime(
+                "CALL PRXSUBSTR requires three or four arguments (id, source, position, length).",
+            ));
+        }
+        let id = self.prx_id_arg(&args[0], "PRXSUBSTR")?;
+        let source = self.prx_char_arg(&args[1])?;
+        let pat = self.ctx.prx.get_mut(id).expect("id validated");
+        let found = crate::datastep::functions::prx::find_and_store(pat, &source, 0, None);
+        let (pos, len) = found.unwrap_or((0, 0));
+        self.prx_write_num(&args[2], pos as f64)?;
+        if let Some(len_arg) = args.get(3) {
+            self.prx_write_num(len_arg, len as f64)?;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL PRXNEXT(id, start, stop, source, position, length) — cherche le
+    /// prochain match à partir de la position `start` (1-based), sans
+    /// dépasser `stop` (missing ou < 1 = fin de chaîne). Après un match,
+    /// `start` est avancé à `position + MAX(length, 1)` pour l'appel
+    /// suivant ; sinon position/length valent 0 et `start` est inchangé.
+    pub(super) fn call_prxnext(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() != 6 {
+            return Err(SasError::runtime(
+                "CALL PRXNEXT requires exactly six arguments (id, start, stop, source, position, length).",
+            ));
+        }
+        let id = self.prx_id_arg(&args[0], "PRXNEXT")?;
+        let start_v = self.eval_checked(&args[1])?;
+        let start = match coerce_num(&start_v, &mut self.ctx) {
+            Some(f) if f >= 1.0 => f as usize,
+            _ => 1,
+        };
+        let stop_v = self.eval_checked(&args[2])?;
+        let stop = coerce_num(&stop_v, &mut self.ctx)
+            .filter(|f| *f >= 1.0)
+            .map(|f| f as usize);
+        let source = self.prx_char_arg(&args[3])?;
+        let pat = self.ctx.prx.get_mut(id).expect("id validated");
+        let found = crate::datastep::functions::prx::find_and_store(pat, &source, start - 1, stop);
+        let (pos, len) = found.unwrap_or((0, 0));
+        self.prx_write_num(&args[4], pos as f64)?;
+        self.prx_write_num(&args[5], len as f64)?;
+        if pos > 0 {
+            self.prx_write_num(&args[1], (pos + len.max(1)) as f64)?;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL PRXPOSN(id, n, position <, length>) — position/longueur du
+    /// groupe capturé `n` (0 = match entier) du DERNIER match du pattern
+    /// (PRXMATCH, CALL PRXSUBSTR/PRXNEXT/PRXCHANGE) ; 0/0 si pas de match
+    /// ou groupe non participant.
+    pub(super) fn call_prxposn(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if !(3..=4).contains(&args.len()) {
+            return Err(SasError::runtime(
+                "CALL PRXPOSN requires three or four arguments (id, n, position, length).",
+            ));
+        }
+        let id = self.prx_id_arg(&args[0], "PRXPOSN")?;
+        let n_v = self.eval_checked(&args[1])?;
+        let n = match coerce_num(&n_v, &mut self.ctx) {
+            Some(f) if f >= 0.0 => f as usize,
+            _ => {
+                return Err(SasError::runtime(
+                    "CALL PRXPOSN requires a numeric capture-buffer number.",
+                ));
+            }
+        };
+        let pat = self.ctx.prx.get(id).expect("id validated");
+        let (pos, len) =
+            crate::datastep::functions::prx::last_match_group(pat, n).unwrap_or((0, 0));
+        self.prx_write_num(&args[2], pos as f64)?;
+        if let Some(len_arg) = args.get(3) {
+            self.prx_write_num(len_arg, len as f64)?;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// CALL PRXFREE(id) — libère le pattern : l'id devient invalide (tout
+    /// usage ultérieur → ERROR) et son texte-source quitte le cache.
+    pub(super) fn call_prxfree(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        if args.len() != 1 {
+            return Err(SasError::runtime(
+                "CALL PRXFREE requires exactly one argument (the regular expression id).",
+            ));
+        }
+        let id = self.prx_id_arg(&args[0], "PRXFREE")?;
+        self.ctx.prx.free(id);
+        Ok(Flow::Normal)
+    }
+
+    /// CALL PRXDEBUG(on-off) — trace de debug interactive de SAS : acceptée
+    /// comme no-op silencieux (l'argument est évalué pour ses effets).
+    pub(super) fn call_prxdebug(&mut self, args: &[crate::ast::Expr]) -> Result<Flow> {
+        for arg in args {
+            self.eval_checked(arg)?;
+        }
         Ok(Flow::Normal)
     }
 }

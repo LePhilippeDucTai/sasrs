@@ -109,12 +109,12 @@ individual options of each procedure and DATA step statement. Legend:
 | Variables & attributes | ✅ | `RETAIN`, sum statement (`var + expr`), `LENGTH`, `FORMAT`, `LABEL`, `ATTRIB`, `KEEP`, `DROP`, `ARRAY` (multi-dim, `_NUMERIC_`/`_CHARACTER_`/`_ALL_`, temporary, `DO OVER`) |
 | Automatic variables | ✅ | `_N_`, `_ERROR_`, `FIRST.`/`LAST.`, `END=`, `NOBS=`, `POINT=`, `IN=` |
 | Hash objects | ✅ | `DECLARE HASH`/`HITER`, methods `find/check/add/replace/remove/clear/output/num_items/find_next/find_prev`, `ordered:`/`duplicate:`/`multidata:`/`dataset:` |
-| `CALL` routines | 🟡 | `CALL SYMPUT`, `CALL EXECUTE` (others parsed → runtime error) |
+| `CALL` routines | ✅ | `STREAMINIT`, `SYMPUT`, `SYMPUTX`, `EXECUTE`, `MISSING`, `SORTN`, `SORTC`, `CATS`, `SCAN`, `LABEL`, `VNAME`, `PRXCHANGE` (incl. in-place, res-length/trunc/n-changes), `PRXSUBSTR`, `PRXNEXT`, `PRXPOSN`, `PRXFREE`, `PRXDEBUG` (no-op). Exotic routines (`ALLPERM`/`LEXCOMB`/`RANPERM`-family legacy RNG, `SLEEP`, `SYSTEM`, `MODULE`, `POKE`) → runtime error |
 | Not supported | 🔴 | standalone `WHERE` statement, bare `SET;`/`MERGE;`, multiple `SET` statements, `INFORMAT` statement |
 
 ### DATA step / macro functions
 
-~115 functions are implemented across these categories:
+~120 functions are implemented across these categories:
 
 | Category | Functions |
 | --- | --- |
@@ -122,6 +122,7 @@ individual options of each procedure and DATA step statement. Legend:
 | Math | `ABS SQRT EXP LOG LOG2 LOG10 INT ROUND ROUNDZ MOD CEIL FLOOR SIGN FACT COMB PERM GAMMA LGAMMA DIGAMMA TRIGAMMA BETA` |
 | Trigonometry | `SIN COS TAN ARSIN ARCOS ATAN ATAN2 SINH COSH TANH` |
 | Strings | `UPCASE LOWCASE PROPCASE TRIM STRIP LEFT LENGTH SUBSTR SUBSTRN INDEX FIND FINDC COUNT COUNTC VERIFY SCAN CAT CATS CATX CATQ COMPRESS COMPBL TRANWRD TRANSLATE REVERSE REPEAT CHAR BYTE RANK WHICHC` |
+| Perl regex (PRX) | `PRXPARSE PRXMATCH PRXCHANGE PRXPOSN PRXPAREN` (Perl syntax via `fancy-regex`: lookaround, backreferences; flags `i m s x o`, free delimiter, `s/…/…/` substitution with `$1`/`\1` references) |
 | Dates & times | `TODAY DATE MDY YEAR MONTH DAY WEEKDAY INTCK INTNX DATEPART TIMEPART DATETIME DHMS HMS HOUR MINUTE SECOND DATDIF YRDIF JULDATE DATEJUL NLDATE` |
 | Conversion | `PUT INPUT` |
 | Distributions | `CDF PDF SDF LOGCDF QUANTILE PROBNORM PROBT PROBF PROBCHI PROBBETA PROBGAM PROBBNML POISSON` |

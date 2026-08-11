@@ -233,6 +233,9 @@ impl Compiler<'_> {
                         (VarType::Char, len)
                     }
                     _ if lower.starts_with("cat") => (VarType::Char, 200),
+                    // Résultat caractère de longueur indéterminée : SAS donne
+                    // 200 à une variable sans longueur préalable (M40.1).
+                    "prxchange" | "prxposn" => (VarType::Char, 200),
                     "put" => (VarType::Char, put_width(args)),
                     _ => (VarType::Num, 8),
                 }

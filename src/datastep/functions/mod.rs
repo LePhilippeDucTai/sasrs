@@ -59,6 +59,7 @@ mod char;
 mod datetime;
 mod distributions;
 mod math;
+pub(crate) mod prx;
 mod random;
 mod stat;
 #[cfg(test)]
@@ -68,6 +69,7 @@ use self::char::*;
 use self::datetime::*;
 use self::distributions::*;
 use self::math::*;
+use self::prx::{fn_prxchange, fn_prxmatch, fn_prxparen, fn_prxparse, fn_prxposn};
 pub use self::random::streaminit_seed;
 use self::random::*;
 use self::stat::*;
@@ -334,6 +336,12 @@ static DISPATCH: &[(&str, SasFn)] = &[
     ("QUANTILE", fn_quantile),
     ("SDF", fn_sdf),
     ("LOGCDF", fn_logcdf),
+    // Perl regular expressions (M40.1) — table de patterns dans EvalCtx.prx.
+    ("PRXPARSE", fn_prxparse),
+    ("PRXMATCH", fn_prxmatch),
+    ("PRXCHANGE", fn_prxchange),
+    ("PRXPOSN", fn_prxposn),
+    ("PRXPAREN", fn_prxparen),
     // Macro bridge (M11.5) — lit l'instantané de la table macro.
     ("SYMGET", fn_symget),
     // Random variate generation (M15.5)

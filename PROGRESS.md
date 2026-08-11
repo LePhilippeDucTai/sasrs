@@ -959,8 +959,14 @@ Prérequis FORMAT/CATALOG/IML STORE.
 
 ## M40 — DATA step : statements manquants + CALL routines
 Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
-- [ ] M40.1 — CALL routines faisables : MISSING, SYMPUTX, SCAN, LABEL, VNAME, SORTN/SORTC, STDIZE,
-  PRX* (si regex) ; oracle `CALL MISSING(x)`⇒x=. (Opus, élevé)
+- [x] M40.1 — CALL routines faisables : MISSING, SYMPUTX, SCAN, LABEL, VNAME, SORTN/SORTC, STDIZE,
+  PRX* (si regex) ; oracle `CALL MISSING(x)`⇒x=. (Opus, élevé) — fait : PRX complet via
+  `fancy-regex` (fonctions PRXPARSE/PRXMATCH/PRXCHANGE/PRXPOSN/PRXPAREN + CALL
+  PRXCHANGE/PRXSUBSTR/PRXNEXT/PRXPOSN/PRXFREE/PRXDEBUG, cache par texte de pattern,
+  positions en caractères) ; MISSING/SYMPUTX/SCAN/LABEL/VNAME/SORTN/SORTC étaient déjà
+  livrés (tests complétés : oracle CALL MISSING déjà couvert, +test STREAMINIT).
+  **STDIZE non implémenté : il n'existe pas de CALL STDIZE en DATA step SAS** (STDIZE est
+  une PROC SAS/STAT) — routine non inventée.
 - [ ] M40.2 — Multiple `SET` (lecture parallèle, EOF par site) + bare `SET;`/`MERGE;` (re-réf `_LAST_`) ;
   touche boucle implicite + PDV ; oracle 2 SET ⇒ 1 obs/itération, fin au 1ᵉʳ EOF (Opus, très élevé)
 - [ ] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)

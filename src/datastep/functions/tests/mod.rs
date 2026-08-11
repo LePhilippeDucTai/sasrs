@@ -140,6 +140,7 @@ fn num_val(v: Value) -> f64 {
 
 mod intnx;
 mod probbnml;
+mod prx;
 mod sinh;
 mod substr;
 mod unknown;
