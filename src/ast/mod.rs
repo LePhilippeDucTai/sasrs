@@ -39,12 +39,13 @@ pub struct LengthSpec {
 }
 
 /// Un item du statement ATTRIB : un groupe de variables et les attributs
-/// déclarés. `format`/`label` sont optionnels ; `length` est conservé pour
-/// compatibilité mais non appliqué en M4 (voir parser).
+/// déclarés. `format`/`informat`/`label` sont optionnels ; `length` est
+/// conservé pour compatibilité mais non appliqué en M4 (voir parser).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttribItem {
     pub vars: Vec<String>,
     pub format: Option<String>,
+    pub informat: Option<String>,
     pub label: Option<String>,
     pub length: Option<LengthSpec>,
 }
@@ -93,6 +94,16 @@ pub enum DsStmt {
     },
     /// Subsetting `if expr;`
     SubsettingIf(Expr),
+    /// `where expr;` standalone (M40.3) — filtre PRÉ-CHARGEMENT appliqué à
+    /// TOUS les datasets lus par SET/MERGE : même effet qu'un `WHERE=()`
+    /// posé sur chaque dataset d'entrée (les obs rejetées n'entrent jamais
+    /// au PDV, `_N_` ne compte que les retenues, FIRST./LAST. sur le flux
+    /// filtré). Un `WHERE=()` de dataset REMPLACE le statement pour CE
+    /// dataset (règle SAS : l'option gagne, pas de cumul). Plusieurs WHERE
+    /// statements : le dernier gagne (NOTE « WHERE clause has been
+    /// replaced. »). Résolu en fin de compilation (`build_input`) — le
+    /// statement lui-même est un marqueur no-op à l'exécution.
+    Where(Expr),
     /// Non-iterative `do; ... end;`
     Block(Vec<DsStmt>),
     /// DO itératif / conditionnel (M2) : `do i = e1 [to e2] [by e3]
@@ -158,6 +169,14 @@ pub enum DsStmt {
     /// associe un format aux variables (appliqué à la finalisation du PDV /
     /// par PROC PRINT) ; aucun effet à l'exécution.
     Format(Vec<(Vec<String>, String)>),
+    /// `informat d date9. name $10.;` (M40.3) — même grammaire que FORMAT :
+    /// chaque groupe est une liste de variables suivie d'un token
+    /// d'informat. Déclaratif : associe un informat PAR DÉFAUT aux
+    /// variables, utilisé par l'INPUT en mode liste quand l'item n'a pas
+    /// d'informat explicite (lecture « modified list input », comme `:inf.`).
+    /// La fonction INPUT(), elle, porte son informat en argument et n'est
+    /// pas concernée.
+    Informat(Vec<(Vec<String>, String)>),
     /// `label weight='Body Weight' name='Pupil';` (M4) — paires
     /// (variable, libellé). Déclaratif.
     Label(Vec<(String, String)>),

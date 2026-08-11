@@ -147,6 +147,8 @@ impl Compiler<'_> {
     }
 
     /// Compile un `ATTRIB` (bras `DsStmt::Attrib` de `walk_stmt`).
+    /// `informat=` n'est PAS traité ici : il est collecté (et validé) par la
+    /// pré-passe `collect_informats` (M40.3), avant le walk.
     pub(super) fn compile_attrib(&mut self, items: &[AttribItem]) -> Result<()> {
         for item in items {
             if let Some(token) = &item.format
@@ -168,6 +170,81 @@ impl Compiler<'_> {
             }
         }
         Ok(())
+    }
+
+    /// PRÉ-PASSE M40.3 : collecte (et valide) les informats déclarés par les
+    /// statements `INFORMAT` et `ATTRIB informat=` de TOUTE l'étape, AVANT
+    /// le walk — l'association est donc indépendante de l'ordre
+    /// statement/INPUT (fidèle à SAS : ces statements sont purement
+    /// déclaratifs). Une déclaration ultérieure pour la même variable écrase
+    /// la précédente (dernier gagne). Un informat qui ne parse pas → même
+    /// erreur que l'INPUT formaté avec un informat inconnu.
+    pub(super) fn collect_informats(&mut self, stmts: &[DsStmt]) -> Result<()> {
+        for stmt in stmts {
+            self.collect_informats_stmt(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn collect_informats_stmt(&mut self, stmt: &DsStmt) -> Result<()> {
+        let declare =
+            |names: &[String], token: &String, informats: &mut HashMap<String, String>| {
+                if crate::formats::FormatSpec::parse(token).is_none() {
+                    return Err(SasError::runtime(format!(
+                        "The informat {token} is not valid."
+                    )));
+                }
+                for name in names {
+                    informats.insert(name.to_uppercase(), token.clone());
+                }
+                Ok(())
+            };
+        match stmt {
+            DsStmt::Informat(groups) => {
+                for (names, token) in groups {
+                    declare(names, token, &mut self.informats)?;
+                }
+                Ok(())
+            }
+            DsStmt::Attrib(items) => {
+                for item in items {
+                    if let Some(token) = &item.informat {
+                        declare(&item.vars, token, &mut self.informats)?;
+                    }
+                }
+                Ok(())
+            }
+            // Descente dans les statements composés : un INFORMAT/ATTRIB peut
+            // vivre dans un IF/DO/SELECT (déclaratif quel que soit le flot).
+            DsStmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.collect_informats_stmt(then_branch)?;
+                if let Some(e) = else_branch {
+                    self.collect_informats_stmt(e)?;
+                }
+                Ok(())
+            }
+            DsStmt::Block(body)
+            | DsStmt::DoLoop { body, .. }
+            | DsStmt::DoList { body, .. }
+            | DsStmt::DoOver { body, .. } => self.collect_informats(body),
+            DsStmt::Select {
+                whens, otherwise, ..
+            } => {
+                for w in whens {
+                    self.collect_informats_stmt(&w.body)?;
+                }
+                if let Some(o) = otherwise {
+                    self.collect_informats_stmt(o)?;
+                }
+                Ok(())
+            }
+            DsStmt::Labeled { stmt, .. } => self.collect_informats_stmt(stmt),
+            _ => Ok(()),
+        }
     }
 
     /// Compile un `CALL <name>(args);` (bras `DsStmt::CallRoutine` de `walk_stmt`).

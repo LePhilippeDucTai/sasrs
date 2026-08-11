@@ -383,6 +383,7 @@ fn attrib_format_and_label() {
         vec![DsStmt::Attrib(vec![AttribItem {
             vars: vec!["weight".to_string()],
             format: Some("8.2".to_string()),
+            informat: None,
             label: Some("Body Weight".to_string()),
             length: None,
         }])]
@@ -399,12 +400,14 @@ fn attrib_multiple_items() {
             AttribItem {
                 vars: vec!["a".to_string(), "b".to_string()],
                 format: Some("dollar8.".to_string()),
+                informat: None,
                 label: None,
                 length: None,
             },
             AttribItem {
                 vars: vec!["c".to_string()],
                 format: None,
+                informat: None,
                 label: Some("C var".to_string()),
                 length: Some(LengthSpec {
                     char: true,
@@ -412,5 +415,56 @@ fn attrib_multiple_items() {
                 }),
             },
         ])]
+    );
+}
+
+// ── WHERE standalone / INFORMAT / ATTRIB informat= (M40.3) ────────────
+
+#[test]
+fn where_statement_parses_expression() {
+    let ast = parse("data o; set i; where x > 2; run;").unwrap();
+    assert_eq!(
+        ast.stmts[1],
+        DsStmt::Where(Expr::Binary {
+            op: BinaryOp::Gt,
+            left: Box::new(Expr::Var("x".to_string())),
+            right: Box::new(Expr::Num(2.0)),
+        })
+    );
+}
+
+#[test]
+fn informat_groups_vars_and_tokens() {
+    let ast = parse("data o; informat d1 d2 date9. name $10.; run;").unwrap();
+    assert_eq!(
+        ast.stmts,
+        vec![DsStmt::Informat(vec![
+            (
+                vec!["d1".to_string(), "d2".to_string()],
+                "date9.".to_string()
+            ),
+            (vec!["name".to_string()], "$10.".to_string()),
+        ])]
+    );
+}
+
+#[test]
+fn informat_missing_token_errors() {
+    let err = parse("data o; informat d; run;").unwrap_err();
+    assert!(err.to_string().contains("INFORMAT"), "got: {err}");
+}
+
+#[test]
+fn attrib_informat_option() {
+    let ast = parse("data o; attrib d informat=date9. format=date9.; run;").unwrap();
+    assert_eq!(
+        ast.stmts,
+        vec![DsStmt::Attrib(vec![AttribItem {
+            vars: vec!["d".to_string()],
+            format: Some("date9.".to_string()),
+            informat: Some("date9.".to_string()),
+            label: None,
+            length: None,
+        }])]
     );
 }

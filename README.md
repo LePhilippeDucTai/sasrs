@@ -105,12 +105,12 @@ individual options of each procedure and DATA step statement. Legend:
 | Dataset options | ✅ | `KEEP=`, `DROP=`, `RENAME=(a=b)`, `WHERE=()` (`FIRSTOBS=`/`OBS=` only on `INFILE`) |
 | External input | ✅ | `INFILE` (`DELIMITER=`/`DLM=`, `DSD`, `FIRSTOBS=`, `OBS=`, `MISSOVER`, `TRUNCOVER`, `STOPOVER`, `LRECL=`), `INPUT` (list / column / formatted), `DATALINES`/`CARDS` |
 | Text output | ✅ | `FILE` (`LOG`/`PRINT`/external path), `PUT` (named / formatted / literal / `_ALL_`, `@n`/`+n`/`/`, `@`/`@@` hold) |
-| Control flow | ✅ | `IF/THEN/ELSE`, subsetting `IF`, `DO`/`END`, iterative `DO ... TO ... BY [WHILE/UNTIL]`, `DO WHILE`, `DO UNTIL`, `DO` value list, `DO OVER`, `SELECT/WHEN/OTHERWISE`, labels + `GOTO`/`LINK`/`RETURN`, `OUTPUT`, `DELETE`, `STOP` |
-| Variables & attributes | ✅ | `RETAIN`, sum statement (`var + expr`), `LENGTH`, `FORMAT`, `LABEL`, `ATTRIB`, `KEEP`, `DROP`, `ARRAY` (multi-dim, `_NUMERIC_`/`_CHARACTER_`/`_ALL_`, temporary, `DO OVER`) |
+| Control flow | ✅ | `IF/THEN/ELSE`, subsetting `IF`, standalone `WHERE` (pre-PDV filter on every `SET`/`MERGE` input, all sites; a dataset `WHERE=` option replaces the statement for that dataset; last `WHERE` wins with the SAS NOTE), `DO`/`END`, iterative `DO ... TO ... BY [WHILE/UNTIL]`, `DO WHILE`, `DO UNTIL`, `DO` value list, `DO OVER`, `SELECT/WHEN/OTHERWISE`, labels + `GOTO`/`LINK`/`RETURN`, `OUTPUT`, `DELETE`, `STOP` |
+| Variables & attributes | ✅ | `RETAIN`, sum statement (`var + expr`), `LENGTH`, `FORMAT`, `INFORMAT` (default informats used by list-mode `INPUT` as modified list input; explicit `INPUT` informats win; also `ATTRIB INFORMAT=`), `LABEL`, `ATTRIB`, `KEEP`, `DROP`, `ARRAY` (multi-dim, `_NUMERIC_`/`_CHARACTER_`/`_ALL_`, temporary, `DO OVER`) |
 | Automatic variables | ✅ | `_N_`, `_ERROR_`, `FIRST.`/`LAST.`, `END=`, `NOBS=`, `POINT=`, `IN=` |
 | Hash objects | ✅ | `DECLARE HASH`/`HITER`, methods `find/check/add/replace/remove/clear/output/num_items/find_next/find_prev`, `ordered:`/`duplicate:`/`multidata:`/`dataset:` |
 | `CALL` routines | ✅ | `STREAMINIT`, `SYMPUT`, `SYMPUTX`, `EXECUTE`, `MISSING`, `SORTN`, `SORTC`, `CATS`, `SCAN`, `LABEL`, `VNAME`, `PRXCHANGE` (incl. in-place, res-length/trunc/n-changes), `PRXSUBSTR`, `PRXNEXT`, `PRXPOSN`, `PRXFREE`, `PRXDEBUG` (no-op). Exotic routines (`ALLPERM`/`LEXCOMB`/`RANPERM`-family legacy RNG, `SLEEP`, `SYSTEM`, `MODULE`, `POKE`) → runtime error |
-| Not supported | 🔴 | standalone `WHERE` statement, `INFORMAT` statement |
+| Not supported | 🔴 | `BY` and `POINT=` combined with multiple `SET` statements (clean error, see Data sources), `WHERE` statement with `UPDATE`/`MODIFY` or `POINT=` (clean error; the master `WHERE=` option on `UPDATE` works), informats are not persisted in dataset metadata (no Informat column in `PROC CONTENTS`) |
 
 ### DATA step / macro functions
 

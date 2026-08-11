@@ -89,10 +89,15 @@ fn stmt_ok(stmt: &DsStmt, pdv: &Pdv) -> bool {
     match stmt {
         // L'entrée (déjà matérialisée) et les déclaratifs purs : aucun effet à
         // l'exécution dans le chemin ligne-à-ligne — sans risque d'ignorer ici.
+        // INFORMAT (M40.3) est déclaratif (il n'agit qu'à travers un INPUT,
+        // lui-même hors périmètre). Un WHERE statement, lui, tombe dans le
+        // `_ => false` — de toute façon `eligible()` a déjà rejeté l'étape
+        // (le WHERE est replié dans le `where_` du dataset d'entrée).
         DsStmt::Set { .. }
         | DsStmt::Keep(_)
         | DsStmt::Drop(_)
         | DsStmt::Format(_)
+        | DsStmt::Informat(_)
         | DsStmt::Label(_)
         | DsStmt::Attrib(_) => true,
         DsStmt::Assign { var, expr } => {

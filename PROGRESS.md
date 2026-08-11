@@ -974,7 +974,14 @@ Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
   POINT du statement, NOTEs « observations read » par dataset par site ; bare `SET;`/`MERGE;`
   → `_LAST_` (mécanisme des PROC sans DATA=). Refus honnêtes documentés README : BY et
   POINT= avec SET multiples non supportés ; fastpath exclu sur SET multiples.
-- [ ] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)
+- [x] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)
+  — fait : WHERE replié dans le `where_` de CHAQUE dataset d'entrée (tous les sites SET +
+  MERGE ; l'option WHERE= d'un dataset le remplace pour ce dataset ; dernier WHERE gagne
+  avec NOTE ; validation stricte « Variable x is not on file ») ; refus propres WHERE sans
+  entrée / avec POINT= / avec UPDATE-MODIFY. INFORMAT statement + ATTRIB informat= :
+  pré-passe déclarative (ordre indifférent, IF/DO/SELECT couverts) injectée dans l'INPUT
+  liste comme « modified list input » ; informats non persistés en métadonnées (pas de
+  colonne Informat dans CONTENTS — reliquat README).
 - [ ] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
 
 ## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE

@@ -210,12 +210,17 @@ impl Runner {
             // PUT (M14.2) : rend les items dans la ligne de sortie courante.
             DsStmt::Put(items) => self.exec_put(items),
             // Directives de compilation / déclaratives : rien à exécuter.
+            // WHERE (M40.3) est résolu à la compilation (replié dans le
+            // `where_` de chaque dataset d'entrée) ; INFORMAT est injecté
+            // dans les items INPUT — les deux sont des marqueurs ici.
             DsStmt::Keep(_)
             | DsStmt::Drop(_)
             | DsStmt::Retain(_)
             | DsStmt::Length(_)
             | DsStmt::By(_)
             | DsStmt::Format(_)
+            | DsStmt::Informat(_)
+            | DsStmt::Where(_)
             | DsStmt::Label(_)
             | DsStmt::Attrib(_)
             | DsStmt::Infile { .. }

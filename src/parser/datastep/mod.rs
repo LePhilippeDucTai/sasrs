@@ -93,7 +93,9 @@ mod tests;
 
 pub(super) use self::array::expand_numbered_range;
 use self::array::{parse_array, parse_assign_indexed_tail};
-use self::attrs::{parse_attrib, parse_format, parse_label, parse_length, parse_retain};
+use self::attrs::{
+    parse_attrib, parse_format, parse_informat, parse_label, parse_length, parse_retain,
+};
 use self::control::{parse_do, parse_goto, parse_if, parse_link, parse_select};
 pub(crate) use self::hash::parse_hash_args;
 use self::hash::{parse_declare, parse_hash_method};
@@ -309,8 +311,19 @@ fn parse_statement(ts: &mut StatementStream) -> Result<DsStmt> {
         "retain" => parse_retain(ts),
         "length" => parse_length(ts),
         "format" => parse_format(ts),
+        "informat" => parse_informat(ts),
         "label" => parse_label(ts),
         "attrib" => parse_attrib(ts),
+        // WHERE standalone (M40.3) : `where expr;` — filtre des datasets
+        // d'entrée (SET/MERGE), résolu à la compilation. Comme les autres
+        // mots-clés de statement, WHERE en tête l'emporte sur une
+        // hypothétique variable du même nom.
+        "where" => {
+            ts.next(); // `where`
+            let expr = super::expr::parse_expr(ts)?;
+            ts.expect_semi()?;
+            Ok(DsStmt::Where(expr))
+        }
         "array" => parse_array(ts),
         "call" => parse_call_routine(ts),
         "infile" => parse_infile(ts),

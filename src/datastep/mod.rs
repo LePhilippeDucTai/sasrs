@@ -226,6 +226,18 @@ struct Compiler<'a> {
     /// Appliqués au PDV en fin de compilation (indépendamment de l'ordre des
     /// statements) ; l'emportent sur le format hérité de l'input.
     formats: HashMap<String, String>,
+    /// Informats déclarés (INFORMAT/ATTRIB informat=, M40.3) : nom UPPERCASE
+    /// → token d'informat. Collectés par une PRÉ-PASSE (`collect_informats`,
+    /// avant le walk — l'ordre statement/INPUT n'importe donc pas, comme en
+    /// SAS) puis injectés dans les items INPUT en mode liste sans informat
+    /// explicite (`apply_declared_informats`).
+    informats: HashMap<String, String>,
+    /// WHERE statement standalone (M40.3) : la DERNIÈRE expression vue (un
+    /// second WHERE remplace le premier, NOTE « WHERE clause has been
+    /// replaced. »). Appliquée à TOUS les datasets d'entrée en fin de
+    /// compilation (`build_input`) — l'option WHERE= d'un dataset REMPLACE
+    /// le statement pour ce dataset.
+    where_stmt: Option<Expr>,
     /// INFILE rencontré (M14) : source + options. `None` = pas d'INFILE
     /// explicite (DATALINES inline implicite si présent).
     infile: Option<(crate::ast::InfileSource, crate::ast::InfileOptions)>,
@@ -345,6 +357,19 @@ impl Compiler<'_> {
                 Ok(())
             }
             DsStmt::SubsettingIf(cond) => self.walk_expr(cond),
+            // WHERE standalone (M40.3) : mémorisé ici, appliqué à TOUS les
+            // datasets d'entrée en fin de compilation (`build_input`). On ne
+            // walke PAS l'expression (cela créerait des variables Num
+            // parasites au PDV) — la validation par dataset (« Variable x is
+            // not on file WORK.A. ») est faite au moment de l'application.
+            // Un second WHERE REMPLACE le premier (dernier gagne, NOTE SAS).
+            DsStmt::Where(expr) => {
+                if self.where_stmt.is_some() {
+                    self.session.log.note("WHERE clause has been replaced.");
+                }
+                self.where_stmt = Some(expr.clone());
+                Ok(())
+            }
             DsStmt::Block(stmts) => {
                 for s in stmts {
                     self.walk_stmt(s)?;
@@ -423,6 +448,9 @@ impl Compiler<'_> {
             // inconnue est ignorée (SIMPLIFICATION M4 documentée : en vrai
             // SAS la variable serait créée sur le PDV).
             DsStmt::Format(groups) => self.compile_format(groups),
+            // INFORMAT (M40.3) : déjà collecté (et validé) par la pré-passe
+            // `collect_informats` — marqueur no-op pendant le walk.
+            DsStmt::Informat(_) => Ok(()),
             DsStmt::Label(pairs) => {
                 for (name, label) in pairs {
                     self.labels.insert(name.to_uppercase(), label.clone());

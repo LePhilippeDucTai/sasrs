@@ -185,7 +185,21 @@ pub(super) fn parse_length(ts: &mut StatementStream) -> Result<DsStmt> {
 /// `read_format_token`, robuste au découpage du lexer). L'application aux
 /// variables (et la validation du token) est faite à la compilation.
 pub(super) fn parse_format(ts: &mut StatementStream) -> Result<DsStmt> {
-    ts.next(); // `format`
+    Ok(DsStmt::Format(parse_format_groups(ts, "FORMAT")?))
+}
+
+/// `informat d date9. name $10.;` (M40.3) — même grammaire que FORMAT
+/// (listes de variables suivies d'un token d'informat). La validation du
+/// token et l'association aux INPUT sont faites à la compilation.
+pub(super) fn parse_informat(ts: &mut StatementStream) -> Result<DsStmt> {
+    Ok(DsStmt::Informat(parse_format_groups(ts, "INFORMAT")?))
+}
+
+/// Grammaire commune FORMAT/INFORMAT : suites répétables de « noms...
+/// token-de-format » jusqu'au `;` (consommé). `stmt` nomme le statement
+/// dans les messages d'erreur.
+fn parse_format_groups(ts: &mut StatementStream, stmt: &str) -> Result<Vec<(Vec<String>, String)>> {
+    ts.next(); // `format` / `informat`
     let mut groups: Vec<(Vec<String>, String)> = Vec::new();
     let mut names: Vec<String> = Vec::new();
     loop {
@@ -194,18 +208,20 @@ pub(super) fn parse_format(ts: &mut StatementStream) -> Result<DsStmt> {
             TokenKind::Semi => {
                 if !names.is_empty() {
                     return Err(SasError::parse(
-                        "expected a format after the variable name(s) in the FORMAT statement",
+                        format!(
+                            "expected a format after the variable name(s) in the {stmt} statement"
+                        ),
                         tok.span,
                     ));
                 }
                 if groups.is_empty() {
                     return Err(SasError::parse(
-                        "expected a variable name in the FORMAT statement",
+                        format!("expected a variable name in the {stmt} statement"),
                         tok.span,
                     ));
                 }
                 ts.next();
-                return Ok(DsStmt::Format(groups));
+                return Ok(groups);
             }
             // Un Ident est SOIT un nom de variable, SOIT le début d'un token
             // de format (ex. `date9.` se lexe `date9` + `.`). On tranche par
@@ -222,7 +238,7 @@ pub(super) fn parse_format(ts: &mut StatementStream) -> Result<DsStmt> {
             _ => {
                 if names.is_empty() {
                     return Err(SasError::parse(
-                        "expected a variable name in the FORMAT statement",
+                        format!("expected a variable name in the {stmt} statement"),
                         tok.span,
                     ));
                 }
@@ -292,18 +308,21 @@ pub(super) fn parse_label(ts: &mut StatementStream) -> Result<DsStmt> {
 
 /// `attrib weight format=8.2 label='Body Weight';` (M4) — un item par
 /// groupe de variables (un ou plusieurs noms) suivi d'options
-/// `format=<token>`, `label='...'`, `length=[$]n`. `length=` est parsé mais
-/// NON appliqué en M4 (simplification documentée). Un nouveau nom de
-/// variable (sans `=`) après des options clôt l'item courant.
+/// `format=<token>`, `informat=<token>` (M40.3), `label='...'`,
+/// `length=[$]n`. `length=` est parsé mais NON appliqué en M4
+/// (simplification documentée). Un nouveau nom de variable (sans `=`)
+/// après des options clôt l'item courant.
 pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
     ts.next(); // `attrib`
     let mut items: Vec<AttribItem> = Vec::new();
     let mut vars: Vec<String> = Vec::new();
     let mut format: Option<String> = None;
+    let mut informat: Option<String> = None;
     let mut label: Option<String> = None;
     let mut length: Option<LengthSpec> = None;
     let flush = |vars: &mut Vec<String>,
                  format: &mut Option<String>,
+                 informat: &mut Option<String>,
                  label: &mut Option<String>,
                  length: &mut Option<LengthSpec>,
                  items: &mut Vec<AttribItem>| {
@@ -311,6 +330,7 @@ pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
             items.push(AttribItem {
                 vars: std::mem::take(vars),
                 format: format.take(),
+                informat: informat.take(),
                 label: label.take(),
                 length: length.take(),
             });
@@ -320,7 +340,14 @@ pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
         let tok = ts.peek().clone();
         match &tok.kind {
             TokenKind::Semi => {
-                flush(&mut vars, &mut format, &mut label, &mut length, &mut items);
+                flush(
+                    &mut vars,
+                    &mut format,
+                    &mut informat,
+                    &mut label,
+                    &mut length,
+                    &mut items,
+                );
                 if items.is_empty() {
                     return Err(SasError::parse(
                         "expected a variable name in the ATTRIB statement",
@@ -333,9 +360,10 @@ pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 let lower = name.to_ascii_lowercase();
-                // Une option `format=/label=/length=` : le mot-clé est suivi
-                // d'un `=`. On consomme l'ident puis on inspecte le `=`.
-                if matches!(lower.as_str(), "format" | "label" | "length") {
+                // Une option `format=/informat=/label=/length=` : le mot-clé
+                // est suivi d'un `=`. On consomme l'ident puis on inspecte
+                // le `=`.
+                if matches!(lower.as_str(), "format" | "informat" | "label" | "length") {
                     // Sauvegarde du span pour les messages d'erreur.
                     let kw_span = tok.span;
                     ts.next(); // mot-clé d'option
@@ -357,6 +385,7 @@ pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
                     }
                     match lower.as_str() {
                         "format" => format = Some(super::expr::read_format_token(ts)?),
+                        "informat" => informat = Some(super::expr::read_format_token(ts)?),
                         "label" => label = Some(expect_string_literal(ts, "ATTRIB")?),
                         "length" => length = Some(parse_attrib_length(ts)?),
                         _ => unreachable!(),
@@ -365,8 +394,16 @@ pub(super) fn parse_attrib(ts: &mut StatementStream) -> Result<DsStmt> {
                     // Un nom de variable : s'il commence un nouvel item (des
                     // attributs ont déjà été lus), on flush l'item précédent.
                     validate_sas_name(&name, tok.span)?;
-                    if format.is_some() || label.is_some() || length.is_some() {
-                        flush(&mut vars, &mut format, &mut label, &mut length, &mut items);
+                    if format.is_some() || informat.is_some() || label.is_some() || length.is_some()
+                    {
+                        flush(
+                            &mut vars,
+                            &mut format,
+                            &mut informat,
+                            &mut label,
+                            &mut length,
+                            &mut items,
+                        );
                     }
                     ts.next();
                     vars.push(name);

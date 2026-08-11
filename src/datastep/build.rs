@@ -9,12 +9,28 @@ impl Compiler<'_> {
         // UPDATE/MODIFY gèrent leur propre BY (résolu dans build_update/
         // build_modify) : ne pas consommer `by`/`first_last_refs` ici.
         if self.update.is_some() || self.modify.is_some() {
+            // M40.3 — le WHERE statement avec UPDATE/MODIFY (SAS l'applique
+            // aux deux datasets de l'UPDATE) n'est pas implémenté : refus
+            // honnête plutôt qu'un filtrage partiel (seul le WHERE= du
+            // maître d'UPDATE est supporté, cf. README).
+            if self.where_stmt.is_some() {
+                return Err(SasError::runtime(
+                    "The WHERE statement is not supported with UPDATE or MODIFY in this build.",
+                ));
+            }
             return Ok((None, Vec::new()));
         }
         let mut datasets = std::mem::take(&mut self.input_datasets);
-        let extra_sites = std::mem::take(&mut self.extra_set_sites);
+        let mut extra_sites = std::mem::take(&mut self.extra_set_sites);
         let by_items = self.by.take();
         if datasets.is_empty() {
+            // WHERE statement sans SET/MERGE (étape INPUT/DATALINES ou sans
+            // entrée) : ERROR SAS.
+            if self.where_stmt.is_some() {
+                return Err(SasError::runtime(
+                    "No input data sets available for WHERE statement.",
+                ));
+            }
             // BY ou FIRST./LAST. sans SET : message SAS.
             if by_items.is_some() || !self.first_last_refs.is_empty() {
                 return Err(SasError::runtime(
@@ -22,6 +38,30 @@ impl Compiler<'_> {
                 ));
             }
             return Ok((None, Vec::new()));
+        }
+        // M40.3 — WHERE statement standalone : même effet qu'un `WHERE=()`
+        // posé sur CHAQUE dataset d'entrée (tous les sites SET + MERGE). Un
+        // dataset qui porte déjà son option WHERE= la GARDE (règle SAS :
+        // l'option remplace le statement pour ce dataset — pas de cumul).
+        // Chaque variable du WHERE doit exister dans CHAQUE dataset filtré
+        // (« Variable x is not on file WORK.A. »).
+        if let Some(w) = self.where_stmt.take() {
+            // POINT= remplace la boucle implicite (accès direct) : le filtre
+            // pré-chargement n'y a pas de sens — refus, comme SAS.
+            if self.set_options.point.is_some() {
+                return Err(SasError::runtime(
+                    "The WHERE statement cannot be used with the POINT= option.",
+                ));
+            }
+            for ds in datasets
+                .iter_mut()
+                .chain(extra_sites.iter_mut().flat_map(|(v, _)| v.iter_mut()))
+            {
+                if ds.where_.is_none() {
+                    self.validate_where_stmt_vars(&w, ds)?;
+                    ds.where_ = Some(w.clone());
+                }
+            }
         }
         // M40.2 — restrictions avec PLUSIEURS statements SET : le BY (match
         // par site) et POINT= (accès direct) ne sont pas supportés — refus

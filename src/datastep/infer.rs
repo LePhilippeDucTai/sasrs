@@ -194,6 +194,61 @@ impl Compiler<'_> {
         }
     }
 
+    /// M40.3 — validation du WHERE statement standalone contre UN dataset
+    /// d'entrée : chaque variable référencée doit être une variable DU
+    /// dataset (règle SAS « Variable x is not on file WORK.A. » — plus
+    /// stricte que le WHERE= de dataset, qui accepte toute variable du PDV).
+    /// Les automatiques (_N_, FIRST., IN=...) ne sont pas « on file » : même
+    /// erreur, fidèle à SAS.
+    pub(super) fn validate_where_stmt_vars(&self, expr: &Expr, ds: &InputDataset) -> Result<()> {
+        match expr {
+            Expr::Num(_) | Expr::Str(_) | Expr::Missing(_) => Ok(()),
+            Expr::Var(name) => {
+                let on_file = self
+                    .pdv
+                    .slot(name)
+                    .is_some_and(|slot| ds.var_slots.contains(&slot));
+                if on_file {
+                    Ok(())
+                } else {
+                    Err(SasError::runtime(format!(
+                        "Variable {name} is not on file {}.",
+                        ds.display
+                    )))
+                }
+            }
+            Expr::Unary { expr, .. } => self.validate_where_stmt_vars(expr, ds),
+            Expr::Binary { left, right, .. } => {
+                self.validate_where_stmt_vars(left, ds)?;
+                self.validate_where_stmt_vars(right, ds)
+            }
+            Expr::In { expr, list } => {
+                self.validate_where_stmt_vars(expr, ds)?;
+                for e in list {
+                    self.validate_where_stmt_vars(e, ds)?;
+                }
+                Ok(())
+            }
+            Expr::Index { indices, .. } => {
+                for index in indices {
+                    self.validate_where_stmt_vars(index, ds)?;
+                }
+                Ok(())
+            }
+            Expr::Call { args, .. } => {
+                for a in args {
+                    self.validate_where_stmt_vars(a, ds)?;
+                }
+                Ok(())
+            }
+            // Une méthode hash dans un WHERE n'a pas de sens : rejet.
+            Expr::HashMethod(_) => Err(SasError::runtime(format!(
+                "Hash method calls are not allowed in a WHERE clause on file {}.",
+                ds.display
+            ))),
+        }
+    }
+
     /// Type et longueur inférés d'une expression (compile-time, comme SAS).
     pub(super) fn infer(&self, expr: &Expr) -> (VarType, usize) {
         match expr {

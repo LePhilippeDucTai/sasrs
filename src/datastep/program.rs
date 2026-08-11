@@ -73,6 +73,8 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         arrays: HashMap::new(),
         labels: HashMap::new(),
         formats: HashMap::new(),
+        informats: HashMap::new(),
+        where_stmt: None,
         infile: None,
         datalines: None,
         seen_input: false,
@@ -91,6 +93,16 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     // l'arbre STAMPÉ, qui est aussi celui livré au Runner.
     let mut stmts = ast.stmts.clone();
     stamp_set_sites(&mut stmts, &mut 0);
+    // M40.3 — pré-passe déclarative : collecte les informats des statements
+    // INFORMAT/ATTRIB informat= de toute l'étape (l'ordre statement/INPUT
+    // n'importe pas, comme en SAS), puis les injecte dans les items INPUT en
+    // mode liste sans informat explicite. Le walk (et l'exécution) voient
+    // ensuite des items INPUT ordinaires — type/longueur et lecture passent
+    // par le chemin existant de l'informat explicite.
+    c.collect_informats(&stmts)?;
+    if !c.informats.is_empty() {
+        apply_declared_informats(&mut stmts, &c.informats);
+    }
     for stmt in &stmts {
         c.walk_stmt(stmt)?;
     }
@@ -254,6 +266,73 @@ fn stamp_set_site(stmt: &mut DsStmt, next: &mut usize) {
             }
         }
         DsStmt::Labeled { stmt, .. } => stamp_set_site(stmt, next),
+        _ => {}
+    }
+}
+
+/// M40.3 — injecte les informats déclarés (INFORMAT / ATTRIB informat=) dans
+/// les items INPUT en MODE LISTE sans informat explicite : l'item devient une
+/// lecture « modified list input » (jeton délimité puis conversion par
+/// l'informat, exactement comme `:informat.` — la largeur ne borne pas le
+/// scan). L'informat explicite d'un item INPUT l'emporte toujours sur le
+/// statement ; le mode colonne (`a-b`) est laissé tel quel (lecture standard,
+/// divergence documentée). Comme les statements déclaratifs, la descente
+/// couvre les INPUT nichés dans IF/DO/SELECT.
+fn apply_declared_informats(
+    stmts: &mut [DsStmt],
+    informats: &std::collections::HashMap<String, String>,
+) {
+    for stmt in stmts {
+        apply_declared_informats_stmt(stmt, informats);
+    }
+}
+
+fn apply_declared_informats_stmt(
+    stmt: &mut DsStmt,
+    informats: &std::collections::HashMap<String, String>,
+) {
+    match stmt {
+        DsStmt::Input(items) => {
+            for item in items {
+                if let crate::ast::InputItem::Var {
+                    name,
+                    cols: None,
+                    informat: informat @ None,
+                    list_modifier,
+                    ..
+                } = item
+                    && let Some(token) = informats.get(&name.to_uppercase())
+                {
+                    *informat = Some(token.clone());
+                    *list_modifier = true;
+                }
+            }
+        }
+        DsStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            apply_declared_informats_stmt(then_branch, informats);
+            if let Some(e) = else_branch {
+                apply_declared_informats_stmt(e, informats);
+            }
+        }
+        DsStmt::Block(body)
+        | DsStmt::DoLoop { body, .. }
+        | DsStmt::DoList { body, .. }
+        | DsStmt::DoOver { body, .. } => apply_declared_informats(body, informats),
+        DsStmt::Select {
+            whens, otherwise, ..
+        } => {
+            for w in whens {
+                apply_declared_informats_stmt(&mut w.body, informats);
+            }
+            if let Some(o) = otherwise {
+                apply_declared_informats_stmt(o, informats);
+            }
+        }
+        DsStmt::Labeled { stmt, .. } => apply_declared_informats_stmt(stmt, informats),
         _ => {}
     }
 }
