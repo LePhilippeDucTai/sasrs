@@ -244,7 +244,7 @@ fn set_options_then_second_dataset_parses() {
 #[test]
 fn set_end_nobs_point_options_parse() {
     let ast = parse("data o; set a b end=eof nobs=n point=p; run;").unwrap();
-    let DsStmt::Set { specs, options } = &ast.stmts[0] else {
+    let DsStmt::Set { specs, options, .. } = &ast.stmts[0] else {
         panic!("expected a SET statement");
     };
     assert_eq!(specs.len(), 2);
@@ -390,7 +390,26 @@ fn merge_with_in_option_parses() {
 }
 
 #[test]
-fn merge_without_dataset_errors() {
-    let err = parse("data o; merge; by id; run;").unwrap_err();
-    assert!(err.to_string().to_uppercase().contains("MERGE"));
+fn merge_without_dataset_parses_empty_specs() {
+    // `merge;` nu (M40.2) : liste vide, résolue en _LAST_ à la compilation.
+    let ast = parse("data o; merge; by id; run;").unwrap();
+    assert_eq!(ast.stmts[0], DsStmt::Merge(Vec::new()));
+}
+
+#[test]
+fn bare_set_parses_empty_specs() {
+    // `set;` nu (M40.2) : liste vide, résolue en _LAST_ à la compilation.
+    let ast = parse("data o; set; run;").unwrap();
+    assert_eq!(ast.stmts[0], set_stmt(Vec::new()));
+}
+
+#[test]
+fn bare_set_with_end_option_parses() {
+    // `set end=eof;` : SET nu (_LAST_) + option de niveau statement.
+    let ast = parse("data o; set end=eof; run;").unwrap();
+    let DsStmt::Set { specs, options, .. } = &ast.stmts[0] else {
+        panic!("expected a SET statement");
+    };
+    assert!(specs.is_empty());
+    assert_eq!(options.end.as_deref(), Some("eof"));
 }

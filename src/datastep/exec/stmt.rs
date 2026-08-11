@@ -3,7 +3,13 @@ use super::*;
 impl Runner {
     pub(super) fn exec_stmt(&mut self, stmt: &DsStmt) -> Result<Flow> {
         match stmt {
-            DsStmt::Set { .. } => {
+            DsStmt::Set { site, .. } => {
+                // M40.2 — sites SET supplémentaires : concaténation
+                // séquentielle sur le curseur PROPRE du site (jamais de
+                // BY/POINT=, refusés à la compilation).
+                if *site > 0 {
+                    return self.exec_set_extra(*site - 1);
+                }
                 let Some(input) = &self.input else {
                     // Impossible après compile() ; garde-fou.
                     return Err(SasError::runtime("SET statement without input data."));

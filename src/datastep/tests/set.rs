@@ -197,14 +197,19 @@ fn data_null_has_no_outputs() {
 }
 
 #[test]
-fn second_set_errors_m1() {
+fn second_set_compiles_as_extra_site() {
+    // M40.2 — deux statements SET = deux SITES de lecture indépendants :
+    // le 1ᵉʳ reste `input` (site 0), le 2ᵉ va dans `extra_inputs`.
     let mut s = session();
     write_class(&s, "a");
     write_class(&s, "b");
-    let err = compile_src("data o; set a; set b; run;", &mut s)
-        .err()
-        .unwrap();
-    assert!(err.to_string().contains("not yet implemented"));
+    let prog = compile_src("data o; set a; set b; run;", &mut s).unwrap();
+    let input = prog.input.as_ref().unwrap();
+    assert_eq!(input.datasets.len(), 1);
+    assert_eq!(input.datasets[0].display, "WORK.A");
+    assert_eq!(prog.extra_inputs.len(), 1);
+    assert_eq!(prog.extra_inputs[0].datasets.len(), 1);
+    assert_eq!(prog.extra_inputs[0].datasets[0].display, "WORK.B");
 }
 
 #[test]

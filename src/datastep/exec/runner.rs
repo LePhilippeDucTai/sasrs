@@ -73,6 +73,8 @@ pub(super) fn build_um_runner(cfg: RunnerConfig, by: &[ByVar], session: &Session
         format_catalog: std::rc::Rc::clone(&session.format_catalog),
         set_cursor: SetCursor::new(0),
         rows_read: vec![0; 1],
+        extra_sites: Vec::new(),
+        end0: None,
         ctx: EvalCtx {
             arrays,
             by_flags,

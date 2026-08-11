@@ -967,8 +967,13 @@ Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
   livrés (tests complétés : oracle CALL MISSING déjà couvert, +test STREAMINIT).
   **STDIZE non implémenté : il n'existe pas de CALL STDIZE en DATA step SAS** (STDIZE est
   une PROC SAS/STAT) — routine non inventée.
-- [ ] M40.2 — Multiple `SET` (lecture parallèle, EOF par site) + bare `SET;`/`MERGE;` (re-réf `_LAST_`) ;
+- [x] M40.2 — Multiple `SET` (lecture parallèle, EOF par site) + bare `SET;`/`MERGE;` (re-réf `_LAST_`) ;
   touche boucle implicite + PDV ; oracle 2 SET ⇒ 1 obs/itération, fin au 1ᵉʳ EOF (Opus, très élevé)
+  — fait : sites de lecture numérotés à la compilation (`stamp_set_sites`, pré-ordre, descend
+  dans IF/DO/SELECT), curseur/rows_read/END=/NOBS= par site, EOF d'un site ⇒ fin d'étape AU
+  POINT du statement, NOTEs « observations read » par dataset par site ; bare `SET;`/`MERGE;`
+  → `_LAST_` (mécanisme des PROC sans DATA=). Refus honnêtes documentés README : BY et
+  POINT= avec SET multiples non supportés ; fastpath exclu sur SET multiples.
 - [ ] M40.3 — `WHERE` standalone + `INFORMAT` statement ; oracle WHERE statement = WHERE= option (Opus, moyen)
 - [ ] DoD M40 : fixtures m40 ; README CALL routines + Not supported → ✅ (résiduel exotiques documenté) ; → M41.
 

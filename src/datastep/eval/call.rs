@@ -73,8 +73,9 @@ pub(super) fn eval_var(name: &str, pdv: &Pdv, ctx: &mut EvalCtx) -> Value {
     if let Some((_, flag)) = ctx.in_flags.iter().find(|(n, _)| *n == upper) {
         return Value::Num(if *flag { 1.0 } else { 0.0 });
     }
-    // Variable END= du SET (M16.4) : automatique 0/1 servie depuis le contexte.
-    if let Some((_, v)) = ctx.end_flag.as_ref().filter(|(n, _)| *n == upper) {
+    // Variable END= du SET (M16.4) : automatique 0/1 servie depuis le
+    // contexte — une entrée PAR SITE de lecture (M40.2).
+    if let Some((_, v)) = ctx.end_flags.iter().find(|(n, _)| *n == upper) {
         return Value::Num(*v);
     }
     // `DO OVER arr` actif : une référence nue à `arr` désigne l'élément

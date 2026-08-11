@@ -55,7 +55,8 @@ pub struct InputData {
     pub in_flags: Vec<(String, usize)>,
     /// END= (M16.4) : nom UPPERCASE de la variable automatique temporaire
     /// (0 pendant l'itération, 1 après lecture de la DERNIÈRE obs du DERNIER
-    /// dataset). Servie par `EvalCtx::end_flag`, jamais écrite en sortie.
+    /// dataset DU SITE). Servie par `EvalCtx::end_flags` (une entrée par
+    /// site, M40.2), jamais écrite en sortie.
     pub end_var: Option<String>,
     /// NOBS= (M16.4) : slot PDV de la variable numérique affectée AVANT la
     /// boucle au nombre TOTAL d'observations (somme des datasets du SET).

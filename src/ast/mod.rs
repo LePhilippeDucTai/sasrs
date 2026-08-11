@@ -58,10 +58,18 @@ pub enum DsStmt {
     /// ses options `(keep=... drop=... rename=(...) where=(...))`. Sans
     /// BY, plusieurs datasets = CONCATÉNATION (a en entier puis b) ; avec
     /// BY = INTERCLASSEMENT (M3). Les options de niveau statement (M16.4 :
-    /// `end=`/`nobs=`/`point=`) sont portées par `options`.
+    /// `end=`/`nobs=`/`point=`) sont portées par `options`. `specs` vide =
+    /// `set;` nu (M40.2) : re-référence `_LAST_` (résolu à la compilation).
     Set {
         specs: Vec<DatasetSpec>,
         options: SetOptions,
+        /// N° de SITE DE LECTURE (M40.2) : chaque statement SET de l'étape
+        /// est un site indépendant (curseur, END=, comptes de lignes
+        /// propres). Posé par la compilation (`stamp_set_sites`, pré-ordre
+        /// textuel) ; le parser laisse 0. Relie le `DsStmt::Set` exécuté à
+        /// son `InputData` (site 0 = `StepProgram::input`, sites suivants =
+        /// `StepProgram::extra_inputs[site-1]`).
+        site: usize,
     },
     /// `by [descending] v1 [descending] v2 ...;` — clés d'interclassement
     /// du SET (M3). Chaque paire = (nom, descending). Le statement est

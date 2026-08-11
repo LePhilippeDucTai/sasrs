@@ -46,11 +46,14 @@ use polars::prelude::*;
 /// N'examine QUE la structure ; l'appelant ajoute les conditions de session
 /// (FIRSTOBS=/OBS=).
 pub fn eligible(prog: &StepProgram) -> bool {
-    // Une seule entrée SET simple.
+    // Une seule entrée SET simple. Plusieurs statements SET (M40.2 :
+    // `extra_inputs` non vide) = lecture parallèle multi-curseurs, hors
+    // périmètre vectorisé.
     let Some(input) = &prog.input else {
         return false;
     };
-    if input.datasets.len() != 1
+    if !prog.extra_inputs.is_empty()
+        || input.datasets.len() != 1
         || !input.by.is_empty()
         || input.merge
         || !input.in_flags.is_empty()

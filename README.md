@@ -101,7 +101,7 @@ individual options of each procedure and DATA step statement. Legend:
 
 | Area | State | Detail |
 | --- | :---: | --- |
-| Data sources | ✅ | `SET` (incl. `END=`/`NOBS=`/`POINT=`, multi-dataset concat), `MERGE` + `IN=`, `BY` interleave, `UPDATE`, `MODIFY` |
+| Data sources | ✅ | `SET` (incl. `END=`/`NOBS=`/`POINT=`, multi-dataset concat, multiple `SET` statements with independent cursors and per-site `END=`/`NOBS=`, bare `SET;` reading `_LAST_`), `MERGE` + `IN=` (bare `MERGE;` reads `_LAST_`), `BY` interleave, `UPDATE`, `MODIFY`. `BY` and `POINT=` combined with multiple `SET` statements are rejected with a clear error |
 | Dataset options | ✅ | `KEEP=`, `DROP=`, `RENAME=(a=b)`, `WHERE=()` (`FIRSTOBS=`/`OBS=` only on `INFILE`) |
 | External input | ✅ | `INFILE` (`DELIMITER=`/`DLM=`, `DSD`, `FIRSTOBS=`, `OBS=`, `MISSOVER`, `TRUNCOVER`, `STOPOVER`, `LRECL=`), `INPUT` (list / column / formatted), `DATALINES`/`CARDS` |
 | Text output | ✅ | `FILE` (`LOG`/`PRINT`/external path), `PUT` (named / formatted / literal / `_ALL_`, `@n`/`+n`/`/`, `@`/`@@` hold) |
@@ -110,7 +110,7 @@ individual options of each procedure and DATA step statement. Legend:
 | Automatic variables | ✅ | `_N_`, `_ERROR_`, `FIRST.`/`LAST.`, `END=`, `NOBS=`, `POINT=`, `IN=` |
 | Hash objects | ✅ | `DECLARE HASH`/`HITER`, methods `find/check/add/replace/remove/clear/output/num_items/find_next/find_prev`, `ordered:`/`duplicate:`/`multidata:`/`dataset:` |
 | `CALL` routines | ✅ | `STREAMINIT`, `SYMPUT`, `SYMPUTX`, `EXECUTE`, `MISSING`, `SORTN`, `SORTC`, `CATS`, `SCAN`, `LABEL`, `VNAME`, `PRXCHANGE` (incl. in-place, res-length/trunc/n-changes), `PRXSUBSTR`, `PRXNEXT`, `PRXPOSN`, `PRXFREE`, `PRXDEBUG` (no-op). Exotic routines (`ALLPERM`/`LEXCOMB`/`RANPERM`-family legacy RNG, `SLEEP`, `SYSTEM`, `MODULE`, `POKE`) → runtime error |
-| Not supported | 🔴 | standalone `WHERE` statement, bare `SET;`/`MERGE;`, multiple `SET` statements, `INFORMAT` statement |
+| Not supported | 🔴 | standalone `WHERE` statement, `INFORMAT` statement |
 
 ### DATA step / macro functions
 

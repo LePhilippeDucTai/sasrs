@@ -97,10 +97,12 @@ pub struct EvalCtx {
     /// l'élément courant. Une référence NUE au nom de l'array (lecture ou
     /// écriture) y est redirigée. Empilé/dépilé par le Runner à chaque tour.
     pub do_over: HashMap<String, usize>,
-    /// Variable END= du SET (M16.4) : `(nom UPPERCASE, valeur 0/1)`. Mise à
-    /// jour par le Runner après chaque lecture (1 = dernière obs lue). Servie
-    /// comme variable automatique (jamais de slot PDV).
-    pub end_flag: Option<(String, f64)>,
+    /// Variables END= du SET (M16.4) : `(nom UPPERCASE, valeur 0/1)`, UNE
+    /// PAR SITE de lecture (M40.2 : plusieurs statements SET = plusieurs
+    /// flags indépendants). Mises à jour par le Runner après chaque lecture
+    /// du site (1 = dernière obs de CE flux lue). Servies comme variables
+    /// automatiques (jamais de slot PDV).
+    pub end_flags: Vec<(String, f64)>,
     /// Objets hash de l'étape (M17.1) : nom UPPERCASE → objet (clés, données,
     /// lignes). Copié depuis `StepProgram.hash_objects` par l'exécuteur ;
     /// defineKey/defineData/defineDone (et M17.2 find/add/...) y opèrent.
@@ -165,7 +167,7 @@ impl Default for EvalCtx {
             rng_state: 0x0000_0007_A120_1960_u64,
             rng_spare: None,
             do_over: HashMap::new(),
-            end_flag: None,
+            end_flags: Vec::new(),
             hashes: HashMap::new(),
             hash_iters: HashMap::new(),
             hash_outputs: Vec::new(),

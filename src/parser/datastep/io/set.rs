@@ -1,27 +1,25 @@
 use super::*;
 
-/// `set spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
-/// options de dataset.
+/// `set [spec [spec]*] ;` — zéro, un ou plusieurs datasets (M3), chacun avec
+/// ses options de dataset. `set;` nu (M40.2) : liste vide, la compilation la
+/// résout en `_LAST_` (le dataset le plus récemment créé de la session).
 pub(crate) fn parse_set(ts: &mut StatementStream) -> Result<DsStmt> {
-    let set_tok = ts.peek().clone();
     ts.next(); // `set`
-    if ts.peek().kind == TokenKind::Semi {
-        // `set;` sans dataset : non supporté.
-        return Err(SasError::parse(
-            "Statement SET without a dataset is not yet implemented.",
-            set_tok.span,
-        ));
-    }
     let mut specs = Vec::new();
     // Liste des datasets : un identifiant SUIVI de `=` est une option de
     // niveau statement (`end=`/`nobs=`/`point=`), pas un dataset → on arrête
-    // la liste et on bascule sur le parsing des options.
+    // la liste et on bascule sur le parsing des options. `set end=eof;` est
+    // donc un SET nu (_LAST_) avec option END=.
     while ts.peek().ident().is_some() && ts.peek2().kind != TokenKind::Eq {
         specs.push(ts.parse_dataset_spec()?);
     }
     let options = parse_set_options(ts)?;
     ts.expect_semi()?;
-    Ok(DsStmt::Set { specs, options })
+    Ok(DsStmt::Set {
+        specs,
+        options,
+        site: 0,
+    })
 }
 
 /// Options de niveau statement du SET (M16.4) : `end=v`, `nobs=v`, `point=v`,
@@ -70,19 +68,13 @@ pub(crate) fn parse_set_options(ts: &mut StatementStream) -> Result<crate::ast::
     Ok(options)
 }
 
-/// `merge spec [spec]* ;` — un ou plusieurs datasets (M3), chacun avec ses
-/// options de dataset (dont `in=`). Match-merge SAS par BY. La validité (un
-/// seul SET/MERGE par étape, présence d'un BY, tri) est tranchée à la
-/// compilation/exécution.
+/// `merge [spec [spec]*] ;` — zéro, un ou plusieurs datasets (M3), chacun
+/// avec ses options de dataset (dont `in=`). Match-merge SAS par BY. `merge;`
+/// nu (M40.2) : liste vide, la compilation la résout en `_LAST_` (un seul
+/// flux, cf. PROGRESS M40.2). La validité (un seul SET/MERGE par étape,
+/// présence d'un BY, tri) est tranchée à la compilation/exécution.
 pub(crate) fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
-    let merge_tok = ts.peek().clone();
     ts.next(); // `merge`
-    if ts.peek().kind == TokenKind::Semi {
-        return Err(SasError::parse(
-            "Statement MERGE without a dataset is not yet implemented.",
-            merge_tok.span,
-        ));
-    }
     let mut specs = Vec::new();
     while ts.peek().ident().is_some() {
         specs.push(ts.parse_dataset_spec()?);

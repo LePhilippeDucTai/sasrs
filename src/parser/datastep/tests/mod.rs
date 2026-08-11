@@ -24,11 +24,13 @@ fn dspec(name: &str) -> DatasetSpec {
     DatasetSpec::plain(dsref(name))
 }
 
-/// `DsStmt::Set` sans options de niveau statement (M16.4).
+/// `DsStmt::Set` sans options de niveau statement (M16.4) ; site 0 comme
+/// le parser (le n° de site est posé par la compilation).
 fn set_stmt(specs: Vec<DatasetSpec>) -> DsStmt {
     DsStmt::Set {
         specs,
         options: crate::ast::SetOptions::default(),
+        site: 0,
     }
 }
 

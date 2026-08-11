@@ -13,14 +13,217 @@ fn multiple_outputs_written() {
     assert_eq!(s.last_dataset.as_deref(), Some("WORK.B"));
 }
 
-/// Plusieurs SET *statements* restent refusés (hors périmètre M16.4).
+// ── M40.2 : SET multiples (un SITE de lecture par statement) ─────────
+//
+// Oracles raisonnés en SAS : chaque statement SET a son propre curseur
+// séquentiel ; quand un SET s'exécute sur un flux épuisé, l'étape
+// s'arrête IMMÉDIATEMENT (au point du statement — « fin au 1ᵉʳ EOF »).
+
+/// Oracle 2 SET : a=3 obs, b=2 obs ⇒ 2 obs, chacune combinant l'obs i de
+/// a et l'obs i de b (lecture parallèle). La 3ᵉ obs de a est LUE (comptée
+/// dans la NOTE) avant que le SET de b ne stoppe l'étape.
 #[test]
-fn multiple_set_statements_still_error() {
+fn two_set_statements_read_in_parallel() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_num_ds(&s, "b", &[("y", some(&[10.0, 20.0]))]);
+    let stats = run("data c; set a; set b; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "c", "x"), some(&[1.0, 2.0]));
+    assert_eq!(col(&s, "c", "y"), some(&[10.0, 20.0]));
+    // Comptes PAR SITE : a a servi 3 obs (la 3ᵉ chargée avant l'EOF de b).
+    assert_eq!(
+        stats.read,
+        vec![("WORK.A".to_string(), 3), ("WORK.B".to_string(), 2)]
+    );
+    // Une NOTE par dataset lu, avec les comptes exacts par site.
+    let log = s.log.into_string();
+    assert!(
+        log.contains("There were 3 observations read from the data set WORK.A."),
+        "log was: {log}"
+    );
+    assert!(
+        log.contains("There were 2 observations read from the data set WORK.B."),
+        "log was: {log}"
+    );
+}
+
+/// Fin au 1ᵉʳ EOF AU POINT du statement : a=2, b=1. Itération 1 : output
+/// après `set a` (y encore missing) puis output après `set b`. Itération
+/// 2 : output après `set a` (y RETENU de l'itération 1), puis le `set b`
+/// stoppe — le 2ᵉ output ne s'exécute pas. ⇒ 3 obs.
+#[test]
+fn first_eof_stops_at_statement_point() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0]))]);
+    write_num_ds(&s, "b", &[("y", some(&[10.0]))]);
+    run("data x; set a; output; set b; output; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "x", "x"), some(&[1.0, 1.0, 2.0]));
+    // Obs 1 : y pas encore lu (missing) ; obs 3 : y auto-retenu.
+    assert_eq!(col(&s, "x", "y"), vec![None, Some(10.0), Some(10.0)]);
+}
+
+/// Variables communes : le DERNIER SET exécuté (ordre du programme) gagne.
+#[test]
+fn common_variables_last_executed_set_wins() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0]))]);
+    write_num_ds(&s, "b", &[("x", some(&[10.0, 20.0]))]);
+    run("data out; set a; set b; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
+}
+
+/// END= PAR SITE : le flag du flux court (b) s'allume sur SA dernière obs
+/// (itération 2), pendant que celui du flux long (a) reste à 0.
+#[test]
+fn end_flag_is_per_site() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_num_ds(&s, "b", &[("y", some(&[10.0, 20.0]))]);
+    run(
+        "data out; set a end=ea; set b end=eb; fa = ea; fb = eb; run;",
+        &mut s,
+    )
+    .unwrap();
+    assert_eq!(col(&s, "out", "fa"), some(&[0.0, 0.0]));
+    assert_eq!(col(&s, "out", "fb"), some(&[0.0, 1.0]));
+}
+
+/// NOBS= PAR SITE : chaque variable reçoit le total de SON flux, AVANT la
+/// boucle (disponible dès la 1re itération).
+#[test]
+fn nobs_is_per_site() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_num_ds(&s, "b", &[("y", some(&[10.0, 20.0]))]);
+    run("data out; set a nobs=na; set b nobs=nb; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "na"), some(&[3.0, 3.0]));
+    assert_eq!(col(&s, "out", "nb"), some(&[2.0, 2.0]));
+}
+
+/// Auto-retain PAR SITE : un SET conditionnel (`if _n_ = 1 then set a;`,
+/// idiome SAS des totaux) ne lit qu'une fois — sa variable GARDE sa valeur
+/// pendant que l'autre site continue de lire. Le SET imbriqué est bien un
+/// site propre (stamping dans les branches IF).
+#[test]
+fn conditional_set_site_auto_retains() {
+    let mut s = session();
+    write_num_ds(&s, "b", &[("y", some(&[10.0, 20.0, 30.0]))]);
+    write_num_ds(&s, "a", &[("total", some(&[99.0]))]);
+    let stats = run("data out; set b; if _n_ = 1 then set a; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "y"), some(&[10.0, 20.0, 30.0]));
+    // `total` lu à la 1re itération, retenu ensuite (from_input).
+    assert_eq!(col(&s, "out", "total"), some(&[99.0, 99.0, 99.0]));
+    assert_eq!(
+        stats.read,
+        vec![("WORK.B".to_string(), 3), ("WORK.A".to_string(), 1)]
+    );
+}
+
+/// Deux SET du MÊME dataset = deux curseurs INDÉPENDANTS : chaque site
+/// relit le flux depuis le début (un curseur partagé donnerait x=1,y=2 puis
+/// x=3,y=... — faux). RENAME= sur le 2ᵉ site sépare les variables.
+#[test]
+fn two_sets_of_same_dataset_have_independent_cursors() {
+    let mut s = session();
+    write_num_ds(&s, "h", &[("x", some(&[1.0, 2.0, 3.0]))]);
+    let stats = run("data out; set h; set h(rename=(x=y)); run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "x"), some(&[1.0, 2.0, 3.0]));
+    assert_eq!(col(&s, "out", "y"), some(&[1.0, 2.0, 3.0]));
+    // Une NOTE de lecture PAR SITE, même dataset.
+    assert_eq!(
+        stats.read,
+        vec![("WORK.H".to_string(), 3), ("WORK.H".to_string(), 3)]
+    );
+}
+
+/// WHERE= par site : le filtre d'un site ne touche pas l'autre.
+#[test]
+fn where_option_is_per_site() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0, 3.0]))]);
+    write_num_ds(&s, "b", &[("y", some(&[10.0, 20.0, 30.0]))]);
+    let stats = run("data out; set a(where=(x ne 2)); set b; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "x"), some(&[1.0, 3.0]));
+    assert_eq!(col(&s, "out", "y"), some(&[10.0, 20.0]));
+    // Les lignes rejetées par WHERE= ne comptent pas comme lues.
+    assert_eq!(
+        stats.read,
+        vec![("WORK.A".to_string(), 2), ("WORK.B".to_string(), 2)]
+    );
+}
+
+/// BY avec plusieurs statements SET : refus honnête (le match par site
+/// n'est pas implémenté — cf. README).
+#[test]
+fn by_with_multiple_set_statements_errors() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("id", some(&[1.0]))]);
+    write_num_ds(&s, "b", &[("id", some(&[1.0]))]);
+    let e = run_err("data out; set a; set b; by id; run;", &mut s);
+    assert!(
+        e.contains("BY statement is not supported with multiple SET statements"),
+        "got: {e}"
+    );
+}
+
+/// POINT= avec plusieurs statements SET : refus honnête (accès direct sur
+/// un site + séquentiel sur l'autre non supporté — cf. README).
+#[test]
+fn point_with_multiple_set_statements_errors() {
     let mut s = session();
     write_num_ds(&s, "a", &[("x", some(&[1.0]))]);
-    write_num_ds(&s, "b", &[("x", some(&[2.0]))]);
-    let e = run_err("data out; set a; set b; run;", &mut s);
-    assert!(e.contains("Multiple SET statements"), "got: {e}");
+    write_num_ds(&s, "b", &[("y", some(&[1.0]))]);
+    let e = run_err("data out; set a point=p; set b; stop; run;", &mut s);
+    assert!(
+        e.contains("POINT= is not supported with multiple SET statements"),
+        "got: {e}"
+    );
+}
+
+// ── M40.2 : `set;` / `merge;` nus (re-référence _LAST_) ──────────────
+
+/// `set;` nu lit `_LAST_` (le dataset le plus récemment créé).
+#[test]
+fn bare_set_reads_last_dataset() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0]))]);
+    s.last_dataset = Some("WORK.A".to_string());
+    let stats = run("data out; set; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "x"), some(&[1.0, 2.0]));
+    assert_eq!(stats.read, vec![("WORK.A".to_string(), 2)]);
+}
+
+/// `set end=eof;` nu : _LAST_ + option de niveau statement.
+#[test]
+fn bare_set_with_end_option() {
+    let mut s = session();
+    write_num_ds(&s, "a", &[("x", some(&[1.0, 2.0]))]);
+    s.last_dataset = Some("WORK.A".to_string());
+    run("data out; set end=eof; e = eof; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "e"), some(&[0.0, 1.0]));
+}
+
+/// `set;` nu sans _LAST_ : ERROR claire (comme les PROC sans DATA=).
+#[test]
+fn bare_set_without_last_errors() {
+    let mut s = session();
+    let e = run_err("data out; set; run;", &mut s);
+    assert!(e.contains("_LAST_"), "got: {e}");
+}
+
+/// `merge;` nu re-référence `_LAST_` (un seul flux — cf. PROGRESS M40.2).
+#[test]
+fn bare_merge_reads_last_dataset() {
+    let mut s = session();
+    write_num_ds(
+        &s,
+        "a",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
+    s.last_dataset = Some("WORK.A".to_string());
+    run("data out; merge; by id; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0]));
+    assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
 }
 
 /// Entrées multiples vers la même étiquette via LINK (réutilisation).

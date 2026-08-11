@@ -207,6 +207,13 @@ fn gate_rejects_no_input() {
     assert!(!is_eligible("data out; x = 1; run;"));
 }
 
+/// M40.2 — plusieurs statements SET (lecture parallèle multi-curseurs) :
+/// hors périmètre vectorisé, repli obligatoire sur la boucle.
+#[test]
+fn gate_rejects_multiple_set_statements() {
+    assert!(!is_eligible("data out; set inp; set inp; run;"));
+}
+
 /// Avec le flag ON mais une étape NON éligible (subsetting IF), `execute`
 /// doit retomber sur la boucle ligne-à-ligne et rester correct.
 #[test]

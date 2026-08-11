@@ -4,13 +4,15 @@ impl Compiler<'_> {
     /// Assemble l'`InputData` final : résolution des clés BY en slots PDV,
     /// localisation de chaque clé dans CHAQUE dataset (`by_cols`),
     /// validation des références FIRST./LAST. contre les variables BY.
-    pub(super) fn build_input(&mut self) -> Result<Option<InputData>> {
+    /// Renvoie `(site 0 ou MERGE, sites SET supplémentaires)` (M40.2).
+    pub(super) fn build_input(&mut self) -> Result<(Option<InputData>, Vec<InputData>)> {
         // UPDATE/MODIFY gèrent leur propre BY (résolu dans build_update/
         // build_modify) : ne pas consommer `by`/`first_last_refs` ici.
         if self.update.is_some() || self.modify.is_some() {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         let mut datasets = std::mem::take(&mut self.input_datasets);
+        let extra_sites = std::mem::take(&mut self.extra_set_sites);
         let by_items = self.by.take();
         if datasets.is_empty() {
             // BY ou FIRST./LAST. sans SET : message SAS.
@@ -19,7 +21,24 @@ impl Compiler<'_> {
                     "No SET, MERGE, UPDATE, or MODIFY statement.",
                 ));
             }
-            return Ok(None);
+            return Ok((None, Vec::new()));
+        }
+        // M40.2 — restrictions avec PLUSIEURS statements SET : le BY (match
+        // par site) et POINT= (accès direct) ne sont pas supportés — refus
+        // honnête plutôt qu'un résultat faux (cf. README).
+        if !extra_sites.is_empty() {
+            if by_items.is_some() {
+                return Err(SasError::runtime(
+                    "The BY statement is not supported with multiple SET statements.",
+                ));
+            }
+            if self.set_options.point.is_some()
+                || extra_sites.iter().any(|(_, o)| o.point.is_some())
+            {
+                return Err(SasError::runtime(
+                    "POINT= is not supported with multiple SET statements.",
+                ));
+            }
         }
         let mut by: Vec<ByVar> = Vec::new();
         if let Some(items) = by_items {
@@ -103,15 +122,39 @@ impl Compiler<'_> {
             }
         }
 
-        Ok(Some(InputData {
-            datasets,
-            by,
-            merge: self.seen_merge,
-            in_flags,
-            end_var,
-            nobs_slot,
-            point_slot,
-        }))
+        // M40.2 — sites SET supplémentaires : concaténation séquentielle
+        // pure (jamais de BY/MERGE/IN=/POINT=), avec END=/NOBS= PAR SITE.
+        let mut extra_inputs = Vec::with_capacity(extra_sites.len());
+        for (site_datasets, opts) in extra_sites {
+            let nobs_slot = match &opts.nobs {
+                Some(n) => Some(self.pdv.slot(n).ok_or_else(|| {
+                    SasError::runtime(format!("NOBS= variable {n} is not addressable."))
+                })?),
+                None => None,
+            };
+            extra_inputs.push(InputData {
+                datasets: site_datasets,
+                by: Vec::new(),
+                merge: false,
+                in_flags: Vec::new(),
+                end_var: opts.end.as_ref().map(|n| n.to_uppercase()),
+                nobs_slot,
+                point_slot: None,
+            });
+        }
+
+        Ok((
+            Some(InputData {
+                datasets,
+                by,
+                merge: self.seen_merge,
+                in_flags,
+                end_var,
+                nobs_slot,
+                point_slot,
+            }),
+            extra_inputs,
+        ))
     }
 
     /// Assemble l'`UpdateData` final (M16.5) : résolution des clés en slots

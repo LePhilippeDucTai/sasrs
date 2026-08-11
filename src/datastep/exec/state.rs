@@ -107,6 +107,22 @@ impl SetCursor {
     }
 }
 
+/// M40.2 — état d'exécution d'un site SET SUPPLÉMENTAIRE (2ᵉ, 3ᵉ…
+/// statement SET de l'étape) : ses datasets matérialisés, son curseur de
+/// concaténation et ses compteurs de lignes lues, tous INDÉPENDANTS du
+/// site 0 (`Runner::{input, set_cursor, rows_read}`).
+pub(super) struct SiteState {
+    /// Datasets du site (concaténation séquentielle ; jamais de BY/MERGE/
+    /// POINT=, refusés à la compilation).
+    pub(super) input: InputData,
+    /// Curseur de concaténation propre au site.
+    pub(super) cursor: SetCursor,
+    /// Lignes lues au sens SAS (celles qui passent le WHERE=), par dataset.
+    pub(super) rows_read: Vec<usize>,
+    /// Index du flag END= de ce site dans `EvalCtx::end_flags` (si déclaré).
+    pub(super) end_idx: Option<usize>,
+}
+
 /// État du mode MERGE (M3) : plan pré-calculé + curseur. Vide hors MERGE.
 pub(super) struct MergeState {
     /// Séquence pré-calculée des observations de sortie (groupe par groupe).

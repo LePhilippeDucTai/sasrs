@@ -26,6 +26,7 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         pdv,
         stmts,
         input,
+        extra_inputs,
         update: _,
         modify: _,
         text_input,
@@ -64,7 +65,12 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let single_iteration = input.is_none() && text_input.is_none();
     let n_rows: usize = input
         .as_ref()
-        .map_or(0, |i| i.datasets.iter().map(|d| d.n_rows).sum());
+        .map_or(0, |i| i.datasets.iter().map(|d| d.n_rows).sum::<usize>())
+        + extra_inputs
+            .iter()
+            .flat_map(|i| i.datasets.iter())
+            .map(|d| d.n_rows)
+            .sum::<usize>();
     // Garde-fou anti-boucle infinie pour la source texte.
     let n_text_lines = text_input.as_ref().map_or(0, |t| t.lines.len());
     let n_datasets = input.as_ref().map_or(0, |i| i.datasets.len());
@@ -79,19 +85,45 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             .map(|(name, _)| (name.clone(), false))
             .collect()
     });
-    // END= (M16.4) : variable automatique 0/1, initialisée à 0.
-    let end_flag = input
-        .as_ref()
-        .and_then(|i| i.end_var.as_ref().map(|n| (n.clone(), 0.0)));
+    // END= (M16.4/M40.2) : variables automatiques 0/1, UNE PAR SITE de
+    // lecture, initialisées à 0. Le site 0 garde son index dans `end0`, les
+    // sites supplémentaires dans leur `SiteState::end_idx`.
+    let mut end_flags: Vec<(String, f64)> = Vec::new();
+    let end0 = input.as_ref().and_then(|i| i.end_var.as_ref()).map(|n| {
+        end_flags.push((n.clone(), 0.0));
+        end_flags.len() - 1
+    });
+    // M40.2 — état d'exécution des sites SET supplémentaires (curseurs et
+    // compteurs de lignes lues indépendants du site 0).
+    let extra_sites: Vec<SiteState> = extra_inputs
+        .into_iter()
+        .map(|inp| {
+            let end_idx = inp.end_var.as_ref().map(|n| {
+                end_flags.push((n.clone(), 0.0));
+                end_flags.len() - 1
+            });
+            let n_ds = inp.datasets.len();
+            SiteState {
+                cursor: SetCursor::new(n_ds),
+                rows_read: vec![0; n_ds],
+                end_idx,
+                input: inp,
+            }
+        })
+        .collect();
     // POINT= (M16.4) : si présent, la boucle implicite est REMPLACÉE par un
     // contrôle manuel (pas d'avance de curseur automatique, pas d'output
     // implicite, pas de fin d'étape à l'épuisement). On mémorise le slot.
+    // (Refusé à la compilation avec plusieurs sites SET — site 0 seulement.)
     let point_slot = input.as_ref().and_then(|i| i.point_slot);
-    // NOBS= (M16.4) : slot + total d'observations (somme des datasets).
-    let nobs = input.as_ref().and_then(|i| {
-        i.nobs_slot
-            .map(|slot| (slot, i.datasets.iter().map(|d| d.n_rows).sum::<usize>()))
-    });
+    // NOBS= (M16.4/M40.2) : slot + total d'observations DU SITE (somme de
+    // ses datasets), pour chaque site qui déclare l'option.
+    let mut nobs: Vec<(usize, usize)> = Vec::new();
+    for site in input.iter().chain(extra_sites.iter().map(|s| &s.input)) {
+        if let Some(slot) = site.nobs_slot {
+            nobs.push((slot, site.datasets.iter().map(|d| d.n_rows).sum::<usize>()));
+        }
+    }
     let n_outputs = outputs.len();
     // SYMGET (M11.5) : instantané de la table macro pris AU DÉBUT de
     // l'étape. Sous la feature `macros` il porte les `%let`/symput
@@ -105,11 +137,13 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         format_catalog: std::rc::Rc::clone(&session.format_catalog),
         set_cursor: SetCursor::new(n_datasets),
         rows_read: vec![0; n_datasets],
+        extra_sites,
+        end0,
         ctx: EvalCtx {
             arrays,
             by_flags,
             in_flags,
-            end_flag,
+            end_flags,
             macro_symbols,
             hashes: hash_objects,
             hash_iters,
@@ -153,9 +187,10 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         r.pdv.set(slot, v);
     }
 
-    // NOBS= (M16.4) : affectée AVANT la boucle (disponible dès la 1re
-    // itération, p.ex. `do i = 1 to n;`). Slot retenu ⇒ persiste.
-    if let Some((slot, total)) = nobs {
+    // NOBS= (M16.4/M40.2) : affectées AVANT la boucle (disponibles dès la
+    // 1re itération, p.ex. `do i = 1 to n;`), une par site qui déclare
+    // l'option. Slots retenus ⇒ persistent.
+    for (slot, total) in nobs {
         r.pdv.set(slot, Value::Num(total as f64));
     }
 
@@ -226,6 +261,18 @@ pub fn execute(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
         // (fidèle à la NOTE SAS). Une NOTE par dataset, dans l'ordre du
         // statement SET.
         for (ds, n) in input.datasets.iter().zip(&r.rows_read) {
+            session.log.note(&format!(
+                "There were {} observations read from the data set {}.",
+                n, ds.display
+            ));
+            stats.read.push((ds.display.clone(), *n));
+        }
+    }
+    // M40.2 — sites SET supplémentaires : une NOTE par dataset PAR SITE,
+    // dans l'ordre des statements (SAS émet une NOTE par ouverture, même
+    // pour deux lectures du même dataset), avec les comptes propres du site.
+    for site in &r.extra_sites {
+        for (ds, n) in site.input.datasets.iter().zip(&site.rows_read) {
             session.log.note(&format!(
                 "There were {} observations read from the data set {}.",
                 n, ds.display

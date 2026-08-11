@@ -15,134 +15,39 @@ impl Runner {
     /// valeur (RETAIN implicite des variables de SET — règle SAS, pas de
     /// remise à missing).
     pub(super) fn exec_set_concat(&mut self) -> Result<Flow> {
-        loop {
-            let Some(input) = &self.input else {
-                return Err(SasError::runtime("SET statement without input data."));
-            };
-            let Some(ds) = input.datasets.get(self.set_cursor.cur_ds) else {
-                // Fin de TOUS les inputs : fin d'étape immédiate.
-                return Ok(Flow::EndStep);
-            };
-            let row = self.set_cursor.cursors[self.set_cursor.cur_ds];
-            if row >= ds.n_rows {
-                self.set_cursor.cur_ds += 1;
-                continue;
-            }
-            for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
-                self.pdv.set(*slot, col[row].clone());
-            }
-            self.set_cursor.cursors[self.set_cursor.cur_ds] += 1;
-            let Some(w) = &ds.where_ else {
-                self.rows_read[self.set_cursor.cur_ds] += 1;
-                self.set_end_flag();
-                return Ok(Flow::Normal);
-            };
-            // Évaluation inline (emprunts disjoints : `input` tient
-            // self.input, eval n'utilise que pdv et ctx).
-            let v = eval(w, &self.pdv, &mut self.ctx);
-            if let Some(err) = self.ctx.fatal.take() {
-                return Err(err);
-            }
-            if self.ctx.error_flag {
-                self.pdv.error_ = true;
-                self.ctx.error_flag = false;
-            }
-            if v.truthy() {
-                self.rows_read[self.set_cursor.cur_ds] += 1;
-                self.set_end_flag();
-                return Ok(Flow::Normal);
-            }
-        }
-    }
-
-    /// Met à jour la variable END= (M16.4) après une lecture réussie en mode
-    /// concaténation : 1 si AUCUNE observation ne reste à lire (en tenant
-    /// compte du WHERE= de chaque dataset), 0 sinon. Sans END= déclaré,
-    /// no-op. La détection se fait par un balayage en avant NON destructif
-    /// (les curseurs ne sont pas modifiés).
-    fn set_end_flag(&mut self) {
-        if self.ctx.end_flag.is_none() {
-            return;
-        }
-        let has_more = self.concat_has_more();
-        if let Some((_, v)) = &mut self.ctx.end_flag {
-            *v = if has_more { 0.0 } else { 1.0 };
-        }
-    }
-
-    /// Balaye en avant (sans muter les curseurs) pour savoir s'il reste au
-    /// moins une observation lisible APRÈS la position courante, en respectant
-    /// le WHERE= de chaque dataset. Sert END= en mode concaténation.
-    fn concat_has_more(&mut self) -> bool {
-        let Some(input) = self.input.take() else {
-            return false;
+        let Some(input) = &self.input else {
+            return Err(SasError::runtime("SET statement without input data."));
         };
-        // Le balayage évalue éventuellement des WHERE= sur des lignes JAMAIS
-        // réellement lues : il ne doit donc émettre AUCUNE NOTE/erreur. On
-        // mémorise l'état des compteurs de l'évaluateur et on le restaure à la
-        // fin (le vrai chargement, lui, comptabilise normalement).
-        let saved_ctx = (
-            self.ctx.missing_generated,
-            self.ctx.division_by_zero,
-            self.ctx.note_num_to_char,
-            self.ctx.note_char_to_num,
-            self.ctx.invalid_data,
-            self.ctx.error_flag,
-            self.ctx.fatal.take(),
-        );
-        let mut found = false;
-        'outer: for d in self.set_cursor.cur_ds..input.datasets.len() {
-            let ds = &input.datasets[d];
-            let start = if d == self.set_cursor.cur_ds {
-                self.set_cursor.cursors[d]
-            } else {
-                0
-            };
-            for row in start..ds.n_rows {
-                match &ds.where_ {
-                    None => {
-                        found = true;
-                        break 'outer;
-                    }
-                    Some(w) => {
-                        // Évalue le WHERE= sur une COPIE des valeurs de la ligne
-                        // chargées dans le PDV, puis restaure (le balayage ne
-                        // doit pas laisser de trace). On sauvegarde/restaure les
-                        // slots touchés.
-                        let saved: Vec<(usize, Value)> = ds
-                            .var_slots
-                            .iter()
-                            .map(|&s| (s, self.pdv.get(s).clone()))
-                            .collect();
-                        for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
-                            self.pdv.set(*slot, col[row].clone());
-                        }
-                        let v = eval(w, &self.pdv, &mut self.ctx);
-                        // Restaure les slots (le balayage ne laisse aucune
-                        // trace sur le PDV).
-                        for (slot, val) in saved {
-                            self.pdv.set(slot, val);
-                        }
-                        if v.truthy() {
-                            found = true;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-        // Restaure intégralement les compteurs de l'évaluateur.
-        (
-            self.ctx.missing_generated,
-            self.ctx.division_by_zero,
-            self.ctx.note_num_to_char,
-            self.ctx.note_char_to_num,
-            self.ctx.invalid_data,
-            self.ctx.error_flag,
-            self.ctx.fatal,
-        ) = saved_ctx;
-        self.input = Some(input);
-        found
+        set_concat_read(
+            input,
+            &mut self.set_cursor,
+            &mut self.rows_read,
+            self.end0,
+            &mut self.pdv,
+            &mut self.ctx,
+        )
+    }
+
+    /// M40.2 — SET d'un site SUPPLÉMENTAIRE (2ᵉ, 3ᵉ… statement SET de
+    /// l'étape) : même lecture séquentielle en concaténation que le site 0,
+    /// mais sur le curseur/les compteurs PROPRES du site (`extra_sites[idx]`,
+    /// idx = site − 1). L'épuisement de CE flux termine l'étape immédiatement
+    /// (au point du statement — « fin au 1ᵉʳ EOF »).
+    pub(super) fn exec_set_extra(&mut self, idx: usize) -> Result<Flow> {
+        let SiteState {
+            input,
+            cursor,
+            rows_read,
+            end_idx,
+        } = &mut self.extra_sites[idx];
+        set_concat_read(
+            input,
+            cursor,
+            rows_read,
+            *end_idx,
+            &mut self.pdv,
+            &mut self.ctx,
+        )
     }
 
     /// SET ... POINT= (M16.4) : ACCÈS DIRECT. Lit la valeur de la variable
@@ -201,8 +106,9 @@ impl Runner {
         }
         self.rows_read[d] += 1;
         // END= avec POINT= : 1 si l'index pointe la DERNIÈRE observation.
-        if let Some((_, v)) = &mut self.ctx.end_flag {
-            *v = if (idx as usize) == total { 1.0 } else { 0.0 };
+        // (POINT= n'existe qu'au site 0 — flag `end0`.)
+        if let Some(i) = self.end0 {
+            self.ctx.end_flags[i].1 = if (idx as usize) == total { 1.0 } else { 0.0 };
         }
         self.input = Some(input);
         Ok(Flow::Normal)
@@ -251,6 +157,153 @@ impl Runner {
         self.modify_state = Some(state);
         Ok(Flow::Normal)
     }
+}
+
+/// Cœur de la lecture SET en CONCATÉNATION, paramétré par SITE (M40.2 —
+/// emprunts disjoints : chaque site fournit SON `input`/`cursor`/
+/// `rows_read`/flag END=, le PDV et l'EvalCtx sont partagés). Sémantique
+/// inchangée du site unique : le premier dataset en entier, puis le
+/// suivant ; boucle de skip interne sur le WHERE= (les lignes rejetées ne
+/// comptent pas dans `rows_read`) ; tous les datasets DU SITE épuisés →
+/// l'étape se termine IMMÉDIATEMENT (EndStep, au point du statement). Les
+/// variables absentes du dataset courant GARDENT leur valeur (RETAIN
+/// implicite des variables de SET — règle SAS).
+fn set_concat_read(
+    input: &InputData,
+    cursor: &mut SetCursor,
+    rows_read: &mut [usize],
+    end_idx: Option<usize>,
+    pdv: &mut Pdv,
+    ctx: &mut EvalCtx,
+) -> Result<Flow> {
+    loop {
+        let Some(ds) = input.datasets.get(cursor.cur_ds) else {
+            // Fin de TOUS les inputs du site : fin d'étape immédiate.
+            return Ok(Flow::EndStep);
+        };
+        let row = cursor.cursors[cursor.cur_ds];
+        if row >= ds.n_rows {
+            cursor.cur_ds += 1;
+            continue;
+        }
+        for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+            pdv.set(*slot, col[row].clone());
+        }
+        cursor.cursors[cursor.cur_ds] += 1;
+        let Some(w) = &ds.where_ else {
+            rows_read[cursor.cur_ds] += 1;
+            set_site_end_flag(input, cursor, end_idx, pdv, ctx);
+            return Ok(Flow::Normal);
+        };
+        let v = eval(w, pdv, ctx);
+        if let Some(err) = ctx.fatal.take() {
+            return Err(err);
+        }
+        if ctx.error_flag {
+            pdv.error_ = true;
+            ctx.error_flag = false;
+        }
+        if v.truthy() {
+            rows_read[cursor.cur_ds] += 1;
+            set_site_end_flag(input, cursor, end_idx, pdv, ctx);
+            return Ok(Flow::Normal);
+        }
+    }
+}
+
+/// Met à jour la variable END= du site (M16.4) après une lecture réussie en
+/// mode concaténation : 1 si AUCUNE observation ne reste à lire dans CE flux
+/// (en tenant compte du WHERE= de chaque dataset), 0 sinon. Sans END=
+/// déclaré sur le site, no-op. La détection se fait par un balayage en avant
+/// NON destructif (les curseurs ne sont pas modifiés).
+fn set_site_end_flag(
+    input: &InputData,
+    cursor: &SetCursor,
+    end_idx: Option<usize>,
+    pdv: &mut Pdv,
+    ctx: &mut EvalCtx,
+) {
+    let Some(i) = end_idx else {
+        return;
+    };
+    let has_more = concat_has_more(input, cursor, pdv, ctx);
+    ctx.end_flags[i].1 = if has_more { 0.0 } else { 1.0 };
+}
+
+/// Balaye en avant (sans muter les curseurs) pour savoir s'il reste au
+/// moins une observation lisible APRÈS la position courante du site, en
+/// respectant le WHERE= de chaque dataset. Sert END= en mode concaténation.
+fn concat_has_more(
+    input: &InputData,
+    cursor: &SetCursor,
+    pdv: &mut Pdv,
+    ctx: &mut EvalCtx,
+) -> bool {
+    // Le balayage évalue éventuellement des WHERE= sur des lignes JAMAIS
+    // réellement lues : il ne doit donc émettre AUCUNE NOTE/erreur. On
+    // mémorise l'état des compteurs de l'évaluateur et on le restaure à la
+    // fin (le vrai chargement, lui, comptabilise normalement).
+    let saved_ctx = (
+        ctx.missing_generated,
+        ctx.division_by_zero,
+        ctx.note_num_to_char,
+        ctx.note_char_to_num,
+        ctx.invalid_data,
+        ctx.error_flag,
+        ctx.fatal.take(),
+    );
+    let mut found = false;
+    'outer: for d in cursor.cur_ds..input.datasets.len() {
+        let ds = &input.datasets[d];
+        let start = if d == cursor.cur_ds {
+            cursor.cursors[d]
+        } else {
+            0
+        };
+        for row in start..ds.n_rows {
+            match &ds.where_ {
+                None => {
+                    found = true;
+                    break 'outer;
+                }
+                Some(w) => {
+                    // Évalue le WHERE= sur une COPIE des valeurs de la ligne
+                    // chargées dans le PDV, puis restaure (le balayage ne
+                    // doit pas laisser de trace). On sauvegarde/restaure les
+                    // slots touchés.
+                    let saved: Vec<(usize, Value)> = ds
+                        .var_slots
+                        .iter()
+                        .map(|&s| (s, pdv.get(s).clone()))
+                        .collect();
+                    for (col, slot) in ds.columns.iter().zip(&ds.var_slots) {
+                        pdv.set(*slot, col[row].clone());
+                    }
+                    let v = eval(w, pdv, ctx);
+                    // Restaure les slots (le balayage ne laisse aucune
+                    // trace sur le PDV).
+                    for (slot, val) in saved {
+                        pdv.set(slot, val);
+                    }
+                    if v.truthy() {
+                        found = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    // Restaure intégralement les compteurs de l'évaluateur.
+    (
+        ctx.missing_generated,
+        ctx.division_by_zero,
+        ctx.note_num_to_char,
+        ctx.note_char_to_num,
+        ctx.invalid_data,
+        ctx.error_flag,
+        ctx.fatal,
+    ) = saved_ctx;
+    found
 }
 
 /// Clés BY de la ligne `row` d'un dataset (dans l'ordre du BY).

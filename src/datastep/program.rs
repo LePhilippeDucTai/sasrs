@@ -3,7 +3,14 @@ use super::*;
 pub struct StepProgram {
     pub pdv: Pdv,
     pub stmts: Vec<crate::ast::DsStmt>,
+    /// Entrée du PREMIER statement SET (site 0), ou du MERGE. `None` = pas
+    /// de SET/MERGE dans l'étape.
     pub input: Option<InputData>,
+    /// Sites SET supplémentaires (M40.2) : un `InputData` par statement SET
+    /// au-delà du premier (index = site − 1, cf. `DsStmt::Set::site`).
+    /// Chaque site a son propre curseur séquentiel à l'exécution ; jamais de
+    /// BY / MERGE / POINT= (refusés à la compilation avec plusieurs SET).
+    pub extra_inputs: Vec<InputData>,
     /// Entrée UPDATE (M16.5), exclusive de `input`/`text_input`/`modify`.
     pub update: Option<UpdateData>,
     /// Entrée MODIFY (M16.5), exclusive de `input`/`text_input`/`update`.
@@ -76,8 +83,15 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         goto_link_refs: Vec::new(),
         hash_objects: HashMap::new(),
         hash_iters: HashMap::new(),
+        extra_set_sites: Vec::new(),
     };
-    for stmt in &ast.stmts {
+    // M40.2 — numérote chaque statement SET (pré-ordre textuel) : chaque SET
+    // est un SITE DE LECTURE indépendant. Le n° stampé relie la compilation
+    // (InputData du site) à l'exécution (curseur du site) ; on walke ensuite
+    // l'arbre STAMPÉ, qui est aussi celui livré au Runner.
+    let mut stmts = ast.stmts.clone();
+    stamp_set_sites(&mut stmts, &mut 0);
+    for stmt in &stmts {
         c.walk_stmt(stmt)?;
     }
     // FORMAT/ATTRIB format= : appliqués au PDV maintenant que TOUTES les
@@ -120,7 +134,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         c.pdv = rebuild_with_retained(&c.pdv, &c.retained_slots);
     }
 
-    let input = c.build_input()?;
+    let (input, extra_inputs) = c.build_input()?;
     let update = c.build_update()?;
     let modify = c.build_modify()?;
     let text_input = c.build_text_input()?;
@@ -151,7 +165,7 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
     // étiquette définie uniquement dans un bloc imbriqué n'est donc pas une
     // cible valide.
     let mut flow_labels: HashMap<String, usize> = HashMap::new();
-    for (i, stmt) in ast.stmts.iter().enumerate() {
+    for (i, stmt) in stmts.iter().enumerate() {
         if let DsStmt::Labeled { name, .. } = stmt {
             flow_labels.insert(name.to_uppercase(), i);
         }
@@ -181,8 +195,9 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         .collect();
     Ok(StepProgram {
         pdv: c.pdv,
-        stmts: ast.stmts.clone(),
+        stmts,
         input,
+        extra_inputs,
         update,
         modify,
         text_input,
@@ -196,4 +211,49 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         hash_objects: c.hash_objects,
         hash_iters: c.hash_iters,
     })
+}
+
+/// M40.2 — pose le n° de SITE sur chaque `DsStmt::Set` de l'étape, en
+/// pré-ordre textuel (le 1ᵉʳ SET rencontré = site 0). Ne descend que dans
+/// les variantes qui portent des statements enfants (un SET peut vivre dans
+/// un IF/DO/SELECT — `if _n_ = 1 then set totals;` est un idiome SAS).
+fn stamp_set_sites(stmts: &mut [DsStmt], next: &mut usize) {
+    for stmt in stmts {
+        stamp_set_site(stmt, next);
+    }
+}
+
+fn stamp_set_site(stmt: &mut DsStmt, next: &mut usize) {
+    match stmt {
+        DsStmt::Set { site, .. } => {
+            *site = *next;
+            *next += 1;
+        }
+        DsStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stamp_set_site(then_branch, next);
+            if let Some(e) = else_branch {
+                stamp_set_site(e, next);
+            }
+        }
+        DsStmt::Block(body)
+        | DsStmt::DoLoop { body, .. }
+        | DsStmt::DoList { body, .. }
+        | DsStmt::DoOver { body, .. } => stamp_set_sites(body, next),
+        DsStmt::Select {
+            whens, otherwise, ..
+        } => {
+            for w in whens {
+                stamp_set_site(&mut w.body, next);
+            }
+            if let Some(o) = otherwise {
+                stamp_set_site(o, next);
+            }
+        }
+        DsStmt::Labeled { stmt, .. } => stamp_set_site(stmt, next),
+        _ => {}
+    }
 }

@@ -2,22 +2,38 @@ use super::*;
 
 impl Compiler<'_> {
     /// Compile un statement `SET` (bras `DsStmt::Set` de `walk_stmt`).
+    ///
+    /// M40.2 — plusieurs statements SET par étape : chaque statement est un
+    /// SITE DE LECTURE indépendant (`site` posé par `stamp_set_sites`). Le
+    /// site 0 garde le chemin historique (`input_datasets`/`set_options`,
+    /// seul site autorisé à porter BY/POINT=) ; les sites suivants vont dans
+    /// `extra_set_sites` (concaténation séquentielle pure). `specs` vide =
+    /// `set;` nu : re-référence `_LAST_` (comme SAS).
     pub(super) fn compile_set_stmt(
         &mut self,
         specs: &[DatasetSpec],
         options: &SetOptions,
+        site: usize,
     ) -> Result<()> {
-        if self.seen_set {
-            return Err(SasError::runtime(
-                "Multiple SET statements are not yet implemented.",
-            ));
-        }
         if self.seen_merge {
             return Err(SasError::runtime(
                 "A SET statement is not allowed after a MERGE statement.",
             ));
         }
         self.seen_set = true;
+        // `set;` nu : résolution _LAST_ (même mécanisme que les PROC sans
+        // DATA= — erreur claire si aucun dataset n'a encore été créé).
+        let last_spec;
+        let specs = if specs.is_empty() {
+            let dref = crate::procs::common::resolve_last_dataset(&None, self.session)?;
+            last_spec = [DatasetSpec::plain(dref)];
+            &last_spec[..]
+        } else {
+            specs
+        };
+        // Sites supplémentaires : les datasets compilés par `compile_set`
+        // sont détournés vers le site (drain de la tranche poussée).
+        let site_start = self.input_datasets.len();
         for spec in specs {
             // `in=` n'est pas valide sur un SET (MERGE seulement).
             if spec.options.in_.is_some() {
@@ -26,6 +42,11 @@ impl Compiler<'_> {
                 ));
             }
             self.compile_set(spec)?;
+        }
+        if site > 0 {
+            debug_assert_eq!(site, self.extra_set_sites.len() + 1);
+            let datasets: Vec<InputDataset> = self.input_datasets.drain(site_start..).collect();
+            self.extra_set_sites.push((datasets, options.clone()));
         }
         // Options de niveau statement (M16.4). NOBS= crée (ou réutilise)
         // une variable numérique au PDV maintenant (elle est affectée
@@ -51,11 +72,18 @@ impl Compiler<'_> {
             // considère "assignée" (pas de NOTE "uninitialized").
             self.assigned.insert(name.to_uppercase());
         }
-        self.set_options = options.clone();
+        // Le site 0 garde ses options dans `set_options` (résolues par
+        // `build_input`) ; celles des sites suivants sont déjà dans
+        // `extra_set_sites` (résolues site par site).
+        if site == 0 {
+            self.set_options = options.clone();
+        }
         Ok(())
     }
 
     /// Compile un statement `MERGE` (bras `DsStmt::Merge` de `walk_stmt`).
+    /// `specs` vide = `merge;` nu (M40.2) : re-référence `_LAST_` (un seul
+    /// flux — équivalent à un match-merge à un dataset, cf. PROGRESS M40.2).
     pub(super) fn compile_merge(&mut self, specs: &[DatasetSpec]) -> Result<()> {
         if self.seen_set || self.seen_merge {
             return Err(SasError::runtime(
@@ -63,6 +91,14 @@ impl Compiler<'_> {
             ));
         }
         self.seen_merge = true;
+        let last_spec;
+        let specs = if specs.is_empty() {
+            let dref = crate::procs::common::resolve_last_dataset(&None, self.session)?;
+            last_spec = [DatasetSpec::plain(dref)];
+            &last_spec[..]
+        } else {
+            specs
+        };
         for spec in specs {
             // L'index du dataset dans `input_datasets` AVANT le push.
             let ds_index = self.input_datasets.len();

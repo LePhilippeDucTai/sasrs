@@ -56,8 +56,9 @@ impl Runner {
         }
         self.set_cursor.prev_keys = Some(cur_keys);
         // END= (M16.4) : 1 si plus aucune observation à interclasser.
-        if let Some((_, v)) = &mut self.ctx.end_flag {
-            *v = if next_keys.is_none() { 1.0 } else { 0.0 };
+        // (L'interclassement BY n'existe qu'au site 0 — flag `end0`.)
+        if let Some(i) = self.end0 {
+            self.ctx.end_flags[i].1 = if next_keys.is_none() { 1.0 } else { 0.0 };
         }
         Ok(Flow::Normal)
     }

@@ -38,6 +38,18 @@
 //!   (input non trié selon le BY), ERROR "BY variables are not properly
 //!   sorted on data set X." et l'étape s'arrête.
 //!
+//! ## SET multiples (M40.2)
+//! Chaque statement SET de l'étape est un SITE DE LECTURE indépendant
+//! (curseur séquentiel, END=/NOBS= et comptes de lignes PROPRES) : à
+//! chaque itération, chaque SET atteint par le flot d'exécution lit la
+//! PROCHAINE obs de SON flux (les variables communes sont écrasées par le
+//! dernier site exécuté). Un SET qui s'exécute sur SON flux épuisé termine
+//! l'étape IMMÉDIATEMENT (au point du statement — « fin au 1ᵉʳ EOF » ; un
+//! OUTPUT déjà exécuté dans l'itération compte). Site 0 = `input`
+//! (seul site autorisé à porter BY/POINT=/MERGE), suivants =
+//! `extra_sites` ; BY et POINT= avec plusieurs SET sont refusés à la
+//! compilation.
+//!
 //! ## Flux de contrôle intra-itération
 //! `enum Flow { Normal, NextIter, EndStep }` :
 //! - `SubsettingIf` faux → NextIter (pas d'output implicite)
@@ -215,6 +227,13 @@ struct Runner {
     /// read". Partagé par les modes SET et MERGE (`build_merge_plan` le
     /// remplit) — laissé à plat.
     rows_read: Vec<usize>,
+    /// M40.2 — sites SET SUPPLÉMENTAIRES (2ᵉ, 3ᵉ… statements SET), chacun
+    /// avec ses datasets, son curseur et ses compteurs propres (index =
+    /// site − 1). Vide hors SET multiples.
+    extra_sites: Vec<SiteState>,
+    /// Index du flag END= du SITE 0 dans `ctx.end_flags` (si déclaré) —
+    /// les sites supplémentaires portent le leur dans `SiteState::end_idx`.
+    end0: Option<usize>,
     ctx: EvalCtx,
     outputs: Vec<OutputSpec>,
     /// builders[output][colonne], parallèle à outputs[o].kept_slots.

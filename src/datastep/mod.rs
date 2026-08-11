@@ -53,11 +53,13 @@
 //! - `put(x, fmt)` : largeur = chiffres finaux du nom de format si
 //!   disponibles, sinon 200 (le parser M1 ne sait pas encore produire un
 //!   littéral de format ; best-effort documenté).
-//! - Un seul statement SET par étape (le second → erreur "not yet
-//!   implemented"), mais un SET peut lister PLUSIEURS datasets (M3) : le
-//!   PDV reçoit l'UNION de leurs variables en ordre de première
-//!   apparition ; une variable présente avec des types incompatibles →
-//!   ERROR "Variable X has been defined as both character and numeric.".
+//! - Plusieurs statements SET par étape (M40.2) : chaque statement est un
+//!   SITE DE LECTURE indépendant (site 0 = `input`, suivants =
+//!   `extra_inputs` ; BY/POINT= refusés avec plusieurs sites). Un SET peut
+//!   lister PLUSIEURS datasets (M3) : le PDV reçoit l'UNION de leurs
+//!   variables en ordre de première apparition ; une variable présente
+//!   avec des types incompatibles → ERROR "Variable X has been defined as
+//!   both character and numeric.".
 //!   Le statement BY est résolu en fin de compilation (`build_input`) :
 //!   chaque clé doit exister dans CHAQUE dataset du SET, et toute
 //!   référence FIRST.x/LAST.x exige que x soit une clé BY. FIRST./LAST.
@@ -251,6 +253,11 @@ struct Compiler<'a> {
     hash_objects: HashMap<String, HashObject>,
     /// Itérateurs de hash déclarés (M17.2) : nom UPPERCASE → itérateur.
     hash_iters: HashMap<String, HashIter>,
+    /// M40.2 — sites SET SUPPLÉMENTAIRES (2ᵉ, 3ᵉ… statements SET de
+    /// l'étape) : datasets matérialisés + options de niveau statement, par
+    /// site (index = site − 1 ; le site 0 reste `input_datasets` /
+    /// `set_options`). Résolus en `InputData` dans `build_input`.
+    extra_set_sites: Vec<(Vec<InputDataset>, crate::ast::SetOptions)>,
 }
 
 /// État intermédiaire d'un UPDATE pendant la compilation : les datasets sont
@@ -293,7 +300,11 @@ mod infer;
 impl Compiler<'_> {
     fn walk_stmt(&mut self, stmt: &DsStmt) -> Result<()> {
         match stmt {
-            DsStmt::Set { specs, options } => self.compile_set_stmt(specs, options),
+            DsStmt::Set {
+                specs,
+                options,
+                site,
+            } => self.compile_set_stmt(specs, options, *site),
             // MERGE (M3) : comme SET multi-datasets mais en match-merge par
             // BY. Chaque dataset peut porter une option `in=`. Un SET/MERGE
             // a déjà été vu → erreur.
