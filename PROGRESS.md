@@ -10,7 +10,7 @@ complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
 nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
-0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M39.3**.
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **DoD M39**.
 
 **MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
 restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
@@ -948,7 +948,7 @@ Prérequis FORMAT/CATALOG/IML STORE.
   PROC FORMAT) ; oracle round-trip (définir, relancer, résout encore) (Opus, moyen)
 - [x] M39.2 — `CNTLOUT=` (catalogue→dataset FMTNAME/START/END/LABEL/TYPE) + `CNTLIN=` (dataset→catalogue) ;
   oracle CNTLOUT→CNTLIN round-trip identique (Opus, moyen)
-- [ ] M39.3 — `FMTLIB`, `FMTSEARCH=` (lie M38.2) ; oracle : FMTLIB liste exactement les formats définis (Sonnet, faible)
+- [x] M39.3 — `FMTLIB`, `FMTSEARCH=` (lie M38.2) ; oracle : FMTLIB liste exactement les formats définis (Sonnet, faible)
 - [ ] DoD M39 : fixtures m39 ; README FORMAT/User formats préparés ; path in-memory octet-identique ; → M40.
 
 ## M40 — DATA step : statements manquants + CALL routines

@@ -90,10 +90,16 @@ pub(crate) fn apply_option(session: &mut Session, name: &str, value: Option<&str
                 value.unwrap_or("")
             )),
         },
-        // M38.2 — FMTSEARCH= : list of library refs / catalogues for
-        // format search order. Stored; multi-library resolution deferred
-        // to M39. Value arrives as space-separated entries (parser joins
-        // the parenthesised list with spaces).
+        // M38.2 — FMTSEARCH= : list of library refs / catalogues for format
+        // search order. Value arrives as space-separated entries (parser
+        // joins the parenthesised list with spaces).
+        //
+        // M39.3 — once posed, this option BRANCHES format resolution: a
+        // non-empty list rebuilds `session.format_catalog` in full, ordered
+        // per `formats::search::resolve_search_order` (see that module's doc
+        // for the full rationale, and `formats::mod`'s doc for why the empty
+        // case is a deliberate no-op — the default WORK-then-assignment-order
+        // legacy path must stay untouched when FMTSEARCH= is never set).
         "fmtsearch" => {
             let entries: Vec<String> = value
                 .unwrap_or("")
@@ -101,6 +107,9 @@ pub(crate) fn apply_option(session: &mut Session, name: &str, value: Option<&str
                 .map(|s| s.to_ascii_uppercase())
                 .collect();
             session.options.fmtsearch = entries;
+            if !session.options.fmtsearch.is_empty() {
+                crate::formats::search::rebuild_format_catalog(session);
+            }
         }
         // M19.2 — SASAUTOS= fixe le(s) répertoire(s) de bibliothèques
         // autocall. On accepte une valeur simple (un répertoire) :

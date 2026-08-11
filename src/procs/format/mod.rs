@@ -31,10 +31,12 @@ use crate::session::Session;
 use crate::token::TokenKind;
 
 mod cntl;
+mod fmtlib;
 mod invalue;
 mod picture;
 mod value;
 
+use fmtlib::render_fmtlib;
 use invalue::*;
 use picture::*;
 use value::*;
@@ -57,6 +59,11 @@ pub struct FormatAst {
     /// dataset de contrôle, appliqué AVANT les sous-statements VALUE/INVALUE
     /// de ce même step (qui peuvent donc l'écraser). `None` = pas demandé.
     pub cntlin: Option<DatasetRef>,
+    /// M39.3 — `FMTLIB` : option d'en-tête sans valeur. Après RUN, liste dans
+    /// le listing le contenu (VALUE/PICTURE/INVALUE) du catalogue CIBLÉ par
+    /// `lib` (WORK par défaut), tel qu'il est APRÈS ce step (donc après
+    /// CNTLIN= et les sous-statements). Voir `render_fmtlib`.
+    pub fmtlib: bool,
 }
 
 /// Parse `proc format [library=<libref>] ; value ... ; [value ... ;] run;`
@@ -75,9 +82,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
     let mut lib = "WORK".to_string();
     let mut cntlout: Option<DatasetRef> = None;
     let mut cntlin: Option<DatasetRef> = None;
+    let mut fmtlib = false;
     // Consume the trailing `;` of the `proc format` statement header,
-    // recognising `LIBRARY=`/`LIB=`/`CNTLOUT=`/`CNTLIN=` along the way; any
-    // other header option is skipped token-by-token (none else supported yet).
+    // recognising `LIBRARY=`/`LIB=`/`CNTLOUT=`/`CNTLIN=`/`FMTLIB` along the
+    // way; any other header option is skipped token-by-token (none else
+    // supported yet).
     loop {
         if ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -136,9 +145,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
                 ));
             }
             lib = name.to_uppercase();
+        } else if ts.peek().is_kw("fmtlib") {
+            ts.next(); // consume "fmtlib" — bare option, no value.
+            fmtlib = true;
         } else {
-            // Skip any other unrecognised proc-header option token (e.g. the
-            // future FMTLIB of M39.3).
+            // Skip any other unrecognised proc-header option token.
             ts.next();
         }
     }
@@ -190,6 +201,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         pictures,
         cntlout,
         cntlin,
+        fmtlib,
     })
 }
 
@@ -217,6 +229,12 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
     // `session.libref_format_catalogs` puis un sidecar disque (ci-dessous) :
     // c'est cette seconde écriture, absente pour WORK, qui rend le catalogue
     // permanent.
+    // M39.3 : en parallèle, `session.format_catalog_own_work` accumule les
+    // MÊMES définitions mais UNIQUEMENT quand ce step vise WORK — c'est le
+    // "slot" WORK que `formats::search::rebuild_format_catalog` consulte
+    // (FMTSEARCH= posée) et que `FMTLIB` sans `LIB=` liste. N'affecte en rien
+    // `session.format_catalog` ci-dessus (chemin legacy inchangé).
+    let is_work = ast.lib == "WORK";
     let catalog = std::rc::Rc::make_mut(&mut session.format_catalog);
     for (name, uf) in cntlin_values.iter().chain(ast.values.iter()) {
         let uname = name.to_uppercase();
@@ -224,6 +242,9 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
             .log
             .note(&format!("Format {} has been output.", uname));
         catalog.define(&uname, uf.clone());
+        if is_work {
+            session.format_catalog_own_work.define(&uname, uf.clone());
+        }
     }
     for (name, ui) in cntlin_invalues.iter().chain(ast.invalues.iter()) {
         let uname = name.to_uppercase();
@@ -231,6 +252,11 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
             .log
             .note(&format!("Informat {} has been output.", uname));
         catalog.define_informat(&uname, ui.clone());
+        if is_work {
+            session
+                .format_catalog_own_work
+                .define_informat(&uname, ui.clone());
+        }
     }
     for (name, up) in &ast.pictures {
         let uname = name.to_uppercase();
@@ -238,6 +264,11 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
             .log
             .note(&format!("Format {} has been output.", uname));
         catalog.define_picture(&uname, up.clone());
+        if is_work {
+            session
+                .format_catalog_own_work
+                .define_picture(&uname, up.clone());
+        }
     }
 
     if ast.lib != "WORK" {
@@ -270,6 +301,26 @@ pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {
             base
         };
         cntl::write_cntlout(cntlout_ref, &dump, session)?;
+    }
+
+    // M39.3 — si `OPTIONS FMTSEARCH=` a déjà été posée, ce step vient de
+    // modifier une des deux sources que `rebuild_format_catalog` fusionne
+    // (`format_catalog_own_work` pour WORK, `libref_format_catalogs[lib]`
+    // sinon) : recalcule `session.format_catalog` pour que la résolution
+    // reflète immédiatement la nouvelle définition, dans l'ordre déjà choisi.
+    // No-op tant que FMTSEARCH= n'a jamais été posée (voir `formats::mod`).
+    if !session.options.fmtsearch.is_empty() {
+        crate::formats::search::rebuild_format_catalog(session);
+    }
+
+    // M39.3 — `FMTLIB` : liste le catalogue CIBLÉ (`ast.lib`) tel qu'il est
+    // maintenant (après CNTLIN=/VALUE/INVALUE/PICTURE ci-dessus). Volontai-
+    // rement APRÈS le rebuild ci-dessus : ni l'un ni l'autre n'a d'influence
+    // sur l'autre (FMTLIB lit `format_catalog_own_work`/`libref_format_catalogs`
+    // directement, jamais `session.format_catalog`), mais l'ordre garde le
+    // step "état stable puis rendu" lisible.
+    if ast.fmtlib {
+        render_fmtlib(session, &ast.lib);
     }
 
     Ok(())

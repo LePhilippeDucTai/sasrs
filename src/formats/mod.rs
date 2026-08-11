@@ -31,15 +31,50 @@
 //! WORK, jamais de fichier vide) — même garde que le sidecar `.sasmeta.json`
 //! de `dataset.rs`.
 //!
-//! Ordre de résolution retenu ici (raffiné par FMTSEARCH= en M39.3) : WORK
-//! (`session.format_catalog`, le chemin historique, jamais touché par le
-//! disque) **d'abord**, puis les bibliothèques chargées par LIBNAME dans leur
-//! ordre d'assignation. En pratique (voir `executor/global/libname.rs` et
-//! `procs/format/mod.rs`) les formats d'un libref chargé sont fusionnés dans
-//! `session.format_catalog` SANS écraser une clé déjà présente
-//! ([`FormatCatalog::merge_missing_from`]) : toute définition WORK explicite
-//! (avant ou après le LIBNAME, car `PROC FORMAT` sans LIB= écrase toujours
-//! sans condition) l'emporte sur la valeur chargée depuis un libref.
+//! Ordre de résolution retenu ici : WORK (`session.format_catalog`, le chemin
+//! historique, jamais touché par le disque) **d'abord**, puis les
+//! bibliothèques chargées par LIBNAME dans leur ordre d'assignation. En
+//! pratique (voir `executor/global/libname.rs` et `procs/format/mod.rs`) les
+//! formats d'un libref chargé sont fusionnés dans `session.format_catalog`
+//! SANS écraser une clé déjà présente ([`FormatCatalog::merge_missing_from`]) :
+//! toute définition WORK explicite (avant ou après le LIBNAME, car
+//! `PROC FORMAT` sans LIB= écrase toujours sans condition) l'emporte sur la
+//! valeur chargée depuis un libref.
+//!
+//! ## M39.3 — `FMTSEARCH=` : résolution ordonnée explicite
+//!
+//! Le mécanisme ci-dessus (implicite, "WORK puis ordre d'assignation") reste
+//! le chemin par défaut, INCHANGÉ, tant que `OPTIONS FMTSEARCH=` n'a jamais
+//! été posée dans la session (`session.options.fmtsearch.is_empty()`) — c'est
+//! ce qui garantit l'octet-identité des jalons précédents. Dès que
+//! `FMTSEARCH=` est posée (même vide n'est jamais reposé après coup dans ce
+//! build, voir `formats::search`), `session.format_catalog` cesse d'être
+//! alimenté par la fusion implicite ci-dessus et devient un **catalogue
+//! recalculé en entier** à chaque changement pertinent (`OPTIONS FMTSEARCH=`,
+//! `LIBNAME`, `PROC FORMAT`) par [`search::rebuild_format_catalog`], à partir
+//! de deux sources qui, elles, ne sont JAMAIS mutées directement par la
+//! fusion legacy :
+//! - `session.format_catalog_own_work` — les définitions de CETTE session
+//!   ciblant WORK (voir sa doc dans `session.rs`) ;
+//! - `session.libref_format_catalogs[libref]` — déjà, de longue date, le
+//!   catalogue propre à CE libref (chargé par sidecar + accumulé par
+//!   `PROC FORMAT LIBRARY=libref`), jamais pollué par les autres librefs.
+//!
+//! `search::resolve_search_order` traduit la liste `FMTSEARCH=(a b …)` en un
+//! ordre effectif : WORK et LIBRARY sont recherchés EN TÊTE par défaut, sauf
+//! présence explicite dans la liste (auquel cas ils gardent leur position
+//! écrite). "LIBRARY" n'est un libref réel dans ce build que si l'utilisateur
+//! l'a lui-même assigné via `LIBNAME LIBRARY ...` — ce build n'a pas de
+//! catalogue permanent LIBRARY préassigné comme le fait SAS ; une entrée
+//! "LIBRARY" sans libref assigné est silencieusement sans effet (déviation
+//! documentée, pas un oubli).
+//!
+//! Déviation assumée : repasser `FMTSEARCH=` à une liste VIDE après l'avoir
+//! posée non-vide ne restaure PAS la fusion implicite par défaut — le dernier
+//! ordre explicite reste actif (voir `search::rebuild_format_catalog`). Non
+//! requis par l'oracle M39.3 (qui ne teste que la bascule entre deux ordres
+//! non vides) ; un `OPTIONS FMTSEARCH=` jamais posé reste, lui, byte-identique
+//! à avant M39.3.
 //!
 //! ## M39.2 — `CNTLOUT=`/`CNTLIN=`
 //!
@@ -54,6 +89,7 @@
 #![allow(unused_variables, dead_code)]
 
 pub mod builtin;
+pub mod search;
 pub mod userdef;
 
 use crate::error::{Result, SasError};
@@ -183,6 +219,14 @@ impl FormatCatalog {
     /// [`FormatCatalog::user_formats`].
     pub fn user_informats(&self) -> impl Iterator<Item = (&str, &userdef::UserInformat)> {
         self.user_informats.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// M39.3 — read-only iteration over PICTURE entries, symmetric to
+    /// [`FormatCatalog::user_formats`]. Used by `PROC FORMAT FMTLIB` to list
+    /// picture formats (not covered by `CNTLOUT=`/`CNTLIN=`, see
+    /// [`FormatCatalog::user_picture_count`]).
+    pub fn user_pictures(&self) -> impl Iterator<Item = (&str, &userdef::UserPicture)> {
+        self.user_pictures.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     /// M39.2 — number of PICTURE formats in this catalog. `CNTLOUT=`/`CNTLIN=`

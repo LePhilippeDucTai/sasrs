@@ -38,6 +38,14 @@ pub(crate) fn load_format_catalog_sidecar(session: &mut Session, libref: &str) {
         merged.merge_missing_from(&catalog);
     }
     session.libref_format_catalogs.insert(key, catalog);
+
+    // M39.3 — when `OPTIONS FMTSEARCH=` has been posed, this LIBNAME's newly
+    // (re)loaded sidecar must be picked up according to the explicit search
+    // order, not the implicit merge just above (which stays for the
+    // FMTSEARCH=-never-set default path only — see `formats::mod` doc).
+    if !session.options.fmtsearch.is_empty() {
+        crate::formats::search::rebuild_format_catalog(session);
+    }
 }
 
 /// NOTE de succès (ou ERROR) commune aux trois moteurs de LIBNAME.

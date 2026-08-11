@@ -1,0 +1,49 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m39/fmtlib.sas
+---
+==== LOG ====
+
+1     proc format fmtlib;
+2       value agef low-<21='Minor' 21-high='Adult' other='Unknown';
+3       value $gradef 'A'='Excellent' 'B'='Good' 'C'='Average';
+4       invalue gradei 'A'=4 'B'=3 'C'=2 other=0;
+5     run;
+NOTE: Format AGEF has been output.
+NOTE: Format $GRADEF has been output.
+NOTE: Informat GRADEI has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                         The SAS System
+
+FORMAT NAME: $GRADEF    TYPE: CHARACTER    LENGTH: 9    NUMBER OF VALUES: 3
+
+                                   START    END    LABEL
+
+                                   'A'             Excellent
+                                   'B'             Good
+                                   'C'             Average
+
+FORMAT NAME: AGEF    TYPE: NUMERIC    LENGTH: 7    NUMBER OF VALUES: 3
+
+                                    START    END     LABEL
+
+                                    LOW      <21     Minor
+                                    21       HIGH    Adult
+                                    OTHER            Unknown
+
+INFORMAT NAME: GRADEI    RESULT: NUMERIC    LENGTH: 1    NUMBER OF VALUES: 4
+
+                                     START    END    LABEL
+
+                                     'A'             4
+                                     'B'             3
+                                     'C'             2
+                                     OTHER           0
+
+==== EXIT 0 ====

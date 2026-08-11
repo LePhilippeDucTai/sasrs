@@ -190,6 +190,21 @@ pub struct Session {
     ///
     /// Clé = libref UPPERCASE. Ne contient PAS "WORK".
     pub libref_format_catalogs: HashMap<String, crate::formats::FormatCatalog>,
+    /// M39.3 — le sous-ensemble de `format_catalog` (ci-dessus) qui appartient
+    /// STRICTEMENT à WORK : les définitions VALUE/INVALUE/PICTURE d'un
+    /// `PROC FORMAT;` sans `LIBRARY=`/`LIB=` (ou `LIB=WORK` explicite) dans
+    /// CETTE session. `format_catalog` lui-même ne convient pas comme "vue de
+    /// WORK seul" pour `FMTLIB`/`FMTSEARCH=` : il reçoit AUSSI, par la règle
+    /// « immédiatement résolvable » de M39.1, une copie directe des
+    /// définitions ciblant un AUTRE libref, ainsi que les fusions
+    /// `merge_missing_from` faites au `LIBNAME` — ni l'un ni l'autre
+    /// n'appartient à WORK. Peuplé en parallèle de `format_catalog` par
+    /// `procs::format::execute` (uniquement quand `ast.lib == "WORK"`) ;
+    /// jamais sérialisé (WORK ne persiste pas de sidecar). Consulté par :
+    /// - `FMTLIB` sans `LIB=` (liste exactement le catalogue WORK) ;
+    /// - `formats::search::rebuild_format_catalog` (le "slot" WORK de l'ordre
+    ///   `FMTSEARCH=`).
+    pub format_catalog_own_work: crate::formats::FormatCatalog,
     /// Processeur macro de la session (M11) : table des symboles `%let`/`&var`.
     /// Sous le build par défaut c'est une identité pure (cf. `MacroEngine`).
     pub macro_engine: crate::preprocess::MacroEngine,
@@ -307,6 +322,7 @@ impl Session {
             deterministic,
             format_catalog: std::rc::Rc::new(crate::formats::FormatCatalog::default()),
             libref_format_catalogs: HashMap::new(),
+            format_catalog_own_work: crate::formats::FormatCatalog::default(),
             macro_engine,
             vectorize: false,
             call_execute_queue: Vec::new(),
