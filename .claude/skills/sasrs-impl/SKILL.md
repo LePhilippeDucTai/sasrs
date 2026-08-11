@@ -9,10 +9,20 @@ Tu es l'ORCHESTRATEUR du projet `sasrs` (crate unique à la racine du dépôt, b
 `sasrs`). Branche de développement : la branche de développement courante du dépôt
 (ne JAMAIS pousser ailleurs). `git branch --show-current` donne la branche active.
 
+**Répartition des rôles** : l'orchestrateur ne code JAMAIS lui-même — il sélectionne,
+délègue à des sous-agents (dont il choisit le modèle automatiquement, voir étape 3),
+revoit, valide, committe et pousse. Le modèle de la session orchestrateur est donc libre
+et constant d'un jalon à l'autre (recommandé : Fable, effort high — la revue de fidélité
+SAS et l'acceptation des snapshots restent sa responsabilité) ; l'utilisateur n'a PAS à
+consulter le jalon courant avant de lancer la skill. Les sous-agents héritent de l'effort
+de raisonnement de la session.
+
 ## Sources de vérité (à lire dans cet ordre, toujours)
 
 1. `PROGRESS.md` (racine du dépôt) — le curseur : jalon courant + cases cochées.
-2. `PLAN.md` (racine du dépôt) — architecture, décisions actées, table modèle/effort,
+2. `PLAN.md` (racine du dépôt) — architecture, décisions actées, table modèle/effort
+   (**pour M37–M66, la colonne Modèle du tableau Phase G fait foi** — les annotations
+   par case de PROGRESS.md sont antérieures à la re-disponibilité de Fable),
    checklist des pièges (§Checklist — relire avant toute revue).
 3. L'en-tête de chaque fichier squelette à implémenter — il contient SON plan détaillé
    (sémantique SAS, algorithmes, pièges, tests à écrire). C'est le cahier des charges.
@@ -30,9 +40,13 @@ Tu es l'ORCHESTRATEUR du projet `sasrs` (crate unique à la racine du dépôt, b
    de couvrir TOUTES les cases du jalon courant — ne pas s'arrêter après un seul fichier
    tant que des cases restent et que le contexte le permet (voir garde-fous).
 3. **Implémentation** : pour chaque fichier du lot, déléguer à un sous-agent via le tool
-   Agent avec le paramètre `model` suggéré par PROGRESS.md/PLAN.md (`sonnet`, `opus`,
-   `fable` — les fichiers marqués Fable peuvent aussi être faits directement par
-   l'orchestrateur). Donner au sous-agent : le chemin du fichier, l'instruction de lire
+   Agent — TOUJOURS déléguer, l'orchestrateur n'implémente pas lui-même. Le paramètre
+   `model` du sous-agent est déterminé AUTOMATIQUEMENT, sans intervention utilisateur :
+   prendre la colonne **Modèle** de la ligne du jalon courant dans le tableau **Phase G
+   de PLAN.md** (`fable`, `opus` ou `sonnet` ; pour un jalon hors Phase G, l'annotation
+   de la case dans PROGRESS.md). Jamais un modèle inférieur à celui du jalon ; en cas de
+   doute ou d'ambiguïté, prendre le supérieur (`fable`).
+   Donner au sous-agent : le chemin du fichier, l'instruction de lire
    son en-tête + PLAN.md §Checklist, d'implémenter TOUT le fichier (zéro `todo!()`
    restant) ET ses tests unitaires, et de faire passer
    `cargo test -p sasrs`. Les fichiers indépendants (⫽) peuvent être délégués
