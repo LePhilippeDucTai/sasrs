@@ -10,7 +10,7 @@ complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
 nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
-0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M39.1**.
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M39.2**.
 
 **MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
 restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
@@ -944,7 +944,7 @@ Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS 
 
 ## M39 — Store de catalogue de format persistant
 Prérequis FORMAT/CATALOG/IML STORE.
-- [ ] M39.1 — Sérialiser `FormatCatalog` en sidecar JSON par libref (chargé au LIBNAME, sauvé après
+- [x] M39.1 — Sérialiser `FormatCatalog` en sidecar JSON par libref (chargé au LIBNAME, sauvé après
   PROC FORMAT) ; oracle round-trip (définir, relancer, résout encore) (Opus, moyen)
 - [ ] M39.2 — `CNTLOUT=` (catalogue→dataset FMTNAME/START/END/LABEL/TYPE) + `CNTLIN=` (dataset→catalogue) ;
   oracle CNTLOUT→CNTLIN round-trip identique (Opus, moyen)

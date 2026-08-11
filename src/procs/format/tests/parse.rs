@@ -242,3 +242,47 @@ fn parse_picture_coexists_with_value() {
     assert_eq!(ast.values.len(), 1);
     assert_eq!(ast.pictures.len(), 1);
 }
+
+// ── M39.1 — LIBRARY=/LIB= header option ─────────────────────────────────────
+
+#[test]
+fn parse_no_lib_defaults_to_work() {
+    let ast = parse_format_src("proc format; value sexfmt 1='Male'; run;").unwrap();
+    assert_eq!(ast.lib, "WORK");
+}
+
+#[test]
+fn parse_lib_equals_libref() {
+    let ast = parse_format_src("proc format lib=perm; value sexfmt 1='Male'; run;").unwrap();
+    assert_eq!(ast.lib, "PERM");
+    assert_eq!(ast.values.len(), 1);
+}
+
+#[test]
+fn parse_library_equals_libref_case_insensitive() {
+    let ast = parse_format_src("proc format LIBRARY=Perm; value sexfmt 1='Male'; run;").unwrap();
+    assert_eq!(ast.lib, "PERM");
+}
+
+#[test]
+fn parse_lib_equals_work_explicit() {
+    let ast = parse_format_src("proc format lib=work; value sexfmt 1='Male'; run;").unwrap();
+    assert_eq!(ast.lib, "WORK");
+}
+
+#[test]
+fn parse_lib_two_level_catalog_name_is_a_clean_error() {
+    let err = parse_format_src("proc format lib=perm.formats2; value sexfmt 1='Male'; run;")
+        .err()
+        .expect("two-level LIBRARY= must be a parse error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("two-level") || msg.contains("PERM"),
+        "expected a clean deferral error mentioning the two-level name, got: {msg}"
+    );
+}
+
+#[test]
+fn parse_lib_missing_eq_is_error() {
+    assert!(parse_format_src("proc format lib perm; run;").is_err());
+}

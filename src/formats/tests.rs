@@ -329,3 +329,105 @@ fn char_user_informat_resolved() {
         Value::Char("Unknown".to_string())
     );
 }
+
+// -------------------------------------------------------------------------
+// M39.1 — sidecar JSON (load_sidecar/save_sidecar/is_empty/merge_missing_from)
+// -------------------------------------------------------------------------
+
+fn sample_value_format() -> userdef::UserFormat {
+    userdef::UserFormat {
+        is_char: false,
+        ranges: vec![
+            userdef::Range {
+                from: userdef::Bound::Num(1.0),
+                to: userdef::Bound::Num(1.0),
+                from_exclusive: false,
+                to_exclusive: false,
+                label: "Pass".to_string(),
+            },
+            userdef::Range {
+                from: userdef::Bound::Num(2.0),
+                to: userdef::Bound::Num(2.0),
+                from_exclusive: false,
+                to_exclusive: false,
+                label: "Fail".to_string(),
+            },
+        ],
+        other: Some("Unknown".to_string()),
+    }
+}
+
+#[test]
+fn empty_catalog_is_empty() {
+    assert!(FormatCatalog::default().is_empty());
+}
+
+#[test]
+fn nonempty_catalog_is_not_empty() {
+    let mut cat = catalog();
+    cat.define("GRADEF", sample_value_format());
+    assert!(!cat.is_empty());
+}
+
+#[test]
+fn save_sidecar_writes_nothing_for_empty_catalog() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cat = FormatCatalog::default();
+    cat.save_sidecar(tmp.path()).unwrap();
+    assert!(
+        !tmp.path().join(FormatCatalog::SIDECAR_FILE).exists(),
+        "an empty catalog must never write a sidecar file"
+    );
+}
+
+#[test]
+fn save_then_load_sidecar_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cat = catalog();
+    cat.define("GRADEF", sample_value_format());
+    cat.save_sidecar(tmp.path()).unwrap();
+    assert!(tmp.path().join(FormatCatalog::SIDECAR_FILE).is_file());
+
+    let loaded = FormatCatalog::load_sidecar(tmp.path()).expect("sidecar should parse back");
+    let spec = FormatSpec::parse("GRADEF.").unwrap();
+    assert_eq!(loaded.format(&Value::Num(1.0), &spec).trim(), "Pass");
+    assert_eq!(loaded.format(&Value::Num(2.0), &spec).trim(), "Fail");
+    assert_eq!(loaded.format(&Value::Num(3.0), &spec).trim(), "Unknown");
+}
+
+#[test]
+fn load_sidecar_missing_file_returns_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(FormatCatalog::load_sidecar(tmp.path()).is_none());
+}
+
+#[test]
+fn merge_missing_from_does_not_overwrite_existing_key() {
+    let mut work = catalog();
+    work.define(
+        "GRADEF",
+        userdef::UserFormat {
+            is_char: false,
+            ranges: vec![userdef::Range {
+                from: userdef::Bound::Num(1.0),
+                to: userdef::Bound::Num(1.0),
+                from_exclusive: false,
+                to_exclusive: false,
+                label: "WORK-WINS".to_string(),
+            }],
+            other: None,
+        },
+    );
+    let mut library = catalog();
+    library.define("GRADEF", sample_value_format());
+    library.define("OTHERFMT", sample_value_format());
+
+    work.merge_missing_from(&library);
+
+    let spec = FormatSpec::parse("GRADEF.").unwrap();
+    // Pre-existing WORK definition keeps priority over the library's.
+    assert_eq!(work.format(&Value::Num(1.0), &spec).trim(), "WORK-WINS");
+    // A name absent from WORK is pulled in from the library.
+    let spec2 = FormatSpec::parse("OTHERFMT.").unwrap();
+    assert_eq!(work.format(&Value::Num(1.0), &spec2).trim(), "Pass");
+}

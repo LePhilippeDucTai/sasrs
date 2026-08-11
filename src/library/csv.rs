@@ -118,4 +118,8 @@ impl LibraryProvider for CsvLibrary {
     fn is_cloud(&self) -> bool {
         false
     }
+
+    fn catalog_dir(&self) -> Option<&std::path::Path> {
+        Some(&self.dir)
+    }
 }

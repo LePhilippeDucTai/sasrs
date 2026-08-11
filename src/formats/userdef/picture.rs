@@ -6,7 +6,7 @@ use super::*;
 
 /// Optional directives attached to a picture template, written in parentheses
 /// after the template string, e.g. `'000,009.99' (prefix='$' mult=100)`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PictureDirectives {
     /// String prepended just before the first significant (printed) character.
     pub prefix: Option<String>,
@@ -20,7 +20,7 @@ pub struct PictureDirectives {
 }
 
 /// A single range in a PICTURE format: a numeric range → a picture template.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PictureRange {
     pub from: Bound,
     pub to: Bound,
@@ -65,7 +65,7 @@ pub struct PictureRange {
 ///   nuances are not modelled; this is the common case.
 /// - Rounding is half-away-from-zero on the scaled value.
 /// - No `DATATYPE=`, no directives beyond PREFIX/MULT/FILL.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserPicture {
     pub ranges: Vec<PictureRange>,
     /// Fallback template (`other='...'`).

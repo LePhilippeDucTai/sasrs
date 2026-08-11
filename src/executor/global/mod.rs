@@ -30,7 +30,14 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 .is_some_and(|p| p.eq_ignore_ascii_case("s3://"))
             {
                 let result = session.libs.assign_uri(libref, path);
+                let ok = result.is_ok();
                 log_libref_assignment(session, libref, "PARQUET", path, result);
+                // M39.1 : S3Library n'a pas de répertoire local (`catalog_dir`
+                // renvoie `None`) — l'appel est un no-op sûr, gardé pour
+                // uniformité avec le chemin local ci-dessous.
+                if ok {
+                    load_format_catalog_sidecar(session, libref);
+                }
                 return;
             }
 
@@ -68,7 +75,14 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 Some("CSV") => ("CSV", session.libs.assign_csv(libref, abs)),
                 _ => ("PARQUET", session.libs.assign(libref, abs)),
             };
+            let ok = result.is_ok();
             log_libref_assignment(session, libref, engine_name, &shown, result);
+            // M39.1 : charge le sidecar de formats du libref (s'il existe) —
+            // jamais pour WORK, qui reste purement en mémoire (voir
+            // `load_format_catalog_sidecar`).
+            if ok {
+                load_format_catalog_sidecar(session, libref);
+            }
         }
         GlobalStmt::LibnameClear { libref } => match session.libs.clear(libref) {
             Ok(()) => session.log.note(&format!(

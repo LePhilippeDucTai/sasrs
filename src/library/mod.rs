@@ -49,6 +49,15 @@ pub trait LibraryProvider: Send + Sync {
     fn is_cloud(&self) -> bool {
         false
     }
+
+    /// M39.1 — physical directory backing this libref, for providers that
+    /// have one (`DirLibrary`/`CsvLibrary`). `None` for cloud/other providers
+    /// without a local root (e.g. `S3Library`). Used solely to locate the
+    /// per-libref format-catalog sidecar (`formats.sascat.json`); a `None`
+    /// libref simply cannot persist a format catalog to disk in this build.
+    fn catalog_dir(&self) -> Option<&std::path::Path> {
+        None
+    }
 }
 
 enum WorkDir {

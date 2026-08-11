@@ -11,6 +11,7 @@ fn execute_registers_format_in_catalog() {
 
     let mut session = make_session();
     let ast = FormatAst {
+        lib: "WORK".to_string(),
         values: vec![(
             "SEXFMT".to_string(),
             UserFormat {
@@ -74,6 +75,100 @@ fn execute_round_trip_parse_and_execute() {
         "Female"
     );
     assert_eq!(session.format_catalog.format(&Value::Num(99.0), &spec), "?");
+}
+
+// ── M39.1 — LIBRARY=<libref> sidecar persistence ────────────────────────────
+
+#[test]
+fn execute_lib_work_writes_no_sidecar() {
+    // Default (no LIBRARY=) or explicit LIBRARY=WORK: purely in-memory, byte
+    // identical to the pre-M39.1 behaviour — NO file anywhere, including
+    // WORK's own (temp) directory.
+    let mut session = make_session();
+    let work_dir = session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .catalog_dir()
+        .unwrap()
+        .to_path_buf();
+    let ast = parse_format_src("proc format; value sexfmt 1='Male'; run;").unwrap();
+    assert_eq!(ast.lib, "WORK");
+    execute(&ast, &mut session).unwrap();
+    assert!(
+        !work_dir
+            .join(crate::formats::FormatCatalog::SIDECAR_FILE)
+            .exists(),
+        "WORK must never persist a format catalog sidecar"
+    );
+    assert!(session.libref_format_catalogs.is_empty());
+}
+
+#[test]
+fn execute_lib_permanent_writes_sidecar_and_resolves_immediately() {
+    use crate::formats::FormatSpec;
+    use crate::value::Value;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut session = make_session();
+    session
+        .libs
+        .assign("PERM", tmp.path().to_path_buf())
+        .unwrap();
+
+    let ast =
+        parse_format_src("proc format lib=perm; value gradef 1='Pass' 2='Fail'; run;").unwrap();
+    execute(&ast, &mut session).unwrap();
+
+    // Sidecar written at the libref's root.
+    let sidecar = tmp.path().join(crate::formats::FormatCatalog::SIDECAR_FILE);
+    assert!(
+        sidecar.is_file(),
+        "PROC FORMAT LIB=perm should persist a sidecar"
+    );
+
+    // Immediately resolvable in THIS session, like any user format.
+    let spec = FormatSpec::parse("GRADEF.").unwrap();
+    assert_eq!(
+        session
+            .format_catalog
+            .format(&Value::Num(1.0), &spec)
+            .trim(),
+        "Pass"
+    );
+
+    // The libref's own catalog (for further accumulation / re-save) also holds it.
+    assert!(session.libref_format_catalogs.contains_key("PERM"));
+}
+
+#[test]
+fn execute_lib_permanent_no_substatements_writes_no_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut session = make_session();
+    session
+        .libs
+        .assign("PERM", tmp.path().to_path_buf())
+        .unwrap();
+
+    let ast = parse_format_src("proc format lib=perm; run;").unwrap();
+    execute(&ast, &mut session).unwrap();
+
+    let sidecar = tmp.path().join(crate::formats::FormatCatalog::SIDECAR_FILE);
+    assert!(
+        !sidecar.exists(),
+        "an empty PROC FORMAT LIB= step must not write a sidecar"
+    );
+}
+
+#[test]
+fn execute_lib_unassigned_libref_is_error() {
+    let mut session = make_session();
+    let ast = parse_format_src("proc format lib=nosuchlib; value gradef 1='Pass'; run;").unwrap();
+    let err = execute(&ast, &mut session).unwrap_err();
+    assert!(
+        err.to_string().to_uppercase().contains("NOSUCHLIB"),
+        "got: {err}"
+    );
 }
 
 #[test]

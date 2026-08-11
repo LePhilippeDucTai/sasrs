@@ -67,7 +67,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `IMPORT` | ✅ | `DATAFILE=`/`FILENAME=`, `OUT=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `GETNAMES=`, `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL`, `GUESSINGROWS=` (parsed, ignored) |
 | `EXPORT` | ✅ | `DATA=`, `OUTFILE=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL` |
 | `SQL` | ✅ | see [PROC SQL](#proc-sql) below | dictionary tables, `ODS OUTPUT` capture |
-| `FORMAT` | 🟡 | `VALUE` (`$`/numeric, ranges `a-b`, `low-<b`, `a<-high`, value lists, `OTHER`), `INVALUE` (user informats), `PICTURE` (`PREFIX=`/`MULT=`/`FILL=`) | `CNTLIN=`/`CNTLOUT=`, `FMTLIB`, persistent format catalogs |
+| `FORMAT` | 🟡 | `VALUE` (`$`/numeric, ranges `a-b`, `low-<b`, `a<-high`, value lists, `OTHER`), `INVALUE` (user informats), `PICTURE` (`PREFIX=`/`MULT=`/`FILL=`); `LIB=`/`LIBRARY=libref` persistent catalogs (JSON sidecar `formats.sascat.json` in the libref directory, saved after the proc, loaded at `LIBNAME`; WORK stays in-memory; resolution: WORK first, then librefs in assignment order) | `CNTLIN=`/`CNTLOUT=`, `FMTLIB`, two-level `LIBRARY=libref.catalog` |
 | `FREQ` | 🟡 | `DATA=`; `TABLES` one-way, two-way (`v1*v2`) & n-way (`v1*v2*…`, stratified two-way of the last two vars) with `/MISSING /OUT= /NOPERCENT /NOROW /NOCOL /NOFREQ /NOCUM /LIST /CHISQ /FISHER` (2×2) `/MEASURES /AGREE /TREND`; `WEIGHT` (sum of weights into frequencies & CHISQ), `BY`; `ODS OUTPUT OneWayFreqs` | Fisher on tables >2×2 |
 | `UNIVARIATE` | 🟡 | `DATA=`, `NOPRINT`, `NORMAL`/`NORMALTEST`; `VAR` (`/ normal`), `WEIGHT`, `BY` (parsed), `OUTPUT` (parsed). Report: Moments, Basic Measures, Quantiles, Extreme Obs, Tests for Normality. With `WEIGHT`: weighted Quantiles (weighted Definition 5 — cumulative-weight position) and weighted `Median`/`Q1`/`Q3`/`Range`/`IQR`, plus Extreme Obs (raw extreme values). Plots wired to ODS GRAPHICS: `HISTOGRAM`/`QQPLOT`/`PROBPLOT`/`CDFPLOT`/`PPPLOT` → PNG/SVG under `--features graphics` (`univar_{N}`; histogram, normal-QQ/normal-probability scatter, empirical CDF, P-P scatter), else the shared "image deferred" NOTE; nothing emitted when ODS GRAPHICS off | weighted skewness/kurtosis (computed unweighted); plot-statement options (`/ NORMAL`, annotation) |
 | `TABULATE` | 🟡 | `DATA=`; `CLASS`, `VAR`, `TABLE` (1/2/3 dims), stats `N NMISS SUM MEAN MIN MAX STD PCTN PCTSUM`, `ALL`, `*` crossings, `OUT=` cell dataset, `FORMAT=`/`*f=` cell formats, `='label'` + stored LABEL in headers | group denominators `PCTN<...>` |
@@ -165,7 +165,7 @@ individual options of each procedure and DATA step statement. Legend:
 | ODS — not supported | 🔴 | embedded images |
 | Built-in formats | ✅ | numeric (`w.d`, `BEST`, `COMMA`, `DOLLAR`, `Z`, `PERCENT`, `E`, `EURO`, `COMMAX`…), dates/times (`DATEw`, `DDMMYY`, `MMDDYY`, `YYMMDD`, `DATETIME`, `TIME`, `MONYY`, `WEEKDATE`, `DOWNAME`, ISO 8601 `B8601`/`E8601`…), character (`$w`, `$CHAR`, `$UPCASE`, `$HEX`, `$QUOTE`), specials (`HEX`, `BINARY`, `OCTAL`, `ROMAN`, `WORDS`, `FRACT`, `NEGPAREN`) |
 | Built-in informats | ✅ | `w.d`, `COMMA`, `DOLLAR`, `DATEw`, `MMDDYY`/`DDMMYY`/`YYMMDD`, `TIME`, `$CHAR`/`$w` |
-| User formats | 🟡 | `PROC FORMAT` `VALUE`/`INVALUE`/`PICTURE` (in-memory; no `CNTLIN=`/`CNTLOUT=` or persistent catalogs) |
+| User formats | 🟡 | `PROC FORMAT` `VALUE`/`INVALUE`/`PICTURE`; persistent per-libref catalogs via `LIB=` (JSON sidecar, loaded at `LIBNAME`); no `CNTLIN=`/`CNTLOUT=` yet |
 
 ### Global statements
 

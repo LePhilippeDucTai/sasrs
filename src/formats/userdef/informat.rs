@@ -5,7 +5,7 @@ use super::*;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The result value of a single INVALUE mapping.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum InformatValue {
     /// A numeric literal result (e.g. `'A'=4`).
     Num(f64),
@@ -20,7 +20,7 @@ pub enum InformatValue {
 }
 
 /// A single range entry in a `UserInformat` (string key range → result value).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InformatRange {
     /// Lower bound (character string or Low sentinel). For a single-value entry
     /// `from == to` and both have the same `Bound::Char(…)` value.
@@ -40,7 +40,7 @@ pub struct InformatRange {
 /// type is determined by whether the informat name has a `$` prefix:
 ///   - `invalue grade` → numeric result
 ///   - `invalue $size` → character result
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserInformat {
     /// `true` if the name had a `$` prefix → character result.
     pub is_char_result: bool,

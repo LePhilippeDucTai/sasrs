@@ -180,6 +180,16 @@ pub struct Session {
     /// étape DATA en prenait deux copies PROFONDES (trois `HashMap`) à
     /// l'ouverture, une pour le `Runner` et une pour l'`EvalCtx` (MQ9.8).
     pub format_catalog: std::rc::Rc<crate::formats::FormatCatalog>,
+    /// M39.1 — catalogues de formats PERSISTANTS par libref (hors WORK, qui
+    /// n'existe qu'en mémoire dans `format_catalog` ci-dessus). Peuplé :
+    /// - au `LIBNAME` : chargé depuis le sidecar `formats.sascat.json` du
+    ///   libref s'il existe (voir `executor::global::libname`) ;
+    /// - à `PROC FORMAT LIBRARY=<libref>;` : les nouvelles définitions
+    ///   s'accumulent ici PUIS le catalogue entier est réécrit sur disque
+    ///   (`procs::format::execute`).
+    ///
+    /// Clé = libref UPPERCASE. Ne contient PAS "WORK".
+    pub libref_format_catalogs: HashMap<String, crate::formats::FormatCatalog>,
     /// Processeur macro de la session (M11) : table des symboles `%let`/`&var`.
     /// Sous le build par défaut c'est une identité pure (cf. `MacroEngine`).
     pub macro_engine: crate::preprocess::MacroEngine,
@@ -296,6 +306,7 @@ impl Session {
             views: std::collections::HashMap::new(),
             deterministic,
             format_catalog: std::rc::Rc::new(crate::formats::FormatCatalog::default()),
+            libref_format_catalogs: HashMap::new(),
             macro_engine,
             vectorize: false,
             call_execute_queue: Vec::new(),

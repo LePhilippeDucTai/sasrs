@@ -14,14 +14,42 @@
 //!   `A`..`Z`/`_`, `.` → `.` (à respecter dans TOUS les formats
 //!   numériques).
 //! - `informat(s, spec)` : symétrique pour INPUT().
+//!
+//! ## M39.1 — sidecar de catalogue par libref
+//!
+//! `FormatCatalog` (dé)sérialise en JSON via [`FormatCatalog::load_sidecar`] /
+//! [`FormatCatalog::save_sidecar`], un fichier **par libref**, nommé
+//! `formats.sascat.json`, posé à la RACINE du répertoire de la bibliothèque
+//! (pas par table — un catalogue de formats est une ressource de bibliothèque,
+//! pas de dataset, à l'image d'un `.sas7bcat` réel). Schéma (clés upcase) :
+//! ```json
+//! { "user": { "GRADEF": { "is_char": false, "ranges": [...], "other": null } },
+//!   "user_informats": { "$SIZE": { ... } },
+//!   "user_pictures":  { "DOLLARPIC": { ... } } }
+//! ```
+//! Écrit uniquement si le catalogue n'est pas vide (jamais de fichier pour
+//! WORK, jamais de fichier vide) — même garde que le sidecar `.sasmeta.json`
+//! de `dataset.rs`.
+//!
+//! Ordre de résolution retenu ici (raffiné par FMTSEARCH= en M39.3) : WORK
+//! (`session.format_catalog`, le chemin historique, jamais touché par le
+//! disque) **d'abord**, puis les bibliothèques chargées par LIBNAME dans leur
+//! ordre d'assignation. En pratique (voir `executor/global/libname.rs` et
+//! `procs/format/mod.rs`) les formats d'un libref chargé sont fusionnés dans
+//! `session.format_catalog` SANS écraser une clé déjà présente
+//! ([`FormatCatalog::merge_missing_from`]) : toute définition WORK explicite
+//! (avant ou après le LIBNAME, car `PROC FORMAT` sans LIB= écrase toujours
+//! sans condition) l'emporte sur la valeur chargée depuis un libref.
 
 #![allow(unused_variables, dead_code)]
 
 pub mod builtin;
 pub mod userdef;
 
+use crate::error::{Result, SasError};
 use crate::value::{Value, format_best};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatSpec {
@@ -101,7 +129,7 @@ impl FormatSpec {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FormatCatalog {
     user: HashMap<String, userdef::UserFormat>,
     /// User-defined informats (PROC FORMAT INVALUE, M18.2) keyed by upcased
@@ -133,6 +161,65 @@ impl FormatCatalog {
         let mut names: Vec<&str> = self.user.keys().map(|s| s.as_str()).collect();
         names.sort();
         names
+    }
+
+    /// True when no VALUE/INVALUE/PICTURE has EVER been registered. Used to
+    /// decide whether the M39.1 sidecar is worth writing at all (WORK never
+    /// writes one; a `PROC FORMAT LIB=x;` with no sub-statement writes none
+    /// either).
+    pub fn is_empty(&self) -> bool {
+        self.user.is_empty() && self.user_informats.is_empty() && self.user_pictures.is_empty()
+    }
+
+    /// M39.1 — merge entries from `other` into `self`, WITHOUT overwriting a
+    /// key already present in `self`. Used exclusively when a `LIBNAME`
+    /// statement loads a libref's persisted sidecar catalog into the live
+    /// session catalog: whatever is already defined (WORK, or an earlier
+    /// LIBNAME'd library) keeps priority — see the module doc for the full
+    /// resolution-order rationale.
+    pub fn merge_missing_from(&mut self, other: &FormatCatalog) {
+        for (k, v) in &other.user {
+            self.user.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.user_informats {
+            self.user_informats
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.user_pictures {
+            self.user_pictures
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
+        }
+    }
+
+    /// M39.1 — filename of the per-libref sidecar catalog. One file at the
+    /// ROOT of the libref's directory (a format catalog is a LIBRARY-level
+    /// resource, not a per-table one).
+    pub const SIDECAR_FILE: &'static str = "formats.sascat.json";
+
+    /// Load the sidecar catalog from `dir` (the libref's physical directory),
+    /// if it exists and parses. Any I/O or parse error is swallowed and
+    /// treated as "no persisted catalog" — mirrors `dataset.rs::read_sidecar`.
+    pub fn load_sidecar(dir: &Path) -> Option<FormatCatalog> {
+        let path = dir.join(Self::SIDECAR_FILE);
+        let data = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    /// Write the catalog as `dir/formats.sascat.json`. No-op (does not even
+    /// touch the file) when the catalog is empty — mirrors the "no meta, no
+    /// file" rule of `dataset.rs::write_sidecar`, which is what keeps the
+    /// in-memory-only WORK path byte-identical.
+    pub fn save_sidecar(&self, dir: &Path) -> Result<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        let path = dir.join(Self::SIDECAR_FILE);
+        let json = serde_json::to_string(self)
+            .map_err(|e| SasError::runtime(format!("failed to serialize format catalog: {e}")))?;
+        std::fs::write(path, json)?;
+        Ok(())
     }
 
     /// PUT: value → formatted string (SAS-justified, width spec.w).

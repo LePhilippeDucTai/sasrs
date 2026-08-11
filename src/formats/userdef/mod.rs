@@ -56,7 +56,7 @@ pub enum FormatKind {
     Invalue,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum Bound {
     Low,
     High,
@@ -75,7 +75,7 @@ impl Clone for Bound {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Range {
     pub from: Bound,
     pub to: Bound,
@@ -84,7 +84,7 @@ pub struct Range {
     pub label: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserFormat {
     pub is_char: bool,
     pub ranges: Vec<Range>,

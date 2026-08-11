@@ -80,4 +80,8 @@ impl LibraryProvider for DirLibrary {
         }
         Ok(())
     }
+
+    fn catalog_dir(&self) -> Option<&std::path::Path> {
+        Some(&self.dir)
+    }
 }
