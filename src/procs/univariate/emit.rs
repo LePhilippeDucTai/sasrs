@@ -4,6 +4,10 @@ use crate::procs::common::centered;
 
 /// Emit the full report for a single analysis variable. `data` holds the
 /// non-missing (value, obs_number) pairs in original observation order.
+///
+/// M38.3 — les tables « Moments » et « Basic Statistical Measures » portent
+/// leurs noms d'objets ODS (`Moments`, `BasicMeasures`) : si `ODS OUTPUT` les
+/// demande, une tranche typée par variable s'accumule (d'où le `Result`).
 pub(super) fn emit_variable(
     session: &mut Session,
     name: &str,
@@ -11,7 +15,7 @@ pub(super) fn emit_variable(
     n_missing: usize,
     n_total: usize,
     normal: bool,
-) {
+) -> Result<()> {
     session.listing.blank();
     centered(session, &format!("Variable: {name}"));
     session.listing.blank();
@@ -61,8 +65,8 @@ pub(super) fn emit_variable(
         ),
     ];
     let m_rows: Vec<Vec<String>> = moments
-        .into_iter()
-        .map(|(la, va, lb, vb)| vec![la.to_string(), va, lb.to_string(), vb])
+        .iter()
+        .map(|(la, va, lb, vb)| vec![la.to_string(), va.clone(), lb.to_string(), vb.clone()])
         .collect();
     session.listing.write_table(
         &[
@@ -74,6 +78,19 @@ pub(super) fn emit_variable(
         &[Align::Left, Align::Right, Align::Left, Align::Right],
         &m_rows,
     );
+
+    // M38.3 — cette table porte le nom d'objet ODS « Moments ». Structure du
+    // dataset SAS réel : VarName, Label1, cValue1 (valeur AFFICHÉE, celle du
+    // listing), nValue1 (valeur numérique pleine précision), Label2, cValue2,
+    // nValue2 — une paire (colonne gauche, colonne droite) par ligne. Écart
+    // assumé : pas de FORMAT attaché aux nValue (SAS pose D12.4). Le chemin
+    // WEIGHT (`emit_variable_weighted`) ne capture pas encore — documenté.
+    if session.ods_output_active("Moments") {
+        let nvals1: [Option<f64>; 6] = [Some(nf), mean, s, skew, Some(uss), cv];
+        let nvals2: [Option<f64>; 6] = [Some(nf), Some(sum), variance, kurt, Some(css), std_err];
+        let part = build_moments_part(name, &moments, &nvals1, &nvals2)?;
+        session.append_ods_output("Moments", part)?;
+    }
 
     // ── Basic Statistical Measures ──
     session.listing.blank();
@@ -128,6 +145,23 @@ pub(super) fn emit_variable(
         &[Align::Left, Align::Right, Align::Left, Align::Right],
         &basic_rows,
     );
+
+    // M38.3 — cette table porte le nom d'objet ODS « BasicMeasures ».
+    // Structure du dataset SAS réel : VarName, LocMeasure (char), LocValue
+    // (num), VarMeasure (char), VarValue (num) — 4 lignes par variable, la 4e
+    // sans mesure de position (missing).
+    if session.ods_output_active("BasicMeasures") {
+        let part = build_basic_measures_part(
+            name,
+            &[
+                (Some("Mean"), mean, "Std Deviation", s),
+                (Some("Median"), median, "Variance", variance),
+                (Some("Mode"), mode_v, "Range", range),
+                (None, None, "Interquartile Range", iqr),
+            ],
+        )?;
+        session.append_ods_output("BasicMeasures", part)?;
+    }
 
     // ── Tests for Normality (only when requested via NORMAL) ──
     if normal {
@@ -221,6 +255,98 @@ pub(super) fn emit_variable(
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
     }
+
+    Ok(())
+}
+
+/// M38.3 — tranche typée de la table ODS « Moments » pour une variable :
+/// colonnes VarName, Label1, cValue1, nValue1, Label2, cValue2, nValue2.
+/// `moments` fournit les paires (Label1, cValue1, Label2, cValue2) telles
+/// qu'affichées ; `nvals1`/`nvals2` les valeurs numériques pleine précision.
+fn build_moments_part(
+    var_name: &str,
+    moments: &[(&str, String, &str, String)],
+    nvals1: &[Option<f64>; 6],
+    nvals2: &[Option<f64>; 6],
+) -> Result<SasDataset> {
+    let n = moments.len();
+    let varname_col: Vec<Option<String>> = vec![Some(var_name.to_string()); n];
+    let label1: Vec<Option<String>> = moments.iter().map(|m| Some(m.0.to_string())).collect();
+    let cvalue1: Vec<Option<String>> = moments.iter().map(|m| Some(m.1.clone())).collect();
+    let label2: Vec<Option<String>> = moments.iter().map(|m| Some(m.2.to_string())).collect();
+    let cvalue2: Vec<Option<String>> = moments.iter().map(|m| Some(m.3.clone())).collect();
+
+    let char_len = |vals: &[Option<String>]| {
+        vals.iter()
+            .flatten()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    };
+    let columns: Vec<Column> = vec![
+        Series::new("VarName".into(), varname_col.clone()).into(),
+        Series::new("Label1".into(), label1.clone()).into(),
+        Series::new("cValue1".into(), cvalue1.clone()).into(),
+        Series::new("nValue1".into(), nvals1.to_vec()).into(),
+        Series::new("Label2".into(), label2.clone()).into(),
+        Series::new("cValue2".into(), cvalue2.clone()).into(),
+        Series::new("nValue2".into(), nvals2.to_vec()).into(),
+    ];
+    let vars = vec![
+        // VarName : $32, la longueur SAS d'un nom de variable.
+        crate::procs::common::char_var_meta("VarName", 32),
+        crate::procs::common::char_var_meta("Label1", char_len(&label1)),
+        crate::procs::common::char_var_meta("cValue1", char_len(&cvalue1)),
+        num_var_meta("nValue1"),
+        crate::procs::common::char_var_meta("Label2", char_len(&label2)),
+        crate::procs::common::char_var_meta("cValue2", char_len(&cvalue2)),
+        num_var_meta("nValue2"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
+}
+
+/// Une ligne de la table « Basic Statistical Measures » : (mesure de
+/// position, valeur, mesure de dispersion, valeur). La mesure de position peut
+/// manquer (4e ligne « Interquartile Range » du listing).
+type BasicMeasureRow<'a> = (Option<&'a str>, Option<f64>, &'a str, Option<f64>);
+
+/// M38.3 — tranche typée de la table ODS « BasicMeasures » pour une variable :
+/// colonnes VarName, LocMeasure, LocValue, VarMeasure, VarValue.
+fn build_basic_measures_part(var_name: &str, rows: &[BasicMeasureRow]) -> Result<SasDataset> {
+    let n = rows.len();
+    let varname_col: Vec<Option<String>> = vec![Some(var_name.to_string()); n];
+    let loc_measure: Vec<Option<String>> =
+        rows.iter().map(|r| r.0.map(|s| s.to_string())).collect();
+    let loc_value: Vec<Option<f64>> = rows.iter().map(|r| r.1).collect();
+    let var_measure: Vec<Option<String>> = rows.iter().map(|r| Some(r.2.to_string())).collect();
+    let var_value: Vec<Option<f64>> = rows.iter().map(|r| r.3).collect();
+
+    let char_len = |vals: &[Option<String>]| {
+        vals.iter()
+            .flatten()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    };
+    let columns: Vec<Column> = vec![
+        Series::new("VarName".into(), varname_col).into(),
+        Series::new("LocMeasure".into(), loc_measure.clone()).into(),
+        Series::new("LocValue".into(), loc_value).into(),
+        Series::new("VarMeasure".into(), var_measure.clone()).into(),
+        Series::new("VarValue".into(), var_value).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("VarName", 32),
+        crate::procs::common::char_var_meta("LocMeasure", char_len(&loc_measure)),
+        num_var_meta("LocValue"),
+        crate::procs::common::char_var_meta("VarMeasure", char_len(&var_measure)),
+        num_var_meta("VarValue"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
 }
 
 /// Emit the report for a single analysis variable with a WEIGHT variable in

@@ -516,3 +516,141 @@ fn quantile_def5_pinned_even_discontinuity() {
     let xs = [1.0, 2.0, 3.0, 4.0];
     assert_eq!(q(&xs, 0.5), 2.5);
 }
+
+// ── M38.3 : ODS OUTPUT Moments / BasicMeasures ─────────────────────────────
+
+fn plain_ast(var: &[&str]) -> UnivariateAst {
+    UnivariateAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
+        var: var.iter().map(|s| s.to_string()).collect(),
+        by: vec![],
+        weight: None,
+        output: None,
+        normal: false,
+        plots: vec![],
+    }
+}
+
+fn x12345_session() -> Session {
+    let mut session = make_session();
+    let df = df!["x" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(4.0), Some(5.0)]].unwrap();
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x")],
+    };
+    write_dataset(&mut session, "T", ds);
+    session
+}
+
+/// `ods output Moments=m;` → dataset avec la structure SAS réelle
+/// (VarName, Label1, cValue1, nValue1, Label2, cValue2, nValue2), une paire
+/// gauche/droite par ligne du listing, nValue en pleine précision.
+#[test]
+fn ods_output_moments_captured() {
+    let mut session = x12345_session();
+    session.set_ods_output(&[(
+        "Moments".into(),
+        DatasetRef {
+            libref: None,
+            name: "m".into(),
+        },
+    )]);
+
+    execute(&plain_ast(&["x"]), &mut session).unwrap();
+    session.flush_ods_output().unwrap();
+
+    let (out, _) = session.libs.get("WORK").unwrap().read("M").unwrap();
+    let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "VarName", "Label1", "cValue1", "nValue1", "Label2", "cValue2", "nValue2"
+        ]
+    );
+    assert_eq!(out.n_obs(), 6, "6 lignes de la table Moments");
+
+    // Ligne 1 : N=5 / Sum Weights=5 ; ligne 2 : Mean=3 / Sum Observations=15.
+    let n1 = out.df.column("nValue1").unwrap().f64().unwrap();
+    let n2 = out.df.column("nValue2").unwrap().f64().unwrap();
+    assert_eq!(n1.get(0), Some(5.0));
+    assert_eq!(n2.get(0), Some(5.0));
+    assert_eq!(n1.get(1), Some(3.0));
+    assert_eq!(n2.get(1), Some(15.0));
+    let l1 = out.df.column("Label1").unwrap().str().unwrap();
+    assert_eq!(l1.get(0), Some("N"));
+    assert_eq!(l1.get(5), Some("Coeff Variation"));
+}
+
+/// `ods output BasicMeasures=b;` → VarName, LocMeasure, LocValue, VarMeasure,
+/// VarValue ; 4 lignes, la 4e (Interquartile Range) sans mesure de position.
+#[test]
+fn ods_output_basic_measures_captured() {
+    let mut session = x12345_session();
+    session.set_ods_output(&[(
+        "BasicMeasures".into(),
+        DatasetRef {
+            libref: None,
+            name: "b".into(),
+        },
+    )]);
+
+    execute(&plain_ast(&["x"]), &mut session).unwrap();
+    session.flush_ods_output().unwrap();
+
+    let (out, _) = session.libs.get("WORK").unwrap().read("B").unwrap();
+    let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "VarName",
+            "LocMeasure",
+            "LocValue",
+            "VarMeasure",
+            "VarValue"
+        ]
+    );
+    assert_eq!(out.n_obs(), 4);
+    let loc = out.df.column("LocMeasure").unwrap().str().unwrap();
+    assert_eq!(loc.get(0), Some("Mean"));
+    assert_eq!(loc.get(3), None, "4e ligne sans mesure de position");
+    let locv = out.df.column("LocValue").unwrap().f64().unwrap();
+    assert_eq!(locv.get(0), Some(3.0), "Mean");
+    assert_eq!(locv.get(1), Some(3.0), "Median");
+    let varm = out.df.column("VarMeasure").unwrap().str().unwrap();
+    assert_eq!(varm.get(3), Some("Interquartile Range"));
+}
+
+/// Deux variables analysées → les tranches Moments s'empilent (12 lignes).
+#[test]
+fn ods_output_moments_two_vars_stack() {
+    let mut session = make_session();
+    let df = df![
+        "x" => [Some(1.0_f64), Some(2.0)],
+        "y" => [Some(10.0_f64), Some(30.0)],
+    ]
+    .unwrap();
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("y")],
+    };
+    write_dataset(&mut session, "T", ds);
+    session.set_ods_output(&[(
+        "Moments".into(),
+        DatasetRef {
+            libref: None,
+            name: "m".into(),
+        },
+    )]);
+
+    execute(&plain_ast(&["x", "y"]), &mut session).unwrap();
+    session.flush_ods_output().unwrap();
+
+    let (out, _) = session.libs.get("WORK").unwrap().read("M").unwrap();
+    assert_eq!(out.n_obs(), 12, "6 lignes par variable");
+    let vn = out.df.column("VarName").unwrap().str().unwrap();
+    assert_eq!(vn.get(0), Some("x"));
+    assert_eq!(vn.get(6), Some("y"));
+}

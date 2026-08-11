@@ -10,7 +10,6 @@
 //! `last_dataset` matérialise le `_LAST_` de SAS : la dernière table écrite,
 //! utilisée quand une PROC omet `DATA=`.
 
-use crate::ast::DatasetRef;
 use crate::library::LibraryManager;
 use crate::log::LogWriter;
 use crate::output::{OutputDestination, TextListing};
@@ -127,14 +126,25 @@ pub struct Session {
     /// M22.2 — nom (UPPERCASE) de la destination de sortie courante portée par
     /// `self.listing`. "LISTING" par défaut. Sert à `ODS CLOSE` sans nom.
     pub current_destination: String,
-    /// M22.3 — registre `ODS OUTPUT` : capture des tables ODS vers des datasets.
-    /// Clé = nom de table ODS en UPPERCASE (ex. "SUMMARY"), valeur = cible
-    /// dataset. **Vide par défaut** : tant qu'aucun `ODS OUTPUT` n'a été émis, la
-    /// capture est inactive et le listing reste byte-identique. Un proc qui
-    /// produit une table ODS connue consulte ce registre via
-    /// [`Session::ods_output_target`] ; s'il y trouve sa table, il écrit le
-    /// résultat tabulaire comme dataset (en plus du listing).
-    pub ods_output_map: HashMap<String, DatasetRef>,
+    /// M22.3/M38.3 — registre `ODS OUTPUT` : capture des tables ODS vers des
+    /// datasets. Clé = nom de table ODS en UPPERCASE (ex. "SUMMARY",
+    /// "ONEWAYFREQS"), valeur = demande de capture (cible + suivi de
+    /// production). **Vide par défaut** : tant qu'aucun `ODS OUTPUT` n'a été
+    /// émis, la capture est inactive et le listing reste byte-identique. Un
+    /// proc qui produit une table ODS connue consulte ce registre via
+    /// [`Session::ods_output_target`] / [`Session::ods_output_active`] ; s'il y
+    /// trouve sa table, il écrit le résultat tabulaire comme dataset (en plus
+    /// du listing). Cycle de vie et généralisation : voir le module
+    /// [`ods_output`].
+    pub ods_output_map: HashMap<String, ods_output::OdsOutputRequest>,
+    /// M38.3 — tampon d'accumulation des captures ODS OUTPUT du proc courant :
+    /// clé = nom de table ODS en UPPERCASE, valeur = tranches empilées
+    /// ([`Session::append_ods_output`]). Écrit en datasets par
+    /// [`Session::flush_ods_output`] en fin de proc.
+    pub ods_output_pending: HashMap<String, crate::dataset::SasDataset>,
+    /// M38.3 — séquence d'enregistrement des demandes `ODS OUTPUT` (ordre des
+    /// statements), pour des NOTEs/WARNINGs déterministes.
+    pub(crate) ods_output_seq: usize,
     pub options: SasOptions,
     /// M29.1 — état ODS GRAPHICS (génération d'images PNG/SVG). `enabled=false`
     /// par défaut : tant que `ODS GRAPHICS ON` n'a pas été émis, aucun PROC
@@ -267,6 +277,8 @@ impl Session {
             ods_options: OdsOptions::default(),
             current_destination: "LISTING".to_string(),
             ods_output_map: HashMap::new(),
+            ods_output_pending: HashMap::new(),
+            ods_output_seq: 0,
             options,
             ods_graphics: crate::ods_graphics::OdsGraphics::new(base_dir.clone()),
             graphics_image_count: 0,
@@ -388,34 +400,6 @@ impl Session {
         }
     }
 
-    /// M22.3 — enregistre des mappings `ODS OUTPUT table=ds`. Le nom de table
-    /// ODS est stocké en UPPERCASE (matching insensible à la casse). Un mapping
-    /// pour une table déjà enregistrée écrase l'ancien (sémantique SAS : le
-    /// dernier `ODS OUTPUT` gagne).
-    pub fn set_ods_output(&mut self, mappings: &[(String, DatasetRef)]) {
-        for (table, dref) in mappings {
-            self.ods_output_map
-                .insert(table.to_ascii_uppercase(), dref.clone());
-        }
-    }
-
-    /// M22.3 — purge tous les mappings `ODS OUTPUT` (équivalent
-    /// `ODS OUTPUT CLOSE ;`). Après cet appel la capture est de nouveau inactive
-    /// et le listing redevient byte-identique au comportement par défaut.
-    pub fn clear_ods_output(&mut self) {
-        self.ods_output_map.clear();
-    }
-
-    /// M22.3 — renvoie la cible dataset enregistrée pour une table ODS donnée
-    /// (matching insensible à la casse), ou `None` si aucune capture n'est
-    /// active pour cette table. Les procs consultent cette méthode AVANT
-    /// d'écrire une table capturée.
-    pub fn ods_output_target(&self, table: &str) -> Option<DatasetRef> {
-        self.ods_output_map
-            .get(&table.to_ascii_uppercase())
-            .cloned()
-    }
-
     /// M22.2 — applique une option globale ODS (CENTER/NOCENTER, DATE/NODATE,
     /// NUMBER/NONUMBER) à la session. Renvoie `true` si `name` est reconnue.
     pub fn set_ods_option(&mut self, name: &str) -> bool {
@@ -448,6 +432,8 @@ impl Session {
         }
     }
 }
+
+pub mod ods_output;
 
 #[cfg(test)]
 mod tests;

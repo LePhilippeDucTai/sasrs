@@ -85,6 +85,16 @@ pub(super) fn one_way(
 
     session.listing.write_table(&headers, &aligns, &out_rows);
 
+    // M38.3 — cette table de listing porte le nom d'objet ODS « OneWayFreqs » :
+    // si `ODS OUTPUT OneWayFreqs=…` est actif, une tranche TYPÉE s'accumule
+    // (une par variable / groupe BY — union diagonale, comme SAS) et sera
+    // matérialisée en dataset à la fin du proc. Inactif par défaut → aucun
+    // effet, listing byte-identique.
+    if session.ods_output_active("OneWayFreqs") {
+        let part = build_one_way_freqs(ds, col_idx, &cats, denom, req)?;
+        session.append_ods_output("OneWayFreqs", part)?;
+    }
+
     // Frequency Missing line (only when missings are excluded).
     if !req.missing && n_missing > 0.0 {
         session.listing.blank();
@@ -217,4 +227,141 @@ pub(super) fn write_one_way_out(
     ));
 
     Ok(())
+}
+
+/// M38.3 — construit la tranche typée de la table ODS « OneWayFreqs » pour une
+/// variable : structure du dataset SAS 9.4 réel, dans l'ordre du template
+/// `Base.Freq.OneWayFreqs` :
+///
+/// | Colonne        | Type | Label                  | Contenu                    |
+/// |----------------|------|------------------------|----------------------------|
+/// | `Table`        | char | —                      | `Table <var>`              |
+/// | `F_<var>`      | char | `<var>`                | valeur AFFICHÉE (listing)  |
+/// | `<var>`        | idem | méta de l'input        | valeur brute               |
+/// | `Frequency`    | num  | `Frequency`            | fréquence (pondérée)       |
+/// | `Percent`      | num  | `Percent`              | pourcentage, pleine préc.  |
+/// | `CumFrequency` | num  | `Cumulative Frequency` | cumul                      |
+/// | `CumPercent`   | num  | `Cumulative Percent`   | cumul, pleine précision    |
+///
+/// Écarts SAS assumés (documentés) :
+/// - les options d'affichage NOFREQ/NOPERCENT/NOCUM suppriment ici les mêmes
+///   colonnes que dans le listing (oracle M38.3 : « colonnes du listing
+///   FREQ ») ;
+/// - `F_<var>` reprend la valeur affichée par sasrs (aucun FORMAT appliqué aux
+///   valeurs tabulées à ce stade) et les longueurs caractère sont dérivées des
+///   valeurs (SAS fige des longueurs issues des formats) ;
+/// - les colonnes numériques ne portent pas de FORMAT (SAS attache p. ex. une
+///   décimale d'affichage) — les VALEURS stockées sont, comme SAS, en pleine
+///   précision.
+fn build_one_way_freqs(
+    ds: &SasDataset,
+    col_idx: usize,
+    cats: &[Category],
+    denom: f64,
+    req: &TableRequest,
+) -> Result<SasDataset> {
+    let meta = &ds.vars[col_idx];
+    let var_name = meta.name.clone();
+    let n = cats.len();
+
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+
+    // Table : « Table <var> » (identifie la requête TABLES d'origine quand
+    // plusieurs tables s'empilent dans le même dataset).
+    let table_str = format!("Table {var_name}");
+    let table_vals: Vec<Option<String>> = vec![Some(table_str.clone()); n];
+    columns.push(Series::new("Table".into(), table_vals).into());
+    vars.push(crate::procs::common::char_var_meta(
+        "Table",
+        table_str.len().max(8),
+    ));
+
+    // F_<var> : valeur affichée (colonne de tête du listing).
+    let f_labels: Vec<String> = cats.iter().map(|c| category_label(&c.value)).collect();
+    let f_len = f_labels.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+    let f_vals: Vec<Option<String>> = f_labels
+        .into_iter()
+        .map(|s| if s.is_empty() { None } else { Some(s) })
+        .collect();
+    let f_name = format!("F_{var_name}");
+    columns.push(Series::new(f_name.as_str().into(), f_vals).into());
+    vars.push(VarMeta {
+        name: f_name,
+        ty: VarType::Char,
+        length: f_len,
+        format: None,
+        label: Some(var_name.clone()),
+    });
+
+    // <var> : valeur brute, méta (type/longueur/format/label) de l'input.
+    let cat_series = match meta.ty {
+        VarType::Num => {
+            let vals: Vec<Option<f64>> = cats.iter().map(|c| value_to_num(&c.value)).collect();
+            Series::new(meta.name.as_str().into(), vals)
+        }
+        VarType::Char => {
+            let vals: Vec<Option<String>> = cats
+                .iter()
+                .map(|c| match &c.value {
+                    Value::Char(s) if s.trim_end().is_empty() => None,
+                    Value::Char(s) => Some(s.trim_end().to_string()),
+                    _ => None,
+                })
+                .collect();
+            Series::new(meta.name.as_str().into(), vals)
+        }
+    };
+    columns.push(cat_series.into());
+    vars.push(meta.clone());
+
+    let labeled_num = |name: &str, label: &str| VarMeta {
+        name: name.to_string(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: Some(label.to_string()),
+    };
+
+    // Frequency / Percent / CumFrequency / CumPercent — mêmes suppressions
+    // d'affichage que le listing (NOFREQ / NOPERCENT / NOCUM).
+    let show_freq = !req.nofreq;
+    let show_pct = !req.nopercent;
+    let show_cum_freq = !req.nocum;
+    let show_cum_pct = !req.nocum && !req.nopercent;
+
+    let pct_of = |f: f64| if denom > 0.0 { 100.0 * f / denom } else { 0.0 };
+    if show_freq {
+        let vals: Vec<Option<f64>> = cats.iter().map(|c| Some(c.freq)).collect();
+        columns.push(Series::new("Frequency".into(), vals).into());
+        vars.push(labeled_num("Frequency", "Frequency"));
+    }
+    if show_pct {
+        let vals: Vec<Option<f64>> = cats.iter().map(|c| Some(pct_of(c.freq))).collect();
+        columns.push(Series::new("Percent".into(), vals).into());
+        vars.push(labeled_num("Percent", "Percent"));
+    }
+    if show_cum_freq || show_cum_pct {
+        let mut cum = 0.0_f64;
+        let cum_freqs: Vec<f64> = cats
+            .iter()
+            .map(|c| {
+                cum += c.freq;
+                cum
+            })
+            .collect();
+        if show_cum_freq {
+            let vals: Vec<Option<f64>> = cum_freqs.iter().map(|&f| Some(f)).collect();
+            columns.push(Series::new("CumFrequency".into(), vals).into());
+            vars.push(labeled_num("CumFrequency", "Cumulative Frequency"));
+        }
+        if show_cum_pct {
+            let vals: Vec<Option<f64>> = cum_freqs.iter().map(|&f| Some(pct_of(f))).collect();
+            columns.push(Series::new("CumPercent".into(), vals).into());
+            vars.push(labeled_num("CumPercent", "Cumulative Percent"));
+        }
+    }
+
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
 }

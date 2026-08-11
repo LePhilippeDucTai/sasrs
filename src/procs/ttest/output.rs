@@ -69,7 +69,12 @@ pub(super) fn maybe_write_one_sample_output(
         num_var_meta("Probt"),
     ];
     let df_out = DataFrame::new(columns)?;
-    write_out_dataset(session, &target, SasDataset { df: df_out, vars })
+    write_out_dataset(session, &target, SasDataset { df: df_out, vars })?;
+    // M38.3 — si la cible venait d'un `ODS OUTPUT TTest=…` (prioritaire sur
+    // OUT= dans `output_target`), signaler la production pour que la frontière
+    // de step n'émette pas « Output 'TTest' was not created ». No-op sinon.
+    session.mark_ods_output_created("TTest");
+    Ok(())
 }
 
 pub(super) fn maybe_write_paired_output(
@@ -139,5 +144,8 @@ pub(super) fn maybe_write_two_sample_output(
         num_var_meta("Probt"),
     ];
     let df_out = DataFrame::new(columns)?;
-    write_out_dataset(session, &target, SasDataset { df: df_out, vars })
+    write_out_dataset(session, &target, SasDataset { df: df_out, vars })?;
+    // M38.3 — voir maybe_write_one_sample_output.
+    session.mark_ods_output_created("TTest");
+    Ok(())
 }

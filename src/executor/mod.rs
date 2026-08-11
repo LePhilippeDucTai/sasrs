@@ -147,6 +147,11 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
                     .log
                     .note("The SAS System stopped processing this step because of errors.");
             }
+            // M38.3 — frontière de step : WARNING SAS « Output '…' was not
+            // created » pour chaque demande ODS OUTPUT restée sans objet
+            // (APRÈS la NOTE de timing, position SAS), puis purge du registre
+            // (la liste de sélection ODS OUTPUT ne survit pas au step).
+            session.ods_output_step_boundary();
             // M35.3 — keep &SYSLAST in sync with session.last_dataset.
             let syslast = session
                 .last_dataset

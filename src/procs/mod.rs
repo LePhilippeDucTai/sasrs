@@ -122,6 +122,11 @@ macro_rules! procs_registry {
                 $( $epat => $ebody, )*
             };
 
+            // M38.3 — matérialise les captures ODS OUTPUT accumulées pendant
+            // le proc (chemin générique). La NOTE « The data set … » précède
+            // la NOTE de timing, comme dans SAS.
+            let result = result.and_then(|()| $session.flush_ods_output());
+
             // Write timing NOTE even on success (SAS always prints this).
             // On error the caller may still want the timing, but we follow SAS: only
             // write it on success.

@@ -351,6 +351,9 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             ast.alpha,
             &target,
         )?;
+        // M38.3 — capture immédiate : signaler la production pour que la
+        // frontière de step n'émette pas « Output 'Summary' was not created ».
+        session.mark_ods_output_created("Summary");
     }
 
     Ok(())

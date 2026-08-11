@@ -318,7 +318,7 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                         n_missing,
                         grp_rows.len(),
                         ast.normal,
-                    );
+                    )?;
                 }
             }
         }
