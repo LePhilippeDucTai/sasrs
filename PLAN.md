@@ -203,7 +203,7 @@ option/statement neuf). Détail des cases dans `PROGRESS.md`.
 | Tâche | Jalon | État | Modèle | Effort | Notes |
 |---|---|---|---|---|---|
 | Bloc 0 — moteur linéaire partagé `lincom` + digamma/trigamma | M37 | ✅ | **Opus** | élevé | `LinCombEngine`, `class_coding(Param)`, `score_test` (extrait de `glm.rs`) |
-| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | 🔶 | **Fable** | moyen-élevé | **jalon courant** — M38.1–.4 faits ; reprendre à M38.5 (reste M38.5 + DoD) ; fidélité des noms/colonnes des tables ODS OUTPUT = SAS pointu |
+| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | 🔶 | **Fable** | moyen-élevé | **jalon courant** — M38.1–.5 faits ; reste le DoD (fixtures m38 complémentaires, cellules README → ✅) |
 | Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ⬜ | **Sonnet** | moyen | mécanique : le pattern sidecar existe déjà (`.sasmeta.json` de VarMeta) |
 | Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ⬜ | **Fable** | élevé | sémantique de la boucle implicite (EOF par site de `SET`) — zone historiquement Fable |
 | Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ⬜ | **Fable** | moyen-élevé | le quoting macro est la zone la plus subtile du langage |
@@ -238,7 +238,7 @@ extrait de `glm.rs`) ; généralisation ODS OUTPUT + SELECT/EXCLUDE (`session.rs
 store catalogue sidecar (`formats/mod.rs`) ; titres multiples (trait `OutputDestination`) ;
 digamma/trigamma (`stat/dists.rs`). Ordre dur : Bloc 0 avant ses consommateurs ; graphiques en dernier.
 
-**Curseur (2026-08-11)** : M1–M37 terminés ; **jalon courant M38** (reprendre à M38.5) ;
+**Curseur (2026-08-11)** : M1–M37 terminés ; **jalon courant M38** (reprendre au DoD) ;
 M39–M66 à faire — le détail case par case est dans `PROGRESS.md`.
 
 **MAJ modèles (2026-08-11)** : **Fable est de nouveau disponible** → les colonnes

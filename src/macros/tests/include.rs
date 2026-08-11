@@ -73,12 +73,76 @@ fn include_cycle_hits_depth_limit_no_panic() {
 
 #[test]
 fn include_stdin_star_deferral_note() {
-    // M35.2 — `%include *;` (clavier/stdin) reste non supporté : note claire.
+    // M38.5 — `%include *;` (clavier/stdin) reste non supporté : NOTE de
+    // déferrement écrite AU LOG (message exact), le scan se poursuit.
     let dir = tempfile::tempdir().unwrap();
     let mut e = engine_in(dir.path());
     let out = e.expand_open_code("%include *; tail");
-    assert!(out.contains("keyboard/stdin"), "got: {out}");
+    assert!(out.contains("keyboard/terminal input"), "got: {out}");
     assert!(out.contains("tail"), "got: {out}");
+    let logs = e.take_pending_log_lines();
+    assert_eq!(
+        logs,
+        vec![
+            "NOTE: %INCLUDE * (keyboard/terminal input) is not supported in this build; \
+             statement ignored."
+                .to_string()
+        ]
+    );
+}
+
+#[test]
+fn include_device_fileref_deferral_note() {
+    // M38.5 — `%include fileref;` d'un fileref assigné à un device (PIPE) :
+    // NOTE de déferrement AU LOG (message exact), pas de « cannot read ».
+    let dir = tempfile::tempdir().unwrap();
+    let mut e = engine_in(dir.path());
+    e.set_fileref_device("mypipe", "PIPE");
+    let out = e.expand_open_code("%include mypipe; tail");
+    assert!(!out.contains("cannot read"), "got: {out}");
+    assert!(out.contains("tail"), "got: {out}");
+    let logs = e.take_pending_log_lines();
+    assert_eq!(
+        logs,
+        vec![
+            "NOTE: %INCLUDE fileref MYPIPE is assigned to device PIPE, which is not \
+             supported in this build; statement ignored."
+                .to_string()
+        ]
+    );
+}
+
+#[test]
+fn include_device_fileref_case_insensitive() {
+    // M38.5 — la recherche de fileref device est insensible à la casse.
+    let dir = tempfile::tempdir().unwrap();
+    let mut e = engine_in(dir.path());
+    e.set_fileref_device("WebRef", "url");
+    let out = e.expand_open_code("%include WEBREF;");
+    assert!(!out.contains("cannot read"), "got: {out}");
+    let logs = e.take_pending_log_lines();
+    assert_eq!(logs.len(), 1, "got: {logs:?}");
+    assert!(
+        logs[0].contains("fileref WEBREF is assigned to device URL"),
+        "got: {logs:?}"
+    );
+}
+
+#[test]
+fn fileref_last_assignment_wins_path_vs_device() {
+    // M38.5 — dernier FILENAME gagne : device puis chemin → chemin ; chemin
+    // puis device → device.
+    let dir = tempfile::tempdir().unwrap();
+    let p = write_file(dir.path(), "real.sas", "%let w = disk;");
+    let mut e = engine_in(dir.path());
+    e.set_fileref_device("ref", "PIPE");
+    e.set_fileref("ref", p.clone());
+    assert_eq!(e.fileref_device("REF"), None);
+    let out = e.expand_open_code("%include ref; &w");
+    assert_eq!(out.trim(), "disk");
+    e.set_fileref_device("ref", "URL");
+    assert_eq!(e.fileref_path("REF"), None);
+    assert_eq!(e.fileref_device("ref"), Some("URL"));
 }
 
 #[test]

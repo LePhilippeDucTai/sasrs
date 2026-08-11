@@ -176,8 +176,8 @@ individual options of each procedure and DATA step statement. Legend:
 | `TITLE` | ✅ | `TITLE1`–`TITLE9` rendered (centered, in level order; SAS clearing semantics: `TITLEn 'x'` clears levels above, `TITLEn;` clears `n` and above) across all destinations |
 | `FOOTNOTE` | ✅ | `FOOTNOTE1`–`FOOTNOTE9` rendered (same multi-level clearing semantics as `TITLE`) |
 | `ODS` | ✅ | see Output section |
-| `%INCLUDE` | 🟡 | quoted paths, **filerefs** (via `FILENAME`), **non-quoted paths**, autocall (`SASAUTOS`); `*`/stdin deferred (NOTE) |
-| `FILENAME` | 🟡 | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device/pipe/URL forms noted & ignored |
+| `%INCLUDE` | ✅ | quoted paths, **filerefs** (via `FILENAME`), **non-quoted paths**, autocall (`SASAUTOS`); `*`/stdin (interactive-only) recognized & cleanly NOTE-deferred (`NOTE: %INCLUDE * (keyboard/terminal input) is not supported in this build; statement ignored.`) |
+| `FILENAME` | ✅ | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device forms (`PIPE`/`URL`/`TEMP`/`DUMMY`…) recognized & registered, cleanly NOTE-deferred at the statement and again at `%INCLUDE` use (last FILENAME wins between path and device) |
 | `X` | 🔴 | not supported |
 
 > The coverage above reflects the current state of `main`; statistical modelling

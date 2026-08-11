@@ -120,6 +120,12 @@ pub struct MacroEngine {
     /// chemin déjà résolu (absolu ou relatif à la base). Consulté par
     /// `%include fileref;` pour résoudre un fileref nu en chemin de fichier.
     filerefs: std::collections::HashMap<String, std::path::PathBuf>,
+    /// M38.5 — registre des `fileref` assignés à un DEVICE non-fichier
+    /// (`FILENAME ref PIPE|URL|TEMP|… ;`). Clé = nom EN MAJUSCULES, valeur =
+    /// device EN MAJUSCULES (`PIPE`, `URL`, …). Consulté par `%include fileref;`
+    /// pour émettre une NOTE de déferrement propre au lieu d'un « cannot read »
+    /// trompeur. Disjoint de `filerefs` (dernier `FILENAME` gagne).
+    fileref_devices: std::collections::HashMap<String, String>,
     /// M19.2 — noms (MAJUSCULES) de macros dont la recherche autocall a déjà
     /// été TENTÉE (trouvée ou non), pour éviter de relire/recompiler le disque
     /// à chaque invocation. Une fois compilée, la macro vit dans `macros`.
@@ -261,7 +267,31 @@ impl MacroEngine {
     /// chemin doit être DÉJÀ résolu (cf. `Session::resolve_path`). Un
     /// ré-enregistrement écrase l'ancien chemin (dernier `FILENAME` gagne).
     pub fn set_fileref(&mut self, name: &str, path: std::path::PathBuf) {
-        self.filerefs.insert(name.to_uppercase(), path);
+        let key = name.to_uppercase();
+        // Dernier `FILENAME` gagne : une assignation chemin remplace une
+        // éventuelle assignation device antérieure du même nom (M38.5).
+        self.fileref_devices.remove(&key);
+        self.filerefs.insert(key, path);
+    }
+
+    /// M38.5 — enregistre un `fileref` assigné à un DEVICE non-fichier
+    /// (statement global `FILENAME ref PIPE|URL|TEMP|… ;`). Le nom et le device
+    /// sont stockés en MAJUSCULES ; une assignation device remplace une
+    /// éventuelle assignation chemin antérieure du même nom (dernier `FILENAME`
+    /// gagne). Consulté par `%include fileref;` pour un diagnostic fidèle.
+    pub fn set_fileref_device(&mut self, name: &str, device: &str) {
+        let key = name.to_uppercase();
+        self.filerefs.remove(&key);
+        self.fileref_devices.insert(key, device.to_uppercase());
+    }
+
+    /// M38.5 — device associé à un `fileref` (recherche insensible à la casse),
+    /// ou `None` si le fileref n'est pas assigné à un device. Consulté par
+    /// `%include fileref;` AVANT la résolution en chemin.
+    pub(super) fn fileref_device(&self, name: &str) -> Option<&str> {
+        self.fileref_devices
+            .get(&name.to_uppercase())
+            .map(String::as_str)
     }
 
     /// M35.2 — chemin associé à un `fileref` (recherche insensible à la casse),

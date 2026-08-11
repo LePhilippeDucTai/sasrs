@@ -175,6 +175,48 @@ fn filename_device_temp_ignored() {
 }
 
 #[test]
+fn filename_device_pipe_with_command_spec() {
+    // M38.5 — `FILENAME ref PIPE 'commande';` : device reconnu, la
+    // spécification entre guillemets est consommée sans erreur.
+    let stmt = parse("filename mypipe pipe 'ls -l';").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::Filename {
+            fileref: "mypipe".into(),
+            path: None,
+            device: Some("PIPE".into()),
+        }
+    );
+}
+
+#[test]
+fn filename_device_url_with_spec() {
+    // M38.5 — `FILENAME ref URL 'http://...';` : device reconnu, URL consommée.
+    let stmt = parse("filename web url 'https://example.com/prog.sas';").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::Filename {
+            fileref: "web".into(),
+            path: None,
+            device: Some("URL".into()),
+        }
+    );
+}
+
+#[test]
+fn filename_device_dummy_recognised() {
+    let stmt = parse("filename nul dummy;").unwrap();
+    assert_eq!(
+        stmt,
+        GlobalStmt::Filename {
+            fileref: "nul".into(),
+            path: None,
+            device: Some("DUMMY".into()),
+        }
+    );
+}
+
+#[test]
 fn filename_options_after_path_ignored() {
     // Résidu d'options après le chemin → consommé sans erreur.
     let stmt = parse("filename inc '/tmp/x.sas' lrecl=256;").unwrap();

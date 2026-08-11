@@ -66,6 +66,73 @@ fn filename_then_include_via_executor() {
 }
 
 #[test]
+fn filename_device_then_include_deferral_notes() {
+    // M38.5 — `FILENAME ref PIPE '...';` est reconnu et différé (NOTE au
+    // statement) ; un `%include ref;` d'un segment ULTÉRIEUR émet une NOTE de
+    // déferrement dédiée (pas de « cannot read »), la session continue, EXIT 0.
+    let out = run_det(
+        "filename mypipe pipe 'ls -l';\n\
+         data _null_; run;\n\
+         %include mypipe;\n\
+         data a; x = 1; run;\n",
+    );
+    assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+    assert!(
+        out.log.contains(
+            "NOTE: FILENAME device PIPE is not supported in this build; statement ignored."
+        ),
+        "{}",
+        out.log
+    );
+    assert!(
+        out.log.contains(
+            "NOTE: %INCLUDE fileref MYPIPE is assigned to device PIPE, which is not \
+             supported in this build; statement ignored."
+        ),
+        "{}",
+        out.log
+    );
+    // La session poursuit après le déferrement.
+    assert!(
+        out.log
+            .contains("The data set WORK.A has 1 observations and 1 variables.")
+    );
+}
+
+#[test]
+fn include_star_end_to_end_deferral_note() {
+    // M38.5 — `%include *;` (clavier/stdin) en batch : NOTE propre, EXIT 0.
+    let out = run_det("%include *;\ndata a; x = 1; run;\n");
+    assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+    assert!(
+        out.log.contains(
+            "NOTE: %INCLUDE * (keyboard/terminal input) is not supported in this build; \
+             statement ignored."
+        ),
+        "{}",
+        out.log
+    );
+    assert!(
+        out.log
+            .contains("The data set WORK.A has 1 observations and 1 variables.")
+    );
+}
+
+#[test]
+fn filename_device_url_end_to_end_note() {
+    // M38.5 — `FILENAME ref URL '...';` : NOTE au statement, EXIT 0.
+    let out = run_det("filename web url 'https://example.com/prog.sas';\n");
+    assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
+    assert!(
+        out.log.contains(
+            "NOTE: FILENAME device URL is not supported in this build; statement ignored."
+        ),
+        "{}",
+        out.log
+    );
+}
+
+#[test]
 fn execute_ods_opens_listing_and_html() {
     // ODS LISTING / ODS HTML / ODS CLOSE parsent et s'exécutent sans erreur,
     // et le listing texte reste fonctionnel après bascule.

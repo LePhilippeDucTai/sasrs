@@ -33,8 +33,12 @@ impl MacroEngine {
     /// - profondeur d'inclusion > `MAX_INCLUDE_DEPTH` (cycle présumé) → un
     ///   commentaire de note SAS-like est émis, le statement est consommé ;
     /// - fichier illisible/absent → idem (commentaire d'erreur) ;
-    /// - `%include *;` (clavier/stdin) → non supporté : un commentaire de note
-    ///   est émis et le statement consommé jusqu'au `;`.
+    /// - `%include *;` (clavier/stdin, M38.5) → non supporté : une NOTE de
+    ///   déferrement est écrite AU LOG (via `pending_log_lines`), un commentaire
+    ///   trace est émis et le statement consommé jusqu'au `;` ;
+    /// - `%include fileref;` d'un fileref assigné à un DEVICE (`FILENAME ref
+    ///   PIPE|URL|…`, M38.5) → non supporté : même traitement (NOTE au log +
+    ///   commentaire), au lieu d'un « cannot read » trompeur.
     pub(super) fn consume_include(
         &mut self,
         chars: &[char],
@@ -78,9 +82,27 @@ impl MacroEngine {
                 }
                 let raw: String = chars[tok_start..j].iter().collect();
                 let token = raw.trim().to_string();
-                // `*` ou vide : clavier/stdin, non supporté → note de déferrement.
+                // `*` ou vide : clavier/stdin, non supporté → NOTE de
+                // déferrement au log + commentaire trace (M38.5).
                 if token.is_empty() || token == "*" {
-                    out.push_str("/* %include: keyboard/stdin (*) is not supported */");
+                    let msg = "%INCLUDE * (keyboard/terminal input) is not supported \
+                               in this build; statement ignored.";
+                    self.log_line(format!("NOTE: {msg}"));
+                    out.push_str(&format!("/* NOTE: {msg} */"));
+                    return Some(Self::skip_trailing_newline(chars, j + 1, out));
+                }
+                // Fileref assigné à un DEVICE (`FILENAME ref PIPE|URL|…`) :
+                // non supporté → NOTE de déferrement au log + commentaire
+                // trace, au lieu d'un « cannot read » trompeur (M38.5).
+                if let Some(dev) = self.fileref_device(&token).map(str::to_string) {
+                    let msg = format!(
+                        "%INCLUDE fileref {} is assigned to device {}, which is \
+                         not supported in this build; statement ignored.",
+                        token.to_uppercase(),
+                        dev
+                    );
+                    self.log_line(format!("NOTE: {msg}"));
+                    out.push_str(&format!("/* NOTE: {msg} */"));
                     return Some(Self::skip_trailing_newline(chars, j + 1, out));
                 }
                 // Fileref connu → son chemin ; sinon le token est traité comme chemin.

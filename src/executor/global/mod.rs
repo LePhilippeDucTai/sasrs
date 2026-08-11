@@ -85,8 +85,10 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             // M35.2 — registre minimal fileref → chemin pour `%include fileref;`.
             // La forme `FILENAME ref 'chemin';` (ou chemin nu) enregistre le
             // chemin résolu (même base que %include/LIBNAME/SASAUTOS). Les
-            // formes device/options (`TEMP`, pipes, URL, …) sont acceptées mais
-            // ignorées (NOTE), car non supportées dans ce build.
+            // formes device (`TEMP`, `PIPE`, `URL`, …) sont reconnues mais
+            // différées (NOTE) car non supportées dans ce build ; le device est
+            // tout de même mémorisé (M38.5) pour un diagnostic fidèle au moment
+            // de l'usage (`%include fileref;`).
             //
             // CAVEAT segment : un FILENAME ne devient visible pour un `%include`
             // que si ce dernier est dans un SEGMENT/STATEMENT ULTÉRIEUR — chaque
@@ -99,6 +101,10 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                     session.macro_engine.set_fileref(fileref, resolved);
                 }
                 (None, Some(dev)) => {
+                    // M38.5 — mémoriser l'assignation device pour qu'un
+                    // `%include fileref;` ultérieur émette une NOTE de
+                    // déferrement fidèle au lieu d'un « cannot read » trompeur.
+                    session.macro_engine.set_fileref_device(fileref, dev);
                     session.log.note(&format!(
                         "FILENAME device {} is not supported in this build; statement ignored.",
                         dev
