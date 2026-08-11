@@ -10,7 +10,7 @@ complète (zéro `todo!()` restant dans le fichier), tests du fichier écrits,
 `claude/*` — Phase Q2 fusionnée, clôture Q3 intégrée, ligne parallèle abandonnée — ont été
 nettoyées). Vérification complète : `cargo fmt --check` vert, `cargo clippy --all-targets
 -- -D warnings` vert (0 diagnostic), `cargo test -p sasrs` vert (**2 681 tests, 0 échec,
-0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **DoD M38**.
+0 `.snap.new`**), `cargo build --features graphics` OK. Reprise des développements : **M39.1**.
 
 **MAJ modèles (2026-08-11)** : Fable de nouveau disponible — les modèles/efforts des jalons
 restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Phase G de
@@ -18,7 +18,11 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M38 (Phase G)**. **Phase Q3 (MQ7–MQ9) TERMINÉE** — revue de code sur les
+Jalon courant : **M39 (Phase G)**. **M38 TERMINÉ** — langage global + ODS capture/sélection :
+titres/footnotes multiples (TITLE1–9/FOOTNOTE1–9), OPTIONS appliquées, ODS OUTPUT généralisé
+par nom d'objet (OneWayFreqs/Moments/BasicMeasures/Summary/TTest), ODS SELECT/EXCLUDE (cycle
+de vie SAS), `%INCLUDE *`/FILENAME device différés proprement ; 3 fixtures m38.
+**Phase Q3 (MQ7–MQ9) TERMINÉE** — revue de code sur les
 axes DRY et robustesse : clippy 357 → **0** (`-D warnings` vert), `cargo fmt --check` vert
 (453 fichiers reformatés, `rustfmt.toml` posé), ~60 helpers dupliqués supprimés (≈ −1 500
 lignes), 3 crashs atteignables depuis un script SAS corrigés, le piège `expect_eq`
@@ -931,7 +935,12 @@ Cellules README → ✅ : OPTIONS, TITLE, %INCLUDE, FILENAME, ODS GRAPHICS, ODS 
 - [x] M38.4 — ODS SELECT/EXCLUDE : sets Session consultés dans `write_table` (remplace l'erreur différée
   `parser/global.rs`) ; oracle : `ods exclude all;` supprime les tables, log inchangé (Opus, moyen)
 - [x] M38.5 — `%INCLUDE *`/stdin + FILENAME device/pipe/URL reconnus (NOTE propre, sortis du 🟡) (Sonnet, faible)
-- [ ] DoD M38 : fixtures m38 (titres multiples, ODS OUTPUT depuis FREQ, ODS EXCLUDE) ; 6 cellules → ✅ ; → M39.
+- [x] DoD M38 : fixtures m38 (titres multiples, ODS OUTPUT depuis FREQ, ODS EXCLUDE) ; 6 cellules → ✅ ; → M39.
+  *Écart au DoD, acté à la clôture* : cellules README `TITLE`/`%INCLUDE`/`FILENAME` → ✅ ;
+  `OPTIONS`, `ODS OUTPUT`, `ODS SELECT/EXCLUDE`, `ODS GRAPHICS` restent 🟡 **honnêtement**
+  (PAGESIZE stocké sans pagination ; capture/filtrage limités aux tables nommées de
+  FREQ/UNIVARIATE/MEANS/TTEST — extension au fil des jalons M43+ ; FMTSEARCH → M39/M43) —
+  la règle « le README reflète exactement le code » prime sur la cible « 6 cellules ✅ ».
 
 ## M39 — Store de catalogue de format persistant
 Prérequis FORMAT/CATALOG/IML STORE.
