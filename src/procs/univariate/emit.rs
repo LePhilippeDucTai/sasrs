@@ -400,8 +400,9 @@ fn build_basic_measures_part(var_name: &str, rows: &[BasicMeasureRow]) -> Result
 /// count, `n_total` the group's total row count.
 ///
 /// Moments and Basic Measures mean/std/variance use the weighted formulas
-/// (see file header). Skewness/Kurtosis are computed on the UNWEIGHTED values
-/// (documented divergence). Quantiles use the SAS WEIGHTED Definition 5
+/// (see file header). Skewness/Kurtosis use the SAS WEIGHTED g1/g2 formulas
+/// (M45.1, VARDEF=DF — see `weighted_skewness`). Quantiles use the SAS
+/// WEIGHTED Definition 5
 /// (`weighted_quantile_def5`); the Extreme Observations section lists the raw
 /// extreme VALUES with their obs numbers (extremes are not weighted in SAS).
 /// `obs_pairs` are the usable `(value, obs_number)` pairs in row order.
@@ -431,7 +432,6 @@ pub(super) fn emit_variable_weighted(
 
     let n = pairs.len();
     let nf = n as f64;
-    let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
 
     // Pairs sorted ascending by value, for the weighted quantiles / median /
     // mode / range (weights stay attached to their value).
@@ -466,9 +466,16 @@ pub(super) fn emit_variable_weighted(
         Some(sd) if sum_w > 0.0 => Some(sd / sum_w.sqrt()),
         _ => None,
     };
-    // Skewness / kurtosis deferred → computed on UNWEIGHTED values.
-    let skew = skewness(&xs);
-    let kurt = kurtosis(&xs);
+    // M45.1 — weighted skewness / kurtosis (SAS VARDEF=DF), built on the
+    // weighted mean and std computed just above so the three Moments lines stay
+    // mutually consistent. Reduce exactly to the unweighted formulas at w ≡ 1.
+    let (skew, kurt) = match (mean_w, std) {
+        (Some(m), Some(sd)) => (
+            weighted_skewness(pairs, m, sd),
+            weighted_kurtosis(pairs, m, sd),
+        ),
+        _ => (None, None),
+    };
 
     // ── Moments ── (objet ODS « Moments »)
     if show_moments {

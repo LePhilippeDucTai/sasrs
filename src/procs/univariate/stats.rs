@@ -39,6 +39,54 @@ pub(super) fn kurtosis(xs: &[f64]) -> Option<f64> {
     Some(term1 - term2)
 }
 
+/// SAS WEIGHTED skewness g1 (VARDEF=DF). `pairs` are the usable
+/// `(value, weight)` pairs (all weights strictly positive), `mean_w` the
+/// weighted mean `Σw_i x_i / Σw_i` and `s_w` the weighted standard deviation
+/// `√(Σw_i(x_i-mean_w)² / (n-1))` — both already computed by the caller, so the
+/// Skewness line stays consistent with the Mean / Std Deviation lines of the
+/// same Moments block.
+///
+/// With `z_i = √w_i · (x_i - mean_w) / s_w`:
+/// `g1 = n/((n-1)(n-2)) * Σ z_i^3`.
+///
+/// `n` is the number of usable OBSERVATIONS, not the sum of the weights. At
+/// `w_i ≡ 1` every `√w_i` is 1 and this reduces exactly to [`skewness`].
+/// Needs `n>=3` and `s_w>0`, else None.
+pub(super) fn weighted_skewness(pairs: &[(f64, f64)], mean_w: f64, s_w: f64) -> Option<f64> {
+    let n = pairs.len();
+    if n < 3 || s_w <= 0.0 {
+        return None;
+    }
+    let nf = n as f64;
+    let sum3: f64 = pairs
+        .iter()
+        .map(|(x, w)| (w.sqrt() * (x - mean_w) / s_w).powi(3))
+        .sum();
+    Some(nf / ((nf - 1.0) * (nf - 2.0)) * sum3)
+}
+
+/// SAS WEIGHTED excess kurtosis g2 (VARDEF=DF). Same conventions as
+/// [`weighted_skewness`]; with `z_i = √w_i · (x_i - mean_w) / s_w`:
+///
+/// `g2 = [ n(n+1)/((n-1)(n-2)(n-3)) ] * Σ z_i^4 - 3(n-1)^2 / ((n-2)(n-3))`.
+///
+/// At `w_i ≡ 1` this reduces exactly to [`kurtosis`]. Needs `n>=4` and
+/// `s_w>0`, else None.
+pub(super) fn weighted_kurtosis(pairs: &[(f64, f64)], mean_w: f64, s_w: f64) -> Option<f64> {
+    let n = pairs.len();
+    if n < 4 || s_w <= 0.0 {
+        return None;
+    }
+    let nf = n as f64;
+    let sum4: f64 = pairs
+        .iter()
+        .map(|(x, w)| (w.sqrt() * (x - mean_w) / s_w).powi(4))
+        .sum();
+    let term1 = nf * (nf + 1.0) / ((nf - 1.0) * (nf - 2.0) * (nf - 3.0)) * sum4;
+    let term2 = 3.0 * (nf - 1.0).powi(2) / ((nf - 2.0) * (nf - 3.0));
+    Some(term1 - term2)
+}
+
 /// SAS WEIGHTED quantile (default QNTLDEF=5 analog) of fraction `p` over the
 /// already-sorted (ascending by value) `(value, weight)` pairs. All weights are
 /// strictly positive (the caller has dropped weights ≤ 0 via

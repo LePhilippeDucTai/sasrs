@@ -11,6 +11,11 @@
      5% (t=0.5 -> W_1=1) = 1 ; 0% Min = 1.
    Moments ponderes : SumWgt=10, Sum Obs=Swx=1+4+9+16=30, Mean=30/10=3,
      CSS_w=Sw(x-3)^2 = 1*4+2*1+3*0+4*1 = 10, Var=CSS_w/(n-1)=10/3.
+   Skewness / Kurtosis PONDERES (M45.1, VARDEF=DF, z_i = sqrt(w_i)(x_i-3)/s_w) :
+     S w^{3/2}(x-3)^3 = -8 - 2*sqrt(2) + 0 + 8 = -2*sqrt(2)
+       g1 = 4/((3)(2)) * (-2*sqrt(2)) / (10/3)^{3/2} = -0.309838668
+     S w^2(x-3)^4 = 16 + 4 + 0 + 16 = 36 ; s_w^4 = 100/9
+       g2 = [4*5/((3)(2)(1))] * 36/(100/9) - 3*(3)^2/((2)(1)) = 10.8 - 13.5 = -2.7
    Extreme Observations : valeurs brutes 1,2,3,4 aux obs 1..4 (non ponderees). */
 
 data wq;
