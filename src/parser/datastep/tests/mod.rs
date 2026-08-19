@@ -99,6 +99,7 @@ fn var_item(name: &str, is_char: bool) -> InputItem {
 }
 
 mod array;
+mod dsopts;
 mod input;
 mod parse;
 mod retain;
