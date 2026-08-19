@@ -258,6 +258,129 @@ fn unquote_roundtrip_plain_text() {
     assert_eq!(expand("%unquote(abc)"), "abc");
 }
 
+// --- M41.1 : %quote / %nrquote (quoting exécution, échappements `%`) ---
+
+#[test]
+fn quote_resolves_then_masks() {
+    // Comme %bquote : SAS résout D'ABORD &x, PUIS masque le résultat — le `;`
+    // devient littéral (il ne termine rien en aval).
+    assert_eq!(expand("%let x=Z; %quote(&x;y)"), "Z;y");
+}
+
+#[test]
+fn quote_semicolon_does_not_terminate_let() {
+    // Le `;` masqué par %quote ne clôt pas le %let (région sautée).
+    assert_eq!(expand("%let v=%quote(a;b); &v"), "a;b");
+}
+
+#[test]
+fn quote_escaped_quote_is_literal() {
+    // Quote NON APPARIÉE : SAS exige l'échappement `%'` — le `%` disparaît et
+    // la quote devient un caractère littéral (masqué).
+    assert_eq!(expand("%quote(it%'s)"), "it's");
+}
+
+#[test]
+fn quote_escaped_paren_bounds_correctly() {
+    // `%(` ne compte pas dans l'équilibrage : l'appel est borné sur la `)`
+    // finale et la parenthèse échappée reste du texte.
+    assert_eq!(expand("%quote(a%(b)"), "a(b");
+}
+
+#[test]
+fn quote_escaped_percent_is_literal() {
+    // `%%` → un `%` littéral, masqué : il ne redéclenche pas le processeur.
+    assert_eq!(expand("%quote(50%%)"), "50%");
+}
+
+#[test]
+fn quote_escaped_paren_in_let_value() {
+    // Le saut de région de %let doit lui aussi ignorer la parenthèse échappée
+    // (lecture via read_balanced_parens_pct).
+    assert_eq!(expand("%let v=%quote(a%(b); [&v]"), "[a(b]");
+}
+
+#[test]
+fn nrquote_masks_triggers_in_result() {
+    // Forme NR : les `&`/`%` RÉSIDUELS du résultat (ici &z indéfini) sont
+    // masqués en plus — inertes en aval, littéraux en sortie.
+    assert_eq!(expand("%nrquote(a&z b)"), "a&z b");
+}
+
+#[test]
+fn nrquote_resolves_defined_refs_first() {
+    // Contrairement à %nrstr (compilation), %nrquote RÉSOUT d'abord : une
+    // &ref définie est bien remplacée avant masquage.
+    assert_eq!(expand("%let x=ok; %nrquote(&x!)"), "ok!");
+}
+
+// --- M41.1 : interactions de la famille %bquote (imbrication, %unquote,
+// --- %if, argument d'appel de macro, idempotence) ---
+
+#[test]
+fn bquote_nested_is_idempotent() {
+    // Imbrication %bquote(%bquote(...)) : le masquage est IDEMPOTENT — les
+    // sentinelles internes traversent le masquage externe inchangées.
+    assert_eq!(expand("%bquote(%bquote(a;b))"), "a;b");
+}
+
+#[test]
+fn nrbquote_over_bquote_masks_residual_trigger() {
+    // %bquote laisse le `&z` (indéfini) ACTIF ; le %nrbquote englobant le
+    // masque à son tour — littéral en sortie.
+    assert_eq!(expand("%nrbquote(%bquote(a&z))"), "a&z");
+}
+
+#[test]
+fn unquote_reverses_bquote_family() {
+    // Aller-retour : %nrstr masque `&x`, %nrbquote re-masque (idempotent),
+    // %unquote dé-masque et RÉ-ACTIVE la résolution → valeur de x.
+    assert_eq!(expand("%let x=hi; %unquote(%nrbquote(%nrstr(&x)))"), "hi");
+}
+
+#[test]
+fn bquote_result_in_if_condition() {
+    // Le résultat d'un %bquote participe normalement à une comparaison %if.
+    assert_eq!(
+        expand("%let x=3; %if %bquote(&x) = 3 %then Y; %else N;"),
+        "Y;"
+    );
+}
+
+#[test]
+fn bquote_as_macro_argument_protects_semicolon() {
+    // En argument d'appel de macro, le `;` masqué ne coupe rien : la valeur
+    // transite intacte jusqu'au corps.
+    let s = expand("%macro m(a); [&a] %mend; %m(%bquote(x;y))");
+    assert_eq!(s.trim(), "[x;y]");
+}
+
+#[test]
+fn bquote_in_let_then_reused() {
+    // Valeur %bquote stockée par %let puis relue : les sentinelles survivent
+    // dans la table des symboles et l'unmask final rétablit les littéraux.
+    assert_eq!(expand("%let v=%bquote(p,q;r); <&v>"), "<p,q;r>");
+}
+
+// --- M41.1 : complétude du jeu de caractères masqués (liste SAS) ---
+
+#[test]
+fn mask_covers_caret_notsign_hash() {
+    // SAS masque aussi `^`, `¬` (graphies du NOT) et `#` (IN), comme `~` :
+    // aller-retour masque → unmask = identité, et le caractère EST masqué.
+    for c in ['^', '¬', '#'] {
+        let m = MacroEngine::mask_special(&c.to_string(), false);
+        assert_ne!(m, c.to_string(), "`{c}` doit être masqué");
+        assert_eq!(MacroEngine::unmask(&m), c.to_string());
+    }
+}
+
+#[test]
+fn bquote_caret_roundtrips_verbatim() {
+    // `^` masqué par %bquote puis rétabli à l'unmask final (littéral).
+    assert_eq!(expand("%bquote(a^b¬c#d)"), "a^b¬c#d");
+}
+
 #[test]
 fn unquote_reenables_macro_call() {
     // %nrstr masque le `%` d'un appel ; %unquote le ré-active → la macro

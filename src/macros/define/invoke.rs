@@ -4,6 +4,19 @@ use super::*;
 type ParsedCallArgs = (Vec<String>, Vec<(String, String)>, usize);
 
 impl MacroEngine {
+    /// Expanse la valeur d'un argument d'appel de macro dans la portée
+    /// APPELANTE (M41.1) : présence d'un déclencheur `%` → expansion complète
+    /// (`process_impl`, qui exécute fonctions de quoting et macros imbriquées) ;
+    /// sinon simple résolution des `&refs` (comportement historique, même
+    /// partage de logique que `consume_let`).
+    fn expand_call_arg(&mut self, arg: &str) -> String {
+        if arg.contains('%') {
+            self.process_impl(arg)
+        } else {
+            self.resolve_value(arg)
+        }
+    }
+
     /// Expanse une invocation `%name[(args)]`. `name_start` pointe sur le nom
     /// (après le `%`), `after_name` sur le premier caractère après le nom.
     /// Lie les arguments, empile une portée, ré-expanse le corps, insère le
@@ -64,12 +77,20 @@ impl MacroEngine {
         };
 
         // Les valeurs d'arguments sont résolues dans la portée APPELANTE (SAS
-        // évalue les arguments au moment de l'appel) avant la liaison.
-        let pos_args: Vec<String> = pos_args.iter().map(|a| self.resolve_value(a)).collect();
+        // évalue les arguments au moment de l'appel) avant la liaison. M41.1 :
+        // un argument portant un déclencheur `%` (fonction de quoting, macro
+        // imbriquée…) est expansé COMPLÈTEMENT — c'est ce qui permet à
+        // `%m(%bquote(x;y))` de lier la valeur masquée `x;y` et non le texte
+        // `%bquote(x;y)` verbatim (les sentinelles protègent le `;` dans le
+        // corps ; l'unmask final de `expand_open_code` rétablit le littéral).
+        let pos_args: Vec<String> = pos_args
+            .iter()
+            .map(|a| self.expand_call_arg(a))
+            .collect::<Vec<_>>();
         let kw_args: Vec<(String, String)> = kw_args
             .iter()
-            .map(|(k, v)| (k.clone(), self.resolve_value(v)))
-            .collect();
+            .map(|(k, v)| (k.clone(), self.expand_call_arg(v)))
+            .collect::<Vec<_>>();
 
         // Liaison des paramètres -> portée locale.
         let scope = Self::bind_params(&def.params, &pos_args, &kw_args);
@@ -87,10 +108,13 @@ impl MacroEngine {
                     .get(&pname.to_uppercase())
                     .cloned()
                     .unwrap_or_default();
+                // L'écho au log montre les caractères LITTÉRAUX (une valeur
+                // quotée par `%bquote`/`%str` porte des sentinelles internes
+                // qui ne doivent jamais fuir dans le log).
                 self.log_line(format!(
                     "MLOGIC({label}):  Parameter {} has value {}",
                     pname.to_uppercase(),
-                    val
+                    Self::unmask(&val)
                 ));
             }
         }

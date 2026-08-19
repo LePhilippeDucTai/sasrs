@@ -57,8 +57,22 @@ impl MacroEngine {
     /// Caractères masqués par `%str` (et `%nrstr`), dans l'ordre des offsets.
     /// `%str` masque la ponctuation/opérateurs pour qu'un `;` ou `,` interne
     /// soit littéral ; `&` et `%` ne sont masqués QUE par `%nrstr`.
+    ///
+    /// Liste SAS 9.4 (partagée par toute la famille `%str`/`%bquote`/`%quote`) :
+    /// `; + - * / < > = | ~ , ( ) ' " ^ ¬ #` — `^` et `¬` sont des graphies du
+    /// NOT et `#` du IN, masqués comme `~`. Deux items de la liste SAS sont
+    /// délibérément ABSENTS :
+    /// - le BLANC : son masquage n'est observable ici que via le `trim` de
+    ///   `%let`, mais il casserait `%scan`/`%cmpres` sur valeurs quotées (le
+    ///   blanc est LE délimiteur par défaut et les fonctions opèrent sur le
+    ///   texte sentinelle) — régression sur des constructions déjà correctes ;
+    /// - les opérateurs mnémoniques (`AND OR NOT EQ NE LE LT GE GT IN`) : le
+    ///   masquage est au niveau MOT (sentinelle multi-casse irrécupérable à
+    ///   l'unmask) et ne serait observable que dans des comparaisons `%if` à
+    ///   opérandes caractère, non supportées par l'évaluateur (erreur dans les
+    ///   deux cas). Refus documenté, coût disproportionné.
     pub(super) const STR_MASKED: &'static [char] = &[
-        ';', '+', '-', '*', '/', '<', '>', '=', '|', '~', ',', '(', ')', '\'', '"',
+        ';', '+', '-', '*', '/', '<', '>', '=', '|', '~', ',', '(', ')', '\'', '"', '^', '¬', '#',
     ];
     /// Caractères additionnels masqués UNIQUEMENT par `%nrstr` (déclencheurs).
     pub(super) const NRSTR_EXTRA: &'static [char] = &['&', '%'];

@@ -116,6 +116,41 @@ impl MacroEngine {
         None
     }
 
+    /// Variante de [`Self::read_balanced_parens`] pour `%quote`/`%nrquote`
+    /// (M41.1) : un `%` devant `'`, `"`, `(`, `)` ou `%` est un ÉCHAPPEMENT SAS
+    /// (la paire est sautée SANS compter dans l'équilibrage). Ainsi
+    /// `%quote(a%(b)` est bien borné sur la `)` finale, la parenthèse échappée
+    /// restant du texte. Sur un texte sans échappement, comportement identique
+    /// à `read_balanced_parens`.
+    pub(super) fn read_balanced_parens_pct(
+        chars: &[char],
+        lparen: usize,
+    ) -> Option<(String, usize)> {
+        let mut depth = 0i32;
+        let mut j = lparen;
+        let start = lparen + 1;
+        while j < chars.len() {
+            match chars[j] {
+                '%' if matches!(chars.get(j + 1), Some('\'' | '"' | '(' | ')' | '%')) => {
+                    // Paire d'échappement : ne participe pas à l'équilibrage.
+                    j += 2;
+                    continue;
+                }
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner: String = chars[start..j].iter().collect();
+                        return Some((inner, j + 1));
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        None
+    }
+
     /// Découpe une chaîne d'arguments sur les `,` de niveau supérieur (les
     /// parenthèses imbriquées sont équilibrées). Chaîne vide → aucun argument.
     pub(super) fn split_top_level_commas(s: &str) -> Vec<String> {
