@@ -72,6 +72,7 @@ fn hist() -> Vec<UnivariatePlot> {
     vec![UnivariatePlot {
         kind: UnivariatePlotKind::Histogram,
         var: Some("x".into()),
+        normal: false,
     }]
 }
 
@@ -79,6 +80,7 @@ fn qq() -> Vec<UnivariatePlot> {
     vec![UnivariatePlot {
         kind: UnivariatePlotKind::QqPlot,
         var: Some("x".into()),
+        normal: false,
     }]
 }
 
@@ -109,6 +111,7 @@ fn wq(pairs: &[(f64, f64)], p: f64) -> f64 {
 }
 
 mod execute;
+mod fitted_normal;
 mod ods_select;
 mod phi;
 mod skewness;

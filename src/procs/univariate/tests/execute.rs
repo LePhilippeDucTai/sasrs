@@ -26,6 +26,7 @@ fn execute_graphics_emits_deferred_note() {
         plots: vec![UnivariatePlot {
             kind: UnivariatePlotKind::Histogram,
             var: Some("x".into()),
+            normal: false,
         }],
     };
     // ODS GRAPHICS off (default) → rendering stays deferred (one NOTE).
@@ -454,6 +455,7 @@ fn probplot_with_ods_no_feature_defers_image() {
     let plots = vec![UnivariatePlot {
         kind: UnivariatePlotKind::ProbPlot,
         var: Some("x".into()),
+        normal: false,
     }];
     let log = run_plots(true, plots, None, None);
     // M33.2: PROBPLOT now shares the standard "image deferred" NOTE.
@@ -472,6 +474,7 @@ fn probplot_cdfplot_ppplot_with_feature_create_images() {
         let plots = vec![UnivariatePlot {
             kind,
             var: Some("x".into()),
+            normal: false,
         }];
         let log = run_plots(true, plots, Some(dir.clone()), Some(stem.into()));
         assert!(log.contains("written"), "{:?} log: {log}", kind);
@@ -489,6 +492,7 @@ fn cdfplot_ppplot_with_ods_no_feature_defer_image() {
         let plots = vec![UnivariatePlot {
             kind,
             var: Some("x".into()),
+            normal: false,
         }];
         let log = run_plots(true, plots, None, None);
         assert!(log.contains("image deferred"), "{:?} log: {log}", kind);

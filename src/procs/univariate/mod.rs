@@ -109,6 +109,11 @@ pub struct UnivariatePlot {
     /// Target variable name (the first identifier after the keyword). `None`
     /// when the statement carries no explicit variable (e.g. `histogram;`).
     pub var: Option<String>,
+    /// `/ NORMAL` was requested on the statement (M45.2): fit a normal
+    /// distribution to the plotted variable — emit the "Fitted Normal
+    /// Distribution" parameters table in the listing, and (under
+    /// `--features graphics`) overlay the fitted curve / reference line.
+    pub normal: bool,
 }
 
 /// Kind of UNIVARIATE graphical statement.
@@ -336,6 +341,22 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                     )?;
                 }
             }
+        }
+
+        // M45.2 — « Fitted Normal Distribution » : une table de paramètres par
+        // instruction graphique portant `/ NORMAL`, dans l'ordre des
+        // instructions et par groupe BY (comme SAS). C'est du listing : elle
+        // sort que ODS GRAPHICS soit ON ou OFF.
+        for plot in ast.plots.iter().filter(|p| p.normal) {
+            let Some(vi) = plot_var_index(plot, &var_cols, &ds) else {
+                continue;
+            };
+            let Some((mu, sigma)) =
+                fitted_normal_params(&var_values[vi], weight_values.as_deref(), grp_rows)
+            else {
+                continue;
+            };
+            emit_fitted_normal(session, &ds.vars[var_cols[vi]].name, mu, sigma);
         }
     }
 
