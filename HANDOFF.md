@@ -38,11 +38,28 @@ du 2026-08-11 (2 681 tests, 0 `.snap.new`, clippy et fmt verts).
    `datastep::functions::call`, mais avec des arguments qui sont des **noms de
    variables macro** (sans `&`), lus puis réécrits dans la table des symboles.
 
+## Une tentative de M41.1 existe sur `wip/m41.1` — NON VALIDÉE
+
+La branche `wip/m41.1` (commit `2598e3f`, 6 fichiers, ~305 lignes) porte une
+tentative interrompue de la case M41.1 : `%QUOTE`/`%NRQUOTE` complets avec
+échappements `%'` `%"` `%(` `%)` `%%`, `^`/`¬`/`#` ajoutés à `STR_MASKED`,
+expansion complète des arguments d'invocation portant un `%`, `unmask` de
+l'écho MLOGIC, et ses tests unitaires.
+
+**Clippy était vert ; `cargo test -p sasrs` n'a jamais tourné jusqu'au bout.**
+L'invariant « zéro `.snap.new` » n'est donc PAS vérifié, et deux des
+modifications sont précisément de celles qui font bouger des snapshots (voir
+« Pièges » ci-dessous). À traiter comme une ébauche à valider, pas comme un
+acquis : la reprendre coûte une suite de tests complète et une revue serrée.
+La jeter et refaire M41.1 à neuf en s'appuyant sur les points 2 à 4 ci-dessus
+est une option légitime.
+
 ## Prochaine étape concrète
 
-Reprendre **M41.1** au début, en tenant compte des points 2 à 4 ci-dessus,
-puis enchaîner M41.2, M41.3 et la DoD (fixtures `tests/fixtures/m41/`) selon la
-boucle de la skill `sasrs-impl`.
+Reprendre **M41.1**, soit depuis `wip/m41.1` (valider puis revoir), soit à neuf
+depuis `main`, en tenant compte des points 2 à 4 ci-dessus ; puis enchaîner
+M41.2, M41.3 et la DoD (fixtures `tests/fixtures/m41/`) selon la boucle de la
+skill `sasrs-impl`.
 
 ## Pièges de validation propres à ce jalon
 
