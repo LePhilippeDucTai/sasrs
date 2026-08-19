@@ -19,6 +19,31 @@ cargo install --path .
 
 This installs the `sasrs` binary.
 
+### Without Rust (Windows, via Python)
+
+If Rust can't be installed on the target machine (e.g. a locked-down
+corporate laptop) but Python is available, the `python/` subdirectory of
+this repo packages a thin Python wrapper that downloads a **precompiled
+Windows x86_64 binary** from this repo's
+[GitHub Releases](https://github.com/LePhilippeDucTai/sasrs/releases) on
+first run, verifies its SHA-256, caches it locally, and execs it (no Rust
+toolchain needed on that machine, but it does need network access to
+`github.com`). Run it directly with [uv](https://docs.astral.sh/uv/):
+
+```sh
+uvx --from "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python" sasrs program.sas
+```
+
+Or install it into a project/environment:
+
+```sh
+uv add "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python"
+```
+
+Currently only a Windows x86_64 binary is published; other platforms
+raise a clear error naming the missing binary rather than failing
+silently.
+
 ## Usage
 
 ```sh

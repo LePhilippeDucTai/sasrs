@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sasrs"
+version = "0.1.0"
+description = "Wrapper Python qui télécharge et exécute le binaire précompilé de l'interpréteur SAS sasrs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+
+[project.urls]
+Homepage = "https://github.com/LePhilippeDucTai/sasrs"
+
+[project.scripts]
+sasrs = "sasrs_py.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sasrs_py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/sasrs_py/**", "README.md"]
