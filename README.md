@@ -162,7 +162,7 @@ individual options of each procedure and DATA step statement. Legend:
 | Variables | ✅ | `%LET`, `&var`/`&var.`, `%LOCAL`, `%GLOBAL`, nested indirection `&&&x` |
 | Control flow | ✅ | `%IF/%THEN/%ELSE`, `%DO/%END`, `%DO i=a %TO b %BY c`, `%DO %WHILE`, `%DO %UNTIL`, `%RETURN`, `%GOTO`/`%label:`, `%ABORT` (`CANCEL`/`ABEND`/`RETURN [n]`) |
 | Evaluation | ✅ | `%EVAL`, `%SYSEVALF`, `%SYSFUNC`/`%QSYSFUNC` (full DATA step function library — no whitelist — with optional trailing `format.`) |
-| Quoting | 🟡 | `%STR`, `%NRSTR`, `%UNQUOTE`, `%CMPRES`, `%QCMPRES` (no `%SUPERQ`/`%BQUOTE`/`%NRBQUOTE`) |
+| Quoting | ✅ | `%STR`, `%NRSTR`, `%BQUOTE`, `%NRBQUOTE`, `%QUOTE`, `%NRQUOTE`, `%SUPERQ`, `%UNQUOTE`, `%CMPRES`, `%QCMPRES`, `%QUPCASE`, `%QLOWCASE`, `%QSUBSTR`, `%QSCAN` |
 | Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path, fileref via `FILENAME`, non-quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
 | Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR`, `&SYSVER`, `&SYSSCP(L)`; status codes `&SYSCC`/`&SYSERR`/`&SYSRC`/`&SQLOBS`/`&SQLRC`; `&SYSLAST` (live, last dataset); env info `&SYSPROCESSNAME`, `&SYSENV`, `&SYSUSERID`, `&SYSHOSTNAME`, … |
 | Tracing | ✅ | `MPRINT`, `MLOGIC`, `SYMBOLGEN` |

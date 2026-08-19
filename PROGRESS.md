@@ -1000,11 +1000,24 @@ Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
 
 ## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE
 Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
-- [ ] M41.1 — `%BQUOTE`/`%NRBQUOTE` (quoting exécution, masque `&`/`%`) via `apply_quoting` ; oracle
-  `%bquote(a&b)` masque `&` sans résoudre (Opus, élevé)
-- [ ] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) ; oracle
-  `%let x=&y; %superq(x)`→`&y` littéral (Opus, élevé)
-- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Opus, moyen)
+- [x] M41.1 — `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` existaient déjà depuis M12.2 (audit, pas une
+  implémentation) : oracle **corrigé** — en SAS 9.4 `%BQUOTE` RÉSOUT D'ABORD `&`/`%` puis
+  masque le résultat (sauf `&`/`%`, actifs) ; c'est `%NRBQUOTE` qui masque en plus les
+  déclencheurs résiduels. L'ancien oracle « `%bquote(a&b)` masque `&` sans résoudre » était
+  faux, non corrigé. Le vrai trou comblé ici : `%QUOTE`/`%NRQUOTE` (paire de quoting
+  d'exécution « historique », même contrat que `%BQUOTE`/`%NRBQUOTE` mais échappements `%'`
+  `%"` `%(` `%)` `%%` requis pour les quotes/parenthèses non appariées — `consume_equote` +
+  `read_balanced_parens_pct`). Complété : jeu `STR_MASKED` élargi à `^`/`¬`/`#` (graphies
+  NOT/IN de la liste SAS 9.4 ; blanc et opérateurs mnémoniques refusés, coût/risque
+  disproportionné, documenté dans `quoting.rs`) ; expansion complète (`process_impl`, pas
+  seulement `&refs`) des arguments d'invocation de macro portant un `%` (permet
+  `%m(%bquote(x;y))`) ; `unmask` de l'écho `MLOGIC` des paramètres (une valeur quotée ne doit
+  pas fuir ses sentinelles dans le log). 17 tests. (Fable, élevé)
+- [x] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) : déjà
+  implémenté depuis M12.2 (`consume_superq`), audit confirmé conforme à l'oracle `%let x=&y;
+  %superq(x)`→`&y` littéral (test existant `superq_returns_value_without_resolving`). (Fable,
+  élevé)
+- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Fable, moyen)
 - [ ] DoD M41 : fixtures m41 ; README Macro Quoting → ✅ (reste %SYSEXEC/%WINDOW/%DISPLAY/%SYSLPUT/%SYSRPUT doc) ; → M42.
 
 ## M42 — PROC SQL : dictionnaires + prédicats
