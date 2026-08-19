@@ -1054,7 +1054,19 @@ Cellule README PROC SQL Not supported 🔴→✅.
   `SASHELP.VMEMBER` était déjà aliasé) — ajouté comme alias de `Tables` (ce projet ne suit
   que des datasets, pas de catalogues, donc pas de colonne `ENGINE` distincte). Oracle
   `SELECT * FROM dictionary.columns` déjà conforme (pré-existant). +1 test. (Opus, élevé)
-- [ ] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) ; oracle CONTAINS≡INDEX>0, SOUNDS LIKE=même soundex (Sonnet, moyen)
+- [x] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) : nouveaux `SqlExpr::Contains`/
+  `SoundsLike` (même forme que `Like`) ; parsés dans `continue_compare`/`parse_sql_compare`
+  (les deux niveaux de grammaire dupliqués existants, comme `LIKE`/`BETWEEN`), y compris
+  `NOT CONTAINS`/`NOT SOUNDS LIKE`. Abaissement Polars via UDF `Expr::map` (même mécanisme
+  que `like_to_match`, pas de feature `regex` Polars) : `contains_to_match` (recherche de
+  sous-chaîne sensible à la casse, motif vide → toujours faux, ≡ `INDEX(expr,'') > 0`
+  faux) ; `sounds_like_to_match` + `soundex()` maison (algorithme classique : 1 lettre +
+  3 chiffres, H/W transparents à la fusion, voyelle rompt la fusion, la lettre initiale ne
+  fusionne jamais avec la suivante — vérifié sur les 5 exemples de référence
+  Robert/Rupert/Ashcraft/Tymczak/Pfister). 5 sites de traversée exhaustive mis à jour
+  (`grouping.rs` ×3, `subquery.rs` ×2). 17 tests (5 parser + 8 plan/exec + 1 unitaire
+  Soundex + variantes NOT/missing/motif vide). 2879 tests + snapshot verts, 0 warning
+  `-D warnings`, `cargo fmt --check` propre, 0 `.snap.new`. (Sonnet, moyen)
 - [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
 - [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
 

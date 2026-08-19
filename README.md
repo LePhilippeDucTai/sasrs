@@ -176,11 +176,11 @@ individual options of each procedure and DATA step statement. Legend:
 | Queries | ✅ | `SELECT [DISTINCT]`, `WHERE`, `GROUP BY` (incl. positional), `HAVING`, `ORDER BY [ASC\|DESC]`, `CALCULATED`, column/table aliases |
 | DDL/DML | ✅ | `CREATE TABLE AS`, `CREATE VIEW`, `DROP TABLE`/`VIEW`, `INSERT ... VALUES`/`SELECT`, `UPDATE ... SET`, `DELETE`, `DESCRIBE TABLE` |
 | Joins | ✅ | `INNER`, `LEFT`, `RIGHT`, `FULL`, `CROSS` |
-| Predicates | ✅ | `BETWEEN`, `IS [NOT] NULL`/`MISSING`, `LIKE` (`%`/`_`), `IN`/`NOT IN`, scalar/`IN`/`EXISTS` subqueries |
+| Predicates | ✅ | `BETWEEN`, `IS [NOT] NULL`/`MISSING`, `LIKE` (`%`/`_`), `[NOT] CONTAINS` (substring, case-sensitive, ≡ `INDEX() > 0`), `[NOT] SOUNDS LIKE` (Soundex match), `IN`/`NOT IN`, scalar/`IN`/`EXISTS` subqueries |
 | Set operators | ✅ | `UNION [ALL]`, `EXCEPT`, `INTERSECT` |
 | Aggregates | ✅ | `COUNT(*)`, `COUNT([DISTINCT] col)`, `SUM`, `AVG`/`MEAN`, `MIN`, `MAX` |
 | Dictionary tables | ✅ | `DICTIONARY.TABLES`/`.MEMBERS`/`.COLUMNS`/`.MACROS` (+ `SASHELP.VTABLE`/`VMEMBER`/`VCOLUMN`/`VMACRO` aliases), full `WHERE`/`SELECT`/`ORDER BY` support |
-| Not supported | 🔴 | `ODS OUTPUT` capture, `CONTAINS`/`SOUNDS LIKE` |
+| Not supported | 🔴 | `ODS OUTPUT` capture |
 
 ### Output (ODS) & formats
 

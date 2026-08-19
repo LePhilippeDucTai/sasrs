@@ -64,6 +64,24 @@ pub(super) fn sql_expr_to_polars(e: &SqlExpr, ctx: &Ctx) -> Result<Expr> {
             let m = like_to_match(a, pattern)?;
             Ok(if *negated { m.not() } else { m })
         }
+        SqlExpr::Contains {
+            expr,
+            pattern,
+            negated,
+        } => {
+            let a = sql_expr_to_polars(expr, ctx)?;
+            let m = contains_to_match(a, pattern)?;
+            Ok(if *negated { m.not() } else { m })
+        }
+        SqlExpr::SoundsLike {
+            expr,
+            text,
+            negated,
+        } => {
+            let a = sql_expr_to_polars(expr, ctx)?;
+            let m = sounds_like_to_match(a, text)?;
+            Ok(if *negated { m.not() } else { m })
+        }
         SqlExpr::Binary { op, left, right } => binary_to_polars(*op, left, right, ctx),
         SqlExpr::Unary { op, expr } => {
             let a = sql_expr_to_polars(expr, ctx)?;
@@ -350,4 +368,145 @@ pub(super) fn sas_like_match(text: &str, pattern: &str) -> bool {
         j += 1;
     }
     j == p.len()
+}
+
+/// Traduit un prédicat SQL `expr CONTAINS 'sous-chaîne'` (M42.2) en expression
+/// Polars.
+///
+/// Sémantique Oracle/SAS : `CONTAINS` ≡ `INDEX(expr, 'sous-chaîne') > 0`
+/// (cf. `datastep::functions::char::search::fn_index`) — recherche de
+/// sous-chaîne littérale, **sensible à la casse**, position 1-based/0 si
+/// absente. On n'appelle PAS `fn_index` directement : cette fonction attend
+/// un `EvalCtx` complet (compteurs de notes, RNG, hash objects...) propre au
+/// moteur DATA step, hors de propos pour un prédicat évalué colonne par
+/// colonne ici. Son cœur (`str::find`) est trivial à réappliquer sans
+/// dupliquer de LOGIQUE (seule la recherche de sous-chaîne compte ; SAS ne
+/// distingue pas les positions au-delà de "trouvé/pas trouvé" pour CONTAINS).
+///
+/// Comme pour `like_to_match`, la feature `regex` de Polars n'étant pas
+/// activée, on ne peut pas utiliser `Expr::str().contains_literal` : on
+/// retombe sur le même mécanisme d'UDF `Expr::map`.
+///
+/// `INDEX(s, '')` renvoie toujours 0 (chaîne vide jamais "trouvée") : donc
+/// `CONTAINS ''` est toujours faux, y compris pour une valeur non manquante.
+/// Une valeur missing (null) ne "contient" jamais rien → résultat null/false
+/// (comme LIKE).
+pub(super) fn contains_to_match(a: Expr, pattern: &str) -> Result<Expr> {
+    if pattern.is_empty() {
+        return Ok(lit(false));
+    }
+    let pat = pattern.to_string();
+    Ok(a.map(
+        move |col: Column| {
+            let s = col.str()?;
+            let out: BooleanChunked = s
+                .iter()
+                .map(|opt| opt.map(|v| v.contains(pat.as_str())))
+                .collect();
+            Ok(Some(out.into_column()))
+        },
+        GetOutput::from_type(DataType::Boolean),
+    ))
+}
+
+/// Traduit un prédicat SQL `expr SOUNDS LIKE 'texte'` (M42.2) en expression
+/// Polars.
+///
+/// Sémantique Oracle/SAS : `SOUNDS LIKE` ≡ `SOUNDEX(expr) = SOUNDEX('texte')`.
+/// Le code Soundex de `'texte'` est constant (littéral du prédicat) : on le
+/// calcule UNE fois hors de la fermeture, puis on compare le Soundex de
+/// chaque valeur de colonne à cette constante via une UDF `Expr::map`, même
+/// mécanisme que `like_to_match`/`contains_to_match` (pas de fonction Soundex
+/// native dans l'API Polars disponible ici).
+pub(super) fn sounds_like_to_match(a: Expr, text: &str) -> Result<Expr> {
+    let target = soundex(text);
+    Ok(a.map(
+        move |col: Column| {
+            let s = col.str()?;
+            let out: BooleanChunked = s
+                .iter()
+                .map(|opt| opt.map(|v| soundex(v) == target))
+                .collect();
+            Ok(Some(out.into_column()))
+        },
+        GetOutput::from_type(DataType::Boolean),
+    ))
+}
+
+/// Code Soundex standard (algorithme américain classique, celui qu'implémente
+/// `SOUNDEX()` en SAS) : 1 lettre + 3 chiffres, complété par des zéros ou
+/// tronqué.
+///
+/// Table de codage (insensible à la casse ; les caractères non alphabétiques
+/// sont ignorés, comme s'ils n'existaient pas) :
+///   B,F,P,V → 1 · C,G,J,K,Q,S,X,Z → 2 · D,T → 3 · L → 4 · M,N → 5 · R → 6
+///   A,E,I,O,U,H,W,Y → pas de chiffre.
+///
+/// Règle d'adjacence (celle qui distingue les implémentations « naïves » de
+/// la vraie table Soundex) : deux lettres de MÊME code ne comptent qu'une
+/// fois si elles sont adjacentes OU séparées uniquement par H/W — H et W
+/// sont transparents, ils NE rompent PAS la fusion (exemple canonique
+/// "Ashcraft" → A261 : le S et le C, tous deux code 2 et séparés par le H,
+/// fusionnent comme s'ils étaient adjacents). Une voyelle (A/E/I/O/U ou Y)
+/// entre deux lettres de même code, elle, ROMPT la fusion : les deux
+/// chiffres sont alors conservés. Attention : cette règle de fusion ne
+/// s'applique PAS entre la lettre initiale et la lettre suivante même si
+/// elles partagent le même code — exemple "Pfister" → P123 (le F n'est PAS
+/// fusionné avec le P initial, contrairement à l'intuition « P et F sont
+/// dans le même groupe » ; seules les lettres codées APRÈS la première
+/// participent entre elles à la règle de fusion).
+///
+/// Chaîne vide ou sans aucune lettre → `"0000"` (pas de lettre initiale à
+/// conserver ; comportement observé de SAS pour une entrée vide — choix
+/// documenté ici faute de pouvoir le vérifier directement contre un SAS réel
+/// dans cet environnement).
+pub(super) fn soundex(s: &str) -> String {
+    fn digit(c: char) -> Option<u8> {
+        match c.to_ascii_uppercase() {
+            'B' | 'F' | 'P' | 'V' => Some(1),
+            'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some(2),
+            'D' | 'T' => Some(3),
+            'L' => Some(4),
+            'M' | 'N' => Some(5),
+            'R' => Some(6),
+            _ => None,
+        }
+    }
+
+    let letters: Vec<char> = s.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    let Some(&first) = letters.first() else {
+        return "0000".to_string();
+    };
+
+    let mut code = String::with_capacity(4);
+    code.push(first.to_ascii_uppercase());
+    // Dernier chiffre RETENU (pour la règle de fusion) parmi les lettres
+    // APRÈS la première — volontairement `None` au départ (cf. doc-comment
+    // ci-dessus : "Pfister" → P123, le F n'est pas fusionné avec le P).
+    let mut last: Option<u8> = None;
+    for &c in &letters[1..] {
+        if code.len() == 4 {
+            break;
+        }
+        let uc = c.to_ascii_uppercase();
+        if uc == 'H' || uc == 'W' {
+            // H/W : transparents, ne rompent PAS la fusion en cours.
+            continue;
+        }
+        match digit(uc) {
+            Some(d) => {
+                if Some(d) != last {
+                    code.push((b'0' + d) as char);
+                }
+                last = Some(d);
+            }
+            // Voyelle (ou Y) : rompt la fusion pour la suite.
+            None => last = None,
+        }
+    }
+
+    while code.len() < 4 {
+        code.push('0');
+    }
+    code
 }

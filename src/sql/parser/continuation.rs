@@ -67,6 +67,8 @@ pub(super) fn continue_compare(ts: &mut StatementStream, left: SqlExpr) -> Resul
     let negated = if ts.peek().kind == TokenKind::Not {
         if ts.peek2().is_kw("between")
             || ts.peek2().is_kw("like")
+            || ts.peek2().is_kw("contains")
+            || ts.peek2().is_kw("sounds")
             || ts.peek2().kind == TokenKind::In
         {
             ts.next();
@@ -129,6 +131,45 @@ pub(super) fn continue_compare(ts: &mut StatementStream, left: SqlExpr) -> Resul
         return Ok(SqlExpr::Like {
             expr: Box::new(left),
             pattern,
+            negated,
+        });
+    }
+    if ts.peek().is_kw("contains") {
+        ts.next();
+        let pat_tok = ts.peek().clone();
+        let pattern = match &pat_tok.kind {
+            TokenKind::Str { value, .. } => value.clone(),
+            _ => {
+                return Err(SasError::parse(
+                    "expected a string after CONTAINS",
+                    pat_tok.span,
+                ));
+            }
+        };
+        ts.next();
+        return Ok(SqlExpr::Contains {
+            expr: Box::new(left),
+            pattern,
+            negated,
+        });
+    }
+    if ts.peek().is_kw("sounds") {
+        ts.next();
+        expect_kw(ts, "like")?;
+        let txt_tok = ts.peek().clone();
+        let text = match &txt_tok.kind {
+            TokenKind::Str { value, .. } => value.clone(),
+            _ => {
+                return Err(SasError::parse(
+                    "expected a string after SOUNDS LIKE",
+                    txt_tok.span,
+                ));
+            }
+        };
+        ts.next();
+        return Ok(SqlExpr::SoundsLike {
+            expr: Box::new(left),
+            text,
             negated,
         });
     }
