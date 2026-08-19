@@ -18,7 +18,13 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M42 (Phase G)**. **M41 TERMINÉ** — macro : quoting complet + %SYSCALL/%SYSMACDELETE :
+Jalon courant : **M43 (Phase G)**. **M42 TERMINÉ** — PROC SQL : dictionnaires + prédicats :
+`DICTIONARY.MEMBERS` (alias de `TABLES`, seul trou réel — `TABLES`/`COLUMNS`/`MACROS`
+déjà complets depuis M20.3) ; nouveaux prédicats `[NOT] CONTAINS` (≡ `INDEX()>0`) et
+`[NOT] SOUNDS LIKE` (Soundex maison, vérifié sur 5 exemples de référence) ; `ODS OUTPUT
+SQL_Results` généralisé au SELECT nu de PROC SQL (accumulation diagonale multi-SELECT,
+convention du projet) ; 2 fixtures m42.
+**M41 TERMINÉ** — macro : quoting complet + %SYSCALL/%SYSMACDELETE :
 `%QUOTE`/`%NRQUOTE` (quoting d'exécution historique, échappements `%'`/`%"`/`%(`/`%)`/`%%`) ;
 audit `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` (déjà conformes depuis M12.2, oracle PROGRESS.md corrigé) ;
 `STR_MASKED` élargi (`^`/`¬`/`#`) ; expansion complète des arguments d'invocation de macro
@@ -1067,8 +1073,22 @@ Cellule README PROC SQL Not supported 🔴→✅.
   (`grouping.rs` ×3, `subquery.rs` ×2). 17 tests (5 parser + 8 plan/exec + 1 unitaire
   Soundex + variantes NOT/missing/motif vide). 2879 tests + snapshot verts, 0 warning
   `-D warnings`, `cargo fmt --check` propre, 0 `.snap.new`. (Sonnet, moyen)
-- [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
-- [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
+- [x] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) : `exec_select` accumule la version
+  TYPÉE (avant mise en forme listing) sous l'objet ODS réel `SQL_Results` via
+  `ods_output_active`/`append_ods_output`, même mécanisme générique que `OneWayFreqs`
+  (FREQ). Choix documenté : plusieurs SELECT nus dans un même run-group `proc sql;...quit;`
+  s'ACCUMULENT par union diagonale (convention déjà établie du projet — comportement SAS
+  réel pour ce cas non confirmable dans cet environnement). 4 tests (capture simple, aucune
+  capture si non demandée, empilement diagonal 2 SELECT, WARNING générique si demandé sans
+  SELECT nu dans le step). 2883 tests + snapshot verts, 0 warning, 0 `.snap.new`. (Sonnet,
+  faible)
+- [x] DoD M42 : fixtures m42 (dictionary_predicates, sql_ods_output) + 2 snapshots
+  **vérifiés à la main** : dictionary.members ≡ dictionary.tables, dictionary.columns liste
+  les colonnes ; CONTAINS/NOT CONTAINS filtrent sur sous-chaîne (sensible casse), SOUNDS
+  LIKE regroupe Robert/Rupert (soundex R163) hors Ashcraft ; ODS OUTPUT SQL_Results capture
+  le SELECT nu en dataset typé. README PROC SQL → ✅ (dictionary tables, CONTAINS/SOUNDS
+  LIKE, ODS OUTPUT SQL_Results ajoutés ; ligne "Not supported" retirée, plus de trou connu
+  à ce périmètre). → **M43**.
 
 ## BLOC 1 — Procs Base & descriptifs
 

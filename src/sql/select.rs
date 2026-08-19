@@ -11,7 +11,26 @@ pub(super) fn exec_select(sel: &ast::SelectStmt, session: &mut Session) -> Resul
     for note in notes {
         session.log.forward(&note);
     }
+
     render_listing(&ds, session);
+
+    // M42.3 — cette table de listing porte le nom d'objet ODS « SQL_Results »
+    // (nom SAS réel : `ods output sql_results=ds;`) : si sa capture est
+    // active, la version TYPÉE (déjà utilisée ci-dessus pour le rendu, avant
+    // mise en forme) s'accumule. Un run-group `proc sql ; select … ;
+    // select … ; quit ;` peut contenir PLUSIEURS SELECT nus : par cohérence
+    // avec la convention générale de ce projet (union diagonale des tranches
+    // successives au sein d'un même step — voir `OneWayFreqs` en PROC FREQ,
+    // doc `session/ods_output.rs`), chaque SELECT ajoute sa tranche au même
+    // dataset accumulé plutôt que de ne garder que le premier/dernier. Le
+    // comportement SAS réel pour plusieurs SELECT dans un seul
+    // `ODS OUTPUT SQL_Results=` n'a pas pu être confirmé avec certitude ; ce
+    // choix suit simplement la convention déjà établie dans ce code pour
+    // rester cohérent avec le reste du moteur.
+    if session.ods_output_active("SQL_Results") {
+        session.append_ods_output("SQL_Results", ds)?;
+    }
+
     Ok(())
 }
 
