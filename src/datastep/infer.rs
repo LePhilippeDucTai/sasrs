@@ -296,7 +296,7 @@ impl Compiler<'_> {
                     // Résultat caractère de longueur indéterminée : SAS donne
                     // 200 à une variable sans longueur préalable (M40.1).
                     "prxchange" | "prxposn" => (VarType::Char, 200),
-                    "put" => (VarType::Char, put_width(args)),
+                    "put" => (VarType::Char, self.put_width(args)),
                     _ => (VarType::Num, 8),
                 }
             }
@@ -313,5 +313,47 @@ impl Compiler<'_> {
             (VarType::Char, l) => l,
             (VarType::Num, _) => 12,
         }
+    }
+
+    /// Largeur du format d'un `put(x, fmt)` (compile-time, comme SAS).
+    ///
+    /// Cas de base (chiffres finaux du nom du format, ex. `best12` → 12,
+    /// sinon 200 — le parser M1 ne produit pas encore de littéral de format
+    /// complet, best-effort) : inchangé depuis avant M43.1.
+    ///
+    /// M43.1 — si le nom résout vers un `VALUE` format UTILISATEUR déjà
+    /// connu dans `self.session.format_catalog` à ce point de la
+    /// compilation, la largeur RÉELLEMENT produite à l'exécution peut
+    /// différer des chiffres littéraux du token (`MIN=`/`MAX=` élargissent
+    /// ou rétrécissent, `DEFAULT=`/la longueur du plus long label remplacent
+    /// le fallback 200 quand le token n'a pas de largeur). On calcule alors
+    /// la largeur avec [`UserFormat::effective_width`] — EXACTEMENT le même
+    /// calcul que `format()` applique à l'exécution — pour que la longueur
+    /// PDV inférée à la compilation ne tronque jamais la valeur réellement
+    /// produite. Un format non résolu ici (builtin, ou PROC FORMAT pas
+    /// encore exécuté au moment de cette étape — le programme peut définir
+    /// le format APRÈS l'étape DATA) garde le comportement historique.
+    pub(super) fn put_width(&self, args: &[Expr]) -> usize {
+        let Some(fmt) = args.get(1) else { return 200 };
+        let name = match fmt {
+            Expr::Var(n) => n.as_str(),
+            Expr::Str(s) => s.as_str(),
+            _ => return 200,
+        };
+        // La largeur du résultat de PUT est la largeur `w` du format, PAS les
+        // chiffres finaux du token : pour `dollar10.2` c'est 10 (pas 2, le
+        // nombre de décimales). On s'appuie donc sur le parseur de FormatSpec.
+        let Some(spec) = crate::formats::FormatSpec::parse(name) else {
+            return 200;
+        };
+        if let Some(uf) = self.session.format_catalog.user_format(&spec.name) {
+            // `effective_width` renvoie `None` seulement sur son chemin
+            // rapide (MIN=/MAX=/DEFAULT= tous absents) quand `spec.w` est
+            // `None` : sortie non bornée, largeur réelle = longueur du label
+            // au point d'usage — imprévisible à la compilation, d'où le même
+            // fallback 200 que le cas builtin/inconnu ci-dessous.
+            return uf.effective_width(spec.w).unwrap_or(200);
+        }
+        spec.w.map(|w| w as usize).unwrap_or(200)
     }
 }

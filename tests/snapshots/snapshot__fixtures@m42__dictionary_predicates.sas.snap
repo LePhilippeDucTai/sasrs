@@ -1,0 +1,125 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m42/dictionary_predicates.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc sql;
+3       create table work.people as select * from d.class;
+4     quit;
+NOTE: Table WORK.PEOPLE created, with 19 rows and 5 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'DICTIONARY.MEMBERS lists the same datasets as DICTIONARY.TABLES';
+
+6     proc sql;
+7       select libname, memname, nobs, nvar
+8       from dictionary.members
+9       order by libname, memname;
+10    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    title 'CONTAINS: names holding the substring "ar" (case-sensitive)';
+
+12    proc sql;
+13      select name from work.people
+14      where name contains 'ar'
+15      order by name;
+16    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+17    title 'NOT CONTAINS: the complement';
+
+18    proc sql;
+19      select name from work.people
+20      where name not contains 'ar'
+21      order by name;
+22    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+23    title "SOUNDS LIKE 'Rupert': matches Robert (same Soundex code R163)";
+
+24    proc sql;
+25      select name from work.people
+26      where name sounds like 'Rupert'
+27      order by name;
+28    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+29    title 'NOT SOUNDS LIKE: everyone except that Soundex match';
+
+30    proc sql;
+31      select count(*) as n from work.people
+32      where name not sounds like 'Rupert';
+33    quit;
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                DICTIONARY.MEMBERS lists the same datasets as DICTIONARY.TABLES
+
+                               libname    memname    nobs    nvar
+
+                               D          CLASS        19       5
+                               WORK       PEOPLE       19       5
+
+                  CONTAINS: names holding the substring "ar" (case-sensitive)
+
+                                            name
+
+                                            Barbara
+                                            Carol
+                                            Mary
+
+                                  NOT CONTAINS: the complement
+
+                                            name
+
+                                            Alfred
+                                            Alice
+                                            Henry
+                                            James
+                                            Jane
+                                            Janet
+                                            Jeffrey
+                                            John
+                                            Joyce
+                                            Judy
+                                            Louise
+                                            Philip
+                                            Robert
+                                            Ronald
+                                            Thomas
+                                            William
+
+                 SOUNDS LIKE 'Rupert': matches Robert (same Soundex code R163)
+
+                                             name
+
+                                             Robert
+
+                      NOT SOUNDS LIKE: everyone except that Soundex match
+
+                                                n
+
+                                               18
+
+==== EXIT 0 ====

@@ -1,0 +1,37 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m41/syscall_sysmacdelete.sas
+---
+==== LOG ====
+
+1     data nums;
+2       length n1 n2 n3 $4 c1 c2 c3 $8;
+3       n1 = "10"; n2 = "20"; n3 = "30";
+4       c1 = "apple"; c2 = "banana"; c3 = "cherry";
+5     run;
+NOTE: The data set WORK.NUMS has 1 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+6     title '%SYSCALL SORTN/SORTC: values sorted ascending in place';
+
+7     proc print data=nums noobs;
+8     run;
+NOTE: There were 1 observations read from the data set WORK.NUMS.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+Before delete: [hello]
+After delete: [%greet]
+
+==== LISTING ====
+                     %SYSCALL SORTN/SORTC: values sorted ascending in place
+
+                          n1    n2    n3    c1       c2        c3
+
+                          10    20    30    apple    banana    cherry
+
+==== EXIT 0 ====

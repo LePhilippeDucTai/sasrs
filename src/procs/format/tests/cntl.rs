@@ -462,3 +462,122 @@ fn cntlin_with_lib_persists_reconstructed_formats_to_sidecar() {
         "sidecar should contain the CNTLIN-reconstructed GRADEF format"
     );
 }
+
+// ── M43.1 — MIN=/MAX=/DEFAULT=/FUZZ= CNTLOUT=/CNTLIN= ──────────────────────
+
+/// Decode a numeric column of `ds` (by name) into `Option<f64>` (`None` = SAS
+/// missing `.`). Panics if the column is absent or not numeric (both would be
+/// a test bug, not a scenario under test).
+fn col_nums(ds: &SasDataset, name: &str) -> Vec<Option<f64>> {
+    let i = ds
+        .vars
+        .iter()
+        .position(|v| v.name == name)
+        .unwrap_or_else(|| panic!("no column {name} — columns: {:?}", ds.vars));
+    decode_column(ds, i)
+        .unwrap()
+        .into_iter()
+        .map(|v| match v {
+            Value::Num(n) => Some(n),
+            Value::Missing(_) => None,
+            other => panic!("expected numeric column {name}, got {other:?}"),
+        })
+        .collect()
+}
+
+fn col_names(ds: &SasDataset) -> Vec<String> {
+    ds.vars.iter().map(|v| v.name.clone()).collect()
+}
+
+const BASE_COLUMNS: [&str; 8] = [
+    "FMTNAME", "START", "END", "LABEL", "TYPE", "SEXCL", "EEXCL", "HLO",
+];
+
+#[test]
+fn cntlout_no_width_options_omits_the_four_columns_byte_identical_shape() {
+    // A catalog that uses NONE of MIN=/MAX=/DEFAULT=/FUZZ= must keep the
+    // exact pre-M43.1 8-column CNTLOUT= shape — no MIN/MAX/DEFAULT/FUZZ
+    // columns at all, same column count/names as before M43.1.
+    let session = run_format_src(
+        "proc format cntlout=fmtctl; \
+         value agef low-<21='Minor' 21-high='Adult' other='Unknown'; \
+         run;",
+    );
+    let ds = read_work(&session, "FMTCTL");
+    assert_eq!(col_names(&ds), BASE_COLUMNS.to_vec());
+}
+
+#[test]
+fn cntlout_width_options_columns_present_with_values_and_missing_for_unused() {
+    // One format uses all four options, a second uses none — the columns
+    // must appear (since at least one format needs them) and carry the
+    // right value on the first format's rows, `.` (missing) on the second's.
+    let session = run_format_src(
+        "proc format cntlout=fmtctl; \
+         value agef (min=3 max=10 default=6 fuzz=0.5) \
+         low-<21='Minor' 21-high='Adult'; \
+         value plain 1='One'; \
+         run;",
+    );
+    let ds = read_work(&session, "FMTCTL");
+    let mut expected_cols = BASE_COLUMNS.to_vec();
+    expected_cols.extend(["MIN", "MAX", "DEFAULT", "FUZZ"]);
+    assert_eq!(col_names(&ds), expected_cols);
+
+    let fmtnames = col_strs(&ds, "FMTNAME");
+    // Sorted (FMTNAME, TYPE): AGEF (2 rows) before PLAIN (1 row).
+    assert_eq!(fmtnames, vec!["AGEF", "AGEF", "PLAIN"]);
+    assert_eq!(col_nums(&ds, "MIN"), vec![Some(3.0), Some(3.0), None]);
+    assert_eq!(col_nums(&ds, "MAX"), vec![Some(10.0), Some(10.0), None]);
+    assert_eq!(col_nums(&ds, "DEFAULT"), vec![Some(6.0), Some(6.0), None]);
+    assert_eq!(col_nums(&ds, "FUZZ"), vec![Some(0.5), Some(0.5), None]);
+}
+
+#[test]
+fn cntlin_width_options_round_trip() {
+    use crate::formats::FormatSpec;
+
+    let mut session = make_session();
+    let ast1 = parse_format_src(
+        "proc format cntlout=x; \
+         value agef (min=3 max=10 default=6 fuzz=0.5) \
+         low-<21='Minor' 21-high='Adult'; \
+         run;",
+    )
+    .unwrap();
+    execute(&ast1, &mut session).unwrap();
+
+    let ast2 = parse_format_src("proc format cntlin=x cntlout=y; run;").unwrap();
+    execute(&ast2, &mut session).unwrap();
+
+    // CNTLOUT -> CNTLIN -> CNTLOUT reproduces the identical MIN/MAX/DEFAULT/
+    // FUZZ columns, same as the base 8-column oracle in
+    // `cntlout_cntlin_round_trip_identical`.
+    let dx = read_work(&session, "X");
+    let dy = read_work(&session, "Y");
+    assert_eq!(rows(&dx), rows(&dy));
+    assert_eq!(col_nums(&dx, "MIN"), col_nums(&dy, "MIN"));
+    assert_eq!(col_nums(&dx, "MAX"), col_nums(&dy, "MAX"));
+    assert_eq!(col_nums(&dx, "DEFAULT"), col_nums(&dy, "DEFAULT"));
+    assert_eq!(col_nums(&dx, "FUZZ"), col_nums(&dy, "FUZZ"));
+
+    // The reconstructed UserFormat itself carries the same four fields as
+    // the original.
+    let (_, uf) = session
+        .format_catalog
+        .user_formats()
+        .find(|(k, _)| *k == "AGEF")
+        .expect("AGEF reconstructed via CNTLIN=");
+    assert_eq!(uf.min, Some(3));
+    assert_eq!(uf.max, Some(10));
+    assert_eq!(uf.default, Some(6));
+    assert_eq!(uf.fuzz, Some(0.5));
+
+    // And format resolution reflects DEFAULT=6 at the point of use (no
+    // explicit width): "Minor" (len 5) right-justified to width 6.
+    let spec = FormatSpec::parse("AGEF.").unwrap();
+    assert_eq!(
+        session.format_catalog.format(&Value::Num(10.0), &spec),
+        " Minor"
+    );
+}

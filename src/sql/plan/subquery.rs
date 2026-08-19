@@ -163,6 +163,8 @@ pub(super) fn rewrite_sql_expr(
         }
         SqlExpr::IsNull { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
         SqlExpr::Like { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
+        SqlExpr::Contains { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
+        SqlExpr::SoundsLike { expr, .. } => rewrite_sql_expr(expr, outer, session)?,
         SqlExpr::Aggregate { arg: Some(a), .. } => rewrite_sql_expr(a, outer, session)?,
         SqlExpr::Aggregate { .. }
         | SqlExpr::Base(_)
@@ -211,7 +213,10 @@ pub(super) fn collect_qualified_tables(query: &SelectStmt, out: &mut Vec<String>
                 walk(low, out);
                 walk(high, out);
             }
-            SqlExpr::IsNull { expr, .. } | SqlExpr::Like { expr, .. } => walk(expr, out),
+            SqlExpr::IsNull { expr, .. }
+            | SqlExpr::Like { expr, .. }
+            | SqlExpr::Contains { expr, .. }
+            | SqlExpr::SoundsLike { expr, .. } => walk(expr, out),
             SqlExpr::Aggregate { arg: Some(a), .. } => walk(a, out),
             SqlExpr::Subquery(q) => collect_qualified_tables(q, out),
             SqlExpr::InSubquery { expr, query, .. } => {

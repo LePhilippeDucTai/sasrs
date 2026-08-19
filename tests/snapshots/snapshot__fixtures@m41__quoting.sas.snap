@@ -1,0 +1,71 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m41/quoting.sas
+---
+==== LOG ====
+
+1     data q;
+2       length q1 q2 q3 q4 q5 q6 $12;
+3       /* quote resolves x first then masks the semicolon so it stays literal */
+4       q1 = "Z;y";
+5       /* an unpaired open paren, escaped so the call still bounds correctly */
+6       q2 = "a(b";
+7       /* nrquote also masks the still-undefined z reference in the result */
+8       q3 = "a&z b";
+9       /* superq never resolves - w holds the literal two characters x-ref */
+10      q4 = "&x";
+11      /* bquote behaves like quote here, without requiring percent escapes */
+12      q5 = "Z;y";
+13      /* nrbquote also masks the undefined z reference, like nrquote */
+14      q6 = "a&z b";
+15    run;
+NOTE: The data set WORK.Q has 1 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    data qv;
+17      length v $6;
+18      /* v was assigned above from a quote call whose masked semicolon did not
+19         end the surrounding let statement */
+20      v = "a;b";
+21    run;
+NOTE: The data set WORK.QV has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+22    title 'M41 quoting: %QUOTE/%NRQUOTE + %BQUOTE/%NRBQUOTE/%SUPERQ';
+
+23    proc print data=q noobs;
+24      var q1 q2 q3 q4 q5 q6;
+25    run;
+NOTE: There were 1 observations read from the data set WORK.Q.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+26    proc print data=qv noobs;
+27      var v;
+28    run;
+NOTE: There were 1 observations read from the data set WORK.QV.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                    M41 quoting: %QUOTE/%NRQUOTE + %BQUOTE/%NRBQUOTE/%SUPERQ
+
+                           q1     q2     q3       q4    q5     q6
+
+                           Z;y    a(b    a&z b    &x    Z;y    a&z b
+
+                    M41 quoting: %QUOTE/%NRQUOTE + %BQUOTE/%NRBQUOTE/%SUPERQ
+
+                                              v
+
+                                              a;b
+
+==== EXIT 0 ====

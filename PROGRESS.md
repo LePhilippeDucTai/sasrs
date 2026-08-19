@@ -18,7 +18,28 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M41 (Phase G)**. **M40 TERMINÉ** — DATA step complété :
+Jalon courant : **M45 (Phase G)**. **M44 TERMINÉ** — PROC FREQ : Fisher exact généralisé r×c
+(Freeman-Halton) : énumération exacte complète des tables à marges fixées (garde 500 000
+tables), fallback Monte-Carlo déterministe au-delà ; chemin 2×2 existant intouché ; vérifié
+par oracle Python indépendant (arithmétique rationnelle) + cohérence interne (Σp=1, chemin
+général ≡ formule 2×2 spécialisée) faute d'exemple SAS externe fiable trouvé ; 1 fixture m44.
+**M43 TERMINÉ** — PROC FORMAT : `MIN=`/`MAX=`/`DEFAULT=`/
+`FUZZ=` sur `VALUE` (largeur de sortie bornée/par défaut, tolérance de bornes numériques),
+round-trip CNTLOUT=/CNTLIN=, chemin rapide octet-identique quand inutilisés ; bug de
+troncature PDV (`put_width` aveugle au catalogue) trouvé et corrigé au DoD ; 1 fixture m43.
+**M42 TERMINÉ** — PROC SQL : dictionnaires + prédicats :
+`DICTIONARY.MEMBERS` (alias de `TABLES`, seul trou réel — `TABLES`/`COLUMNS`/`MACROS`
+déjà complets depuis M20.3) ; nouveaux prédicats `[NOT] CONTAINS` (≡ `INDEX()>0`) et
+`[NOT] SOUNDS LIKE` (Soundex maison, vérifié sur 5 exemples de référence) ; `ODS OUTPUT
+SQL_Results` généralisé au SELECT nu de PROC SQL (accumulation diagonale multi-SELECT,
+convention du projet) ; 2 fixtures m42.
+**M41 TERMINÉ** — macro : quoting complet + %SYSCALL/%SYSMACDELETE :
+`%QUOTE`/`%NRQUOTE` (quoting d'exécution historique, échappements `%'`/`%"`/`%(`/`%)`/`%%`) ;
+audit `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` (déjà conformes depuis M12.2, oracle PROGRESS.md corrigé) ;
+`STR_MASKED` élargi (`^`/`¬`/`#`) ; expansion complète des arguments d'invocation de macro
+portant un `%` ; `%SYSCALL SORTN`/`SORTC` (tri en place de variables macro) ; `%SYSMACDELETE`
+(suppression de définition compilée) ; 2 fixtures m41.
+**M40 TERMINÉ** — DATA step complété :
 PRX complet via `fancy-regex` (5 fonctions + 6 CALL routines, cache par texte de pattern),
 SET multiples (sites de lecture indépendants, EOF par site au point du statement, END=/NOBS=
 par site), bare `SET;`/`MERGE;` → `_LAST_`, WHERE statement standalone (≡ WHERE= par
@@ -1000,32 +1021,146 @@ Cellules README DATA step (CALL routines 🟡→✅, Not supported 🔴→✅).
 
 ## M41 — Macro : quoting complet + %SYSCALL/%SYSMACDELETE
 Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
-- [ ] M41.1 — `%BQUOTE`/`%NRBQUOTE` (quoting exécution, masque `&`/`%`) via `apply_quoting` ; oracle
-  `%bquote(a&b)` masque `&` sans résoudre (Opus, élevé)
-- [ ] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) ; oracle
-  `%let x=&y; %superq(x)`→`&y` littéral (Opus, élevé)
-- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Opus, moyen)
-- [ ] DoD M41 : fixtures m41 ; README Macro Quoting → ✅ (reste %SYSEXEC/%WINDOW/%DISPLAY/%SYSLPUT/%SYSRPUT doc) ; → M42.
+- [x] M41.1 — `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` existaient déjà depuis M12.2 (audit, pas une
+  implémentation) : oracle **corrigé** — en SAS 9.4 `%BQUOTE` RÉSOUT D'ABORD `&`/`%` puis
+  masque le résultat (sauf `&`/`%`, actifs) ; c'est `%NRBQUOTE` qui masque en plus les
+  déclencheurs résiduels. L'ancien oracle « `%bquote(a&b)` masque `&` sans résoudre » était
+  faux, non corrigé. Le vrai trou comblé ici : `%QUOTE`/`%NRQUOTE` (paire de quoting
+  d'exécution « historique », même contrat que `%BQUOTE`/`%NRBQUOTE` mais échappements `%'`
+  `%"` `%(` `%)` `%%` requis pour les quotes/parenthèses non appariées — `consume_equote` +
+  `read_balanced_parens_pct`). Complété : jeu `STR_MASKED` élargi à `^`/`¬`/`#` (graphies
+  NOT/IN de la liste SAS 9.4 ; blanc et opérateurs mnémoniques refusés, coût/risque
+  disproportionné, documenté dans `quoting.rs`) ; expansion complète (`process_impl`, pas
+  seulement `&refs`) des arguments d'invocation de macro portant un `%` (permet
+  `%m(%bquote(x;y))`) ; `unmask` de l'écho `MLOGIC` des paramètres (une valeur quotée ne doit
+  pas fuir ses sentinelles dans le log). 17 tests. (Fable, élevé)
+- [x] M41.2 — `%SUPERQ(name)` (valeur **non résolue**, accès texte brut `SymbolTable`) : déjà
+  implémenté depuis M12.2 (`consume_superq`), audit confirmé conforme à l'oracle `%let x=&y;
+  %superq(x)`→`&y` littéral (test existant `superq_returns_value_without_resolving`). (Fable,
+  élevé)
+- [x] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` : `%SYSCALL` limité à `SORTN`/`SORTC`
+  (les deux seules routines CALL documentées comme opérant uniquement sur du texte de
+  variables macro, sans PDV/étape DATA — arguments = noms de variables macro, valeurs lues
+  via `get_symbol`, triées ascendant, réécrites en place via `assign` = sémantique `%let`,
+  y compris portée locale) ; toute autre routine retombe sur la NOTE « not supported »
+  historique inchangée. `%SYSMACDELETE name` supprime la définition compilée de
+  `self.macros` (silencieux si absente) — invocation ultérieure `%name` non trouvée, laissée
+  verbatim (oracle confirmé : `%sysmacdelete` puis appel → non trouvée). 14 tests
+  (`tests/syscall.rs`). 2866 tests + snapshot verts, 0 warning `-D warnings`, `cargo fmt
+  --check` propre, 0 `.snap.new` (m1–m40 octet-identiques). (Fable, moyen)
+- [x] DoD M41 : fixtures `tests/fixtures/m41/` (quoting, syscall_sysmacdelete) + 2 snapshots
+  **vérifiés à la main** : quoting — `%quote`/`%bquote` résolvent Z puis masquent `;`
+  (`Z;y`), échappement `%(` bien borné (`a(b`), `%nrquote`/`%nrbquote` masquent `&z`
+  indéfini (`a&z b`), `%superq(w)` où `w=%nrstr(&x)` rend le littéral `&x` SANS résoudre
+  (preuve de non-résolution), `%let v=%quote(a;b)` — le `;` masqué n'a pas terminé le
+  `%let` (`v=a;b`) ; syscall_sysmacdelete — SORTN(30,10,20)→(10,20,30) et
+  SORTC(banana,apple,cherry)→(apple,banana,cherry) triés ascendant en place dans l'ordre
+  d'appel, `%sysmacdelete greet` rend l'invocation suivante `[%greet]` verbatim (vs
+  `[hello]` avant suppression). README Quoting 🟡→✅ (`%QUOTE`/`%NRQUOTE`/`%QUPCASE`/etc.
+  ajoutés à la liste), Utilities complété (SORTN/SORTC/SYSMACDELETE), Unsupported réduit
+  (ne liste plus que `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/autres routines `%SYSCALL`/
+  `%SYSMSTORECLEAR`/`%SYSLPUT`/`%SYSRPUT`). → **M42**.
 
 ## M42 — PROC SQL : dictionnaires + prédicats
 Cellule README PROC SQL Not supported 🔴→✅.
-- [ ] M42.1 — Dictionary tables (`DICTIONARY.TABLES/.COLUMNS/.MEMBERS` → vues sur `LibraryManager`) ;
-  oracle : `SELECT * FROM dictionary.columns` liste les colonnes connues (Opus, élevé)
-- [ ] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) ; oracle CONTAINS≡INDEX>0, SOUNDS LIKE=même soundex (Sonnet, moyen)
-- [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
-- [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
+- [x] M42.1 — Dictionary tables : `TABLES`/`COLUMNS`/`MACROS` (+ alias `SASHELP.VTABLE`/
+  `VCOLUMN`/`VMACRO`/`VMEMBER`) étaient déjà complets depuis M20.3 (audit, README stale —
+  corrigé). Seul trou réel : `DICTIONARY.MEMBERS` (absent du libref `DICTIONARY`, alors que
+  `SASHELP.VMEMBER` était déjà aliasé) — ajouté comme alias de `Tables` (ce projet ne suit
+  que des datasets, pas de catalogues, donc pas de colonne `ENGINE` distincte). Oracle
+  `SELECT * FROM dictionary.columns` déjà conforme (pré-existant). +1 test. (Opus, élevé)
+- [x] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) : nouveaux `SqlExpr::Contains`/
+  `SoundsLike` (même forme que `Like`) ; parsés dans `continue_compare`/`parse_sql_compare`
+  (les deux niveaux de grammaire dupliqués existants, comme `LIKE`/`BETWEEN`), y compris
+  `NOT CONTAINS`/`NOT SOUNDS LIKE`. Abaissement Polars via UDF `Expr::map` (même mécanisme
+  que `like_to_match`, pas de feature `regex` Polars) : `contains_to_match` (recherche de
+  sous-chaîne sensible à la casse, motif vide → toujours faux, ≡ `INDEX(expr,'') > 0`
+  faux) ; `sounds_like_to_match` + `soundex()` maison (algorithme classique : 1 lettre +
+  3 chiffres, H/W transparents à la fusion, voyelle rompt la fusion, la lettre initiale ne
+  fusionne jamais avec la suivante — vérifié sur les 5 exemples de référence
+  Robert/Rupert/Ashcraft/Tymczak/Pfister). 5 sites de traversée exhaustive mis à jour
+  (`grouping.rs` ×3, `subquery.rs` ×2). 17 tests (5 parser + 8 plan/exec + 1 unitaire
+  Soundex + variantes NOT/missing/motif vide). 2879 tests + snapshot verts, 0 warning
+  `-D warnings`, `cargo fmt --check` propre, 0 `.snap.new`. (Sonnet, moyen)
+- [x] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) : `exec_select` accumule la version
+  TYPÉE (avant mise en forme listing) sous l'objet ODS réel `SQL_Results` via
+  `ods_output_active`/`append_ods_output`, même mécanisme générique que `OneWayFreqs`
+  (FREQ). Choix documenté : plusieurs SELECT nus dans un même run-group `proc sql;...quit;`
+  s'ACCUMULENT par union diagonale (convention déjà établie du projet — comportement SAS
+  réel pour ce cas non confirmable dans cet environnement). 4 tests (capture simple, aucune
+  capture si non demandée, empilement diagonal 2 SELECT, WARNING générique si demandé sans
+  SELECT nu dans le step). 2883 tests + snapshot verts, 0 warning, 0 `.snap.new`. (Sonnet,
+  faible)
+- [x] DoD M42 : fixtures m42 (dictionary_predicates, sql_ods_output) + 2 snapshots
+  **vérifiés à la main** : dictionary.members ≡ dictionary.tables, dictionary.columns liste
+  les colonnes ; CONTAINS/NOT CONTAINS filtrent sur sous-chaîne (sensible casse), SOUNDS
+  LIKE regroupe Robert/Rupert (soundex R163) hors Ashcraft ; ODS OUTPUT SQL_Results capture
+  le SELECT nu en dataset typé. README PROC SQL → ✅ (dictionary tables, CONTAINS/SOUNDS
+  LIKE, ODS OUTPUT SQL_Results ajoutés ; ligne "Not supported" retirée, plus de trou connu
+  à ce périmètre). → **M43**.
 
 ## BLOC 1 — Procs Base & descriptifs
 
 ## M43 — PROC FORMAT : complétion totale
-- [ ] M43.1 — Brancher CNTLIN/CNTLOUT/FMTLIB (M39) dans `procs/format.rs` ; multi-label, largeurs
-  MAX=/MIN=/DEFAULT= ; oracle : largeur défaut = max label, CNTLOUT round-trip (Sonnet, moyen)
-- [ ] DoD M43 : fixture m43 ; README FORMAT → ✅ ; → M44.
+- [x] M43.1 — CNTLIN/CNTLOUT/FMTLIB étaient déjà branchés depuis M39 (audit ; "multi-label" du
+  libellé désigne les plages multiples déjà supportées, pas l'option `MULTILABEL` distincte —
+  non implémentée, hors périmètre). Vrai livrable : `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=` sur
+  `VALUE` (options format-level, syntaxe pragmatique non stricte — reconnues dans n'importe
+  quel ordre, parenthèses optionnelles, comme `OTHER=`) : `UserFormat::effective_width`
+  (largeur explicite du point d'usage, sinon `DEFAULT=`, sinon longueur du plus long label ;
+  bornée dans `[MIN,MAX]`) avec **chemin rapide octet-identique** quand les trois sont absents
+  (oracle "largeur défaut = max label" vérifié) ; `FUZZ=` (défaut SAS `1e-12` même sans
+  option explicite, tolérance sur les comparaisons de bornes numériques, `fuzzy_cmp`).
+  CNTLOUT/CNTLIN : 4 colonnes numériques MIN/MAX/DEFAULT/FUZZ, **émission conditionnelle**
+  (absentes si aucun format du catalogue ne les utilise → octet-identique aux fixtures
+  d'avant M43.1) ; round-trip vérifié. PICTURE dans CNTLIN/CNTLOUT et LIBRARY=libref.catalog
+  à 2 niveaux restent hors périmètre (déjà documentés README, non touchés). 23 tests (10
+  unitaires largeur/fuzz + 6 parser + 4 exécution + 3 CNTLOUT/CNTLIN round-trip). **Bug
+  trouvé par la fixture DoD et corrigé** : `datastep::helpers::put_width` (longueur PDV
+  inférée à la compilation pour `x = put(v, fmt.)`) était purement syntaxique (chiffres du
+  token de format) et ignorait `MIN=`/`MAX=`/`DEFAULT=` — une largeur réelle élargie par
+  `MIN=` tronquait la valeur au runtime (`narrow4.` avec `MIN=8` → sortie coupée à 4
+  caractères). Corrigé en `Compiler::put_width` (accès au catalogue via `self.session`),
+  qui délègue à `UserFormat::effective_width` (même calcul que `format()`) quand le nom
+  résout un format utilisateur connu à ce point du programme ; fallback historique inchangé
+  sinon (builtin, format pas encore défini). Nouvel accesseur `FormatCatalog::user_format`.
+  +7 tests (3 régressions confirmées cassées avant fix + 4 nouveaux). 2910 tests + snapshot
+  verts, 0 warning `-D warnings`, `cargo fmt --check` propre, 0 `.snap.new`. (Sonnet, moyen)
+- [x] DoD M43 : fixture `tests/fixtures/m43/format_width_fuzz.sas` + snapshot **vérifié à la
+  main** : `DEFAULT=6` applique une largeur de 6 sans suffixe explicite au point d'usage,
+  `MIN=`/`MAX=` bornent une largeur explicite trop étroite/large, `FUZZ=` fait matcher une
+  valeur à un cheveu d'une borne côté inclusif, round-trip CNTLOUT→CNTLIN→CNTLOUT préserve
+  les 4 colonnes. README FORMAT : ligne "non couvert" retire `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=`
+  (résiduels PICTURE en CNTLIN/CNTLOUT et LIBRARY à 2 niveaux inchangés, toujours documentés).
+  → **M44**.
 
 ## M44 — PROC FREQ : Fisher exact r×c
-- [ ] M44.1 — Fisher exact r×c (réseau Freeman-Halton/Mehta-Patel + garde combinatoire + fallback
-  Monte-Carlo déterministe PRNG maison) ; oracle : 2×2 = Fisher existant, Σtables≤p(obs) (Opus, très élevé)
-- [ ] DoD M44 : fixture m44 (3×3 vs doc SAS) ; README FREQ → ✅ (résiduel grandes tables MC documenté) ; → M45.
+- [x] M44.1 — Fisher exact r×c (Freeman-Halton) : énumération EXACTE complète (récursion
+  ligne/colonne, bornes serrées `[row_rem − Σ col_rem restants, min(row_rem, col_rem[j])]`,
+  seule (r−1)(c−1) cellules branchent, dernière cellule/ligne forcées) plutôt que
+  l'algorithme réseau Mehta-Patel — priorité donnée à la correction vérifiable (le réseau
+  n'est qu'une optimisation de performance de la MÊME définition). Garde combinatoire
+  500 000 tables (mesurée : <0.2s même en dépassement) ; au-delà, Monte-Carlo déterministe
+  (LCG mêmes constantes Knuth MMIX que le RNG DATA step, graine fixe, échantillonnage par
+  inversion sur la loi hypergéométrique conditionnelle exacte cellule par cellule,
+  10 000 tirages = défaut SAS, résultat étiqueté "Monte Carlo estimate" dans le listing).
+  Chemin 2×2 existant intouché (seul le test `grand==0` remonte avant le branchement de
+  forme, strictement neutre). Vérification (aucun oracle SAS externe fiable trouvé) :
+  oracle Python indépendant en arithmétique rationnelle exacte (stratégie d'énumération
+  DIFFÉRENTE, auto-vérifié Σp=1, reproduit la valeur SAS documentée 0.4857 du 2×2
+  [[3,1],[1,3]]) ; + 3 vérifications internes fortes : Σp=1 sur plusieurs tables, chemin
+  général ≡ formule 2×2 spécialisée à 1e-9 sur 3 tables (chemins de calcul totalement
+  indépendants), cas dégénérés (marge nulle, 1×C) sans panic, déterminisme bit-à-bit du
+  Monte-Carlo à graine fixe. 9 tests (2918 tests + snapshot verts, 0 warning `-D warnings`,
+  `cargo fmt --check` propre, 0 `.snap.new` — la seule fixture FISHER existante est en 2×2,
+  chemin inchangé). (Fable, élevé)
+- [x] DoD M44 : fixture `tests/fixtures/m44/fisher_rxc.sas` + snapshot **vérifié à la main**
+  (table diagonale 3×3 parfaite [[5,0,0],[0,5,0],[0,0,5]] — cas hors-doc-SAS mais
+  vérifiable à la main : P = 1/756756, Pr≤P = 1/126126 = 6×P, cohérent avec les 3! = 6
+  permutations diagonales équiprobables et les seules tables aussi extrêmes ; + table 2×3
+  non dégénérée montrant le chemin exact courant ; + table 4×4 dépassant la garde montrant
+  la NOTE Monte-Carlo). README FREQ : FISHER étendu à r×c ; "non couvert" reformulé (résiduel
+  Monte-Carlo au-delà de 500 000 tables, documenté). → **M45**.
 
 ## M45 — PROC UNIVARIATE : pondération + plots
 - [ ] M45.1 — Skewness/kurtosis pondérés (moments m3/m4, VARDEF=DF) ; oracle poids=1 = actuel, symétrique⇒skew≈0 (Opus, moyen)

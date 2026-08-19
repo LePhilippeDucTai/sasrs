@@ -52,6 +52,13 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
     // n'émet RIEN dans le flux de code.
     ("put", STMT, MacroEngine::consume_put),
+    // `%syscall routine(v1, v2, ...);` (M41.3) — `SORTN`/`SORTC` triés en
+    // place ; toute autre routine retombe sur la NOTE « not supported »
+    // historique (voir `Self::SYSCALL_LABEL`).
+    ("syscall", STMT, MacroEngine::consume_syscall),
+    // `%sysmacdelete name;` (M41.3) — supprime la définition compilée ;
+    // n'émet rien (cf. doc du consommateur).
+    ("sysmacdelete", STMT, MacroEngine::consume_sysmacdelete),
     // `%call execute(text);` (M19.3) — met en file un fragment de code
     // SAS à exécuter APRÈS le segment courant (sémantique CALL EXECUTE).
     ("call", STMT, MacroEngine::consume_macro_call),
@@ -101,6 +108,15 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     }),
     ("bquote", FUNC, |s, c, i, o| {
         s.consume_bquote(c, i, "bquote", false, o)
+    }),
+    // `%quote(text)` / `%nrquote(text)` (M41.1) — comme `%bquote`/`%nrbquote`
+    // (résout puis masque), mais avec les échappements `%'`/`%"`/`%(`/`%)`/`%%`
+    // exigés par SAS pour les quotes/parenthèses non appariées.
+    ("nrquote", FUNC, |s, c, i, o| {
+        s.consume_equote(c, i, "nrquote", true, o)
+    }),
+    ("quote", FUNC, |s, c, i, o| {
+        s.consume_equote(c, i, "quote", false, o)
     }),
     // Fonctions chaîne macro simples et leurs variantes `%q*` (le booléen
     // vaut « résultat masqué », vrai pour les `%q*`).
@@ -312,8 +328,14 @@ impl MacroEngine {
         // équilibrées pour ne pas terminer le `%let` prématurément.
         let val_start = j;
         while j < chars.len() && chars[j] != ';' {
-            if chars[j] == '%'
-                && (Self::matches_kw_paren(chars, j, "str")
+            if chars[j] == '%' {
+                // M41.1 — `%quote`/`%nrquote` : lecture consciente des
+                // échappements `%(`/`%)` (une parenthèse échappée ne compte
+                // pas dans l'équilibrage de la région à sauter).
+                let pct_escapes = Self::matches_kw_paren(chars, j, "quote")
+                    || Self::matches_kw_paren(chars, j, "nrquote");
+                if pct_escapes
+                    || Self::matches_kw_paren(chars, j, "str")
                     || Self::matches_kw_paren(chars, j, "nrstr")
                     || Self::matches_kw_paren(chars, j, "bquote")
                     || Self::matches_kw_paren(chars, j, "nrbquote")
@@ -321,16 +343,22 @@ impl MacroEngine {
                     || Self::matches_kw_paren(chars, j, "cmpres")
                     || Self::matches_kw_paren(chars, j, "qcmpres")
                     || Self::matches_kw_paren(chars, j, "unquote")
-                    || Self::matches_kw_paren(chars, j, "sysevalf"))
-            {
-                // Avancer jusqu'à la `(` puis sauter la région équilibrée.
-                let mut p = j + 1;
-                while matches!(chars.get(p), Some(ch) if *ch != '(') {
-                    p += 1;
-                }
-                if let Some((_, after)) = Self::read_balanced_parens(chars, p) {
-                    j = after;
-                    continue;
+                    || Self::matches_kw_paren(chars, j, "sysevalf")
+                {
+                    // Avancer jusqu'à la `(` puis sauter la région équilibrée.
+                    let mut p = j + 1;
+                    while matches!(chars.get(p), Some(ch) if *ch != '(') {
+                        p += 1;
+                    }
+                    let region = if pct_escapes {
+                        Self::read_balanced_parens_pct(chars, p)
+                    } else {
+                        Self::read_balanced_parens(chars, p)
+                    };
+                    if let Some((_, after)) = region {
+                        j = after;
+                        continue;
+                    }
                 }
             }
             j += 1;

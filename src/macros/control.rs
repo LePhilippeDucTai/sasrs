@@ -357,26 +357,31 @@ impl MacroEngine {}
 
 impl MacroEngine {
     /// Reconnaît et consomme proprement les statements macro NON pris en charge
-    /// dans ce build (interactif/OS) : `%syscall`, `%sysexec`, `%window`,
-    /// `%display`, `%sysmacdelete`, `%sysmstoreclear`, `%syslput`, `%sysrput`.
-    /// Chacun émet une NOTE « not supported in this build » et est consommé
-    /// jusqu'à son `;` terminal (en respectant les parenthèses équilibrées du
-    /// premier `(...)` éventuel, pour ne pas couper sur un `;` interne). Rend
-    /// l'index après le `;`, ou `None` si aucun de ces mots-clés ne matche.
+    /// dans ce build (interactif/OS) : `%sysexec`, `%window`, `%display`,
+    /// `%sysmstoreclear`, `%syslput`, `%sysrput`. Chacun émet une NOTE
+    /// « not supported in this build » et est consommé jusqu'à son `;`
+    /// terminal (en respectant les parenthèses équilibrées du premier `(...)`
+    /// éventuel, pour ne pas couper sur un `;` interne). Rend l'index après le
+    /// `;`, ou `None` si aucun de ces mots-clés ne matche.
+    ///
+    /// M41.3 — `%syscall` et `%sysmacdelete` sont sortis de cette table : ils
+    /// ont désormais leurs propres consommateurs dédiés (`consume_syscall`,
+    /// `consume_sysmacdelete`) branchés directement dans `DISPATCH`
+    /// (`expand.rs`). `consume_syscall` réutilise [`Self::SYSCALL_LABEL`] pour
+    /// garder un texte de NOTE identique sur les routines CALL non
+    /// implémentées (tout sauf `SORTN`/`SORTC`).
     pub(super) fn consume_unsupported_stmt(
         &mut self,
         chars: &[char],
         i: usize,
         out: &mut String,
     ) -> Option<usize> {
-        // (mot-clé, libellé affiché). `%sysexec` et `%syscall` acceptent une
-        // forme à parenthèses ou nue ; les autres sont des statements à `;`.
+        // (mot-clé, libellé affiché). `%sysexec` accepte une forme à
+        // parenthèses ou nue ; les autres sont des statements à `;`.
         const KW: &[(&str, &str)] = &[
             ("sysexec", "%SYSEXEC (OS command execution)"),
-            ("syscall", "%SYSCALL (CALL routine invocation)"),
             ("window", "%WINDOW (interactive window definition)"),
             ("display", "%DISPLAY (interactive window display)"),
-            ("sysmacdelete", "%SYSMACDELETE"),
             ("sysmstoreclear", "%SYSMSTORECLEAR"),
             ("syslput", "%SYSLPUT (remote macro variable)"),
             ("sysrput", "%SYSRPUT (remote macro variable)"),
@@ -407,6 +412,140 @@ impl MacroEngine {
         out.push_str(&format!(
             "/* NOTE: {label} is not supported in this build; statement ignored */"
         ));
+        Some(Self::skip_trailing_newline(chars, j, out))
+    }
+}
+
+// ── M41.3 : %syscall (SORTN/SORTC) + %sysmacdelete ────────────────────────────
+
+impl MacroEngine {
+    /// Libellé affiché pour une routine `%syscall` non implémentée — même
+    /// texte que l'ancienne entrée générique de [`Self::consume_unsupported_stmt`]
+    /// pour préserver l'oracle `syscall_noted_and_consumed`.
+    const SYSCALL_LABEL: &'static str = "%SYSCALL (CALL routine invocation)";
+
+    /// Consomme `%syscall routine(v1, v2, ...);` : seules `SORTN` et `SORTC`
+    /// (insensibles casse) sont implémentées — ce sont les deux seules
+    /// routines CALL documentées comme opérant uniquement sur du texte de
+    /// variables macro, sans PDV ni étape DATA. Toute autre routine retombe
+    /// sur la NOTE « not supported » historique (texte inchangé). Rend
+    /// l'index après le `;`, ou `None` si la syntaxe (nom de routine puis
+    /// parenthèses) ne tient pas.
+    pub(super) fn consume_syscall(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + "syscall".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        let (routine, after_routine) = Self::read_name(chars, j)?;
+        j = after_routine;
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after_parens) = Self::read_balanced_parens(chars, j)?;
+        j = after_parens;
+        // Consommer jusqu'au `;` terminal (comme les autres statements).
+        while j < chars.len() && chars[j] != ';' {
+            j += 1;
+        }
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+
+        // Les arguments sont des NOMS de variable macro (pas de `&`) : on ne
+        // résout RIEN, on découpe juste sur les `,` de niveau supérieur.
+        let vars: Vec<String> = Self::split_top_level_commas(&inner)
+            .iter()
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect();
+
+        match routine.to_uppercase().as_str() {
+            "SORTN" => self.syscall_sortn(&vars),
+            "SORTC" => self.syscall_sortc(&vars),
+            _ => {
+                out.push_str(&format!(
+                    "/* NOTE: {} is not supported in this build; statement ignored */",
+                    Self::SYSCALL_LABEL
+                ));
+            }
+        }
+        Some(Self::skip_trailing_newline(chars, j, out))
+    }
+
+    /// `CALL SORTN(v1, ..., vn)` — trie ASCENDANT les valeurs NUMÉRIQUES des
+    /// variables macro nommées et les réécrit en place (plus petite dans
+    /// `v1`, etc.). Une variable indéfinie ou dont le texte ne parse pas en
+    /// `f64` vaut `0.0` (repli indulgent, cohérent avec le reste du projet —
+    /// pas d'erreur bloquante). L'écriture réutilise la sémantique de
+    /// `%let` ([`Self::assign`]) et le formatage numérique de
+    /// [`crate::value::format_best`] (même rendu que `%sysfunc`/`%eval`, sans
+    /// zéro ni point décimal superflu).
+    pub(super) fn syscall_sortn(&mut self, vars: &[String]) {
+        let mut values: Vec<f64> = vars
+            .iter()
+            .map(|v| {
+                self.get_symbol(v)
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .unwrap_or(0.0)
+            })
+            .collect();
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        for (name, value) in vars.iter().zip(values.iter()) {
+            self.assign(name, crate::value::format_best(*value, 12));
+        }
+    }
+
+    /// `CALL SORTC(v1, ..., vn)` — même principe pour des valeurs TEXTE,
+    /// triées avec la MÊME collation que le reste du projet pour les
+    /// chaînes de caractères : comparaison lexicale des chaînes rognées à
+    /// droite, comme `Value::sas_cmp` pour `Value::Char`. Une variable
+    /// indéfinie vaut la chaîne vide.
+    pub(super) fn syscall_sortc(&mut self, vars: &[String]) {
+        let mut values: Vec<String> = vars
+            .iter()
+            .map(|v| self.get_symbol(v).unwrap_or_default())
+            .collect();
+        values.sort_by(|a, b| a.trim_end().cmp(b.trim_end()));
+        for (name, value) in vars.iter().zip(values.iter()) {
+            self.assign(name, value.clone());
+        }
+    }
+
+    /// Consomme `%sysmacdelete name;` : supprime la définition compilée de
+    /// la macro `name` de `self.macros`. Silencieux si elle n'existait pas
+    /// déjà (convention indulgente du projet — pas d'ERROR bloquante).
+    /// N'émet RIEN dans le flux : une invocation `%name` ultérieure ne
+    /// trouve plus la macro et est laissée VERBATIM par `process_impl`,
+    /// exactement comme pour toute macro jamais définie (cf.
+    /// `unknown_macro_keyword_left_verbatim` dans `tests/window.rs`). Rend
+    /// l'index après le `;`, ou `None` si le nom est absent.
+    pub(super) fn consume_sysmacdelete(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + "sysmacdelete".len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        let (name, after_name) = Self::read_name(chars, j)?;
+        j = after_name;
+        while j < chars.len() && chars[j] != ';' {
+            j += 1;
+        }
+        if chars.get(j) == Some(&';') {
+            j += 1;
+        }
+        self.macros.remove(&name.to_uppercase());
         Some(Self::skip_trailing_newline(chars, j, out))
     }
 }

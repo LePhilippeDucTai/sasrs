@@ -22,12 +22,35 @@
 //! | EEXCL    | char | `Y`/`N` — borne haute exclusive (`-<`)                          |
 //! | HLO      | char | lettres parmi `L`(OW)/`H`(IGH)/`O`(THER) ; vide sinon           |
 //!
-//! Colonnes IMPLÉMENTÉES uniquement (le sur-ensemble réel SAS ajoute MIN/MAX/
-//! DEFAULT/LENGTH/FUZZ/PREFIX/MULT/FILL/NOEDIT/DECSEP/DIG3SEP/… — hors
-//! périmètre M39.2, repris en partie par M43.1 pour les largeurs
-//! MIN=/MAX=/DEFAULT=). FMTNAME/START/END/LABEL/TYPE sont considérées
-//! obligatoires en lecture (`CNTLIN=`) ; SEXCL/EEXCL/HLO sont optionnelles
-//! (absentes → borne inclusive, pas de marqueur LOW/HIGH/OTHER).
+//! Colonnes IMPLÉMENTÉES uniquement (le sur-ensemble réel SAS ajoute
+//! LENGTH/PREFIX/MULT/FILL/NOEDIT/DECSEP/DIG3SEP/… — toujours hors périmètre).
+//! FMTNAME/START/END/LABEL/TYPE sont considérées obligatoires en lecture
+//! (`CNTLIN=`) ; SEXCL/EEXCL/HLO sont optionnelles (absentes → borne
+//! inclusive, pas de marqueur LOW/HIGH/OTHER).
+//!
+//! ## M43.1 — MIN/MAX/DEFAULT/FUZZ (VALUE uniquement)
+//!
+//! Quatre colonnes NUMÉRIQUES supplémentaires (comme en SAS réel — toutes
+//! les autres colonnes de ce module sont caractère, mais celles-ci portent
+//! des largeurs/une tolérance, donc `f64`/missing `.`, pas de texte) portent
+//! les options FORMAT-LEVEL `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=` du `VALUE`
+//! d'origine (voir `formats::userdef::UserFormat`). Une valeur non posée
+//! s'écrit manquante (`.`).
+//!
+//! **Émission conditionnelle (CNTLOUT=)** : ces 4 colonnes ne sont ajoutées
+//! au dataset de sortie QUE si au moins un format VALUE du catalogue posé en
+//! utilise une — sinon elles sont omises entièrement, pour que la sortie
+//! `CNTLOUT=` d'un catalogue qui n'utilise aucune de ces options (l'immense
+//! majorité, y compris toutes les fixtures d'avant M43.1) reste
+//! OCTET-IDENTIQUE à avant M43.1 (même nombre de colonnes, même NOTE
+//! "N variables"). En lecture (`CNTLIN=`), elles sont optionnelles comme
+//! SEXCL/EEXCL/HLO : absentes → `None` pour les quatre, sur tous les formats.
+//!
+//! Non couvert : LENGTH (longueur de STOCKAGE, distincte de DEFAULT — sa
+//! sémantique SAS exacte n'est pas assez sûre pour l'implémenter sans
+//! deviner ; laissé hors périmètre, choix documenté plutôt qu'oubli) ;
+//! MIN/MAX/DEFAULT/FUZZ sur INVALUE (M43.1 priorise VALUE ; même limitation
+//! que PICTURE ci-dessous — pas de colonne dédiée pour un INVALUE).
 //!
 //! ## INVALUE : encodage du résultat dans LABEL
 //!
@@ -64,7 +87,7 @@ use super::*;
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
 use crate::formats::FormatCatalog;
-use crate::procs::common::{char_var_meta, decode_column, open_resolved};
+use crate::procs::common::{char_var_meta, decode_column, num_var_meta, open_resolved};
 use crate::value::Value;
 use polars::prelude::*;
 use std::collections::HashMap;
@@ -84,6 +107,13 @@ struct CntlRow {
     sexcl: bool,
     eexcl: bool,
     hlo: String,
+    /// M43.1 — `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=`, FORMAT-LEVEL (same value on
+    /// every row of a given VALUE format), `None` = SAS missing. Always
+    /// `None` for INVALUE rows (out of scope, see module doc).
+    min: Option<f64>,
+    max: Option<f64>,
+    default: Option<f64>,
+    fuzz: Option<f64>,
 }
 
 // ── CNTLOUT= : catalogue → dataset ──────────────────────────────────────────
@@ -136,6 +166,10 @@ fn range_row(
         sexcl: from_excl,
         eexcl: to_excl,
         hlo,
+        min: None,
+        max: None,
+        default: None,
+        fuzz: None,
     }
 }
 
@@ -149,6 +183,10 @@ fn other_row(fmtname: &str, ty: char, label: &str) -> CntlRow {
         sexcl: false,
         eexcl: false,
         hlo: "O".to_string(),
+        min: None,
+        max: None,
+        default: None,
+        fuzz: None,
     }
 }
 
@@ -216,6 +254,15 @@ fn build_rows(cat: &FormatCatalog) -> Vec<CntlRow> {
             .collect();
         if let Some(other) = &uf.other {
             rows.push(other_row(fmtname, ty, other));
+        }
+        // M43.1 — MIN=/MAX=/DEFAULT=/FUZZ= are FORMAT-LEVEL: stamp the same
+        // value onto every row of this format's group (missing on all rows
+        // when the corresponding option was never set).
+        for row in &mut rows {
+            row.min = uf.min.map(|w| w as f64);
+            row.max = uf.max.map(|w| w as f64);
+            row.default = uf.default.map(|w| w as f64);
+            row.fuzz = uf.fuzz;
         }
         groups.push((fmtname.to_string(), ty, rows));
     }
@@ -298,7 +345,7 @@ pub(super) fn write_cntlout(
         .collect();
     let hlos: Vec<Option<String>> = rows.iter().map(|r| Some(r.hlo.clone())).collect();
 
-    let columns: Vec<Column> = vec![
+    let mut columns: Vec<Column> = vec![
         Series::new("FMTNAME".into(), fmtnames).into(),
         Series::new("START".into(), starts).into(),
         Series::new("END".into(), ends).into(),
@@ -308,7 +355,7 @@ pub(super) fn write_cntlout(
         Series::new("EEXCL".into(), eexcls).into(),
         Series::new("HLO".into(), hlos).into(),
     ];
-    let out_vars = vec![
+    let mut out_vars = vec![
         char_var_meta("FMTNAME", fmtname_len),
         char_var_meta("START", text_len),
         char_var_meta("END", text_len),
@@ -318,6 +365,29 @@ pub(super) fn write_cntlout(
         char_var_meta("EEXCL", 1),
         char_var_meta("HLO", hlo_len),
     ];
+
+    // M43.1 — MIN/MAX/DEFAULT/FUZZ: only added when at least one VALUE format
+    // in `rows` actually uses one of them, so a catalog that uses none of
+    // these options (every fixture before M43.1) writes the EXACT SAME 8
+    // columns as before — see module doc.
+    let uses_width_or_fuzz = rows
+        .iter()
+        .any(|r| r.min.is_some() || r.max.is_some() || r.default.is_some() || r.fuzz.is_some());
+    if uses_width_or_fuzz {
+        let mins: Vec<Option<f64>> = rows.iter().map(|r| r.min).collect();
+        let maxs: Vec<Option<f64>> = rows.iter().map(|r| r.max).collect();
+        let defaults: Vec<Option<f64>> = rows.iter().map(|r| r.default).collect();
+        let fuzzes: Vec<Option<f64>> = rows.iter().map(|r| r.fuzz).collect();
+        columns.push(Series::new("MIN".into(), mins).into());
+        columns.push(Series::new("MAX".into(), maxs).into());
+        columns.push(Series::new("DEFAULT".into(), defaults).into());
+        columns.push(Series::new("FUZZ".into(), fuzzes).into());
+        out_vars.push(num_var_meta("MIN"));
+        out_vars.push(num_var_meta("MAX"));
+        out_vars.push(num_var_meta("DEFAULT"));
+        out_vars.push(num_var_meta("FUZZ"));
+    }
+
     let df = DataFrame::new(columns)?;
     let out_ds = SasDataset { df, vars: out_vars };
 
@@ -386,6 +456,12 @@ pub(super) fn read_cntlin(cntlin_ref: &DatasetRef, session: &mut Session) -> Res
     let sexcls = col("SEXCL").map(|i| decode_column(&ds, i)).transpose()?;
     let eexcls = col("EEXCL").map(|i| decode_column(&ds, i)).transpose()?;
     let hlos = col("HLO").map(|i| decode_column(&ds, i)).transpose()?;
+    // M43.1 — optional numeric columns, same tolerant "absent → None"
+    // convention as SEXCL/EEXCL/HLO above.
+    let mins = col("MIN").map(|i| decode_column(&ds, i)).transpose()?;
+    let maxs = col("MAX").map(|i| decode_column(&ds, i)).transpose()?;
+    let defaults = col("DEFAULT").map(|i| decode_column(&ds, i)).transpose()?;
+    let fuzzes = col("FUZZ").map(|i| decode_column(&ds, i)).transpose()?;
 
     let get_str = |col: &Option<Vec<Value>>, i: usize| -> String {
         match col {
@@ -394,6 +470,15 @@ pub(super) fn read_cntlin(cntlin_ref: &DatasetRef, session: &mut Session) -> Res
                 _ => String::new(),
             },
             None => String::new(),
+        }
+    };
+    let get_num = |col: &Option<Vec<Value>>, i: usize| -> Option<f64> {
+        match col {
+            Some(v) => match &v[i] {
+                Value::Num(n) => Some(*n),
+                _ => None,
+            },
+            None => None,
         }
     };
 
@@ -425,6 +510,13 @@ pub(super) fn read_cntlin(cntlin_ref: &DatasetRef, session: &mut Session) -> Res
         let is_other = hlo.contains('O');
         let is_low = hlo.contains('L');
         let is_high = hlo.contains('H');
+        // M43.1 — FORMAT-LEVEL, so the same on every row of this fmtname;
+        // reading it fresh on each row and re-assigning below is harmless
+        // (CNTLOUT= always writes it identically on every row of a format).
+        let min_v = get_num(&mins, i);
+        let max_v = get_num(&maxs, i);
+        let default_v = get_num(&defaults, i);
+        let fuzz_v = get_num(&fuzzes, i);
 
         match ty {
             'N' | 'C' => {
@@ -439,10 +531,17 @@ pub(super) fn read_cntlin(cntlin_ref: &DatasetRef, session: &mut Session) -> Res
                     is_char,
                     ranges: Vec::new(),
                     other: None,
+                    ..Default::default()
                 });
                 if is_new {
                     value_order.push(key.clone());
                 }
+                entry.min = min_v.map(|v| v.max(0.0).round() as u32).or(entry.min);
+                entry.max = max_v.map(|v| v.max(0.0).round() as u32).or(entry.max);
+                entry.default = default_v
+                    .map(|v| v.max(0.0).round() as u32)
+                    .or(entry.default);
+                entry.fuzz = fuzz_v.or(entry.fuzz);
                 if is_other {
                     entry.other = Some(label);
                 } else {

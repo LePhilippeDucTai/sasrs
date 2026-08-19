@@ -23,7 +23,10 @@
 //!   Proportions", DF = k-1).
 //! - **FISHER** / **EXACT** : test exact de Fisher pour les tables 2×2
 //!   (probabilités hypergéométriques exactes : F, left/right one-sided, P,
-//!   two-sided). r×c (> 2×2) → note de non-support (différé, sans panic).
+//!   two-sided). r×c (> 2×2, M44.1) : test de Freeman-Halton par énumération
+//!   exacte complète des tables à marges fixées (garde combinatoire à
+//!   500 000 tables) ; au-delà, fallback Monte-Carlo déterministe (LCG à
+//!   graine fixe, 10 000 tirages, estimation étiquetée dans le listing).
 //! - **MEASURES** / **RELRISK** : odds ratio + risques relatifs cohorte
 //!   (Col1/Col2) avec IC 95 % Wald sur l'échelle log, pour les tables 2×2.
 //!   Cellules nulles → estimation manquante ("."), jamais de division par 0.
@@ -60,7 +63,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::num_var_meta;
-use crate::procs::common::{self, chisq_sf, decode_column, ln_choose, probnorm};
+use crate::procs::common::{self, chisq_sf, decode_column, ln_choose, ln_factorial, probnorm};
 use crate::session::Session;
 use crate::token::TokenKind;
 use crate::value::{Value, VarType, format_best};

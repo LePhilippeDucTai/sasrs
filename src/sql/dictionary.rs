@@ -28,14 +28,16 @@ use polars::prelude::*;
 
 /// Vrai si la référence `libref.name` désigne une dictionary table (à
 /// matérialiser à la volée) plutôt qu'un dataset stocké. Reconnaît :
-/// - libref `DICTIONARY` + membre `TABLES`/`COLUMNS`/`MACROS` ;
+/// - libref `DICTIONARY` + membre `TABLES`/`MEMBERS`/`COLUMNS`/`MACROS`
+///   (`MEMBERS` est un alias de `TABLES` : ce projet se limite aux datasets,
+///   pas de catalogues, donc pas de colonne `ENGINE` supplémentaire) ;
 /// - libref `SASHELP` + vue `VTABLE`/`VCOLUMN`/`VMACRO` (+ alias `VMEMBER`).
 pub(crate) fn dictionary_kind(libref: &str, name: &str) -> Option<DictKind> {
     let lib = libref.to_uppercase();
     let mem = name.to_uppercase();
     match lib.as_str() {
         "DICTIONARY" => match mem.as_str() {
-            "TABLES" => Some(DictKind::Tables),
+            "TABLES" | "MEMBERS" => Some(DictKind::Tables),
             "COLUMNS" => Some(DictKind::Columns),
             "MACROS" => Some(DictKind::Macros),
             _ => None,

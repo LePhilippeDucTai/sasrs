@@ -380,6 +380,85 @@ fn like_compared_with_equals() {
     assert_eq!(sorted_strs(&like, "w"), sorted_strs(&eq, "w"));
 }
 
+// ---- M42.2 : CONTAINS / SOUNDS LIKE -----------------------------------
+
+#[test]
+fn contains_predicate_matches_substring() {
+    let mut s = make_session();
+    write_words(&mut s);
+    let out = run("select w from w where w contains 'b';", &mut s);
+    // Contient 'b' (sensible à la casse, comme INDEX) : abc, abx, xbc, abcd.
+    // Pas axc, a_c (pas de 'b'), pas ABC ('B' majuscule ≠ 'b').
+    assert_eq!(sorted_strs(&out, "w"), vec!["abc", "abcd", "abx", "xbc"]);
+}
+
+#[test]
+fn not_contains_predicate_excludes_matches() {
+    let mut s = make_session();
+    write_words(&mut s);
+    let out = run("select w from w where w not contains 'b';", &mut s);
+    assert_eq!(sorted_strs(&out, "w"), vec!["ABC", "a_c", "axc"]);
+}
+
+#[test]
+fn contains_empty_pattern_never_matches() {
+    // Oracle/SAS : CONTAINS '' ≡ INDEX(expr, '') > 0 ≡ 0 > 0 ≡ faux (INDEX
+    // ne trouve jamais une sous-chaîne vide).
+    let mut s = make_session();
+    write_words(&mut s);
+    let out = run("select w from w where w contains '';", &mut s);
+    assert_eq!(out.height(), 0);
+}
+
+#[test]
+fn contains_missing_never_matches() {
+    let mut s = make_session();
+    let df = df!["w" => [Some("abc"), None, Some("axc")]].unwrap();
+    write_table(&mut s, "W", df, vec![chr("w", 8)]);
+    let out = run("select w from w where w contains 'a';", &mut s);
+    assert_eq!(out.height(), 2);
+}
+
+#[test]
+fn sounds_like_matches_soundex_code() {
+    let mut s = make_session();
+    let df = df!["name" => ["Robert", "Rupert", "Rubin", "Ashcraft"]].unwrap();
+    write_table(&mut s, "T", df, vec![chr("name", 12)]);
+    let out = run(
+        "select name from t where name sounds like 'Robert';",
+        &mut s,
+    );
+    // "Robert" et "Rupert" partagent le code Soundex R163 ; "Rubin" (R150)
+    // et "Ashcraft" (A261) n'y matchent pas.
+    assert_eq!(sorted_strs(&out, "name"), vec!["Robert", "Rupert"]);
+}
+
+#[test]
+fn not_sounds_like_excludes_matches() {
+    let mut s = make_session();
+    let df = df!["name" => ["Robert", "Rupert", "Rubin", "Ashcraft"]].unwrap();
+    write_table(&mut s, "T", df, vec![chr("name", 12)]);
+    let out = run(
+        "select name from t where name not sounds like 'Robert';",
+        &mut s,
+    );
+    assert_eq!(sorted_strs(&out, "name"), vec!["Ashcraft", "Rubin"]);
+}
+
+#[test]
+fn soundex_worked_examples() {
+    // Exemples de référence standard (Knuth / Soundex classique) — voir la
+    // doc-comment de `soundex` dans `sql/plan/expr.rs`.
+    assert_eq!(soundex("Robert"), "R163");
+    assert_eq!(soundex("Rupert"), "R163");
+    assert_eq!(soundex("Ashcraft"), "A261");
+    assert_eq!(soundex("Tymczak"), "T522");
+    assert_eq!(soundex("Pfister"), "P123");
+    // Entrée vide (ou sans aucune lettre) → "0000" (cas limite documenté).
+    assert_eq!(soundex(""), "0000");
+    assert_eq!(soundex("123"), "0000");
+}
+
 #[test]
 fn having_filters_groups() {
     let mut s = make_session();

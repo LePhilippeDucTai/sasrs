@@ -33,6 +33,7 @@ fn execute_registers_format_in_catalog() {
                     },
                 ],
                 other: Some("Unknown".to_string()),
+                ..Default::default()
             },
         )],
         invalues: vec![],
@@ -375,4 +376,75 @@ fn execute_picture_via_format_statement() {
     );
     assert_eq!(out.exit_code, 0, "log: {}", out.log);
     assert!(out.listing.contains("12.34"), "listing: {}", out.listing);
+}
+
+// ── M43.1 — MIN=/MAX=/DEFAULT=/FUZZ= end-to-end registration ────────────────
+
+#[test]
+fn execute_value_width_options_registered_in_catalog() {
+    // Full parse+execute through `proc format; value ... (min= max= default=
+    // fuzz=) ...; run;` — the resulting catalog entry's UserFormat must carry
+    // the same four values that were parsed.
+    let session = run_format_src(
+        "proc format; \
+         value agef (min=3 max=10 default=6 fuzz=0.5) \
+         low-<21='Minor' 21-high='Adult'; \
+         run;",
+    );
+    let (_, uf) = session
+        .format_catalog
+        .user_formats()
+        .find(|(k, _)| *k == "AGEF")
+        .expect("AGEF registered in catalog");
+    assert_eq!(uf.min, Some(3));
+    assert_eq!(uf.max, Some(10));
+    assert_eq!(uf.default, Some(6));
+    assert_eq!(uf.fuzz, Some(0.5));
+}
+
+#[test]
+fn execute_value_no_width_options_leaves_fields_none() {
+    // Regression: a VALUE with none of MIN=/MAX=/DEFAULT=/FUZZ= still
+    // registers with all four fields `None` (pre-M43.1 byte-identical
+    // behavior), matching the "nothing new set" case in parse.rs.
+    let session = run_format_src("proc format; value f 1='One'; run;");
+    let (_, uf) = session
+        .format_catalog
+        .user_formats()
+        .find(|(k, _)| *k == "F")
+        .expect("F registered in catalog");
+    assert_eq!(uf.min, None);
+    assert_eq!(uf.max, None);
+    assert_eq!(uf.default, None);
+    assert_eq!(uf.fuzz, None);
+}
+
+#[test]
+fn execute_value_default_width_applied_via_format_catalog() {
+    use crate::formats::FormatSpec;
+    use crate::value::Value;
+
+    // DEFAULT=6, no explicit width at the point of use → the catalog must
+    // apply the format-level DEFAULT= as the output width: label "X" (len 1)
+    // right-justified to width 6.
+    let session = run_format_src("proc format; value f (default=6) 1='X'; run;");
+    let spec = FormatSpec::parse("F.").unwrap();
+    assert_eq!(
+        session.format_catalog.format(&Value::Num(1.0), &spec),
+        "     X"
+    );
+}
+
+#[test]
+fn execute_value_min_clamps_computed_width_via_format_catalog() {
+    use crate::formats::FormatSpec;
+    use crate::value::Value;
+
+    // No DEFAULT=, no explicit width → computed width = len("X") = 1,
+    // clamped up to MIN=8.
+    let session = run_format_src("proc format; value f (min=8) 1='X'; run;");
+    let spec = FormatSpec::parse("F.").unwrap();
+    let out = session.format_catalog.format(&Value::Num(1.0), &spec);
+    assert_eq!(out.len(), 8);
+    assert!(out.ends_with('X'), "out: {out:?}");
 }

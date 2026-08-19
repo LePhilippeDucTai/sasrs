@@ -228,6 +228,76 @@ fn like_pattern() {
 }
 
 #[test]
+fn not_like_pattern() {
+    let stmt = one("select * from a where name not like 'A%';");
+    let SqlStmt::Select(sel) = stmt else { panic!() };
+    assert_eq!(
+        sel.where_,
+        Some(SqlExpr::Like {
+            expr: Box::new(var("name")),
+            pattern: "A%".to_string(),
+            negated: true,
+        })
+    );
+}
+
+#[test]
+fn contains_predicate() {
+    let stmt = one("select * from a where name contains 'oh';");
+    let SqlStmt::Select(sel) = stmt else { panic!() };
+    assert_eq!(
+        sel.where_,
+        Some(SqlExpr::Contains {
+            expr: Box::new(var("name")),
+            pattern: "oh".to_string(),
+            negated: false,
+        })
+    );
+}
+
+#[test]
+fn not_contains_predicate() {
+    let stmt = one("select * from a where name not contains 'oh';");
+    let SqlStmt::Select(sel) = stmt else { panic!() };
+    assert_eq!(
+        sel.where_,
+        Some(SqlExpr::Contains {
+            expr: Box::new(var("name")),
+            pattern: "oh".to_string(),
+            negated: true,
+        })
+    );
+}
+
+#[test]
+fn sounds_like_predicate() {
+    let stmt = one("select * from a where name sounds like 'Robert';");
+    let SqlStmt::Select(sel) = stmt else { panic!() };
+    assert_eq!(
+        sel.where_,
+        Some(SqlExpr::SoundsLike {
+            expr: Box::new(var("name")),
+            text: "Robert".to_string(),
+            negated: false,
+        })
+    );
+}
+
+#[test]
+fn not_sounds_like_predicate() {
+    let stmt = one("select * from a where name not sounds like 'Robert';");
+    let SqlStmt::Select(sel) = stmt else { panic!() };
+    assert_eq!(
+        sel.where_,
+        Some(SqlExpr::SoundsLike {
+            expr: Box::new(var("name")),
+            text: "Robert".to_string(),
+            negated: true,
+        })
+    );
+}
+
+#[test]
 fn calculated_usage() {
     let stmt = one("select x + y as total from a where calculated total > 5;");
     let SqlStmt::Select(sel) = stmt else { panic!() };

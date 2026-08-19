@@ -25,8 +25,9 @@ fn syscall_noted_and_consumed() {
 
 #[test]
 fn misc_unsupported_keywords_consumed() {
+    // M41.3 — `%sysmacdelete` est sorti de cette liste : il est maintenant
+    // implémenté (voir `tests/syscall.rs`) et n'émet plus de NOTE.
     for (src, tag) in [
-        ("%sysmacdelete m;", "%SYSMACDELETE"),
         ("%sysmstoreclear;", "%SYSMSTORECLEAR"),
         ("%syslput x=1;", "%SYSLPUT"),
         ("%sysrput x=1;", "%SYSRPUT"),

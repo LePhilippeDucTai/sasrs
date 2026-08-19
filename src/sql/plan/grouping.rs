@@ -120,6 +120,8 @@ pub(super) fn collect_aggregates(e: &SqlExpr) -> Vec<&SqlExpr> {
             }
             SqlExpr::IsNull { expr, .. } => rec(expr, out),
             SqlExpr::Like { expr, .. } => rec(expr, out),
+            SqlExpr::Contains { expr, .. } => rec(expr, out),
+            SqlExpr::SoundsLike { expr, .. } => rec(expr, out),
             _ => {}
         }
     }
@@ -256,6 +258,8 @@ pub(super) fn item_has_aggregate(e: &SqlExpr) -> bool {
         } => item_has_aggregate(expr) || item_has_aggregate(low) || item_has_aggregate(high),
         SqlExpr::IsNull { expr, .. } => item_has_aggregate(expr),
         SqlExpr::Like { expr, .. } => item_has_aggregate(expr),
+        SqlExpr::Contains { expr, .. } => item_has_aggregate(expr),
+        SqlExpr::SoundsLike { expr, .. } => item_has_aggregate(expr),
         SqlExpr::Calculated(_)
         | SqlExpr::Base(_)
         | SqlExpr::Star
@@ -306,6 +310,8 @@ pub(super) fn references_bare_column(e: &SqlExpr) -> bool {
         }
         SqlExpr::IsNull { expr, .. } => references_bare_column(expr),
         SqlExpr::Like { expr, .. } => references_bare_column(expr),
+        SqlExpr::Contains { expr, .. } => references_bare_column(expr),
+        SqlExpr::SoundsLike { expr, .. } => references_bare_column(expr),
         SqlExpr::Calculated(_) => false,
         SqlExpr::Star | SqlExpr::QualifiedStar(_) => false,
         // Résolues en littéraux avant l'abaissement.

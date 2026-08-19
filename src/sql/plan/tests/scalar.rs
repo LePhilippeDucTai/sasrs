@@ -215,6 +215,33 @@ fn dictionary_tables_lists_datasets() {
 }
 
 #[test]
+fn dictionary_members_alias_of_tables() {
+    let mut s = make_session();
+    write_people(&mut s); // WORK.T
+    write_table(
+        &mut s,
+        "U",
+        df!["a" => [1.0_f64, 2.0]].unwrap(),
+        vec![num("a")],
+    );
+    // dictionary.members doit produire exactement les mêmes données que
+    // DICTIONARY.TABLES.
+    let a = run(
+        "select libname, memname, nobs, nvar from dictionary.members \
+         order by memname;",
+        &mut s,
+    );
+    let b = run(
+        "select libname, memname, nobs, nvar from dictionary.tables \
+         order by memname;",
+        &mut s,
+    );
+    assert_eq!(strs(&a, "memname"), strs(&b, "memname"));
+    assert_eq!(strs(&a, "libname"), strs(&b, "libname"));
+    assert_eq!(strs(&a, "memname"), vec!["T", "U"]);
+}
+
+#[test]
 fn dictionary_columns_lists_variables() {
     let mut s = make_session();
     write_people(&mut s); // name char(8), sex char(1), age num, height num

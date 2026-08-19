@@ -149,6 +149,22 @@ pub enum SqlExpr {
         pattern: String,
         negated: bool,
     },
+    /// `expr [NOT] CONTAINS 'sous-chaîne'` (M42.2) — vrai ssi la sous-chaîne
+    /// apparaît n'importe où dans `expr`. Équivalent Oracle :
+    /// `INDEX(expr, 'sous-chaîne') > 0`.
+    Contains {
+        expr: Box<SqlExpr>,
+        pattern: String,
+        negated: bool,
+    },
+    /// `expr [NOT] SOUNDS LIKE 'texte'` (M42.2) — vrai ssi `expr` et `texte`
+    /// ont le même code Soundex. Équivalent Oracle :
+    /// `SOUNDEX(expr) = SOUNDEX('texte')`.
+    SoundsLike {
+        expr: Box<SqlExpr>,
+        text: String,
+        negated: bool,
+    },
     Binary {
         op: crate::ast::BinaryOp,
         left: Box<SqlExpr>,

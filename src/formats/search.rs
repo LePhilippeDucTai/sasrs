@@ -133,6 +133,7 @@ mod tests {
                 label: label.to_string(),
             }],
             other: None,
+            ..Default::default()
         };
 
         let mut session = Session::new(None, std::env::temp_dir(), true).unwrap();

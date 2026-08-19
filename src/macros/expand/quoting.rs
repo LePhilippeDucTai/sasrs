@@ -192,4 +192,74 @@ impl MacroEngine {
         out.push_str(&Self::apply_quoting(self, &expanded, mask, false));
         Some(after)
     }
+
+    // ── M41.1 : %quote / %nrquote (quoting d'exécution « historique ») ──────
+
+    /// Pré-passe d'échappement de `%quote`/`%nrquote` : en SAS, les quotes et
+    /// parenthèses NON APPARIÉES de l'argument doivent être précédées d'un `%`
+    /// (`%'`, `%"`, `%(`, `%)`), et `%%` produit un `%` littéral. Chaque paire
+    /// est remplacée ICI, AVANT expansion, par la sentinelle du caractère
+    /// échappé : le caractère devient littéral/inerte (masqué) et le `%`
+    /// d'échappement disparaît — notamment `%%` ne redéclenchera pas le
+    /// processeur. Un `%` non suivi d'un échappable est laissé tel quel
+    /// (déclencheur normal, résolu par `process_impl`).
+    fn mask_percent_escapes(text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '%'
+                && let Some(&c) = chars.get(i + 1)
+                && matches!(c, '\'' | '"' | '(' | ')' | '%')
+            {
+                // `mask_char` couvre tous les échappables (table STR_MASKED
+                // + NRSTR_EXTRA pour `%`).
+                out.push(Self::mask_char(c).unwrap_or(c));
+                i += 2;
+                continue;
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Consomme `%quote ( text )` (si `!nr`) ou `%nrquote ( text )`. Même
+    /// contrat que `%bquote`/`%nrbquote` — résout D'ABORD les `&`/`%` du texte
+    /// puis masque le résultat (`MaskSet::Punct`, ou `MaskSet::All` pour la
+    /// forme NR qui masque en plus `&`/`%`) — à une différence près, fidèle à
+    /// SAS : les quotes/parenthèses non appariées doivent être ÉCHAPPÉES par un
+    /// `%` (cf. `mask_percent_escapes` ; la lecture de l'argument est elle
+    /// aussi consciente des échappements via `read_balanced_parens_pct`, pour
+    /// que `%quote(a%(b)` soit borné sur la bonne `)`).
+    ///
+    /// Écart assumé : sur une quote non appariée NON échappée, SAS 9.4 part en
+    /// erreur de scan (message non reproductible sans oracle) ; on masque
+    /// alors le caractère comme `%bquote` — lénifiant, mais byte-identique à
+    /// SAS sur toute entrée VALIDE. Rend l'index après la `)`.
+    pub(crate) fn consume_equote(
+        &mut self,
+        chars: &[char],
+        i: usize,
+        kw: &str,
+        nr: bool,
+        out: &mut String,
+    ) -> Option<usize> {
+        let mut j = i + 1 + kw.len();
+        while matches!(chars.get(j), Some(c) if c.is_whitespace()) {
+            j += 1;
+        }
+        if chars.get(j) != Some(&'(') {
+            return None;
+        }
+        let (inner, after) = Self::read_balanced_parens_pct(chars, j)?;
+        // 1. échappements `%x` → sentinelles (caractères littéraux, inertes) ;
+        // 2. expansion normale du reste (résout `&x`/`%m`) ;
+        // 3. masquage du résultat (les sentinelles déjà posées sont idempotentes).
+        let escaped = Self::mask_percent_escapes(&inner);
+        let expanded = self.process_impl(&escaped);
+        let mask = if nr { MaskSet::All } else { MaskSet::Punct };
+        out.push_str(&Self::apply_quoting(self, &expanded, mask, false));
+        Some(after)
+    }
 }
