@@ -77,24 +77,65 @@ de raisonnement de la session.
     Répéter les étapes 2→3→4→5→5b jusqu'à l'une des conditions d'arrêt suivantes :
     - toutes les cases du jalon courant sont cochées → passer à l'étape 6 ;
     - les limites de contexte ou d'utilisation approchent → terminer proprement (étape 5
-      pour l'en-cours) et rapporter à l'étape 7 ;
-    - un blocage nécessite une décision utilisateur → rapporter à l'étape 7.
+      pour l'en-cours) et rapporter à l'étape 8 ;
+    - un blocage nécessite une décision utilisateur → rapporter à l'étape 8.
     Ne jamais rompre la boucle silencieusement : toute sortie anticipée DOIT apparaître
-    dans le rapport de fin d'invocation (étape 7).
+    dans le rapport de fin d'invocation (étape 8).
 6. **Fin de jalon** : quand toutes les cases du jalon sont cochées, dérouler sa ligne
    "DoD"/fixtures (snapshots insta : générer, VÉRIFIER À LA MAIN la plausibilité SAS de
    chaque snapshot avant `cargo insta accept`, committer les .snap), mettre à jour
    "Jalon courant : **Mn+1**" en tête de PROGRESS.md, **vérifier que les tableaux de
    couverture de `README.md` sont à jour pour tout ce que le jalon a livré** (relire la
    section "Feature coverage" et corriger les écarts éventuels), committer, pousser.
-7. **Rapport de fin d'invocation** : 2–5 lignes — ce qui a été livré/committé (hashes),
-   où en est le jalon, ce que la PROCHAINE invocation prendra. Si un blocage nécessite
-   une décision utilisateur, le dire explicitement.
+7. **Republier le wrapper Python** (`python/`) — SI au moins un commit a été poussé
+   pendant cette invocation (étape 1, boucle 5b ou étape 6), reconstruire et republier
+   le binaire Windows avant le rapport final. Sinon, sauter cette étape.
+   a. `export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"` (cargo/rustup et uv/gh
+      ne sont pas sur le PATH par défaut sur cette machine).
+   b. Compiler croisé, copier sous le nom d'asset attendu, stripper :
+      ```
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+        cargo build --release --target x86_64-pc-windows-gnu -p sasrs
+      cp target/x86_64-pc-windows-gnu/release/sasrs.exe /tmp/sasrs-windows-x86_64.exe
+      x86_64-w64-mingw32-strip --strip-all /tmp/sasrs-windows-x86_64.exe
+      ```
+      (toolchain croisée déjà installée sur cette machine : target rustup
+      `x86_64-pc-windows-gnu` + paquet système `gcc-mingw-w64-x86-64` — ne pas les
+      réinstaller sauf erreur indiquant leur absence.)
+   c. Calculer l'empreinte : `sha256sum /tmp/sasrs-windows-x86_64.exe`.
+   d. **Mettre à jour les DEUX occurrences** de la constante SHA-256 dans
+      `python/src/sasrs_py/cli.py` (dict `_PLATFORM_ASSETS`, clés
+      `("Windows", "AMD64")` et `("Windows", "x86_64")`) avec cette nouvelle empreinte.
+      Étape obligatoire et non négociable : à défaut, le wrapper installé chez
+      l'utilisateur rejettera le téléchargement (vérification d'intégrité en échec) dès
+      que l'ancien binaire aura été remplacé côté GitHub.
+   e. Committer CE SEUL fichier (`python/src/sasrs_py/cli.py`) avec un message du type
+      `python wrapper: re-sync SHA-256 (sasrs <hash court du commit source>)`, pousser.
+   f. Publier sur la release existante en écrasant l'ancien binaire (tag fixe
+      `python-v0.1.0` — ne jamais créer de nouveau tag/release à chaque republication) :
+      `gh release upload python-v0.1.0 /tmp/sasrs-windows-x86_64.exe --repo LePhilippeDucTai/sasrs --clobber`.
+   g. Vérifier avant de considérer l'étape terminée : retélécharger l'asset
+      anonymement
+      (`curl -sL https://github.com/LePhilippeDucTai/sasrs/releases/download/python-v0.1.0/sasrs-windows-x86_64.exe | sha256sum`)
+      et comparer à l'empreinte calculée en (c).
+   h. Nettoyer `/tmp/sasrs-windows-x86_64.exe`.
+   i. Si `gh auth status` échoue (jeton expiré/absent) : NE PAS bloquer le reste de
+      l'invocation. Le signaler explicitement dans le rapport de fin (étape 8) comme
+      action utilisateur requise (renouveler le jeton), et laisser le binaire compilé
+      dans `target/x86_64-pc-windows-gnu/release/` pour publication manuelle ultérieure —
+      dans ce cas, NE PAS committer la mise à jour de `cli.py` (le hash publié doit
+      rester cohérent avec le binaire réellement en ligne).
+8. **Rapport de fin d'invocation** : 2–5 lignes — ce qui a été livré/committé (hashes),
+   où en est le jalon, si le wrapper Python a été republié (ou pourquoi pas), ce que la
+   PROCHAINE invocation prendra. Si un blocage nécessite une décision utilisateur, le
+   dire explicitement.
 
 ## Garde-fous
 
 - Périmètre : uniquement le crate `sasrs` (`src/`, `tests/`, `Cargo.toml`/`Cargo.lock`).
-  Ne pas toucher aux fichiers hors de ce crate.
+  Ne pas toucher aux fichiers hors de ce crate — seule exception : l'étape 7
+  (republication du wrapper Python), qui édite exclusivement le hash SHA-256 dans
+  `python/src/sasrs_py/cli.py`.
 - Ne jamais cocher une case pour du code contenant encore `todo!()`/`unimplemented!()`.
 - **Type de jalon — critère de validation adapté** :
   - Jalon de **refactorisation** (sortie inchangée, ex. M31/M32) : en plus de
