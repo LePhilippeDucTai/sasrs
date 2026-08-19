@@ -206,11 +206,11 @@ option/statement neuf). Détail des cases dans `PROGRESS.md`.
 | Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | ✅ | **Fable** | moyen-élevé | fait (M38.1–.5 + DoD) ; cellules README OPTIONS/ODS restées 🟡 honnêtement (voir DoD M38 dans PROGRESS.md) |
 | Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ✅ | **Sonnet** | moyen | fait (M39.1–.3 + DoD : sidecar `LIB=`, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`, `FMTSEARCH=`) ; reliquat PICTURE/2-niveaux → M43 |
 | Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ✅ | **Fable** | élevé | fait (M40.1–.3 + DoD : PRX via `fancy-regex`, sites SET indépendants, WHERE ≡ WHERE= par dataset, INFORMAT→modified list input) ; refus documentés : BY/POINT= × SET multiples, WHERE × UPDATE/MODIFY, `CALL STDIZE` inexistant en DATA step |
-| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ⬜ | **Fable** | moyen-élevé | le quoting macro est la zone la plus subtile du langage |
-| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ⬜ | **Opus** | moyen | ajouts cadrés au parser/plan SQL existants |
-| Bloc 1 — PROC FORMAT : complétion totale | M43 | ⬜ | **Sonnet** | moyen | — |
-| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ⬜ | **Fable** | élevé | algorithme réseau (Mehta-Patel) — numérique délicate |
-| Bloc 1 — PROC UNIVARIATE : pondération + plots | M45 | ⬜ | **Opus** | moyen | — |
+| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ✅ | **Fable** | moyen-élevé | le quoting macro est la zone la plus subtile du langage |
+| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ✅ | **Opus** | moyen | ajouts cadrés au parser/plan SQL existants |
+| Bloc 1 — PROC FORMAT : complétion totale | M43 | ✅ | **Sonnet** | moyen | — |
+| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ✅ | **Fable** | élevé | algorithme réseau (Mehta-Patel) — numérique délicate |
+| Bloc 1 — PROC UNIVARIATE : pondération + plots | M45 | ✅ | **Opus** | moyen | — |
 | Bloc 1 — PROC TABULATE : `PCTN<dim>` | M46 | ⬜ | **Fable** | moyen-élevé | règles de dénominateur PCTN — SAS pointu |
 | Bloc 1 — PROC REPORT : DEFINE FLOW + COMPUTE riche | M47 | ⬜ | **Fable** | moyen-élevé | ordre d'évaluation des COMPUTE + variables automatiques — SAS pointu |
 | Bloc 1 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR | M48 | ⬜ | **Sonnet** | moyen | — |

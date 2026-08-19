@@ -18,7 +18,12 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M45 (Phase G)**. **M44 TERMINÉ** — PROC FREQ : Fisher exact généralisé r×c
+Jalon courant : **M46 (Phase G)**. **M45 TERMINÉ** — PROC UNIVARIATE : skewness/kurtosis
+pondérés (g1/g2 SAS avec `z_i = √w_i(x_i−x̄_w)/s_w`, VARDEF=DF, réduction exacte aux formules
+non pondérées à `w ≡ 1`) ; option `/ NORMAL` des instructions graphiques : table « Fitted
+Normal Distribution » en listing (objet ODS `ParameterEstimates`, μ̂/σ̂ = Mean/Std du bloc
+Moments) et, sous `--features graphics`, courbe ajustée superposée à l'HISTOGRAM et droite
+`y = μ̂ + σ̂x` sur QQPLOT/PROBPLOT ; 2 fixtures m45. **M44 TERMINÉ** — PROC FREQ : Fisher exact généralisé r×c
 (Freeman-Halton) : énumération exacte complète des tables à marges fixées (garde 500 000
 tables), fallback Monte-Carlo déterministe au-delà ; chemin 2×2 existant intouché ; vérifié
 par oracle Python indépendant (arithmétique rationnelle) + cohérence interne (Σp=1, chemin
@@ -1163,10 +1168,42 @@ Cellule README PROC SQL Not supported 🔴→✅.
   Monte-Carlo au-delà de 500 000 tables, documenté). → **M45**.
 
 ## M45 — PROC UNIVARIATE : pondération + plots
-- [ ] M45.1 — Skewness/kurtosis pondérés (moments m3/m4, VARDEF=DF) ; oracle poids=1 = actuel, symétrique⇒skew≈0 (Opus, moyen)
-- [ ] M45.2 — Plot-statement `HISTOGRAM/QQPLOT … /NORMAL` overlay + annotation (`graphics/render.rs`) ;
-  oracle : NORMAL centré sur μ̂,σ̂ ; sans graphics → NOTE-deferred (Opus, moyen)
-- [ ] DoD M45 : fixture m45 ; README UNIVARIATE → ✅ ; → M46.
+- [x] M45.1 — Skewness/kurtosis pondérés (VARDEF=DF) : `weighted_skewness`/`weighted_kurtosis`
+  avec `z_i = √w_i (x_i − x̄_w) / s_w`, alimentées par la moyenne et l'écart-type pondérés déjà
+  calculés par `emit_variable_weighted` (les trois lignes du bloc Moments restent mutuellement
+  cohérentes). `n` = nombre d'observations utilisables, pas Σw. Chemin NON pondéré intouché.
+  Oracles : réduction EXACTE aux formules non pondérées à poids=1 sur 3 jeux (chemin de calcul
+  indépendant) ; jeu pondéré symétrique x=[1,2,3] w=[2,1,2] ⇒ g1 = 0 ; oracle entièrement
+  calculé à la main x=[1,2,3,4] w=[1,2,3,4] ⇒ x̄_w=3, s_w²=10/3, g1 = (4/6)(−2√2)/(10/3)^{3/2}
+  = −0.309838668 et g2 = 10.8 − 13.5 = −2.7 (exact) ; gardes n<3/n<4 et s_w=0 ⇒ None sans NaN.
+  5 tests ; un seul snapshot bouge (m33/univariate_weighted, les deux nombres ci-dessus, la
+  fixture porte la dérivation). (Opus, moyen)
+- [x] M45.2 — Plot-statement `HISTOGRAM/QQPLOT/… / NORMAL` : l'option était jetée
+  (`skip_to_semi` sur tout le corps). Le corps est désormais scanné pour le mot-clé, sans
+  parser la grammaire complète des options (ordre libre ; `MIDPOINTS=`, `NORMAL(MU= SIGMA=)`,
+  … tolérés et ignorés). Annotation : table « Fitted Normal Distribution for <var> » en
+  LISTING (objet ODS `ParameterEstimates`, filtrable par ODS SELECT/EXCLUDE), une par
+  instruction et par groupe BY, émise que ODS GRAPHICS soit ON ou OFF ; μ̂/σ̂ sont exactement
+  la Mean et la Std Deviation du bloc Moments de la variable (donc pondérées sous WEIGHT),
+  ce qui les rend vérifiables à l'œil dans le snapshot. Overlay sous `--features graphics`
+  via `draw_to_file_ext`/`Decorations` (infra M34.11, rien d'ajouté côté `graphics`) :
+  densité normale ramenée à l'échelle « Percent » sur l'HISTOGRAM (nombre de classes choisi
+  en un seul endroit, partagé par le tracé et sa courbe) et droite `y = μ̂ + σ̂x` sur
+  QQPLOT/PROBPLOT. Résiduels documentés : pas d'overlay sur CDFPLOT/PPPLOT (la table sort
+  quand même) ; le chemin image ajuste sur les valeurs brutes, donc sous WEIGHT la courbe
+  tracée est l'ajustement NON pondéré alors que la table rapporte le pondéré. 11 tests ;
+  un seul snapshot bouge (m21/univariate_normal, dont la fixture portait déjà
+  `histogram height / normal;`). (Opus, moyen)
+- [x] DoD M45 : 2 fixtures **vérifiées à la main** — `tests/fixtures/m45/univariate_weighted_moments.sas`
+  (oracle pondéré ci-dessus ; poids unitaires PUIS mêmes données sans WEIGHT, dont les deux
+  blocs Moments doivent afficher des Skewness/Kurtosis identiques — l'oracle de réduction est
+  lisible directement dans le snapshot ; jeu pondéré symétrique ⇒ Skewness 0 et Kurtosis
+  manquante à n=3) et `tests/fixtures/m45/univariate_normal_plot.sas` (x=[2,4,4,4,5,5,7,9] ⇒
+  Mu=5, Sigma=√(32/7)=2.1380899 ; deux instructions `/ NORMAL` ⇒ deux tables ; les mêmes sans
+  l'option ⇒ aucune table ; ODS GRAPHICS ON ⇒ table + NOTE « image deferred » ; CDFPLOT ⇒
+  table sans overlay). README UNIVARIATE → ✅ (résiduels listés), `ParameterEstimates` ajouté
+  aux objets ODS SELECT/EXCLUDE. 2959 tests + snapshots verts (2980 avec `--features
+  graphics`), 0 `.snap.new`, clippy `-D warnings` et `cargo fmt --check` propres. → **M46**.
 
 ## M46 — PROC TABULATE : PCTN<dim>
 - [ ] M46.1 — Dénominateurs paramétrés `PCTN<row|col>`/`PCTSUM<dim>` ; oracle : PCTN sans `<>` inchangé,

@@ -1,0 +1,295 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m45/univariate_weighted_moments.sas
+---
+==== LOG ====
+
+1     data w1;
+2       x = 1; w = 1; output;
+3       x = 2; w = 2; output;
+4       x = 3; w = 3; output;
+5       x = 4; w = 4; output;
+6     run;
+NOTE: The data set WORK.W1 has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     title 'Weighted skewness/kurtosis: hand-computed oracle (g1=-0.309838668, g2=-2.7)';
+
+8     proc univariate data=w1;
+9       var x;
+10      weight w;
+11    run;
+NOTE: There were 4 observations read from the data set WORK.W1.
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    data unit;
+13      x = 1; w = 1; output;
+14      x = 2; w = 1; output;
+15      x = 3; w = 1; output;
+16      x = 4; w = 1; output;
+17    run;
+NOTE: The data set WORK.UNIT has 4 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    title 'Unit weights: weighted formulas must reduce to the unweighted ones';
+
+19    proc univariate data=unit;
+20      var x;
+21      weight w;
+22    run;
+NOTE: There were 4 observations read from the data set WORK.UNIT.
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+23    title 'Same data, no WEIGHT statement: Skewness/Kurtosis must match the block above';
+
+24    proc univariate data=unit;
+25      var x;
+26    run;
+NOTE: There were 4 observations read from the data set WORK.UNIT.
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    data sym;
+28      x = 1; w = 2; output;
+29      x = 2; w = 1; output;
+30      x = 3; w = 2; output;
+31    run;
+NOTE: The data set WORK.SYM has 3 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+32    title 'Weighted symmetric distribution: Skewness = 0 (Kurtosis needs n>=4)';
+
+33    proc univariate data=sym;
+34      var x;
+35      weight w;
+36    run;
+NOTE: There were 3 observations read from the data set WORK.SYM.
+NOTE: PROCEDURE UNIVARIATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+37    title;
+
+==== LISTING ====
+          Weighted skewness/kurtosis: hand-computed oracle (g1=-0.309838668, g2=-2.7)
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                             4    Sum Weights                   10
+              Mean                          3    Sum Observations              30
+              Std Deviation      1.8257418584    Variance            3.3333333333
+              Skewness           -0.309838668    Kurtosis                    -2.7
+              Uncorrected SS              100    Corrected SS                  10
+              Coeff Variation    60.858061945    Std Error Mean      0.5773502692
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean               3    Std Deviation          1.8257418584
+                  Median             3    Variance               3.3333333333
+                  Mode               .    Range                             3
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             4
+                                     99%                  4
+                                     95%                  4
+                                     90%                  4
+                                     75% Q3               4
+                                     50% Median           3
+                                     25% Q1               2
+                                     10%                1.5
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+                              4             4                4              4
+
+
+               Unit weights: weighted formulas must reduce to the unweighted ones
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                             4    Sum Weights                    4
+              Mean                        2.5    Sum Observations              10
+              Std Deviation      1.2909944487    Variance            1.6666666667
+              Skewness                      0    Kurtosis                    -1.2
+              Uncorrected SS               30    Corrected SS                   5
+              Coeff Variation    51.639777949    Std Error Mean      0.6454972244
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean             2.5    Std Deviation          1.2909944487
+                  Median           2.5    Variance               1.6666666667
+                  Mode               .    Range                             3
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             4
+                                     99%                  4
+                                     95%                  4
+                                     90%                  4
+                                     75% Q3             3.5
+                                     50% Median         2.5
+                                     25% Q1             1.5
+                                     10%                  1
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+                              4             4                4              4
+
+
+          Same data, no WEIGHT statement: Skewness/Kurtosis must match the block above
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+              Label1                   Value1    Label2                    Value2
+
+              N                             4    Sum Weights                    4
+              Mean                        2.5    Sum Observations              10
+              Std Deviation      1.2909944487    Variance            1.6666666667
+              Skewness                      0    Kurtosis                    -1.2
+              Uncorrected SS               30    Corrected SS                   5
+              Coeff Variation    51.639777949    Std Error Mean      0.6454972244
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean             2.5    Std Deviation          1.2909944487
+                  Median           2.5    Variance               1.6666666667
+                  Mode               .    Range                             3
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             4
+                                     99%                  4
+                                     95%                  4
+                                     90%                  4
+                                     75% Q3             3.5
+                                     50% Median         2.5
+                                     25% Q1             1.5
+                                     10%                  1
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+                              4             4                4              4
+
+
+              Weighted symmetric distribution: Skewness = 0 (Kurtosis needs n>=4)
+
+                                    The UNIVARIATE Procedure
+
+                                          Variable: x
+
+                                            Moments
+
+               Label1                   Value1    Label2                   Value2
+
+               N                             3    Sum Weights                   5
+               Mean                          2    Sum Observations             10
+               Std Deviation      1.4142135624    Variance                      2
+               Skewness                      0    Kurtosis                      .
+               Uncorrected SS               24    Corrected SS                  4
+               Coeff Variation    70.710678119    Std Error Mean      0.632455532
+
+                                   Basic Statistical Measures
+
+                  LocLabel    LocValue    VarLabel                   VarValue
+
+                  Mean               2    Std Deviation          1.4142135624
+                  Median             2    Variance                          2
+                  Mode               .    Range                             2
+                                          Interquartile Range               2
+
+                                    Quantiles (Definition 5)
+
+                                     Quantile      Estimate
+
+                                     100% Max             3
+                                     99%                  3
+                                     95%                  3
+                                     90%                  3
+                                     75% Q3               3
+                                     50% Median           2
+                                     25% Q1               1
+                                     10%                  1
+                                     5%                   1
+                                     1%                   1
+                                     0% Min               1
+
+                                      Extreme Observations
+
+                   Lowest Value    Lowest Obs    Highest Value    Highest Obs
+
+                              1             1                1              1
+                              2             2                2              2
+                              3             3                3              3
+
+
+
+==== EXIT 0 ====
