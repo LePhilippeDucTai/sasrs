@@ -166,7 +166,8 @@ individual options of each procedure and DATA step statement. Legend:
 | Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path, fileref via `FILENAME`, non-quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
 | Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR`, `&SYSVER`, `&SYSSCP(L)`; status codes `&SYSCC`/`&SYSERR`/`&SYSRC`/`&SQLOBS`/`&SQLRC`; `&SYSLAST` (live, last dataset); env info `&SYSPROCESSNAME`, `&SYSENV`, `&SYSUSERID`, `&SYSHOSTNAME`, … |
 | Tracing | ✅ | `MPRINT`, `MLOGIC`, `SYMBOLGEN` |
-| Unsupported (clean NOTE) | 🔴 | `%SYSEXEC` (OS command), `%WINDOW`/`%DISPLAY` (interactive), `%SYSCALL`, `%SYSMACDELETE`, `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` — consumed with a "not supported in this build" NOTE; unknown `%keyword` left verbatim (SAS behaviour) |
+| Utilities (cont.) | ✅ | `%SYSCALL SORTN`/`SORTC` (the two CALL routines meaningful outside a DATA step — sort macro variables' values in place), `%SYSMACDELETE` (removes a compiled macro definition) |
+| Unsupported (clean NOTE) | 🔴 | `%SYSEXEC` (OS command), `%WINDOW`/`%DISPLAY` (interactive), other `%SYSCALL` routines (e.g. `SET`, `POKELONG`), `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` — consumed with a "not supported in this build" NOTE; unknown `%keyword` left verbatim (SAS behaviour) |
 
 ### PROC SQL
 

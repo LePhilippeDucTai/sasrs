@@ -18,7 +18,13 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M41 (Phase G)**. **M40 TERMINÉ** — DATA step complété :
+Jalon courant : **M42 (Phase G)**. **M41 TERMINÉ** — macro : quoting complet + %SYSCALL/%SYSMACDELETE :
+`%QUOTE`/`%NRQUOTE` (quoting d'exécution historique, échappements `%'`/`%"`/`%(`/`%)`/`%%`) ;
+audit `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` (déjà conformes depuis M12.2, oracle PROGRESS.md corrigé) ;
+`STR_MASKED` élargi (`^`/`¬`/`#`) ; expansion complète des arguments d'invocation de macro
+portant un `%` ; `%SYSCALL SORTN`/`SORTC` (tri en place de variables macro) ; `%SYSMACDELETE`
+(suppression de définition compilée) ; 2 fixtures m41.
+**M40 TERMINÉ** — DATA step complété :
 PRX complet via `fancy-regex` (5 fonctions + 6 CALL routines, cache par texte de pattern),
 SET multiples (sites de lecture indépendants, EOF par site au point du statement, END=/NOBS=
 par site), bare `SET;`/`MERGE;` → `_LAST_`, WHERE statement standalone (≡ WHERE= par
@@ -1017,8 +1023,28 @@ Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
   implémenté depuis M12.2 (`consume_superq`), audit confirmé conforme à l'oracle `%let x=&y;
   %superq(x)`→`&y` littéral (test existant `superq_returns_value_without_resolving`). (Fable,
   élevé)
-- [ ] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` ; oracle : %sysmacdelete puis appel → non trouvée (Fable, moyen)
-- [ ] DoD M41 : fixtures m41 ; README Macro Quoting → ✅ (reste %SYSEXEC/%WINDOW/%DISPLAY/%SYSLPUT/%SYSRPUT doc) ; → M42.
+- [x] M41.3 — `%SYSCALL routine(args)` + `%SYSMACDELETE name` : `%SYSCALL` limité à `SORTN`/`SORTC`
+  (les deux seules routines CALL documentées comme opérant uniquement sur du texte de
+  variables macro, sans PDV/étape DATA — arguments = noms de variables macro, valeurs lues
+  via `get_symbol`, triées ascendant, réécrites en place via `assign` = sémantique `%let`,
+  y compris portée locale) ; toute autre routine retombe sur la NOTE « not supported »
+  historique inchangée. `%SYSMACDELETE name` supprime la définition compilée de
+  `self.macros` (silencieux si absente) — invocation ultérieure `%name` non trouvée, laissée
+  verbatim (oracle confirmé : `%sysmacdelete` puis appel → non trouvée). 14 tests
+  (`tests/syscall.rs`). 2866 tests + snapshot verts, 0 warning `-D warnings`, `cargo fmt
+  --check` propre, 0 `.snap.new` (m1–m40 octet-identiques). (Fable, moyen)
+- [x] DoD M41 : fixtures `tests/fixtures/m41/` (quoting, syscall_sysmacdelete) + 2 snapshots
+  **vérifiés à la main** : quoting — `%quote`/`%bquote` résolvent Z puis masquent `;`
+  (`Z;y`), échappement `%(` bien borné (`a(b`), `%nrquote`/`%nrbquote` masquent `&z`
+  indéfini (`a&z b`), `%superq(w)` où `w=%nrstr(&x)` rend le littéral `&x` SANS résoudre
+  (preuve de non-résolution), `%let v=%quote(a;b)` — le `;` masqué n'a pas terminé le
+  `%let` (`v=a;b`) ; syscall_sysmacdelete — SORTN(30,10,20)→(10,20,30) et
+  SORTC(banana,apple,cherry)→(apple,banana,cherry) triés ascendant en place dans l'ordre
+  d'appel, `%sysmacdelete greet` rend l'invocation suivante `[%greet]` verbatim (vs
+  `[hello]` avant suppression). README Quoting 🟡→✅ (`%QUOTE`/`%NRQUOTE`/`%QUPCASE`/etc.
+  ajoutés à la liste), Utilities complété (SORTN/SORTC/SYSMACDELETE), Unsupported réduit
+  (ne liste plus que `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/autres routines `%SYSCALL`/
+  `%SYSMSTORECLEAR`/`%SYSLPUT`/`%SYSRPUT`). → **M42**.
 
 ## M42 — PROC SQL : dictionnaires + prédicats
 Cellule README PROC SQL Not supported 🔴→✅.

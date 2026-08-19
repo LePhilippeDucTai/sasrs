@@ -52,6 +52,13 @@ const DISPATCH: &[(&str, Matcher, Handler)] = &[
     // `%put <texte>;` (M19.3) — écrit son argument (résolu) au log,
     // n'émet RIEN dans le flux de code.
     ("put", STMT, MacroEngine::consume_put),
+    // `%syscall routine(v1, v2, ...);` (M41.3) — `SORTN`/`SORTC` triés en
+    // place ; toute autre routine retombe sur la NOTE « not supported »
+    // historique (voir `Self::SYSCALL_LABEL`).
+    ("syscall", STMT, MacroEngine::consume_syscall),
+    // `%sysmacdelete name;` (M41.3) — supprime la définition compilée ;
+    // n'émet rien (cf. doc du consommateur).
+    ("sysmacdelete", STMT, MacroEngine::consume_sysmacdelete),
     // `%call execute(text);` (M19.3) — met en file un fragment de code
     // SAS à exécuter APRÈS le segment courant (sémantique CALL EXECUTE).
     ("call", STMT, MacroEngine::consume_macro_call),
