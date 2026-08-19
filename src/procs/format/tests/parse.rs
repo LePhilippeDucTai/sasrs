@@ -286,3 +286,85 @@ fn parse_lib_two_level_catalog_name_is_a_clean_error() {
 fn parse_lib_missing_eq_is_error() {
     assert!(parse_format_src("proc format lib perm; run;").is_err());
 }
+
+// ── M43.1 — MIN=/MAX=/DEFAULT=/FUZZ= VALUE options ──────────────────────────
+
+#[test]
+fn parse_value_no_width_options_defaults_all_none() {
+    // Regression: a VALUE with none of these options still parses to all
+    // four fields `None` (pre-M43.1 byte-identical behavior).
+    let ast = parse_format_src("proc format; value f 1='One'; run;").unwrap();
+    let (_, uf) = &ast.values[0];
+    assert_eq!(uf.min, None);
+    assert_eq!(uf.max, None);
+    assert_eq!(uf.default, None);
+    assert_eq!(uf.fuzz, None);
+}
+
+#[test]
+fn parse_value_all_four_width_options_parenthesized() {
+    let ast = parse_format_src(
+        "proc format; value f (min=3 max=10 default=6 fuzz=0.001) 1='One' 2='Two'; run;",
+    )
+    .unwrap();
+    let (_, uf) = &ast.values[0];
+    assert_eq!(uf.min, Some(3));
+    assert_eq!(uf.max, Some(10));
+    assert_eq!(uf.default, Some(6));
+    assert_eq!(uf.fuzz, Some(0.001));
+    assert_eq!(uf.ranges.len(), 2);
+}
+
+#[test]
+fn parse_value_width_options_without_parens() {
+    // Pragmatic non-strict-grammar form: parens are optional.
+    let ast =
+        parse_format_src("proc format; value f min=3 max=10 default=6 fuzz=0.001 1='One'; run;")
+            .unwrap();
+    let (_, uf) = &ast.values[0];
+    assert_eq!(uf.min, Some(3));
+    assert_eq!(uf.max, Some(10));
+    assert_eq!(uf.default, Some(6));
+    assert_eq!(uf.fuzz, Some(0.001));
+}
+
+#[test]
+fn parse_value_width_options_any_order() {
+    let ast =
+        parse_format_src("proc format; value f (fuzz=0.5 default=8 min=2 max=20) 1='One'; run;")
+            .unwrap();
+    let (_, uf) = &ast.values[0];
+    assert_eq!(uf.min, Some(2));
+    assert_eq!(uf.max, Some(20));
+    assert_eq!(uf.default, Some(8));
+    assert_eq!(uf.fuzz, Some(0.5));
+}
+
+#[test]
+fn parse_value_width_options_partial_subset() {
+    // Only DEFAULT= set — the other three individually stay None.
+    let ast = parse_format_src("proc format; value f (default=6) 1='One'; run;").unwrap();
+    let (_, uf) = &ast.values[0];
+    assert_eq!(uf.min, None);
+    assert_eq!(uf.max, None);
+    assert_eq!(uf.default, Some(6));
+    assert_eq!(uf.fuzz, None);
+}
+
+#[test]
+fn parse_value_width_options_before_ranges_on_char_format() {
+    // Options must appear right after the (possibly `$`-prefixed) name, and
+    // before the range list, as real SAS requires — including for a `$`
+    // character VALUE.
+    let ast = parse_format_src(
+        "proc format; value $cityfmt (min=1 max=20) 'PAR'='Paris' 'NYC'='New York'; run;",
+    )
+    .unwrap();
+    let (name, uf) = &ast.values[0];
+    assert_eq!(name, "$cityfmt");
+    assert!(uf.is_char);
+    assert_eq!(uf.min, Some(1));
+    assert_eq!(uf.max, Some(20));
+    assert_eq!(uf.ranges.len(), 2);
+    assert_eq!(uf.ranges[0].label, "Paris");
+}

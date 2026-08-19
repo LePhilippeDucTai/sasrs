@@ -85,6 +85,18 @@
 //! pour le détail des colonnes et le round-trip. Les formats PICTURE ne sont
 //! PAS couverts (leurs directives PREFIX/MULT/FILL n'ont pas de colonne dans
 //! ce jeu minimal) — déferral documenté, pas un oubli.
+//!
+//! ## M43.1 — `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=` sur `VALUE`
+//!
+//! `PROC FORMAT VALUE` accepte quatre options FORMAT-LEVEL supplémentaires
+//! (portées par `userdef::UserFormat`, voir sa doc de module pour le détail) :
+//! `MIN=`/`MAX=` bornent la largeur de sortie effective, `DEFAULT=` fixe la
+//! largeur par défaut (sinon calculée : longueur du plus long label),
+//! `FUZZ=` assouplit les comparaisons de bornes numériques. `format()`
+//! ci-dessous délègue le calcul de largeur à `UserFormat::effective_width`,
+//! qui a un chemin rapide garantissant l'octet-identité de tout `VALUE` qui
+//! ne pose aucune de ces options (l'écrasante majorité des fixtures
+//! existantes). Round-trip via `CNTLOUT=`/`CNTLIN=` : voir `procs::format::cntl`.
 
 #![allow(unused_variables, dead_code)]
 
@@ -215,6 +227,17 @@ impl FormatCatalog {
         self.user.iter().map(|(k, v)| (k.as_str(), v))
     }
 
+    /// Lookup a single user-defined `VALUE` format by name (case-insensitive
+    /// — mirrors the lookup in [`FormatCatalog::format`]'s user-format
+    /// branch). M43.1 — used at DATA step COMPILE time by
+    /// `datastep::helpers::put_width` to size a `put(x, fmt.)` PDV variable
+    /// via [`userdef::UserFormat::effective_width`] instead of trusting only
+    /// the literal width digits in the format token, when the name already
+    /// resolves to a known format at that point in the program.
+    pub fn user_format(&self, name: &str) -> Option<&userdef::UserFormat> {
+        self.user.get(&name.to_uppercase())
+    }
+
     /// M39.2 — read-only iteration over INVALUE entries, symmetric to
     /// [`FormatCatalog::user_formats`].
     pub fn user_informats(&self) -> impl Iterator<Item = (&str, &userdef::UserInformat)> {
@@ -320,8 +343,13 @@ impl FormatCatalog {
             && let Some(label) = uf.lookup(v)
         {
             let s = label.to_string();
-            return match spec.w {
-                Some(w) => right_justify(&s, w as usize),
+            // M43.1 — effective width = spec.w, else DEFAULT=/computed max
+            // label length, clamped into [MIN=, MAX=]. `effective_width`
+            // has a fast path that reproduces the pre-M43.1 calculation
+            // exactly when MIN=/MAX=/DEFAULT= are all unset (the common
+            // case) — see its doc.
+            return match uf.effective_width(spec.w) {
+                Some(w) => right_justify(&s, w),
                 None => s,
             };
         }

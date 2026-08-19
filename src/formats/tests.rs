@@ -354,6 +354,7 @@ fn sample_value_format() -> userdef::UserFormat {
             },
         ],
         other: Some("Unknown".to_string()),
+        ..Default::default()
     }
 }
 
@@ -416,6 +417,7 @@ fn merge_missing_from_does_not_overwrite_existing_key() {
                 label: "WORK-WINS".to_string(),
             }],
             other: None,
+            ..Default::default()
         },
     );
     let mut library = catalog();

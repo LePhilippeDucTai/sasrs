@@ -1,0 +1,202 @@
+---
+source: tests/snapshot.rs
+assertion_line: 52
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/m43/format_width_fuzz.sas
+---
+==== LOG ====
+
+1     proc format;
+2       value agef (default=6) low-<21='Minor' 21-high='Adult';
+3     run;
+NOTE: Format AGEF has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+4     title 'DEFAULT=6 : largeur appliquee sans suffixe explicite au point d''usage';
+
+5     data work.people;
+6       input age;
+7       format age agef.;
+8       datalines;
+9     5
+10    40
+11    ;
+12    run;
+NOTE: The data set WORK.PEOPLE has 2 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    proc print data=work.people noobs;
+14    run;
+NOTE: There were 2 observations read from the data set WORK.PEOPLE.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+15    proc format;
+16      value narrow (min=8 max=10) low-<21='Minor' 21-high='Adult';
+17    run;
+NOTE: Format NARROW has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+18    title 'MIN=8/MAX=10 : largeur explicite bornee (narrow4. trop etroit -> 8)';
+
+19    data work.clamped;
+20      x = put(5, narrow4.);
+21      y = put(40, narrow20.);
+22    run;
+NOTE: The data set WORK.CLAMPED has 1 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+23    proc print data=work.clamped noobs;
+24    run;
+NOTE: There were 1 observations read from the data set WORK.CLAMPED.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+25    proc format;
+26      value fuzzy (fuzz=1e-6) low-<10='Below' 10-high='AtLeast';
+27    run;
+NOTE: Format FUZZY has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    title 'FUZZ=1e-6 : 9.9999995 (a 5e-7 de 10) matche la plage inclusive AtLeast';
+
+29    data work.near_boundary;
+30      input x;
+31      format x fuzzy.;
+32      datalines;
+33    9.9999995
+34    9.9
+35    ;
+36    run;
+NOTE: The data set WORK.NEAR_BOUNDARY has 2 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+37    proc print data=work.near_boundary noobs;
+38    run;
+NOTE: There were 2 observations read from the data set WORK.NEAR_BOUNDARY.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+39    proc format cntlout=work.fmtctl;
+40      value agef (min=3 max=10 default=6 fuzz=0.5) low-<21='Minor' 21-high='Adult';
+41    run;
+NOTE: Format AGEF has been output.
+NOTE: The data set WORK.FMTCTL has 6 observations and 12 variables.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+42    title 'CNTLOUT= depose les colonnes MIN/MAX/DEFAULT/FUZZ';
+
+43    proc print data=work.fmtctl noobs;
+44    run;
+NOTE: There were 6 observations read from the data set WORK.FMTCTL.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+45    proc format cntlin=work.fmtctl cntlout=work.fmtctl2;
+46    run;
+NOTE: Format AGEF has been output.
+NOTE: Format FUZZY has been output.
+NOTE: Format NARROW has been output.
+NOTE: The data set WORK.FMTCTL2 has 6 observations and 12 variables.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+47    title 'Round-trip CNTLIN->CNTLOUT : FMTCTL2 identique a FMTCTL';
+
+48    proc compare base=work.fmtctl compare=work.fmtctl2;
+49    run;
+NOTE: No unequal values were found. All values compared are exactly equal.
+NOTE: PROCEDURE COMPARE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+             DEFAULT=6 : largeur appliquee sans suffixe explicite au point d'usage
+
+                                                age
+
+                                              Minor
+                                              Adult
+
+              MIN=8/MAX=10 : largeur explicite bornee (narrow4. trop etroit -> 8)
+
+                                     x           y
+
+                                        Minor         Adult
+
+             FUZZ=1e-6 : 9.9999995 (a 5e-7 de 10) matche la plage inclusive AtLeast
+
+                                                  x
+
+                                            AtLeast
+                                              Below
+
+                       CNTLOUT= depose les colonnes MIN/MAX/DEFAULT/FUZZ
+
+FMTNAME    START    END    LABEL      TYPE    SEXCL    EEXCL    HLO    MIN    MAX    DEFAULT        FUZZ
+
+AGEF                21     Minor      N       N        Y        L        3     10          6         0.5
+AGEF       21              Adult      N       N        N        H        3     10          6         0.5
+FUZZY               10     Below      N       N        Y        L        .      .          .    0.000001
+FUZZY      10              AtLeast    N       N        N        H        .      .          .    0.000001
+NARROW              21     Minor      N       N        Y        L        8     10          .           .
+NARROW     21              Adult      N       N        N        H        8     10          .           .
+
+                    Round-trip CNTLIN->CNTLOUT : FMTCTL2 identique a FMTCTL
+
+The COMPARE Procedure
+
+Data Set Summary
+
+                 Dataset         Role       Label    Observations    Variables
+
+                 WORK.FMTCTL     BASE                           6           12
+                 WORK.FMTCTL2    COMPARE                        6           12
+
+Variables Summary
+
+Number of Variables in Common: 12
+
+Observation Summary
+
+Number of Observations in Common: 6
+Number of Observations with Differences: 0
+Number of Observations in Agreement: 6
+
+Values Comparison Summary
+
+                            Variable    Type    N Diffs    Max Diff
+
+                            DEFAULT     Num           0           0
+                            EEXCL       Char          0
+                            END         Char          0
+                            FMTNAME     Char          0
+                            FUZZ        Num           0           0
+                            HLO         Char          0
+                            LABEL       Char          0
+                            MAX         Num           0           0
+                            MIN         Num           0           0
+                            SEXCL       Char          0
+                            START       Char          0
+                            TYPE        Char          0
+
+==== EXIT 0 ====

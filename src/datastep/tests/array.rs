@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 use crate::dataset::{SasDataset, VarMeta};
 use polars::df;
@@ -161,23 +160,105 @@ fn bare_array_name_reference_errors() {
 
 #[test]
 fn put_width_parsing() {
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Var("best12".into())]), 12);
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Str("date9.".into())]), 9);
-    assert_eq!(put_width(&[Expr::Num(1.0), Expr::Var("words".into())]), 200);
-    assert_eq!(put_width(&[Expr::Num(1.0)]), 200);
+    let mut s = session();
+    // Chiffres finaux du nom du format (`best12` → 12), sinon 200 — cas de
+    // base inchangé depuis avant M43.1 (aucun format utilisateur en jeu).
+    let prog = compile_src(
+        "data o; a = put(1, best12.); b = put(1, date9.); c = put(1, words.); \
+         d = put(1, dollar10.2); e = put(1, percent8.1); f = put(1, comma12.); run;",
+        &mut s,
+    )
+    .unwrap();
+    let len = |n: &str| prog.pdv.vars()[prog.pdv.slot(n).unwrap()].length;
+    assert_eq!(len("a"), 12);
+    assert_eq!(len("b"), 9);
+    // Format inconnu sans chiffres de largeur → fallback générique 200.
+    assert_eq!(len("c"), 200);
     // Forme w.d : la largeur est `w`, pas le nombre de décimales.
-    assert_eq!(
-        put_width(&[Expr::Num(1.0), Expr::Str("dollar10.2".into())]),
-        10
+    assert_eq!(len("d"), 10);
+    assert_eq!(len("e"), 8);
+    assert_eq!(len("f"), 12);
+}
+
+// ── M43.1 — `put_width` doit refléter MIN=/MAX= des formats VALUE ────
+
+#[test]
+fn put_width_user_format_min_widens_literal_token_width() {
+    // narrowfmt (min=8) : la largeur littérale du token (`narrowfmt4.` → 4)
+    // est TROP ÉTROITE pour la sortie réelle (MIN=8 l'élargit à l'exécution).
+    // Avant le fix, put_width restait aveuglément à 4 → troncature au
+    // runtime. Après le fix, la longueur PDV inférée doit être 8.
+    let mut s = session();
+    define_format(
+        &mut s,
+        "proc format; value narrowfmt (min=8 max=10) low-<21='Minor' 21-high='Adult'; run;",
     );
-    assert_eq!(
-        put_width(&[Expr::Num(1.0), Expr::Str("percent8.1".into())]),
-        8
+    let prog = compile_src(
+        "data o; x = put(5, narrowfmt8.); y = put(5, narrowfmt4.); z = put(5, narrowfmt.); run;",
+        &mut s,
+    )
+    .unwrap();
+    let len = |n: &str| prog.pdv.vars()[prog.pdv.slot(n).unwrap()].length;
+    // Largeur explicite déjà dans [MIN,MAX] : inchangée.
+    assert_eq!(len("x"), 8);
+    // Largeur explicite 4 < MIN=8 : clampée à 8, pas tronquée à 4.
+    assert_eq!(len("y"), 8);
+    // Pas de largeur explicite : label le plus long ("Minor", 5) clampé par
+    // MIN=8 → 8 (PAS le fallback générique 200).
+    assert_eq!(len("z"), 8);
+}
+
+#[test]
+fn put_width_user_format_max_narrows_literal_token_width() {
+    // widefmt (max=5) : la largeur littérale du token (`widefmt20.` → 20)
+    // est TROP LARGE (MAX=5 la rétrécit à l'exécution).
+    let mut s = session();
+    define_format(
+        &mut s,
+        "proc format; value widefmt (max=5) 1='AB' 2='ABCDE' other='Z'; run;",
     );
-    assert_eq!(
-        put_width(&[Expr::Num(1.0), Expr::Str("comma12.".into())]),
-        12
+    let prog = compile_src("data o; y = put(1, widefmt20.); run;", &mut s).unwrap();
+    let len = |n: &str| prog.pdv.vars()[prog.pdv.slot(n).unwrap()].length;
+    assert_eq!(len("y"), 5);
+}
+
+#[test]
+fn put_width_user_format_without_options_matches_legacy_behavior() {
+    // Format utilisateur SANS MIN=/MAX=/DEFAULT= (cas historique, majorité
+    // des formats existants) : inféré exactement comme avant M43.1, que le
+    // format soit résolu dans le catalogue ou non.
+    let mut s = session();
+    define_format(
+        &mut s,
+        "proc format; value sexfmt 1='Male' 2='Female' other='Unknown'; run;",
     );
+    let prog = compile_src(
+        "data o; a = put(1, sexfmt4.); b = put(1, sexfmt.); run;",
+        &mut s,
+    )
+    .unwrap();
+    let len = |n: &str| prog.pdv.vars()[prog.pdv.slot(n).unwrap()].length;
+    // Largeur explicite : inchangée (spec.w brut).
+    assert_eq!(len("a"), 4);
+    // Pas de largeur explicite, pas d'options M43.1 : fallback générique 200
+    // (comportement historique — sortie non bornée, imprévisible à la
+    // compilation).
+    assert_eq!(len("b"), 200);
+}
+
+#[test]
+fn put_width_builtin_format_unaffected_by_catalog_lookup() {
+    // Un format BUILTIN (jamais dans le catalogue utilisateur) reste
+    // entièrement gouverné par les chiffres littéraux du token, même en
+    // présence d'un format utilisateur avec MIN=/MAX= dans le même catalogue.
+    let mut s = session();
+    define_format(
+        &mut s,
+        "proc format; value narrowfmt (min=8 max=10) low-<21='Minor' 21-high='Adult'; run;",
+    );
+    let prog = compile_src("data o; y = put(1, best12.); run;", &mut s).unwrap();
+    let len = |n: &str| prog.pdv.vars()[prog.pdv.slot(n).unwrap()].length;
+    assert_eq!(len("y"), 12);
 }
 
 // ── Options de dataset + OUTPUT ciblé (M2, lot 4) ────────────────────

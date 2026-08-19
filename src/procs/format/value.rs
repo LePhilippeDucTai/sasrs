@@ -1,7 +1,18 @@
 use super::*;
 
 /// Parse one VALUE statement (after the "value" keyword has been consumed):
-///   [$]<fmtname>  <range>='label'  [<range>='label' ...] [other='label'] ;
+///   [$]<fmtname>  [(min=<n> max=<n> default=<n> fuzz=<n>)]
+///   <range>='label'  [<range>='label' ...] [other='label'] ;
+///
+/// ## M43.1 — `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=`
+/// Real SAS requires these four options inside a parenthesized option list
+/// immediately after the format name. This parser follows the SAME
+/// pragmatic, non-strict-grammar convention already used below for
+/// `OTHER=` (recognised as a positional keyword-value pair, not confined to
+/// one grammar slot): the four keywords are recognised in ANY order,
+/// directly after the name and before the first range, with an optional
+/// enclosing `(`/`)` simply skipped rather than enforced. This keeps the
+/// parser small while still accepting the real-SAS parenthesized spelling.
 pub(super) fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, UserFormat)> {
     // --- format name: optional `$` then identifier ---
     let is_char = ts.peek().kind == TokenKind::Dollar;
@@ -29,6 +40,36 @@ pub(super) fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, User
     } else {
         base_name
     };
+
+    // --- M43.1 : MIN=/MAX=/DEFAULT=/FUZZ= option list (see doc comment) ---
+    let mut min: Option<u32> = None;
+    let mut max: Option<u32> = None;
+    let mut default: Option<u32> = None;
+    let mut fuzz: Option<f64> = None;
+    loop {
+        match ts.peek().kind {
+            TokenKind::LParen | TokenKind::RParen => {
+                ts.next();
+                continue;
+            }
+            _ => {}
+        }
+        if ts.peek().is_kw("min") {
+            ts.next();
+            min = Some(parse_width_option(ts, "MIN")?);
+        } else if ts.peek().is_kw("max") {
+            ts.next();
+            max = Some(parse_width_option(ts, "MAX")?);
+        } else if ts.peek().is_kw("default") {
+            ts.next();
+            default = Some(parse_width_option(ts, "DEFAULT")?);
+        } else if ts.peek().is_kw("fuzz") {
+            ts.next();
+            fuzz = Some(parse_fuzz_option(ts)?);
+        } else {
+            break;
+        }
+    }
 
     // --- parse range='label' pairs until `;` ---
     let mut ranges: Vec<Range> = Vec::new();
@@ -87,8 +128,43 @@ pub(super) fn parse_value_stmt(ts: &mut StatementStream) -> Result<(String, User
         is_char,
         ranges,
         other,
+        min,
+        max,
+        default,
+        fuzz,
     };
     Ok((name, uf))
+}
+
+/// M43.1 — parse `<KW>=<n>` where `<n>` is a non-negative numeric literal,
+/// returning it as a `u32` width (rounded if given with decimals — SAS
+/// widths are integral; a decimal `MIN=`/`MAX=`/`DEFAULT=` is not standard
+/// SAS but tolerated here rather than rejected outright).
+fn parse_width_option(ts: &mut StatementStream, opt_name: &str) -> Result<u32> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse(
+            format!("expected '=' after {opt_name}"),
+            ts.peek().span,
+        ));
+    }
+    ts.next(); // consume `=`
+    let n = parse_numeric_literal(ts)?;
+    if n < 0.0 {
+        return Err(SasError::parse(
+            format!("{opt_name}= must not be negative"),
+            ts.peek().span,
+        ));
+    }
+    Ok(n.round() as u32)
+}
+
+/// M43.1 — parse `FUZZ=<n>`, a plain (possibly decimal) numeric tolerance.
+fn parse_fuzz_option(ts: &mut StatementStream) -> Result<f64> {
+    if ts.peek().kind != TokenKind::Eq {
+        return Err(SasError::parse("expected '=' after FUZZ", ts.peek().span));
+    }
+    ts.next(); // consume `=`
+    parse_numeric_literal(ts)
 }
 
 /// Parse a comma-separated list of range specs that share a single label.
@@ -223,28 +299,31 @@ pub(super) fn parse_bound(ts: &mut StatementStream, is_char: bool) -> Result<Bou
     }
 
     // Numeric bound: a number literal.
-    // Handle optional leading minus sign (negative numbers).
-    let negative = if ts.peek().kind == TokenKind::Minus {
-        // But only if the next-next is a number (not another operator).
-        // Peek2 check: is the token after `-` a Num?
-        if matches!(ts.peek2().kind, TokenKind::Num(_)) {
+    parse_numeric_literal(ts).map(Bound::Num)
+}
+
+/// Parse a (possibly negative) numeric literal token — shared by numeric
+/// range bounds ([`parse_bound`]) and the `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=`
+/// VALUE options (M43.1), so both paths agree on what "a number" means here.
+/// Handles an optional leading minus sign (negative numbers): only consumed
+/// when immediately followed by a `Num` token, so a bare `-` before
+/// something else (shouldn't happen here, but defensive) is left alone.
+pub(super) fn parse_numeric_literal(ts: &mut StatementStream) -> Result<f64> {
+    let negative =
+        if ts.peek().kind == TokenKind::Minus && matches!(ts.peek2().kind, TokenKind::Num(_)) {
             ts.next(); // consume `-`
             true
         } else {
             false
-        }
-    } else {
-        false
-    };
+        };
 
     match ts.peek().kind.clone() {
         TokenKind::Num(n) => {
             ts.next();
-            let v = if negative { -n } else { n };
-            Ok(Bound::Num(v))
+            Ok(if negative { -n } else { n })
         }
         _ => Err(SasError::parse(
-            "expected a numeric bound (number, LOW, or HIGH)",
+            "expected a numeric literal",
             ts.peek().span,
         )),
     }

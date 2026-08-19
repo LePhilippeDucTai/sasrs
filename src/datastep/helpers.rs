@@ -114,22 +114,3 @@ pub(super) fn input_var_type(is_char: bool, informat: Option<&str>) -> Result<(V
         Ok((VarType::Num, 8))
     }
 }
-
-/// Largeur du format d'un `put(x, fmt)` : chiffres finaux du nom du format
-/// (`best12` → 12), sinon 200. Le parser M1 ne produit pas encore de
-/// littéral de format complet — best-effort.
-pub(super) fn put_width(args: &[Expr]) -> usize {
-    let Some(fmt) = args.get(1) else { return 200 };
-    let name = match fmt {
-        Expr::Var(n) => n.as_str(),
-        Expr::Str(s) => s.as_str(),
-        _ => return 200,
-    };
-    // La largeur du résultat de PUT est la largeur `w` du format, PAS les
-    // chiffres finaux du token : pour `dollar10.2` c'est 10 (pas 2, le nombre
-    // de décimales). On s'appuie donc sur le parseur de FormatSpec.
-    crate::formats::FormatSpec::parse(name)
-        .and_then(|spec| spec.w)
-        .map(|w| w as usize)
-        .unwrap_or(200)
-}

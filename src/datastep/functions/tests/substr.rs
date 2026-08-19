@@ -280,6 +280,7 @@ fn put_user_format_via_function() {
                 },
             ],
             other: Some("Unknown".to_string()),
+            ..Default::default()
         },
     );
     let mut c = EvalCtx {

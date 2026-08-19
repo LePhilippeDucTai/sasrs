@@ -18,7 +18,11 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M43 (Phase G)**. **M42 TERMINÉ** — PROC SQL : dictionnaires + prédicats :
+Jalon courant : **M44 (Phase G)**. **M43 TERMINÉ** — PROC FORMAT : `MIN=`/`MAX=`/`DEFAULT=`/
+`FUZZ=` sur `VALUE` (largeur de sortie bornée/par défaut, tolérance de bornes numériques),
+round-trip CNTLOUT=/CNTLIN=, chemin rapide octet-identique quand inutilisés ; bug de
+troncature PDV (`put_width` aveugle au catalogue) trouvé et corrigé au DoD ; 1 fixture m43.
+**M42 TERMINÉ** — PROC SQL : dictionnaires + prédicats :
 `DICTIONARY.MEMBERS` (alias de `TABLES`, seul trou réel — `TABLES`/`COLUMNS`/`MACROS`
 déjà complets depuis M20.3) ; nouveaux prédicats `[NOT] CONTAINS` (≡ `INDEX()>0`) et
 `[NOT] SOUNDS LIKE` (Soundex maison, vérifié sur 5 exemples de référence) ; `ODS OUTPUT
@@ -1093,9 +1097,37 @@ Cellule README PROC SQL Not supported 🔴→✅.
 ## BLOC 1 — Procs Base & descriptifs
 
 ## M43 — PROC FORMAT : complétion totale
-- [ ] M43.1 — Brancher CNTLIN/CNTLOUT/FMTLIB (M39) dans `procs/format.rs` ; multi-label, largeurs
-  MAX=/MIN=/DEFAULT= ; oracle : largeur défaut = max label, CNTLOUT round-trip (Sonnet, moyen)
-- [ ] DoD M43 : fixture m43 ; README FORMAT → ✅ ; → M44.
+- [x] M43.1 — CNTLIN/CNTLOUT/FMTLIB étaient déjà branchés depuis M39 (audit ; "multi-label" du
+  libellé désigne les plages multiples déjà supportées, pas l'option `MULTILABEL` distincte —
+  non implémentée, hors périmètre). Vrai livrable : `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=` sur
+  `VALUE` (options format-level, syntaxe pragmatique non stricte — reconnues dans n'importe
+  quel ordre, parenthèses optionnelles, comme `OTHER=`) : `UserFormat::effective_width`
+  (largeur explicite du point d'usage, sinon `DEFAULT=`, sinon longueur du plus long label ;
+  bornée dans `[MIN,MAX]`) avec **chemin rapide octet-identique** quand les trois sont absents
+  (oracle "largeur défaut = max label" vérifié) ; `FUZZ=` (défaut SAS `1e-12` même sans
+  option explicite, tolérance sur les comparaisons de bornes numériques, `fuzzy_cmp`).
+  CNTLOUT/CNTLIN : 4 colonnes numériques MIN/MAX/DEFAULT/FUZZ, **émission conditionnelle**
+  (absentes si aucun format du catalogue ne les utilise → octet-identique aux fixtures
+  d'avant M43.1) ; round-trip vérifié. PICTURE dans CNTLIN/CNTLOUT et LIBRARY=libref.catalog
+  à 2 niveaux restent hors périmètre (déjà documentés README, non touchés). 23 tests (10
+  unitaires largeur/fuzz + 6 parser + 4 exécution + 3 CNTLOUT/CNTLIN round-trip). **Bug
+  trouvé par la fixture DoD et corrigé** : `datastep::helpers::put_width` (longueur PDV
+  inférée à la compilation pour `x = put(v, fmt.)`) était purement syntaxique (chiffres du
+  token de format) et ignorait `MIN=`/`MAX=`/`DEFAULT=` — une largeur réelle élargie par
+  `MIN=` tronquait la valeur au runtime (`narrow4.` avec `MIN=8` → sortie coupée à 4
+  caractères). Corrigé en `Compiler::put_width` (accès au catalogue via `self.session`),
+  qui délègue à `UserFormat::effective_width` (même calcul que `format()`) quand le nom
+  résout un format utilisateur connu à ce point du programme ; fallback historique inchangé
+  sinon (builtin, format pas encore défini). Nouvel accesseur `FormatCatalog::user_format`.
+  +7 tests (3 régressions confirmées cassées avant fix + 4 nouveaux). 2910 tests + snapshot
+  verts, 0 warning `-D warnings`, `cargo fmt --check` propre, 0 `.snap.new`. (Sonnet, moyen)
+- [x] DoD M43 : fixture `tests/fixtures/m43/format_width_fuzz.sas` + snapshot **vérifié à la
+  main** : `DEFAULT=6` applique une largeur de 6 sans suffixe explicite au point d'usage,
+  `MIN=`/`MAX=` bornent une largeur explicite trop étroite/large, `FUZZ=` fait matcher une
+  valeur à un cheveu d'une borne côté inclusif, round-trip CNTLOUT→CNTLIN→CNTLOUT préserve
+  les 4 colonnes. README FORMAT : ligne "non couvert" retire `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=`
+  (résiduels PICTURE en CNTLIN/CNTLOUT et LIBRARY à 2 niveaux inchangés, toujours documentés).
+  → **M44**.
 
 ## M44 — PROC FREQ : Fisher exact r×c
 - [ ] M44.1 — Fisher exact r×c (réseau Freeman-Halton/Mehta-Patel + garde combinatoire + fallback

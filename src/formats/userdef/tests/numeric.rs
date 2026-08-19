@@ -8,6 +8,7 @@ fn numeric_single_value_match() {
         is_char: false,
         ranges: vec![num_single(1.0, "Male"), num_single(2.0, "Female")],
         other: None,
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(1.0)), Some("Male"));
     assert_eq!(uf.lookup(&Value::Num(2.0)), Some("Female"));
@@ -25,6 +26,7 @@ fn numeric_single_value_list() {
             num_single(3.0, "Group"),
         ],
         other: Some("Other".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(1.0)), Some("Group"));
     assert_eq!(uf.lookup(&Value::Num(2.0)), Some("Group"));
@@ -39,6 +41,7 @@ fn numeric_inclusive_range() {
         is_char: false,
         ranges: vec![num_range(1.0, 3.0, false, false, "Low")],
         other: Some("High".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(1.0)), Some("Low"));
     assert_eq!(uf.lookup(&Value::Num(2.5)), Some("Low"));
@@ -60,6 +63,7 @@ fn numeric_low_to_exclusive_upper() {
             label: "Below5".to_string(),
         }],
         other: Some("AtLeast5".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(-100.0)), Some("Below5"));
     assert_eq!(uf.lookup(&Value::Num(4.999)), Some("Below5"));
@@ -80,6 +84,7 @@ fn numeric_exclusive_lower_to_high() {
             label: "Above5".to_string(),
         }],
         other: Some("AtMost5".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(5.001)), Some("Above5"));
     assert_eq!(uf.lookup(&Value::Num(100.0)), Some("Above5"));
@@ -93,6 +98,7 @@ fn other_fallback() {
         is_char: false,
         ranges: vec![num_single(1.0, "One")],
         other: Some("Unknown".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Num(99.0)), Some("Unknown"));
 }
@@ -103,6 +109,7 @@ fn missing_value_falls_to_other() {
         is_char: false,
         ranges: vec![num_single(1.0, "One")],
         other: Some("Miss".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::missing()), Some("Miss"));
 }
@@ -128,6 +135,7 @@ fn char_single_value_format() {
             },
         ],
         other: Some("Unknown City".to_string()),
+        ..Default::default()
     };
     assert_eq!(uf.lookup(&Value::Char("PAR".to_string())), Some("Paris"));
     assert_eq!(uf.lookup(&Value::Char("NYC".to_string())), Some("New York"));

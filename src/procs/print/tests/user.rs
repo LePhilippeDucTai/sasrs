@@ -42,6 +42,7 @@ fn user_format_end_to_end_via_session_catalog() {
             },
         ],
         other: Some("Unknown".to_string()),
+        ..Default::default()
     };
     std::rc::Rc::make_mut(&mut session.format_catalog).define("SEXFMT", uf);
 

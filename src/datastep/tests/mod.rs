@@ -84,5 +84,19 @@ fn write_weights(session: &Session, table: &str) {
         .unwrap();
 }
 
+/// Parse et exécute un `proc format; ...; run;` dans `session` — peuple
+/// `session.format_catalog` pour les tests qui doivent voir un `VALUE`
+/// format utilisateur résolu à la compilation d'une étape DATA (M43.1,
+/// `Compiler::put_width`). Miroir du pattern `execute_round_trip_parse_and_execute`
+/// dans `procs::format::tests::execute`.
+fn define_format(session: &mut Session, src: &str) {
+    let file = SourceFile::new(src);
+    let mut ts = StatementStream::new(&file).unwrap();
+    assert!(ts.next().is_kw("proc"));
+    assert!(ts.next().is_kw("format"));
+    let ast = crate::procs::format::parse(&mut ts).unwrap();
+    crate::procs::format::execute(&ast, session).unwrap();
+}
+
 mod array;
 mod set;
