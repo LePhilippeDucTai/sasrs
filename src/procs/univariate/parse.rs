@@ -60,16 +60,27 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         // probe rather than the lowercase `kw`, so handle it before the match.
         if let Some(kind) = graphics_kind(ts.peek()) {
             // Capture the kind and its target variable (the first identifier
-            // after the keyword), then skip the rest of the body to `;`
-            // (trailing `/ options` are tolerated but ignored). Rendering is
-            // wired to ODS GRAPHICS (M29.3).
+            // after the keyword), then scan the rest of the body to `;` for the
+            // options we honour. Rendering is wired to ODS GRAPHICS (M29.3).
             ts.next(); // consume keyword
             let var = ts.peek().ident().map(str::to_string);
             if var.is_some() {
                 ts.next();
             }
+            // M45.2 — `/ NORMAL` requests a fitted normal distribution. Scan
+            // for the keyword rather than parsing the full option grammar:
+            // every other option (`MIDPOINTS=`, `NOPRINT`, a parenthesised
+            // `NORMAL(MU=… SIGMA=…)` list, …) stays tolerated and ignored, in
+            // any order — same pragmatic rule as `var x / normal;` below.
+            let mut normal = false;
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                if ts.peek().is_kw("normal") {
+                    normal = true;
+                }
+                ts.next();
+            }
             ts.skip_to_semi();
-            plots.push(UnivariatePlot { kind, var });
+            plots.push(UnivariatePlot { kind, var, normal });
             return Ok(true);
         }
         Ok(match kw {

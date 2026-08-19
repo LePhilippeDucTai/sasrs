@@ -400,8 +400,9 @@ fn build_basic_measures_part(var_name: &str, rows: &[BasicMeasureRow]) -> Result
 /// count, `n_total` the group's total row count.
 ///
 /// Moments and Basic Measures mean/std/variance use the weighted formulas
-/// (see file header). Skewness/Kurtosis are computed on the UNWEIGHTED values
-/// (documented divergence). Quantiles use the SAS WEIGHTED Definition 5
+/// (see file header). Skewness/Kurtosis use the SAS WEIGHTED g1/g2 formulas
+/// (M45.1, VARDEF=DF — see `weighted_skewness`). Quantiles use the SAS
+/// WEIGHTED Definition 5
 /// (`weighted_quantile_def5`); the Extreme Observations section lists the raw
 /// extreme VALUES with their obs numbers (extremes are not weighted in SAS).
 /// `obs_pairs` are the usable `(value, obs_number)` pairs in row order.
@@ -431,7 +432,6 @@ pub(super) fn emit_variable_weighted(
 
     let n = pairs.len();
     let nf = n as f64;
-    let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
 
     // Pairs sorted ascending by value, for the weighted quantiles / median /
     // mode / range (weights stay attached to their value).
@@ -466,9 +466,16 @@ pub(super) fn emit_variable_weighted(
         Some(sd) if sum_w > 0.0 => Some(sd / sum_w.sqrt()),
         _ => None,
     };
-    // Skewness / kurtosis deferred → computed on UNWEIGHTED values.
-    let skew = skewness(&xs);
-    let kurt = kurtosis(&xs);
+    // M45.1 — weighted skewness / kurtosis (SAS VARDEF=DF), built on the
+    // weighted mean and std computed just above so the three Moments lines stay
+    // mutually consistent. Reduce exactly to the unweighted formulas at w ≡ 1.
+    let (skew, kurt) = match (mean_w, std) {
+        (Some(m), Some(sd)) => (
+            weighted_skewness(pairs, m, sd),
+            weighted_kurtosis(pairs, m, sd),
+        ),
+        _ => (None, None),
+    };
 
     // ── Moments ── (objet ODS « Moments »)
     if show_moments {
@@ -662,4 +669,47 @@ pub(super) fn emit_variable_weighted(
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
     }
+}
+
+/// M45.2 — « Fitted Normal Distribution » : la table de paramètres que SAS
+/// imprime pour chaque instruction graphique portant `/ NORMAL`.
+///
+/// ```text
+///                    Fitted Normal Distribution for height
+///
+///                       Parameters for Normal Distribution
+///
+///                       Parameter    Symbol       Estimate
+///
+///                       Mean         Mu        62.336842105
+///                       Std Dev      Sigma     5.1270752466
+/// ```
+///
+/// C'est du LISTING, pas une image : la table sort que `ODS GRAPHICS` soit ON
+/// ou OFF (le rendu de la courbe, lui, reste conditionné à ODS GRAPHICS et à
+/// `--features graphics`). `mu`/`sigma` sont ceux du bloc Moments de la même
+/// variable — donc **pondérés** quand une instruction WEIGHT est en vigueur,
+/// ce qui rend la table directement vérifiable dans le snapshot.
+///
+/// Nom d'objet ODS SAS : `ParameterEstimates` (filtrage ODS SELECT/EXCLUDE
+/// M38.4). `sigma <= 0` (valeurs toutes égales) ou moins de 2 observations
+/// utilisables → aucune table, comme SAS qui ne peut pas ajuster de loi.
+pub(super) fn emit_fitted_normal(session: &mut Session, name: &str, mu: f64, sigma: f64) {
+    let fittable = sigma > 0.0; // false for NaN too — no distribution to fit
+    if !fittable || !session.ods_displays("ParameterEstimates") {
+        return;
+    }
+    session.listing.blank();
+    centered(session, &format!("Fitted Normal Distribution for {name}"));
+    session.listing.blank();
+    centered(session, "Parameters for Normal Distribution");
+    session.listing.blank();
+    session.listing.write_table(
+        &["Parameter".into(), "Symbol".into(), "Estimate".into()],
+        &[Align::Left, Align::Left, Align::Right],
+        &[
+            vec!["Mean".into(), "Mu".into(), fmt_num(mu)],
+            vec!["Std Dev".into(), "Sigma".into(), fmt_num(sigma)],
+        ],
+    );
 }
