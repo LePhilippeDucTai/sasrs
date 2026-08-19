@@ -91,7 +91,7 @@ individual options of each procedure and DATA step statement. Legend:
 | `COMPARE` | ✅ | `BASE=`, `COMPARE=`, `OUT=`, `NOVALUES`, `BRIEFSUMMARY` | `CRITERION=`, `ID`, `VAR`/`WITH` |
 | `IMPORT` | ✅ | `DATAFILE=`/`FILENAME=`, `OUT=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `GETNAMES=`, `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL`, `GUESSINGROWS=` (parsed, ignored) |
 | `EXPORT` | ✅ | `DATA=`, `OUTFILE=`, `DBMS=(CSV\|TAB\|DLM)`, `REPLACE`; `DELIMITER=`/`DLM=` | `DBMS=XLSX`/`EXCEL` |
-| `SQL` | ✅ | see [PROC SQL](#proc-sql) below | dictionary tables, `ODS OUTPUT` capture |
+| `SQL` | ✅ | see [PROC SQL](#proc-sql) below | `ODS OUTPUT` capture |
 | `FORMAT` | 🟡 | `VALUE` (`$`/numeric, ranges `a-b`, `low-<b`, `a<-high`, value lists, `OTHER`), `INVALUE` (user informats), `PICTURE` (`PREFIX=`/`MULT=`/`FILL=`); `LIB=`/`LIBRARY=libref` persistent catalogs (JSON sidecar `formats.sascat.json` in the libref directory, saved after the proc, loaded at `LIBNAME`; WORK stays in-memory; resolution: WORK first, then librefs in assignment order); `CNTLOUT=` (control dataset `FMTNAME`/`START`/`END`/`LABEL`/`TYPE`/`SEXCL`/`EEXCL`/`HLO`, deterministic order) and `CNTLIN=` (rebuild from control dataset, applied before same-step `VALUE`/`INVALUE`, composes with `LIB=`) with exact round-trip; `FMTLIB` (catalog listing: name/type/length header + START/END/LABEL ranges, `LOW`/`HIGH`/`OTHER`, exclusive-bound marker); `FMTSEARCH=` honored (WORK/LIBRARY implicitly first unless explicitly positioned, resolution rebuilt on `OPTIONS`/`LIBNAME`/`PROC FORMAT`) | two-level `LIBRARY=libref.catalog`, `PICTURE` in `CNTLIN=`/`CNTLOUT=` (TYPE=P noted & skipped), `MIN=`/`MAX=`/`DEFAULT=`/`FUZZ=` |
 | `FREQ` | 🟡 | `DATA=`; `TABLES` one-way, two-way (`v1*v2`) & n-way (`v1*v2*…`, stratified two-way of the last two vars) with `/MISSING /OUT= /NOPERCENT /NOROW /NOCOL /NOFREQ /NOCUM /LIST /CHISQ /FISHER` (2×2) `/MEASURES /AGREE /TREND`; `WEIGHT` (sum of weights into frequencies & CHISQ), `BY`; `ODS OUTPUT OneWayFreqs` | Fisher on tables >2×2 |
 | `UNIVARIATE` | 🟡 | `DATA=`, `NOPRINT`, `NORMAL`/`NORMALTEST`; `VAR` (`/ normal`), `WEIGHT`, `BY` (parsed), `OUTPUT` (parsed). Report: Moments, Basic Measures, Quantiles, Extreme Obs, Tests for Normality. With `WEIGHT`: weighted Quantiles (weighted Definition 5 — cumulative-weight position) and weighted `Median`/`Q1`/`Q3`/`Range`/`IQR`, plus Extreme Obs (raw extreme values). Plots wired to ODS GRAPHICS: `HISTOGRAM`/`QQPLOT`/`PROBPLOT`/`CDFPLOT`/`PPPLOT` → PNG/SVG under `--features graphics` (`univar_{N}`; histogram, normal-QQ/normal-probability scatter, empirical CDF, P-P scatter), else the shared "image deferred" NOTE; nothing emitted when ODS GRAPHICS off | weighted skewness/kurtosis (computed unweighted); plot-statement options (`/ NORMAL`, annotation) |
@@ -179,7 +179,8 @@ individual options of each procedure and DATA step statement. Legend:
 | Predicates | ✅ | `BETWEEN`, `IS [NOT] NULL`/`MISSING`, `LIKE` (`%`/`_`), `IN`/`NOT IN`, scalar/`IN`/`EXISTS` subqueries |
 | Set operators | ✅ | `UNION [ALL]`, `EXCEPT`, `INTERSECT` |
 | Aggregates | ✅ | `COUNT(*)`, `COUNT([DISTINCT] col)`, `SUM`, `AVG`/`MEAN`, `MIN`, `MAX` |
-| Not supported | 🔴 | dictionary tables, `ODS OUTPUT` capture, `CONTAINS`/`SOUNDS LIKE` |
+| Dictionary tables | ✅ | `DICTIONARY.TABLES`/`.MEMBERS`/`.COLUMNS`/`.MACROS` (+ `SASHELP.VTABLE`/`VMEMBER`/`VCOLUMN`/`VMACRO` aliases), full `WHERE`/`SELECT`/`ORDER BY` support |
+| Not supported | 🔴 | `ODS OUTPUT` capture, `CONTAINS`/`SOUNDS LIKE` |
 
 ### Output (ODS) & formats
 

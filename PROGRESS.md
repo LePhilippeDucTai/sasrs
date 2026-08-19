@@ -1048,8 +1048,12 @@ Cellule README Macro Quoting 🟡→✅, Unsupported réduit.
 
 ## M42 — PROC SQL : dictionnaires + prédicats
 Cellule README PROC SQL Not supported 🔴→✅.
-- [ ] M42.1 — Dictionary tables (`DICTIONARY.TABLES/.COLUMNS/.MEMBERS` → vues sur `LibraryManager`) ;
-  oracle : `SELECT * FROM dictionary.columns` liste les colonnes connues (Opus, élevé)
+- [x] M42.1 — Dictionary tables : `TABLES`/`COLUMNS`/`MACROS` (+ alias `SASHELP.VTABLE`/
+  `VCOLUMN`/`VMACRO`/`VMEMBER`) étaient déjà complets depuis M20.3 (audit, README stale —
+  corrigé). Seul trou réel : `DICTIONARY.MEMBERS` (absent du libref `DICTIONARY`, alors que
+  `SASHELP.VMEMBER` était déjà aliasé) — ajouté comme alias de `Tables` (ce projet ne suit
+  que des datasets, pas de catalogues, donc pas de colonne `ENGINE` distincte). Oracle
+  `SELECT * FROM dictionary.columns` déjà conforme (pré-existant). +1 test. (Opus, élevé)
 - [ ] M42.2 — `CONTAINS` (substring) + `SOUNDS LIKE` (soundex) ; oracle CONTAINS≡INDEX>0, SOUNDS LIKE=même soundex (Sonnet, moyen)
 - [ ] M42.3 — ODS OUTPUT capture du SELECT nu (via M38.3) (Sonnet, faible)
 - [ ] DoD M42 : fixtures m42 ; README PROC SQL Not supported → ✅ ; → M43.
