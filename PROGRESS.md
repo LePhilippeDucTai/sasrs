@@ -18,7 +18,12 @@ restants (M38–M66) ont été recalibrés **jalon par jalon dans le tableau Pha
 effort)` ci-dessous sont antérieures : lire « Opus, (très) élevé » comme « à confier à
 Fable, un cran d'effort en dessous » sur les jalons marqués Fable dans PLAN.md.
 
-Jalon courant : **M44 (Phase G)**. **M43 TERMINÉ** — PROC FORMAT : `MIN=`/`MAX=`/`DEFAULT=`/
+Jalon courant : **M45 (Phase G)**. **M44 TERMINÉ** — PROC FREQ : Fisher exact généralisé r×c
+(Freeman-Halton) : énumération exacte complète des tables à marges fixées (garde 500 000
+tables), fallback Monte-Carlo déterministe au-delà ; chemin 2×2 existant intouché ; vérifié
+par oracle Python indépendant (arithmétique rationnelle) + cohérence interne (Σp=1, chemin
+général ≡ formule 2×2 spécialisée) faute d'exemple SAS externe fiable trouvé ; 1 fixture m44.
+**M43 TERMINÉ** — PROC FORMAT : `MIN=`/`MAX=`/`DEFAULT=`/
 `FUZZ=` sur `VALUE` (largeur de sortie bornée/par défaut, tolérance de bornes numériques),
 round-trip CNTLOUT=/CNTLIN=, chemin rapide octet-identique quand inutilisés ; bug de
 troncature PDV (`put_width` aveugle au catalogue) trouvé et corrigé au DoD ; 1 fixture m43.
@@ -1130,9 +1135,32 @@ Cellule README PROC SQL Not supported 🔴→✅.
   → **M44**.
 
 ## M44 — PROC FREQ : Fisher exact r×c
-- [ ] M44.1 — Fisher exact r×c (réseau Freeman-Halton/Mehta-Patel + garde combinatoire + fallback
-  Monte-Carlo déterministe PRNG maison) ; oracle : 2×2 = Fisher existant, Σtables≤p(obs) (Opus, très élevé)
-- [ ] DoD M44 : fixture m44 (3×3 vs doc SAS) ; README FREQ → ✅ (résiduel grandes tables MC documenté) ; → M45.
+- [x] M44.1 — Fisher exact r×c (Freeman-Halton) : énumération EXACTE complète (récursion
+  ligne/colonne, bornes serrées `[row_rem − Σ col_rem restants, min(row_rem, col_rem[j])]`,
+  seule (r−1)(c−1) cellules branchent, dernière cellule/ligne forcées) plutôt que
+  l'algorithme réseau Mehta-Patel — priorité donnée à la correction vérifiable (le réseau
+  n'est qu'une optimisation de performance de la MÊME définition). Garde combinatoire
+  500 000 tables (mesurée : <0.2s même en dépassement) ; au-delà, Monte-Carlo déterministe
+  (LCG mêmes constantes Knuth MMIX que le RNG DATA step, graine fixe, échantillonnage par
+  inversion sur la loi hypergéométrique conditionnelle exacte cellule par cellule,
+  10 000 tirages = défaut SAS, résultat étiqueté "Monte Carlo estimate" dans le listing).
+  Chemin 2×2 existant intouché (seul le test `grand==0` remonte avant le branchement de
+  forme, strictement neutre). Vérification (aucun oracle SAS externe fiable trouvé) :
+  oracle Python indépendant en arithmétique rationnelle exacte (stratégie d'énumération
+  DIFFÉRENTE, auto-vérifié Σp=1, reproduit la valeur SAS documentée 0.4857 du 2×2
+  [[3,1],[1,3]]) ; + 3 vérifications internes fortes : Σp=1 sur plusieurs tables, chemin
+  général ≡ formule 2×2 spécialisée à 1e-9 sur 3 tables (chemins de calcul totalement
+  indépendants), cas dégénérés (marge nulle, 1×C) sans panic, déterminisme bit-à-bit du
+  Monte-Carlo à graine fixe. 9 tests (2918 tests + snapshot verts, 0 warning `-D warnings`,
+  `cargo fmt --check` propre, 0 `.snap.new` — la seule fixture FISHER existante est en 2×2,
+  chemin inchangé). (Fable, élevé)
+- [x] DoD M44 : fixture `tests/fixtures/m44/fisher_rxc.sas` + snapshot **vérifié à la main**
+  (table diagonale 3×3 parfaite [[5,0,0],[0,5,0],[0,0,5]] — cas hors-doc-SAS mais
+  vérifiable à la main : P = 1/756756, Pr≤P = 1/126126 = 6×P, cohérent avec les 3! = 6
+  permutations diagonales équiprobables et les seules tables aussi extrêmes ; + table 2×3
+  non dégénérée montrant le chemin exact courant ; + table 4×4 dépassant la garde montrant
+  la NOTE Monte-Carlo). README FREQ : FISHER étendu à r×c ; "non couvert" reformulé (résiduel
+  Monte-Carlo au-delà de 500 000 tables, documenté). → **M45**.
 
 ## M45 — PROC UNIVARIATE : pondération + plots
 - [ ] M45.1 — Skewness/kurtosis pondérés (moments m3/m4, VARDEF=DF) ; oracle poids=1 = actuel, symétrique⇒skew≈0 (Opus, moyen)

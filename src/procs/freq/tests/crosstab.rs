@@ -134,12 +134,202 @@ fn fisher_2x2_numeric_values() {
     assert!((right - 17.0 / 70.0).abs() < 1e-12);
 }
 
+// ---- Fisher r×c (Freeman-Halton, M44.1) ----
+//
+// Oracle values below were computed with an INDEPENDENT brute-force
+// implementation in exact rational arithmetic (Python fractions.Fraction,
+// different enumeration strategy), which itself asserts that the table
+// probabilities sum to exactly 1 and reproduces the SAS-documented 2x2
+// value 0.4857 for [[3,1],[1,3]].
+
+/// Exact-path helper with production-sized guard.
+fn rxc_exact(freq: &[Vec<usize>]) -> FisherRxcResult {
+    let (rt, ct, g) = margins(freq);
+    fisher_rxc_compute(freq, &rt, &ct, g, 500_000, 10_000, 1)
+}
+
 #[test]
-fn fisher_larger_than_2x2_deferred() {
+fn fisher_rxc_listing_2x3() {
+    // The old "larger than 2x2 not supported" deferral is replaced by a real
+    // Freeman-Halton block reporting P and Pr <= P.
     let freq = vec![vec![1, 2, 3], vec![4, 5, 6]];
     let (rt, ct, g) = margins(&freq);
     let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
-    assert!(out.contains("larger than 2x2"), "{out}");
+    assert!(out.contains("Fisher's Exact Test"), "{out}");
+    assert!(out.contains("Table Probability (P)"), "{out}");
+    assert!(out.contains("Pr <= P"), "{out}");
+    assert!(!out.contains("larger than 2x2"), "{out}");
+    // Exact path: no Monte-Carlo note for such a small table.
+    assert!(!out.contains("Monte Carlo"), "{out}");
+}
+
+#[test]
+fn fisher_rxc_probabilities_sum_to_one() {
+    // Strong internal sanity check, independent of any external oracle: the
+    // enumerated multivariate hypergeometric masses must total 1.
+    for freq in [
+        vec![vec![2, 3, 4], vec![4, 3, 2]],
+        vec![vec![3, 1, 2], vec![1, 4, 1], vec![2, 1, 3]],
+        vec![vec![5, 0, 0], vec![0, 5, 0], vec![0, 0, 5]],
+    ] {
+        let res = rxc_exact(&freq);
+        assert!(!res.monte_carlo);
+        assert!((res.p_sum - 1.0).abs() < 1e-10, "p_sum={}", res.p_sum);
+    }
+}
+
+#[test]
+fn fisher_rxc_matches_2x2_special_case() {
+    // The general enumeration on a 2x2 table must agree with the dedicated
+    // 2x2 hypergeometric path (same definition, same tolerance).
+    for freq in [
+        vec![vec![3, 1], vec![1, 3]],
+        vec![vec![10, 20], vec![30, 40]],
+        vec![vec![2, 7], vec![8, 2]],
+    ] {
+        let (rt, ct, g) = margins(&freq);
+        // Recompute the 2x2 two-sided p exactly as fisher_block does.
+        let (r1, r2, c1, n) = (rt[0] as i64, rt[1] as i64, ct[0] as i64, g as i64);
+        let a_obs = freq[0][0] as i64;
+        let ln_p = |a: i64| {
+            ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, (c1 - a) as u64)
+                - ln_choose(n as u64, c1 as u64)
+        };
+        let p_obs = ln_p(a_obs).exp();
+        let mut p_two = 0.0;
+        for a in 0.max(r1 + c1 - n)..=r1.min(c1) {
+            let p = ln_p(a).exp();
+            if p <= p_obs * (1.0 + 1e-7) {
+                p_two += p;
+            }
+        }
+
+        let res = rxc_exact(&freq);
+        assert!(!res.monte_carlo);
+        assert!(
+            (res.p_obs - p_obs).abs() < 1e-9,
+            "p_obs {} vs {}",
+            res.p_obs,
+            p_obs
+        );
+        assert!(
+            (res.p_two - p_two).abs() < 1e-9,
+            "p_two {} vs {}",
+            res.p_two,
+            p_two
+        );
+    }
+}
+
+#[test]
+fn fisher_rxc_oracle_values() {
+    // Exact rational oracle values (see comment atop this section).
+    // 2x3 [[2,3,4],[4,3,2]]: 37 tables, p_obs = 225/2431, p_two = 2031/2431.
+    let res = rxc_exact(&[vec![2, 3, 4], vec![4, 3, 2]]);
+    assert_eq!(res.count, 37);
+    assert!((res.p_obs - 225.0 / 2431.0).abs() < 1e-9, "{}", res.p_obs);
+    assert!((res.p_two - 2031.0 / 2431.0).abs() < 1e-9, "{}", res.p_two);
+
+    // 3x3 [[3,1,2],[1,4,1],[2,1,3]]: 406 tables, p_obs = 750/119119,
+    // p_two = 111113/238238 = 0.466394949588227.
+    let res = rxc_exact(&[vec![3, 1, 2], vec![1, 4, 1], vec![2, 1, 3]]);
+    assert_eq!(res.count, 406);
+    assert!(
+        (res.p_obs - 750.0 / 119_119.0).abs() < 1e-9,
+        "{}",
+        res.p_obs
+    );
+    assert!(
+        (res.p_two - 111_113.0 / 238_238.0).abs() < 1e-9,
+        "{}",
+        res.p_two
+    );
+
+    // Perfect-diagonal 3x3 [[5,0,0],[0,5,0],[0,0,5]]: 231 tables,
+    // p_obs = 1/756756 (most extreme table), p_two = 1/126126 (six
+    // equiprobable permutation-diagonal tables).
+    let res = rxc_exact(&[vec![5, 0, 0], vec![0, 5, 0], vec![0, 0, 5]]);
+    assert_eq!(res.count, 231);
+    assert!((res.p_obs - 1.0 / 756_756.0).abs() < 1e-9, "{}", res.p_obs);
+    assert!((res.p_two - 1.0 / 126_126.0).abs() < 1e-9, "{}", res.p_two);
+}
+
+#[test]
+fn fisher_rxc_guard_falls_back_to_monte_carlo() {
+    // Tiny guard forces the Monte-Carlo path (406 tables > 5); result must be
+    // a plausible probability, deterministic, and reasonably close to the
+    // exact 0.46639.
+    let freq = vec![vec![3, 1, 2], vec![1, 4, 1], vec![2, 1, 3]];
+    let (rt, ct, g) = margins(&freq);
+    let res = fisher_rxc_compute(&freq, &rt, &ct, g, 5, 10_000, 42);
+    assert!(res.monte_carlo);
+    assert_eq!(res.count, 10_000);
+    assert!((0.0..=1.0).contains(&res.p_two), "{}", res.p_two);
+    // 3-sigma band around the exact value: sqrt(p(1-p)/N) ~ 0.005.
+    let exact = 111_113.0 / 238_238.0;
+    assert!(
+        (res.p_two - exact).abs() < 0.02,
+        "MC estimate {} far from exact {exact}",
+        res.p_two
+    );
+    // p_obs stays exact even on the MC path.
+    assert!(
+        (res.p_obs - 750.0 / 119_119.0).abs() < 1e-9,
+        "{}",
+        res.p_obs
+    );
+}
+
+#[test]
+fn fisher_rxc_monte_carlo_deterministic() {
+    // Same seed => bit-identical estimate; different seed may differ.
+    let freq = vec![vec![3, 1, 2], vec![1, 4, 1], vec![2, 1, 3]];
+    let (rt, ct, g) = margins(&freq);
+    let a = fisher_rxc_compute(&freq, &rt, &ct, g, 5, 2_000, 7);
+    let b = fisher_rxc_compute(&freq, &rt, &ct, g, 5, 2_000, 7);
+    assert!(a.monte_carlo && b.monte_carlo);
+    assert_eq!(a.p_two.to_bits(), b.p_two.to_bits());
+}
+
+#[test]
+fn fisher_rxc_monte_carlo_listing_label() {
+    // A table exceeding the production guard must print the estimate label.
+    // 4x4 with margins 20 each (n=80) has far more than 500k tables.
+    let freq = vec![
+        vec![5, 5, 5, 5],
+        vec![5, 5, 5, 5],
+        vec![5, 5, 5, 5],
+        vec![5, 5, 5, 5],
+    ];
+    let (rt, ct, g) = margins(&freq);
+    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    assert!(out.contains("Monte Carlo estimate"), "{out}");
+    assert!(out.contains("10000 samples"), "{out}");
+}
+
+#[test]
+fn fisher_rxc_zero_margin_degenerate() {
+    // A zero row margin leaves a single feasible table: p_obs = p_two = 1.
+    let freq = vec![vec![0, 0, 0], vec![1, 2, 3]];
+    let (rt, ct, g) = margins(&freq);
+    let res = rxc_exact(&freq);
+    assert!(!res.monte_carlo);
+    assert_eq!(res.count, 1);
+    assert!((res.p_obs - 1.0).abs() < 1e-12);
+    assert!((res.p_two - 1.0).abs() < 1e-12);
+    // And the listing renders without panicking.
+    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    assert!(out.contains("Pr <= P"), "{out}");
+    assert!(out.contains("1.0000"), "{out}");
+}
+
+#[test]
+fn fisher_rxc_single_row_degenerate() {
+    // 1xC: the margins force the observed table; p = 1, no panic.
+    let res = rxc_exact(&[vec![1, 2, 3]]);
+    assert!(!res.monte_carlo);
+    assert_eq!(res.count, 1);
+    assert!((res.p_two - 1.0).abs() < 1e-12);
 }
 
 // ---- MEASURES (odds ratio / RR) ----
