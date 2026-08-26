@@ -21,11 +21,11 @@ RELEASE_TAG = "python-v0.1.0"
 _PLATFORM_ASSETS = {
     ("Windows", "AMD64"): (
         "sasrs-windows-x86_64.exe",
-        "092fb0ec4fba145ea76873dda5ca30b9899f9e3eb5e961f76b2fa74117393d87",
+        "76f82df0d5c28443c01844ca76faa4b93fe30ce278c378d6ddf7b5752cb84ee6",
     ),
     ("Windows", "x86_64"): (
         "sasrs-windows-x86_64.exe",
-        "092fb0ec4fba145ea76873dda5ca30b9899f9e3eb5e961f76b2fa74117393d87",
+        "76f82df0d5c28443c01844ca76faa4b93fe30ce278c378d6ddf7b5752cb84ee6",
     ),
 }
 
