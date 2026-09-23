@@ -11,7 +11,7 @@ use super::*;
 /// coercition identique à `DirLibrary`, seul l'URI et le transport changent).
 ///
 /// Tout ce code n'est compilé qu'avec la feature `s3` (qui tire `polars/cloud`
-/// + `polars/aws`). Sous le build par défaut, ce backend n'existe pas et un
+/// et `polars/aws`). Sous le build par défaut, ce backend n'existe pas et un
 /// chemin `s3://` est traité comme aujourd'hui (chemin local).
 ///
 /// Credentials / région : `read`/`scan` dérivent les `CloudOptions` de

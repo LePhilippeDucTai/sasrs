@@ -4,7 +4,6 @@
 // qu'elle n'en rend, et la revue a préféré garder les indices explicites.
 #![allow(clippy::needless_range_loop)]
 
-use super::super::*;
 use super::*;
 
 /// Oracle (a): a single-coefficient `TEST xj=0;` yields F == t² of xj.

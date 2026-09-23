@@ -1,6 +1,5 @@
 //! M39.2 — tests `CNTLOUT=`/`CNTLIN=`.
 
-use super::super::*;
 use super::*;
 use crate::dataset::SasDataset;
 use crate::procs::common::decode_column;

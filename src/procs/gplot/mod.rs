@@ -200,13 +200,17 @@ pub(crate) mod graphics_impl {
         }
     }
 
+    /// Une série prête à tracer : points `(x, y)`, couleur, ligne (SYMBOL
+    /// `INTERPOL=JOIN`), marqueur (SYMBOL `VALUE=`).
+    type PlotSeries = (Vec<(f64, f64)>, SeriesColor, bool, bool);
+
     /// Construit la liste des séries (label, data, color, line, marker) à tracer
     /// pour un statement PLOT, en honorant SYMBOLn et `=group`.
     pub fn build_series(
         ds: &crate::dataset::SasDataset,
         stmt: &GplotStmt,
         symbols: &[SymbolDef],
-    ) -> Result<Vec<(Vec<(f64, f64)>, SeriesColor, bool, bool)>> {
+    ) -> Result<Vec<PlotSeries>> {
         let GplotStmt::Plot {
             y_vars,
             x_var,

@@ -1,0 +1,168 @@
+# CI bloquante de sasrs (J01-P2).
+#
+# Le job agrégé `ci-ok` est LE SEUL check à rendre obligatoire dans la
+# protection de branche (contexte exact : « ci-ok ») : il `needs` tous les
+# autres jobs et échoue dès que l'un d'eux n'est pas vert.
+#
+# Environnement identique à scripts/check.sh : CI=true et INSTA_UPDATE=no —
+# insta n'écrit jamais de `.snap.new`, un écart de snapshot fait échouer le
+# test. Après chaque job de test, `git status --porcelain` doit être vide,
+# sinon le job échoue (aucun fichier produit par les tests ne doit rester).
+#
+# La toolchain (1.98.1 + rustfmt + clippy) vient de rust-toolchain.toml, lu
+# par actions-rust-lang/setup-rust-toolchain.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CI: "true"
+  INSTA_UPDATE: "no"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  clippy:
+    name: clippy (défaut)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+  clippy-graphics:
+    name: clippy (graphics)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: graphics
+      - name: Installer les dépendances système fontconfig (plotters)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
+      - name: cargo clippy --all-targets --features graphics -- -D warnings
+        run: cargo clippy --all-targets --features graphics -- -D warnings
+
+  clippy-s3:
+    name: clippy (s3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: s3
+      - name: cargo clippy --all-targets --features s3 -- -D warnings
+        run: cargo clippy --all-targets --features s3 -- -D warnings
+
+  test:
+    name: test (défaut)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p sasrs
+        run: cargo test -p sasrs
+      - name: git status --porcelain doit être vide
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "::error::Arbre de travail sale après les tests (fichier .snap.new oublié ?)"
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  test-graphics:
+    name: test (graphics)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: graphics
+      - name: Installer les dépendances système fontconfig (plotters)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
+      - name: cargo test -p sasrs --features graphics
+        run: cargo test -p sasrs --features graphics
+      - name: git status --porcelain doit être vide
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "::error::Arbre de travail sale après les tests (fichier .snap.new oublié ?)"
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  test-s3:
+    name: test (s3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: s3
+      # Aucun secret nécessaire : les tests s3 --lib ne parlent pas à AWS.
+      - name: cargo test --features s3 --lib
+        run: cargo test --features s3 --lib
+      - name: git status --porcelain doit être vide
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "::error::Arbre de travail sale après les tests (fichier .snap.new oublié ?)"
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  ci-ok:
+    name: ci-ok
+    needs:
+      - fmt
+      - clippy
+      - clippy-graphics
+      - clippy-s3
+      - test
+      - test-graphics
+      - test-s3
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Tous les jobs de la CI doivent être verts
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "Résultats des jobs : ${results}"
+          for bad in failure cancelled skipped; do
+            if printf '%s' "$results" | grep -qw "$bad"; then
+              echo "::error::au moins un job de la CI est « ${bad} »."
+              exit 1
+            fi
+          done
+          echo "ci-ok : tous les jobs de la CI sont verts."

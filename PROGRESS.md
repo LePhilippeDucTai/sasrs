@@ -1,5 +1,13 @@
 # Avancement `sasrs` — curseur de la skill sasrs-impl
 
+> **⚠️ Feuille de route gelée le 2026-09-23.** Ce curseur est figé à M46 (Phase G) et
+> n'est plus mis à jour : la suite du projet est pilotée par le plan de consolidation
+> dans `docs/plans/consolidation/` (statut des jalons J01–J08 :
+> `docs/plans/consolidation/PROGRESS.md`, géré par l'orchestrateur). Le remapping des
+> jalons restants M46–M66 est décrit dans `PLAN.md` § « Correspondance M46–M66 →
+> consolidation ». La skill `sasrs-impl` est remplacée par `/milestone-continue
+> consolidation`.
+
 Ce fichier est l'état d'avancement machine-lisible du projet. La skill
 `sasrs-impl` le lit pour savoir où reprendre, et le met à jour DANS LE MÊME
 COMMIT que le code livré. Ne cocher une case que si : implémentation
