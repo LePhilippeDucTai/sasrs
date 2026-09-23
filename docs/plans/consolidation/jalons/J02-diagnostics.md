@@ -3,6 +3,40 @@
 Goal: un code retour et un log auxquels on peut se fier : échecs d'écriture et d'ODS comptés, erreurs macro réellement émises, `%ABORT` honoré, et aucune instruction, option ou valeur reconnue mais non respectée sans ERROR/WARNING explicite (issue #5).
 Depends on: J01 · Orchestrator: sonnet/high
 
+## J02-P0 — Corrective review J01 : durcissement de l'appareil de confiance CI
+
+```yaml
+id: J02-P0
+kind: implement
+tier: T5
+size: S
+depends_on: []
+files:
+  - scripts/ci-status.sh
+  - scripts/check.sh
+  - .github/workflows/ci.yml
+  - scripts/check_ci_structure.py
+  - .github/CODEOWNERS
+acceptance:
+  - "bash -n scripts/ci-status.sh && bash -n scripts/check.sh"
+  - "grep -qE 'git (fetch origin|ls-remote)' scripts/ci-status.sh"
+  - "test \"$(grep -c -- '--locked' .github/workflows/ci.yml)\" -ge 6 && grep -q -- '--locked' scripts/check.sh"
+  - "python3 scripts/check_ci_structure.py"
+  - "test -f .github/CODEOWNERS && grep -q '@LePhilippeDucTai' .github/CODEOWNERS"
+  - "scripts/ci-status.sh --help | grep -q consolidation"
+```
+
+### Scope
+- **F2** (`ci-status.sh`) : faire un `git fetch origin <branche>` (ou `git ls-remote` sur la ref) AVANT la comparaison headSha == sha local — la revue a démontré un faux vert (M4-A) sur refs locales périmées. Conserver tous les comportements fail-closed existants (sha ≠, conclusion failure, run in_progress). Corriger **F9** au passage : le séparateur statut/conclusion qui colle « aucune » (cas in_progress).
+- **F4** : ajouter `--locked` à toute invocation cargo qui l'accepte dans `ci.yml` (les 6 lignes clippy/test ; PAS `cargo fmt --check`) et dans `scripts/check.sh` (clippy, test, build).
+- **F5** : nouveau `scripts/check_ci_structure.py` (PyYAML, shebang python3) : parse `.github/workflows/ci.yml` et échoue (exit ≠ 0, message explicite) si `ci-ok` est absent, si un job de `needs` n'existe pas, ou si `ci-ok` porte un `continue-on-error`. Le job `ci-ok` de `ci.yml` reçoit un checkout `actions/checkout@v4` + un step `python3 scripts/check_ci_structure.py` AVANT la vérification d'agrégation (l'arbitre valide la structure du workflow avant de déclarer vert). Preuve par la négative obligatoire dans le rapport : sur une copie scratch, retirer un job de `needs` → le script doit sortir ≠ 0.
+- **F1 (volet déposé dans le dépôt)** : `.github/CODEOWNERS` avec `@LePhilippeDucTai` sur `.github/workflows/`, `scripts/`. Interdit d'activer `required_pull_request_reviews` ou tout autre réglage de dépôt via gh api (décision sensible différée à l'utilisateur, D-003 — dépôt mono-auteur : l'auto-approbation est impossible, ça bloquerait toutes les PR).
+- Interdits : toucher toute autre ligne de `ci.yml` ou `check.sh` (commandes, jobs, env) ; modifier `Cargo.toml`/`Cargo.lock` ; affaiblir un check existant.
+- Note d'environnement (F10) : sur l'hôte, le `python3` de PATH (linuxbrew) n'a pas PyYAML — rejouer l'acceptation 4 avec `/usr/bin/python3` ; dans la CI, le python3 du runner l'a.
+
+### Context
+- Review J01-P6 try 2 (`/tmp/sasrs-j01p6-review.log`) : GO-avec-findings ; F1/F2 majeurs, F4/F5/F9 mineurs. D-003 dans `DECISIONS_LOG.md`.
+
 ## J02-P1 — Échecs d'écriture, code retour et pertes ODS
 
 ```yaml
@@ -10,7 +44,7 @@ id: J02-P1
 kind: implement
 tier: T3
 size: M
-depends_on: []
+depends_on: [J02-P0]
 files:
   - src/main.rs
   - src/lib.rs
@@ -44,7 +78,7 @@ id: J02-P2
 kind: implement
 tier: T2
 size: M
-depends_on: []
+depends_on: [J02-P0]
 files:
   - src/macros/
   - src/executor/mod.rs
@@ -75,7 +109,7 @@ id: J02-P3
 kind: implement
 tier: T2
 size: M
-depends_on: []
+depends_on: [J02-P0]
 files:
   - src/procs/common/parse.rs
   - src/procs/common/stmt.rs
