@@ -2,11 +2,11 @@
 
 Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌ failed ⏸ blocked ⏭ dropped
 
-## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (0/6)
+## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (1/6)
 
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
-| J01-P1 | Baseline lint et graphics verte | T5 | ⬜ | 0 | |
+| J01-P1 | Baseline lint et graphics verte | T5 | ✅ | 1 | merge 147e839 (worker daa4b39) ; 5/5 acceptations rejouées vertes |
 | J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | ⬜ | 0 | |
 | J01-P3 | Harnais de tests CLI réels | T4 | ⬜ | 0 | |
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ⬜ | 0 | |
