@@ -13,7 +13,7 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
 | J01-P5 | Protection de main par le check CI | T5 | ✅ | 1 | merge dc136d9 (worker a2d5ab9) ; 3/3 acc. vertes, protection relue par gh api (contexts=[ci-ok], strict=false, enforce_admins=false) |
 | J01-P6 | Review J01 | T2 | ⬜ | 1 | session perdue (Claude hors ligne 15:42, aucun artefact) ; redépend de P7, relance après P7 |
-| J01-P7 | CI : dépendances système fontconfig (graphics) | T5 | ⬜ | 0 | runs 35882867341/35883283504 rouges (yeslogic-fontconfig-sys, build.rs panic) ; D-002 |
+| J01-P7 | CI : dépendances système fontconfig (graphics) | T5 | 🔄 | 1 | worker dsh/GLM effort high en vol (wt-sasrs-j01p7, log /tmp/sasrs-j01p7.log) ; runs 35882867341/35883283504 rouges (yeslogic-fontconfig-sys) ; D-002 |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
 
