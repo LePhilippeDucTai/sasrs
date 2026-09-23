@@ -122,3 +122,9 @@ pour l'état de la CI, pas le souvenir d'un agent.
   un commit de snapshot modifié porte ses lignes `Snapshot:` (§4).
 - La PR décrit reproducer, tests, oracle et provenance, snapshots modifiés et état de la
   CI : voir `.github/pull_request_template.md`.
+
+## 9. Main protégé
+
+La branche `main` est protégée : toute fusion `consolidation` → `main` passe par une
+PR avec le check `ci-ok` vert (§1). Les vérifications locales se font via
+`scripts/check.sh` (§7) avant d'ouvrir la PR.
