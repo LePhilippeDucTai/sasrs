@@ -59,6 +59,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: graphics
+      - name: Installer les dépendances système fontconfig (plotters)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
       - name: cargo clippy --all-targets --features graphics -- -D warnings
         run: cargo clippy --all-targets --features graphics -- -D warnings
 
@@ -104,6 +106,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: graphics
+      - name: Installer les dépendances système fontconfig (plotters)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
       - name: cargo test -p sasrs --features graphics
         run: cargo test -p sasrs --features graphics
       - name: git status --porcelain doit être vide
