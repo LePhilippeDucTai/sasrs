@@ -7,9 +7,9 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
 | J01-P1 | Baseline lint et graphics verte | T5 | ✅ | 1 | merge 147e839 (worker daa4b39) ; 5/5 acceptations rejouées vertes |
-| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | ⬜ | 0 | |
-| J01-P3 | Harnais de tests CLI réels | T4 | ⬜ | 0 | |
-| J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ⬜ | 0 | |
+| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | 🔄 | 1 | worker dsh/GSM lancé (PID 1713478, wt-sasrs-j01p2) |
+| J01-P3 | Harnais de tests CLI réels | T4 | 🔄 | 1 | worker dsh/GLM lancé (PID 1713557, wt-sasrs-j01p3) |
+| J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | 🔄 | 1 | worker dsh/GLM lancé (PID 1713700, wt-sasrs-j01p4) |
 | J01-P5 | Protection de main par le check CI | T5 | ⬜ | 0 | |
 | J01-P6 | Review J01 | T2 | ⬜ | 0 | |
 
