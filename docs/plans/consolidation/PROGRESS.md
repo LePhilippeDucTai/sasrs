@@ -19,7 +19,7 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
-| J02-P0 | Corrective review J01 : durcissement appareil de confiance CI (F1/F2/F4/F5/F9) | T5 | ⬜ | 0 | part corrective posée par la review P6 (GO-avec-findings) ; F1 volet gh api différé à l'utilisateur (D-003) |
+| J02-P0 | Corrective review J01 : durcissement appareil de confiance CI (F1/F2/F4/F5/F9) | T5 | 🔄 | 1 | worker dsh/GLM-5.3-flash en vol (wt sasrs-wt-j02p0, log /tmp/sasrs-j02p0.log) ; F1 volet gh api différé à l'utilisateur (D-003) |
 | J02-P1 | Échecs d'écriture, code retour et pertes ODS | T3 | ⬜ | 0 | |
 | J02-P2 | Erreurs macro comptées, %ABORT, références non résolues | T2 | ⬜ | 0 | |
 | J02-P3 | Contrat « reconnu mais ignoré » : instructions de procédure | T2 | ⬜ | 0 | |
