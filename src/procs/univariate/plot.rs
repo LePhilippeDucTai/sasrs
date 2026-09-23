@@ -72,7 +72,7 @@ pub(super) fn plot_values(
             let label = ds.vars[var_cols[i]].name.clone();
             let xs: Vec<f64> = var_values[i]
                 .iter()
-                .filter_map(|v| value_to_num(v))
+                .filter_map(value_to_num)
                 .filter(|f| !f.is_nan())
                 .collect();
             (label, xs)
