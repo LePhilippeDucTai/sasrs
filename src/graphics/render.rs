@@ -238,17 +238,17 @@ where
     };
 
     // Bornes forcées (XAXIS/YAXIS VALUES= ou AXIS ORDER=).
-    if let Some((lo, hi)) = deco.x_range {
-        if hi > lo {
-            x_lo = lo;
-            x_hi = hi;
-        }
+    if let Some((lo, hi)) = deco.x_range
+        && hi > lo
+    {
+        x_lo = lo;
+        x_hi = hi;
     }
-    if let Some((lo, hi)) = deco.y_range {
-        if hi > lo {
-            y_lo = lo;
-            y_hi = hi;
-        }
+    if let Some((lo, hi)) = deco.y_range
+        && hi > lo
+    {
+        y_lo = lo;
+        y_hi = hi;
     }
 
     let mut chart = ChartBuilder::on(&area)

@@ -92,7 +92,7 @@ pub fn normal_density_curve(xs: &[f64], npoints: usize) -> Vec<(f64, f64)> {
     let mean = vals.iter().sum::<f64>() / n as f64;
     let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
     let sd = var.sqrt();
-    if !(sd > 0.0) {
+    if sd.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return Vec::new();
     }
     let x_min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -123,7 +123,7 @@ pub fn kernel_density_curve(xs: &[f64], npoints: usize) -> Vec<(f64, f64)> {
     let mean = vals.iter().sum::<f64>() / n as f64;
     let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
     let sd = var.sqrt();
-    if !(sd > 0.0) {
+    if sd.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return Vec::new();
     }
     // Bande passante de Silverman (règle du pouce).
@@ -297,7 +297,10 @@ fn build_primary_spec(
 }
 
 /// Bornes d'axe forcées par XAXIS/YAXIS VALUES=.
-fn axis_ranges(ast: &SgplotAst) -> (Option<(f64, f64)>, Option<(f64, f64)>) {
+/// Bornes d'axe forcées par XAXIS/YAXIS VALUES= : `(x_range, y_range)`.
+type AxisRanges = (Option<(f64, f64)>, Option<(f64, f64)>);
+
+fn axis_ranges(ast: &SgplotAst) -> AxisRanges {
     let x = ast
         .xaxis
         .as_ref()

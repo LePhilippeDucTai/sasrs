@@ -9,30 +9,41 @@ mod common;
 
 use sasrs::{RunOptions, run};
 
+/// Fixtures qui MATÉRIALISENT de vraies images sous `--features graphics` :
+/// leur log diverge alors du snapshot capturé pour le build PAR DÉFAUT
+/// (NOTE « image deferred » / « Output '...' written »). Le `.snap` verrouille
+/// le build par défaut ; la génération réelle d'image est couverte par les
+/// tests unitaires des procs concernées (`src/procs/sgplot/tests.rs`,
+/// `src/procs/gplot/tests.rs`, `src/procs/reg/tests/m3610.rs`, …). Ces
+/// fixtures sont donc sautées UNIQUEMENT quand la feature graphics est
+/// active — toutes les autres continuent de tourner et vérifient l'invariant
+/// byte-identique du build graphics.
+///
+/// Liste explicite des chemins relatifs à ce fichier — la maintenir à jour
+/// quand une fixture se met à écrire des images (ou cesse d'en écrire) :
+/// - `fixtures/m29/sgplot_basic.sas`        — SGPLOT après `ods graphics on`.
+/// - `fixtures/m29/sgplot_univar_reg.sas`   — UNIVARIATE histogram/qqplot + diagnostic REG, sous ODS ON.
+/// - `fixtures/m30/gplot_gchart.sas`        — GPLOT + GCHART après `ods graphics on`.
+/// - `fixtures/m30/proc_plot.sas`           — PROC PLOT après `ods graphics on`.
+/// - `fixtures/m33/univariate_weighted.sas` — UNIVARIATE PROBPLOT sous ODS ON.
+/// - `fixtures/m36/plots.sas`               — REG PLOTS=(…) + PLOT (rendus même sans ODS ON).
+/// - `fixtures/m45/univariate_normal_plot.sas` — UNIVARIATE HISTOGRAM/QQPLOT/CDFPLOT, section sous ODS ON.
+#[cfg(feature = "graphics")]
+const IMAGE_FIXTURES: &[&str] = &[
+    "fixtures/m29/sgplot_basic.sas",
+    "fixtures/m29/sgplot_univar_reg.sas",
+    "fixtures/m30/gplot_gchart.sas",
+    "fixtures/m30/proc_plot.sas",
+    "fixtures/m33/univariate_weighted.sas",
+    "fixtures/m36/plots.sas",
+    "fixtures/m45/univariate_normal_plot.sas",
+];
+
 #[test]
 fn fixtures() {
     insta::glob!("fixtures/**/*.sas", |path| {
-        // Les fixtures PROC SGPLOT (M29.2) matérialisent de vraies images sous
-        // `--features graphics` : leur log diverge alors du snapshot capturé
-        // pour le build PAR DÉFAUT (NOTE « image deferred »). Le snapshot .snap
-        // verrouille le build par défaut ; la génération réelle d'image est
-        // couverte par les tests unitaires de `src/procs/sgplot.rs`. On saute
-        // donc ces fixtures UNIQUEMENT quand la feature graphics est active —
-        // les autres fixtures continuent de tourner pour vérifier l'invariant
-        // byte-identique du build graphics.
         #[cfg(feature = "graphics")]
-        if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-            n.starts_with("sgplot")
-                    || n.starts_with("proc_plot")
-                    || n.starts_with("gplot")
-                    || n.starts_with("gchart")
-                    // PROC UNIVARIATE fixtures also materialise a real image
-                    // under `--features graphics` (PROBPLOT/etc.), so the
-                    // default-build snapshot — which records the "image deferred"
-                    // NOTE — would diverge: skip when graphics is on, like the
-                    // plotting procs above.
-                    || n.starts_with("univariate")
-        }) {
+        if IMAGE_FIXTURES.iter().any(|f| path.ends_with(f)) {
             return;
         }
         let source = std::fs::read_to_string(path).unwrap();

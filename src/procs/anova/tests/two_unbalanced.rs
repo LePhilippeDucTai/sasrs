@@ -1,4 +1,3 @@
-use super::super::*;
 use super::*;
 
 // ── Test 7: two-way design-matrix dimension check ─────────────────────
