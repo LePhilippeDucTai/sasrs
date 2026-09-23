@@ -6,10 +6,14 @@ A SAS 9.4 language interpreter built in Rust on top of [Polars](https://pola.rs/
 and executes it in batch, writing a SAS-style **log** and **listing**. Datasets
 are backed by Parquet tables via Polars.
 
-> Status: early development. The interpreter covers a large subset of SAS 9.4
+> Status: work in progress. The interpreter covers a large subset of SAS 9.4
 > (DATA step, PROC SQL, the macro processor, many base/stat procedures, and ODS
-> HTML/RTF/PDF/Excel output). Statistical modelling procedures are still in
-> progress — see `PROGRESS.md` and `PLAN.md` for the milestone roadmap.
+> HTML/RTF/PDF/Excel output). The active roadmap is the consolidation plan in
+> [`docs/plans/consolidation/`](docs/plans/consolidation/) — reliability of results
+> and diagnostics, storage integrity, independent validation, then high-value SAS
+> compatibility. The former milestone roadmap (`PLAN.md`, `PROGRESS.md`) is frozen;
+> see `PLAN.md` § “Correspondance M46–M66 → consolidation” for where the remaining
+> milestones went.
 
 ## Installation
 
@@ -74,7 +78,12 @@ individual options of each procedure and DATA step statement. Legend:
 
 - ✅ — covered
 - 🟡 — partial (a documented subset of options, or simplifications vs SAS 9.4)
-- 🔴 — recognised by the dispatcher but **not implemented** (skeleton / `todo!()`)
+- 🔴 — recognised but **not supported**: using it produces an explicit diagnostic
+  (ERROR/WARNING), never a silent no-op
+
+The four coverage states behind these marks — *implemented* · *validated against a
+reference* · *documented approximation* · *not supported* — are defined in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ### Procedures (PROC)
 
@@ -208,9 +217,11 @@ individual options of each procedure and DATA step statement. Legend:
 | `FILENAME` | ✅ | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device forms (`PIPE`/`URL`/`TEMP`/`DUMMY`…) recognized & registered, cleanly NOTE-deferred at the statement and again at `%INCLUDE` use (last FILENAME wins between path and device) |
 | `X` | 🔴 | not supported |
 
-> The coverage above reflects the current state of `main`; statistical modelling
-> procedures (`TTEST`, `NPAR1WAY`, and beyond) are the active milestones. See
-> `PROGRESS.md` and `PLAN.md` for the full roadmap.
+> The coverage above reflects the current state of the code, not a promise: a
+> procedure is only claimed *validated* where an external reference backs it (see
+> `CONTRIBUTING.md`). What comes next — hardening, storage integrity, independent
+> validation, high-value SAS compatibility — is planned in
+> [`docs/plans/consolidation/`](docs/plans/consolidation/).
 
 ## Library API
 

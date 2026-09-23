@@ -1,5 +1,12 @@
 # `sasrs` — Plan d'implémentation
 
+> **⚠️ Feuille de route gelée le 2026-09-23.** Ce document n'est plus le plan actif :
+> la suite du projet est pilotée par le plan de consolidation dans
+> `docs/plans/consolidation/` (jalons J01–J08, détail par part dans
+> `docs/plans/consolidation/jalons/`). Les décisions actées, l'architecture et la
+> checklist des pièges ci-dessous restent la référence en vigueur ; le devenir des
+> jalons restants M46–M66 est décrit dans « Correspondance M46–M66 → consolidation ».
+
 Interpréteur du langage **SAS** (référence : SAS 9.4 classique, pré-Viya) écrit en **Rust**,
 moteur de données **Polars**, tables au format **Parquet**. Pas d'UI : un binaire batch
 `sasrs script.sas` qui produit une **log fidèle SAS** et un **listing** texte.
@@ -9,6 +16,21 @@ existe déjà en **squelette compilable** : le plan détaillé du fichier (séma
 respecter, pièges, algorithmes) est dans le doc-commentaire en tête du fichier, les
 signatures publiques sont posées, les corps sont en `todo!()`. Un agent peut donc prendre
 un fichier, lire son en-tête, et l'implémenter sans contexte supplémentaire.
+
+## Correspondance M46–M66 → consolidation
+
+La Phase G ci-dessous est **gelée à M45** : ses jalons restants ne seront pas exécutés
+tels quels. Ils sont remappés sur le plan de consolidation (`docs/plans/consolidation/`),
+qui redécoupe le travail par comportement borné (reproducer + oracle + critère
+d'acceptation par comportement) plutôt que « un jalon par proc entière ».
+
+| Jalons gelés | Devenir |
+|---|---|
+| **M50** — PROC PRINTTO : routage fichier réel | **J07-P5** (`docs/plans/consolidation/jalons/J07-compatibilite.md`) |
+| **M46–M49, M51–M66** — TABULATE `PCTN<>` ; REPORT FLOW/COMPUTE riche ; DATASETS APPEND/CONTENTS/MODIFY/REPAIR ; CATALOG ; OPTIONS détail par option ; LOGISTIC/GENMOD/MIXED/GLIMMIX ; PRINCOMP/FACTOR/DISCRIM/DISTANCE/CLUSTER/FASTCLUS/IML ; S3 ; GPLOT/GCHART/PLOT/SGPLOT | feuille de route avancée `docs/roadmap/avancee.md`, rédigée par **J08-P5** (`docs/plans/consolidation/jalons/J08-avance-e2e.md`) — replanification par comportement borné (oracle et acceptation par comportement), hors périmètre de la consolidation |
+
+Le curseur d'exécution (jalon courant, parts terminées) vit désormais dans
+`docs/plans/consolidation/PROGRESS.md` ; `PROGRESS.md` racine est figé à M46.
 
 ## Décisions actées (ne pas rediscuter)
 
