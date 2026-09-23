@@ -2,7 +2,7 @@
 
 Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌ failed ⏸ blocked ⏭ dropped
 
-## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (4/6)
+## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (5/6)
 
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
@@ -11,8 +11,8 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | J01-P2b | Fix baseline clippy s3 (doc_lazy_continuation) | T5 | ✅ | 1 | merge b6d11e7 (worker 3a18721) ; 4/4 acc. rejouées vertes par l'orchestrateur |
 | J01-P3 | Harnais de tests CLI réels | T4 | ✅ | 1 | merge 779a27d (worker c00f5f8) ; 2/2 acceptations, 8 tests cli verts |
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
-| J01-P5 | Protection de main par le check CI | T5 | 🔄 | 1 | worker dsh/GLM en vol (wt-sasrs-j01p5, log /tmp/sasrs-j01p5.log) |
-| J01-P6 | Review J01 | T2 | ⬜ | 0 | attend P5 ; effort max requis au dispatch |
+| J01-P5 | Protection de main par le check CI | T5 | ✅ | 1 | merge dc136d9 (worker a2d5ab9) ; 3/3 acc. vertes, protection relue par gh api (contexts=[ci-ok], strict=false, enforce_admins=false) |
+| J01-P6 | Review J01 | T2 | 🔄 | 1 | review dsh/GLM effort max en vol (wt-sasrs-j01p6, log /tmp/sasrs-j01p6.log) |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
 
