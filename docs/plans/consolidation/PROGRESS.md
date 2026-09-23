@@ -13,7 +13,7 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
 | J01-P5 | Protection de main par le check CI | T5 | ✅ | 1 | merge dc136d9 (worker a2d5ab9) ; 3/3 acc. vertes, protection relue par gh api (contexts=[ci-ok], strict=false, enforce_admins=false) |
 | J01-P6 | Review J01 | T2 | ⬜ | 1 | 1ʳᵉ session perdue (15:42, aucun artefact) ; le « P6 ✅ 6/6 » journalisé à 18:10 par la session parallèle est corrigé (cf. Log 18:25 : rapport introuvable) ; redépend de P7, relance sur le tip post-P7 |
-| J01-P7 | CI : dépendances système fontconfig (graphics) | T5 | ✅ | 1 | merge 21c584b (worker 94e21a5) ; 5/5 acc. rejouées vertes par l'orchestrateur (yaml parse, greps 2×, clippy graphics rc=0 conteneur bevy, snapshot 1/1, arbre propre) ; arbitrage final ci-status après push ; D-002 |
+| J01-P7 | CI : dépendances système fontconfig (graphics) | T5 | ✅ | 1 | merge 21c584b (worker 94e21a5) ; 5/5 acc. rejouées vertes par l'orchestrateur (yaml parse, greps 2×, clippy graphics rc=0 conteneur bevy, snapshot 1/1, arbre propre) ; ci-status.sh OK sur 0e513ea (run 35888958607, 8/8 jobs verts, ci-ok success — première CI verte du dépôt) ; D-002 |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
 
