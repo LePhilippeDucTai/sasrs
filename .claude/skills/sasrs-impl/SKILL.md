@@ -1,95 +1,26 @@
 ---
 name: sasrs-impl
-description: Avance le projet sasrs (interpréteur SAS en Rust/Polars) jusqu'à la fin du jalon courant — itère sur TOUTES les cases non cochées du jalon, une par une (ou un groupe ⫽ à la fois), committe ET pousse après chaque validation avant de passer à la suivante. S'arrête en fin de jalon ou si les limites de contexte approchent.
+description: REMPLACÉE (2026-09-23) — ne plus invoquer. La roadmap M1–M66 est gelée ; le projet sasrs est piloté par le plan de consolidation dans docs/plans/consolidation/. Utiliser /milestone-continue consolidation à la place.
 ---
 
-# sasrs-impl — exécuter le prochain incrément du jalon courant
+# sasrs-impl — skill remplacée
 
-Tu es l'ORCHESTRATEUR du projet `sasrs` (crate unique à la racine du dépôt, binaire
-`sasrs`). Branche de développement : la branche de développement courante du dépôt
-(ne JAMAIS pousser ailleurs). `git branch --show-current` donne la branche active.
+Cette skill est **remplacée par `/milestone-continue consolidation`** depuis le
+2026-09-23. La feuille de route M1–M66 qu'elle pilotait (`PLAN.md`/`PROGRESS.md` racine)
+est **gelée** ; le projet suit désormais le plan de consolidation :
 
-**Répartition des rôles** : l'orchestrateur ne code JAMAIS lui-même — il sélectionne,
-délègue à des sous-agents (dont il choisit le modèle automatiquement, voir étape 3),
-revoit, valide, committe et pousse. Le modèle de la session orchestrateur est donc libre
-et constant d'un jalon à l'autre (recommandé : Fable, effort high — la revue de fidélité
-SAS et l'acceptation des snapshots restent sa responsabilité) ; l'utilisateur n'a PAS à
-consulter le jalon courant avant de lancer la skill. Les sous-agents héritent de l'effort
-de raisonnement de la session.
+1. `docs/plans/consolidation/PLAN.md` — périmètre, architecture, risques, conventions ;
+2. `docs/plans/consolidation/PROGRESS.md` — statut des jalons J01–J08 et de leurs parts
+   (géré par l'orchestrateur, seule source de vérité du curseur) ;
+3. `docs/plans/consolidation/jalons/J0N-*.md` — contrat de chaque part (scope, files,
+   acceptance, contexte).
 
-## Sources de vérité (à lire dans cet ordre, toujours)
-
-1. `PROGRESS.md` (racine du dépôt) — le curseur : jalon courant + cases cochées.
-2. `PLAN.md` (racine du dépôt) — architecture, décisions actées, table modèle/effort
-   (**pour M37–M66, la colonne Modèle du tableau Phase G fait foi** — les annotations
-   par case de PROGRESS.md sont antérieures à la re-disponibilité de Fable),
-   checklist des pièges (§Checklist — relire avant toute revue).
-3. L'en-tête de chaque fichier squelette à implémenter — il contient SON plan détaillé
-   (sémantique SAS, algorithmes, pièges, tests à écrire). C'est le cahier des charges.
-
-## Procédure d'une invocation
-
-1. **État des lieux** : `git status` (l'arbre doit être propre — sinon examiner, terminer
-   ou committer l'en-cours avant tout), `git pull origin <branche>`, puis
-   `cargo test -p sasrs` pour vérifier que la base est verte. Base rouge =
-   la réparer D'ABORD (c'est l'incrément du jour).
-2. **Sélection** : identifier la PROCHAINE case non cochée du jalon courant dans
-   PROGRESS.md, dans l'ordre du fichier (il encode les dépendances). Si plusieurs cases
-   consécutives sont marquées ⫽ (fichiers indépendants), les regrouper en un seul lot
-   parallèle ; sinon prendre un seul fichier à la fois. L'objectif de l'invocation est
-   de couvrir TOUTES les cases du jalon courant — ne pas s'arrêter après un seul fichier
-   tant que des cases restent et que le contexte le permet (voir garde-fous).
-3. **Implémentation** : pour chaque fichier du lot, déléguer à un sous-agent via le tool
-   Agent — TOUJOURS déléguer, l'orchestrateur n'implémente pas lui-même. Le paramètre
-   `model` du sous-agent est déterminé AUTOMATIQUEMENT, sans intervention utilisateur :
-   prendre la colonne **Modèle** de la ligne du jalon courant dans le tableau **Phase G
-   de PLAN.md** (`fable`, `opus` ou `sonnet` ; pour un jalon hors Phase G, l'annotation
-   de la case dans PROGRESS.md). Jamais un modèle inférieur à celui du jalon ; en cas de
-   doute ou d'ambiguïté, prendre le supérieur (`fable`).
-   Donner au sous-agent : le chemin du fichier, l'instruction de lire
-   son en-tête + PLAN.md §Checklist, d'implémenter TOUT le fichier (zéro `todo!()`
-   restant) ET ses tests unitaires, et de faire passer
-   `cargo test -p sasrs`. Les fichiers indépendants (⫽) peuvent être délégués
-   en parallèle.
-4. **Validation orchestrateur** (obligatoire avant commit — c'est le contrat) :
-   - relire le diff de chaque fichier livré : conformité au plan d'en-tête, respect de
-     la checklist des pièges (sas_cmp partout, nullify_specials, pas de get_row,
-     troncature char, NOTEs au pluriel invariable...) ;
-   - `cargo test -p sasrs` complet, zéro warning nouveau ;
-   - rejeter/faire corriger ce qui ne passe pas la revue.
-5. **Commit + push IMMÉDIATEMENT après validation** (protection contre la perte de
-   session et mise à jour du PR GitHub) : cocher les cases dans PROGRESS.md (+ passer
-   les fichiers à ✅ dans la table de PLAN.md quand un fichier est terminé) ET, si
-   l'incrément ajoute/modifie/retire une fonctionnalité visible de l'utilisateur (PROC,
-   statement DATA step, fonction, option/argument, format, destination ODS, capacité
-   macro/SQL…), **mettre à jour les tableaux de couverture de `README.md`** (section
-   "Feature coverage" : ajuster l'état ✅/🟡/🔴, la liste des options couvertes et celle
-   des éléments non couverts/différés — la couverture annoncée doit refléter exactement
-   l'état du code après l'incrément). Inclure PROGRESS.md/PLAN.md/README.md dans le MÊME
-   commit que le code, message clair (`sasrs M1:
-   implement parser/expr (Pratt SAS precedence)`), puis `git push -u origin <branche>`
-   (échec réseau : réessayer 4 fois, backoff 2/4/8/16 s). Un commit par fichier validé
-   ou par groupe ⫽ cohérent — jamais de gros commit fourre-tout, jamais de code non
-   validé. **Ne jamais commencer le fichier ou groupe suivant sans avoir committé ET
-   poussé le précédent.**
-5b. **Boucle interne — cases restantes du jalon** : après chaque commit+push réussi,
-    retourner à l'étape 2 et sélectionner la prochaine case non cochée du MÊME jalon.
-    Répéter les étapes 2→3→4→5→5b jusqu'à l'une des conditions d'arrêt suivantes :
-    - toutes les cases du jalon courant sont cochées → passer à l'étape 6 ;
-    - les limites de contexte ou d'utilisation approchent → terminer proprement (étape 5
-      pour l'en-cours) et rapporter à l'étape 7 ;
-    - un blocage nécessite une décision utilisateur → rapporter à l'étape 7.
-    Ne jamais rompre la boucle silencieusement : toute sortie anticipée DOIT apparaître
-    dans le rapport de fin d'invocation (étape 7).
-6. **Fin de jalon** : quand toutes les cases du jalon sont cochées, dérouler sa ligne
-   "DoD"/fixtures (snapshots insta : générer, VÉRIFIER À LA MAIN la plausibilité SAS de
-   chaque snapshot avant `cargo insta accept`, committer les .snap), mettre à jour
-   "Jalon courant : **Mn+1**" en tête de PROGRESS.md, **vérifier que les tableaux de
-   couverture de `README.md` sont à jour pour tout ce que le jalon a livré** (relire la
-   section "Feature coverage" et corriger les écarts éventuels), committer, pousser.
-7. **Rapport de fin d'invocation** : 2–5 lignes — ce qui a été livré/committé (hashes),
-   où en est le jalon, ce que la PROCHAINE invocation prendra. Si un blocage nécessite
-   une décision utilisateur, le dire explicitement.
+Ne pas reprendre le protocole historique de cette skill : il lisait `PROGRESS.md`
+racine comme curseur et poussait jalon par jalon sur une branche unique, ce qui n'est
+plus le modèle (work par parts, fusion une part = un commit de merge, CI bloquante
+`ci-ok` comme arbitre — voir `CONTRIBUTING.md` pour les règles de développement).
+Le remapping des jalons restants M46–M66 est décrit dans `PLAN.md` racine
+§ « Correspondance M46–M66 → consolidation ».
 
 **Republication du wrapper Python** (`python/`) : PAS gérée par cette skill. Un watchdog
 Hermes indépendant (`~/.hermes/scripts/cron-sasrs/rebuild-python-release.sh`, cron
@@ -97,33 +28,4 @@ Hermes indépendant (`~/.hermes/scripts/cron-sasrs/rebuild-python-release.sh`, c
 autrement), recompile `sasrs.exe` pour Windows, resynchronise le SHA-256 dans
 `python/src/sasrs_py/cli.py` et republie sur la release `python-v0.1.0`. Ne PAS
 dupliquer cette logique ici — l'orchestrateur n'a rien à faire de spécifique pour que
-le wrapper Python reste à jour, au-delà de committer et pousser normalement (étape 5).
-
-## Garde-fous
-
-- Périmètre : uniquement le crate `sasrs` (`src/`, `tests/`, `Cargo.toml`/`Cargo.lock`).
-  Ne pas toucher aux fichiers hors de ce crate.
-- Ne jamais cocher une case pour du code contenant encore `todo!()`/`unimplemented!()`.
-- **Type de jalon — critère de validation adapté** :
-  - Jalon de **refactorisation** (sortie inchangée, ex. M31/M32) : en plus de
-    `cargo test -p sasrs` vert, la suite snapshot doit produire **zéro `.snap.new`**
-    (log + listing octet-identiques). Les commits d'extraction sont « move-only » (seul
-    changement textuel admis : `Self::foo`→`module::foo` / relocalisation verbatim) ; toute
-    fusion comportementale (unification de logique) fait l'objet d'un commit dédié validé
-    par ses tests unitaires ciblés. Ne PAS générer de nouveaux snapshots pour ces jalons.
-  - Jalon de **complétion d'options** (ex. M33–M35) : chaque case qui livre une option
-    auparavant refusée doit faire **rétrécir d'autant la colonne droite « non couvert »**
-    du tableau README correspondant (et faire passer un proc 🟡→✅ quand il est complété),
-    avec fixture(s) `tests/fixtures/<jalon>/` + snapshot(s) vérifié(s) à la main.
-- Impératif de synchronisation de la doc : aucun incrément touchant une fonctionnalité
-  visible (PROC, statement, fonction, option/argument, format, ODS, macro, SQL) ne doit
-  être committé sans la mise à jour correspondante des tableaux de couverture de
-  `README.md`. PROGRESS.md (curseur interne) ET README.md (couverture publique) avancent
-  ensemble — ne jamais les laisser diverger.
-- Ne pas rediscuter les décisions actées de PLAN.md (types SAS stricts, parser SQL
-  dédié, etc.).
-- Snapshots insta : un snapshot n'est PAS un oracle — le relire et le confronter au
-  comportement SAS documenté avant de l'accepter.
-- Si les limites d'utilisation approchent ou que le contexte devient long : finir le
-  fichier en cours, valider, committer, pousser, rapporter. Le travail committé est le
-  seul qui compte.
+le wrapper Python reste à jour, au-delà de committer et pousser normalement.
