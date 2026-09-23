@@ -2,17 +2,17 @@
 
 Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌ failed ⏸ blocked ⏭ dropped
 
-## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (1/6)
+## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (4/6)
 
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
 | J01-P1 | Baseline lint et graphics verte | T5 | ✅ | 1 | merge 147e839 (worker daa4b39) ; 5/5 acceptations rejouées vertes |
-| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | 🔄 | 1 | 5/6 acc. vertes ; acc.5 bloquée par défaut baseline hors périmètre (clippy s3, src/library/s3.rs doc_lazy_continuation) → fix via J01-P2b ; commit 0107bec en attente de merge |
-| J01-P2b | Fix baseline clippy s3 (doc_lazy_continuation) | T5 | 🔄 | 1 | micro-part dsh/GLM en vol (unit sasrs-j01p2b, wt-sasrs-j01p2b) |
+| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | ✅ | 1 | merge 82ed882 (worker 0107bec) ; 6/6 acc. vertes (acc.5 check.sh lint rejouée sur l'arbre intégré après fix P2b) |
+| J01-P2b | Fix baseline clippy s3 (doc_lazy_continuation) | T5 | ✅ | 1 | merge b6d11e7 (worker 3a18721) ; 4/4 acc. rejouées vertes par l'orchestrateur |
 | J01-P3 | Harnais de tests CLI réels | T4 | ✅ | 1 | merge 779a27d (worker c00f5f8) ; 2/2 acceptations, 8 tests cli verts |
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
-| J01-P5 | Protection de main par le check CI | T5 | ⬜ | 0 | attend P2+P4 (P2 via P2b) |
-| J01-P6 | Review J01 | T2 | ⬜ | 0 | |
+| J01-P5 | Protection de main par le check CI | T5 | ⬜ | 0 | prête (P2+P4 mergés) |
+| J01-P6 | Review J01 | T2 | ⬜ | 0 | attend P5 ; effort max requis au dispatch |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
 
