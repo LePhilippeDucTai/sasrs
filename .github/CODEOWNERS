@@ -1,0 +1,19 @@
+# CODEOWNERS — propriété du « système de confiance » (J02-P0, F1/D-003).
+#
+# Toute modification du workflow CI ou des scripts de vérification demande
+# la relecture de @LePhilippeDucTai : la protection de main garantit le NOM
+# du check « ci-ok », pas son CONTENU — l'arbitre ne doit pas pouvoir être
+# affaibli sans revue humaine (revue J01, F1).
+#
+# Note : le routage CODEOWNERS ne mord que si la revue requise est activée
+# sur le dépôt (réglage DIFFÉRÉ à l'utilisateur, D-003 — dépôt mono-auteur :
+# activer required_pull_request_reviews maintenant bloquerait toute PR).
+# Ce fichier pose le propriétaire ; l'activation du réglage reste un geste
+# humain explicite.
+
+# Workflow CI (l'arbitre et sa structure).
+/.github/workflows/ @LePhilippeDucTai
+
+# Scripts de vérification locale/CI (check.sh, ci-status.sh,
+# check_ci_structure.py).
+/scripts/ @LePhilippeDucTai

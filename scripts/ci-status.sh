@@ -4,8 +4,11 @@
 #
 # Réussit (exit 0) uniquement si le dernier run du workflow ci.yml de la
 # branche porte le même headSha que `git rev-parse origin/<branche>` ET s'est
-# terminé avec la conclusion « success ». Dans tous les autres cas (run
-# rouge, run en cours, run obsolète, aucun run), affiche l'état et échoue.
+# terminé avec la conclusion « success ». La ref locale est rafraîchie par
+# `git fetch origin <branche>` AVANT la comparaison : sans fetch, un run vert
+# sur un vieux sha combiné à une origin/<branche> périmée donne un faux vert
+# (revue J01, M4-A). Dans tous les autres cas (run rouge, run en cours, run
+# obsolète, aucun run), affiche l'état et échoue.
 #
 # Codes de retour : 0 = CI verte et à jour ; 1 = pas verte / pas à jour /
 # aucun run ; 2 = erreur d'usage ou d'outil.
@@ -24,7 +27,9 @@ Usage: scripts/ci-status.sh [branche]
 
 Vérifie la CI GitHub Actions de `branche` (défaut : consolidation) :
 le dernier run du workflow ci.yml doit porter le même headSha que
-origin/<branche> et être conclu « success ».
+origin/<branche> et être conclu « success ». La ref origin/<branche> est
+rafraîchie par « git fetch origin <branche> » avant la comparaison (pas de
+faux vert sur refs locales périmées).
 
 Sorties : exit 0 si la CI du dernier commit poussé est verte, exit 1 sinon
 (run rouge, en cours, obsolète ou absent), exit 2 en cas d'erreur d'outil.
@@ -48,9 +53,20 @@ for tool in git gh jq; do
     fi
 done
 
+# F2 (revue J01, M4-A) : rafraîchir la ref locale AVANT la comparaison.
+# Sans fetch, l'égalité headSha == origin/<branche> hérite de la fraîcheur
+# des refs locales : un run vert sur un vieux sha donnait un faux vert.
+# Fetch en échec → exit 2 : refus fail-closed de juger sur une ref
+# potentiellement périmée.
+if ! git fetch origin "${BRANCH}"; then
+    echo "ci-status.sh: « git fetch origin ${BRANCH} » a échoué (réseau ? dépôt inaccessible ?)." >&2
+    echo "ci-status.sh: refus de comparer sur une origin/${BRANCH} potentiellement périmée." >&2
+    exit 2
+fi
+
 remote_ref="origin/${BRANCH}"
 if ! remote_sha="$(git rev-parse --verify "${remote_ref}^{commit}")"; then
-    echo "ci-status.sh: référence introuvable : ${remote_ref} (lancer « git fetch origin » ?)." >&2
+    echo "ci-status.sh: référence introuvable : ${remote_ref} (le fetch a pourtant réussi — la branche existe-t-elle sur origin ?)." >&2
     exit 2
 fi
 
@@ -72,7 +88,7 @@ run_url="$(printf '%s' "$json" | jq -r '.[0].url // ""')"
 
 echo "branche           : ${BRANCH}"
 echo "origin/${BRANCH}  : ${remote_sha:0:12}"
-echo "dernier run       : ${head_sha:0:12} (${run_status}${conclusion:+, conclusion: }${conclusion:-aucune})"
+echo "dernier run       : ${head_sha:0:12} (${run_status}, conclusion: ${conclusion:-aucune})"
 echo "run               : ${run_url}"
 
 if [ "$head_sha" != "$remote_sha" ]; then

@@ -47,7 +47,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy --all-targets -- -D warnings
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   clippy-graphics:
     name: clippy (graphics)
@@ -62,7 +62,7 @@ jobs:
       - name: Installer les dépendances système fontconfig (plotters)
         run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
       - name: cargo clippy --all-targets --features graphics -- -D warnings
-        run: cargo clippy --all-targets --features graphics -- -D warnings
+        run: cargo clippy --locked --all-targets --features graphics -- -D warnings
 
   clippy-s3:
     name: clippy (s3)
@@ -75,7 +75,7 @@ jobs:
         with:
           key: s3
       - name: cargo clippy --all-targets --features s3 -- -D warnings
-        run: cargo clippy --all-targets --features s3 -- -D warnings
+        run: cargo clippy --locked --all-targets --features s3 -- -D warnings
 
   test:
     name: test (défaut)
@@ -86,7 +86,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: cargo test -p sasrs
-        run: cargo test -p sasrs
+        run: cargo test --locked -p sasrs
       - name: git status --porcelain doit être vide
         run: |
           status="$(git status --porcelain)"
@@ -109,7 +109,7 @@ jobs:
       - name: Installer les dépendances système fontconfig (plotters)
         run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev fonts-liberation
       - name: cargo test -p sasrs --features graphics
-        run: cargo test -p sasrs --features graphics
+        run: cargo test --locked -p sasrs --features graphics
       - name: git status --porcelain doit être vide
         run: |
           status="$(git status --porcelain)"
@@ -131,7 +131,7 @@ jobs:
           key: s3
       # Aucun secret nécessaire : les tests s3 --lib ne parlent pas à AWS.
       - name: cargo test --features s3 --lib
-        run: cargo test --features s3 --lib
+        run: cargo test --locked --features s3 --lib
       - name: git status --porcelain doit être vide
         run: |
           status="$(git status --porcelain)"
@@ -155,6 +155,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+      - name: Valider la structure du workflow (garde anti-affaiblissement)
+        run: python3 scripts/check_ci_structure.py
       - name: Tous les jobs de la CI doivent être verts
         run: |
           results="${{ join(needs.*.result, ' ') }}"
