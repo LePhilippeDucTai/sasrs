@@ -7,10 +7,11 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
 | J01-P1 | Baseline lint et graphics verte | T5 | ✅ | 1 | merge 147e839 (worker daa4b39) ; 5/5 acceptations rejouées vertes |
-| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | 🔄 | 1 | worker dsh/GSM lancé (PID 1713478, wt-sasrs-j01p2) |
-| J01-P3 | Harnais de tests CLI réels | T4 | 🔄 | 1 | worker dsh/GLM lancé (PID 1713557, wt-sasrs-j01p3) |
-| J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | 🔄 | 1 | worker dsh/GLM lancé (PID 1713700, wt-sasrs-j01p4) |
-| J01-P5 | Protection de main par le check CI | T5 | ⬜ | 0 | |
+| J01-P2 | CI GitHub Actions bloquante et scripts de vérification | T4 | 🔄 | 1 | 5/6 acc. vertes ; acc.5 bloquée par défaut baseline hors périmètre (clippy s3, src/library/s3.rs doc_lazy_continuation) → fix via J01-P2b ; commit 0107bec en attente de merge |
+| J01-P2b | Fix baseline clippy s3 (doc_lazy_continuation) | T5 | 🔄 | 1 | micro-part dsh/GLM en vol (unit sasrs-j01p2b, wt-sasrs-j01p2b) |
+| J01-P3 | Harnais de tests CLI réels | T4 | ✅ | 1 | merge 779a27d (worker c00f5f8) ; 2/2 acceptations, 8 tests cli verts |
+| J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
+| J01-P5 | Protection de main par le check CI | T5 | ⬜ | 0 | attend P2+P4 (P2 via P2b) |
 | J01-P6 | Review J01 | T2 | ⬜ | 0 | |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
