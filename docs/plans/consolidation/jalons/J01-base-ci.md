@@ -154,7 +154,7 @@ id: J01-P6
 kind: review
 tier: T2
 size: S
-depends_on: [J01-P1, J01-P2, J01-P3, J01-P4, J01-P5]
+depends_on: [J01-P1, J01-P2, J01-P3, J01-P4, J01-P5, J01-P7]
 files: []
 acceptance:
   - "cargo fmt --check"
@@ -185,3 +185,31 @@ acceptance:
 
 ### Scope
 Review the merged milestone diff with verify-before-done, code-review, test-design. Report; change nothing.
+
+## J01-P7 — CI : dépendances système fontconfig pour le profil graphics
+
+```yaml
+id: J01-P7
+kind: implement
+tier: T5
+size: S
+depends_on: [J01-P2, J01-P2b]
+files:
+  - .github/workflows/ci.yml
+acceptance:
+  - "python3 -c \"import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))\""
+  - "test \"$(grep -c 'pkg-config' .github/workflows/ci.yml)\" -ge 2 && test \"$(grep -c 'libfontconfig1-dev' .github/workflows/ci.yml)\" -ge 2 && test \"$(grep -c 'libfreetype-dev' .github/workflows/ci.yml)\" -ge 2 && test \"$(grep -c 'fonts-liberation' .github/workflows/ci.yml)\" -ge 2"
+  - "CI=true INSTA_UPDATE=no cargo clippy --all-targets --features graphics -- -D warnings"
+  - "CI=true INSTA_UPDATE=no cargo test -p sasrs --features graphics --test snapshot"
+  - "test -z \"$(git status --porcelain)\""
+```
+
+### Scope
+- Les 2 jobs `clippy (graphics)` et `test (graphics)` reçoivent, avant toute commande cargo, un step d'installation des dépendances système qu'exige `yeslogic-fontconfig-sys` sur le runner : `pkg-config`, `libfontconfig1-dev`, `libfreetype-dev`, `fonts-liberation` (rendu texte). Via `sudo apt-get update && sudo apt-get install -y …` (mécanisme officiel d'ubuntu-latest), un step par job (aucun partage de steps possible entre jobs GitHub Actions).
+- Interdits : toucher toute autre ligne de `ci.yml` (autres jobs, commandes cargo, env, `ci-ok`, déclencheurs, cache) ; modifier `Cargo.toml`/`Cargo.lock` (la dépendance graphics reste réelle et bloquante) ; affaiblir un job ou retirer un job.
+- Les acceptations 3 et 4 se rejouent dans le conteneur de développement (l'hôte n'a pas pkg-config, cf. scripts/check.sh §8) : elles prouvent que la liste de paquets couvre bien les besoins du build.rs de la crate.
+- Arbitrage final (orchestrateur, après push) : `scripts/ci-status.sh consolidation` vert sur le sha mergé — la CI arbitre (CONTRIBUTING §1).
+
+### Context
+- Runs CI échouées : 35882867341, 35883283504 (`failed to run custom build command for yeslogic-fontconfig-sys v6.0.1`, panic build.rs:8 — pkg-config absent du runner). Tous les autres jobs sont verts. D-002 dans `DECISIONS_LOG.md`.
+

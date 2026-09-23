@@ -2,7 +2,7 @@
 
 Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌ failed ⏸ blocked ⏭ dropped
 
-## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (5/6)
+## J01 — Base verte, CI bloquante, harnais CLI, roadmap réconciliée (5/7)
 
 | Part | Title | Tier | Status | Tries | Note |
 |------|-------|------|--------|-------|------|
@@ -12,7 +12,8 @@ Updated 2026-09-23 · s0 · base consolidation · ⬜ todo 🔄 wip ✅ done ❌
 | J01-P3 | Harnais de tests CLI réels | T4 | ✅ | 1 | merge 779a27d (worker c00f5f8) ; 2/2 acceptations, 8 tests cli verts |
 | J01-P4 | Roadmap réconciliée et règles de développement par agents | T5 | ✅ | 1 | merge 102c3ae (worker fe5a646) ; 5/5 acceptations vertes |
 | J01-P5 | Protection de main par le check CI | T5 | ✅ | 1 | merge dc136d9 (worker a2d5ab9) ; 3/3 acc. vertes, protection relue par gh api (contexts=[ci-ok], strict=false, enforce_admins=false) |
-| J01-P6 | Review J01 | T2 | 🔄 | 1 | review dsh/GLM effort max en vol (wt-sasrs-j01p6, log /tmp/sasrs-j01p6.log) |
+| J01-P6 | Review J01 | T2 | ⬜ | 1 | session perdue (Claude hors ligne 15:42, aucun artefact) ; redépend de P7, relance après P7 |
+| J01-P7 | CI : dépendances système fontconfig (graphics) | T5 | ⬜ | 0 | runs 35882867341/35883283504 rouges (yeslogic-fontconfig-sys, build.rs panic) ; D-002 |
 
 ## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré » (0/8)
 
