@@ -1,0 +1,2682 @@
+{
+  "protocol_version": 3,
+  "project_id": "lephilippeductai/sasrs",
+  "plan_id": "959bc69d-76bf-4a77-ab01-02dcb8113c51",
+  "revision": 1,
+  "stub": "consolidation",
+  "base_branch": "consolidation",
+  "goal": "Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.",
+  "max_parallel": 3,
+  "max_attempts": 3,
+  "checks": [
+    {
+      "id": "fmt",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo fmt --check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 900,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "clippy",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo clippy --locked --all-targets -- -D warnings"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "clippy-s3",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo clippy --locked --all-targets --features s3 -- -D warnings"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "test",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo test --locked -p sasrs"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "test-s3-lib",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo test --locked --features s3 --lib"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "ci-structure",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/check_ci_structure.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-write-failure",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test cli write_failure 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-ods-cli",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test cli ods_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-no-note-diagnostics",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,re,sys\npat=re.compile('\\\\.note\\\\(\\\\s*(?:&\\\\s*format!\\\\(\\\\s*)?\"(?:WARNING|ERROR)\\\\b')\nhits=[]\nfor p in sorted(pathlib.Path('src').rglob('*.rs')):\n    if 'tests' in p.parts or p.name=='tests.rs': continue\n    t=p.read_text(encoding='utf-8')\n    hits+=[f'{p}:{t.count(chr(10),0,m.start())+1}' for m in pat.finditer(t)]\nprint('\\n'.join(hits) or 'OK: aucune occurrence (NOTE portant WARNING/ERROR)')\nsys.exit(1 if hits else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-macro-diag",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib macro_diag 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-macro-no-comment-diagnostics",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,re,sys\npat=re.compile('\"/\\\\*\\\\s*(?:NOTE|ERROR|WARNING|\\\\{)')\nhits=[]\nfor p in sorted(pathlib.Path('src/macros').rglob('*.rs')):\n    if 'tests' in p.parts or p.name=='tests.rs': continue\n    t=p.read_text(encoding='utf-8')\n    hits+=[f'{p}:{t.count(chr(10),0,m.start())+1}' for m in pat.finditer(t)]\nprint('\\n'.join(hits) or 'OK: aucune occurrence (diagnostic macro réduit à un commentaire)')\nsys.exit(1 if hits else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-macro-sas-messages",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\ndef text(d): return ''.join(p.read_text(encoding='utf-8') for p in pathlib.Path(d).rglob('*.rs') if 'tests' not in p.parts and p.name!='tests.rs')\nex=text('src/executor'); both=ex+text('src/macros')\nneed={'take_abort_request( consommé par src/executor':'take_abort_request(' in ex,'Apparent symbolic reference':'Apparent symbolic reference' in both,'Apparent invocation of macro':'Apparent invocation of macro' in both}\nmiss=[k for k,v in need.items() if not v]\nprint('manquants:',miss)\nsys.exit(1 if miss else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-contract-doc",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/support-contract.md').read_text(encoding='utf-8')\nmiss=[n for n in ['ERROR', 'WARNING', '180-322'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/support-contract.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-contract-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib contract_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-contract-fixtures",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nfx=sorted(pathlib.Path('tests/fixtures/j02').glob('contract_*.sas'))\nbad=[] if len(fx)>=4 else [f'{len(fx)} fixtures contract_*.sas (<4)']\nfor f in fx:\n    s=pathlib.Path('tests/snapshots')/f'snapshot__fixtures@j02__{f.name}.snap'\n    if not s.is_file(): bad.append(f'snapshot absent: {s}'); continue\n    t=s.read_text(encoding='utf-8')\n    if 'ERROR' not in t and 'WARNING' not in t: bad.append(f'aucun diagnostic dans {s}')\nprint('\\n'.join(bad) or f'OK: {len(fx)} fixtures'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-silent-opt",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib silent_opt_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-printto-honest",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('src/procs/printto.rs').read_text(encoding='utf-8')\nmiss=[n for n in [] if n not in t]\nbad=[n for n in ['redirected to'] if n in t]\nprint('src/procs/printto.rs', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-model-fallback",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib model_fallback_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-convergence",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib convergence_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-ci-guard-selftest",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/check_ci_structure.py",
+        "--self-test"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-readme-contract",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('README.md').read_text(encoding='utf-8')\nmiss=[n for n in ['## Exit codes', 'docs/support-contract.md'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('README.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j02-contributing-v3",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('CONTRIBUTING.md').read_text(encoding='utf-8')\nmiss=[n for n in ['.mission-control/plans/'] if n not in t]\nbad=[n for n in ['docs/plans/consolidation/jalons'] if n in t]\nprint('CONTRIBUTING.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-oracle-check",
+      "argv": [
+        "python3",
+        "-B",
+        "tools/oracles/weighted_stats.py",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 300,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-oracle-cases",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,sys\ncs=json.load(open('tests/oracles/weighted_stats.json',encoding='utf-8'))['cases']\nok=len(cs)>=8 and all(c.get('provenance') and 'expected' in c for c in cs)\nprint(len(cs),'cas'); sys.exit(0 if ok else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-weighted-oracle",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test weighted_oracle 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-weighted-def5-shared",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('src/procs/common/stats.rs').read_text(encoding='utf-8')\nmiss=[n for n in ['fn weighted_quantile_def5'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('src/procs/common/stats.rs', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-encoding-doc",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/encoding.md').read_text(encoding='utf-8')\nmiss=[n for n in ['caractères', 'UTF-8', 'BOM'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/encoding.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-utf8",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib utf8 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-no-mojibake",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nbad=[str(p) for p in sorted(pathlib.Path('tests/snapshots').glob('*.snap')) if b'\\xc3\\xa2\\xc2\\x80' in p.read_bytes()]\nprint('\\n'.join(bad) or 'OK: aucun mojibake'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-multibyte",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib multibyte 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-no-byte-truncate",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,re,sys\nhits=[f'{f}:{i}' for f in ('src/formats/builtin/mod.rs','src/formats/mod.rs') for i,l in enumerate(pathlib.Path(f).read_text(encoding='utf-8').splitlines(),1) if re.search(r'out\\.truncate\\(w\\)',l)]\nprint('\\n'.join(hits) or 'OK'); sys.exit(1 if hits else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-char-width",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib char_width 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-datastep-divergence",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib datastep_divergence 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j03-readme",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('README.md').read_text(encoding='utf-8')\nmiss=[n for n in ['docs/encoding.md', 'EXCLNPWGT'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('README.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-adr-storage",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/adr/0001-stockage-parquet-sidecar.md').read_text(encoding='utf-8')\nt=t.lower()\nmiss=[n for n in ['## décision', 'récupération'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/adr/0001-stockage-parquet-sidecar.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-atomic-write",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib atomic_write 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-build-fault-injection",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; cargo build --locked --features fault-injection"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-orphan-sidecar",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --features fault-injection --lib orphan_sidecar 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-sidecar-invalid",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib sidecar_invalid 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-sql-metadata",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib sql_metadata 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-storage-integrity",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --features fault-injection --test storage_integrity 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-ci-fault-injection",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nmiss=[f for f in ('.github/workflows/ci.yml','scripts/check.sh') if 'fault-injection' not in pathlib.Path(f).read_text(encoding='utf-8')]\nprint('manquant dans:',miss); sys.exit(1 if miss else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j04-readme-recovery",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('README.md').read_text(encoding='utf-8')\nt=t.lower()\nmiss=[n for n in ['storage and recovery', 'docs/adr/0001'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('README.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-conformance",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test conformance 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-conformance-layout",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\nbad=[f for f in ('conformance/README.md','conformance/schema.md') if not pathlib.Path(f).is_file()]\ncs=sorted(pathlib.Path('conformance/cases/example').glob('*/case.json'))\nif len(cs)<2: bad.append(f'{len(cs)} cas example (<2)')\nkeys={'id','title','provenance','validates','tolerance','status'}\nfor c in cs:\n    miss=keys-set(json.loads(c.read_text(encoding='utf-8')))\n    if miss: bad.append(f'{c}: champs manquants {sorted(miss)}')\nprint('\\n'.join(bad) or 'OK'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-cases-base",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/base').glob('*/case.json'))\nbad=[] if len(cs)>=10 else [f'{len(cs)} cas base (<10)']\nfor c in cs:\n    d=json.loads(c.read_text(encoding='utf-8')); pv=d.get('provenance') or {}\n    if d.get('status') not in ('validated','known-divergence'): bad.append(f'{c}: status')\n    if pv.get('kind') not in ('sas-doc','sas-run'): bad.append(f'{c}: provenance.kind')\n    if pv.get('kind')=='sas-doc' and not str(pv.get('source','')).startswith('http'): bad.append(f'{c}: URL')\nprint('\\n'.join(bad) or f'OK: {len(cs)} cas'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-cases-stat",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/stat').glob('*/case.json'))\nbad=[] if len(cs)>=8 else [f'{len(cs)} cas stat (<8)']\nfor c in cs:\n    d=json.loads(c.read_text(encoding='utf-8')); pv=d.get('provenance') or {}\n    if d.get('status') not in ('validated','known-divergence'): bad.append(f'{c}: status')\n    if d.get('validates') not in ('math','sas-behaviour'): bad.append(f'{c}: validates')\n    if 'tolerance' not in d: bad.append(f'{c}: tolerance')\n    if not pv.get('source'): bad.append(f'{c}: provenance.source')\nprint('\\n'.join(bad) or f'OK: {len(cs)} cas'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-properties",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test properties 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-differential",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test differential 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-conformance-status",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/conformance_report.py",
+        "--check"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 300,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-ci-validation-jobs",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('.github/workflows/ci.yml').read_text(encoding='utf-8')\nmiss=[n for n in ['--test conformance', '--test properties', '--test differential'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('.github/workflows/ci.yml', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j05-readme-status",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('README.md').read_text(encoding='utf-8')\nmiss=[n for n in ['conformance/STATUS.md'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('README.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-adr-api",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/adr/0002-api-publique.md').read_text(encoding='utf-8')\nt=t.lower()\nmiss=[n for n in ['## décision'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/adr/0002-api-publique.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-api",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test api 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-api-diagnostics",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test api diagnostics 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-api-produced-files",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test api produced_files 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-examples",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test examples 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-quickstart",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo run --locked --quiet --example quickstart); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && [ \"$(printf '%s\\n' \"$out\" | tail -n 1)\" = OK ]"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-python-tests",
+      "argv": [
+        "env",
+        "PYTHONPATH=python/src",
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "python/tests",
+        "-v"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 300,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-ci-python-job",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import sys,yaml\njobs=yaml.safe_load(open('.github/workflows/ci.yml',encoding='utf-8'))['jobs']\nneeds=jobs['ci-ok'].get('needs') or []\npy=[n for n,j in jobs.items() if any(isinstance(s,dict) and 'unittest' in str(s.get('run','')) for s in (j.get('steps') or []))]\nprint('jobs python:',py,'needs:',needs); sys.exit(0 if py and all(n in needs for n in py) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-release-workflow",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('.github/workflows/release.yml').read_text(encoding='utf-8')\nmiss=[n for n in ['tags', 'v*', 'SHA256SUMS', 'manifest.json', 'x86_64-unknown-linux', 'x86_64-pc-windows', 'aarch64-apple-darwin'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('.github/workflows/release.yml', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-version-manifest",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo run --locked --quiet -- --version); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE '^sasrs [0-9]+\\.[0-9]+\\.[0-9]+ \\(commit ([0-9a-f]{7,40}|unknown), features: [^)]*\\)$'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-release-doc",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/release.md').read_text(encoding='utf-8')\nmiss=[n for n in ['SHA256SUMS', 'Hermes'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/release.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-adr-python",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/adr/0003-api-python.md').read_text(encoding='utf-8')\nt=t.lower()\nmiss=[n for n in ['## décision', 'pyo3'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/adr/0003-api-python.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j06-getting-started",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\ng=pathlib.Path('docs/getting-started.md').read_text(encoding='utf-8'); r=pathlib.Path('README.md').read_text(encoding='utf-8')\nmiss=[n for n,ok in (('examples/',('examples/' in g)),('cargo install',('cargo install' in g)),('lien README',('docs/getting-started.md' in r))) if not ok]\nprint('manquants:',miss); sys.exit(1 if miss else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-compat-oracles",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\nroot=pathlib.Path('conformance/cases/compat'); bad=[]\nfor g in ['means', 'compare', 'transpose', 'printto', 'informat']:\n    cs=sorted((root/g).glob('*/case.json'))\n    if len(cs)<2: bad.append(f'{g}: {len(cs)} cas (<2)')\n    for c in cs:\n        d=json.loads(c.read_text(encoding='utf-8')); pv=d.get('provenance') or {}\n        if pv.get('kind')!='sas-doc' or not str(pv.get('source','')).startswith('http'): bad.append(f'{c}: provenance sas-doc + URL')\n        if d.get('status') not in ('validated','known-divergence'): bad.append(f'{c}: status')\nif not (root/'ORACLE.sha256').is_file(): bad.append('ORACLE.sha256 absent')\nprint('\\n'.join(bad) or 'OK'); sys.exit(1 if bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-compat-oracle-frozen",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import hashlib,pathlib,sys\nroot=pathlib.Path('conformance/cases/compat'); want={}\nfor line in (root/'ORACLE.sha256').read_text(encoding='utf-8').splitlines():\n    if line.strip():\n        h,p=line.split('  ',1); want[p]=h\nhave={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file() and p.name not in ('case.json','ORACLE.sha256')}\ndiff=sorted(k for k in set(want)|set(have) if want.get(k)!=have.get(k))\nprint('\\n'.join(diff) or f'OK: {len(have)} fichiers oracle inchangés'); sys.exit(1 if diff or not have else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-means-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib means_compat 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-means-validated",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/compat/means').glob('*/case.json'))\nst={str(c):json.loads(c.read_text(encoding='utf-8')).get('status') for c in cs}\nprint(st); sys.exit(0 if st and all(s=='validated' for s in st.values()) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-compare-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib compare_compat 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-compare-validated",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/compat/compare').glob('*/case.json'))\nst={str(c):json.loads(c.read_text(encoding='utf-8')).get('status') for c in cs}\nprint(st); sys.exit(0 if st and all(s=='validated' for s in st.values()) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-transpose-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib transpose_compat 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-transpose-validated",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/compat/transpose').glob('*/case.json'))\nst={str(c):json.loads(c.read_text(encoding='utf-8')).get('status') for c in cs}\nprint(st); sys.exit(0 if st and all(s=='validated' for s in st.values()) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-printto-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test cli printto 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-printto-validated",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/compat/printto').glob('*/case.json'))\nst={str(c):json.loads(c.read_text(encoding='utf-8')).get('status') for c in cs}\nprint(st); sys.exit(0 if st and all(s=='validated' for s in st.values()) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-informat-tests",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib informat_meta 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-informat-validated",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import json,pathlib,sys\ncs=sorted(pathlib.Path('conformance/cases/compat/informat').glob('*/case.json'))\nst={str(c):json.loads(c.read_text(encoding='utf-8')).get('status') for c in cs}\nprint(st); sys.exit(0 if st and all(s=='validated' for s in st.values()) else 1)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j07-docs",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nr=pathlib.Path('README.md').read_text(encoding='utf-8'); s=pathlib.Path('docs/support-contract.md').read_text(encoding='utf-8')\nmiss=[n for n,ok in (('README→conformance/STATUS.md','conformance/STATUS.md' in r),('support-contract PRINTTO','PRINTTO' in s)) if not ok]\nprint('manquants:',miss); sys.exit(1 if miss else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-xlsx",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib dbms_xlsx_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-by",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib by_generalized_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-ods-output",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib ods_output_object_ 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-adr-sas7bdat",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/adr/0004-adaptateurs-sas7bdat-xpt.md').read_text(encoding='utf-8')\nt=t.lower()\nmiss=[n for n in ['## décision'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('docs/adr/0004-adaptateurs-sas7bdat-xpt.md', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-roadmap",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('docs/roadmap/avancee.md').read_text(encoding='utf-8')\nh=' '.join(l.lower() for l in t.splitlines() if l.startswith('## '))\nmiss=[d for d in ('logistic','genmod','glm','mixed','glimmix','s3','graphiques') if d not in h]\nif 'M46' not in t: miss.append('correspondance M46–M66')\nif 'docs/roadmap/avancee.md' not in pathlib.Path('PLAN.md').read_text(encoding='utf-8'): miss.append('lien PLAN.md')\nprint('manquants:',miss); sys.exit(1 if miss else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-e2e",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --test e2e 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-coverage-claims",
+      "argv": [
+        "python3",
+        "-B",
+        "scripts/check_coverage_claims.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 300,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "j08-ci-install-job",
+      "argv": [
+        "python3",
+        "-B",
+        "-c",
+        "import pathlib,sys\nt=pathlib.Path('.github/workflows/ci.yml').read_text(encoding='utf-8')\nmiss=[n for n in ['cargo install', 'check_coverage_claims.py'] if n not in t]\nbad=[n for n in [] if n in t]\nprint('.github/workflows/ci.yml', 'manquants:', miss, 'interdits:', bad)\nsys.exit(1 if miss or bad else 0)"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "expected_exit_code": 0
+    }
+  ],
+  "final_check_ids": [
+    "fmt",
+    "clippy",
+    "clippy-s3",
+    "test",
+    "test-s3-lib",
+    "ci-structure"
+  ],
+  "milestones": [
+    {
+      "id": "J02",
+      "title": "Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré »"
+    },
+    {
+      "id": "J03",
+      "title": "Divergences numériques et encodage"
+    },
+    {
+      "id": "J04",
+      "title": "Intégrité du stockage et des métadonnées"
+    },
+    {
+      "id": "J05",
+      "title": "Validation industrielle : conformité, propriétés, différentiel"
+    },
+    {
+      "id": "J06",
+      "title": "Utilisabilité : API Session, Python, distribution, documentation"
+    },
+    {
+      "id": "J07",
+      "title": "Compatibilité à forte valeur (1) : MEANS, COMPARE, TRANSPOSE, PRINTTO, informats"
+    },
+    {
+      "id": "J08",
+      "title": "XLSX, BY, ODS OUTPUT, feuille de route avancée, validation de bout en bout"
+    }
+  ],
+  "work_units": [
+    {
+      "id": "J02-P1",
+      "milestone_id": "J02",
+      "title": "Échecs d'écriture, code retour et pertes ODS",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`--log`/`--print` impossibles à écrire : ERROR sur stderr, contenu reversé sur stderr (jamais perdu), exit 2 ; stdout fermé : pas de panique, exit 2. Écriture d'un fichier ODS (CLOSE ou filet de fin de run) ou d'une image en échec : `log.error` compté avec le chemin complet — les 7 sites `note(\"WARNING: …\")` de lib.rs, session.rs, reg/output/plots.rs et univariate/plot_graphics.rs disparaissent. Ouvrir une destination à fichier alors qu'une autre est ouverte : finaliser et écrire la précédente d'abord ; le listing produit avant `ODS HTML FILE=` reste dans le listing ; `ODS _ALL_ CLOSE` ferme la destination courante ; destination sans contenu → NOTE explicite. Panique pendant `run()` : `catch_unwind`, log partiel conservé + `ERROR: internal error …`, exit 2. Tests CLI (noms contractuels) `write_failure_*` (log, print, dossier absent, permission) et `ods_*` (fichier ODS non inscriptible, deux destinations successives) dans tests/cli.rs. Ne pas modifier le format des NOTEs de succès ni les compteurs du log. Le code sous `cfg(feature = \"graphics\")` n'est compilé localement que si le conteneur a fontconfig : le garder minimal et symétrique du chemin par défaut. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [],
+      "files": [
+        "src/main.rs",
+        "src/lib.rs",
+        "src/session.rs",
+        "src/executor/global/ods.rs",
+        "src/procs/univariate/plot_graphics.rs",
+        "src/procs/reg/output/plots.rs",
+        "tests/cli.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-write-failure",
+        "j02-ods-cli",
+        "j02-no-note-diagnostics"
+      ]
+    },
+    {
+      "id": "J02-P2",
+      "milestone_id": "J02",
+      "title": "Erreurs macro comptées, %ABORT, références non résolues",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "Remplacer les diagnostics réduits à un commentaire (`emit_error` → `/* … */` et les sites `/* NOTE: … */` de include.rs, control.rs, control/jump.rs, define/invoke.rs) par un canal de diagnostics du `MacroEngine` vidé par l'executor dans le log : ERROR comptées pour %EVAL/%SYSEVALF invalides, %DO emballé, %SYSFUNC inconnue, %INCLUDE illisible ou trop imbriqué, récursion, %GOTO sans label, paramètres positionnels en trop, mot-clé inconnu ; vraies NOTEs pour %SYSEXEC/%WINDOW/%SYSCALL non gérés ; textes SAS cités (SAS 9.4 Macro Language Reference). `%ABORT` : `take_abort_request` consommé par l'executor, arrêt du programme ; CANCEL/ABEND/RETURN n mappés sur le code retour et documentés. WARNINGs `Apparent symbolic reference X not resolved.` et `Apparent invocation of macro X not resolved.` là où SAS les émet. `%LENGTH` d'un argument vide vérifié contre la doc. Tests unitaires `macro_diag*` ; fixtures `tests/fixtures/j02/macro_*.sas` avec snapshots relus à la main ; snapshots existants modifiés justifiés un par un. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [],
+      "files": [
+        "src/macros",
+        "src/executor/mod.rs",
+        "src/executor/tests",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-macro-diag",
+        "j02-macro-no-comment-diagnostics",
+        "j02-macro-sas-messages"
+      ]
+    },
+    {
+      "id": "J02-P3",
+      "milestone_id": "J02",
+      "title": "Contrat « reconnu mais ignoré » : instructions de procédure",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "Créer `docs/support-contract.md` : ERROR si un résultat numérique, un dataset ou le contrôle de flux peut changer ; WARNING si l'effet est d'affichage seulement ; instruction inconnue → ERROR façon SAS 180-322 ; jamais de repli silencieux ; exemples. `parse_proc_body` : sous-instruction non reconnue → ERROR au lieu de `skip_to_semi` ; helpers partagés `unsupported_statement(proc, stmt)` (ERROR) et `ignored_display_statement` (WARNING) appliqués d'un coup aux procs appelantes (BY/WEIGHT/FREQ/OUTPUT/ID/WHERE/CLASS vs FORMAT/LABEL/ATTRIB). Les instructions globales valides dans une étape PROC (TITLE, FOOTNOTE, OPTIONS, LIBNAME, ODS, FILENAME) continuent de fonctionner. Tests unitaires `contract_*` ; au moins 4 fixtures `tests/fixtures/j02/contract_*.sas` (BY dans GLM, WEIGHT dans LOGISTIC, instruction inventée, FORMAT dans une proc qui l'ignore) dont le snapshot montre le diagnostic. Un fixture existant qui utilisait une instruction ignorée garde son intention (instruction retirée ou ERROR assumée, justifiée). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P2"
+      ],
+      "files": [
+        "src/procs/common",
+        "docs/support-contract.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-contract-doc",
+        "j02-contract-tests",
+        "j02-contract-fixtures"
+      ]
+    },
+    {
+      "id": "J02-P4",
+      "milestone_id": "J02",
+      "title": "Options ignorées en silence : procs Base et PROC SQL",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Via les helpers de J02-P3, options reconnues non honorées → ERROR : COMPARE `CRITERION=`/`METHOD=`/`BRIEF`/`LISTALL`/`OUT*`/`MAXPRINT=` et instructions ID/VAR/WITH/BY (implémentées en J07) ; UNIVARIATE `VARDEF=`/`PCTLDEF=` non par défaut ; options de TABLES inconnues de FREQ ; DATASETS `KILL` et options inconnues ; MEANS statistique inconnue ou non calculable dans `OUTPUT` (`clm(x)=`) ; SQL instruction inconnue, `OUTOBS=`/`INOBS=` (implémenter si trivial, sinon ERROR). Honorer UNIVARIATE `NOPRINT` et SQL `NOPRINT`. PRINTTO : supprimer la NOTE trompeuse « redirected to » ; `LOG=`/`PRINT=` → WARNING « routing not supported » jusqu'à J07-P5. PLOT : options d'affichage (`HREF=`, `VREF=`, `HAXIS=`…) → WARNING. Tests unitaires `silent_opt_*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P3"
+      ],
+      "files": [
+        "src/procs/compare",
+        "src/procs/univariate/parse.rs",
+        "src/procs/univariate/tests",
+        "src/procs/freq",
+        "src/procs/datasets",
+        "src/procs/means",
+        "src/procs/printto.rs",
+        "src/procs/printto",
+        "src/procs/plot.rs",
+        "src/procs/plot",
+        "src/sql",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-silent-opt",
+        "j02-printto-honest"
+      ]
+    },
+    {
+      "id": "J02-P5",
+      "milestone_id": "J02",
+      "title": "Replis silencieux de modélisation",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "GENMOD : `DIST=`/`LINK=` inconnus → ERROR (plus de repli POISSON/lien canonique) ; `LINK=POWER(λ)` → ERROR sauf λ=-1 ; options MODEL inconnues (`OFFSET=`…) → ERROR. LOGISTIC : `DESCENDING`/`ORDER=` honorés ou ERROR ; `LINK=` inconnu et options MODEL inconnues → ERROR ; CLASS `(PARAM= REF=)` analysé correctement (plus de jetons pris pour des variables), `PARAM=REF` et `REF=FIRST|LAST` honorés, le reste → ERROR. MIXED/GLIMMIX : `TYPE=`/`METHOD=` inconnus → ERROR ; `DDFM=` autre que CONTAIN → ERROR. DISCRIM : `METHOD≠NORMAL`, `POOL=NO|TEST`, `POOL=` inconnu → ERROR (plus de repli LDA). `common::model::parse_effect_list` : `a*b`, `a(b)` → ERROR dans les procs qui les aplatissaient. REG : options PROC/MODEL inconnues → ERROR. Tests unitaires `model_fallback_*` ; syntaxe de référence = doc SAS/STAT 9.4 citée. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P4"
+      ],
+      "files": [
+        "src/procs/genmod",
+        "src/procs/logistic",
+        "src/procs/mixed",
+        "src/procs/glimmix",
+        "src/procs/discrim",
+        "src/procs/common/model.rs",
+        "src/procs/reg/parse",
+        "src/procs/reg/tests",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-model-fallback"
+      ]
+    },
+    {
+      "id": "J02-P6",
+      "milestone_id": "J02",
+      "title": "Convergence et singularité véridiques",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Les listings n'affirment la convergence que si elle est atteinte : GENMOD (ligne « Convergence criterion … satisfied » après l'ajustement ; épuisement du step-halving = non-convergence), GLIMMIX (PQL, Laplace : drapeau Nelder-Mead respecté), MIXED (général et legacy), LOGISTIC (binaire ; ordinal : un pas singulier ne fait plus `break` en silence). Non-convergence → WARNING SAS (« Convergence was not attained… », « The maximum likelihood estimate may not exist… ») au lieu d'une NOTE ou du silence ; composante de variance tronquée à 0 → NOTE « Estimated G matrix is not positive definite. » ; λ plafonné → NOTE. GLM/ANOVA de rang incomplet : ERROR explicite (plus de SSE/SE NaN silencieux) tant que l'inverse généralisée n'existe pas. Tests unitaires `convergence_*` (non-convergence, séparation quasi complète, plan singulier) ; messages cités de la doc SAS. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P5"
+      ],
+      "files": [
+        "src/procs/genmod",
+        "src/procs/glimmix",
+        "src/procs/mixed",
+        "src/procs/logistic",
+        "src/procs/glm",
+        "src/procs/anova",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-convergence"
+      ]
+    },
+    {
+      "id": "J02-P9",
+      "milestone_id": "J02",
+      "title": "Garde CI : jobs agrégés figés et parité check.sh",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "S",
+      "scope": "Résidus de J02-P0 (watch-points a et b) : `scripts/check_ci_structure.py` fige la liste attendue des jobs agrégés par `ci-ok` (fmt, clippy, clippy-graphics, clippy-s3, test, test-graphics, test-s3) — un job supprimé partout (workflow + needs) fait désormais échouer ; parité : chaque commande cargo d'un step `run` de ci.yml existe à l'identique dans `scripts/check.sh` (message nommant la commande manquante). Nouveau mode `--self-test` sur des copies temporaires : arbre intact → 0 ; job retiré partout → 1 ; commande cargo retirée de check.sh → 1 ; `continue-on-error` sur ci-ok → 1 ; `--self-test` sort 0 seulement si toutes ces attentes tiennent. En tête de script : tout ajout de job CI met à jour la liste. Ne modifier ni ci.yml ni check.sh. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [],
+      "files": [
+        "scripts/check_ci_structure.py"
+      ],
+      "check_ids": [
+        "ci-structure",
+        "j02-ci-guard-selftest"
+      ]
+    },
+    {
+      "id": "J02-P7",
+      "milestone_id": "J02",
+      "title": "Documentation de couverture honnête (J02)",
+      "kind": "implement",
+      "tier": "T5",
+      "size": "M",
+      "scope": "README.md : section `## Exit codes` (0/1/2, cas CLI dont échecs d'écriture) et lien vers `docs/support-contract.md` ; chaque ligne des tableaux de couverture confrontée au code : retirer ou qualifier les affirmations fausses (FACTOR `QUARTIMAX`/OBLIMIN = ERROR, GLIMMIX `METHOD=QUAD` = ERROR, SGPLOT `GROUP=`/`RESPONSE=`/`STAT=`/`SCALE=`/`TYPE=` non rendus, PLOT `=group`, GCHART HBAR dessiné en VBAR, `ODS GRAPHICS RESET=`, PRINTTO, COMPARE, MEANS WEIGHT — quantiles non pondérés jusqu'à J03 —, options devenues ERROR en J02). `docs/support-contract.md` : tableau des comportements passés d'« ignoré » à ERROR/WARNING en J02. Doc-comments `//!` périmés de GENMOD (« Gamma errors »), PRINCOMP (OUT=), GPLOT, GCHART (PIE), GLIMMIX (NOTEs promises), MIXED. CONTRIBUTING.md : la feuille de route active est le manifeste `.mission-control/plans/consolidation/plan.json` (vues générées dans docs/plans/consolidation/, état dans Mission Control) ; retirer la référence aux contrats `jalons/` du plan V2. Ne modifier aucun code exécutable. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P1",
+        "J02-P2",
+        "J02-P3",
+        "J02-P4",
+        "J02-P5",
+        "J02-P6",
+        "J02-P9"
+      ],
+      "files": [
+        "README.md",
+        "docs/support-contract.md",
+        "CONTRIBUTING.md",
+        "src/procs/genmod/mod.rs",
+        "src/procs/glimmix/mod.rs",
+        "src/procs/mixed/mod.rs",
+        "src/procs/princomp/mod.rs",
+        "src/procs/gplot/mod.rs",
+        "src/procs/gchart/mod.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-readme-contract",
+        "j02-contributing-v3"
+      ]
+    },
+    {
+      "id": "J02-P8",
+      "milestone_id": "J02",
+      "title": "Review J02",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J02-P1",
+        "J02-P2",
+        "J02-P3",
+        "J02-P4",
+        "J02-P5",
+        "J02-P6",
+        "J02-P9",
+        "J02-P7"
+      ],
+      "files": [],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-write-failure",
+        "j02-ods-cli",
+        "j02-no-note-diagnostics",
+        "j02-macro-diag",
+        "j02-macro-no-comment-diagnostics",
+        "j02-macro-sas-messages",
+        "j02-contract-doc",
+        "j02-contract-tests",
+        "j02-contract-fixtures",
+        "j02-silent-opt",
+        "j02-printto-honest",
+        "j02-model-fallback",
+        "j02-convergence",
+        "ci-structure",
+        "j02-ci-guard-selftest",
+        "j02-readme-contract",
+        "j02-contributing-v3",
+        "clippy-s3",
+        "test-s3-lib"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J02 : aucune ERROR/WARNING nouvelle sans test ; exit codes CLI réellement 2 sur échec d'écriture ; efficacité du garde CI (J02-P9) démontrée par son self-test. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J03-P1",
+      "milestone_id": "J03",
+      "title": "Oracle indépendant des statistiques pondérées",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "S",
+      "scope": "Script Python (bibliothèque standard seulement) `tools/oracles/weighted_stats.py` implémentant depuis la doc SAS 9.4 (URLs citées dans le JSON) : N, NMISS, SUMWGT, MEAN, VAR/STD (VARDEF=DF et WEIGHT), MEDIAN, P1…P99, Q1, Q3, QRANGE pondérés (définition 5 pondérée), poids nuls, négatifs et manquants selon PROC MEANS et PROC UNIVARIATE (EXCLNPWGT inclus). `tests/oracles/weighted_stats.json` : au moins 8 cas (poids très déséquilibrés, fractionnaires, nuls, négatifs, manquants, tous égaux = définition 5 non pondérée, une seule observation, poids cumulé exactement sur une borne), chacun avec `provenance` et `expected` ; `--check` recalcule et compare, exit ≠ 0 en cas d'écart. Indépendance : ne pas lire src/procs/means, src/procs/univariate ni src/procs/common/stats.rs ; règle SAS incertaine → champ `uncertain` dans le cas. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P8"
+      ],
+      "files": [
+        "tools/oracles",
+        "tests/oracles"
+      ],
+      "check_ids": [
+        "j03-oracle-check",
+        "j03-oracle-cases"
+      ]
+    },
+    {
+      "id": "J03-P3",
+      "milestone_id": "J03",
+      "title": "Contrat d'encodage, lexer UTF-8 et BOM",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`docs/encoding.md` : contrat D-001 (longueurs et troncatures en caractères = session SAS LATIN1/WLATIN1 ; jamais d'UTF-8 invalide ; écart avec une session SAS UTF-8 ; entrées UTF-8 strictes, BOM ignoré ; sorties UTF-8, RTF échappé, PDF `?` documenté). Lexer : littéraux chaîne décodés en UTF-8 (fin du `b as char` de lexer/literal.rs) ; identifiants toujours ASCII. BOM UTF-8 retiré du source `.sas`, des fichiers `%INCLUDE` et `INFILE` ; UTF-8 invalide → ERROR nommant le fichier (plus de commentaire silencieux dans `%INCLUDE`). `VarMeta.length` documenté « caractères » ; commentaire faux de procs/append.rs corrigé. Snapshots m16 `constructions` et m34 `glimmix_links_laplace` corrigés (tiret cadratin en mojibake) avec justification. Tests `utf8*` (LENGTH('é')=1, TITLE non ASCII, BOM, UTF-8 invalide). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P8"
+      ],
+      "files": [
+        "docs/encoding.md",
+        "src/lexer",
+        "src/main.rs",
+        "src/datastep",
+        "src/macros/include.rs",
+        "src/dataset.rs",
+        "src/dataset",
+        "src/procs/append.rs",
+        "src/procs/append",
+        "tests/cli.rs",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j03-encoding-doc",
+        "j03-utf8",
+        "j03-no-mojibake"
+      ]
+    },
+    {
+      "id": "J03-P4",
+      "milestone_id": "J03",
+      "title": "Formats et informats sans découpe d'octets",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`$w.`, `$CHAR`, `$F`, `$QUOTE`, `$HEX`, `$UPCASE` et le repli de formats/mod.rs : troncature et remplissage en caractères, plus aucune panique sur du multioctet (fin de `out.truncate(w)` en octets). `right_justify` en caractères (plus de « afé » pour « Café » w=4) ; informat `$w.` en caractères ; informat DATE protégé contre le non-ASCII ; largeur par défaut des formats utilisateur en caractères. PROC REPORT : `pad_cell`, largeurs de colonnes et longueurs inférées de `OUT=` en caractères. Tests `multibyte*` (accents, CJK, emoji, largeur limite, espaces finaux) pour chaque fonction corrigée ; contrat : docs/encoding.md. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P3"
+      ],
+      "files": [
+        "src/formats",
+        "src/procs/report",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j03-multibyte",
+        "j03-no-byte-truncate"
+      ]
+    },
+    {
+      "id": "J03-P5",
+      "milestone_id": "J03",
+      "title": "Largeurs de mise en page et longueurs inférées en caractères",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "Centrage des titres et largeurs de colonnes du listing, de RTF, PDF et IML calculés en caractères. Longueurs `VarMeta` inférées depuis les données en caractères : CNTLOUT (PROC FORMAT), DISTANCE, FREQ `OUT=`. Tests `char_width*` (table à valeurs accentuées alignée, longueur CNTLOUT d'un label accentué). Ne pas toucher TRANSPOSE (J07) ni UNIVARIATE (J03-P2). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P4"
+      ],
+      "files": [
+        "src/listing.rs",
+        "src/listing",
+        "src/output",
+        "src/procs/common/format.rs",
+        "src/procs/iml",
+        "src/procs/format",
+        "src/procs/distance.rs",
+        "src/procs/distance",
+        "src/procs/freq",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j03-char-width"
+      ]
+    },
+    {
+      "id": "J03-P6",
+      "milestone_id": "J03",
+      "title": "Divergences de l'étape DATA",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "UPDATE : transactions sans maître ajoutées, toutes les transactions d'une même clé appliquées dans l'ordre, valeurs manquantes de transaction sans effet (sauf `UPDATEMODE=NOMISSINGCHECK`) — valeurs attendues copiées de l'exemple documenté SAS (URL en commentaire). FIND : position de départ selon la doc (`FIND('abc','a')` = 1) ; corriger le test intnx.rs qui verrouille l'erreur. FORMAT/ATTRIB sur une variable inconnue : variable créée comme en SAS. REPEAT plafonné en caractères ; STRIP/CATS/CATX/COMPBL : blancs retirés selon la doc (espaces, pas les tabulations). Tests `datastep_divergence*`, chaque valeur attendue avec sa source ; fixtures `tests/fixtures/j03/datastep_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P5"
+      ],
+      "files": [
+        "src/datastep",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j03-datastep-divergence"
+      ]
+    },
+    {
+      "id": "J03-P2",
+      "milestone_id": "J03",
+      "title": "Statistiques pondérées MEANS/SUMMARY et UNIVARIATE",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "`weighted_quantile_def5` déplacé dans procs/common/stats.rs et utilisé par MEANS/SUMMARY pour MEDIAN, percentiles et QRANGE sous WEIGHT, dans les quatre chemins (listing, PRINTALLTYPES/WAYS/TYPES, `OUTPUT OUT=`, ODS `Summary`). N/NMISS/SUMWGT et poids ≤ 0 conformes à l'oracle (EXCLNPWGT honoré ou ERROR explicite). UNIVARIATE : `OUTPUT OUT=` honore WEIGHT (moyenne, écart-type, somme, quantiles) ; tests de normalité et capture ODS sous WEIGHT conformes (calcul, ou NOTE SAS s'ils ne sont pas disponibles) ; titre « Quantiles (Definition 5) » vérifié ; `//!` de univariate/mod.rs à jour. `tests/weighted_oracle.rs` exécute chaque cas de tests/oracles/weighted_stats.json de bout en bout via `sasrs::run` (DATALINES + `OUTPUT OUT=` relu), tolérance relative 1e-10 ; un cas `uncertain` en échec est signalé, jamais réécrit. L'oracle est hors périmètre : ne pas le modifier. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P1",
+        "J03-P6"
+      ],
+      "files": [
+        "src/procs/common/stats.rs",
+        "src/procs/common/tests.rs",
+        "src/procs/means",
+        "src/procs/univariate",
+        "tests/weighted_oracle.rs",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j03-weighted-oracle",
+        "j03-weighted-def5-shared",
+        "j03-oracle-check"
+      ]
+    },
+    {
+      "id": "J03-P7",
+      "milestone_id": "J03",
+      "title": "Documentation de couverture (J03)",
+      "kind": "implement",
+      "tier": "T5",
+      "size": "S",
+      "scope": "README.md : lignes MEANS/SUMMARY et UNIVARIATE (WEIGHT pondéré, y compris `OUTPUT OUT=` ; EXCLNPWGT ; ce qui reste non couvert), courte section encodage + lien `docs/encoding.md`, DATA step (UPDATE, FIND), limite « caractères » dans la ligne LENGTH. `docs/support-contract.md` : lignes J03. Audit README vs comportement réel des zones touchées en J03. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P1",
+        "J03-P2",
+        "J03-P3",
+        "J03-P4",
+        "J03-P5",
+        "J03-P6"
+      ],
+      "files": [
+        "README.md",
+        "docs/support-contract.md"
+      ],
+      "check_ids": [
+        "j03-readme"
+      ]
+    },
+    {
+      "id": "J03-P8",
+      "milestone_id": "J03",
+      "title": "Review J03",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J03-P1",
+        "J03-P3",
+        "J03-P4",
+        "J03-P5",
+        "J03-P6",
+        "J03-P2",
+        "J03-P7"
+      ],
+      "files": [],
+      "check_ids": [
+        "j03-oracle-check",
+        "j03-oracle-cases",
+        "fmt",
+        "clippy",
+        "test",
+        "j03-encoding-doc",
+        "j03-utf8",
+        "j03-no-mojibake",
+        "j03-multibyte",
+        "j03-no-byte-truncate",
+        "j03-char-width",
+        "j03-datastep-divergence",
+        "j03-weighted-oracle",
+        "j03-weighted-def5-shared",
+        "j03-readme",
+        "clippy-s3",
+        "test-s3-lib",
+        "ci-structure"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J03 : l'oracle pondéré est indépendant de l'implémentation (auteur, contenu, sources) ; aucun snapshot ne verrouille une troncature en octets. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J04-P1",
+      "milestone_id": "J04",
+      "title": "Protocole d'écriture atomique parquet + sidecar",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "ADR `docs/adr/0001-stockage-parquet-sidecar.md` (contexte, options, `## Décision`, conséquences, stratégie de récupération) ; option recommandée : temporaires dans le même dossier + fsync + rename ; empreinte du parquet (taille, lignes, colonnes) dans le sidecar ; sidecar dont l'empreinte ne correspond pas = périmé → ignoré avec diagnostic ; ordre d'écriture tel qu'une interruption ne publie jamais de nouvelles données avec des métadonnées fausses. Implémentation dans `SasDataset::write_parquet`/`write_sidecar` et `DirLibrary::write` ; temporaires orphelins nettoyés ou ignorés par `list`. Feature cargo `fault-injection` (hors défaut) : points d'arrêt nommés (`after_parquet_tmp`, `after_parquet_rename`, `after_sidecar_tmp`…) pilotés par `SASRS_FAULT_INJECT`, sans coût hors feature. Tests `atomic_write*`. Ne changer ni le format Parquet ni la décision « sidecar JSON ». Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J03-P8"
+      ],
+      "files": [
+        "docs/adr/0001-stockage-parquet-sidecar.md",
+        "src/dataset.rs",
+        "src/dataset",
+        "src/library",
+        "Cargo.toml"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "clippy-s3",
+        "test-s3-lib",
+        "j04-adr-storage",
+        "j04-atomic-write",
+        "j04-build-fault-injection"
+      ]
+    },
+    {
+      "id": "J04-P2",
+      "milestone_id": "J04",
+      "title": "Suppression, renommage et échange sans orphelins",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`delete` supprime aussi le sidecar ; `rename` refuse une destination existante (ERROR, comme PROC DATASETS CHANGE), supprime tout sidecar orphelin de la destination et annule le déplacement du parquet si celui du sidecar échoue ; EXCHANGE : rollback en cas d'échec intermédiaire ; `unique_temp_name` vérifie aussi les sidecars ; `list`/`exists`/`read` cohérents sur la casse. CSV : `scan` transmet les notes de coercition (WARNING 2^53). Tests `orphan_sidecar*` (delete, rename vers une cible avec sidecar orphelin, échec simulé via `fault-injection`, EXCHANGE). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P1"
+      ],
+      "files": [
+        "src/library",
+        "src/procs/datasets"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "clippy-s3",
+        "j04-orphan-sidecar"
+      ]
+    },
+    {
+      "id": "J04-P3",
+      "milestone_id": "J04",
+      "title": "Sidecar corrompu ou invalide : diagnostic explicite",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "S",
+      "scope": "Sidecar illisible, JSON invalide, type de champ faux, longueur incompatible avec le type ou inférieure à la plus longue valeur, empreinte périmée : WARNING compté (ligne `WARNING:` relayée par `log.forward`) nommant le fichier et la cause ; métadonnées fautives ignorées, données lues ; plus aucun `.ok()` silencieux. Entrées de variables absentes du parquet : NOTE. Tests `sidecar_invalid*` (un par cause). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P1"
+      ],
+      "files": [
+        "src/dataset.rs",
+        "src/dataset"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j04-sidecar-invalid"
+      ]
+    },
+    {
+      "id": "J04-P4",
+      "milestone_id": "J04",
+      "title": "Métadonnées après transformations SQL",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`CREATE TABLE AS SELECT` conserve format, label et longueur des colonnes sources reprises telles quelles (règles SAS : colonne calculée sans métadonnées sauf `FORMAT=`/`LABEL=`/`LENGTH=` dans le SELECT) ; les lectures SQL passent par le chemin qui applique le sidecar ; sql/dictionary.rs transmet les notes de lecture au log. Tests `sql_metadata*` ; fixture `tests/fixtures/j04/sqlmeta_*.sas` (PROC CONTENTS après CREATE TABLE AS). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P1"
+      ],
+      "files": [
+        "src/sql",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j04-sql-metadata"
+      ]
+    },
+    {
+      "id": "J04-P5",
+      "milestone_id": "J04",
+      "title": "Tests d'interruption et de corruption simulées, doc de récupération",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "Suite adversariale `tests/storage_integrity.rs` (en tête `#![cfg(feature = \"fault-injection\")]`), écrite sans modifier src/ : pour chaque point d'injection, un programme SAS réel écrit/remplace/supprime/renomme une table, est interrompu, puis un run suivant lit soit l'ancien état cohérent soit le nouveau — jamais données nouvelles + métadonnées fausses sans diagnostic ; round-trip données + métadonnées (formats, labels, longueurs, missings spéciaux) ; sidecars corrompus générés. Défaut trouvé → blocked avec reproducer (pas de correction ici). CI : job `test-fault-injection` (`cargo test --locked -p sasrs --features fault-injection --test storage_integrity`) agrégé par ci-ok, même commande dans scripts/check.sh, liste figée de check_ci_structure.py mise à jour. README : section `## Storage and recovery` (protocole, diagnostics, conduite après interruption) + lien vers docs/adr/0001-stockage-parquet-sidecar.md. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P2",
+        "J04-P3",
+        "J04-P4"
+      ],
+      "files": [
+        "tests/storage_integrity.rs",
+        "tests/common",
+        ".github/workflows/ci.yml",
+        "scripts/check.sh",
+        "scripts/check_ci_structure.py",
+        "README.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "ci-structure",
+        "j04-storage-integrity",
+        "j04-ci-fault-injection",
+        "j04-readme-recovery"
+      ]
+    },
+    {
+      "id": "J04-P6",
+      "milestone_id": "J04",
+      "title": "Review J04",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J04-P1",
+        "J04-P2",
+        "J04-P3",
+        "J04-P4",
+        "J04-P5"
+      ],
+      "files": [],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "clippy-s3",
+        "test-s3-lib",
+        "j04-adr-storage",
+        "j04-atomic-write",
+        "j04-build-fault-injection",
+        "j04-orphan-sidecar",
+        "j04-sidecar-invalid",
+        "j04-sql-metadata",
+        "ci-structure",
+        "j04-storage-integrity",
+        "j04-ci-fault-injection",
+        "j04-readme-recovery"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J04 : la suite storage_integrity est écrite indépendamment de l'implémentation et mord (preuve par mutation d'un point d'injection) ; aucun chemin de lecture n'ignore plus un sidecar en silence. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J05-P1",
+      "milestone_id": "J05",
+      "title": "Structure du corpus de conformité et exécuteur",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Cas `conformance/cases/<groupe>/<id>/` (groupes example, base, stat, compat…) : `program.sas`, `data/*.csv`, `expected/<dataset>.csv`, `case.json` (`id`, `title`, `provenance` {`kind`: sas-doc | sas-run | independent-oracle, `source` (URL ou référence), `sas_version`, `options`}, `validates`: math | sas-behaviour, `tolerance` {abs, rel} par défaut et par colonne, `log` {required, forbidden (regex)}, `exit_code`, `status`: validated | known-divergence (+ `issue`)), décrit dans conformance/schema.md et conformance/README.md. `tests/conformance.rs` : pour chaque cas, tempdir, CSV → parquet (types de case.json), `run` avec `work_dir` fixé, relecture des datasets attendus, comparaison avec tolérances (missings SAS comparés comme tels) ; un cas `known-divergence` doit échouer, sinon le test signale « à promouvoir » et échoue ; rapport par cas. Deux cas sous conformance/cases/example/. Indépendant des snapshots insta. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P6"
+      ],
+      "files": [
+        "conformance/README.md",
+        "conformance/schema.md",
+        "conformance/cases/example",
+        "tests/conformance.rs",
+        "tests/common"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-layout"
+      ]
+    },
+    {
+      "id": "J05-P2",
+      "milestone_id": "J05",
+      "title": "Cas de conformité Base issus de la documentation SAS",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "Au moins 10 cas sous conformance/cases/base/ reprenant des exemples publiés de la doc SAS 9.4 avec leur sortie (URL exacte dans `provenance`) : étape DATA (RETAIN, FIRST./LAST., MERGE BY, UPDATE, tableaux), SORT NODUPKEY, FORMAT, MEANS CLASS/OUTPUT, FREQ CHISQ, TRANSPOSE, SQL jointures et remerge, fonctions caractère/date. Valeurs attendues recopiées de la doc, jamais produites par sasrs ; cas en échec → `known-divergence` décrit (issue GitHub ouverte par le coordinateur, pas par le worker). Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P1"
+      ],
+      "files": [
+        "conformance/cases/base"
+      ],
+      "check_ids": [
+        "j05-conformance",
+        "j05-cases-base"
+      ]
+    },
+    {
+      "id": "J05-P3",
+      "milestone_id": "J05",
+      "title": "Cas de conformité statistiques",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "Au moins 8 cas sous conformance/cases/stat/ depuis les exemples « Getting Started »/« Examples » publiés de SAS/STAT et Base 9.4 : REG, TTEST, CORR (Pearson, Spearman), UNIVARIATE (pondéré inclus), FREQ Fisher, NPAR1WAY, GLM, LOGISTIC binaire ; tolérances justifiées par la précision imprimée dans la doc ; `validates: math` pour un résultat mathématique (oracle indépendant), `sas-behaviour` pour une sortie SAS ; cas en échec → `known-divergence`. Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P1"
+      ],
+      "files": [
+        "conformance/cases/stat"
+      ],
+      "check_ids": [
+        "j05-conformance",
+        "j05-cases-stat"
+      ]
+    },
+    {
+      "id": "J05-P4",
+      "milestone_id": "J05",
+      "title": "Tests de propriétés",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`proptest` en dev-dependency (Cargo.lock mis à jour et commité) ; `tests/properties.rs` : `Value::sas_cmp` ordre total cohérent avec l'ordre SAS des missings (`._` < `.` < `.A` … `.Z` < nombres) ; missings spéciaux préservés par un aller-retour parquet ; round-trip `VarMeta` (format, label, longueur) par write/read ; troncature PDV jamais d'UTF-8 invalide et ≤ longueur en caractères ; formats `$w.` et `w.d` sans panique, largeur en caractères ; SORT stable et conforme à `sas_cmp`. Nombre de cas borné (< 30 s), graine reproductible. Défaut trouvé → blocked avec reproducer minimal. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J04-P6"
+      ],
+      "files": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "tests/properties.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-properties"
+      ]
+    },
+    {
+      "id": "J05-P5",
+      "milestone_id": "J05",
+      "title": "Différentiel chemin vectorisé / ligne à ligne",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`tests/differential.rs` : chaque fixture tests/fixtures/**/*.sas exécutée avec `vectorize` vrai et faux → log (hors NOTE propre au fast-path), listing et datasets produits identiques ; programmes DATA step générés (proptest) : SET + assignations numériques, missings spéciaux, KEEP/DROP/RENAME/FORMAT/LABEL, 0 ligne, FIRSTOBS/OBS. Écart trouvé : corriger le fast-path (repli vers la boucle si non équivalent) avec test de non-régression. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P4"
+      ],
+      "files": [
+        "tests/differential.rs",
+        "src/datastep/fastpath.rs",
+        "src/datastep/fastpath"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-differential"
+      ]
+    },
+    {
+      "id": "J05-P6",
+      "milestone_id": "J05",
+      "title": "CI de conformité et couverture validée publique",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "`scripts/conformance_report.py` (bibliothèque standard) génère conformance/STATUS.md (par PROC/zone : cas validés, divergences connues, provenance) ; `--check` échoue si le fichier commité est périmé. CI : jobs conformance (`--test conformance` + `conformance_report.py --check`), properties (`--test properties`) et differential (`--test differential`) agrégés par ci-ok ; liste figée de check_ci_structure.py et scripts/check.sh mis à jour. README : la marque « validé contre référence » renvoie à conformance/STATUS.md ; aucune ligne ne revendique « validé » sans cas. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P2",
+        "J05-P3",
+        "J05-P5"
+      ],
+      "files": [
+        "scripts/conformance_report.py",
+        "conformance/STATUS.md",
+        ".github/workflows/ci.yml",
+        "scripts/check.sh",
+        "scripts/check_ci_structure.py",
+        "README.md"
+      ],
+      "check_ids": [
+        "ci-structure",
+        "j05-conformance-status",
+        "j05-ci-validation-jobs",
+        "j05-readme-status"
+      ]
+    },
+    {
+      "id": "J05-P7",
+      "milestone_id": "J05",
+      "title": "Review J05",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J05-P1",
+        "J05-P2",
+        "J05-P3",
+        "J05-P4",
+        "J05-P5",
+        "J05-P6"
+      ],
+      "files": [],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-layout",
+        "j05-cases-base",
+        "j05-cases-stat",
+        "j05-properties",
+        "j05-differential",
+        "ci-structure",
+        "j05-conformance-status",
+        "j05-ci-validation-jobs",
+        "j05-readme-status",
+        "j04-storage-integrity",
+        "clippy-s3",
+        "test-s3-lib"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J05 : les valeurs attendues du corpus proviennent de la doc SAS publiée ou d'un oracle indépendant (jamais de sasrs) ; un cas known-divergence qui passerait fait bien échouer le runner. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J06-P1",
+      "milestone_id": "J06",
+      "title": "Façade publique sasrs::api (ADR)",
+      "kind": "implement",
+      "tier": "T2",
+      "size": "M",
+      "scope": "ADR `docs/adr/0002-api-publique.md` (`## Décision`) : surface stable `sasrs::api`, politique de compatibilité (semver ; internes `#[doc(hidden)]` plutôt que cassés), types exposés. `api::Session` : `new(Options)`, `submit(&str) -> Submission` (log, compteurs, code retour) répétable sur la même session, `register_dataset(libref, name, DataFrame, métadonnées optionnelles)`, `dataset(libref, name) -> (DataFrame, Vec<VarMeta>)`, `close() -> CloseReport` (finalise les destinations ODS, supprime WORK) ; erreurs typées. `run()` et `RunOutcome` conservés, réimplémentés sur la façade, sortie inchangée. `tests/api.rs` : deux soumissions partageant WORK et macros, injection puis relecture avec métadonnées, `close`. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P7"
+      ],
+      "files": [
+        "docs/adr/0002-api-publique.md",
+        "src/api.rs",
+        "src/api",
+        "src/lib.rs",
+        "src/session.rs",
+        "src/session",
+        "tests/api.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j06-adr-api",
+        "j06-api"
+      ]
+    },
+    {
+      "id": "J06-P2",
+      "milestone_id": "J06",
+      "title": "Diagnostics structurés et fichiers produits",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`LogWriter` conserve une liste de diagnostics `{severity: Note|Warning|Error, line: Option<u32>, step, message}` en plus du texte (inchangé octet pour octet), exposée par `Submission` et `RunOutcome` (champ ajouté). Registre des fichiers produits (ODS HTML/RTF/PDF/Excel, images) : chemin, type, proc ; exposé par `Submission`/`CloseReport`. Tests `diagnostics*` et `produced_files*` dans tests/api.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J06-P1"
+      ],
+      "files": [
+        "src/log.rs",
+        "src/log",
+        "src/session.rs",
+        "src/session",
+        "src/api.rs",
+        "src/api",
+        "src/lib.rs",
+        "src/ods_graphics.rs",
+        "src/ods_graphics",
+        "src/graphics.rs",
+        "src/graphics",
+        "tests/api.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j06-api-diagnostics",
+        "j06-api-produced-files"
+      ]
+    },
+    {
+      "id": "J06-P3",
+      "milestone_id": "J06",
+      "title": "Exemples autonomes testés",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "`examples/data/` (CSV), `examples/cli/analysis.sas` + sortie attendue documentée, `examples/quickstart.rs` (façade `api` : soumettre, relire une table, afficher un diagnostic ; imprime `OK` en dernière ligne). `tests/examples.rs` exécute l'exemple CLI via le binaire et vérifie la table produite et le code retour. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J06-P2"
+      ],
+      "files": [
+        "examples",
+        "tests/examples.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j06-examples",
+        "j06-quickstart"
+      ]
+    },
+    {
+      "id": "J06-P4",
+      "milestone_id": "J06",
+      "title": "Wrapper Python durci et testé",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "python/src/sasrs_py/cli.py : timeout réseau, message clair sans traceback (réseau absent, HTTP 404, plateforme non supportée, SHA invalide), cache indexé par SHA (pas de re-hachage si un marqueur vérifié existe), verrou de fichier pour les lancements concurrents, nettoyage des temporaires orphelins, repli sûr si `os.replace` échoue sous Windows et que le binaire en place est valide. `python/tests/` (unittest, bibliothèque standard, `urlopen` et plateforme simulés) : cache absent, cache corrompu, réseau absent, plateforme non supportée, deux lancements concurrents, SHA incorrect. python/README.md : le wrapper télécharge et lance un binaire ; limites. CI : job Python (3.9 et dernière) agrégé par ci-ok ; liste figée de check_ci_structure.py et scripts/check.sh mis à jour. Le watchdog Hermes réécrit les lignes SHA de cli.py sur main (R-001) : prévoir le conflit. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P7"
+      ],
+      "files": [
+        "python",
+        ".github/workflows/ci.yml",
+        "scripts/check.sh",
+        "scripts/check_ci_structure.py"
+      ],
+      "check_ids": [
+        "ci-structure",
+        "j06-python-tests",
+        "j06-ci-python-job"
+      ]
+    },
+    {
+      "id": "J06-P5",
+      "milestone_id": "J06",
+      "title": "Distribution versionnée et manifeste de build",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`.github/workflows/release.yml` sur tag `v*` : binaires linux x86_64, windows x86_64, macOS arm64 ; `SHA256SUMS` ; `manifest.json` (version, commit, features, rustc, cible) ; assets jamais remplacés (échec si la release existe). `build.rs` : commit et features embarqués ; `sasrs --version` → `sasrs <version> (commit <sha|unknown>, features: …)` en tolérant l'absence de git (le conteneur de build n'en a pas). Wrapper Python épinglé sur `v<version>` avec SHA issus de `SHA256SUMS` embarqués ; plus de réécriture externe. `docs/release.md` : procédure, immutabilité, arrêt du watchdog Hermes (R-001). Ne publier aucune release ni poser de tag (geste utilisateur). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J06-P4"
+      ],
+      "files": [
+        ".github/workflows/release.yml",
+        "build.rs",
+        "Cargo.toml",
+        "src/main.rs",
+        "python",
+        "docs/release.md",
+        "tests/cli.rs"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j06-release-workflow",
+        "j06-version-manifest",
+        "j06-release-doc",
+        "j06-python-tests"
+      ]
+    },
+    {
+      "id": "J06-P6",
+      "milestone_id": "J06",
+      "title": "Plan d'une API Python native",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "S",
+      "scope": "ADR `docs/adr/0003-api-python.md` (`## Décision`) : faisabilité pyo3/maturin au-dessus de `sasrs::api`, échange de DataFrames (Arrow/Polars, pandas), roues par plateforme, coût de build Polars, coexistence avec la voie CLI ; recommandation et items pour la feuille de route (J08-P5). Pas de code. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J05-P7"
+      ],
+      "files": [
+        "docs/adr/0003-api-python.md"
+      ],
+      "check_ids": [
+        "j06-adr-python"
+      ]
+    },
+    {
+      "id": "J06-P7",
+      "milestone_id": "J06",
+      "title": "Parcours nouvel utilisateur",
+      "kind": "implement",
+      "tier": "T5",
+      "size": "M",
+      "scope": "`docs/getting-started.md` : installation depuis un environnement vierge (binaire de release, `cargo install`, Python), premier programme, récupérer une table (CLI `--work` + parquet, Rust `api`, Python), lire un diagnostic, codes retour. README : installation réécrite (voies réelles uniquement), bibliothèque (exemple renvoyant vers examples/quickstart.rs), features `graphics`/`s3`, lien vers docs/getting-started.md. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J06-P3",
+        "J06-P5",
+        "J06-P6"
+      ],
+      "files": [
+        "README.md",
+        "docs/getting-started.md"
+      ],
+      "check_ids": [
+        "j06-getting-started"
+      ]
+    },
+    {
+      "id": "J06-P8",
+      "milestone_id": "J06",
+      "title": "Review J06",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J06-P1",
+        "J06-P2",
+        "J06-P3",
+        "J06-P4",
+        "J06-P5",
+        "J06-P6",
+        "J06-P7"
+      ],
+      "files": [],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j06-adr-api",
+        "j06-api",
+        "j06-api-diagnostics",
+        "j06-api-produced-files",
+        "j06-examples",
+        "j06-quickstart",
+        "ci-structure",
+        "j06-python-tests",
+        "j06-ci-python-job",
+        "j06-release-workflow",
+        "j06-version-manifest",
+        "j06-release-doc",
+        "j06-adr-python",
+        "j06-getting-started",
+        "j04-storage-integrity",
+        "j05-conformance-status",
+        "clippy-s3",
+        "test-s3-lib"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J06 : un nouvel utilisateur peut installer, exécuter un programme, récupérer une table et comprendre une erreur sans lire PLAN.md ni PROGRESS.md ; l'API n'expose aucun module interne par accident. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J07-P1",
+      "milestone_id": "J07",
+      "title": "Oracles de conformité écrits avant l'implémentation",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "Cas `known-divergence` sous conformance/cases/compat/{means,compare,transpose,printto,informat}/ (au moins 2 par sous-dossier), valeurs attendues recopiées d'exemples publiés de la doc SAS 9.4 (URL en `provenance`) : MEANS/SUMMARY (NWAY, MISSING, ORDER=, ID, MAXDEC=, CLASS `/ MISSING ORDER=`, FREQ, `OUTPUT / AUTONAME`, valeurs CLASS manquantes exclues par défaut), COMPARE (ID, VAR/WITH, CRITERION=, METHOD=, OUTNOEQUAL/OUTBASE/OUTCOMP/OUTDIF, BY), TRANSPOSE (COPY, IDLABEL, LET, SUFFIX=, LABEL=, DELIMITER=), PRINTTO (LOG=/PRINT=/NEW), informats persistés (CONTENTS). `conformance/cases/compat/ORACLE.sha256` au format sha256sum (chemins relatifs à conformance/cases/compat) couvre tous les fichiers des cas sauf case.json : J07-P2 à P6 n'en sont pas propriétaires et ne peuvent changer que le `status`. STATUS.md régénéré. Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J06-P8"
+      ],
+      "files": [
+        "conformance/cases/compat",
+        "conformance/STATUS.md"
+      ],
+      "check_ids": [
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracles",
+        "j07-compat-oracle-frozen"
+      ]
+    },
+    {
+      "id": "J07-P2",
+      "milestone_id": "J07",
+      "title": "PROC MEANS/SUMMARY : options de production",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`NWAY`, `MISSING` (PROC et CLASS), `ORDER=` (DATA/FORMATTED/FREQ/INTERNAL), `ID`, `MAXDEC=`, `DESCENDTYPES`, `COMPLETETYPES`, `CHARTYPE`, `FREQ`, `VARDEF=`, `EXCLNPWGT`, `OUTPUT` (`mean=`, `mean(x y)=`, `/ AUTONAME`), plusieurs CLASS/VAR/OUTPUT ; valeurs CLASS manquantes exclues par défaut (snapshots justifiés) ; ODS `Summary` avec colonnes CLASS/BY. Cas compat/means → `validated` (seul le statut change), STATUS.md régénéré. Tests `means_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P1"
+      ],
+      "files": [
+        "src/procs/means",
+        "conformance/cases/compat/means",
+        "conformance/STATUS.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracle-frozen",
+        "j07-means-tests",
+        "j07-means-validated"
+      ]
+    },
+    {
+      "id": "J07-P3",
+      "milestone_id": "J07",
+      "title": "PROC COMPARE : outil de validation de migration",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`ID` (appariement par clé triée, observations propres à chaque table signalées), `VAR`/`WITH`, `CRITERION=`, `METHOD=ABSOLUTE|RELATIVE|EXACT|PERCENT`, `BRIEF`, `LISTALL`, `MAXPRINT=`, `OUT=` avec `OUTNOEQUAL`/`OUTBASE`/`OUTCOMP`/`OUTDIF`/`OUTPERCENT`, `BY` ; messages et `&SYSINFO` conformes à la doc ; remplace les ERROR provisoires de J02-P4. Cas compat/compare → `validated`, STATUS.md régénéré. Tests `compare_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P2"
+      ],
+      "files": [
+        "src/procs/compare",
+        "conformance/cases/compat/compare",
+        "conformance/STATUS.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracle-frozen",
+        "j07-compare-tests",
+        "j07-compare-validated"
+      ]
+    },
+    {
+      "id": "J07-P4",
+      "milestone_id": "J07",
+      "title": "PROC TRANSPOSE complet",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`COPY`, `IDLABEL` (+ `_LABEL_`), `LET`, `SUFFIX=`, `LABEL=`, `DELIMITER=`, `PREFIX=` chaîne, plusieurs variables `ID`, `BY DESCENDING` + contrôle de tri, longueurs inférées en caractères. Cas compat/transpose → `validated`, STATUS.md régénéré. Tests `transpose_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P3"
+      ],
+      "files": [
+        "src/procs/transpose",
+        "conformance/cases/compat/transpose",
+        "conformance/STATUS.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracle-frozen",
+        "j07-transpose-tests",
+        "j07-transpose-validated"
+      ]
+    },
+    {
+      "id": "J07-P5",
+      "milestone_id": "J07",
+      "title": "PROC PRINTTO : routage réel",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`LOG=`/`PRINT=` routent réellement log et listing vers des fichiers (ajout, ou remplacement avec `NEW`), `PROC PRINTTO;` rétablit les destinations ; interaction avec `--log`/`--print` et les diagnostics structurés documentée ; erreur d'ouverture → ERROR comptée ; remplace la WARNING provisoire de J02-P4. Cas compat/printto → `validated`, STATUS.md régénéré. Tests CLI `printto*` dans tests/cli.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P4"
+      ],
+      "files": [
+        "src/procs/printto.rs",
+        "src/procs/printto",
+        "src/session.rs",
+        "src/session",
+        "src/log.rs",
+        "src/log",
+        "src/lib.rs",
+        "src/main.rs",
+        "tests/cli.rs",
+        "conformance/cases/compat/printto",
+        "conformance/STATUS.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracle-frozen",
+        "j07-printto-tests",
+        "j07-printto-validated"
+      ]
+    },
+    {
+      "id": "J07-P6",
+      "milestone_id": "J07",
+      "title": "Informats persistés dans les métadonnées",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "`VarMeta.informat` persisté dans le sidecar (protocole ADR 0001, rétrocompatible) ; posé par INFORMAT/ATTRIB en étape DATA, conservé par SET/MERGE ; colonne Informat de PROC CONTENTS et `OUT=` ; `MODIFY … INFORMAT` dans PROC DATASETS. Périmètre large (src entier) car `VarMeta` est construit littéralement dans ~120 sites de 42 fichiers : hors dataset/datastep/contents/datasets, se limiter à l'ajout mécanique du champ. Cas compat/informat → `validated`, STATUS.md régénéré. Tests `informat_meta*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P5"
+      ],
+      "files": [
+        "src",
+        "conformance/cases/compat/informat",
+        "conformance/STATUS.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracle-frozen",
+        "j07-informat-tests",
+        "j07-informat-validated"
+      ]
+    },
+    {
+      "id": "J07-P7",
+      "milestone_id": "J07",
+      "title": "Documentation de couverture (J07)",
+      "kind": "implement",
+      "tier": "T5",
+      "size": "S",
+      "scope": "README.md : lignes MEANS/SUMMARY, COMPARE, TRANSPOSE, PRINTTO, CONTENTS, DATA step (informats) mises à jour avec l'état « validé » issu du corpus (lien conformance/STATUS.md) ; docs/support-contract.md à jour (ERROR provisoires de J02-P4 levés, routage PRINTTO) ; STATUS.md régénéré si besoin. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P6"
+      ],
+      "files": [
+        "README.md",
+        "docs/support-contract.md",
+        "conformance/STATUS.md"
+      ],
+      "check_ids": [
+        "j05-conformance-status",
+        "j07-docs"
+      ]
+    },
+    {
+      "id": "J07-P8",
+      "milestone_id": "J07",
+      "title": "Review J07",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J07-P1",
+        "J07-P2",
+        "J07-P3",
+        "J07-P4",
+        "J07-P5",
+        "J07-P6",
+        "J07-P7"
+      ],
+      "files": [],
+      "check_ids": [
+        "j05-conformance",
+        "j05-conformance-status",
+        "j07-compat-oracles",
+        "j07-compat-oracle-frozen",
+        "fmt",
+        "clippy",
+        "test",
+        "j07-means-tests",
+        "j07-means-validated",
+        "j07-compare-tests",
+        "j07-compare-validated",
+        "j07-transpose-tests",
+        "j07-transpose-validated",
+        "j07-printto-tests",
+        "j07-printto-validated",
+        "j07-informat-tests",
+        "j07-informat-validated",
+        "j07-docs",
+        "j04-storage-integrity",
+        "clippy-s3",
+        "test-s3-lib",
+        "ci-structure"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J07 : ORACLE.sha256 intact (les implémenteurs n'ont changé que des statuts) ; chaque option annoncée est couverte par un cas validé. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J08-P1",
+      "milestone_id": "J08",
+      "title": "PROC IMPORT/EXPORT DBMS=XLSX",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "IMPORT `DBMS=XLSX|EXCEL` via la crate `calamine` : `SHEET=`, `RANGE=`, `GETNAMES=`, types SAS stricts (dates Excel → dates SAS 1960), `GUESSINGROWS=` honoré ou ERROR. EXPORT `DBMS=XLSX` : réutilise l'écrivain XLSX pur Rust de output/excel.rs, extrait dans `output/xlsx.rs` ; `SHEET=`, `REPLACE`, formats appliqués selon la doc. Aller-retour EXPORT → IMPORT sans perte (valeurs, missings, dates). Tests `dbms_xlsx_*` (préfixe unique : `xlsx_` matche déjà 4 tests) ; fixtures `tests/fixtures/j08/xlsx_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P8"
+      ],
+      "files": [
+        "src/procs/import.rs",
+        "src/procs/import",
+        "src/procs/export.rs",
+        "src/procs/export",
+        "src/output",
+        "Cargo.toml",
+        "Cargo.lock",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "clippy-s3",
+        "j08-xlsx"
+      ]
+    },
+    {
+      "id": "J08-P2",
+      "milestone_id": "J08",
+      "title": "BY généralisé (CORR, TABULATE)",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "BY (DESCENDING, contrôle de tri, en-tête de groupe SAS, `OUT=` avec variables BY) pour CORR et TABULATE via `common::by` ; invariant testé : un seul groupe = sortie sans BY. Les autres procs qui refusent BY (ERROR depuis J02-P3) le restent ; leur liste va dans la feuille de route (J08-P5). Tests `by_generalized_*` (préfixe unique : `by_group` matche déjà 4 tests) ; fixtures `tests/fixtures/j08/by_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J08-P1"
+      ],
+      "files": [
+        "src/procs/corr",
+        "src/procs/tabulate",
+        "src/procs/common/by.rs",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j08-by"
+      ]
+    },
+    {
+      "id": "J08-P3",
+      "milestone_id": "J08",
+      "title": "Objets ODS OUTPUT supplémentaires",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Capture par nom d'objet SAS (colonnes et noms de la doc) : UNIVARIATE `Quantiles`, `ExtremeObs`, `TestsForNormality` ; FREQ `CrossTabFreqs`, `ChiSq`, `FishersExact` ; REG `ParameterEstimates`, `ANOVA`, `FitStatistics`. ODS SELECT/EXCLUDE reconnaît ces noms. Tests `ods_output_object_*` (préfixe unique : `ods_output_` matche déjà 18 tests). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J08-P2"
+      ],
+      "files": [
+        "src/procs/univariate",
+        "src/procs/freq",
+        "src/procs/reg",
+        "src/session",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j08-ods-output"
+      ]
+    },
+    {
+      "id": "J08-P4",
+      "milestone_id": "J08",
+      "title": "Étude des adaptateurs SAS7BDAT/XPT",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "S",
+      "scope": "ADR `docs/adr/0004-adaptateurs-sas7bdat-xpt.md` (`## Décision`) : adaptateurs aux frontières (PROC IMPORT/EXPORT, `LIBNAME … XPORT`) sans remplacer le stockage Parquet ; options (crates pur Rust, readstat via FFI, écriture XPT v5/v8), licences, encodages, métadonnées (formats, labels, longueurs), plan de tests ; recommandation et items pour la feuille de route. Pas de code. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J07-P8"
+      ],
+      "files": [
+        "docs/adr/0004-adaptateurs-sas7bdat-xpt.md"
+      ],
+      "check_ids": [
+        "j08-adr-sas7bdat"
+      ]
+    },
+    {
+      "id": "J08-P5",
+      "milestone_id": "J08",
+      "title": "Feuille de route avancée par comportement borné",
+      "kind": "implement",
+      "tier": "T1",
+      "size": "M",
+      "scope": "`docs/roadmap/avancee.md` : une section `## <domaine>` par proc et pour S3, Graphiques et résidus Base (TABULATE `PCTN<>`, REPORT FLOW/COMPUTE, DATASETS APPEND/REPAIR, CATALOG, OPTIONS) ; items bornés par comportement (jamais « terminer PROC X »), chacun avec état actuel (implémenté / validé / approximation / ERROR), dépendances, oracle indépendant prévu, non-convergence, matrice singulière, paramètre sur frontière, identifiabilité, tolérances. Minimum issu de l'issue #10 : LOGISTIC, GENMOD, GLM/ANOVA, MIXED, GLIMMIX, PRINCOMP/FACTOR/DISCRIM/CLUSTER/FASTCLUS/IML, S3 (exists/list/write/delete/rename), graphiques (parse-only, images BY, légendes, styles, overlays), procs dont BY reste en ERROR, items des ADR 0003/0004. Ordre par dépendances et bénéfice ; table de correspondance ex-M46–M66 → items ; prêt pour un `/milestone-plan` suivant. PLAN.md racine : section de correspondance pointée vers la feuille de route. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J08-P4"
+      ],
+      "files": [
+        "docs/roadmap",
+        "PLAN.md"
+      ],
+      "check_ids": [
+        "j08-roadmap"
+      ]
+    },
+    {
+      "id": "J08-P6",
+      "milestone_id": "J08",
+      "title": "Validation de bout en bout et contrôle des promesses de couverture",
+      "kind": "implement",
+      "tier": "T4",
+      "size": "M",
+      "scope": "`tests/e2e.rs` + `tests/e2e/` : programme réaliste de migration (CSV/XLSX importés → DATA step → SORT → MEANS NWAY `OUTPUT` → TRANSPOSE → COMPARE contre une table attendue → ODS OUTPUT → EXPORT XLSX), exécuté par le binaire et par `sasrs::api` ; tables comparées à des attendus issus du corpus ou d'exemples SAS publiés ; codes retour et diagnostics vérifiés. `scripts/check_coverage_claims.py` : chaque ligne marquée validée dans README a au moins un cas `validated` dans conformance/STATUS.md, sinon échec. CI : job « installation vierge » (`cargo install --path . --root <tmp>` puis l'exemple CLI de docs/getting-started.md) et job coverage-claims agrégés par ci-ok (liste figée de check_ci_structure.py, scripts/check.sh). README : lignes IMPORT/EXPORT, CORR, TABULATE, ODS OUTPUT à jour, aucune promesse au-delà de l'implémenté et validé. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J08-P1",
+        "J08-P2",
+        "J08-P3"
+      ],
+      "files": [
+        "tests/e2e.rs",
+        "tests/e2e",
+        "scripts/check_coverage_claims.py",
+        ".github/workflows/ci.yml",
+        "scripts/check.sh",
+        "scripts/check_ci_structure.py",
+        "README.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "ci-structure",
+        "j08-e2e",
+        "j08-coverage-claims",
+        "j08-ci-install-job"
+      ]
+    },
+    {
+      "id": "J08-P7",
+      "milestone_id": "J08",
+      "title": "Review J08",
+      "kind": "review",
+      "tier": "T2",
+      "size": "S",
+      "depends_on": [
+        "J08-P1",
+        "J08-P2",
+        "J08-P3",
+        "J08-P4",
+        "J08-P5",
+        "J08-P6"
+      ],
+      "files": [],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "clippy-s3",
+        "j08-xlsx",
+        "j08-by",
+        "j08-ods-output",
+        "j08-adr-sas7bdat",
+        "j08-roadmap",
+        "ci-structure",
+        "j08-e2e",
+        "j08-coverage-claims",
+        "j08-ci-install-job",
+        "j04-storage-integrity",
+        "j05-conformance-status",
+        "test-s3-lib"
+      ],
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Revue finale du Goal : parcours nouvel utilisateur réel, couverture publique ≤ implémenté et validé, sous-issues #5–#10 couvertes ou explicitement renvoyées à docs/roadmap/avancee.md. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    }
+  ]
+}

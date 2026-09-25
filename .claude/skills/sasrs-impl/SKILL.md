@@ -9,11 +9,12 @@ Cette skill est **remplacée par `/milestone-continue consolidation`** depuis le
 2026-09-23. La feuille de route M1–M66 qu'elle pilotait (`PLAN.md`/`PROGRESS.md` racine)
 est **gelée** ; le projet suit désormais le plan de consolidation :
 
-1. `docs/plans/consolidation/PLAN.md` — périmètre, architecture, risques, conventions ;
-2. `docs/plans/consolidation/PROGRESS.md` — statut des jalons J01–J08 et de leurs parts
-   (géré par l'orchestrateur, seule source de vérité du curseur) ;
-3. `docs/plans/consolidation/jalons/J0N-*.md` — contrat de chaque part (scope, files,
-   acceptance, contexte).
+1. `.mission-control/plans/consolidation/plan.json` — définition Milestone V3 (depuis le
+   2026-09-24), seule autorité avec l’état du contrôleur mission-control ;
+2. `docs/plans/consolidation/PLAN.md`, `PROGRESS.md`, `DECISIONS.md` — vues générées par
+   `mc render`, jamais éditées ;
+3. `docs/plans/consolidation/v2/` — plan V2 archivé (jalons J01–J08, décisions D-001–D-003,
+   recommandations R-001–R-003), lecture seule.
 
 Ne pas reprendre le protocole historique de cette skill : il lisait `PROGRESS.md`
 racine comme curseur et poussait jalon par jalon sur une branche unique, ce qui n'est

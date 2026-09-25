@@ -58,32 +58,32 @@ run_lint() {
     echo '==> cargo fmt --check'
     cargo fmt --check
     echo '==> cargo clippy --all-targets -- -D warnings (défaut)'
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --locked --all-targets -- -D warnings
     echo '==> cargo clippy --all-targets --features graphics -- -D warnings'
-    cargo clippy --all-targets --features graphics -- -D warnings
+    cargo clippy --locked --all-targets --features graphics -- -D warnings
     echo '==> cargo clippy --all-targets --features s3 -- -D warnings'
-    cargo clippy --all-targets --features s3 -- -D warnings
+    cargo clippy --locked --all-targets --features s3 -- -D warnings
 }
 
 run_test() {
     local before
     before="$(git status --porcelain)"
     echo '==> cargo test -p sasrs'
-    cargo test -p sasrs
+    cargo test --locked -p sasrs
     assert_tree_unchanged "$before"
     echo '==> cargo test -p sasrs --features graphics'
-    cargo test -p sasrs --features graphics
+    cargo test --locked -p sasrs --features graphics
     assert_tree_unchanged "$before"
     echo '==> cargo test --features s3 --lib'
-    cargo test --features s3 --lib
+    cargo test --locked --features s3 --lib
     assert_tree_unchanged "$before"
 }
 
 run_build() {
     echo '==> cargo build --features graphics'
-    cargo build --features graphics
+    cargo build --locked --features graphics
     echo '==> cargo build --features s3'
-    cargo build --features s3
+    cargo build --locked --features s3
 }
 
 [ "$#" -eq 1 ] || usage

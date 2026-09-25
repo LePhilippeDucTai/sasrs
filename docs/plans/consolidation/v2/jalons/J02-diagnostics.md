@@ -295,3 +295,5 @@ acceptance:
 
 ### Scope
 Review the merged milestone diff with verify-before-done, code-review, test-design. Report; change nothing.
+
+Watch-points reportés (J02-P0, à verdicter) : (a) le garde `check_ci_structure.py` valide la cohérence INTERNE de ci.yml mais n'a pas de baseline des jobs attendus — un job supprimé PARTOUT (workflow + needs) passe inaperçu (démontré par le worker, rc=0) ; verdict attendu : faut-il verrouiller la liste des 7 jobs agrégés dans le script ? (b) `scripts/check.sh` doit rester en parité avec ci.yml à chaque évolution des commandes cargo (ex. tout nouveau flag), le script n'imposant pas l'inverse.
