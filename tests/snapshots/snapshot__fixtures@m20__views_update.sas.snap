@@ -89,7 +89,7 @@ NOTE: PROCEDURE SQL used (Total process time):
                                     Louise      12      56.3
                                     Mary        15      66.5
 
-                               Après UPDATE weight+5 si age>=14
+                                Après UPDATE weight+5 si age>=14
 
                                     name       age    weight
 
@@ -103,7 +103,7 @@ NOTE: PROCEDURE SQL used (Total process time):
                                     Ronald      15       138
                                     William     15       117
 
-                     Summary après INSERT depuis sous-requête FROM(UNION)
+                      Summary après INSERT depuis sous-requête FROM(UNION)
 
                                          name       age
 

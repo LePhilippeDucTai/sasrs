@@ -66,33 +66,33 @@ NOTE: PROCEDURE SQL used (Total process time):
             cpu time            0.00 seconds
 
 ==== LISTING ====
-                           sashelp.vtable (alias) — même requête
+                             sashelp.vtable (alias) — même requête
 
                                libname    memname    nobs    nvar
 
 
-                           sashelp.vtable (alias) — même requête
+                             sashelp.vtable (alias) — même requête
 
                                libname    memname    nobs    nvar
 
 
-                           sashelp.vcolumn (alias) — même requête
+                             sashelp.vcolumn (alias) — même requête
 
                                 name    type    length    varnum
 
 
-                           sashelp.vcolumn (alias) — même requête
+                             sashelp.vcolumn (alias) — même requête
 
                                 name    type    length    varnum
 
 
-                           sashelp.vmacro (alias) — même requête
+                             sashelp.vmacro (alias) — même requête
 
                                     scope     name     value
 
                                     GLOBAL    MYVAR    hello
 
-                           sashelp.vmacro (alias) — même requête
+                             sashelp.vmacro (alias) — même requête
 
                                     scope     name     value
 
