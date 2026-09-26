@@ -87,10 +87,7 @@ impl OutputDestination for RtfDestination {
         // Compute column widths in twips
         let col_widths: Vec<usize> = (0..headers.len())
             .map(|i| {
-                let header_len = headers
-                    .get(i)
-                    .map(|s| super::char_width(s))
-                    .unwrap_or(0);
+                let header_len = headers.get(i).map(|s| super::char_width(s)).unwrap_or(0);
                 let max_data_len = rows
                     .iter()
                     .map(|r| r.get(i).map(|s| super::char_width(s)).unwrap_or(0))

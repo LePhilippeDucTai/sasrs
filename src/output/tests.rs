@@ -251,8 +251,14 @@ fn char_width_rtf_column_width_in_chars() {
         &[vec!["Éléphant".into()], vec!["Thé".into()]],
     );
     let out = r.take_string();
-    assert!(out.contains("\\cellx960"), "largeur 8 caractères attendue: {out}");
-    assert!(!out.contains("\\cellx1080"), "pas de largeur en octets: {out}");
+    assert!(
+        out.contains("\\cellx960"),
+        "largeur 8 caractères attendue: {out}"
+    );
+    assert!(
+        !out.contains("\\cellx1080"),
+        "pas de largeur en octets: {out}"
+    );
 }
 
 #[test]
@@ -402,8 +408,16 @@ fn char_width_pdf_column_width_in_chars() {
     );
     let (_, bytes) = p.finalize_to_bytes().unwrap();
     let s = String::from_utf8_lossy(&bytes);
-    assert!(s.contains("122.0 742.0 Tm"), "2e colonne à 122 pt attendue: {}", &*s);
-    assert!(!s.contains("134.0 742.0 Tm"), "pas de largeur en octets: {}", &*s);
+    assert!(
+        s.contains("122.0 742.0 Tm"),
+        "2e colonne à 122 pt attendue: {}",
+        &*s
+    );
+    assert!(
+        !s.contains("134.0 742.0 Tm"),
+        "pas de largeur en octets: {}",
+        &*s
+    );
     let _ = std::fs::remove_file(&tmp);
 }
 

@@ -589,9 +589,7 @@ fn cntlin_width_options_round_trip() {
 /// octet par « é ».
 #[test]
 fn char_width_cntlout_accented_label_length() {
-    let session = run_format_src(
-        "proc format cntlout=fmtctl; value f 1='Café' 2='Thé'; run;",
-    );
+    let session = run_format_src("proc format cntlout=fmtctl; value f 1='Café' 2='Thé'; run;");
     let ds = read_work(&session, "FMTCTL");
     let label = ds
         .vars

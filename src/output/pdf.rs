@@ -102,9 +102,10 @@ impl PdfDestination {
                             let max_len = std::iter::once(
                                 headers.get(i).map(|s| super::char_width(s)).unwrap_or(0),
                             )
-                            .chain(rows.iter().map(|r| {
-                                r.get(i).map(|s| super::char_width(s)).unwrap_or(0)
-                            }))
+                            .chain(
+                                rows.iter()
+                                    .map(|r| r.get(i).map(|s| super::char_width(s)).unwrap_or(0)),
+                            )
                             .max()
                             .unwrap_or(6);
                             (max_len as f32 * col_gap).max(50.0)
