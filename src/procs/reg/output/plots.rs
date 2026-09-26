@@ -61,7 +61,7 @@ pub(crate) fn reg_diagnostic_plot(session: &mut Session, y_hat: &[f64], resid: &
             Err(e) => {
                 session
                     .log
-                    .note(&format!("WARNING: could not write image {}: {}", name, e));
+                    .error(&format!("could not write image {}: {}", path.display(), e));
             }
         }
     }
@@ -459,7 +459,7 @@ pub(crate) fn render_reg_image(
         Err(e) => {
             session
                 .log
-                .note(&format!("WARNING: could not write image {}: {}", name, e));
+                .error(&format!("could not write image {}: {}", path.display(), e));
         }
     }
 }

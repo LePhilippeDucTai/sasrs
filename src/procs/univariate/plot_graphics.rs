@@ -267,7 +267,7 @@ pub fn render(
         Err(e) => {
             session
                 .log
-                .note(&format!("WARNING: could not write image {}: {}", name, e));
+                .error(&format!("could not write image {}: {}", path.display(), e));
         }
     }
 }

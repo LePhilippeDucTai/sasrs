@@ -7,8 +7,7 @@
 //! stderr et listing → stdout, `--version` aligné sur `Cargo.toml`, chemins
 //! LIBNAME relatifs résolus depuis le dossier du SCRIPT.
 //!
-//! Hors périmètre ici : les échecs d'écriture `--log`/`--print` (J02-P1
-//! corrige le comportement puis le teste).
+//! J02-P1 : échecs d’écriture CLI et cycle de vie des destinations ODS.
 
 mod common;
 
@@ -247,4 +246,207 @@ fn relative_libname_resolved_from_script_dir() {
         "d.class n'a pas été lu depuis le dossier du script :\n{}",
         run.stdout
     );
+}
+
+// J02-P1: expected behavior comes from the coordinator's write-failure and
+// ODS lifecycle contract. Compare recovered bytes with the existing clean CLI
+// behavior; no new snapshots or implementation-derived formatting oracle.
+fn assert_write_failure(flag: &str, target: &str) {
+    let baseline = run_sas(CLEAN_PRINT, &["--deterministic"]);
+    let case = run_sas(CLEAN_PRINT, &["--deterministic", flag, target]);
+    assert_eq!(case.run.code(), 2, "{}", case.run.stderr);
+    assert!(case.run.stderr.contains("ERROR: cannot write"));
+    assert!(case.run.stderr.contains(target));
+    let recovered = if flag == "--log" {
+        &baseline.run.stderr
+    } else {
+        &baseline.run.stdout
+    };
+    assert!(case.run.stderr.contains(recovered), "{}", case.run.stderr);
+    assert!(!case.run.stderr.contains("panicked"));
+}
+
+#[test]
+fn write_failure_log_directory() {
+    assert_write_failure("--log", ".");
+}
+
+#[test]
+fn write_failure_print_directory() {
+    assert_write_failure("--print", ".");
+}
+
+#[test]
+fn write_failure_missing_directory() {
+    for flag in ["--log", "--print"] {
+        assert_write_failure(flag, "absent/output.txt");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn write_failure_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("readonly.txt");
+    std::fs::write(&target, "preserved").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o444)).unwrap();
+    // A privileged test runner must not silently pass without exercising EACCES.
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .is_err()
+    );
+    for flag in ["--log", "--print"] {
+        assert_write_failure(flag, target.to_str().unwrap());
+    }
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "preserved");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_failure_closed_stdout() {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("prog.sas");
+    std::fs::write(&script, CLEAN_PRINT).unwrap();
+    let (writer, reader) = UnixStream::pair().unwrap();
+    drop(reader);
+    let out = Command::new(env!("CARGO_BIN_EXE_sasrs"))
+        .arg(script)
+        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("ERROR: cannot write stdout"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn ods_unwritable_file_close_and_end_of_run() {
+    for destination in ["html", "rtf", "pdf", "excel"] {
+        for close in [
+            String::new(),
+            "ods _all_ close;".into(),
+            "ods close;".into(),
+            format!("ods {destination} close;"),
+        ] {
+            let prog = format!("ods {destination} file='absent/result';\n{CLEAN_PRINT}\n{close}");
+            let case = run_sas(&prog, &[]);
+            assert_eq!(case.run.code(), 2, "{}", case.run.stderr);
+            assert!(case.run.stderr.contains("ERROR: Could not write"));
+            assert!(
+                case.run
+                    .stderr
+                    .contains(case.dir().join("absent/result").to_str().unwrap())
+            );
+            assert!(!case.run.stderr.contains("NOTE: WARNING"));
+        }
+    }
+}
+
+#[test]
+fn ods_successive_destinations_preserve_files_and_listing() {
+    for second in ["html", "rtf", "pdf", "excel"] {
+        let prog = format!(
+            "title 'BEFORE_ODS'; {CLEAN_PRINT}\n\
+             ods html file='first.html'; title 'FIRST_ODS'; proc print data=a; run;\n\
+             ods {second} file='second.out'; title 'SECOND_ODS'; proc print data=a; run;\n\
+             ods _all_ close; title 'AFTER_ODS'; proc print data=a; run;"
+        );
+        let case = run_sas(&prog, &[]);
+        assert_eq!(case.run.code(), 0, "{}", case.run.stderr);
+        let first = std::fs::read_to_string(case.dir().join("first.html")).unwrap();
+        assert!(first.contains("FIRST_ODS"));
+        assert!(!first.contains("SECOND_ODS"));
+        let second = std::fs::read(case.dir().join("second.out")).unwrap();
+        assert!(!second.is_empty());
+        assert!(case.run.stdout.contains("BEFORE_ODS"));
+        assert!(case.run.stdout.contains("AFTER_ODS"));
+        assert!(!case.run.stdout.contains("FIRST_ODS"));
+        assert!(!case.run.stdout.contains("SECOND_ODS"));
+        assert_eq!(case.run.stderr.matches("NOTE: Writing").count(), 2);
+    }
+}
+
+#[test]
+fn ods_empty_destination_note() {
+    for destination in ["html", "rtf", "pdf", "excel"] {
+        for close in ["", "ods _all_ close;"] {
+            let case = run_sas(&format!("ods {destination} file='empty.out'; {close}"), &[]);
+            assert_eq!(case.run.code(), 0, "{}", case.run.stderr);
+            assert!(
+                case.run.stderr.contains("NOTE: ODS") && case.run.stderr.contains("no output"),
+                "{}",
+                case.run.stderr
+            );
+            assert!(!case.dir().join("empty.out").exists());
+        }
+    }
+}
+
+#[test]
+fn ods_replacement_after_write_failure_continues() {
+    let case = run_sas(
+        &format!(
+            "ods html file='absent/first.html'; {CLEAN_PRINT}\n\
+             ods html file='second.html'; title 'SECOND_ODS'; proc print data=a; run;\n\
+             ods html close; ods _all_ close;"
+        ),
+        &[],
+    );
+    assert_eq!(case.run.code(), 2, "{}", case.run.stderr);
+    assert_eq!(case.run.stderr.matches("ERROR: Could not write").count(), 1);
+    assert!(
+        case.run
+            .stderr
+            .contains(case.dir().join("absent/first.html").to_str().unwrap())
+    );
+    assert_eq!(
+        case.run
+            .stderr
+            .matches("NOTE: Writing HTML Body file: second.html")
+            .count(),
+        1
+    );
+    assert!(
+        std::fs::read_to_string(case.dir().join("second.html"))
+            .unwrap()
+            .contains("SECOND_ODS")
+    );
+}
+
+#[cfg(feature = "graphics")]
+#[test]
+fn ods_image_write_failure_is_error() {
+    for procedure in [
+        "proc reg data=a; model y=x; run;",
+        "proc reg data=a plots=(fit); model y=x; run;",
+        "proc univariate data=a noprint; var x; histogram x; run;",
+    ] {
+        let case = run_sas(
+            &format!(
+                "data a; do x=1 to 20; y=x*x; output; end; run;\n\
+                 ods graphics on / imagename='absent/image'; {procedure}"
+            ),
+            &[],
+        );
+        assert_eq!(case.run.code(), 2, "{}", case.run.stderr);
+        assert!(
+            case.run.stderr.contains("ERROR: could not write image"),
+            "{}",
+            case.run.stderr
+        );
+        assert!(
+            case.run
+                .stderr
+                .contains(case.dir().join("absent/image").to_str().unwrap())
+        );
+        assert!(!case.run.stderr.contains("NOTE: WARNING"));
+    }
 }

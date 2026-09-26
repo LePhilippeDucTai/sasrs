@@ -33,6 +33,7 @@ pub mod value;
 
 use session::Session;
 use source::SourceFile;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -64,9 +65,22 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let mut session = match Session::new(opts.work_dir, base_dir, opts.deterministic) {
-        Ok(s) => s,
-        Err(e) => {
+    let base_dir = if base_dir.is_absolute() {
+        base_dir
+    } else {
+        std::env::current_dir().unwrap_or_default().join(base_dir)
+    };
+    let created = catch_unwind(AssertUnwindSafe(|| {
+        Session::new(opts.work_dir, base_dir, opts.deterministic)
+    }));
+    let mut session = match created {
+        Ok(Ok(s)) => s,
+        other => {
+            let e = match other {
+                Ok(Err(e)) => e.to_string(),
+                Err(payload) => internal_error(payload.as_ref()),
+                Ok(Ok(_)) => unreachable!(),
+            };
             return RunOutcome {
                 log: format!("ERROR: {e}\n"),
                 listing: String::new(),
@@ -76,58 +90,32 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
     };
     session.vectorize = opts.vectorize;
 
-    // M11.1 : l'expansion macro n'est plus pilotée ici. L'état macro vit dans
-    // `Session::macro_engine` et l'expansion est désormais conduite par
-    // l'`executor` (cf. `run_program`). Le source brut est passé tel quel.
-    let src = SourceFile::new(source_text.to_string());
+    run_in_session(session, |session| {
+        let src = SourceFile::new(source_text.to_string());
+        executor::run_program(&src, session);
+    })
+}
 
-    executor::run_program(&src, &mut session);
+fn internal_error(payload: &(dyn std::any::Any + Send)) -> String {
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic payload");
+    format!("internal error: {message}")
+}
 
-    // M23 — filet de sécurité : si une destination avec fichier cible est encore
-    // ouverte à la fin du programme (fixture sans `ODS CLOSE`), on l'écrit
-    // maintenant. La NOTE va dans le log AVANT `log.into_string()`.
-    if let Some((path, bytes)) = session.listing.finalize_to_bytes() {
-        let label = session.listing.dest_type_label();
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("output")
-            .to_string();
-        match std::fs::write(&path, &bytes) {
-            Ok(()) => {
-                session
-                    .log
-                    .note(&format!("Writing {} file: {}", label, file_name));
-            }
-            Err(e) => {
-                session.log.note(&format!(
-                    "WARNING: Could not write {} file {}: {}",
-                    label, file_name, e
-                ));
-            }
-        }
-    } else if let Some((path, content)) = session.listing.finalize() {
-        let label = session.listing.dest_type_label();
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("output.html")
-            .to_string();
-        match std::fs::write(&path, &content) {
-            Ok(()) => {
-                session
-                    .log
-                    .note(&format!("Writing {} file: {}", label, file_name));
-            }
-            Err(e) => {
-                session.log.note(&format!(
-                    "WARNING: Could not write {} file {}: {}",
-                    label, file_name, e
-                ));
-            }
-        }
+// Keep ownership of the session outside the unwind boundary so partial log and
+// output survive an executor panic. Finalization has its own boundary because
+// destination rendering can panic too.
+fn run_in_session(mut session: Session, execute: impl FnOnce(&mut Session)) -> RunOutcome {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| execute(&mut session))) {
+        session.log.error(&internal_error(payload.as_ref()));
     }
-
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| session.finish_destination())) {
+        session.log.error(&internal_error(payload.as_ref()));
+    }
+    let listing = session.take_completed_listing();
     let exit_code = if session.log.errors > 0 {
         2
     } else if session.log.warnings > 0 {
@@ -137,9 +125,56 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
     };
     RunOutcome {
         log: session.log.into_string(),
-        listing: session.listing.take_string(),
-        // NB : `Session.listing` est désormais `Box<dyn OutputDestination>` ;
-        // `into_string` prend `&mut self` (drain) au lieu de consommer.
+        listing,
         exit_code,
+    }
+}
+
+#[cfg(test)]
+mod run_failure_tests {
+    use super::*;
+
+    #[test]
+    fn panic_preserves_partial_log_and_listing() {
+        let session = Session::new(None, std::env::temp_dir(), true).unwrap();
+        let outcome = run_in_session(session, |session| {
+            session.log.note("before panic");
+            session.listing.write_line("partial listing");
+            panic!("test execution failure");
+        });
+        assert_eq!(outcome.exit_code, 2);
+        assert!(outcome.log.contains("NOTE: before panic\n"));
+        assert!(
+            outcome
+                .log
+                .contains("ERROR: internal error: test execution failure\n")
+        );
+        assert_eq!(outcome.listing, "partial listing\n");
+    }
+
+    #[test]
+    fn panic_still_finalizes_open_ods_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.html");
+        let session = Session::new(None, dir.path().to_path_buf(), true).unwrap();
+        let outcome = run_in_session(session, |session| {
+            session.open_destination(
+                "HTML",
+                Box::new(output::HtmlDestination::with_file(96, path.clone())),
+            );
+            session.listing.write_line("partial output");
+            std::panic::panic_any(17);
+        });
+        assert_eq!(outcome.exit_code, 2);
+        assert!(
+            outcome
+                .log
+                .contains("ERROR: internal error: unknown panic payload")
+        );
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("partial output")
+        );
     }
 }
