@@ -450,3 +450,42 @@ fn ods_image_write_failure_is_error() {
         assert!(!case.run.stderr.contains("NOTE: WARNING"));
     }
 }
+
+// ── UTF-8 / BOM (contrat D-001, docs/encoding.md — J03-P3) ────────────────
+
+/// Un BOM UTF-8 en tête du source `.sas` est ignoré : programme propre,
+/// code retour 0 (comme SAS, qui saute le BOM).
+#[test]
+fn utf8_bom_in_source_is_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("prog.sas");
+    std::fs::write(&script, format!("\u{feff}{CLEAN_PRINT}")).unwrap();
+    let run = sasrs(tmp.path(), &[script.to_str().unwrap()]);
+    assert_eq!(run.code(), 0, "stderr:\n{}", run.stderr);
+    assert!(
+        !run.stderr.contains("ERROR:"),
+        "le BOM ne doit produire aucune ERROR : {}",
+        run.stderr
+    );
+}
+
+/// Un source `.sas` qui n'est pas valide UTF-8 est refusé : code retour 2 et
+/// message qui NOMME le fichier (contrat D-001 — aucun repli lossy).
+#[test]
+fn utf8_invalid_source_is_error_naming_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("prog.sas");
+    std::fs::write(&script, b"data a; x = \"caf\xe9\"; run;\n").unwrap();
+    let run = sasrs(tmp.path(), &[script.to_str().unwrap()]);
+    assert_eq!(run.code(), 2, "stderr:\n{}", run.stderr);
+    assert!(
+        run.stderr.contains("ERROR") && run.stderr.contains("prog.sas"),
+        "l'ERROR devrait nommer le fichier : {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("UTF-8"),
+        "l'ERROR devrait mentionner UTF-8 : {}",
+        run.stderr
+    );
+}

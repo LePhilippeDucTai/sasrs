@@ -25,7 +25,9 @@ const MAX_EXACT_INT: i64 = 1 << 53;
 pub struct VarMeta {
     pub name: String,
     pub ty: VarType,
-    /// Storage length: bytes for char (display width), 8 for numeric.
+    /// Longueur de stockage d'une variable caractère, en CARACTÈRES (contrat
+    /// D-001, docs/encoding.md — convention session SAS LATIN1/WLATIN1) ;
+    /// 8 pour du numérique.
     pub length: usize,
     pub format: Option<String>,
     pub label: Option<String>,

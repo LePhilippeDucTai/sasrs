@@ -129,8 +129,10 @@ fn truncate_to_length(s: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
     }
-    // SAS character length is in bytes, but we approximate with char count.
-    // We truncate by chars to avoid splitting a multi-byte sequence.
+    // Contrat D-001 (docs/encoding.md) : les longueurs caractère comptent en
+    // CARACTÈRES (convention session SAS LATIN1/WLATIN1), pas en octets — la
+    // troncature par caractères est le comportement attendu, aligné sur la
+    // troncature PDV et sur `VarMeta::length`.
     s.chars().take(max_chars).collect()
 }
 

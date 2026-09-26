@@ -65,7 +65,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 33    title;
 
 ==== LISTING ====
-              PROC GLIMMIX PROBIT (binary, no random) â cross-check LOGISTIC
+                PROC GLIMMIX PROBIT (binary, no random) — cross-check LOGISTIC
 
                                      The GLIMMIX Procedure
 
@@ -175,7 +175,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
               x              1.5651            0.4034    58       3.88      0.0003
 
 
-      PROC GLIMMIX METHOD=LAPLACE (Normal + random intercept) â cross-check MIXED ML
+        PROC GLIMMIX METHOD=LAPLACE (Normal + random intercept) — cross-check MIXED ML
 
                                      The GLIMMIX Procedure
 
