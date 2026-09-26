@@ -37,6 +37,12 @@ pub struct DatasetOptions {
     /// uniquement en INPUT de MERGE ; en sortie DATA → erreur de
     /// compilation. Jamais écrite en sortie (comme FIRST./LAST.).
     pub in_: Option<String>,
+    /// `updatemode=missingcheck|nomissingcheck` (J03-P6) : option du
+    /// statement UPDATE (portée par la transaction, cf. DsStmt::Update).
+    /// `missingcheck` (défaut SAS) : les valeurs manquantes de la
+    /// transaction ne superposent PAS le maître ; `nomissingcheck` : elles
+    /// le font. Ignorée pour les autres statements.
+    pub updatemode: Option<String>,
 }
 
 /// Référence de dataset accompagnée de ses options : `lib.a(keep=x y)`.

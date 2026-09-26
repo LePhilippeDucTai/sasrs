@@ -131,7 +131,9 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    /// Compile un `FORMAT` (bras `DsStmt::Format` de `walk_stmt`).
+    /// Compile un `FORMAT` (bras `DsStmt::Format` de `walk_stmt`). Une
+    /// variable INCONNUE est CRÉÉE par le statement (comme en SAS, J03-P6) :
+    /// numérique (8) par défaut, caractère (8) si le format est `$...`.
     pub(super) fn compile_format(&mut self, groups: &[(Vec<String>, String)]) -> Result<()> {
         for (names, token) in groups {
             if crate::formats::FormatSpec::parse(token).is_none() {
@@ -140,15 +142,32 @@ impl Compiler<'_> {
                 )));
             }
             for name in names {
+                self.declare_format_var(name, token)?;
                 self.formats.insert(name.to_uppercase(), token.clone());
             }
         }
         Ok(())
     }
 
+    /// Crée la variable `name` si elle est absente du PDV (FORMAT/ATTRIB sur
+    /// une variable inconnue — J03-P6 : SAS crée la variable). Type : Char(8)
+    /// si le format commence par `$`, Num(8) sinon.
+    fn declare_format_var(&mut self, name: &str, token: &str) -> Result<()> {
+        if self.pdv.slot(name).is_none() {
+            let (ty, length) = if token.trim_start().starts_with('$') {
+                (VarType::Char, 8)
+            } else {
+                (VarType::Num, 8)
+            };
+            self.add_var(name, ty, length);
+        }
+        Ok(())
+    }
+
     /// Compile un `ATTRIB` (bras `DsStmt::Attrib` de `walk_stmt`).
     /// `informat=` n'est PAS traité ici : il est collecté (et validé) par la
-    /// pré-passe `collect_informats` (M40.3), avant le walk.
+    /// pré-passe `collect_informats` (M40.3), avant le walk. Comme FORMAT,
+    /// un ATTRIB sur une variable INCONNUE la CRÉE (J03-P6).
     pub(super) fn compile_attrib(&mut self, items: &[AttribItem]) -> Result<()> {
         for item in items {
             if let Some(token) = &item.format
@@ -161,7 +180,12 @@ impl Compiler<'_> {
             for name in &item.vars {
                 let upper = name.to_uppercase();
                 if let Some(token) = &item.format {
+                    self.declare_format_var(name, token)?;
                     self.formats.insert(upper.clone(), token.clone());
+                } else if self.pdv.slot(name).is_none() {
+                    // ATTRIB sans format (ex. `attrib x label='...';`) : la
+                    // variable est créée numérique (8), défaut SAS.
+                    self.add_var(name, VarType::Num, 8);
                 }
                 if let Some(label) = &item.label {
                     self.labels.insert(upper.clone(), label.clone());

@@ -31,7 +31,13 @@ fn update_basic_overlay() {
     );
 }
 
-/// UPDATE : une clé maître sans transaction correspondante reste inchangée.
+/// UPDATE : une clé maître sans transaction correspondante reste inchangée ;
+/// une transaction sans maître (id=9) est AJOUTÉE en nouvelle observation
+/// (J03-P6, doc SAS LEPG ch. 21 : « If an observation in the transaction
+/// data set does not have a corresponding observation in the master data
+/// set, then SAS adds an observation to the master output data set. »).
+/// La clé 9 étant supérieure à toutes les clés maître, l'obs est émise en
+/// dernière (interclassement par clé).
 #[test]
 fn update_no_match_unchanged() {
     let mut s = session();
@@ -41,8 +47,11 @@ fn update_no_match_unchanged() {
         &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
     );
     write_num_ds(&s, "tra", &[("id", some(&[9.0])), ("x", some(&[99.0]))]);
-    run("data mas; update mas tra key=id; run;", &mut s).unwrap();
-    assert_eq!(col(&s, "mas", "x"), some(&[10.0, 20.0]));
+    let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "mas", "id"), some(&[1.0, 2.0, 9.0]));
+    // Maîtres inchangés ; la transaction ajoutée porte x=99.
+    assert_eq!(col(&s, "mas", "x"), some(&[10.0, 20.0, 99.0]));
+    assert_eq!(stats.written, vec![("WORK.MAS".to_string(), 3, 2)]);
 }
 
 /// UPDATE : une valeur transaction MANQUANTE ne superpose pas (no-update).
@@ -86,9 +95,13 @@ fn update_key_not_overwritten() {
     assert_eq!(col(&s, "mas", "x"), some(&[42.0]));
 }
 
-/// UPDATE : plusieurs transactions pour une clé → seule la PREMIÈRE compte.
+/// UPDATE : plusieurs transactions pour une même clé → TOUTES appliquées
+/// dans l'ordre, la DERNIÈRE valeur (non manquante) gagne (J03-P6, doc SAS
+/// LEPG ch. 21 Output 21.30 : « The value Dewberry in the master data set
+/// is replaced by Dill, which is the last value for plant in the
+/// transaction data set. »).
 #[test]
-fn update_multiple_transactions_first_wins() {
+fn update_multiple_transactions_last_wins() {
     let mut s = session();
     write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
     write_num_ds(
@@ -97,13 +110,72 @@ fn update_multiple_transactions_first_wins() {
         &[("id", some(&[1.0, 1.0])), ("x", some(&[20.0, 30.0]))],
     );
     run("data mas; update mas tra key=id; run;", &mut s).unwrap();
-    // Première transaction (20) appliquée, la seconde (30) ignorée.
-    assert_eq!(col(&s, "mas", "x"), some(&[20.0]));
+    // Les deux transactions sont appliquées (20 puis 30) : 30 gagne.
+    assert_eq!(col(&s, "mas", "x"), some(&[30.0]));
 }
 
-/// UPDATE : une transaction sans maître correspondant est IGNORÉE (v1).
+/// UPDATE : UPDATEMODE=NOMISSINGCHECK (les deux formes documentées) : une
+/// valeur transaction MANQUANTE écrase aussi le maître (J03-P6, doc LEPG
+/// Output 21.32).
 #[test]
-fn update_unmatched_transaction_ignored() {
+fn update_nomissingcheck_overlays_missing() {
+    let mut s = session();
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
+    write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("x", vec![None])]);
+    // Forme nue (fin de statement).
+    run(
+        "data out1; update mas tra key=id updatemode=nomissingcheck; run;",
+        &mut s,
+    )
+    .unwrap();
+    assert_eq!(col(&s, "out1", "x"), vec![None, Some(20.0)]);
+    // Forme parenthésée (sur la transaction) : même résultat.
+    run(
+        "data out2; update mas tra(updatemode=nomissingcheck) key=id; run;",
+        &mut s,
+    )
+    .unwrap();
+    assert_eq!(col(&s, "out2", "x"), vec![None, Some(20.0)]);
+}
+
+/// UPDATE : UPDATEMODE=MISSINGCHECK explicite = défaut : une valeur
+/// transaction manquante n'a aucun effet.
+#[test]
+fn update_missingcheck_explicit_is_default() {
+    let mut s = session();
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
+    write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("x", vec![None])]);
+    run(
+        "data out; update mas tra key=id updatemode=missingcheck; run;",
+        &mut s,
+    )
+    .unwrap();
+    assert_eq!(col(&s, "out", "x"), some(&[10.0, 20.0]));
+}
+
+/// UPDATE : une valeur UPDATEMODE= invalide → erreur de parsing.
+#[test]
+fn update_updatemode_invalid_value_errors() {
+    let file = SourceFile::new("data o; update m t key=k updatemode=maybe; run;");
+    let mut ts = StatementStream::new(&file).unwrap();
+    assert!(ts.next().is_kw("data"));
+    let err = crate::parser::datastep::parse_data_step(&mut ts).unwrap_err();
+    assert!(err.to_string().contains("UPDATEMODE"), "got: {err}");
+}
+
+/// UPDATE : une transaction sans maître correspondant est AJOUTÉE comme
+/// nouvelle observation (J03-P6 — la divergence v1 « ignorée » est corrigée
+/// selon la doc SAS, cf. update_no_match_unchanged).
+#[test]
+fn update_unmatched_transaction_added() {
     let mut s = session();
     write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
     write_num_ds(
@@ -112,10 +184,10 @@ fn update_unmatched_transaction_ignored() {
         &[("id", some(&[1.0, 2.0])), ("x", some(&[11.0, 22.0]))],
     );
     let stats = run("data mas; update mas tra key=id; run;", &mut s).unwrap();
-    // id=2 (sans maître) n'est PAS inséré : 1 obs en sortie.
-    assert_eq!(col(&s, "mas", "id"), some(&[1.0]));
-    assert_eq!(col(&s, "mas", "x"), some(&[11.0]));
-    assert_eq!(stats.written, vec![("WORK.MAS".to_string(), 1, 2)]);
+    // id=2 (sans maître) est INSÉRÉ : 2 obs en sortie.
+    assert_eq!(col(&s, "mas", "id"), some(&[1.0, 2.0]));
+    assert_eq!(col(&s, "mas", "x"), some(&[11.0, 22.0]));
+    assert_eq!(stats.written, vec![("WORK.MAS".to_string(), 2, 2)]);
 }
 
 /// UPDATE avec WHERE= sur le maître : les obs filtrées ne sont ni mises à

@@ -286,6 +286,7 @@ impl Compiler<'_> {
             overlay_slots,
             master_where: pending.master_where,
             by,
+            nomissingcheck: pending.nomissingcheck,
         }))
     }
 

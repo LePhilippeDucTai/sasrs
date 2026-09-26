@@ -30,13 +30,15 @@ pub(crate) fn fn_trim(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     }
 }
 
-/// STRIP: remove both leading and trailing blanks.
+/// STRIP: remove both leading and trailing blanks. Per the SAS doc (I18N
+/// level 0), a « blank » is the space character (0x20) — tabs, newlines and
+/// other whitespace are NOT removed (J03-P6 : `trim()` de Rust retire trop).
 pub(crate) fn fn_strip(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     match args.first() {
         None => Value::Char(String::new()),
         Some(v) => {
             let s = coerce_char(v);
-            Value::Char(s.trim().to_string())
+            Value::Char(s.trim_matches(' ').to_string())
         }
     }
 }

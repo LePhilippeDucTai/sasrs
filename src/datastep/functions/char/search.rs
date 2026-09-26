@@ -75,8 +75,10 @@ pub(crate) fn fn_scan(args: &[Value], ctx: &mut EvalCtx) -> Value {
 }
 
 /// FIND(s, target[, startPos[, modifiers]]): return 1-based position of first
-/// occurrence of target in s, starting at startPos. If not found, return 0.
-/// Modifiers: 'i' for case-insensitive.
+/// occurrence of target in s, STARTING AT startPos (inclusive — J03-P6, doc
+/// SAS : « startpos の位置から検索を開始し、右方向に検索します », ex.
+/// `find('abc','a')` = 1 ; `xyz='She sells…'; find(xyz,'she',22)` = 27).
+/// If not found, return 0. Modifiers: 'i' for case-insensitive.
 pub(crate) fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
     if args.len() < 2 {
         return Value::Num(0.0);
@@ -109,7 +111,10 @@ pub(crate) fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
         return Value::Num(0.0);
     }
 
-    let search_from_char_idx = start_pos as usize; // startPos is exclusive (1-based), skip to next char
+    // J03-P6 : la recherche COMMENCE à startPos (position incluse,
+    // 1-based) puis va vers la droite — avant, la position de départ était
+    // sautée (divergence : `find('abc','a')` renvoyait 0 au lieu de 1).
+    let search_from_char_idx = (start_pos - 1) as usize;
 
     let target_search = if case_insensitive {
         target.to_lowercase()
@@ -117,7 +122,6 @@ pub(crate) fn fn_find(args: &[Value], ctx: &mut EvalCtx) -> Value {
         target.clone()
     };
 
-    // Search in the substring starting after startPos
     let search_text = chars[search_from_char_idx..].iter().collect::<String>();
     if case_insensitive && search_text.is_empty() {
         return Value::Num(0.0);

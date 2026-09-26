@@ -113,12 +113,14 @@ impl Compiler<'_> {
     }
 
     /// Compile un statement `UPDATE` (bras `DsStmt::Update` de `walk_stmt`).
+    /// `nomissingcheck` (J03-P6) porte UPDATEMODE=NOMISSINGCHECK.
     pub(super) fn compile_update(
         &mut self,
         master: &DatasetRef,
         master_where: &Option<Expr>,
         transaction: &DatasetRef,
         key_vars: &[String],
+        nomissingcheck: bool,
     ) -> Result<()> {
         if self.seen_set || self.seen_merge || self.update.is_some() || self.modify.is_some() {
             return Err(SasError::runtime(
@@ -138,6 +140,7 @@ impl Compiler<'_> {
             master_display: master.display(),
             key_names: key_vars.to_vec(),
             master_where: master_where.clone(),
+            nomissingcheck,
         });
         Ok(())
     }

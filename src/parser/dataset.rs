@@ -77,7 +77,10 @@ impl<'a> StatementStream<'a> {
                     tok.span,
                 ));
             };
-            if !matches!(lower.as_str(), "keep" | "drop" | "rename" | "where" | "in") {
+            if !matches!(
+                lower.as_str(),
+                "keep" | "drop" | "rename" | "where" | "in" | "updatemode"
+            ) {
                 return Err(SasError::parse(
                     format!("Dataset option {} is not supported.", lower.to_uppercase()),
                     tok.span,
@@ -119,6 +122,27 @@ impl<'a> StatementStream<'a> {
                     validate_sas_name(&nm, nm_tok.span)?;
                     self.next();
                     options.in_ = Some(nm);
+                }
+                // `updatemode=missingcheck|nomissingcheck` (J03-P6) : option
+                // UPDATE — la valeur est un ident (pas d'expression), et la
+                // validité de son usage est tranchée à la compilation du
+                // statement UPDATE (les autres statements la rejettent).
+                "updatemode" => {
+                    let val_tok = self.peek().clone();
+                    let Some(val) = val_tok.ident().map(str::to_ascii_lowercase) else {
+                        return Err(SasError::parse(
+                            "expected MISSINGCHECK or NOMISSINGCHECK after UPDATEMODE=",
+                            val_tok.span,
+                        ));
+                    };
+                    if !matches!(val.as_str(), "missingcheck" | "nomissingcheck") {
+                        return Err(SasError::parse(
+                            "The UPDATEMODE= data set option expects MISSINGCHECK or NOMISSINGCHECK.",
+                            val_tok.span,
+                        ));
+                    }
+                    self.next();
+                    options.updatemode = Some(val);
                 }
                 _ => unreachable!("filtered above"),
             }

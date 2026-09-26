@@ -96,12 +96,13 @@ pub(crate) fn fn_repeat(args: &[Value], ctx: &mut EvalCtx) -> Value {
                 // MQ9.1 — `s.repeat(n)` alloue `s.len() * n` octets : sans
                 // borne, `repeat('a', 1e12)` demande 1 To et tue le process
                 // (capacity overflow / OOM), au lieu de produire une valeur.
-                // Une variable caractère SAS ne dépasse pas 32 767 octets et
-                // la valeur serait tronquée à l'affectation de toute façon :
-                // on borne donc le NOMBRE DE COPIES, ce qui garde le résultat
-                // sur une frontière de caractère.
+                // J03-P6 : le plafond est compté en CARACTÈRES (convention de
+                // la crate depuis les jalons encodage/largeurs — J03-P3/P4),
+                // pas en octets : 32 767 caractères de « é » (2 octets)
+                // restent 32 767 caractères, sur une frontière de caractère.
                 const MAX_CHAR_LEN: usize = 32_767;
-                let max_copies = (MAX_CHAR_LEN / s.len().max(1)).max(1);
+                let s_chars = s.chars().count();
+                let max_copies = (MAX_CHAR_LEN / s_chars.max(1)).max(1);
                 Value::Char(s.repeat((n as usize).min(max_copies)))
             }
         }
@@ -156,14 +157,31 @@ pub(crate) fn fn_propcase(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     Value::Char(result)
 }
 
-/// COMPBL(s): compress multiple blanks to single, remove leading/trailing blanks.
+/// COMPBL(s): replace each occurrence of TWO OR MORE consecutive blanks by a
+/// single blank (J03-P6, doc SAS : « 文字列中に 2 つ以上の空白が連続して出現する
+/// たびに、COMPBL 関数はそれらを 1 つの空白に変換して、複数の空白を削除します » —
+/// un blanc ISOLÉ n'est pas affecté, les blancs restants inclus). Un « blank »
+/// est l'espace (0x20) : les tabulations et autres blancs Unicode ne sont PAS
+/// concernés (fonction de niveau I18N 0).
 pub(crate) fn fn_compbl(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     if args.is_empty() {
         return Value::Char(String::new());
     }
     let s = coerce_char(&args[0]);
-    let trimmed = s.trim();
-    let result: String = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result = String::with_capacity(s.len());
+    let mut in_blanks = false;
+    for c in s.chars() {
+        if c == ' ' {
+            if !in_blanks {
+                result.push(' ');
+                in_blanks = true;
+            }
+            // Un 2ᵉ blanc consécutif (et les suivants) est supprimé.
+        } else {
+            result.push(c);
+            in_blanks = false;
+        }
+    }
     Value::Char(result)
 }
 

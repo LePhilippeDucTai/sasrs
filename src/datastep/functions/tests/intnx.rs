@@ -144,11 +144,22 @@ fn find_not_found() {
 
 #[test]
 fn find_with_start_pos() {
-    // Find "o" starting from position 5 in "hello world"
+    // Doc SAS (FIND) : « startpos の位置から検索を開始し、右方向に検索し
+    // ます » — la recherche COMMENCE à startPos (incluse). L'exemple doc :
+    // xyz='She sells seashells? Yes, she does.'; find(xyz,'she',22) = 27.
+    // Ici : 'o' EST en position 5 de 'hello world'.
     assert_eq!(
         invoke("FIND", &[chr("hello world"), chr("o"), num(5.0)]),
-        num(8.0)
+        num(5.0)
     );
+}
+
+#[test]
+fn find_start_pos_inclusive_first_char() {
+    // J03-P6 — doc SAS : `find('abc','a')` = 1 (la position de départ n'est
+    // pas sautée). Avant la correction, ce cas renvoyait 0.
+    assert_eq!(invoke("FIND", &[chr("abc"), chr("a")]), num(1.0));
+    assert_eq!(invoke("FIND", &[chr("abc"), chr("a"), num(1.0)]), num(1.0));
 }
 
 #[test]
@@ -413,17 +424,24 @@ fn compbl_multiple_spaces() {
 
 #[test]
 fn compbl_leading_trailing() {
+    // J03-P6 — doc SAS COMPBL : chaque occurrence de 2 espaces OU PLUS
+    // consécutifs devient UN espace ; un blanc isolé (dont un blanc de bord
+    // résultant) n'est PAS supprimé. `  hello world  ` → ` hello world `.
     assert_eq!(
         invoke("COMPBL", &[chr("  hello world  ")]),
-        chr("hello world")
+        chr(" hello world ")
     );
 }
 
 #[test]
 fn compbl_mixed_whitespace() {
+    // J03-P6 — un « blank » est l'espace 0x20 (fonction I18N niveau 0) :
+    // les tabulations ne sont ni supprimées ni fusionnées. Chaque paire
+    // d'espaces autour de la tabulation devient un espace :
+    // 'hello␣␣\t␣␣world' → 'hello␣\t␣world'.
     assert_eq!(
         invoke("COMPBL", &[chr("hello  \t  world")]),
-        chr("hello world")
+        chr("hello \t world")
     );
 }
 
