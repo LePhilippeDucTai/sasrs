@@ -2,10 +2,9 @@
 /* MPRINT/MLOGIC/SYMBOLGEN trace, call execute (macro-side).            */
 /*                                                                       */
 /* Implementation notes:                                                 */
-/*  - the macro processor resolves macro triggers EVERYWHERE (string     */
-/*    literals AND comments), so the .sas files written at build time for */
-/*    include and SASAUTOS are assembled via byte(37) and byte(38), and  */
-/*    the comments below avoid those two sigils entirely;                */
+/*  - include and SASAUTOS files use byte(37) and byte(38) to construct  */
+/*    macro sigils explicitly; single quotes and block comments no     */
+/*    longer trigger macro expansion;                                  */
 /*  - macro expansion is interleaved per step (the segmenter cuts on the */
 /*    step keywords, which comments must also avoid), so an option that  */
 /*    must be visible to a later macro (SASAUTOS, the trace flags) is set */

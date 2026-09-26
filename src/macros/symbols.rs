@@ -69,7 +69,7 @@ impl MacroEngine {
 
     /// Résout récursivement (itérativement) les `&ref` d'une valeur en
     /// utilisant la table courante. Garde de récursion `MAX_RESOLVE_ITERS`.
-    pub(super) fn resolve_value(&self, value: &str) -> String {
+    pub(super) fn resolve_value(&mut self, value: &str) -> String {
         let mut current = value.to_string();
         for _ in 0..Self::MAX_RESOLVE_ITERS {
             if !current.contains('&') {
@@ -80,6 +80,33 @@ impl MacroEngine {
                 break;
             }
             current = next;
+        }
+        // Only warn after indirection has settled: intermediate names in
+        // &&name&i need not exist. Masked and single-quoted text stays inert.
+        let chars: Vec<char> = current.chars().collect();
+        let mut i = 0;
+        let mut double_quoted = false;
+        while i < chars.len() {
+            if let Some(end) = Self::inert_region_end(&chars, i, double_quoted) {
+                i = end;
+                continue;
+            }
+            if chars[i] == '"' {
+                double_quoted = !double_quoted;
+            }
+            if chars[i] == '&'
+                && let Some((name, after)) = Self::read_name(&chars, i + 1)
+            {
+                if self.lookup(&name).is_none() {
+                    self.warning(format!(
+                        "Apparent symbolic reference {} not resolved.",
+                        name.to_uppercase()
+                    ));
+                }
+                i = after;
+            } else {
+                i += 1;
+            }
         }
         current
     }
@@ -130,8 +157,17 @@ impl MacroEngine {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len());
         let mut i = 0;
+        let mut double_quoted = false;
         while i < chars.len() {
+            if let Some(end) = Self::inert_region_end(&chars, i, double_quoted) {
+                out.extend(chars[i..end].iter());
+                i = end;
+                continue;
+            }
             let c = chars[i];
+            if c == '"' {
+                double_quoted = !double_quoted;
+            }
             if c == '&' {
                 // `&&` -> un seul `&`.
                 if chars.get(i + 1) == Some(&'&') {
@@ -141,15 +177,15 @@ impl MacroEngine {
                 }
                 if let Some((name, after)) = Self::read_name(&chars, i + 1) {
                     let mut next = after;
-                    // Terminateur point : consommé qu'on résolve ou non.
+                    // Le point termine une référence résolue ; sinon il reste littéral.
                     if chars.get(next) == Some(&'.') {
                         next += 1;
                     }
                     match self.lookup(&name) {
                         Some(v) => out.push_str(&v),
                         None => {
-                            // Non défini : on laisse `&name` verbatim. Le
-                            // point terminateur a déjà été consommé.
+                            next = after;
+                            // Non défini : préserver la référence, y compris son point.
                             out.push('&');
                             out.push_str(&name);
                         }

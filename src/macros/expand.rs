@@ -174,6 +174,7 @@ impl MacroEngine {
         let chars: Vec<char> = source.chars().collect();
         let mut out = String::with_capacity(source.len());
         let mut i = 0;
+        let mut double_quoted = false;
         'scan: while i < chars.len() {
             // M35.4 — `%return`/`%abort` posés par un statement précédent (ou par
             // une macro invoquée dont l'abort se propage) : on cesse d'expanser
@@ -197,7 +198,24 @@ impl MacroEngine {
                 }
             }
 
+            if let Some(end) = Self::inert_region_end(&chars, i, double_quoted) {
+                out.extend(chars[i..end].iter());
+                i = end;
+                continue;
+            }
             let c = chars[i];
+            if c == '"' {
+                double_quoted = !double_quoted;
+            }
+            // Macro comments are consumed without resolving their contents.
+            if c == '%' && chars.get(i + 1) == Some(&'*') {
+                i += 2;
+                while i < chars.len() && chars[i] != ';' {
+                    i += 1;
+                }
+                i = (i + 1).min(chars.len());
+                continue;
+            }
 
             if c == '%' {
                 // M35.4 — marqueur d'étiquette `%name:` (cible de `%goto`). Il
@@ -235,6 +253,7 @@ impl MacroEngine {
                         i = next;
                         continue;
                     }
+                    self.warning(format!("Apparent invocation of macro {key} not resolved."));
                 }
             }
 
@@ -415,11 +434,10 @@ impl MacroEngine {
         let (inner, after) = Self::read_balanced_parens(chars, j)?;
         // Résoudre d'abord les &refs, puis (récursivement) tout `%eval`/macro
         // imbriqué dans l'argument avant d'évaluer.
-        let resolved = self.resolve_value(&inner);
-        let expanded = self.process_impl(&resolved);
+        let expanded = self.process_impl(&inner);
         match self.macro_eval(&expanded) {
             Ok(v) => out.push_str(&v.to_string()),
-            Err(e) => Self::emit_error(out, &e),
+            Err(e) => self.emit_error(&e),
         }
         Some(after)
     }

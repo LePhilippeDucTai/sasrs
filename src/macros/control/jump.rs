@@ -4,7 +4,7 @@ impl MacroEngine {
     /// Consomme `%return;` : pose le drapeau `return_requested` (la boucle
     /// `process_impl` cessera d'expanser le reste de CE corps en tête du prochain
     /// tour) et avale le `;` terminal. En OPEN CODE (hors d'une macro), `%return`
-    /// est sans objet : SAS émet un avertissement ; on émet une NOTE propre et on
+    /// est sans objet : on émet une ERROR et on
     /// NE pose PAS le drapeau (rien à interrompre). Rend l'index après le `;`.
     pub(crate) fn consume_return(
         &mut self,
@@ -22,7 +22,7 @@ impl MacroEngine {
         }
         if self.macro_stack.is_empty() {
             // Open code : pas de corps à interrompre.
-            out.push_str("/* NOTE: %RETURN is not valid in open code; statement ignored */");
+            self.error("The %RETURN statement is not valid in open code.");
         } else {
             self.flow.return_requested = true;
         }
@@ -31,7 +31,7 @@ impl MacroEngine {
 
     /// Consomme `%abort [cancel | abend [n] | return [n]];` : enregistre
     /// l'intention d'abort (drapeau `abort_requested` + variante `abort_kind`),
-    /// émet la NOTE SAS-like, et avale jusqu'au `;`. Le drapeau se PROPAGE
+    /// émet une ERROR, et avale jusqu'au `;`. Le drapeau se PROPAGE
     /// (l'appelant l'observe et stoppe à son tour) — il n'est PAS réinitialisé par
     /// `expand_invocation`. On NE fait jamais `process::exit`/`panic`. Rend
     /// l'index après le `;`.
@@ -48,6 +48,7 @@ impl MacroEngine {
             j += 1;
         }
         let args: String = chars[arg_start..j].iter().collect();
+        let args = self.process_impl(&args);
         if chars.get(j) == Some(&';') {
             j += 1;
         }
@@ -75,8 +76,8 @@ impl MacroEngine {
             AbortKind::Return(Some(n)) => format!(" RETURN {n}"),
             AbortKind::Return(None) => " RETURN".to_string(),
         };
-        out.push_str(&format!(
-            "/* NOTE: %ABORT{detail} encountered; macro expansion stopped */"
+        self.error(format!(
+            "Execution terminated by the %ABORT{detail} statement."
         ));
         self.flow.abort_requested = true;
         self.flow.abort_kind = Some(kind);
@@ -88,8 +89,8 @@ impl MacroEngine {
     /// et repositionnement du scan) a lieu en tête de la boucle `process_impl`,
     /// éventuellement APRÈS remontée hors d'une action `%then`/`%do` imbriquée
     /// (le `%goto` peut sauter vers une étiquette du corps englobant). `budget`
-    /// partagé décrémenté à chaque saut ; épuisé → NOTE d'erreur (anti-boucle).
-    /// Open code → NOTE propre. Rend l'index après le `;`.
+    /// partagé décrémenté à chaque saut ; épuisé → ERROR (anti-boucle).
+    /// Open code → ERROR. Rend l'index après le `;`.
     pub(crate) fn consume_goto(
         &mut self,
         chars: &[char],
@@ -111,17 +112,14 @@ impl MacroEngine {
         }
         let after_stmt = Self::skip_trailing_newline(chars, j, out);
         if self.macro_stack.is_empty() {
-            out.push_str("/* NOTE: %GOTO is not valid in open code; statement ignored */");
+            self.error("The %GOTO statement is not valid in open code.");
             return Some(after_stmt);
         }
         if self.flow.goto_budget <= 0 {
-            Self::emit_error(
-                out,
-                &MacroError::new(format!(
-                    "ERROR: %GOTO jump budget ({}) exhausted (runaway guard)",
-                    Self::MAX_GOTO_JUMPS
-                )),
-            );
+            self.emit_error(&MacroError::new(format!(
+                "ERROR: %GOTO jump budget ({}) exhausted (runaway guard)",
+                Self::MAX_GOTO_JUMPS
+            )));
             return Some(after_stmt);
         }
         self.flow.goto_budget -= 1;

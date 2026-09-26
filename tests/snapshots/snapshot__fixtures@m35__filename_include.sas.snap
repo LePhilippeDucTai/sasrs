@@ -5,6 +5,7 @@ input_file: tests/fixtures/m35/filename_include.sas
 ---
 ==== LOG ====
 step one
+ERROR: %INCLUDE: cannot read 'nosuchref': No such file or directory (os error 2)
 step two
 
 1     filename scratch temp;
@@ -12,4 +13,4 @@ NOTE: FILENAME device TEMP is not supported in this build; statement ignored.
 
 ==== LISTING ====
 
-==== EXIT 0 ====
+==== EXIT 2 ====

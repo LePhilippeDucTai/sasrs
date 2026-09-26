@@ -24,11 +24,12 @@ fn sysfunc_numeric_function() {
 
 #[test]
 fn sysfunc_unknown_function_errors_no_panic() {
-    let out = run("%sysfunc(nosuchfn(1))");
+    let (out, log) = run_logged("%sysfunc(nosuchfn(1))");
     assert!(
-        out.contains("not supported") || out.contains("unknown"),
+        log.contains("not supported") || log.contains("unknown"),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 // --- M35.1 : %sysfunc délègue à la bibliothèque COMPLÈTE (plus de whitelist) ---
@@ -517,6 +518,7 @@ fn sysevalf_power_is_real() {
 
 #[test]
 fn sysevalf_syntax_error_no_panic() {
-    let out = expand("%sysevalf(2 + + )");
-    assert!(out.contains("ERROR"), "got: {out}");
+    let (out, log) = run_logged("%sysevalf(2 + + )");
+    assert!(log.contains("ERROR"), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }

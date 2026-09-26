@@ -97,9 +97,10 @@ fn macro_too_few_args_uses_empty_for_positional() {
 }
 
 #[test]
-fn macro_too_many_positional_args_ignored() {
-    // 2e positionnel excédentaire ignoré (un seul paramètre).
-    assert_eq!(run("%macro p(a); val=&a; %mend; %p(1,2,3)"), "val=1;");
+fn macro_too_many_positional_args_rejected() {
+    let (code, log) = run_logged("%macro p(a); val=&a; %mend; %p(1,2,3)");
+    assert!(code.is_empty());
+    assert_eq!(log, "ERROR: More positional parameters found than defined.");
 }
 
 #[test]
@@ -154,8 +155,9 @@ fn global_decl_creates_symbol() {
 #[test]
 fn recursion_guard_does_not_panic() {
     // Auto-appel infini : la garde coupe sans paniquer.
-    let out = run("%macro r; %r %mend; %r");
-    assert!(out.contains("recursion limit"), "got: {out}");
+    let (out, log) = run_logged("%macro r; %r %mend; %r");
+    assert!(log.contains("recursion limit"), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
@@ -343,8 +345,9 @@ fn if_do_nested_in_macro_body() {
 fn runaway_loop_guard_does_not_hang() {
     // step négatif avec start<stop et pas négatif s'arrête tout de suite ;
     // ici on teste le pas nul -> erreur propre, pas de hang.
-    let out = run("%do i=1 %to 10 %by 0; x %end;");
-    assert!(out.contains("step is zero"), "got: {out}");
+    let (out, log) = run_logged("%do i=1 %to 10 %by 0; x %end;");
+    assert!(log.contains("step is zero"), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 // --- M12.1 : %do %while / %do %until ---
@@ -373,8 +376,9 @@ fn do_while_inside_macro_body() {
 #[test]
 fn do_while_runaway_guard() {
     // Condition toujours vraie, jamais mise à jour -> garde anti-runaway.
-    let out = run("%do %while(1); x %end;");
-    assert!(out.contains("runaway guard"), "got: {out}");
+    let (out, log) = run_logged("%do %while(1); x %end;");
+    assert!(log.contains("runaway guard"), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]

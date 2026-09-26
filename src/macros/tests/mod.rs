@@ -50,3 +50,12 @@ mod segmenter;
 mod syscall;
 mod sysfunc;
 mod window;
+
+/// Inspect generated code independently of the diagnostic channel.
+fn run_logged(input: &str) -> (String, String) {
+    let mut engine = MacroEngine::new(true);
+    let code = engine.expand_open_code(input);
+    (code, engine.take_pending_log_lines().join("\n"))
+}
+
+mod macro_diag;

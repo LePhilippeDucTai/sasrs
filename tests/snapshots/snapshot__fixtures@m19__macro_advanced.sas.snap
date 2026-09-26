@@ -58,6 +58,7 @@ The name is: Alice
 SYMBOLGEN:  Macro variable NAME resolves to Alice
 MLOGIC(TEST_LOGIC):  Beginning execution.
 MLOGIC(TEST_LOGIC):  Parameter N has value 3
+SYMBOLGEN:  Macro variable N resolves to 3
 MLOGIC(TEST_LOGIC):  %IF condition &n = 3 is TRUE
 N is three
 MLOGIC(TEST_LOGIC):  Ending execution.

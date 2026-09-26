@@ -109,14 +109,24 @@ impl MacroEngine {
         let (inner, after) = Self::read_balanced_parens(chars, j)?;
         // L'argument peut contenir des &refs/macros : résoudre AVANT de découper
         // les virgules (les nombres ne contiennent pas de virgule de niveau sup.).
-        let resolved = self.resolve_value(&inner);
-        let expanded = self.process_impl(&resolved);
+        let expanded = self.process_impl(&inner);
         let parts = Self::split_top_level_commas(&expanded);
         let expr = parts.first().map(String::as_str).unwrap_or("").trim();
         let conv = parts.get(1).map(|s| s.trim().to_ascii_uppercase());
+        if parts.len() > 2
+            || conv
+                .as_deref()
+                .is_some_and(|c| !matches!(c, "BOOLEAN" | "CEIL" | "FLOOR" | "INTEGER"))
+        {
+            self.error(format!(
+                "Unknown %SYSEVALF conversion operand '{}' specified; conversion is terminated.",
+                conv.as_deref().unwrap_or("")
+            ));
+            return Some(after);
+        }
         match Self::eval_float(expr) {
             Ok(v) => out.push_str(&Self::format_sysevalf(v, conv.as_deref())),
-            Err(e) => Self::emit_error(out, &e),
+            Err(e) => self.emit_error(&e),
         }
         Some(after)
     }

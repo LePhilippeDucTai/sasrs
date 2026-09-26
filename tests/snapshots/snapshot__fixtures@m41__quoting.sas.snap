@@ -5,6 +5,8 @@ expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {
 input_file: tests/fixtures/m41/quoting.sas
 ---
 ==== LOG ====
+WARNING: Apparent symbolic reference Z not resolved.
+WARNING: Apparent symbolic reference Z not resolved.
 
 1     data q;
 2       length q1 q2 q3 q4 q5 q6 $12;
@@ -68,4 +70,4 @@ NOTE: PROCEDURE PRINT used (Total process time):
 
                                               a;b
 
-==== EXIT 0 ====
+==== EXIT 1 ====

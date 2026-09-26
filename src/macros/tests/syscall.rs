@@ -110,10 +110,11 @@ fn syscall_sortc_undefined_sorts_as_empty() {
 
 #[test]
 fn syscall_other_routine_still_noted() {
-    let out = run("p %syscall set(x); q");
+    let (out, log) = run_logged("p %syscall set(x); q");
     assert!(
-        out.contains("%SYSCALL") && out.contains("not supported"),
+        log.contains("%SYSCALL") && log.contains("not supported"),
         "got: {out}"
     );
     assert!(out.contains('p') && out.contains('q'), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }

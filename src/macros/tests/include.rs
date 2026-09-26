@@ -56,7 +56,11 @@ fn include_missing_file_emits_note_no_panic() {
     let dir = tempfile::tempdir().unwrap();
     let mut e = engine_in(dir.path());
     let out = e.expand_open_code("%include 'does_not_exist.sas'; after");
-    assert!(out.contains("cannot read"), "got: {out}");
+    assert!(
+        e.take_pending_log_lines()
+            .join("\n")
+            .contains("cannot read")
+    );
     // Le scan se poursuit après le statement.
     assert!(out.contains("after"), "got: {out}");
 }
@@ -68,7 +72,12 @@ fn include_cycle_hits_depth_limit_no_panic() {
     write_file(dir.path(), "self.sas", "%include 'self.sas';");
     let mut e = engine_in(dir.path());
     let out = e.expand_open_code("%include 'self.sas';");
-    assert!(out.contains("nesting limit"), "got: {out}");
+    assert!(out.trim().is_empty());
+    assert!(
+        e.take_pending_log_lines()
+            .join("\n")
+            .contains("nesting limit")
+    );
 }
 
 #[test]
@@ -78,7 +87,7 @@ fn include_stdin_star_deferral_note() {
     let dir = tempfile::tempdir().unwrap();
     let mut e = engine_in(dir.path());
     let out = e.expand_open_code("%include *; tail");
-    assert!(out.contains("keyboard/terminal input"), "got: {out}");
+    assert!(!out.contains("keyboard/terminal input"), "got: {out}");
     assert!(out.contains("tail"), "got: {out}");
     let logs = e.take_pending_log_lines();
     assert_eq!(
@@ -152,7 +161,11 @@ fn include_unknown_bare_token_cannot_read() {
     let dir = tempfile::tempdir().unwrap();
     let mut e = engine_in(dir.path());
     let out = e.expand_open_code("%include myref; tail");
-    assert!(out.contains("cannot read"), "got: {out}");
+    assert!(
+        e.take_pending_log_lines()
+            .join("\n")
+            .contains("cannot read")
+    );
     assert!(out.contains("tail"), "got: {out}");
 }
 
@@ -417,12 +430,13 @@ fn return_honours_if_branch() {
 
 #[test]
 fn return_in_open_code_notes_and_continues() {
-    let out = run("X %return; Y");
+    let (out, log) = run_logged("X %return; Y");
     assert!(
-        out.contains("NOTE: %RETURN is not valid in open code"),
+        log.contains("ERROR: The %RETURN statement is not valid in open code."),
         "got: {out}"
     );
     assert!(out.contains('X') && out.contains('Y'), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
@@ -457,20 +471,22 @@ fn goto_bounded_loop() {
 
 #[test]
 fn goto_missing_label_notes() {
-    let out = run("%macro m; A %goto nope; B %mend; %m");
+    let (out, log) = run_logged("%macro m; A %goto nope; B %mend; %m");
     assert!(
-        out.contains("NOTE: %GOTO target label %nope: not found"),
+        log.contains("ERROR: The %GOTO label NOPE is not defined."),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
 fn goto_in_open_code_notes() {
-    let out = run("%goto x;");
+    let (out, log) = run_logged("%goto x;");
     assert!(
-        out.contains("NOTE: %GOTO is not valid in open code"),
+        log.contains("ERROR: The %GOTO statement is not valid in open code."),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
@@ -483,7 +499,11 @@ fn label_marker_emits_nothing() {
 fn abort_stops_body_and_notes() {
     let mut e = MacroEngine::new(true);
     let out = e.expand_open_code("%macro m; AAA %abort; ZZZ %mend; %m");
-    assert!(out.contains("NOTE: %ABORT encountered"), "got: {out}");
+    assert!(
+        e.take_pending_log_lines()
+            .join("\n")
+            .contains("ERROR: Execution terminated by the %ABORT statement.")
+    );
     assert!(out.contains("AAA") && !out.contains("ZZZ"), "got: {out}");
     assert_eq!(e.take_abort_request(), Some(AbortKind::Plain));
 }
@@ -525,24 +545,26 @@ fn abort_reentrancy_reset_between_segments() {
 
 #[test]
 fn sysexec_noted_and_consumed() {
-    let out = run("before %sysexec(rm -rf x); after");
+    let (out, log) = run_logged("before %sysexec(rm -rf x); after");
     assert!(
-        out.contains("%SYSEXEC") && out.contains("not supported in this build"),
+        log.contains("%SYSEXEC") && log.contains("not supported in this build"),
         "got: {out}"
     );
     assert!(
         out.contains("before") && out.contains("after"),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
 fn sysexec_inner_semicolon_not_a_cutoff() {
     // Le `;` à l'intérieur des parenthèses ne doit pas couper prématurément.
-    let out = run("%sysexec(echo a; echo b); tail");
-    assert!(out.contains("not supported"), "got: {out}");
+    let (out, log) = run_logged("%sysexec(echo a; echo b); tail");
+    assert!(log.contains("not supported"), "got: {out}");
     assert!(
         out.contains("tail") && !out.contains("echo b"),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
