@@ -515,7 +515,15 @@ fn orphan_sidecar_exchange_rolls_back_on_intermediate_failure() {
     // État d'origine restauré.
     let (a, notes_a) = session.libs.get("WORK").unwrap().read("ALPHA").unwrap();
     assert_eq!(a.n_obs(), 2, "ALPHA keeps its content");
-    assert!(notes_a.is_empty(), "{notes_a:?}");
+    // J04-P3 (décision 3410b5bf, rév. 15) : le répertoire hostile occupe le
+    // chemin du sidecar d'ALPHA ; la lecture signale désormais un WARNING
+    // « Unreadable metadata sidecar … Is a directory » au lieu de rien.
+    assert!(
+        notes_a.len() == 1
+            && notes_a[0].contains("Unreadable metadata sidecar")
+            && notes_a[0].contains("Is a directory"),
+        "{notes_a:?}"
+    );
     let (b, notes_b) = session.libs.get("WORK").unwrap().read("BETA").unwrap();
     assert_eq!(b.n_obs(), 2, "BETA keeps its content");
     assert!(notes_b.is_empty(), "BETA metadata intact: {notes_b:?}");
