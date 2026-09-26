@@ -40,21 +40,22 @@ pub(super) fn render_matrix(name: &str, m: &Matrix, session: &mut Session) {
     let show_col_hdr = nc >= 2;
     let show_row_hdr = nr >= 2;
 
-    // Largeur de chaque colonne : max(4, valeurs formatées, en-tête COLk).
+    // Largeur de chaque colonne : max(4, valeurs formatées, en-tête COLk),
+    // comptées en caractères (contrat D-001) et non en octets.
     let mut widths = vec![4usize; nc];
     for (j, w) in widths.iter_mut().enumerate() {
         if show_col_hdr {
-            *w = (*w).max(format!("COL{}", j + 1).len());
+            *w = (*w).max(crate::listing::char_width(&format!("COL{}", j + 1)));
         }
         for row in &cells {
-            *w = (*w).max(row[j].len());
+            *w = (*w).max(crate::listing::char_width(&row[j]));
         }
     }
 
     // Largeur de l'étiquette de ligne.
     let row_label_w = if show_row_hdr {
         (0..nr)
-            .map(|i| format!("ROW{}", i + 1).len())
+            .map(|i| crate::listing::char_width(&format!("ROW{}", i + 1)))
             .max()
             .unwrap_or(0)
     } else {

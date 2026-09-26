@@ -39,6 +39,7 @@ pub use rtf::RtfDestination;
 pub use text::TextListing;
 
 pub use crate::listing::Align;
+pub use crate::listing::char_width;
 
 use crate::listing::ListingWriter;
 

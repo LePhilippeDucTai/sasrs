@@ -315,20 +315,37 @@ pub(super) fn write_cntlout(
 
     let rows = build_rows(cat);
 
+    // Longueurs en caractères (contrat D-001) : un label accentué compte pour
+    // 1 caractère par lettre, pas 2 octets par « é ».
     let fmtname_len = rows
         .iter()
-        .map(|r| r.fmtname.len())
+        .map(|r| crate::listing::char_width(&r.fmtname))
         .max()
         .unwrap_or(1)
         .max(1);
     let text_len = rows
         .iter()
-        .flat_map(|r| [r.start.len(), r.end.len()])
+        .flat_map(|r| {
+            [
+                crate::listing::char_width(&r.start),
+                crate::listing::char_width(&r.end),
+            ]
+        })
         .max()
         .unwrap_or(1)
         .max(1);
-    let label_len = rows.iter().map(|r| r.label.len()).max().unwrap_or(1).max(1);
-    let hlo_len = rows.iter().map(|r| r.hlo.len()).max().unwrap_or(1).max(1);
+    let label_len = rows
+        .iter()
+        .map(|r| crate::listing::char_width(&r.label))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let hlo_len = rows
+        .iter()
+        .map(|r| crate::listing::char_width(&r.hlo))
+        .max()
+        .unwrap_or(1)
+        .max(1);
 
     let fmtnames: Vec<Option<String>> = rows.iter().map(|r| Some(r.fmtname.clone())).collect();
     let starts: Vec<Option<String>> = rows.iter().map(|r| Some(r.start.clone())).collect();

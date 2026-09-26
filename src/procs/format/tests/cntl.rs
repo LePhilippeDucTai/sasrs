@@ -580,3 +580,32 @@ fn cntlin_width_options_round_trip() {
         " Minor"
     );
 }
+
+// ── char_width : longueurs CNTLOUT en caractères (contrat D-001) ────────────
+
+/// La longueur inférée de la variable LABEL d'un CNTLOUT est exprimée en
+/// CARACTÈRES : un label accentué (« Café » = 4 caractères / 5 octets) donne
+/// LENGTH=4, pas 5. L'ancienne inférence en octets gonflait la variable d'un
+/// octet par « é ».
+#[test]
+fn char_width_cntlout_accented_label_length() {
+    let session = run_format_src(
+        "proc format cntlout=fmtctl; value f 1='Café' 2='Thé'; run;",
+    );
+    let ds = read_work(&session, "FMTCTL");
+    let label = ds
+        .vars
+        .iter()
+        .find(|v| v.name == "LABEL")
+        .expect("CNTLOUT exposes LABEL");
+    assert_eq!(label.length, 4, "« Café » fait 4 caractères");
+    assert_ne!(
+        label.length,
+        "Café".len(),
+        "garde : l'UTF-8 encode « é » sur 2 octets, l'ancien calcul donnait 5"
+    );
+    // Les valeurs elles-mêmes sont préservées intactes.
+    let rs = rows(&ds);
+    assert_eq!(rs[0].label, "Café");
+    assert_eq!(rs[1].label, "Thé");
+}
