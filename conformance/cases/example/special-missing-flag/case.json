@@ -1,0 +1,29 @@
+{
+  "id": "special-missing-flag",
+  "title": "Missings spéciaux ._/.A : identité, comparaisons IF et arithmétique sur missing ordinaire",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 « Missing Values » — https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lrcon/p0w05cpswdxfpyn1s1zo2umch2cr.htm : ._/.A-.Z sont des missing distincts ; ordre de tri ._ < .A..Z < . < nombres ; toute opération arithmétique avec un missing produit un missing",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {
+    "abs": 1e-9,
+    "rel": 1e-9,
+    "columns": {}
+  },
+  "log": {
+    "required": ["NOTE: The data set WORK.FLAGGED has 5 observations"],
+    "forbidden": ["ERROR:", "WARNING:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "scores.csv": {
+      "name": "char",
+      "score": "num",
+      "bonus": "num"
+    }
+  }
+}
