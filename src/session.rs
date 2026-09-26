@@ -114,6 +114,8 @@ pub struct Session {
     /// [`TextListing`] (listing texte byte-identique). Le statement `ODS`
     /// (M22.2+) configurera d'autres destinations via `output_destinations`.
     pub listing: Box<dyn OutputDestination>,
+    /// Output retained when a destination is replaced or closed.
+    completed_listing: String,
     /// Destinations ODS ouvertes par `ODS <dest> OPEN` (M22.2+), indexées par
     /// nom de destination (UPPERCASE : HTML/RTF/PDF/EXCEL/…). Vide par défaut ;
     /// seul `listing` (texte) est actif tant qu'aucun `ODS` n'a ouvert de
@@ -306,6 +308,7 @@ impl Session {
             libs: LibraryManager::new(work_dir)?,
             log: LogWriter::new(deterministic),
             listing: Box::new(TextListing::new(options.ls)),
+            completed_listing: String::new(),
             output_destinations: HashMap::new(),
             ods_options: OdsOptions::default(),
             current_destination: "LISTING".to_string(),
@@ -349,91 +352,71 @@ impl Session {
         }
     }
 
-    /// M22.2 — ouvre une destination ODS.
-    ///
-    /// La destination « courante » de la session reste toujours
-    /// `self.listing: Box<dyn OutputDestination>` (le défaut texte ou la
-    /// dernière destination ouverte). Ouvrir `listing` réinstalle la
-    /// destination texte par défaut ; ouvrir une autre destination la pose
-    /// comme `listing` courant ET l'enregistre dans `output_destinations`
-    /// (indexée par nom UPPERCASE) pour qu'`ODS CLOSE` puisse la retrouver.
-    ///
-    /// Invariant : la LINESIZE de la session est propagée à la nouvelle
-    /// destination pour préserver la cohérence de l'en-tête de page. Le nom de
-    /// la destination courante est mémorisé dans `current_destination` afin que
-    /// `ODS CLOSE` (sans nom) sache quoi fermer.
+    /// Finalize the previous destination before installing the next one.
     pub fn open_destination(&mut self, name: &str, mut dest: Box<dyn OutputDestination>) {
-        let key = name.to_ascii_uppercase();
+        self.finish_destination();
         dest.set_ls(self.options.ls);
-        // M38.1 : reporte les titres/footnotes actifs sur la nouvelle destination
-        // pour que l'en-tête reste cohérent après un changement de destination.
         dest.set_titles(&Self::compact_levels(&self.titles));
         dest.set_footnotes(&Self::compact_levels(&self.footnotes));
-        // La destination courante de la session reste toujours `self.listing` ;
-        // on y installe la destination demandée et on note son nom.
         self.listing = dest;
-        self.current_destination = key;
+        self.current_destination = name.to_ascii_uppercase();
     }
 
-    /// M22.2 — ferme une destination ODS nommée.
-    ///
-    /// Si la destination fermée est la destination courante (ou `LISTING`), on
-    /// rétablit le listing texte par défaut comme destination courante. Une
-    /// destination supplémentaire enregistrée (M22.3+) est retirée du registre.
-    ///
-    /// M22.4 : AVANT de remplacer la destination courante, appelle `finalize()`
-    /// sur elle. Si `finalize()` renvoie `Some((path, html))`, écrit le fichier
-    /// sur disque et émet une NOTE dans le log.
+    /// Close the current destination, including the parser's LISTING alias for
+    /// bare ODS CLOSE. Unrelated named destinations leave it open.
     pub fn close_destination(&mut self, name: &str) {
         let key = name.to_ascii_uppercase();
-        self.output_destinations.remove(&key);
-        // Fermer la destination courante (ou explicitement LISTING) → revenir au
-        // listing texte par défaut byte-identique.
-        if key == "LISTING" || key == self.current_destination {
-            // M23 : finaliser la destination courante avant de la remplacer.
-            // Formats binaires (Excel, PDF) d'abord, puis formats texte (HTML, RTF).
-            if let Some((path, bytes)) = self.listing.finalize_to_bytes() {
-                let label = self.listing.dest_type_label();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("output")
-                    .to_string();
-                match std::fs::write(&path, &bytes) {
-                    Ok(()) => {
-                        self.log
-                            .note(&format!("Writing {} file: {}", label, file_name));
-                    }
-                    Err(e) => {
-                        self.log.note(&format!(
-                            "WARNING: Could not write {} file {}: {}",
-                            label, file_name, e
-                        ));
-                    }
-                }
-            } else if let Some((path, content)) = self.listing.finalize() {
-                let label = self.listing.dest_type_label();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("output.html")
-                    .to_string();
-                match std::fs::write(&path, &content) {
-                    Ok(()) => {
-                        self.log
-                            .note(&format!("Writing {} file: {}", label, file_name));
-                    }
-                    Err(e) => {
-                        self.log.note(&format!(
-                            "WARNING: Could not write {} file {}: {}",
-                            label, file_name, e
-                        ));
-                    }
-                }
-            }
-            self.listing = Box::new(TextListing::new(self.options.ls));
-            self.current_destination = "LISTING".to_string();
+        if key == "_ALL_" {
+            self.output_destinations.clear();
+        } else {
+            self.output_destinations.remove(&key);
         }
+        if key == "_ALL_" || key == "LISTING" || key == self.current_destination {
+            self.open_destination("LISTING", Box::new(TextListing::new(self.options.ls)));
+        }
+    }
+
+    /// Shared by CLOSE, replacement and the end-of-run safety net. Successful
+    /// write NOTEs keep their historical basename-only format; errors include
+    /// the complete target path and increment the ordinary error counter.
+    pub(crate) fn finish_destination(&mut self) {
+        let output = self.listing.finalize_to_bytes().or_else(|| {
+            self.listing
+                .finalize()
+                .map(|(path, text)| (path, text.into_bytes()))
+        });
+        if let Some((path, bytes)) = output {
+            let label = self.listing.dest_type_label();
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => {
+                    let file_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("output");
+                    self.log
+                        .note(&format!("Writing {} file: {}", label, file_name));
+                }
+                Err(e) => self.log.error(&format!(
+                    "Could not write {} file {}: {}",
+                    label,
+                    path.display(),
+                    e
+                )),
+            }
+        } else {
+            let content = self.listing.take_string();
+            if content.is_empty() && self.current_destination != "LISTING" {
+                self.log.note(&format!(
+                    "ODS {}: no output produced.",
+                    self.current_destination
+                ));
+            }
+            self.completed_listing.push_str(&content);
+        }
+    }
+
+    pub(crate) fn take_completed_listing(&mut self) -> String {
+        std::mem::take(&mut self.completed_listing)
     }
 
     /// M22.2 — applique une option globale ODS (CENTER/NOCENTER, DATE/NODATE,

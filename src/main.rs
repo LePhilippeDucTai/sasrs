@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use sasrs::{RunOptions, run};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -46,7 +47,11 @@ fn main() -> ExitCode {
     let source = match std::fs::read_to_string(&cli.script) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("ERROR: cannot read {}: {e}", cli.script.display());
+            let _ = writeln!(
+                io::stderr().lock(),
+                "ERROR: cannot read {}: {e}",
+                cli.script.display()
+            );
             return ExitCode::from(2);
         }
     };
@@ -67,18 +72,40 @@ fn main() -> ExitCode {
         },
     );
 
-    let write_or = |target: &Option<PathBuf>, content: &str, fallback_stdout: bool| match target {
-        Some(path) => {
-            if let Err(e) = std::fs::write(path, content) {
-                eprintln!("ERROR: cannot write {}: {e}", path.display());
-            }
-        }
-        None if fallback_stdout => print!("{content}"),
-        None => eprint!("{content}"),
+    // Attempt both outputs even if the first fails.
+    let log_ok = write_output(&cli.log, &outcome.log, false);
+    let listing_ok = write_output(&cli.print, &outcome.listing, true);
+    ExitCode::from(if log_ok && listing_ok {
+        outcome.exit_code as u8
+    } else {
+        2
+    })
+}
+
+fn write_output(target: &Option<PathBuf>, content: &str, stdout: bool) -> bool {
+    let result = match target {
+        Some(path) => std::fs::write(path, content),
+        None if stdout => write_stream(&mut io::stdout().lock(), content),
+        None => write_stream(&mut io::stderr().lock(), content),
     };
+    if let Err(error) = result {
+        let name = target.as_ref().map_or_else(
+            || if stdout { "stdout" } else { "stderr" }.to_string(),
+            |path| path.display().to_string(),
+        );
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(stderr, "ERROR: cannot write {name}: {error}");
+        // Preserve the entire buffered output when a requested file fails.
+        // Explicit Write calls also make broken pipes errors instead of panics.
+        if target.is_some() || stdout {
+            let _ = write_stream(&mut stderr, content);
+        }
+        return false;
+    }
+    true
+}
 
-    write_or(&cli.log, &outcome.log, false);
-    write_or(&cli.print, &outcome.listing, true);
-
-    ExitCode::from(outcome.exit_code as u8)
+fn write_stream(stream: &mut impl Write, content: &str) -> io::Result<()> {
+    stream.write_all(content.as_bytes())?;
+    stream.flush()
 }
