@@ -145,9 +145,6 @@ fn datastep_divergence_char_fns_fixture() {
     // find('abc','a')=1, find(s,'she',22)=27, find('hello world','o',5)=5,
     // length(repeat('é',1e9))=32767 (plafond en caractères).
     for expected in ["1", "27", "5", "32767"] {
-        assert!(
-            cols.contains(&expected),
-            "{expected} attendu dans {cols:?}"
-        );
+        assert!(cols.contains(&expected), "{expected} attendu dans {cols:?}");
     }
 }
