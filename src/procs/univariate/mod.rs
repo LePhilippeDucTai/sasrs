@@ -378,7 +378,11 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
     ));
 
     // --- Graphical statements (M29.3) ---
-    if !ast.plots.is_empty() && !ast.noprint {
+    // J03-P9: NOPRINT suppresses printed output only — ODS Graphics images
+    // are still produced (ODS Graphics: Procedures Guide), so the graphical
+    // gate no longer tests `ast.noprint`. The listing tables above remain
+    // suppressed under NOPRINT and OUTPUT OUT= is unaffected.
+    if !ast.plots.is_empty() {
         if !session.ods_graphics.enabled {
             // ODS GRAPHICS off: rendering stays deferred (byte-identical to the
             // pre-M29.3 behaviour — a single NOTE for the whole PROC step).
