@@ -30,6 +30,12 @@ s3 = ["polars/cloud", "polars/aws"]
 # OFF par défaut : le build standard reste byte-identique (PROC SGPLOT émet une NOTE).
 # Activer avec --features graphics pour la génération réelle.
 graphics = ["dep:plotters"]
+# J04-P1 : points d'arrêt nommés pour tester le protocole d'écriture atomique
+# parquet + sidecar (ADR 0001) — after_parquet_tmp, after_parquet_rename,
+# after_sidecar_tmp, after_sidecar_rename — pilotés par SASRS_FAULT_INJECT.
+# OFF par défaut, AUCUNE dépendance ; hors feature l'appel est une fonction
+# vide inlinée (coût nul, build standard inchangé).
+fault-injection = []
 
 [dependencies]
 polars = { version = "0.46", features = [

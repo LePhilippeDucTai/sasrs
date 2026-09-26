@@ -7,12 +7,24 @@
 //!
 //! Les métadonnées qui n'ont pas d'équivalent Parquet (format, label) voyagent
 //! dans un fichier annexe JSON à côté du `.parquet`.
+//!
+//! # Écriture atomique (ADR 0001)
+//!
+//! La publication d'une table est un protocole en quatre temps : parquet vers
+//! un temporaire du MÊME dossier + fsync, rename atomique (les données sont
+//! publiées), sidecar vers un temporaire + fsync, rename. Le sidecar porte
+//! l'empreinte du parquet publié (taille, lignes, colonnes) ; un sidecar dont
+//! l'empreinte ne correspond pas est périmé : ignoré à la lecture avec un
+//! WARNING. Une interruption ne publie donc JAMAIS de nouvelles données avec
+//! des métadonnées fausses.
 
 use crate::error::{Result, SasError};
 use crate::value::VarType;
 use polars::prelude::*;
+use std::collections::HashMap;
 use std::fs::File;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// Days between 1960-01-01 (SAS epoch) and 1970-01-01 (Unix epoch).
 pub const SAS_EPOCH_OFFSET_DAYS: f64 = 3653.0;
@@ -56,7 +68,15 @@ impl SasDataset {
     /// Returns the dataset plus NOTE/WARNING lines for the log.
     pub fn read_parquet(path: &Path) -> Result<(SasDataset, Vec<String>)> {
         let file = File::open(path)?;
+        // Empreinte du fichier TEL QU'IL EST sur disque — comparée à celle du
+        // sidecar : une divergence signifie un sidecar périmé (ADR 0001).
+        let size = file.metadata()?.len();
         let df = ParquetReader::new(file).finish()?;
+        let fingerprint = SidecarFingerprint {
+            size,
+            rows: df.height(),
+            columns: df.width(),
+        };
         let mut notes = Vec::new();
         let mut columns: Vec<Column> = Vec::with_capacity(df.width());
         let mut vars = Vec::with_capacity(df.width());
@@ -72,24 +92,35 @@ impl SasDataset {
         // Métadonnées SAS (format/label/longueur) persistées dans un sidecar JSON :
         // le Parquet ne porte que types et données ; format, libellé et longueur
         // déclarée (qui, en SAS, ne sont QUE de l'affichage) survivent au round-trip
-        // via ce fichier annexe. Absent → on garde les VarMeta dérivés du Parquet
-        // (rétro-compatible : datasets écrits sans format/label/longueur explicite).
-        if let Some(meta_map) = read_sidecar(path) {
-            for v in &mut vars {
-                if let Some(saved) = meta_map.get(&v.name.to_uppercase()) {
-                    // Le format/libellé/longueur sauvegardés l'emportent (y compris pour
-                    // remplacer le DATE9. inféré d'une colonne Date physique).
-                    if saved.format.is_some() {
-                        v.format = saved.format.clone();
-                    }
-                    if saved.label.is_some() {
-                        v.label = saved.label.clone();
-                    }
-                    if let Some(saved_len) = saved.length {
-                        v.length = saved_len;
+        // via ce fichier annexe. Un sidecar dont l'empreinte ne correspond pas au
+        // parquet présent est PÉRIMÉ (écriture interrompue, ancien format, copie
+        // manuelle) : ignoré avec un diagnostic — jamais appliqué aux données.
+        // Absent → on garde les VarMeta dérivés du Parquet (rétro-compatible :
+        // datasets écrits sans format/label/longueur explicite).
+        match read_sidecar(path, &fingerprint) {
+            SidecarState::Valid(meta_map) => {
+                for v in &mut vars {
+                    if let Some(saved) = meta_map.get(&v.name.to_uppercase()) {
+                        // Le format/libellé/longueur sauvegardés l'emportent (y compris pour
+                        // remplacer le DATE9. inféré d'une colonne Date physique).
+                        if saved.format.is_some() {
+                            v.format = saved.format.clone();
+                        }
+                        if saved.label.is_some() {
+                            v.label = saved.label.clone();
+                        }
+                        if let Some(saved_len) = saved.length {
+                            v.length = saved_len;
+                        }
                     }
                 }
             }
+            SidecarState::Stale => notes.push(format!(
+                "WARNING: Stale metadata sidecar ignored for {}: its fingerprint \
+                 no longer matches the parquet file.",
+                path.display()
+            )),
+            SidecarState::Absent => {}
         }
 
         let df = DataFrame::new(columns)?;
@@ -118,13 +149,58 @@ impl SasDataset {
         Ok((SasDataset { df, vars }, notes))
     }
 
+    /// Écriture atomique parquet + sidecar (ADR 0001). Une interruption ne
+    /// publie jamais de nouvelles données avec des métadonnées fausses : le
+    /// parquet est publié AVANT le sidecar, et tout sidecar dont l'empreinte
+    /// ne correspond pas au parquet est ignoré à la lecture.
     pub fn write_parquet(&self, path: &Path) -> Result<()> {
-        let mut file = File::create(path)?;
+        // Orphelins d'une écriture précédente interrompue sur cette cible.
+        clean_orphan_temps(path)?;
+
+        // 1. Parquet vers un temporaire du MÊME dossier (le rename y est
+        //    atomique), fsync du fichier avant toute publication.
+        let tmp = tmp_path_for(path);
+        let mut file = File::create(&tmp)?;
         let mut df = self.df.clone();
         ParquetWriter::new(&mut file).finish(&mut df)?;
-        write_sidecar(path, &self.vars)?;
-        Ok(())
+        file.sync_all()?;
+        let size = file.metadata()?.len();
+        drop(file);
+        fault_point("after_parquet_tmp");
+
+        // 2. Publication des données : rename atomique + fsync du dossier.
+        std::fs::rename(&tmp, path)?;
+        fsync_dir(path.parent());
+        fault_point("after_parquet_rename");
+
+        // 3. Métadonnées. Si une interruption frappe ici, l'ANCIEN sidecar
+        //    subsiste mais son empreinte ne peut plus correspondre au nouveau
+        //    parquet : il sera ignoré à la lecture (diagnostic), jamais
+        //    appliqué aux nouvelles données.
+        let fingerprint = SidecarFingerprint {
+            size,
+            rows: self.df.height(),
+            columns: self.vars.len(),
+        };
+        write_sidecar(path, &self.vars, fingerprint)
     }
+}
+
+/// Empreinte du parquet publiée dans le sidecar : taille en octets, nombre de
+/// lignes, nombre de colonnes. Une divergence quelconque ⇒ sidecar périmé.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct SidecarFingerprint {
+    size: u64,
+    rows: usize,
+    columns: usize,
+}
+
+/// Contenu du sidecar `<table>.parquet.sasmeta.json` (ADR 0001) : l'empreinte
+/// du parquet pour lequel il a été écrit, puis les métadonnées par variable.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SidecarFile {
+    fingerprint: SidecarFingerprint,
+    vars: HashMap<String, SavedMeta>,
 }
 
 /// Métadonnée SAS persistée par variable (format/libellé/longueur déclarée).
@@ -140,26 +216,99 @@ struct SavedMeta {
 
 /// Chemin du sidecar JSON associé à un fichier parquet (`t.parquet` →
 /// `t.parquet.sasmeta.json`).
-fn sidecar_path(path: &Path) -> std::path::PathBuf {
+pub(crate) fn sidecar_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".sasmeta.json");
-    std::path::PathBuf::from(s)
+    PathBuf::from(s)
 }
+
+/// Marqueur des temporaires d'écriture atomique (ADR 0001) : les fichiers
+/// `<cible><TMP_MARKER>.<pid>` ne sont jamais des tables et sont purgés à la
+/// prochaine écriture de la même cible.
+pub(crate) const TMP_MARKER: &str = ".sasrs-tmp";
+
+/// Chemin du temporaire d'écriture pour `target` (même dossier).
+fn tmp_path_for(target: &Path) -> PathBuf {
+    let mut s = target.as_os_str().to_os_string();
+    s.push(format!("{TMP_MARKER}.{}", std::process::id()));
+    PathBuf::from(s)
+}
+
+/// fsync best-effort du dossier parent après un rename (durabilité de
+/// l'entrée de répertoire ; échoue silencieusement où la plateforme
+/// n'offre pas l'ouverture d'un dossier).
+fn fsync_dir(parent: Option<&Path>) {
+    if let Some(dir) = parent
+        && let Ok(d) = File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
+}
+
+/// Supprime les temporaires orphelins (`<cible><TMP_MARKER>…`) d'une écriture
+/// interrompue sur cette même cible. Best effort : une erreur de purge
+/// n'empêche pas l'écriture (l'orphelin est de toute façon ignoré par `list`).
+fn clean_orphan_temps(target: &Path) -> Result<()> {
+    let Some(dir) = target.parent() else {
+        return Ok(());
+    };
+    let Some(name) = target.file_name() else {
+        return Ok(());
+    };
+    let prefix = format!("{}{TMP_MARKER}", name.to_string_lossy());
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Point d'arrêt nommé pour l'injection de pannes (ADR 0001, feature
+/// `fault-injection`). Si `SASRS_FAULT_INJECT` (liste de noms séparés par des
+/// virgules) contient `name`, le processus s'interrompt sur-le-champ —
+/// interruption brute, sans unwind ni destructeur, fidèle à un kill.
+#[cfg(feature = "fault-injection")]
+pub(crate) fn fault_point(name: &str) {
+    let Ok(list) = std::env::var("SASRS_FAULT_INJECT") else {
+        return;
+    };
+    if list.split(',').map(str::trim).any(|n| n == name) {
+        // Le message doit sortir AVANT l'exit : stderr non bufferisé suffit.
+        eprintln!("SASRS fault point hit: {name}");
+        std::process::exit(86);
+    }
+}
+
+/// Hors feature `fault-injection` : aucun coût, aucun effet.
+#[cfg(not(feature = "fault-injection"))]
+#[inline(always)]
+pub(crate) fn fault_point(_name: &str) {}
 
 /// Écrit le sidecar de métadonnées si AU MOINS une variable porte un format,
 /// un libellé ou une longueur déclarée ; sinon, supprime un sidecar éventuellement
 /// obsolète (et n'en crée aucun — round-trip identique pour les datasets sans
 /// format/label/longueur explicite, stabilité des snapshots existants).
-fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
+/// L'écriture est atomique (temporaire + fsync + rename, ADR 0001) et le
+/// contenu porte l'empreinte du parquet DÉJÀ publié : un sidecar périmé est
+/// détectable et ignoré à la lecture.
+fn write_sidecar(path: &Path, vars: &[VarMeta], fingerprint: SidecarFingerprint) -> Result<()> {
+    let sc = sidecar_path(path);
+    // Orphelins d'une tentative précédente — purgés même sans métadonnées.
+    clean_orphan_temps(&sc)?;
     let has_meta = vars.iter().any(|v| {
         v.format.is_some() || v.label.is_some() || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
     });
-    let sc = sidecar_path(path);
     if !has_meta {
+        // Pas de métadonnées : on retire l'éventuel sidecar APRÈS la
+        // publication du parquet — entre-temps son empreinte est périmée, il
+        // ne peut pas s'appliquer aux nouvelles données.
         let _ = std::fs::remove_file(&sc);
         return Ok(());
     }
-    let map: std::collections::HashMap<String, SavedMeta> = vars
+    let map: HashMap<String, SavedMeta> = vars
         .iter()
         .map(|v| {
             (
@@ -176,19 +325,45 @@ fn write_sidecar(path: &Path, vars: &[VarMeta]) -> Result<()> {
             )
         })
         .collect();
-    let json = serde_json::to_string(&map)
-        .map_err(|e| SasError::runtime(format!("failed to serialize SAS metadata: {e}")))?;
-    std::fs::write(&sc, json)?;
+    let json = serde_json::to_string(&SidecarFile {
+        fingerprint,
+        vars: map,
+    })
+    .map_err(|e| SasError::runtime(format!("failed to serialize SAS metadata: {e}")))?;
+    let tmp = tmp_path_for(&sc);
+    let mut file = File::create(&tmp)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+    fault_point("after_sidecar_tmp");
+    std::fs::rename(&tmp, &sc)?;
+    fsync_dir(sc.parent());
+    fault_point("after_sidecar_rename");
     Ok(())
 }
 
-/// Lit le sidecar de métadonnées s'il existe (nom UPPERCASE → métadonnée).
-/// Toute erreur de lecture/parsing est silencieusement ignorée (on retombe
-/// sur les VarMeta dérivés du Parquet).
-fn read_sidecar(path: &Path) -> Option<std::collections::HashMap<String, SavedMeta>> {
+/// État du sidecar à la lecture (ADR 0001).
+enum SidecarState {
+    /// Aucun sidecar sur disque (dataset sans métadonnées persistées).
+    Absent,
+    /// Présent mais périmé : empreinte ≠ parquet, ou format illisible
+    /// (sidecar d'avant le protocole). À ignorer, avec diagnostic.
+    Stale,
+    /// Présent, lisible, et dont l'empreinte correspond au parquet lu.
+    Valid(HashMap<String, SavedMeta>),
+}
+
+/// Lit le sidecar de métadonnées et le compare à l'empreinte du parquet
+/// réellement présent : seule une correspondance EXACTE rend les métadonnées
+/// applicables.
+fn read_sidecar(path: &Path, fingerprint: &SidecarFingerprint) -> SidecarState {
     let sc = sidecar_path(path);
-    let data = std::fs::read_to_string(&sc).ok()?;
-    serde_json::from_str(&data).ok()
+    let Ok(data) = std::fs::read_to_string(sc) else {
+        return SidecarState::Absent;
+    };
+    match serde_json::from_str::<SidecarFile>(&data) {
+        Ok(f) if f.fingerprint == *fingerprint => SidecarState::Valid(f.vars),
+        _ => SidecarState::Stale,
+    }
 }
 
 fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Series, VarMeta)> {
