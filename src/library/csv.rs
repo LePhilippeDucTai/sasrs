@@ -68,7 +68,16 @@ impl LibraryProvider for CsvLibrary {
         // V1 : lecture eager puis `.lazy()` — acceptable pour PROC SQL sur de
         // petits fichiers CSV. Une vraie implémentation utiliserait
         // `LazyCsvReader` (à activer avec la feature Polars `lazy_csv`).
-        Ok(self.read(table)?.0.df.lazy())
+        Ok(self.scan_with_notes(table)?.0)
+    }
+
+    /// Le scan CSV est une lecture eager déguisée : les notes de coercition
+    /// (WARNING 2**53 sur les entiers i64, etc.) calculées par
+    /// `SasDataset::from_dataframe` sont disponibles ICI et doivent
+    /// accompagner la frame — `scan` seul les perdait (J04-P2).
+    fn scan_with_notes(&self, table: &str) -> Result<(LazyFrame, Vec<String>)> {
+        let (ds, notes) = self.read(table)?;
+        Ok((ds.df.lazy(), notes))
     }
 
     fn write(&self, table: &str, ds: &SasDataset) -> Result<()> {
@@ -111,6 +120,13 @@ impl LibraryProvider for CsvLibrary {
             )));
         }
         let new_path = self.table_path(new);
+        if new_path.is_file() {
+            return Err(SasError::runtime(format!(
+                "Table {} already exists in this library; {} was not renamed.",
+                new.to_uppercase(),
+                old.to_uppercase()
+            )));
+        }
         std::fs::rename(&old_path, &new_path)?;
         Ok(())
     }

@@ -86,11 +86,16 @@ fn in_lib_assign(ts: &mut StatementStream, slot: &mut Option<String>) -> Result<
 }
 
 /// Find a member name not currently used in `provider`, for the EXCHANGE swap.
+/// J04-P2 : « utilisé » couvre aussi un sidecar orphelin (`<name>.parquet.
+/// sasmeta.json` sans parquet) — un nom temporaire ne doit entrer en collision
+/// avec AUCUN artefact résiduel, sinon le sidecar déplacé de la vraie table
+/// écraserait un résidu (ou l'inverse) au lieu de simplement occuper un nom
+/// libre.
 fn unique_temp_name(provider: &dyn crate::library::LibraryProvider) -> String {
     let mut i = 0u32;
     loop {
         let candidate = format!("__SASRS_XCHG_{i}__");
-        if !provider.exists(&candidate) {
+        if !provider.exists(&candidate) && !provider.sidecar_exists(&candidate) {
             return candidate;
         }
         i += 1;
@@ -180,11 +185,23 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                         "Cannot exchange {lib}.{a} and {lib}.{b}: one or both do not exist."
                     ));
                 } else {
-                    // Pick a temp name that does not already exist.
+                    // Pick a temp name free of ANY residual artifact
+                    // (parquet or orphan sidecar).
                     let tmp = unique_temp_name(provider.as_ref());
+                    // Swap in three renames, each without orphans (J04-P2) :
+                    // a→tmp, b→a, tmp→b. Si une étape intermédiaire échoue,
+                    // on annule les renommages déjà faits — l'échange est
+                    // tout ou rien, jamais de bibliothèque à moitié échangée.
                     provider.rename(&a, &tmp)?;
-                    provider.rename(&b, &a)?;
-                    provider.rename(&tmp, &b)?;
+                    if let Err(e) = provider.rename(&b, &a) {
+                        let _ = provider.rename(&tmp, &a); // rollback
+                        return Err(e);
+                    }
+                    if let Err(e) = provider.rename(&tmp, &b) {
+                        let _ = provider.rename(&a, &b); // rollback
+                        let _ = provider.rename(&tmp, &a); // rollback
+                        return Err(e);
+                    }
                     session.log.note(&format!(
                         "Exchanging the names {lib}.{a} and {lib}.{b} (memtype=DATA)."
                     ));

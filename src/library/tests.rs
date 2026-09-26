@@ -244,3 +244,254 @@ mod s3_tests {
         assert!(prov.is_cloud());
     }
 }
+
+/// CSV : le renommage refuse une destination existante (même sémantique que
+/// DirLibrary / PROC DATASETS CHANGE).
+#[test]
+fn csv_rename_refuses_existing_destination() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = CsvLibrary::new(tmp.path().to_path_buf());
+    let ds = make_ds(vec![1], vec!["a"]);
+    lib.write("old", &ds).unwrap();
+    lib.write("new", &ds).unwrap();
+    let err = lib.rename("OLD", "NEW").unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+    assert!(lib.exists("OLD") && lib.exists("NEW"));
+}
+
+/// CSV : `scan_with_notes` transmet les notes de coercition de la lecture
+/// eager (WARNING 2**53 pour les entiers i64 trop grands) — `scan` seul les
+/// perdait.
+#[test]
+fn csv_scan_with_notes_forwards_coercion_warning() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Entier > 2**53 : la coercition vers le numérique SAS (f64) perd de la
+    // précision et doit produire un WARNING.
+    std::fs::write(tmp.path().join("big.csv"), "x\n9007199254740993\n").unwrap();
+    let lib = CsvLibrary::new(tmp.path().to_path_buf());
+
+    let (_, notes) = lib.scan_with_notes("BIG").unwrap();
+    assert!(
+        notes.iter().any(|n| n.contains("2**53")),
+        "coercion warning lost by scan: {notes:?}"
+    );
+    // Et le read eager (même chemin) produit la même note.
+    let (_, read_notes) = lib.read("BIG").unwrap();
+    assert!(read_notes.iter().any(|n| n.contains("2**53")));
+}
+
+// ── J04-P2 : suppression, renommage et échange sans orphelins ──────────────
+
+use crate::dataset::sidecar_path;
+
+/// Dataset `x`/`name` dont la colonne caractère porte format + libellé :
+/// l'écriture DirLibrary produit donc un sidecar `sasmeta.json`.
+fn ds_with_meta(rows: usize, fmt: &str, label: &str) -> SasDataset {
+    let mut ds = make_ds(vec![42; rows], vec!["aa"; rows]);
+    let v = ds.vars.iter_mut().find(|v| v.name == "name").unwrap();
+    v.format = Some(fmt.to_string());
+    v.label = Some(label.to_string());
+    ds
+}
+
+/// `delete` emporte le sidecar avec le parquet : aucun sidecar orphelin ne
+/// peut survivre à la suppression de sa table.
+#[test]
+fn orphan_sidecar_delete_removes_sidecar_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = DirLibrary::new(dir.path().to_path_buf());
+    lib.write("t", &ds_with_meta(2, "F1.", "lab")).unwrap();
+    let sc = sidecar_path(&dir.path().join("t.parquet"));
+    assert!(sc.is_file(), "sidecar expected after meta write");
+
+    lib.delete("t").unwrap();
+
+    assert!(!lib.exists("T"));
+    assert!(!sc.is_file(), "sidecar must not outlive its table");
+    assert_eq!(lib.list().unwrap(), Vec::<String>::new());
+}
+
+/// Destination existante → ERROR (sémantique PROC DATASETS CHANGE), les
+/// deux tables sont intactes — ni parquet ni sidecar déplacés.
+#[test]
+fn orphan_sidecar_rename_refuses_existing_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = DirLibrary::new(dir.path().to_path_buf());
+    lib.write("src", &ds_with_meta(1, "F1.", "one")).unwrap();
+    lib.write("dst", &ds_with_meta(2, "F2.", "two")).unwrap();
+
+    let err = lib.rename("SRC", "DST").unwrap_err();
+    assert!(err.to_string().contains("already exists"), "{err}");
+
+    // Rien n'a bougé : les deux tables relisent leurs propres métadonnées.
+    let (s, _) = lib.read("SRC").unwrap();
+    assert_eq!(
+        s.vars.iter().find(|v| v.name == "name").unwrap().label,
+        Some("one".to_string())
+    );
+    let (d, _) = lib.read("DST").unwrap();
+    assert_eq!(
+        d.vars.iter().find(|v| v.name == "name").unwrap().label,
+        Some("two".to_string())
+    );
+    assert_eq!(
+        lib.list().unwrap(),
+        vec!["DST".to_string(), "SRC".to_string()]
+    );
+}
+
+/// Un sidecar orphelin à la destination (parquet absent) est purgé par le
+/// renommage : les métadonnées du survivant sont celles de la table renommée.
+#[test]
+fn orphan_sidecar_rename_purges_orphan_sidecar_at_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = DirLibrary::new(dir.path().to_path_buf());
+    lib.write("src", &ds_with_meta(2, "F1.", "lab")).unwrap();
+    // Orphelin fabriqué à la main : un sidecar résiduel sans parquet.
+    let dst_sc = sidecar_path(&dir.path().join("dst.parquet"));
+    std::fs::write(&dst_sc, "{\"fingerprint\":0}").unwrap();
+
+    lib.rename("SRC", "DST").unwrap();
+
+    assert!(!lib.exists("SRC"));
+    assert!(lib.exists("DST"));
+    // Le sidecar présent est bien celui DÉPLACÉ (format/libellé lisibles),
+    // pas l'orphelin résiduel.
+    let (ds, notes) = lib.read("DST").unwrap();
+    assert!(
+        notes.is_empty(),
+        "no stale sidecar note expected: {notes:?}"
+    );
+    let v = ds.vars.iter().find(|v| v.name == "name").unwrap();
+    assert_eq!(v.format.as_deref(), Some("F1."));
+    assert_eq!(v.label.as_deref(), Some("lab"));
+}
+
+/// Le déplacement du sidecar échoue APRÈS celui du parquet (un répertoire
+/// occupe l'emplacement du sidecar destination) → le parquet est rebasculé à
+/// son ancien nom : table intacte, métadonnées intactes, pas de demi-renom.
+#[test]
+fn orphan_sidecar_rename_rolls_back_parquet_on_sidecar_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = DirLibrary::new(dir.path().to_path_buf());
+    lib.write("src", &ds_with_meta(2, "F1.", "lab")).unwrap();
+    // Répertoire hostile : le rename du sidecar vers cet emplacement échoue.
+    std::fs::create_dir(sidecar_path(&dir.path().join("dst.parquet"))).unwrap();
+
+    let err = lib.rename("SRC", "DST").unwrap_err();
+    assert!(err.to_string().contains("sidecar"), "{err}");
+    assert!(err.to_string().contains("rolled back"), "{err}");
+
+    // État de départ restauré : SRC lisible avec ses métadonnées.
+    assert!(lib.exists("SRC"), "parquet move must be rolled back");
+    assert!(!lib.exists("DST"));
+    let (ds, notes) = lib.read("SRC").unwrap();
+    assert!(notes.is_empty(), "metadata must stay valid: {notes:?}");
+    let v = ds.vars.iter().find(|v| v.name == "name").unwrap();
+    assert_eq!(v.format.as_deref(), Some("F1."));
+    assert!(
+        dir.path().join("src.parquet.sasmeta.json").is_file(),
+        "sidecar must be back at the old name"
+    );
+    assert_eq!(lib.list().unwrap(), vec!["SRC".to_string()]);
+}
+
+/// Cohérence casse du trio `list`/`exists`/`read` : tout ce que `list`
+/// annonce doit être lisible par `exists`/`read` quelle que soit la casse
+/// du nom demandé (les chemins sont normalisés en minuscules).
+#[test]
+fn orphan_sidecar_case_coherent_list_exists_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = DirLibrary::new(dir.path().to_path_buf());
+    lib.write("MiXeD", &ds_with_meta(1, "F1.", "lab")).unwrap();
+
+    assert_eq!(lib.list().unwrap(), vec!["MIXED".to_string()]);
+    assert!(lib.exists("MIXED"));
+    assert!(lib.exists("mixed"));
+    assert!(lib.exists("MiXeD"));
+    let (ds_upper, _) = lib.read("MIXED").unwrap();
+    let (ds_lower, _) = lib.read("mixed").unwrap();
+    assert_eq!(ds_upper.n_obs(), ds_lower.n_obs());
+    // Renommage : la détection de destination existante est insensible à la
+    // casse elle aussi (chemins normalisés).
+    let err = lib.rename("OTHER", "mixed").unwrap_err();
+    assert!(err.to_string().contains("does not exist"), "{err}");
+}
+
+/// Tests d'interruption du renommage (feature `fault-injection`) : le binaire
+/// de test est relancé en PROCESSUS ENFANT avec `SASRS_FAULT_INJECT` posé ;
+/// le point de panne tue l'enfant (exit 86) comme un kill en plein rename.
+/// L'état sur disque est vérifié par le parent.
+#[cfg(feature = "fault-injection")]
+mod orphan_sidecar_rename_faults {
+    use super::*;
+    use std::process::{Command, Output};
+
+    const DRIVER: &str =
+        "library::tests::orphan_sidecar_rename_faults::orphan_sidecar_rename_fault_child_driver";
+
+    fn run_child(dir: &std::path::Path, point: &str) -> Output {
+        Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(DRIVER)
+            .env("SASRS_TEST_RENAME_DIR", dir)
+            .env("SASRS_FAULT_INJECT", point)
+            .output()
+            .unwrap()
+    }
+
+    /// Driver exécuté DANS l'enfant : renomme SRC→DST, tué par le point de
+    /// panne en cours de route.
+    #[test]
+    fn orphan_sidecar_rename_fault_child_driver() {
+        let Ok(dir) = std::env::var("SASRS_TEST_RENAME_DIR") else {
+            return; // appel direct (cargo test) : rien à faire
+        };
+        let lib = DirLibrary::new(std::path::Path::new(&dir).to_path_buf());
+        lib.rename("SRC", "DST").unwrap();
+    }
+
+    /// Kill APRÈS le déplacement du parquet, AVANT celui du sidecar : les
+    /// données sont publiées au nouveau nom sans métadonnées (jamais de
+    /// métadonnées d'une autre table), et le sidecar resté à l'ancien nom
+    /// est un orphelin inerte — une réécriture de SRC le purge.
+    #[test]
+    fn orphan_sidecar_rename_killed_after_parquet_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = DirLibrary::new(dir.path().to_path_buf());
+        lib.write("src", &ds_with_meta(2, "F1.", "lab")).unwrap();
+
+        let out = run_child(dir.path(), "after_rename_parquet");
+        assert_eq!(
+            out.status.code(),
+            Some(86),
+            "child did not die at the fault point — stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // Données publiées, sans les métadonnées de l'ancienne table.
+        assert!(lib.exists("DST"));
+        assert!(!lib.exists("SRC"));
+        let (ds, notes) = lib.read("DST").unwrap();
+        assert_eq!(ds.n_obs(), 2);
+        assert!(notes.is_empty(), "no sidecar at DST: {notes:?}");
+        assert_eq!(
+            ds.vars.iter().find(|v| v.name == "name").unwrap().format,
+            None,
+            "stale metadata must not follow an interrupted rename"
+        );
+        // Le sidecar resté à l'ancien nom ne liste pas SRC comme table.
+        assert_eq!(lib.list().unwrap(), vec!["DST".to_string()]);
+
+        // Récupération : réécrire SRC remplace le sidecar orphelin par les
+        // métadonnées fraîches de la nouvelle table.
+        lib.write("src", &ds_with_meta(3, "F9.", "new")).unwrap();
+        let (ds, _) = lib.read("SRC").unwrap();
+        assert_eq!(ds.n_obs(), 3);
+        assert_eq!(
+            ds.vars.iter().find(|v| v.name == "name").unwrap().label,
+            Some("new".to_string()),
+            "fresh metadata must apply after recovery"
+        );
+    }
+}
