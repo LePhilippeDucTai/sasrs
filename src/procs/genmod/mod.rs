@@ -4,7 +4,8 @@
 //! - DIST=POISSON (link=LOG, canonical)
 //! - DIST=BINOMIAL (link=LOGIT, canonical)
 //! - DIST=NORMAL (link=IDENTITY, canonical)
-//! - DIST=GAMMA — deferred, parse OK but execute returns error
+//! - DIST=GAMMA — implemented (canonical reciprocal link, or LINK=LOG;
+//!   V(μ)=μ², Pearson-dispersion scale).
 //! - FREQ statement (weighted observations).
 //! - MODEL statement with EVENT= and DESCENDING options (Binomial).
 //! - Produces: Model Information, Response Profile (Binomial only),

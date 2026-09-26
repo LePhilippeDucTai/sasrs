@@ -7,13 +7,15 @@
 //! # Modèle d'exécution selon l'état
 //!
 //! - `ods_graphics.enabled == false` → NOTE de non-activation, EXIT 0.
-//! - PIE → toujours différé (NOTE "PIE chart deferred in PROC GCHART.").
+//! - PIE sans `--features graphics` → NOTE « image deferred » ; avec
+//!   `--features graphics`, le camembert est rendu (`gchart_{N}.png`).
 //! - VBAR/HBAR sans `--features graphics` → NOTE « image deferred ».
-//! - VBAR/HBAR avec `--features graphics` → image `gchart_{N}.png`.
+//! - VBAR/HBAR avec `--features graphics` → image `gchart_{N}.png`
+//!   (HBAR est dessiné comme un diagramme en barres verticales : le rendu
+//!   horizontal n'est pas implémenté, sans diagnostic dédié).
 //!
 //! Contrairement à GPLOT, GCHART itère sur TOUS les statements : un VBAR suivi
-//! d'un PIE produit une image (ou un « image deferred ») PUIS la NOTE de
-//! différé du PIE.
+//! d'un PIE produit deux images (ou deux « image deferred ») successives.
 //!
 //! # Invariant build par défaut
 //!

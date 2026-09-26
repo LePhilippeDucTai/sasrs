@@ -18,6 +18,31 @@ Aucun dataset partiel ne doit être créé par une PROC rejetée au parsing. Le
 programme peut continuer à l'étape suivante. Un WARNING donne un code de sortie
 1 ; une ERROR donne 2 (hors demande explicite de sortie par `%ABORT`).
 
+## Options et instructions passées d'« ignoré » à ERROR/WARNING en J02
+
+Avant le jalon J02, plusieurs demandes reconnues étaient consommées sans
+diagnostic, voire avec une NOTE trompeuse. Elles produisent désormais un
+diagnostic honnête (réf. merges `2ad236e`, `965e578`, `d4eec6f`) :
+
+| PROC / statement | Demande | Avant | Depuis J02 |
+| --- | --- | --- | --- |
+| COMPARE | `CRITERION=`, `METHOD=`, `BRIEF`, `LISTALL`, `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=`/`OUTPERCENT=`, `MAXPRINT=`, option inconnue | ignorée en silence | **ERROR** |
+| UNIVARIATE | `VARDEF=` / `PCTLDEF=` autres que DF / définition 5 | ignorées | **ERROR** |
+| FREQ | option inconnue d'un statement `TABLES` | skip silencieux | **ERROR** |
+| DATASETS | `KILL` ; options inconnues de l'en-tête et de `COPY` | ignorées | **ERROR** |
+| MEANS/SUMMARY | statistique non calculable nommée dans `OUTPUT` (ex. `clm(x)=`) | colonne missing silencieuse | **ERROR** |
+| SQL | `OUTOBS=` / `INOBS=` ; instruction inconnue | ignorées | **ERROR** |
+| PRINTTO | `LOG=` / `PRINT=` (routage réel non implémenté) | NOTE trompeuse « redirected to » | **WARNING** (« routing not supported until J07-P5 », exit 1) |
+| PLOT | options d'affichage après `/` (`HREF=`, `VREF=`, `HAXIS=`, …) ; `=group` | skip silencieux / désynchronisation du run-group | **WARNING** par option ; `=group` → NOTE (une seule couleur de symbole) |
+| GENMOD | `DIST=`/`LINK=` inconnue, option MODEL inconnue (ex. `OFFSET=`) | repli silencieux sur NORMAL/IDENTITY | **ERROR** |
+| LOGISTIC | `ORDER=` et options PROC inconnues ; `LINK=` inconnue ; options MODEL inconnues ; `PARAM=` autre que REF | repli silencieux | **ERROR** |
+| MIXED / GLIMMIX | `METHOD=` / `TYPE=` inconnus ; `DDFM=` autre que CONTAIN | repli silencieux (GLIMMIX avalait `DDFM=` entier) | **ERROR** |
+| GLIMMIX | `METHOD=QUAD` | NOTE de différé | **ERROR** (utiliser RSPL ou LAPLACE) |
+| GLM / ANOVA | design de rang incomplet (X'X singulière) | lignes NaN imprimées en silence | **ERROR** |
+| FACTOR | `ROTATE=QUARTIMAX` / `ROTATE=OBLIMIN` | repli silencieux sur la rotation par défaut | **ERROR** (utiliser VARIMAX, PROMAX ou NONE) |
+| DISCRIM | `METHOD=` autre que NORMAL, `POOL=NO\|TEST`, `POOL=` inconnu | repli silencieux LDA + NOTE | **ERROR** |
+| GENMOD / LOGISTIC / MIXED / GLIMMIX | non-convergence, séparation, G non définie positive | « converged » imprimé sans vérification, NOTE | **WARNING** SAS-fidèle, message de non-convergence véridique |
+
 ## Catalogue et exemples
 
 - `unsupported_statement(proc, stmt)` : ERROR « The BY statement is not supported

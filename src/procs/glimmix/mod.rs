@@ -3,11 +3,14 @@
 //! Scope implemented:
 //! - DIST=NORMAL/GAUSSIAN (link=IDENTITY), POISSON (link=LOG),
 //!   BINARY/BINOMIAL (link=LOGIT).
-//! - LINK= IDENTITY / LOG / LOGIT (others parse-accepted then deferred).
+//! - LINK= IDENTITY / LOG / LOGIT / PROBIT / CLOGLOG (PROBIT/CLOGLOG without
+//!   random reproduce PROC LOGISTIC); an unknown DIST=/LINK= value is an
+//!   ERROR, no silent fallback to NORMAL/IDENTITY.
 //! - RANDOM INTERCEPT / SUBJECT=<var> TYPE=VC (single random intercept).
 //! - FREQ statement (grouped data).
 //! - MODEL response = <fixed> / SOLUTION [NOINT].
-//! - METHOD=RSPL (default). LAPLACE/QUAD parse-accepted then deferred.
+//! - METHOD=RSPL (default) or LAPLACE (single random intercept, true ML);
+//!   METHOD=QUAD and unknown METHOD= values are ERRORs (no deferral NOTE).
 //!
 //! Estimation strategy (a 3-way dispatch, all routed to proven solvers):
 //!  1. NORMAL/IDENTITY: PQL == REML, so the variance-components model is fit

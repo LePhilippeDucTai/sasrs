@@ -1,27 +1,25 @@
 //! PROC MIXED — linear mixed models with REML / ML estimation (M28).
 //!
 //! Scope implemented:
-//! - CLASS statement (categorical variables; used to identify SUBJECT levels).
-//! - MODEL response = <fixed> / [solution] [ddfm=...] [noint] : here the only
-//!   fully-supported fixed-effects structure is intercept-only (`model y = `),
-//!   matching the verified oracle. Additional fixed CLASS effects are accepted
-//!   but only the intercept design (X = ones) is exercised by the oracle.
-//! - RANDOM intercept / SUBJECT=<var> TYPE=VC|CS : random intercept per
-//!   subject. VC and CS are identical for a single random intercept (balanced
-//!   or not), so both map to the same variance-components model:
-//!   V = σ²_u · Z Z' + σ²_e · I
-//! - METHOD=REML (default) and METHOD=ML.
+//! - CLASS statement (categorical variables; used to identify SUBJECT levels
+//!   and to build fixed-effects reference coding).
+//! - MODEL effects = / [NOINT] [SOLUTION] : general fixed-effects design
+//!   (intercept, continuous covariates, CLASS reference coding).
+//! - RANDOM INTERCEPT / SUBJECT=<var> TYPE=VC|CS and
+//!   REPEATED effect / SUBJECT=<var> TYPE=VC|CS|AR(1)|UN : covariance
+//!   structures over V = ZGZ' + R.
+//! - METHOD=REML (default) and METHOD=ML (unknown METHOD=/TYPE= values and
+//!   DDFM= other than CONTAIN are ERRORs, no silent fallback).
 //!
-//! Estimation: for a single random intercept the REML/ML estimates have a
-//! closed form for *balanced* designs (equal #obs per subject) via the method
-//! of moments; this is exact and is what SAS reports. For unbalanced designs we
-//! fall back to a 1-D profile search on λ = σ²_u/σ²_e. β̂ and SE(β̂) are then
-//! formed from the general V-based formulas, which reproduce the balanced oracle
-//! exactly.
+//! Estimation: closed-form (legacy VC single random intercept) or a general
+//! (RE)ML optimisation (Nelder-Mead + restarts + coordinate polish) over the
+//! V(theta) = ZGZ' + R covariance; the estimates reproduce the balanced
+//! single-random-intercept oracle exactly.
 //!
-//! Parse-accepted but not implemented (NOTE emitted): TYPE=AR(1)/UN (proper
-//! error), REPEATED, ESTIMATE, CONTRAST, COVTEST, ASYCOV, NOBOUND, G/GCORR/
-//! R/RCORR options, DDFM= (we always print/use Contain).
+//! Parse-accepted but not implemented (NOTE emitted): ESTIMATE, CONTRAST,
+//! COVTEST, ASYCOV, NOBOUND, G/GCORR/R/RCORR options; a variance component
+//! truncated to 0 emits "NOTE: Estimated G matrix is not positive definite."
+//! and a non-converged search is a WARNING, not a silent success.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
