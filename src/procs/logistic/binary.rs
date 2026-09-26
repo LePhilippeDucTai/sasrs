@@ -95,11 +95,15 @@ pub(super) fn fit_binary(
     }
 
     if !converged {
-        // Quasi-complete or complete separation, or slow convergence: warn but
-        // proceed with the last iterate rather than panicking.
-        session.log.note(
-            "PROC LOGISTIC: the maximum likelihood estimate may not exist \
-             (possible separation); iteration limit reached.",
+        // Quasi-complete or complete separation, or slow convergence. SAS
+        // LOGISTIC emits a WARNING, not a NOTE, and quotes the likelihood of
+        // a nonexistent MLE (SAS/STAT User's Guide, The LOGISTIC Procedure,
+        // Details: Computational Details — "Failure to Converge": "WARNING:
+        // The maximum likelihood estimate may not exist." under
+        // quasi-complete separation).
+        session.log.warning(
+            "Convergence was not attained in 50 iterations. The maximum likelihood \
+             estimate may not exist (possible separation).",
         );
     }
 

@@ -224,7 +224,21 @@ pub(super) fn fit_ordinal(
             .collect();
         let inv = match invert_matrix(&neg_hess) {
             Ok(m) => m,
-            Err(_) => break,
+            Err(_) => {
+                // Singular information matrix during a Newton step: no longer
+                // a silent `break` (J02-P6). SAS LOGISTIC warns that the
+                // information matrix is singular and that the maximum
+                // likelihood estimate may not exist (SAS/STAT User's Guide,
+                // The LOGISTIC Procedure, Details: Computational Details —
+                // "Failure to Converge"). The fit keeps the last valid
+                // iterate and is reported as non-converged below.
+                session.log.warning(
+                    "The information matrix is singular during the Newton step in \
+                     PROC LOGISTIC (ordinal); the maximum likelihood estimate \
+                     may not exist (possible separation).",
+                );
+                break;
+            }
         };
         let delta = matrix_vec_mult(&inv, &grad);
         for j in 0..n_par {
@@ -239,9 +253,12 @@ pub(super) fn fit_ordinal(
     }
 
     if !converged {
-        session.log.note(
-            "PROC LOGISTIC (ordinal): iteration limit reached without convergence \
-             (possible separation).",
+        // Same WARNING as the binary path (SAS/STAT User's Guide, The
+        // LOGISTIC Procedure, Details: Computational Details — "Failure to
+        // Converge").
+        session.log.warning(
+            "Convergence was not attained in 25 iterations. The maximum likelihood \
+             estimate may not exist (possible separation).",
         );
     }
 

@@ -51,6 +51,7 @@ pub(super) fn fit_irls(
 
     // IRLS iterations (max 50)
     let mut converged = false;
+    let mut step_halving_exhausted = false;
     for _iter in 0..50 {
         // Compute H = X'WX and score = X'W(z - Xβ) = X'(y - μ)/V * deta_dmu⁻¹
         // Actually: score_j = Σ freq_i * x_ij * (y_i - mu_i) / (V(mu_i) * deta_dmu(mu_i))
@@ -105,14 +106,26 @@ pub(super) fn fit_irls(
 
         let mut step = 1.0_f64;
         let mut trial = beta.clone();
+        let mut in_range = false;
         for _ in 0..40 {
             for j in 0..p_param {
                 trial[j] = beta[j] + step * delta[j];
             }
             if mu_in_range(&trial) {
+                in_range = true;
                 break;
             }
             step *= 0.5;
+        }
+        if !in_range || step < 1e-6 {
+            // Step-halving exhausted (40 halvings) or collapsed below 1e-6
+            // without producing a usable Newton step: under separation the
+            // full step drives every μ to exactly 0/1 (logit saturation) and
+            // halving only "succeeds" by making the update negligible. SAS
+            // GENMOD reports this as non-convergence, not as a silent no-op
+            // update followed by a spurious "satisfied" status.
+            step_halving_exhausted = true;
+            break;
         }
         beta = trial;
 
@@ -130,11 +143,21 @@ pub(super) fn fit_irls(
     }
 
     if !converged {
-        // NOTE (not a panic): report non-convergence and stop this PROC cleanly.
+        // SAS GENMOD reports non-convergence as a WARNING, not a NOTE:
+        // "Convergence was not attained in 50 iterations." (SAS/STAT User's
+        // Guide, The GENMOD Procedure, Details: GENMOD Procedure — Iteration
+        // History / convergence status). Stop this PROC cleanly.
         session
             .log
-            .note("PROC GENMOD failed to converge within the iteration limit.");
-        return Err(SasError::runtime("PROC GENMOD failed to converge"));
+            .warning("Convergence was not attained in 50 iterations. The maximum likelihood estimate may not exist.");
+        if step_halving_exhausted {
+            session.log.warning(
+                "Step-halving was exhausted without producing valid fitted means in PROC GENMOD.",
+            );
+        }
+        return Err(SasError::runtime(
+            "PROC GENMOD failed to converge within the iteration limit.",
+        ));
     }
 
     // ── Final H = X'WX at convergence ────────────────────────────────────

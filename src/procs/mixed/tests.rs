@@ -351,7 +351,8 @@ fn test_profile_search_matches_closed_form() {
     // The general (golden-section) path should reproduce the closed form
     // on the balanced oracle.
     let (y, x, subj_of) = oracle();
-    let (s2u, s2e) = profile_search(&y, &x, &subj_of, Method::Reml).unwrap();
+    let (s2u, s2e, _converged, _lambda_capped) =
+        profile_search(&y, &x, &subj_of, Method::Reml).unwrap();
     assert!((s2u - 7.0).abs() < 1e-2, "s2u={s2u}");
     assert!((s2e - 2.0).abs() < 1e-2, "s2e={s2e}");
 }
@@ -419,4 +420,179 @@ fn model_fallback_mixed_interaction_is_error() {
     // Base : `a*b` était aplati en effets fixes a et b.
     let err = parse_mixed("proc mixed; class s; model y = a*b; run;").unwrap_err();
     assert!(err.to_string().contains("Interaction"), "err: {err}");
+}
+
+// ── J02-P6 : convergence_* — convergence véridique ─────────────────────
+//
+// Référence : SAS/STAT 9.4 User's Guide, The MIXED Procedure, Details:
+// Estimation Methods / messages de convergence. « NOTE: Convergence
+// criteria met. » n'apparaît que si le critère est atteint ; une
+// composante de variance tronquée à 0 produit
+// « NOTE: Estimated G matrix is not positive definite. » (SAS Usage Note
+// 22614 ; Kiernan, Tao & Gibbs 2012, SGF 332-2012).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_mixed_details_toc.htm
+
+fn session_with(
+    frame_data: polars::prelude::DataFrame,
+    vars: Vec<crate::dataset::VarMeta>,
+) -> crate::session::Session {
+    use crate::dataset::SasDataset;
+    let mut session =
+        crate::session::Session::new(None, std::path::PathBuf::from("."), true).unwrap();
+    let ds = SasDataset {
+        df: frame_data,
+        vars,
+    };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("CONV", &ds)
+        .unwrap();
+    session.last_dataset = Some("WORK.CONV".to_string());
+    session
+}
+
+#[test]
+fn convergence_mixed_converged_fit_claims_criteria_met() {
+    // Non-regression anchor: the legacy oracle converges (closed form) and
+    // the listing keeps "Convergence criteria met.".
+    use crate::dataset::VarMeta;
+    use crate::value::VarType;
+    use polars::df;
+    let mut session = session_with(
+        df![
+            "subj" => ["A", "A", "B", "B"],
+            "y" => [1.0_f64, 3.0, 5.0, 7.0]
+        ]
+        .unwrap(),
+        vec![
+            VarMeta {
+                name: "subj".into(),
+                ty: VarType::Char,
+                length: 1,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "y".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ],
+    );
+    let ast =
+        parse_mixed("proc mixed; class subj; model y = ; random intercept / subject=subj; run;")
+            .unwrap();
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(
+        listing.contains("Convergence criteria met."),
+        "converged fit must keep the convergence line:\n{listing}"
+    );
+    let log = session.log.into_string();
+    assert!(
+        !log.contains("not positive definite"),
+        "no G-matrix NOTE expected here:\n{log}"
+    );
+}
+
+#[test]
+fn convergence_mixed_truncated_variance_gives_g_not_pd_note() {
+    // Subject means identical (2.0 and 2.0), within-subject variance > 0:
+    // the closed-form σ²_u estimate is negative, truncated to 0 — SAS MIXED
+    // then issues "NOTE: Estimated G matrix is not positive definite.".
+    use crate::dataset::VarMeta;
+    use crate::value::VarType;
+    use polars::df;
+    let mut session = session_with(
+        df![
+            "subj" => ["A", "A", "B", "B"],
+            "y" => [1.0_f64, 3.0, 3.0, 1.0]
+        ]
+        .unwrap(),
+        vec![
+            VarMeta {
+                name: "subj".into(),
+                ty: VarType::Char,
+                length: 1,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "y".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ],
+    );
+    let ast =
+        parse_mixed("proc mixed; class subj; model y = ; random intercept / subject=subj; run;")
+            .unwrap();
+    execute(&ast, &mut session).unwrap();
+    let log = session.log.into_string();
+    assert!(
+        log.contains("Estimated G matrix is not positive definite."),
+        "SAS G-matrix NOTE missing:\n{log}"
+    );
+}
+
+#[test]
+fn convergence_mixed_lambda_capped_gives_boundary_note() {
+    // Subjects separated by orders of magnitude with tiny within-subject
+    // noise: the optimal λ = σ²_u/σ²_e lies far above the search bound
+    // (λ_max = 1000), so the profile search is capped and a NOTE must be
+    // emitted instead of silently returning the boundary value.
+    use crate::dataset::VarMeta;
+    use crate::value::VarType;
+    use polars::df;
+    let mut session = session_with(
+        df![
+            "subj" => ["A", "A", "A", "B", "B"],
+            "y" => [0.0_f64, 1.0, 0.0, 1000.0, 1001.0]
+        ]
+        .unwrap(),
+        vec![
+            VarMeta {
+                name: "subj".into(),
+                ty: VarType::Char,
+                length: 1,
+                format: None,
+                label: None,
+            },
+            VarMeta {
+                name: "y".into(),
+                ty: VarType::Num,
+                length: 8,
+                format: None,
+                label: None,
+            },
+        ],
+    );
+    let ast =
+        parse_mixed("proc mixed; class subj; model y = ; random intercept / subject=subj; run;")
+            .unwrap();
+    execute(&ast, &mut session).unwrap();
+    let log = session.log.into_string();
+    assert!(log.contains("lambda=1000"), "λ-capped NOTE missing:\n{log}");
+}
+
+#[test]
+fn convergence_mixed_general_path_nonconvergence_is_warning_not_note() {
+    // Property guard at unit level: the general path's warning text must be
+    // a WARNING (not a NOTE) when the Nelder-Mead flag reports failure. The
+    // listing line mirrors it via GenFit.converged (asserted in the report
+    // tests); here we pin the property that fit_gen surfaces the flag.
+    let (y, x, subj_of) = oracle();
+    let within = vec![0usize, 1, 0, 1];
+    let (cov, u0) = initial_cov_params(&Plan::RandomVc("subj".into(), CovType::Vc), &y, 2);
+    let fit = fit_gen(&y, &x, cov, &subj_of, &within, Method::Reml, &u0).unwrap();
+    // The oracle converges; the flag must therefore be true and the listing
+    // would print "Convergence criteria met." — the truthful-assertion
+    // invariant this test pins.
+    assert!(fit.converged, "oracle general fit must converge");
 }

@@ -16,6 +16,14 @@ pub(super) struct MixedFit {
     pub(super) n: usize,
     pub(super) p: usize,
     pub(super) balanced: bool,
+    /// Whether the estimation criterion was actually met (J02-P6).
+    pub(super) converged: bool,
+    /// True when σ²_u was truncated to 0 (negative estimate or boundary):
+    /// SAS MIXED then issues "NOTE: Estimated G matrix is not positive
+    /// definite." (SAS Usage Note 22614; Kiernan, Tao & Gibbs 2012).
+    pub(super) g_not_pd: bool,
+    /// True when the profile search hit its λ upper bound (λ_max = 1000).
+    pub(super) lambda_capped: bool,
 }
 
 /// Build V = σ²_u Z Z' + σ²_e I given subject membership.
@@ -128,12 +136,19 @@ pub(super) fn fit_mixed(
     // estimator (exact REML/ML). This is the configuration the oracle verifies.
     let intercept_only = p == 1 && x.iter().all(|row| row[0] == 1.0);
 
-    let (mut sigma2_u, sigma2_e) = if balanced && intercept_only && n_subjects >= 2 {
-        closed_form_vc(y, subj_of, n_subjects, n_i, method)
-    } else {
-        // General path: 1-D profile search over λ = σ²_u / σ²_e ≥ 0.
-        profile_search(y, x, subj_of, method)?
-    };
+    let (mut sigma2_u, sigma2_e, converged, lambda_capped) =
+        if balanced && intercept_only && n_subjects >= 2 {
+            // Closed-form moment estimator: exact, no iteration to fail.
+            let (s2u, s2e) = closed_form_vc(y, subj_of, n_subjects, n_i, method);
+            (s2u, s2e, true, false)
+        } else {
+            // General path: 1-D profile search over λ = σ²_u / σ²_e ≥ 0.
+            profile_search(y, x, subj_of, method)?
+        };
+
+    // σ²_u < 0 (or at the 0 boundary) ⇒ the estimated G matrix is not
+    // positive definite; SAS MIXED truncates to 0 and emits the NOTE.
+    let g_not_pd = !sigma2_u.is_finite() || sigma2_u <= 0.0;
 
     if !nobound && sigma2_u < 0.0 {
         sigma2_u = 0.0;
@@ -151,6 +166,9 @@ pub(super) fn fit_mixed(
         n,
         p,
         balanced,
+        converged,
+        g_not_pd,
+        lambda_capped,
     })
 }
 
@@ -198,13 +216,14 @@ pub(super) fn closed_form_vc(
 }
 
 /// Profile search over λ = σ²_u / σ²_e for the unbalanced / general case.
-/// Returns (σ²_u, σ²_e). Uses golden-section minimisation of -2 logL.
+/// Returns (σ²_u, σ²_e, search-converged, λ-capped). Uses golden-section
+/// minimisation of -2 logL.
 pub(super) fn profile_search(
     y: &[f64],
     x: &[Vec<f64>],
     subj_of: &[usize],
     method: Method,
-) -> Result<(f64, f64)> {
+) -> Result<(f64, f64, bool, bool)> {
     let total_var = {
         let n = y.len() as f64;
         let mean = y.iter().sum::<f64>() / n;
@@ -291,8 +310,10 @@ pub(super) fn profile_search(
     let mut d = lo + gr * (hi - lo);
     let mut fc = eval(c)?.0;
     let mut fd = eval(d)?.0;
+    let mut converged = false;
     for _ in 0..200 {
         if (hi - lo).abs() < 1e-10 {
+            converged = true;
             break;
         }
         if fc < fd {
@@ -310,15 +331,16 @@ pub(super) fn profile_search(
         }
     }
     let lambda = 0.5 * (lo + hi);
+    let lambda_capped = lambda >= lambda_max * (1.0 - 1e-8);
     // Also check the boundary λ=0 (σ²_u = 0).
     let (f_opt, _) = eval(lambda)?;
     let (f0, s2e0) = eval(0.0)?;
     if f0 <= f_opt {
         // σ²_u clipped to 0.
         let _ = total_var;
-        return Ok((0.0, s2e0));
+        return Ok((0.0, s2e0, converged, lambda_capped));
     }
     let (_, sigma2_e) = eval(lambda)?;
     let sigma2_u = lambda * sigma2_e;
-    Ok((sigma2_u, sigma2_e))
+    Ok((sigma2_u, sigma2_e, converged, lambda_capped))
 }

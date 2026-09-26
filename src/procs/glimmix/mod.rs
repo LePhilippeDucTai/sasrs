@@ -312,8 +312,19 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
     print_number_of_observations(session, ast, n_read, n_used, n_total, n_not_used);
     print_iteration_history(session, &fit, has_random, gen_chisq);
 
-    // Convergence note.
-    centered(session, "Convergence criterion (GCONV=1E-8) satisfied.");
+    // Convergence note — asserted only when the estimation criterion was
+    // actually met (J02-P6). On non-convergence SAS GLIMMIX reports a
+    // warning in the log ("Did not converge.", SAS/STAT User's Guide, The
+    // GLIMMIX Procedure, Details: Convergence Status) and the listing states
+    // the failure instead of claiming success.
+    if fit.converged {
+        centered(session, "Convergence criterion (GCONV=1E-8) satisfied.");
+    } else {
+        centered(session, "Convergence criterion was not satisfied.");
+        session
+            .log
+            .warning("Did not converge. The estimates from PROC GLIMMIX may not be reliable.");
+    }
     session.listing.blank();
 
     if has_random {

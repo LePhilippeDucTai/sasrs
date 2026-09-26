@@ -476,3 +476,78 @@ fn model_fallback_glimmix_interaction_is_error() {
     let err = parse_glimmix("proc glimmix; model y = a*b; run;").unwrap_err();
     assert!(err.to_string().contains("Interaction"), "err: {err}");
 }
+
+// ── J02-P6 : convergence_* — convergence véridique ─────────────────────
+//
+// Référence : SAS/STAT 9.4 User's Guide, The GLIMMIX Procedure, Details:
+// Convergence Status — le listing n'affiche « Convergence criterion …
+// satisfied » QUE si le critère a été atteint ; sinon SAS journalise un
+// WARNING (« Did not converge. », cf. Kiernan, Tao & Gibbs 2012, SGF
+// 332-2012) et le Convergence Status reflète l'échec.
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_glimmix_details_toc.htm
+
+#[test]
+fn convergence_glimmix_converged_fit_claims_satisfied() {
+    // Non-regression anchor: a converged fit keeps the satisfied line.
+    let mut session = make_session();
+    let frame =
+        df!["y" => [1.0_f64,2.0,3.0,4.0,5.0,6.0], "x" => [0.0_f64,0.0,0.0,1.0,1.0,1.0]].unwrap();
+    let ds = SasDataset {
+        df: frame,
+        vars: vec![num_meta("y"), num_meta("x")],
+    };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("POISC", &ds)
+        .unwrap();
+    session.last_dataset = Some("WORK.POISC".to_string());
+    let ast =
+        parse_glimmix("proc glimmix; model y = x / dist=poisson link=log solution; run;").unwrap();
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(
+        listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        "converged fit must keep the status line:\n{listing}"
+    );
+}
+
+#[test]
+fn convergence_glimmix_separated_fit_never_claims_satisfied() {
+    // Complete separation of the fixed effect (y=0 for small x, y=1 for
+    // large x, plus a random intercept): the initial IRLS cannot converge
+    // (MLE does not exist), PROC GLIMMIX stops with an ERROR, and — the
+    // property pinned here — the listing never displays
+    // « Convergence criterion (GCONV=1E-8) satisfied. ».
+    let mut session = make_session();
+    let frame = df![
+        "y" => [0.0_f64, 0.0, 1.0, 1.0],
+        "x" => [1.0_f64, 2.0, 9.0, 10.0],
+        "s" => ["A", "A", "B", "B"]
+    ]
+    .unwrap();
+    let ds = SasDataset {
+        df: frame,
+        vars: vec![num_meta("y"), num_meta("x"), char_meta("s", 1)],
+    };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("SEPG", &ds)
+        .unwrap();
+    session.last_dataset = Some("WORK.SEPG".to_string());
+    let ast = parse_glimmix(
+        "proc glimmix; class s; model y = x / dist=binary link=logit; \
+         random intercept / subject=s; run;",
+    )
+    .unwrap();
+    let res = execute(&ast, &mut session);
+    assert!(res.is_err(), "separated GLIMMIX fit must stop cleanly");
+    let listing = session.listing.take_string();
+    assert!(
+        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        "listing must not claim convergence on a failed fit:\n{listing}"
+    );
+}

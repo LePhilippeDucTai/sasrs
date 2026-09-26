@@ -481,3 +481,138 @@ fn model_fallback_logistic_interaction_is_error() {
     let err = parse_logistic("proc logistic; model y = a*b; run;").unwrap_err();
     assert!(err.to_string().contains("Interaction"), "err: {err}");
 }
+
+// ── J02-P6 : convergence_* — convergence véridique ─────────────────────
+//
+// Référence : SAS/STAT 9.4 User's Guide, The LOGISTIC Procedure, Details:
+// Computational Details — « Failure to Converge » : en cas de séparation
+// (quasi-)complète SAS émet « WARNING: The maximum likelihood estimate may
+// not exist. », jamais une NOTE ni un silence ; le listing affiche
+// « Iteration limit reached without convergence. » au lieu de
+// « Convergence criterion (GCONV=1E-8) satisfied. ».
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_logistic_details_toc.htm
+
+#[test]
+fn convergence_logistic_binary_separation_is_warning() {
+    // Complete separation: y=0 for small x, y=1 for large x (MLE does not
+    // exist). PROC LOGISTIC proceeds with the last iterate but must WARN.
+    let session = make_session();
+    let frame = df![
+        "y" => [0.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0],
+        "x" => [1.0_f64, 2.0, 3.0, 9.0, 10.0, 11.0]
+    ]
+    .unwrap();
+    let ds = SasDataset {
+        df: frame,
+        vars: vec![num_meta("y"), num_meta("x")],
+    };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("SEPB", &ds)
+        .unwrap();
+    let ast = LogisticAst {
+        data_options: LogisticDataOptions {
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "SEPB".into(),
+            }),
+            descending: false,
+        },
+        class_vars: vec![],
+        model: Some(LogisticModel {
+            response: "y".into(),
+            event: None,
+            descending: false,
+            predictors: vec!["x".into()],
+            noprint: false,
+            link: Link::Logit,
+        }),
+        freq_var: None,
+        outputs: vec![],
+    };
+    let mut session = session;
+    execute(&ast, &mut session).unwrap();
+    let log = session.log.into_string();
+    assert!(
+        log.contains("WARNING") && log.contains("maximum likelihood estimate may not exist"),
+        "SAS separation WARNING missing:\n{log}"
+    );
+    let listing = session.listing.take_string();
+    assert!(
+        listing.contains("Iteration limit reached without convergence."),
+        "listing must report the failure:\n{listing}"
+    );
+    assert!(
+        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        "listing must not claim convergence on separation:\n{listing}"
+    );
+}
+
+#[test]
+fn convergence_logistic_binary_converged_fit_still_claims_satisfied() {
+    // Non-regression: the oracle fit converges and keeps the satisfied line.
+    let (mut session, ast) = make_oracle_session();
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert!(
+        listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        "converged fit must keep the status line:\n{listing}"
+    );
+}
+
+#[test]
+fn convergence_logistic_ordinal_separation_is_warning() {
+    // Ordinal response perfectly separated by x: the cumulative-logit ML
+    // estimate diverges; the Newton loop hits its 25-iteration limit (the
+    // singular-step break also reports the same doc-quoted warning).
+    let session = make_session();
+    let frame = df![
+        "y" => [1.0_f64, 1.0, 2.0, 2.0, 3.0, 3.0],
+        "x" => [1.0_f64, 2.0, 9.0, 10.0, 17.0, 18.0]
+    ]
+    .unwrap();
+    let ds = SasDataset {
+        df: frame,
+        vars: vec![num_meta("y"), num_meta("x")],
+    };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("SEPO", &ds)
+        .unwrap();
+    let ast = LogisticAst {
+        data_options: LogisticDataOptions {
+            input: Some(DatasetRef {
+                libref: Some("WORK".into()),
+                name: "SEPO".into(),
+            }),
+            descending: false,
+        },
+        class_vars: vec![],
+        model: Some(LogisticModel {
+            response: "y".into(),
+            event: None,
+            descending: false,
+            predictors: vec!["x".into()],
+            noprint: false,
+            link: Link::Logit,
+        }),
+        freq_var: None,
+        outputs: vec![],
+    };
+    let mut session = session;
+    execute(&ast, &mut session).unwrap();
+    let log = session.log.into_string();
+    assert!(
+        log.contains("WARNING"),
+        "ordinal separation must produce a WARNING (not a NOTE):\n{log}"
+    );
+    let listing = session.listing.take_string();
+    assert!(
+        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        "ordinal listing must not claim convergence:\n{listing}"
+    );
+}

@@ -184,7 +184,14 @@ pub(super) fn print_iteration_history_gen(session: &mut Session, ast: &MixedAst,
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
-    centered(session, "Convergence criteria met.");
+    // The convergence line is asserted only when the optimizer actually met
+    // its criterion (J02-P6); SAS MIXED otherwise reports the failure as a
+    // WARNING in the log and the ConvergenceStatus reflects it.
+    if fit.converged {
+        centered(session, "Convergence criteria met.");
+    } else {
+        centered(session, "Convergence criteria were not met.");
+    }
     session.listing.blank();
 }
 
