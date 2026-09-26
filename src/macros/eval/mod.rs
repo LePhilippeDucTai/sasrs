@@ -64,15 +64,13 @@ impl MacroEngine {
     /// Évalue une condition `%if` : résout d'abord les `&refs` et tout
     /// `%eval`/macro imbriqué, puis applique `macro_eval`. Truthy = non nul.
     pub(super) fn eval_condition(&mut self, cond: &str) -> Result<bool, MacroError> {
-        let resolved = self.resolve_value(cond);
-        let expanded = self.process_impl(&resolved);
+        let expanded = self.process_impl(cond);
         Ok(self.macro_eval(expanded.trim())? != 0)
     }
 
     /// Comme `eval_condition` mais rend l'entier (pour les bornes `%to`/`%by`).
     pub(super) fn eval_condition_int(&mut self, expr: &str) -> Result<i64, MacroError> {
-        let resolved = self.resolve_value(expr);
-        let expanded = self.process_impl(&resolved);
+        let expanded = self.process_impl(expr);
         self.macro_eval(expanded.trim())
     }
 }

@@ -6,7 +6,7 @@ use super::*;
 impl MacroEngine {
     /// M19.2 — profondeur maximale d'imbrication des `%include` (garde contre
     /// les inclusions cycliques : un fichier qui s'inclut lui-même, ou un cycle
-    /// A→B→A). Au-delà, l'inclusion est refusée avec une note SAS-like.
+    /// A→B→A). Au-delà, l'inclusion est refusée avec une ERROR.
     pub(super) const MAX_INCLUDE_DEPTH: usize = 50;
 }
 
@@ -31,11 +31,11 @@ impl MacroEngine {
     ///
     /// # Cas d'erreur (jamais de `panic`)
     /// - profondeur d'inclusion > `MAX_INCLUDE_DEPTH` (cycle présumé) → un
-    ///   commentaire de note SAS-like est émis, le statement est consommé ;
-    /// - fichier illisible/absent → idem (commentaire d'erreur) ;
+    ///   diagnostic ERROR est émis, le statement est consommé ;
+    /// - fichier illisible/absent → ERROR dans le canal de diagnostics ;
     /// - `%include *;` (clavier/stdin, M38.5) → non supporté : une NOTE de
-    ///   déferrement est écrite AU LOG (via `pending_log_lines`), un commentaire
-    ///   trace est émis et le statement consommé jusqu'au `;` ;
+    ///   déferrement est écrite AU LOG (via `pending_log_lines`), le statement
+    ///   est consommé jusqu'au `;` ;
     /// - `%include fileref;` d'un fileref assigné à un DEVICE (`FILENAME ref
     ///   PIPE|URL|…`, M38.5) → non supporté : même traitement (NOTE au log +
     ///   commentaire), au lieu d'un « cannot read » trompeur.
@@ -87,8 +87,7 @@ impl MacroEngine {
                 if token.is_empty() || token == "*" {
                     let msg = "%INCLUDE * (keyboard/terminal input) is not supported \
                                in this build; statement ignored.";
-                    self.log_line(format!("NOTE: {msg}"));
-                    out.push_str(&format!("/* NOTE: {msg} */"));
+                    self.note(msg);
                     return Some(Self::skip_trailing_newline(chars, j + 1, out));
                 }
                 // Fileref assigné à un DEVICE (`FILENAME ref PIPE|URL|…`) :
@@ -101,8 +100,7 @@ impl MacroEngine {
                         token.to_uppercase(),
                         dev
                     );
-                    self.log_line(format!("NOTE: {msg}"));
-                    out.push_str(&format!("/* NOTE: {msg} */"));
+                    self.note(msg);
                     return Some(Self::skip_trailing_newline(chars, j + 1, out));
                 }
                 // Fileref connu → son chemin ; sinon le token est traité comme chemin.
@@ -123,8 +121,8 @@ impl MacroEngine {
 
         // Garde contre les inclusions cycliques (profondeur max).
         if self.include_depth >= Self::MAX_INCLUDE_DEPTH {
-            out.push_str(&format!(
-                "/* %include nesting limit ({}) reached for '{}' */",
+            self.error(format!(
+                "%INCLUDE nesting limit ({}) reached for '{}'.",
                 Self::MAX_INCLUDE_DEPTH,
                 path
             ));
@@ -143,7 +141,7 @@ impl MacroEngine {
         let contents = match std::fs::read_to_string(&resolved) {
             Ok(text) => text,
             Err(e) => {
-                out.push_str(&format!("/* %include: cannot read '{}': {} */", path, e));
+                self.error(format!("%INCLUDE: cannot read '{}': {}", path, e));
                 return Some(resume);
             }
         };

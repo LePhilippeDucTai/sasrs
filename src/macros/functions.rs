@@ -43,7 +43,7 @@ impl MacroEngine {
                     out.push_str(&text);
                 }
             }
-            Err(e) => Self::emit_error(out, &e),
+            Err(e) => self.emit_error(&e),
         }
         Some(after)
     }
@@ -228,9 +228,10 @@ impl MacroEngine {
     ///   = blanc et quelques ponctuations SAS ; `n` négatif compte depuis la
     ///   fin ; hors borne → chaîne vide ;
     /// - `index(t, sub)` : position 1-basée de `sub` dans `t` (0 si absent) ;
-    /// - `length(t)` : longueur (au moins 1 pour une chaîne vide, comme SAS qui
-    ///   rend 1 pour une chaîne vide ; ici on rend 0 pour vide et documente
-    ///   l'écart — voir NB). Rend `None` si l'arité est invalide.
+    /// - `length(t)` : nombre de caractères, 0 pour un argument vide.
+    ///   Référence SAS %LENGTH (à distinguer de la fonction DATA step LENGTH) :
+    ///   https://support.sas.com/documentation/cdl/en/mcrolref/61885/HTML/default/a000543620.htm
+    /// Rend `None` si l'arité est invalide.
     pub(super) fn eval_macro_fn(name: &str, args: &[String]) -> Option<String> {
         // M32.7 PART 2 — la table `STRING_FNS` remplace le `match name` ouvert.
         // Le découpage logique (nom q-strippé) et le masquage `%q*` restent dans
@@ -376,6 +377,6 @@ fn fn_index(args: &[String]) -> Option<String> {
 
 fn fn_length(args: &[String]) -> Option<String> {
     let t = args.first().map(String::as_str).unwrap_or("");
-    // SAS %LENGTH returns 1 for a null/empty argument (not 0).
-    Some(t.chars().count().max(1).to_string())
+    // SAS Macro Language Reference, %LENGTH: a null argument returns 0.
+    Some(t.chars().count().to_string())
 }

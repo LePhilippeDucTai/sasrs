@@ -340,3 +340,34 @@ impl MacroEngine {
         None
     }
 }
+
+impl MacroEngine {
+    /// Regions where the SAS word scanner does not trigger macro resolution.
+    /// Double-quoted strings remain active (including apostrophes inside them).
+    pub(super) fn inert_region_end(chars: &[char], i: usize, double_quoted: bool) -> Option<usize> {
+        if !double_quoted && chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+            let mut end = i + 2;
+            while end + 1 < chars.len() {
+                if chars[end] == '*' && chars[end + 1] == '/' {
+                    return Some(end + 2);
+                }
+                end += 1;
+            }
+            return Some(chars.len());
+        }
+        if !double_quoted && chars[i] == '\'' {
+            let mut end = i + 1;
+            while end < chars.len() {
+                if chars[end] == '\'' {
+                    if chars.get(end + 1) == Some(&'\'') {
+                        end += 2;
+                        continue;
+                    }
+                    return Some(end + 1);
+                }
+                end += 1;
+            }
+        }
+        None
+    }
+}

@@ -48,3 +48,5 @@ fn run_globals(srcs: &[&str]) -> crate::session::Session {
 mod call;
 mod end;
 mod options;
+
+mod macro_diag;

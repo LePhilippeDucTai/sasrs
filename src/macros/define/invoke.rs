@@ -57,8 +57,8 @@ impl MacroEngine {
 
         // Garde de récursion.
         if self.depth >= Self::MAX_MACRO_DEPTH {
-            out.push_str(&format!(
-                "/* macro recursion limit ({}) reached for %{} */",
+            self.error(format!(
+                "Macro recursion limit ({}) reached for %{}.",
                 Self::MAX_MACRO_DEPTH,
                 name
             ));
@@ -75,6 +75,32 @@ impl MacroEngine {
                 return after_name;
             }
         };
+
+        // SAS rejects the invocation before executing its body.
+        let positional_count = def
+            .params
+            .iter()
+            .filter(|p| matches!(p, MacroParam::Positional(_)))
+            .count();
+        let mut invalid = false;
+        if pos_args.len() > positional_count {
+            self.error("More positional parameters found than defined.");
+            invalid = true;
+        }
+        for (key, _) in &kw_args {
+            if !def.params.iter().any(
+                |p| matches!(p, MacroParam::Keyword { name, .. } if name.eq_ignore_ascii_case(key)),
+            ) {
+                self.error(format!(
+                    "The keyword parameter {} was not defined with the macro.",
+                    key.to_uppercase()
+                ));
+                invalid = true;
+            }
+        }
+        if invalid {
+            return resume;
+        }
 
         // Les valeurs d'arguments sont résolues dans la portée APPELANTE (SAS
         // évalue les arguments au moment de l'appel) avant la liaison. M41.1 :
@@ -128,14 +154,11 @@ impl MacroEngine {
         let saved_goto_budget = self.flow.goto_budget;
         let saved_goto_requested = self.flow.goto_requested.take();
         self.flow.goto_budget = Self::MAX_GOTO_JUMPS;
-        let mut expanded = self.process_impl(&def.body);
+        let expanded = self.process_impl(&def.body);
         // Un `%goto` non résolu remonté jusqu'ici = étiquette introuvable dans CE
-        // corps : NOTE propre (et on ne propage pas hors de la macro).
+        // corps : ERROR (et on ne propage pas hors de la macro).
         if let Some(missing) = self.flow.goto_requested.take() {
-            expanded.push_str(&format!(
-                "/* NOTE: %GOTO target label %{}: not found; statement ignored */",
-                missing.to_lowercase()
-            ));
+            self.error(format!("The %GOTO label {missing} is not defined."));
         }
         self.flow.goto_budget = saved_goto_budget;
         self.flow.goto_requested = saved_goto_requested;
@@ -248,15 +271,10 @@ impl MacroEngine {
     /// locale (toutes les variables des paramètres y sont présentes).
     ///
     /// Règles (documentées) :
-    /// - Les arguments positionnels remplissent les paramètres dans l'ordre de
-    ///   déclaration (positionnels comme mots-clés peuvent recevoir une valeur
-    ///   positionnelle, fidèle à SAS où l'ordre prime).
-    /// - Les `clé=valeur` écrasent ensuite le paramètre nommé correspondant.
-    /// - Paramètres non fournis : `Keyword` prend son défaut, `Positional`
-    ///   prend la chaîne vide.
-    /// - Trop d'arguments positionnels : les excédentaires sont IGNORÉS
-    ///   (SAS émet une erreur ; on choisit la tolérance — documenté).
-    /// - `clé=valeur` pour une clé inconnue : IGNORÉ (SAS erreur ; toléré ici).
+    /// - L'appelant valide le nombre des positionnels et les noms des mots-clés.
+    /// - Les positionnels remplissent les paramètres positionnels dans l'ordre.
+    /// - Les mots-clés remplacent leur valeur par défaut.
+    /// - Les positionnels omis reçoivent une chaîne vide.
     pub(crate) fn bind_params(
         params: &[MacroParam],
         pos_args: &[String],
@@ -338,8 +356,8 @@ impl MacroEngine {
             };
             self.pending.call_execute.push(code);
         } else {
-            out.push_str(&format!(
-                "/* %call {}: only EXECUTE is supported in macro code */",
+            self.note(format!(
+                "%CALL {}: only EXECUTE is supported in macro code",
                 routine
             ));
         }

@@ -2,25 +2,27 @@ use super::*;
 
 #[test]
 fn window_display_noted_and_consumed() {
-    let out = run("a %window w color=red; b %display w; c");
+    let (out, log) = run_logged("a %window w color=red; b %display w; c");
     assert!(
-        out.contains("%WINDOW") && out.contains("%DISPLAY"),
+        log.contains("%WINDOW") && log.contains("%DISPLAY"),
         "got: {out}"
     );
     assert!(
         out.contains('a') && out.contains('b') && out.contains('c'),
         "got: {out}"
     );
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
 fn syscall_noted_and_consumed() {
-    let out = run("p %syscall scan(s,n,r); q");
+    let (out, log) = run_logged("p %syscall scan(s,n,r); q");
     assert!(
-        out.contains("%SYSCALL") && out.contains("not supported"),
+        log.contains("%SYSCALL") && log.contains("not supported"),
         "got: {out}"
     );
     assert!(out.contains('p') && out.contains('q'), "got: {out}");
+    assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
 }
 
 #[test]
@@ -32,11 +34,12 @@ fn misc_unsupported_keywords_consumed() {
         ("%syslput x=1;", "%SYSLPUT"),
         ("%sysrput x=1;", "%SYSRPUT"),
     ] {
-        let out = run(src);
+        let (out, log) = run_logged(src);
         assert!(
-            out.contains(tag) && out.contains("not supported"),
+            log.contains(tag) && log.contains("not supported"),
             "src {src} got: {out}"
         );
+        assert!(!out.contains("/* ERROR") && !out.contains("/* NOTE"));
     }
 }
 

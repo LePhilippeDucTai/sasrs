@@ -36,7 +36,7 @@ impl MacroEngine {
         let take_then = match self.eval_condition(&cond) {
             Ok(b) => b,
             Err(e) => {
-                Self::emit_error(out, &e);
+                self.emit_error(&e);
                 // En cas d'erreur, on consomme tout de même la structure pour ne
                 // pas réémettre du texte macro brut. On parse les actions sans
                 // les exécuter.
@@ -183,14 +183,14 @@ impl MacroEngine {
         let start = match self.eval_condition_int(&start_expr) {
             Ok(v) => v,
             Err(e) => {
-                Self::emit_error(out, &e);
+                self.emit_error(&e);
                 return Some(after);
             }
         };
         let stop = match self.eval_condition_int(&stop_expr) {
             Ok(v) => v,
             Err(e) => {
-                Self::emit_error(out, &e);
+                self.emit_error(&e);
                 return Some(after);
             }
         };
@@ -198,17 +198,16 @@ impl MacroEngine {
             Some(s) => match self.eval_condition_int(s) {
                 Ok(v) => v,
                 Err(e) => {
-                    Self::emit_error(out, &e);
+                    self.emit_error(&e);
                     return Some(after);
                 }
             },
             None => 1,
         };
         if step == 0 {
-            Self::emit_error(
-                out,
-                &MacroError::new("ERROR: %DO loop step is zero (non-terminating)"),
-            );
+            self.emit_error(&MacroError::new(
+                "ERROR: %DO loop step is zero (non-terminating)",
+            ));
             return Some(after);
         }
 
@@ -230,13 +229,10 @@ impl MacroEngine {
             }
             iters += 1;
             if iters > Self::MAX_LOOP_ITERS {
-                Self::emit_error(
-                    &mut buf,
-                    &MacroError::new(format!(
-                        "ERROR: %DO loop exceeded {} iterations (runaway guard)",
-                        Self::MAX_LOOP_ITERS
-                    )),
-                );
+                self.emit_error(&MacroError::new(format!(
+                    "ERROR: %DO loop exceeded {} iterations (runaway guard)",
+                    Self::MAX_LOOP_ITERS
+                )));
                 break;
             }
             // Affecter &i dans la portée courante (haut de pile, ou table en
@@ -244,6 +240,12 @@ impl MacroEngine {
             self.set_loop_var(var, value);
             let expanded = self.process_impl(body_trimmed);
             buf.push_str(&expanded);
+            if self.flow.return_requested
+                || self.flow.abort_requested
+                || self.flow.goto_requested.is_some()
+            {
+                break;
+            }
             // Avancer en gardant contre l'overflow.
             match value.checked_add(step) {
                 Some(v) => value = v,
@@ -301,31 +303,34 @@ impl MacroEngine {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(e) => {
-                        Self::emit_error(&mut buf, &e);
+                        self.emit_error(&e);
                         break;
                     }
                 }
             }
             iters += 1;
             if iters > Self::MAX_LOOP_ITERS {
-                Self::emit_error(
-                    &mut buf,
-                    &MacroError::new(format!(
-                        "ERROR: %DO loop exceeded {} iterations (runaway guard)",
-                        Self::MAX_LOOP_ITERS
-                    )),
-                );
+                self.emit_error(&MacroError::new(format!(
+                    "ERROR: %DO loop exceeded {} iterations (runaway guard)",
+                    Self::MAX_LOOP_ITERS
+                )));
                 break;
             }
             let expanded = self.process_impl(body_trimmed);
             buf.push_str(&expanded);
+            if self.flow.return_requested
+                || self.flow.abort_requested
+                || self.flow.goto_requested.is_some()
+            {
+                break;
+            }
             if !is_while {
                 // `%until` : on s'arrête quand la condition devient vraie.
                 match self.eval_condition(&cond) {
                     Ok(true) => break,
                     Ok(false) => {}
                     Err(e) => {
-                        Self::emit_error(&mut buf, &e);
+                        self.emit_error(&e);
                         break;
                     }
                 }
@@ -409,8 +414,8 @@ impl MacroEngine {
         if chars.get(j) == Some(&';') {
             j += 1;
         }
-        out.push_str(&format!(
-            "/* NOTE: {label} is not supported in this build; statement ignored */"
+        self.note(format!(
+            "{label} is not supported in this build; statement ignored"
         ));
         Some(Self::skip_trailing_newline(chars, j, out))
     }
@@ -471,8 +476,8 @@ impl MacroEngine {
             "SORTN" => self.syscall_sortn(&vars),
             "SORTC" => self.syscall_sortc(&vars),
             _ => {
-                out.push_str(&format!(
-                    "/* NOTE: {} is not supported in this build; statement ignored */",
+                self.note(format!(
+                    "{} is not supported in this build; statement ignored",
                     Self::SYSCALL_LABEL
                 ));
             }

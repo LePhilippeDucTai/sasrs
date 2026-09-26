@@ -80,6 +80,13 @@ use global::*;
 /// CALL EXECUTE, ce qui se lit comme une erreur avalée alors qu'il n'y avait
 /// rien à avaler — c'est d'ailleurs ce qu'a conclu la revue avant vérification.
 pub fn run_program(src: &SourceFile, session: &mut Session) {
+    run_program_inner(src, session);
+}
+
+/// Returns true when %ABORT terminates this submission, including a nested
+/// CALL EXECUTE replay. The exit code stays in Session until RunOutcome takes it.
+fn run_program_inner(src: &SourceFile, session: &mut Session) -> bool {
+    use crate::macros::MacroLogEntry;
     use crate::preprocess::RawSegmenter;
 
     let orig = src;
@@ -91,8 +98,19 @@ pub fn run_program(src: &SourceFile, session: &mut Session) {
         // M19.3 — relayer au log les lignes produites par l'expansion (écho
         // MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`), AVANT d'exécuter le
         // segment expansé (elles précèdent le code dans le log SAS).
-        for line in session.macro_engine.take_pending_log_lines() {
-            session.log.put_line(&line);
+        for entry in session.macro_engine.take_pending_log() {
+            match entry {
+                MacroLogEntry::Line(line) => session.log.put_line(&line),
+                MacroLogEntry::Error(message) => session.log.error(&message),
+                MacroLogEntry::Warning(message) => session.log.warning(&message),
+                MacroLogEntry::Note(message) => session.log.note(&message),
+            }
+        }
+        if let Some(abort) = session.macro_engine.take_abort_request() {
+            session.request_exit_code(abort.exit_code());
+            let _ = session.macro_engine.take_pending_call_execute();
+            session.call_execute_queue.clear();
+            return true;
         }
         // M19.3 — `%call execute(...)` côté macro : mettre en file pour exécution
         // après le segment courant (même file que le CALL EXECUTE des étapes).
@@ -110,19 +128,24 @@ pub fn run_program(src: &SourceFile, session: &mut Session) {
             let lines = seg_src.lines_of_span(span);
             let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
             session.log.echo_source(&line_texts);
-            run_one_block(block, session);
+            if run_one_block(block, session) {
+                return true;
+            }
         }
         // M19.3 — un `%call execute(...)` en code ouvert (hors étape DATA) doit
         // tout de même être rejoué après le segment qui l'a produit. Les DATA
         // steps drainent déjà la file à leur RUN ; ce drain couvre le code
         // ouvert pur (segment sans étape DATA).
-        run_call_execute_queue(session);
+        if run_call_execute_queue(session) {
+            return true;
+        }
     }
+    false
 }
 
 /// Exécute UN bloc déjà lexé/parsé (commun aux deux builds). L'écho de source
 /// est fait par l'appelant (différemment selon le build).
-fn run_one_block(block: Result<Block>, session: &mut Session) {
+fn run_one_block(block: Result<Block>, session: &mut Session) -> bool {
     match block {
         Err(e) => {
             // La récupération de flux est déjà faite par le stream.
@@ -131,7 +154,9 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
         Ok(Block::Empty) => {}
         Ok(Block::Global(stmt)) => exec_global(&stmt, session),
         Ok(Block::DataStep(ast)) => {
-            exec_data_step(&ast, session);
+            if exec_data_step(&ast, session) {
+                return true;
+            }
             // M35.3 — keep &SYSLAST in sync with session.last_dataset.
             let syslast = session
                 .last_dataset
@@ -165,9 +190,10 @@ fn run_one_block(block: Result<Block>, session: &mut Session) {
             session.macro_engine.set_automatic("SYSLAST", syslast);
         }
     }
+    false
 }
 
-fn exec_data_step(ast: &crate::ast::DataStepAst, session: &mut Session) {
+fn exec_data_step(ast: &crate::ast::DataStepAst, session: &mut Session) -> bool {
     let timer = StepTimer::start();
     let compiled = datastep::compile(ast, session);
     match compiled {
@@ -194,14 +220,14 @@ fn exec_data_step(ast: &crate::ast::DataStepAst, session: &mut Session) {
     // les statements globaux/DATA/PROC). Garde de profondeur : le code rejoué
     // peut lui-même générer du CALL EXECUTE, mais on traite la file en boucle
     // tant qu'elle se remplit.
-    run_call_execute_queue(session);
+    run_call_execute_queue(session)
 }
 
 /// Rejoue (M15.6) le code mis en file par CALL EXECUTE. Chaque entrée est un
 /// fragment SAS ; on les concatène (séparés par un saut de ligne) et on les
 /// exécute via `run_program`. Si le rejeu re-remplit la file (CALL EXECUTE
 /// imbriqué), on boucle, avec une garde de profondeur anti-récursion infinie.
-fn run_call_execute_queue(session: &mut Session) {
+fn run_call_execute_queue(session: &mut Session) -> bool {
     let mut depth = 0;
     while !session.call_execute_queue.is_empty() {
         depth += 1;
@@ -210,12 +236,15 @@ fn run_call_execute_queue(session: &mut Session) {
                 "CALL EXECUTE generated too many nested steps (possible infinite loop); stopping.",
             );
             session.call_execute_queue.clear();
-            return;
+            return false;
         }
         let code = std::mem::take(&mut session.call_execute_queue).join("\n");
         let src = SourceFile::new(code);
-        run_program(&src, session);
+        if run_program_inner(&src, session) {
+            return true;
+        }
     }
+    false
 }
 
 #[cfg(test)]

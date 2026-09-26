@@ -22,7 +22,7 @@ impl MacroEngine {
         }
         if self.macro_stack.is_empty() {
             // Open code : pas de corps à interrompre.
-            out.push_str("/* NOTE: %RETURN is not valid in open code; statement ignored */");
+            self.error("The %RETURN statement is not valid in open code.");
         } else {
             self.flow.return_requested = true;
         }
@@ -48,6 +48,7 @@ impl MacroEngine {
             j += 1;
         }
         let args: String = chars[arg_start..j].iter().collect();
+        let args = self.process_impl(&args);
         if chars.get(j) == Some(&';') {
             j += 1;
         }
@@ -75,8 +76,8 @@ impl MacroEngine {
             AbortKind::Return(Some(n)) => format!(" RETURN {n}"),
             AbortKind::Return(None) => " RETURN".to_string(),
         };
-        out.push_str(&format!(
-            "/* NOTE: %ABORT{detail} encountered; macro expansion stopped */"
+        self.error(format!(
+            "Execution terminated by the %ABORT{detail} statement."
         ));
         self.flow.abort_requested = true;
         self.flow.abort_kind = Some(kind);
@@ -111,17 +112,14 @@ impl MacroEngine {
         }
         let after_stmt = Self::skip_trailing_newline(chars, j, out);
         if self.macro_stack.is_empty() {
-            out.push_str("/* NOTE: %GOTO is not valid in open code; statement ignored */");
+            self.error("The %GOTO statement is not valid in open code.");
             return Some(after_stmt);
         }
         if self.flow.goto_budget <= 0 {
-            Self::emit_error(
-                out,
-                &MacroError::new(format!(
-                    "ERROR: %GOTO jump budget ({}) exhausted (runaway guard)",
-                    Self::MAX_GOTO_JUMPS
-                )),
-            );
+            self.emit_error(&MacroError::new(format!(
+                "ERROR: %GOTO jump budget ({}) exhausted (runaway guard)",
+                Self::MAX_GOTO_JUMPS
+            )));
             return Some(after_stmt);
         }
         self.flow.goto_budget -= 1;

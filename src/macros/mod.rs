@@ -21,7 +21,7 @@ mod symbols;
 use quoting::MaskSet;
 
 pub use define::{MacroDef, MacroParam};
-pub use error::MacroError;
+pub use error::{MacroError, MacroLogEntry};
 
 mod segmenter;
 
@@ -83,8 +83,8 @@ pub trait TextStage {
 ///
 /// ## Garde de récursion
 /// `depth` est incrémenté à chaque invocation et plafonné à `MAX_MACRO_DEPTH`.
-/// Au-delà, l'invocation n'est PAS expansée : un commentaire de note SAS-like
-/// `/* ... */` est émis à la place et le scan continue — aucun `panic`.
+/// Au-delà, l'invocation n'est PAS expansée : une ERROR est envoyée au log
+/// et le scan continue — aucun `panic`.
 ///
 /// ## Différé (non interprété ici)
 /// `%if/%do` (M11.3), `%eval` (M11.4), `%sysfunc`/vars auto (M11.6), fonctions
@@ -171,7 +171,7 @@ struct TraceOptions {
 struct PendingOutputs {
     /// Lignes de log produites pendant l'expansion (écho MPRINT/MLOGIC/
     /// SYMBOLGEN et sortie de `%put`). Drainées via `take_pending_log_lines`.
-    log_lines: Vec<String>,
+    log_lines: Vec<MacroLogEntry>,
     /// File de fragments de code SAS produits par `%call execute(...)` en code
     /// macro, à exécuter APRÈS l'étape/segment courant (même sémantique que le
     /// `CALL EXECUTE` côté DATA step). Drainée via `take_pending_call_execute`.
@@ -214,7 +214,7 @@ struct ControlFlow {
 ///
 /// Le processeur macro ne pouvant pas réellement terminer le process (pas de
 /// `process::exit`), on enregistre l'INTENTION : l'exécuteur peut la draîner via
-/// `take_abort_request` et arrêter proprement la soumission s'il le souhaite.
+/// `take_abort_request` et arrête la soumission avec le code demandé.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AbortKind {
     /// `%abort;` — arrêt simple.
@@ -225,6 +225,26 @@ pub enum AbortKind {
     Cancel,
     /// `%abort return [n];` — arrêt avec code retour optionnel.
     Return(Option<i64>),
+}
+
+impl AbortKind {
+    /// Portable batch policy: plain/CANCEL report an error (2), RETURN defaults
+    /// to 4 and ABEND to 5 (SAS UNIX completion codes). Explicit nonnegative n
+    /// is preserved in RunOutcome, including 0; no process::exit is performed.
+    /// SAS leaves host/session termination to its operating environment; sasrs
+    /// terminates the current run, including queued CALL EXECUTE submissions.
+    /// https://support.sas.com/documentation/cdl/en/hostunx/61879/HTML/default/retcod.htm
+    /// https://support.sas.com/kb/23/addl/fusion23211_1_abort.html
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Plain | Self::Cancel => 2,
+            Self::Return(None) => 4,
+            Self::Abend(None) => 5,
+            Self::Return(Some(n)) | Self::Abend(Some(n)) => {
+                i32::try_from(*n).ok().filter(|n| *n >= 0).unwrap_or(2)
+            }
+        }
+    }
 }
 
 impl MacroEngine {
@@ -334,6 +354,14 @@ impl MacroEngine {
     /// MPRINT/MLOGIC/SYMBOLGEN et sortie de `%put`). L'exécuteur les transfère
     /// vers le `LogWriter` après chaque `expand_open_code`.
     pub fn take_pending_log_lines(&mut self) -> Vec<String> {
+        self.take_pending_log()
+            .into_iter()
+            .map(MacroLogEntry::into_line)
+            .collect()
+    }
+
+    /// Drain typed diagnostics and literal log output in emission order.
+    pub fn take_pending_log(&mut self) -> Vec<MacroLogEntry> {
         std::mem::take(&mut self.pending.log_lines)
     }
 
@@ -355,7 +383,9 @@ impl MacroEngine {
     /// M19.3 — écho d'une ligne de log (helper interne). On la pousse dans le
     /// tampon ; l'exécuteur la relaiera au `LogWriter`.
     fn log_line(&mut self, line: impl Into<String>) {
-        self.pending.log_lines.push(line.into());
+        self.pending
+            .log_lines
+            .push(MacroLogEntry::Line(line.into()));
     }
 
     /// M19.3 — étiquette de macro courante pour MPRINT/MLOGIC : nom de la macro
