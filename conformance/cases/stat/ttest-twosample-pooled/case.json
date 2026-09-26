@@ -1,0 +1,31 @@
+{
+  "id": "ttest-twosample-pooled",
+  "title": "PROC TTEST : test t à deux échantillons (méthodes Pooled et Satterthwaite) via OUTPUT OUT=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/statug/statug_ttest_syntax.htm — SAS/STAT 9.4 User's Guide — The TTEST Procedure — t de Student pooled (df=n1+n2-2) et Satterthwaite-Welch recalculés indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "grow.csv": {
+      "group": "char",
+      "height": "num"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "univariate-moments-output",
+  "title": "PROC UNIVARIATE : moments d'échantillon (n, moyenne, écart-type, skewness, kurtosis, min, max) via OUTPUT OUT=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0h7p31mameo2vn1ok45hqpb8bmq.htm — SAS 9.4 Procedures — The UNIVARIATE Procedure (OUTPUT Statement, statistiques N MEAN STD SKEWNESS KURTOSIS MIN MAX) — formules des moments d'échantillon appliquées indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "data_types": {
+    "scores.csv": {
+      "score": "num"
+    }
+  },
+  "issue": "null — divergence à ouvrir par le coordinateur : statistiques SKEWNESS et KURTOSIS non supportées dans l'instruction OUTPUT de PROC UNIVARIATE (ERROR: Unsupported statistic 'SKEWNESS' in OUTPUT statement. — code retour 2, dataset WORK.MOM non produit) ; n/mean/std/min/max sont acceptés"
+}
