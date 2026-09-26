@@ -75,6 +75,7 @@ fn ages(ds: &SasDataset) -> Vec<f64> {
 
 mod create;
 mod ods_output;
+mod sql_metadata;
 mod update_multi;
 
 mod silent_options;

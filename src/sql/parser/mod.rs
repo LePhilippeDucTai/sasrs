@@ -47,7 +47,8 @@
 #![allow(unused_variables, dead_code)]
 
 use super::ast::{
-    FromItem, Join, JoinKind, SelectItem, SelectStmt, SetOp, SqlExpr, SqlProgram, SqlStmt,
+    FromItem, Join, JoinKind, SelectItem, SelectStmt, SetOp, SqlExpr, SqlItemAttrs, SqlProgram,
+    SqlStmt,
 };
 use crate::ast::{BinaryOp, Expr, UnaryOp};
 use crate::error::{Result, SasError};

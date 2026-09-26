@@ -4,7 +4,7 @@ use super::*;
 // 1. FROM + joins
 // ----------------------------------------------------------------------------
 
-pub(super) fn scan_normalized(session: &Session, lib: &str, table: &str) -> Result<LazyFrame> {
+pub(super) fn scan_normalized(session: &mut Session, lib: &str, table: &str) -> Result<LazyFrame> {
     // Dictionary tables (M20.3) : `DICTIONARY.TABLES/COLUMNS/MACROS` et leurs
     // vues `sashelp.v*` sont matérialisées à la volée depuis l'état de session,
     // puis injectées dans le pipeline standard (WHERE/SELECT/ORDER BY normaux).
@@ -14,7 +14,13 @@ pub(super) fn scan_normalized(session: &Session, lib: &str, table: &str) -> Resu
         return crate::sql::dictionary::build_dictionary(session, kind);
     }
     let provider = session.libs.get(lib)?;
-    let lf = provider.scan(table)?;
+    // J04-P2/J04-P4 : les lectures SQL passent par `scan_with_notes` pour ne
+    // pas perdre les diagnostics de coercition (WARNING 2**53, sidecar
+    // illisible…) que les fournisseurs émettent à la lecture.
+    let (lf, notes) = provider.scan_with_notes(table)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
     // Normalisation des missings spéciaux (NaN-payload → null) sur chaque
     // colonne Float64 — passe par l'unique implémentation `normalize_specials`
     // (cf. note d'en-tête : ne jamais réimplémenter ad hoc).

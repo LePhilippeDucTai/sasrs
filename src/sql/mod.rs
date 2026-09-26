@@ -18,7 +18,10 @@
 //!     modèle SAS (f64/char) puis rendu au listing dans le style PROC PRINT
 //!     (mais SANS colonne `Obs` — le SELECT de PROC SQL n'en a pas) ;
 //!   - CREATE TABLE AS → abaissé, collecté, coercé, écrit dans la
-//!     bibliothèque ; `_LAST_` mis à jour ; NOTE de création ;
+//!     bibliothèque ; `_LAST_` mis à jour ; NOTE de création. J04-P4 : les
+//!     colonnes reprises telles quelles conservent format/label/longueur
+//!     de leur source (sidecar) ; une colonne calculée n'a de métadonnées
+//!     que via `FORMAT=`/`LABEL=`/`LENGTH=` dans le select-list ;
 //!   - DROP TABLE → suppression (ou ERROR si absente) ;
 //!   - INSERT VALUES / INSERT SELECT → lignes ajoutées à la table existante ;
 //!   - DELETE FROM → filtre lazy via `plan::translate_predicate` /

@@ -96,12 +96,18 @@ pub(super) fn parse_select_item(ts: &mut StatementStream) -> Result<SelectItem> 
         ));
     }
 
-    // `*` — toutes les colonnes.
+    let mut attrs = SqlItemAttrs::default();
+
+    // `*` — toutes les colonnes. (`format=` etc. restent parsables après un
+    // éventuel alias — SAS les autorise sur tout item du select-list.)
     if ts.peek().kind == TokenKind::Star {
         ts.next();
+        let alias = maybe_alias(ts)?;
+        parse_item_attrs(ts, &mut attrs)?;
         return Ok(SelectItem {
             expr: SqlExpr::Star,
-            alias: None,
+            alias,
+            attrs,
         });
     }
 
@@ -123,9 +129,11 @@ pub(super) fn parse_select_item(ts: &mut StatementStream) -> Result<SelectItem> 
         if ts.peek().kind == TokenKind::Star {
             ts.next(); // *
             let alias = maybe_alias(ts)?;
+            parse_item_attrs(ts, &mut attrs)?;
             return Ok(SelectItem {
                 expr: SqlExpr::QualifiedStar(name),
                 alias,
+                attrs,
             });
         }
         // Sinon c'est `a.col` : on a déjà consommé ident + dot, il reste
@@ -144,13 +152,66 @@ pub(super) fn parse_select_item(ts: &mut StatementStream) -> Result<SelectItem> 
             column: col,
         };
         let expr = continue_expr_from(ts, base)?;
+        // Attributs SAS avant l'alias (`a.x format=8. as y`) puis après.
+        parse_item_attrs(ts, &mut attrs)?;
         let alias = maybe_alias(ts)?;
-        return Ok(SelectItem { expr, alias });
+        parse_item_attrs(ts, &mut attrs)?;
+        return Ok(SelectItem { expr, alias, attrs });
     }
 
     let expr = parse_sql_expr(ts)?;
+    parse_item_attrs(ts, &mut attrs)?;
     let alias = maybe_alias(ts)?;
-    Ok(SelectItem { expr, alias })
+    parse_item_attrs(ts, &mut attrs)?;
+    Ok(SelectItem { expr, alias, attrs })
+}
+
+/// Attributs SAS d'un item de select-list (J04-P4) : `format=token.`,
+/// `label='texte'`, `length=n`, dans n'importe quel ordre. Chaque attribut
+/// n'est reconnu QUE suivi immédiatement de `=` — ainsi un ident nu (alias
+/// légitime nommé `format`, colonne `length`…) n'est jamais capturé par
+/// erreur.
+pub(super) fn parse_item_attrs(ts: &mut StatementStream, attrs: &mut SqlItemAttrs) -> Result<()> {
+    while let Some(name) = ts.peek().ident().map(str::to_ascii_lowercase) {
+        if !matches!(name.as_str(), "format" | "label" | "length")
+            || ts.peek2().kind != TokenKind::Eq
+        {
+            break;
+        }
+        ts.next(); // l'identifiant d'attribut
+        ts.next(); // `=`
+        match name.as_str() {
+            "label" => {
+                let tok = ts.next();
+                let TokenKind::Str { value, .. } = tok.kind else {
+                    return Err(SasError::parse(
+                        "expected a quoted string after label=",
+                        tok.span,
+                    ));
+                };
+                attrs.label = Some(value);
+            }
+            "length" => {
+                let tok = ts.next();
+                let TokenKind::Num(n) = tok.kind else {
+                    return Err(SasError::parse("expected a number after length=", tok.span));
+                };
+                if n <= 0.0 || n.fract() != 0.0 || n > 32767.0 {
+                    return Err(SasError::parse(
+                        format!("invalid column length {n} in the SELECT list"),
+                        tok.span,
+                    ));
+                }
+                attrs.length = Some(n as usize);
+            }
+            _ => {
+                // Token de format réutilisé du DATA step (`date9.`,
+                // `$char10.`, `8.2`…) : morceaux adjacents du lexer.
+                attrs.format = Some(crate::parser::expr::read_format_token(ts)?);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Alias optionnel d'un item de select : `AS nom` ou `nom` nu. Le `nom` nu
@@ -169,8 +230,14 @@ pub(super) fn maybe_alias(ts: &mut StatementStream) -> Result<Option<String>> {
         return Ok(Some(name));
     }
     // Alias nu : un ident qui n'est pas un mot-clé de clause/jointure.
+    // `format`/`label`/`length` suivis de `=` ouvrent un ATTRIBUT d'item
+    // (J04-P4), pas un alias.
     if let TokenKind::Ident(s) = &ts.peek().kind
         && !is_clause_kw(s)
+        && !(matches!(
+            s.to_ascii_lowercase().as_str(),
+            "format" | "label" | "length"
+        ) && ts.peek2().kind == TokenKind::Eq)
     {
         let name = s.clone();
         ts.next();

@@ -61,8 +61,9 @@ pub(crate) enum DictKind {
 
 /// Construit la LazyFrame d'une dictionary table à partir de l'état de session
 /// (bibliothèques + datasets pour TABLES/COLUMNS ; variables macro globales
-/// pour MACROS).
-pub(crate) fn build_dictionary(session: &Session, kind: DictKind) -> Result<LazyFrame> {
+/// pour MACROS). J04-P4 : les notes de lecture des tables énumérées
+/// (coercition, sidecar) sont transmises au log au lieu d'être avalées.
+pub(crate) fn build_dictionary(session: &mut Session, kind: DictKind) -> Result<LazyFrame> {
     let df = match kind {
         DictKind::Tables => build_tables(session)?,
         DictKind::Columns => build_columns(session)?,
@@ -90,7 +91,7 @@ fn enumerate_members(session: &Session) -> Vec<(String, String)> {
     out
 }
 
-fn build_tables(session: &Session) -> Result<DataFrame> {
+fn build_tables(session: &mut Session) -> Result<DataFrame> {
     let members = enumerate_members(session);
     let mut libname = Vec::with_capacity(members.len());
     let mut memname = Vec::with_capacity(members.len());
@@ -99,13 +100,19 @@ fn build_tables(session: &Session) -> Result<DataFrame> {
     let mut nvar = Vec::with_capacity(members.len());
 
     for (lib, mem) in &members {
-        let provider = session.libs.get(lib)?;
+        let Ok(provider) = session.libs.get(lib) else {
+            continue;
+        };
         // `read` charge le dataset eager : nécessaire pour `nobs` exact et le
         // décompte de variables. Si la lecture échoue (table corrompue), on
         // ignore la table plutôt que de faire échouer toute la requête.
-        let Ok((ds, _notes)) = provider.read(mem) else {
+        let Ok((ds, notes)) = provider.read(mem) else {
             continue;
         };
+        // J04-P4 : les notes de lecture (coercition, sidecar) vont au log.
+        for note in notes {
+            session.log.forward(&note);
+        }
         libname.push(lib.clone());
         memname.push(mem.clone());
         memtype.push("DATA".to_string());
@@ -123,7 +130,7 @@ fn build_tables(session: &Session) -> Result<DataFrame> {
     Ok(df)
 }
 
-fn build_columns(session: &Session) -> Result<DataFrame> {
+fn build_columns(session: &mut Session) -> Result<DataFrame> {
     let members = enumerate_members(session);
     let mut libname = Vec::new();
     let mut memname = Vec::new();
@@ -137,10 +144,16 @@ fn build_columns(session: &Session) -> Result<DataFrame> {
     let mut informat: Vec<String> = Vec::new();
 
     for (lib, mem) in &members {
-        let provider = session.libs.get(lib)?;
-        let Ok((ds, _notes)) = provider.read(mem) else {
+        let Ok(provider) = session.libs.get(lib) else {
             continue;
         };
+        let Ok((ds, notes)) = provider.read(mem) else {
+            continue;
+        };
+        // J04-P4 : les notes de lecture (coercition, sidecar) vont au log.
+        for note in notes {
+            session.log.forward(&note);
+        }
         let mut pos: i64 = 0;
         for (i, v) in ds.vars.iter().enumerate() {
             libname.push(lib.clone());

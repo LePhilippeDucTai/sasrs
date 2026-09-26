@@ -85,6 +85,10 @@ use setop::*;
 use source::*;
 use subquery::*;
 
+/// J04-P4 — ré-exporté pour `exec_create_table_as` (résolution du nom de
+/// sortie d'un item du select-list lors de l'application des métadonnées).
+pub(crate) use project::output_name;
+
 /// Contexte de traduction : permet à `CALCULATED x` de retrouver
 /// l'expression de l'alias `x` dans le select-list courant.
 struct Ctx<'a> {

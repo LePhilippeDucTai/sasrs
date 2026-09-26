@@ -71,6 +71,7 @@ fn create_table_group_having_count_star() {
                 star: true,
             },
             alias: Some("n".to_string()),
+            attrs: Default::default(),
         }
     );
     // FROM t AS a

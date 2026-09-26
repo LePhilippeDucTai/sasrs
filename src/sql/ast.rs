@@ -87,6 +87,20 @@ pub enum SetOp {
 pub struct SelectItem {
     pub expr: SqlExpr,
     pub alias: Option<String>,
+    /// Attributs SAS portés par l'item (J04-P4) : `format=`, `label=`,
+    /// `length=` dans le select-list. Une colonne reprise telle quelle
+    /// hérite des métadonnées de sa source ; une colonne calculée n'en a
+    /// AUCUNE sauf attributs explicites comme ceux-ci.
+    pub attrs: SqlItemAttrs,
+}
+
+/// Attributs de colonne du select-list SAS : `format=token.`, `label='texte'`,
+/// `length=n` (dans n'importe quel ordre, avant ou après l'alias).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SqlItemAttrs {
+    pub format: Option<String>,
+    pub label: Option<String>,
+    pub length: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,0 +1,136 @@
+---
+source: tests/snapshot.rs
+assertion_line: 63
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j04/sqlmeta_preserve.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data work.src;
+3       length name $ 12;
+4       set d.class(keep=name sex age height);
+5       format height 8.2 name $char12.;
+6       label name='Full name' height='Height (in)';
+7     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.SRC has 19 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+8     title 'Source metadata';
+
+9     proc contents data=work.src;
+10    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+11    proc sql;
+12      create table work.kept as
+13      select name, height as h, age
+14      from work.src;
+15    quit;
+NOTE: Table WORK.KEPT created, with 19 rows and 3 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    title 'CREATE TABLE AS SELECT — columns taken as-is keep metadata';
+
+17    proc contents data=work.kept;
+18    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+19    proc sql;
+20      create table work.calc as
+21      select name, height / age as ratio
+22      from work.src;
+23    quit;
+NOTE: Table WORK.CALC created, with 19 rows and 2 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+24    title 'CREATE TABLE AS SELECT — calculated column has no metadata';
+
+25    proc contents data=work.calc;
+26    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    proc sql;
+28      delete from work.src where age > 15;
+29    quit;
+NOTE: 1 rows were deleted from WORK.SRC.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+30    title 'After DELETE FROM — metadata survives the rewrite';
+
+31    proc contents data=work.src;
+32    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                                        Source metadata
+
+Data Set Name:  WORK.SRC              Observations:   19
+Member Type:    DATA                  Variables:      4
+Engine:         PARQUET
+
+                    #    Variable    Type    Len    Format      Label
+
+                    3    age         Num       8
+                    4    height      Num       8    8.2         Height (in)
+                    1    name        Char     12    $char12.    Full name
+                    2    sex         Char      1
+
+                   CREATE TABLE AS SELECT — columns taken as-is keep metadata
+
+Data Set Name:  WORK.KEPT             Observations:   19
+Member Type:    DATA                  Variables:      3
+Engine:         PARQUET
+
+                    #    Variable    Type    Len    Format      Label
+
+                    3    age         Num       8
+                    2    h           Num       8    8.2         Height (in)
+                    1    name        Char     12    $char12.    Full name
+
+                   CREATE TABLE AS SELECT — calculated column has no metadata
+
+Data Set Name:  WORK.CALC             Observations:   19
+Member Type:    DATA                  Variables:      2
+Engine:         PARQUET
+
+                     #    Variable    Type    Len    Format      Label
+
+                     1    name        Char     12    $char12.    Full name
+                     2    ratio       Num       8
+
+                       After DELETE FROM — metadata survives the rewrite
+
+Data Set Name:  WORK.SRC              Observations:   18
+Member Type:    DATA                  Variables:      4
+Engine:         PARQUET
+
+                    #    Variable    Type    Len    Format      Label
+
+                    3    age         Num       8
+                    4    height      Num       8    8.2         Height (in)
+                    1    name        Char     12    $char12.    Full name
+                    2    sex         Char      1
+
+==== EXIT 0 ====
