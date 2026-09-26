@@ -218,10 +218,12 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                     // extra display column (SAS/STAT 9.4, REG MODEL statement);
                     // display-only → WARNING, not silently ignored (J02-P4
                     // policy, J02-P5 keeps it an honest diagnostic).
-                    let kw = if ts.peek().is_kw("cp") { "CP" } else { "ADJRSQ" };
-                    ts.warn_ignored_display(common::ignored_display_statement(
-                        "REG", kw,
-                    ));
+                    let kw = if ts.peek().is_kw("cp") {
+                        "CP"
+                    } else {
+                        "ADJRSQ"
+                    };
+                    ts.warn_ignored_display(common::ignored_display_statement("REG", kw));
                     ts.next();
                 } else {
                     // J02-P5 — unknown MODEL option: ERROR instead of a
