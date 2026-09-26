@@ -127,15 +127,22 @@ fn parse_plot_request(ts: &mut StatementStream) -> Result<PlotStmt> {
         }
     }
 
-    // Skip any trailing `/ options` (BOX, HAXIS=, etc.) — parsed, ignored in v1.
+    // Trailing `/ options` (HREF=, VREF=, HAXIS=, BOX, …) — display-only
+    // customizations, not rendered in v1. J02-P4: each `name=` option warns
+    // honestly (WARNING, exit code 1) instead of being dropped silently. The
+    // scan stays SYNCHRONIZED: it stops ON the terminating `;` (left for the
+    // caller's expect_semi), so the statements after the PLOT still run.
     if ts.peek().kind == TokenKind::Slash {
-        ts.skip_to_semi();
-        return Ok(PlotStmt::Plot {
-            y_vars,
-            x_var,
-            group_var,
-            symbol,
-        });
+        ts.next(); // /
+        while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+            if matches!(ts.peek().kind, TokenKind::Ident(_)) && ts.peek2().kind == TokenKind::Eq {
+                let name = ts.peek().ident().unwrap_or("?").to_uppercase();
+                ts.warn_ignored_display(format!(
+                    "The {name}= option is ignored in PROC PLOT; display customization is not supported."
+                ));
+            }
+            ts.next();
+        }
     }
 
     Ok(PlotStmt::Plot {

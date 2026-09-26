@@ -33,6 +33,7 @@ fn x_ast() -> UnivariateAst {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     }
 }
 

@@ -68,7 +68,9 @@ use polars::prelude::*;
 pub fn execute(program: &SqlProgram, session: &mut Session) -> Result<()> {
     for stmt in &program.stmts {
         match stmt {
-            SqlStmt::Select(sel) => exec_select(sel, session)?,
+            // NOPRINT (J02-P4) : le SELECT s'exécute (NOTEs, captures ODS
+            // OUTPUT) mais ne rend rien au listing.
+            SqlStmt::Select(sel) => exec_select(sel, program.noprint, session)?,
             SqlStmt::CreateTableAs { table, query } => exec_create_table_as(table, query, session)?,
             SqlStmt::CreateView { name, query } => exec_create_view(name, query, session)?,
             SqlStmt::DropTable(refs) => exec_drop(refs, session)?,

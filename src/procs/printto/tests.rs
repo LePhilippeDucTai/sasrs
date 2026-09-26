@@ -66,7 +66,8 @@ fn execute_log_stores_path() {
 
     assert!(session.printto_log.is_some());
     let log = session.log.into_string();
-    assert!(log.contains("log redirected"), "log: {log}");
+    assert!(log.contains("routing not supported"), "log: {log}");
+    assert!(log.contains("WARNING"), "log: {log}");
 }
 
 #[test]

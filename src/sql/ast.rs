@@ -16,6 +16,11 @@ use crate::ast::{DatasetRef, Expr};
 #[derive(Debug, Clone, PartialEq)]
 pub struct SqlProgram {
     pub stmts: Vec<SqlStmt>,
+    /// NOPRINT (J02-P4) : honorer l'option du `PROC SQL` — les SELECT ne
+    /// rendent plus rien au listing (les CREATE TABLE / captures ODS OUTPUT
+    /// continuent). L'option est propre à un step : le `PROC SQL` suivant
+    /// réimprime normalement.
+    pub noprint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

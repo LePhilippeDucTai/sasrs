@@ -160,7 +160,7 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
             }
             "output" => {
                 ts.next();
-                output = Some(parse_output(ts)?);
+                output = Some(parse_output(ts, proc_name)?);
                 true
             }
             _ => false,
@@ -269,7 +269,12 @@ pub(super) fn parse_types(ts: &mut StatementStream) -> Result<Vec<Vec<String>>> 
 
 /// Parse the OUTPUT statement body (after "output" was consumed), through
 /// its terminating `;`. `output out=lib.t [stat(var)=name ...] ;`
-pub(super) fn parse_output(ts: &mut StatementStream) -> Result<MeansOutput> {
+///
+/// J02-P4 — each statistic keyword is validated: an unknown keyword, or one
+/// that has no single computable value in a dataset context (`clm(x)=` names
+/// ONE variable but CLM is a pair of bounds), is an ERROR — the previous
+/// behaviour wrote a silent missing column.
+pub(super) fn parse_output(ts: &mut StatementStream, proc_name: &str) -> Result<MeansOutput> {
     let mut out: Option<DatasetRef> = None;
     let mut specs: Vec<(String, String, String)> = Vec::new();
 
@@ -285,6 +290,13 @@ pub(super) fn parse_output(ts: &mut StatementStream) -> Result<MeansOutput> {
             crate::procs::common::consume_option_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
         } else if let Some(stat) = ts.peek().ident().map(str::to_string) {
+            let stat_l = stat.to_ascii_lowercase();
+            if !is_stat_keyword(&stat_l) || stat_l == "clm" {
+                return Err(crate::procs::common::unsupported_statement(
+                    proc_name,
+                    &format!("OUTPUT statistic {}", stat.to_uppercase()),
+                ));
+            }
             // Expect `stat(var)=name`.
             ts.next(); // stat
             if ts.peek().kind != TokenKind::LParen {

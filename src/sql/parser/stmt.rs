@@ -4,12 +4,35 @@ use super::*;
 ///
 /// Boucle de parsing des statements jusqu'à `quit`/`quit;` ou EOF. Chaque
 /// statement se termine par `;`. `quit;` est consommé et arrête la boucle.
+///
+/// J02-P4 — les options du `PROC SQL` (entre `proc sql` et le premier `;`)
+/// et celles d'un `RESET` passent par [`parse_sql_option_list`] : `NOPRINT`
+/// est honoré, `OUTOBS=`/`INOBS=` et toute option inconnue sont une ERROR
+/// (jamais un repli silencieux). Une instruction inconnue est une ERROR via
+/// le helper du contrat J02-P3 ; les instructions globales (TITLE, ODS, …)
+/// et les commentaires gardent leur chemin normal.
 pub fn parse_sql_program(ts: &mut StatementStream) -> Result<SqlProgram> {
     let mut stmts = Vec::new();
+    let mut noprint = false;
+
+    // Options du statement PROC SQL (`proc sql noprint; …`). On ne consomme
+    // rien tant que la tête n'est pas une option connue : les tests pilotent
+    // ce parser sur des listes de statements nues (sans en-tête `proc sql`).
     loop {
-        // Statements vides : `;` isolé.
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
+        if matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+            break;
+        }
+        if ts.peek().is_kw("noprint") || ts.peek().is_kw("outobs") || ts.peek().is_kw("inobs") {
+            parse_sql_option_list(ts, &mut noprint)?;
+            continue;
+        }
+        break; // statements (ou quit) suivent
+    }
+
+    loop {
+        // Statements vides : `;` isolé. Commentaires et instructions globales
+        // (TITLE, FOOTNOTE, ODS, …) : chemin normal du parseur global.
+        if crate::procs::common::parse_proc_inert_or_global(ts)? {
             continue;
         }
         if ts.at_eof() {
@@ -22,13 +45,74 @@ pub fn parse_sql_program(ts: &mut StatementStream) -> Result<SqlProgram> {
             }
             break;
         }
+        // RESET re-spécifie les options du PROC SQL : mêmes règles que l'en-tête.
+        if ts.peek().is_kw("reset") {
+            ts.next();
+            parse_sql_option_list(ts, &mut noprint)?;
+            ts.expect_semi()?;
+            continue;
+        }
         let stmt = parse_statement(ts)?;
         if let Some(s) = stmt {
             stmts.push(s);
             ts.expect_semi()?;
         }
     }
-    Ok(SqlProgram { stmts })
+    Ok(SqlProgram { stmts, noprint })
+}
+
+/// Options du statement PROC SQL (partagées avec RESET) : `NOPRINT` est
+/// honoré ; `OUTOBS=`/`INOBS=` peuvent changer le résultat d'une requête et
+/// ne sont pas implémentés → ERROR ; toute autre option est inconnue → ERROR.
+/// S'arrête sur le `;` (non consommé) ou l'EOF.
+fn parse_sql_option_list(ts: &mut StatementStream, noprint: &mut bool) -> Result<()> {
+    loop {
+        if matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+            return Ok(());
+        }
+        let tok = ts.peek().clone();
+        let Some(kw) = tok.ident().map(|s| s.to_ascii_lowercase()) else {
+            return Err(SasError::parse(
+                "Unexpected token on PROC SQL statement.",
+                tok.span,
+            ));
+        };
+        match kw.as_str() {
+            "noprint" => {
+                ts.next();
+                *noprint = true;
+            }
+            "outobs" | "inobs" => {
+                ts.next();
+                skip_value_tokens(ts);
+                return Err(crate::procs::common::unsupported_statement(
+                    "SQL",
+                    &format!("{}=", kw.to_uppercase()),
+                ));
+            }
+            other => {
+                return Err(SasError::parse(
+                    format!(
+                        "Unexpected option '{}' on PROC SQL statement.",
+                        other.to_uppercase()
+                    ),
+                    tok.span,
+                ));
+            }
+        }
+    }
+}
+
+/// Consomme la valeur d'une option (`= valeur`) si le token courant est un
+/// `=`, pour rester synchronisé avant de rapporter l'erreur.
+fn skip_value_tokens(ts: &mut StatementStream) {
+    if ts.peek().kind != TokenKind::Eq {
+        return;
+    }
+    ts.next();
+    if !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+        ts.next();
+    }
 }
 
 /// Parse un statement PROC SQL. `Ok(None)` = statement reconnu mais ignoré
@@ -49,12 +133,10 @@ pub(super) fn parse_statement(ts: &mut StatementStream) -> Result<Option<SqlStmt
         "insert" => Ok(Some(parse_insert(ts)?)),
         "delete" => Ok(Some(parse_delete(ts)?)),
         "describe" => Ok(Some(parse_describe(ts)?)),
-        // Statements PROC SQL non modélisés (RESET, TITLE, FOOTNOTE,
-        // VALIDATE, ...) : on les saute proprement jusqu'au `;`.
-        _ => {
-            ts.skip_to_semi();
-            Ok(None)
-        }
+        // J02-P4 — une instruction inconnue n'est plus sautée silencieusement :
+        // ERROR via le helper du contrat J02-P3 (les instructions globales et
+        // RESET sont traitées en amont dans parse_sql_program).
+        _ => Err(crate::procs::common::unsupported_statement("SQL", &head)),
     }
 }
 
