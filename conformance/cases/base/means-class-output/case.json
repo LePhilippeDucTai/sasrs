@@ -3,17 +3,30 @@
   "title": "PROC MEANS CLASS + OUTPUT OUT= : sommes globales (_TYPE_=0) et par groupe (_TYPE_=1)",
   "provenance": {
     "kind": "sas-doc",
-    "source": "SAS 9.4 Procedures — PROC MEANS https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0zn9ag9s3c8cnn1v6k9f5fixg7f.htm (OUTPUT OUT= produit un dataset avec _TYPE_, _FREQ_ ; avec CLASS, une ligne par combinaison de classes et la ligne globale _TYPE_=0)",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0zn9ag9s3c8cnn1v6k9f5fixg7f.htm — SAS 9.4 Procedures — PROC MEANS  (OUTPUT OUT= produit un dataset avec _TYPE_, _FREQ_ ; avec CLASS, une ligne par combinaison de classes et la ligne globale _TYPE_=0)",
     "sas_version": "9.4M5",
-    "options": ["--deterministic"]
+    "options": [
+      "--deterministic"
+    ]
   },
   "validates": "math",
-  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
   "log": {
-    "forbidden": ["ERROR:"]
+    "forbidden": [
+      "ERROR:"
+    ]
   },
   "exit_code": 0,
   "status": "known-divergence",
   "issue": "null — divergences à ouvrir par le coordinateur : liste de statistiques « sum=total_amount » non acceptée dans OUTPUT (ERROR: expected '(' after statistic 'sum') et OUT= par défaut sans variables d'analyse",
-  "data_types": { "sales.csv": { "region": "char", "amount": "num" } }
+  "data_types": {
+    "sales.csv": {
+      "region": "char",
+      "amount": "num"
+    }
+  }
 }

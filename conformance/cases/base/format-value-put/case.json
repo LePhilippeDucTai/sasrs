@@ -3,17 +3,32 @@
   "title": "PROC FORMAT VALUE + instruction FORMAT / PUT : regroupement de valeurs en libellés",
   "provenance": {
     "kind": "sas-doc",
-    "source": "SAS 9.4 Procedures — PROC FORMAT https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p1s2aq2m2s3m8jn1v2n79m7r4v6e.htm (VALUE associe des plages de valeurs à des libellés ; PUT écrit la valeur formatée)",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p1s2aq2m2s3m8jn1v2n79m7r4v6e.htm — SAS 9.4 Procedures — PROC FORMAT  (VALUE associe des plages de valeurs à des libellés ; PUT écrit la valeur formatée)",
     "sas_version": "9.4M5",
-    "options": ["--deterministic"]
+    "options": [
+      "--deterministic"
+    ]
   },
   "validates": "sas-behaviour",
-  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
   "log": {
-    "required": ["NOTE: The data set WORK.REPORT has 3 observations"],
-    "forbidden": ["ERROR:"]
+    "required": [
+      "NOTE: The data set WORK.REPORT has 3 observations"
+    ],
+    "forbidden": [
+      "ERROR:"
+    ]
   },
   "exit_code": 0,
   "status": "validated",
-  "data_types": { "scores.csv": { "student": "char", "score": "num" } }
+  "data_types": {
+    "scores.csv": {
+      "student": "char",
+      "score": "num"
+    }
+  }
 }
