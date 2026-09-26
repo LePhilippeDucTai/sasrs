@@ -433,3 +433,54 @@ fn merge_missing_from_does_not_overwrite_existing_key() {
     let spec2 = FormatSpec::parse("OTHERFMT.").unwrap();
     assert_eq!(work.format(&Value::Num(1.0), &spec2).trim(), "Pass");
 }
+
+// -------------------------------------------------------------------------
+// J03-P4 — multibyte : largeurs et troncatures en caractères (D-001)
+// -------------------------------------------------------------------------
+
+#[test]
+fn multibyte_right_justify_cafe_w4_keeps_full_word() {
+    // Régression J03-P4 : « Café » justifié droite sur w=4 rendait « afé »
+    // (découpe d'octet avalant le C de tête avec la moitié du « é »).
+    assert_eq!(right_justify("Café", 4), "Café");
+}
+
+#[test]
+fn multibyte_right_justify_pads_in_chars() {
+    // « Thé » (3 cars, 5 octets) sur w=5 : deux espaces de tête, pas quatre.
+    let s = right_justify("Thé", 5);
+    assert_eq!(s, "  Thé");
+    assert_eq!(s.chars().count(), 5);
+}
+
+#[test]
+fn multibyte_right_justify_truncates_on_char_boundary() {
+    // « 日本語 » sur w=2 garde les 2 derniers caractères, sans panique.
+    assert_eq!(right_justify("日本語", 2), "本語");
+}
+
+#[test]
+fn multibyte_right_justify_emoji_no_panic() {
+    // w=1 sur un emoji 4 octets : l'ancien slicing byte paniquait.
+    assert_eq!(right_justify("😀😀", 1), "😀");
+}
+
+#[test]
+fn multibyte_fallback_char_format_fits_in_chars() {
+    // Repli du catalogue (nom inconnu du builtin) sur Value::Char : tronque
+    // et complète en caractères — l'ancien `out.truncate(w)` paniquait.
+    let cat = FormatCatalog::default();
+    let spec = FormatSpec {
+        name: "$NOSUCH".into(),
+        w: Some(4),
+        d: None,
+    };
+    let s = cat.format(&Value::Char("Café".into()), &spec);
+    assert_eq!(s, "Café");
+    let spec2 = FormatSpec {
+        name: "$NOSUCH".into(),
+        w: Some(2),
+        d: None,
+    };
+    assert_eq!(cat.format(&Value::Char("日本語".into()), &spec2), "日本");
+}

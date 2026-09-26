@@ -52,6 +52,7 @@ fn pic_low_high(template: &str, dir: PictureDirectives) -> UserPicture {
     }
 }
 
+mod multibyte;
 mod numeric;
 mod picture;
 mod width_fuzz;

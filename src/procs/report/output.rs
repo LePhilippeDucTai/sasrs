@@ -36,10 +36,13 @@ pub(super) fn write_out_dataset(
                 .iter()
                 .map(|r| value_to_char_cell(&r.vals[ci]))
                 .collect();
+            // J03-P4 — longueur inférée en CARACTÈRES (contrat D-001) :
+            // `s.len()` comptait des octets et sur-dimensionnait les
+            // colonnes caractère accentuées dans OUT=.
             let len = vals
                 .iter()
                 .flatten()
-                .map(|s| s.len())
+                .map(|s| s.chars().count())
                 .max()
                 .unwrap_or(8)
                 .max(1);

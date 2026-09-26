@@ -56,7 +56,12 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
         // ── DATE9. → days since 1960-01-01 ───────────────────────────────────
         "DATE" => {
             // Formats: 01JAN2020 (9 chars) or 01JAN20 (7 chars)
-            if trimmed.len() < 7 {
+            // J03-P4 — la découpe ci-dessous est sur des offsets d'OCTETS ;
+            // une entrée non-ASCII (ex. « €€€€€€€ », 28 octets pour 7 cars)
+            // passait la garde puis paniquait sur « char boundary ». Une
+            // date valide n'est faite que d'ASCII : tout le reste part en
+            // missing, comme toute date invalide (contrat D-001).
+            if trimmed.len() < 7 || !trimmed.is_ascii() {
                 return Some(Value::missing());
             }
             let day_str = &trimmed[..2];
@@ -127,14 +132,13 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
         }
 
         // ── $CHAR / $ ─────────────────────────────────────────────────────────
+        // J03-P4 — troncature en CARACTÈRES (contrat D-001) : l'ancien
+        // `out.truncate(w)` coupait au milieu d'un octet UTF-8 et paniquait.
+        // Pas de remplissage : un informat LIT w caractères, il n'en écrit pas.
         "$" | "$CHAR" | "$F" => {
             let s = match spec.w {
                 None => trimmed.to_string(),
-                Some(w) => {
-                    let mut out = trimmed.to_string();
-                    out.truncate(w as usize);
-                    out
-                }
+                Some(w) => trimmed.chars().take(w as usize).collect(),
             };
             Some(Value::Char(s))
         }

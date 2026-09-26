@@ -187,11 +187,14 @@ impl UserFormat {
 
     /// Longueur du plus long label (plages + `OTHER=`) — la largeur par
     /// défaut de SAS quand `DEFAULT=` n'est pas posé (voir doc de module).
+    /// J03-P4 — comptée en CARACTÈRES (contrat D-001, docs/encoding.md) :
+    /// `label.len()` comptait des octets et sur-dimensionnait (voire
+    /// tronquait en plein caractère via `right_justify`) tout label accentué.
     fn max_label_len(&self) -> usize {
         self.ranges
             .iter()
-            .map(|r| r.label.len())
-            .chain(self.other.iter().map(|s| s.len()))
+            .map(|r| r.label.chars().count())
+            .chain(self.other.iter().map(|s| s.chars().count()))
             .max()
             .unwrap_or(0)
     }
