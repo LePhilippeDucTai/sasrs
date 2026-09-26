@@ -3,7 +3,8 @@ use super::*;
 /// Write a centered line within LINESIZE.
 pub fn centered(session: &mut Session, text: &str) {
     let ls = session.listing.ls();
-    let pad = ls.saturating_sub(text.len()) / 2;
+    // Largeur en caractères (contrat D-001), pas en octets.
+    let pad = ls.saturating_sub(crate::listing::char_width(text)) / 2;
     session
         .listing
         .write_line(&format!("{}{}", " ".repeat(pad), text));

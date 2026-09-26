@@ -308,7 +308,13 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
             let name_vals: Vec<String> = (0..n).map(|i| format!("Row{}", i + 1)).collect();
             // `.max(1)` : une longueur char SAS vaut au moins 1, même si toutes
             // les valeurs sont vides (garde portée par l'ancien helper local).
-            let name_len = name_vals.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+            // Largeur en caractères (contrat D-001), pas en octets.
+            let name_len = name_vals
+                .iter()
+                .map(|s| crate::listing::char_width(s))
+                .max()
+                .unwrap_or(1)
+                .max(1);
             columns.push(
                 Series::new(
                     "_NAME_".into(),

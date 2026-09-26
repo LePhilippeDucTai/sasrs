@@ -12,6 +12,14 @@ pub enum Align {
     Right,
 }
 
+/// Largeur d'affichage d'une chaîne en **caractères** (contrat D-001,
+/// docs/encoding.md) — jamais en octets. SAS compte les longueurs de mise en
+/// page (LINESIZE, largeurs de colonnes) en caractères de la session
+/// LATIN1/WLATIN1 ; un `é` compte donc pour 1, pas pour 2 (UTF-8).
+pub fn char_width(s: &str) -> usize {
+    s.chars().count()
+}
+
 pub struct ListingWriter {
     buf: String,
     /// Titres, footnotes et LINESIZE — l'état de page partagé avec les
@@ -48,7 +56,7 @@ impl ListingWriter {
     }
 
     fn centered(&mut self, text: &str) {
-        let pad = self.page.ls.saturating_sub(text.len()) / 2;
+        let pad = self.page.ls.saturating_sub(char_width(text)) / 2;
         self.raw(&format!("{}{}", " ".repeat(pad), text));
     }
 
@@ -103,10 +111,10 @@ impl ListingWriter {
     /// the whole block centered in LS, blank line between header and rows.
     pub fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
         let ncol = headers.len();
-        let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+        let mut widths: Vec<usize> = headers.iter().map(|h| char_width(h)).collect();
         for row in rows {
             for (i, cell) in row.iter().enumerate().take(ncol) {
-                widths[i] = widths[i].max(cell.len());
+                widths[i] = widths[i].max(char_width(cell));
             }
         }
         let gap = "    ";
@@ -153,11 +161,11 @@ impl ListingWriter {
         totals: Option<&Vec<String>>,
     ) {
         let ncol = headers.len();
-        let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+        let mut widths: Vec<usize> = headers.iter().map(|h| char_width(h)).collect();
         let extra_rows = totals.into_iter();
         for row in rows.iter().chain(extra_rows) {
             for (i, cell) in row.iter().enumerate().take(ncol) {
-                widths[i] = widths[i].max(cell.len());
+                widths[i] = widths[i].max(char_width(cell));
             }
         }
         let gap = "    ";

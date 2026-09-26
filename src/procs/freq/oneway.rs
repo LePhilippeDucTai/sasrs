@@ -283,12 +283,19 @@ fn build_one_way_freqs(
     columns.push(Series::new("Table".into(), table_vals).into());
     vars.push(crate::procs::common::char_var_meta(
         "Table",
-        table_str.len().max(8),
+        crate::listing::char_width(&table_str).max(8),
     ));
 
     // F_<var> : valeur affichée (colonne de tête du listing).
     let f_labels: Vec<String> = cats.iter().map(|c| category_label(&c.value)).collect();
-    let f_len = f_labels.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+    // Longueur en caractères (contrat D-001) : les valeurs accentuées ne
+    // comptent pas double.
+    let f_len = f_labels
+        .iter()
+        .map(|s| crate::listing::char_width(s))
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let f_vals: Vec<Option<String>> = f_labels
         .into_iter()
         .map(|s| if s.is_empty() { None } else { Some(s) })

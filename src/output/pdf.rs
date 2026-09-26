@@ -99,13 +99,15 @@ impl PdfDestination {
                     out.push_str("/F1 10 Tf\n");
                     let col_widths: Vec<f32> = (0..headers.len())
                         .map(|i| {
-                            let max_len =
-                                std::iter::once(headers.get(i).map(|s| s.len()).unwrap_or(0))
-                                    .chain(
-                                        rows.iter().map(|r| r.get(i).map(|s| s.len()).unwrap_or(0)),
-                                    )
-                                    .max()
-                                    .unwrap_or(6);
+                            let max_len = std::iter::once(
+                                headers.get(i).map(|s| super::char_width(s)).unwrap_or(0),
+                            )
+                            .chain(
+                                rows.iter()
+                                    .map(|r| r.get(i).map(|s| super::char_width(s)).unwrap_or(0)),
+                            )
+                            .max()
+                            .unwrap_or(6);
                             (max_len as f32 * col_gap).max(50.0)
                         })
                         .collect();

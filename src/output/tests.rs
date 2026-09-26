@@ -239,6 +239,28 @@ fn rtf_escape_special_chars() {
     assert!(out.contains("a\\\\b\\{c\\}d"), "RTF escape rate: {out}");
 }
 
+/// Largeurs de colonnes RTF calculées en CARACTÈRES (contrat D-001) : la
+/// colonne « Nom » contenant « Éléphant » (8 caractères / 9 octets) fait
+/// 8 × 120 = 960 twips, pas 9 × 120 = 1080 twips (calcul en octets).
+#[test]
+fn char_width_rtf_column_width_in_chars() {
+    let mut r = RtfDestination::new(96);
+    r.write_table(
+        &["Nom".into()],
+        &[Align::Left],
+        &[vec!["Éléphant".into()], vec!["Thé".into()]],
+    );
+    let out = r.take_string();
+    assert!(
+        out.contains("\\cellx960"),
+        "largeur 8 caractères attendue: {out}"
+    );
+    assert!(
+        !out.contains("\\cellx1080"),
+        "pas de largeur en octets: {out}"
+    );
+}
+
 #[test]
 fn rtf_without_file_finalize_none() {
     let mut r = RtfDestination::new(96);
@@ -369,6 +391,33 @@ fn pdf_renders_titles_and_footnotes_idempotent() {
     // duplication de footnotes dans self.sections).
     let (_, bytes2) = p.finalize_to_bytes().unwrap();
     assert_eq!(bytes1.len(), bytes2.len(), "finalize doit être idempotent");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// Largeurs de colonnes PDF calculées en CARACTÈRES (contrat D-001) : la
+/// cellule « Héllo wörld! » fait 12 caractères / 14 octets ; la 2e colonne
+/// démarre à 50 + 12×6 = 122 pt, pas 50 + 14×6 = 134 pt (calcul en octets).
+#[test]
+fn char_width_pdf_column_width_in_chars() {
+    let tmp = std::env::temp_dir().join("test_ods_cw.pdf");
+    let mut p = PdfDestination::with_file(96, tmp.clone());
+    p.write_table(
+        &["A".into(), "B".into()],
+        &[Align::Left, Align::Left],
+        &[vec!["Héllo wörld!".into(), "x".into()]],
+    );
+    let (_, bytes) = p.finalize_to_bytes().unwrap();
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("122.0 742.0 Tm"),
+        "2e colonne à 122 pt attendue: {}",
+        &*s
+    );
+    assert!(
+        !s.contains("134.0 742.0 Tm"),
+        "pas de largeur en octets: {}",
+        &*s
+    );
     let _ = std::fs::remove_file(&tmp);
 }
 
