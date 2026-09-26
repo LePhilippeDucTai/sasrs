@@ -163,6 +163,17 @@ pub(super) fn fit_multiway(
     let ncols = next_col;
 
     let sse_full = sse_of(&full_design, &y);
+    if sse_full.is_nan() {
+        // Rank-deficient design (X'X singular) and no generalized inverse is
+        // implemented: ERROR out instead of silently printing NaN SSE/SE
+        // (J02-P6). SAS GLM parameterizes with a generalized inverse (SAS/STAT
+        // User's Guide, The GLM Procedure, Details: Parameterization of PROC
+        // GLM Models); until a g-inverse exists here, the fit is refused.
+        return Err(SasError::runtime(
+            "PROC GLM: the model is rank deficient (X'X is singular) and no \
+             generalized inverse is available; the analysis cannot be computed.",
+        ));
+    }
     let ssm = sst - sse_full;
     let df_error = (n as i64 - ncols as i64).max(0) as f64;
     let df_model: f64 = term_df.iter().map(|&d| d as f64).sum();

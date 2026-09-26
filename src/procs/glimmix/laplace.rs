@@ -93,6 +93,8 @@ pub(super) struct LaplaceFit {
     pub(super) sigma2_e: f64,
     pub(super) neg2: f64,
     pub(super) iterations: usize,
+    /// Whether the Nelder-Mead optimizer reported convergence on its last run.
+    pub(super) converged: bool,
 }
 
 /// Fit the single random-intercept GLMM by Laplace ML. Optimises over the
@@ -148,12 +150,14 @@ pub(super) fn fit_laplace(
     let mut u_best = u0.clone();
     let mut f_best = eval(&u0);
     let mut step = 0.5_f64;
+    let mut converged = false;
     for restart in 0..8 {
         let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 4000, 1e-12, 1e-10);
         if f_r <= f_best {
             f_best = f_r;
             u_best = u_r;
         }
+        converged = conv;
         if restart >= 2 && conv {
             break;
         }
@@ -212,5 +216,6 @@ pub(super) fn fit_laplace(
         sigma2_e,
         neg2: f_best,
         iterations: 1,
+        converged,
     })
 }

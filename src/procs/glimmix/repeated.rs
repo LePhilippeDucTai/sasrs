@@ -162,6 +162,8 @@ pub(super) struct RepFit {
     pub(super) beta: Vec<f64>,
     pub(super) cov_beta: Vec<Vec<f64>>,
     pub(super) neg2: f64,
+    /// Whether the Nelder-Mead optimizer reported convergence on its last run.
+    pub(super) converged: bool,
 }
 
 /// Fit the weighted LMM with repeated covariance R (AR(1)/UN) via Nelder-Mead
@@ -211,12 +213,14 @@ pub(super) fn fit_rep(
     let mut u_best = u0.clone();
     let mut f_best = eval(&u0);
     let mut step = 0.5_f64;
+    let mut converged = false;
     for restart in 0..6 {
         let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
         if f_r <= f_best {
             f_best = f_r;
             u_best = u_r;
         }
+        converged = conv;
         if restart >= 2 && conv {
             break;
         }
@@ -232,6 +236,7 @@ pub(super) fn fit_rep(
         beta,
         cov_beta,
         neg2,
+        converged,
     })
 }
 
@@ -302,6 +307,7 @@ pub(super) fn fit_rspl_rep(
             sigma2_e: residual,
             neg2: rep.neg2,
             iterations: 1,
+            converged: rep.converged,
             cov_parms: Some(cov_parms_from_rep(cov, &rep.theta)),
         });
     }
@@ -339,6 +345,7 @@ pub(super) fn fit_rspl_rep(
     )?;
     beta = last.beta.clone();
     let mut iterations = 1;
+    let mut loop_converged = false;
 
     for it in 1..50 {
         iterations = it + 1;
@@ -353,17 +360,29 @@ pub(super) fn fit_rspl_rep(
             z[i] = eta + (y[i] - mu) / d;
         }
         let rep = fit_rep(&z, x, cov, subj_of, within_idx, Some(&w))?;
-        let diff: f64 = rep
+        // Convergence on the full parameter set (β, θ): a β that freezes
+        // while the covariance parameters keep moving must not be reported
+        // as converged (J02-P6).
+        let diff_beta: f64 = rep
             .beta
             .iter()
             .zip(&beta)
             .map(|(a, b)| (a - b).powi(2))
             .sum::<f64>()
             .sqrt();
+        let diff_theta: f64 = rep
+            .theta
+            .iter()
+            .zip(&last.theta)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let diff = diff_beta.max(diff_theta);
         let norm_old: f64 = beta.iter().map(|b| b * b).sum::<f64>().sqrt();
         beta = rep.beta.clone();
         last = rep;
         if diff / (1.0 + norm_old) < 1e-6 {
+            loop_converged = true;
             break;
         }
     }
@@ -381,6 +400,7 @@ pub(super) fn fit_rspl_rep(
         sigma2_e: residual,
         neg2: last.neg2,
         iterations,
+        converged: loop_converged && last.converged,
         cov_parms: Some(cov_parms_from_rep(cov, &last.theta)),
     })
 }

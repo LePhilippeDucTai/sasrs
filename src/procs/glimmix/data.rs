@@ -350,6 +350,8 @@ pub(super) fn compute_fit(
             sigma2_e,
             neg2: 0.0,
             iterations: g.iterations,
+            // fit_glm errors out on non-convergence before returning here.
+            converged: true,
             cov_parms: None,
         }
     } else if use_laplace {
@@ -363,6 +365,7 @@ pub(super) fn compute_fit(
             sigma2_e: lf.sigma2_e,
             neg2: lf.neg2,
             iterations: lf.iterations,
+            converged: lf.converged,
             cov_parms: None,
         }
     } else if let Some(rep) = rep_cov {
@@ -383,6 +386,9 @@ pub(super) fn compute_fit(
             sigma2_e: s2e,
             neg2,
             iterations: 1,
+            // Deterministic closed-form / profiled REML search — no iteration
+            // criterion can fail here.
+            converged: true,
             cov_parms: None,
         }
     } else {

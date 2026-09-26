@@ -278,9 +278,12 @@ pub(super) fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<(
     // ── Optimize ────────────────────────────────────────────────────────────
     let fit = fit_gen(&y, &x, cov, &subj_of, &within_idx, ast.method, &u0)?;
     if !fit.converged {
+        // SAS MIXED reports non-convergence as a WARNING, not a NOTE
+        // (Kiernan, Tao & Gibbs 2012, SGF 332-2012: "WARNING: Did not
+        // converge." / Convergence Status).
         session
             .log
-            .note("PROC MIXED optimization did not converge within the iteration limit.");
+            .warning("Convergence was not attained within the iteration limit in PROC MIXED.");
     }
 
     // ── Listing ─────────────────────────────────────────────────────────────

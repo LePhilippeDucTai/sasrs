@@ -222,7 +222,6 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
                 binomial_n_nonevent_total,
             );
         }
-        print_convergence_status(session);
     }
 
     // ── 9. IRLS / Newton-Raphson ──────────────────────────────────────────
@@ -234,6 +233,13 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         p_param,
     };
     let (beta, h_inv, final_mu) = fit_irls(session, &data, dist, lf)?;
+
+    // The listing may only claim convergence once the fit actually converged
+    // (fit_irls errors out otherwise), so the Model Convergence Status block
+    // is printed after the fit, in the same listing position as before.
+    if !model.noprint {
+        print_convergence_status(session);
+    }
 
     // ── 10. Scale / Dispersion ────────────────────────────────────────────
     let scale = compute_scale(model, dist, &data, &final_mu, h_inv);

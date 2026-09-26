@@ -236,6 +236,18 @@ pub(super) fn fit_multiway(
     let full_x = build_design(&all_true);
     let full_cols = full_x[0].len();
     let sse_full = fit_sse(&full_x, &y);
+    if sse_full.is_nan() {
+        // Rank-deficient design (X'X singular) and no generalized inverse is
+        // implemented: ERROR out instead of silently printing NaN SS (J02-P6).
+        // SAS PROC ANOVA/GLM handle rank deficiency via a generalized inverse
+        // (SAS/STAT User's Guide, The ANOVA Procedure, Details: Construction
+        // of the design matrix / The GLM Procedure, Parameterization of PROC
+        // GLM Models); until a g-inverse exists here, the fit is refused.
+        return Err(SasError::runtime(
+            "PROC ANOVA: the design is rank deficient (X'X is singular) and no \
+             generalized inverse is available; the analysis cannot be computed.",
+        ));
+    }
     let ssm = sst - sse_full;
     let df_model = (full_cols - 1) as f64;
     let df_error = (n as f64 - full_cols as f64).max(0.0);

@@ -17,6 +17,9 @@ pub(super) struct GlimmixFit {
     /// -2 Res Log Pseudo-Likelihood (random case) else -2 LL placeholder.
     pub(super) neg2: f64,
     pub(super) iterations: usize,
+    /// Whether the estimation criterion was actually met. The listing may only
+    /// claim convergence when this is true (J02-P6).
+    pub(super) converged: bool,
     /// Named covariance-parameter rows for the report. When `None`, the legacy
     /// VC display (Intercept σ²_u + Residual σ²_e) is used — byte-identical to
     /// the m28 oracle. When `Some`, these rows are printed verbatim (AR(1)/UN).
@@ -79,13 +82,28 @@ pub(super) fn fit_pql(
             u_new[s] = s2u * num[s] / (s2e + s2u * den[s]).max(1e-12);
         }
 
-        let diff: f64 = beta_new
+        // Convergence must consider the FULL parameter vector (β, u): a
+        // subject-separated fit can freeze β while the random effects keep
+        // diverging at every linearisation (J02-P6).
+        let diff_beta: f64 = beta_new
             .iter()
             .zip(&beta)
             .map(|(a, b)| (a - b).powi(2))
             .sum::<f64>()
             .sqrt();
-        let norm_old: f64 = beta.iter().map(|b| b * b).sum::<f64>().sqrt();
+        let diff_u: f64 = u_new
+            .iter()
+            .zip(&u)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let diff = diff_beta.max(diff_u);
+        let norm_old: f64 = beta
+            .iter()
+            .chain(u.iter())
+            .map(|b| b * b)
+            .sum::<f64>()
+            .sqrt();
 
         beta = beta_new;
         u = u_new;
@@ -103,6 +121,7 @@ pub(super) fn fit_pql(
                 sigma2_e: s2e,
                 neg2: n2,
                 iterations,
+                converged: true,
                 cov_parms: None,
             });
         }
@@ -147,6 +166,7 @@ pub(super) fn fit_pql(
         sigma2_e: s2e,
         neg2: n2,
         iterations,
+        converged: false,
         cov_parms: None,
     })
 }

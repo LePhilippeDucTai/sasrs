@@ -76,6 +76,29 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
     // ── 4. Fit ──────────────────────────────────────────────────────────────
     let fit = fit_mixed(&y, &x, &subj_of, n_subjects, ast.method, ast.nobound)?;
 
+    // Convergence / boundary diagnostics (J02-P6): the listing below only
+    // claims convergence when the search actually met its criterion, and the
+    // SAS-documented NOTEs are emitted instead of silence.
+    if !fit.converged {
+        session
+            .log
+            .warning("Convergence was not attained within the iteration limit in PROC MIXED.");
+    }
+    if fit.g_not_pd {
+        // "NOTE: Estimated G matrix is not positive definite." — SAS Usage
+        // Note 22614; Kiernan, Tao & Gibbs (2012), "Tips and Strategies for
+        // Mixed Modeling with SAS/STAT Procedures" (SGF 332-2012).
+        session
+            .log
+            .note("Estimated G matrix is not positive definite.");
+    }
+    if fit.lambda_capped {
+        session.log.note(
+            "The variance component ratio search reached its boundary (lambda=1000) \
+             in PROC MIXED; the estimate may be unreliable.",
+        );
+    }
+
     // Max observations per subject.
     let mut counts = vec![0usize; n_subjects];
     for &s in &subj_of {

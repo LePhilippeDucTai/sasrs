@@ -116,6 +116,8 @@ pub(super) fn print_number_of_observations_legacy(
 }
 
 /// Iteration History (minimal, stable) + convergence message (legacy path).
+/// The convergence line is asserted only when the search actually converged
+/// (J02-P6); SAS MIXED otherwise reports the failure in the log.
 pub(super) fn print_iteration_history_legacy(session: &mut Session, fit: &MixedFit) {
     centered(session, "Iteration History");
     session.listing.blank();
@@ -139,10 +141,13 @@ pub(super) fn print_iteration_history_legacy(session: &mut Session, fit: &MixedF
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
-    centered(session, "Convergence criteria met.");
+    if fit.converged {
+        centered(session, "Convergence criteria met.");
+    } else {
+        centered(session, "Convergence criteria were not met.");
+    }
     session.listing.blank();
 }
-
 /// Covariance Parameter Estimates table (legacy path).
 pub(super) fn print_covariance_parameter_estimates_legacy(
     session: &mut Session,
