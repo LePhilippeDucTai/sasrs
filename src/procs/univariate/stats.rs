@@ -40,9 +40,10 @@ pub(super) fn kurtosis(xs: &[f64]) -> Option<f64> {
 }
 
 /// SAS WEIGHTED skewness g1 (VARDEF=DF). `pairs` are the usable
-/// `(value, weight)` pairs (all weights strictly positive), `mean_w` the
-/// weighted mean `Σw_i x_i / Σw_i` and `s_w` the weighted standard deviation
-/// `√(Σw_i(x_i-mean_w)² / (n-1))` — both already computed by the caller, so the
+/// `(value, weight)` pairs (weights ≥ 0, Σw > 0), `mean_w` the weighted
+/// mean `Σw_i x_i / Σw_i` and `s_w` the weighted standard deviation
+/// `√(Σw_i(x_i-mean_w)² / (Σw_i − 1))` (J03-P2 : diviseur W−1, comme la
+/// Variance du bloc Moments) — both already computed by the caller, so the
 /// Skewness line stays consistent with the Mean / Std Deviation lines of the
 /// same Moments block.
 ///
@@ -85,63 +86,6 @@ pub(super) fn weighted_kurtosis(pairs: &[(f64, f64)], mean_w: f64, s_w: f64) -> 
     let term1 = nf * (nf + 1.0) / ((nf - 1.0) * (nf - 2.0) * (nf - 3.0)) * sum4;
     let term2 = 3.0 * (nf - 1.0).powi(2) / ((nf - 2.0) * (nf - 3.0));
     Some(term1 - term2)
-}
-
-/// SAS WEIGHTED quantile (default QNTLDEF=5 analog) of fraction `p` over the
-/// already-sorted (ascending by value) `(value, weight)` pairs. All weights are
-/// strictly positive (the caller has dropped weights ≤ 0 via
-/// `partition_weighted`). Empty → None.
-///
-/// Rule (the weighted analog of the unweighted Definition 5 above): let
-/// `W = Σ w_i` be the total weight and `W_i = Σ_{j≤i} w_j` the cumulative weight
-/// through the i-th smallest value (1-indexed, `W_0 = 0`). For a target
-/// `t = p·W`:
-///
-/// ```text
-/// p == 0 → x(1) (min);  p == 1 → x(n) (max)
-/// find the smallest i with W_i ≥ t:
-///   if W_i == t exactly:  Q = (x(i) + x(i+1)) / 2   // average at the
-///                                                     // discontinuity
-///   else:                 Q = x(i)
-/// ```
-///
-/// This reduces to the unweighted Definition 5 when every weight is 1: then
-/// `W = n`, `t = n·p`, and `W_i == t` exactly iff `n·p` is an integer (the
-/// averaging case), matching `quantile_def5`.
-pub(super) fn weighted_quantile_def5(sorted_pairs: &[(f64, f64)], p: f64) -> Option<f64> {
-    let n = sorted_pairs.len();
-    if n == 0 {
-        return None;
-    }
-    let x = |i: usize| sorted_pairs[i - 1].0; // 1-indexed value accessor
-
-    if p <= 0.0 {
-        return Some(x(1));
-    }
-    if p >= 1.0 {
-        return Some(x(n));
-    }
-
-    let total_w: f64 = sorted_pairs.iter().map(|(_, w)| *w).sum();
-    let t = p * total_w;
-
-    let mut cum = 0.0_f64;
-    for i in 1..=n {
-        cum += sorted_pairs[i - 1].1;
-        // Use a relative tolerance so integer weights hit the exact-average
-        // branch deterministically (mirrors the `g == 0.0` test unweighted).
-        if (cum - t).abs() <= 1e-9 * total_w.max(1.0) {
-            return if i < n {
-                Some((x(i) + x(i + 1)) / 2.0)
-            } else {
-                Some(x(n))
-            };
-        }
-        if cum > t {
-            return Some(x(i));
-        }
-    }
-    Some(x(n))
 }
 
 /// Mode: smallest most-frequent value, but only if some value repeats
@@ -205,17 +149,11 @@ pub(super) fn fitted_normal_params(
     match weights {
         Some(wv) => {
             let (pairs, _) = partition_weighted(values, wv, rows);
-            let n = pairs.len();
-            if n < 2 {
-                return None;
-            }
-            let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
-            if sum_w <= 0.0 {
-                return None;
-            }
-            let mean = pairs.iter().map(|(x, w)| w * x).sum::<f64>() / sum_w;
-            let css: f64 = pairs.iter().map(|(x, w)| w * (x - mean) * (x - mean)).sum();
-            Some((mean, (css / (n as f64 - 1.0)).sqrt()))
+            // J03-P2 — σ̂ suit la Std Deviation pondérée VARDEF=DF du bloc
+            // Moments : diviseur Σw − 1 (oracle weighted_stats).
+            let mean = weighted_mean_css(&pairs)?.0;
+            let std = weighted_variance(&pairs, VarDef::Df)?.sqrt();
+            Some((mean, std))
         }
         None => {
             let xs: Vec<f64> = rows

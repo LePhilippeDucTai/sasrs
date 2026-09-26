@@ -536,3 +536,79 @@ fn contract_globals_survive_later_proc_error_without_leaking_warnings() {
     assert_eq!(outcome.log.matches("180-322").count(), 1);
     assert!(outcome.listing.contains("Retained"));
 }
+
+// ───────────── J03-P2 : variance pondérée et partitions WEIGHT ─────────
+
+#[test]
+fn weighted_variance_vardef_df_and_weight_oracle() {
+    // Oracle weighted_stats « poids-egaux-* » : x=1..8, w=2 partout.
+    // CSS = 84, W = 16 : DF → 84/15 = 5.6 ; WEIGHT → 84/(16−32/16) = 6.
+    let pairs: Vec<(f64, f64)> = (1..=8).map(|x| (x as f64, 2.0)).collect();
+    let df = weighted_variance(&pairs, VarDef::Df).unwrap();
+    assert!((df - 5.6).abs() < 1e-12, "DF = {df}");
+    let w = weighted_variance(&pairs, VarDef::Weight).unwrap();
+    assert!((w - 6.0).abs() < 1e-12, "WEIGHT = {w}");
+    // n = 1 → missing, même si le diviseur serait positif (W−1 = 6).
+    let one = vec![(42.0, 7.0)];
+    assert!(weighted_variance(&one, VarDef::Df).is_none());
+}
+
+#[test]
+fn weighted_quantile_def5_shared_exact_boundary() {
+    // Oracle « borne-cumulee-exacte » : x=[1,2,3], w=[1,1,2], W=4 :
+    // médiane t=2 == cum → (2+3)/2 ; Q1 t=1 == cum → (1+2)/2 ; Q3 → 3.
+    let pairs = vec![(1.0, 1.0), (2.0, 1.0), (3.0, 2.0)];
+    let q = |p: f64| weighted_quantile_def5(&pairs, p).unwrap();
+    assert_eq!(q(0.5), 2.5);
+    assert_eq!(q(0.25), 1.5);
+    assert_eq!(q(0.75), 3.0);
+    assert_eq!(q(0.01), 1.0);
+    assert_eq!(q(0.99), 3.0);
+}
+
+#[test]
+fn partition_weighted_strict_nmiss_rule() {
+    // x manquant à poids valide → NMiss ; poids invalide (manquant ou ≤ 0)
+    // → exclu de N ET de NMiss, quelle que soit la valeur de x.
+    let values = vec![
+        Value::Num(1.0),
+        Value::Num(7.0),
+        Value::Num(9.0),
+        Value::missing(),
+    ];
+    let weights = vec![
+        Value::Num(2.0),
+        Value::missing(),
+        Value::Num(0.0),
+        Value::Num(3.0),
+    ];
+    let rows = vec![0, 1, 2, 3];
+    let (pairs, nmiss) = partition_weighted_strict(&values, &weights, &rows);
+    assert_eq!(pairs, vec![(1.0, 2.0)]);
+    assert_eq!(nmiss, 1);
+}
+
+#[test]
+fn partition_weighted_lax_keeps_zero_weight_in_n() {
+    // Défaut UNIVARIATE : poids nul/négatif → poids effectif 0 mais
+    // l'observation reste ; poids manquant → aussi 0 (l'obs reste tant que
+    // x est non manquant) ; x manquant → NMiss.
+    let values = vec![
+        Value::Num(1.0),
+        Value::Num(5.0),
+        Value::Num(9.0),
+        Value::Num(4.0),
+        Value::missing(),
+    ];
+    let weights = vec![
+        Value::Num(1.0),
+        Value::Num(0.0),
+        Value::Num(1.0),
+        Value::missing(),
+        Value::Num(2.0),
+    ];
+    let rows = vec![0, 1, 2, 3, 4];
+    let (pairs, nmiss) = partition_weighted_lax(&values, &weights, &rows);
+    assert_eq!(pairs, vec![(1.0, 1.0), (5.0, 0.0), (9.0, 1.0), (4.0, 0.0)]);
+    assert_eq!(nmiss, 1);
+}

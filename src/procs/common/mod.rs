@@ -94,11 +94,23 @@ pub use stats::partition_numeric;
 
 pub use stats::partition_weighted;
 
+pub use stats::partition_weighted_lax;
+
+pub use stats::partition_weighted_strict;
+
 pub use stats::sample_std;
 
 pub use stats::t_quantile;
 
 pub use stats::two_sided_p;
+
+pub use stats::VarDef;
+
+pub use stats::weighted_mean_css;
+
+pub use stats::weighted_quantile_def5;
+
+pub use stats::weighted_variance;
 
 // ───────────────────────── shared distributions ─────────────────────────
 //

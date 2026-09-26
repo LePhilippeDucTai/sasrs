@@ -46,6 +46,8 @@ pub fn compute(stat: &str, xs: &[f64], n_missing: usize, alpha: f64) -> Value {
 
     match stat {
         "n" => Value::Num(n as f64),
+        // SAS unweighted SumWgt = N (chaque observation pèse 1).
+        "sumwgt" => Value::Num(n as f64),
         "nmiss" => Value::Num(n_missing as f64),
         "min" => {
             if n == 0 {
@@ -105,13 +107,21 @@ pub fn compute(stat: &str, xs: &[f64], n_missing: usize, alpha: f64) -> Value {
     }
 }
 
-/// Weighted analogue of `compute`. `pairs` holds the usable (value, weight)
-/// pairs of a group (from `common::partition_weighted`); `n_excluded` is the
-/// count of observations dropped by the WEIGHT exclusion rules. VARDEF=DF.
+/// Weighted analogue of `compute` (J03-P2). `pairs` holds the usable
+/// (value, weight) pairs of a group (from `common::partition_weighted_strict`);
+/// `n_missing` is the weighted NMiss (x manquants à poids valide). `vardef`
+/// selects the variance divisor: DF → Σw − 1 (défaut SAS), WEIGHT →
+/// Σw − Σw²/Σw (`common::weighted_variance`).
 ///
-/// See the file header for the formulas. MEDIAN is computed UNWEIGHTED here
-/// (weighted median deferred — documented divergence).
-pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alpha: f64) -> Value {
+/// Formulas: see the file header. MEDIAN / percentiles / QRANGE use the
+/// shared weighted Definition 5 (`common::weighted_quantile_def5`).
+pub fn compute_weighted(
+    stat: &str,
+    pairs: &[(f64, f64)],
+    n_missing: usize,
+    vardef: VarDef,
+    alpha: f64,
+) -> Value {
     let n = pairs.len();
     let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
     let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
@@ -120,20 +130,8 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alp
     } else {
         None
     };
-    // Weighted corrected sum of squares: Σ w_i (x_i − x̄_w)^2.
-    let css_w = match mean_w {
-        Some(m) => pairs
-            .iter()
-            .map(|(x, w)| w * (x - m) * (x - m))
-            .sum::<f64>(),
-        None => 0.0,
-    };
-    // Variance = CSS_w / (n − 1) using the COUNT of usable obs.
-    let variance = if n >= 2 {
-        Some(css_w / (n as f64 - 1.0))
-    } else {
-        None
-    };
+    // J03-P2 — VARDEF= divisor: DF → W−1, WEIGHT → W−Σw²/W (n ≥ 2 requis).
+    let variance = weighted_variance(pairs, vardef);
     let std = variance.map(|v| v.sqrt());
 
     // Weighted confidence limits for the mean. Reuse the SAME weighted std
@@ -151,7 +149,9 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alp
 
     match stat {
         "n" => Value::Num(n as f64),
-        "nmiss" => Value::Num(n_excluded as f64),
+        // SumWgt = Σw_i (SAS PROC MEANS keyword SUMWGT).
+        "sumwgt" => Value::Num(sum_w),
+        "nmiss" => Value::Num(n_missing as f64),
         "min" => {
             if n == 0 {
                 Value::missing()
@@ -202,19 +202,34 @@ pub fn compute_weighted(stat: &str, pairs: &[(f64, f64)], n_excluded: usize, alp
             (Some(m), Some(s)) if m != 0.0 => Value::Num(100.0 * s / m),
             _ => Value::missing(),
         },
-        // Weighted median deferred → unweighted median of the usable values.
+        // J03-P2 — weighted Definition-5 median (shared with UNIVARIATE).
         "median" => {
-            let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
-            match median(&xs) {
+            let mut sorted: Vec<(f64, f64)> = pairs.to_vec();
+            sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            match weighted_quantile_def5(&sorted, 0.5) {
                 Some(m) => Value::Num(m),
                 None => Value::missing(),
             }
         }
-        // Weighted percentiles deferred (like MEDIAN): computed UNWEIGHTED on
-        // the usable values via Definition 5. Documented divergence.
+        // J03-P2 — weighted percentiles / QRANGE via the shared weighted
+        // Definition 5 (position by cumulative weight).
         other if percentile_fraction(other).is_some() || other == "qrange" => {
-            let xs: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
-            compute(other, &xs, n_excluded, alpha)
+            let mut sorted: Vec<(f64, f64)> = pairs.to_vec();
+            sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            if other == "qrange" {
+                return match (
+                    weighted_quantile_def5(&sorted, 0.75),
+                    weighted_quantile_def5(&sorted, 0.25),
+                ) {
+                    (Some(q3), Some(q1)) => Value::Num(q3 - q1),
+                    _ => Value::missing(),
+                };
+            }
+            let p = percentile_fraction(other).unwrap();
+            match weighted_quantile_def5(&sorted, p) {
+                Some(q) => Value::Num(q),
+                None => Value::missing(),
+            }
         }
         _ => Value::missing(),
     }

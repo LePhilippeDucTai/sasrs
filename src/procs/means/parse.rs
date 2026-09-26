@@ -2,8 +2,8 @@ use super::*;
 
 /// Recognized statistic keywords accepted on the PROC MEANS statement.
 pub(super) const STAT_KEYWORDS: &[&str] = &[
-    "n", "nmiss", "mean", "std", "stddev", "min", "max", "sum", "range", "stderr", "cv", "median",
-    "clm", "lclm", "uclm",
+    "n", "nmiss", "mean", "std", "stddev", "min", "max", "sum", "sumwgt", "range", "stderr", "cv",
+    "median", "clm", "lclm", "uclm",
     // Percentile keywords (M33.3) — Definition 5, shared with PROC UNIVARIATE.
     "p1", "p5", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80", "p90", "p95",
     "p99", "q1", "q3", "qrange",
@@ -53,6 +53,8 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
     // SAS default confidence level. Stays 0.05 unless ALPHA= is given; only
     // the CI statistics read it, so the default path is unaffected.
     let mut alpha: f64 = 0.05;
+    // J03-P2 — VARDEF= (DF par défaut) pour la variance pondérée.
+    let mut vardef = VarDef::Df;
 
     // --- PROC MEANS statement options, until `;` ---
     loop {
@@ -77,6 +79,32 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
             // PRINTALLTYPES (M33.3): print every generated _TYPE_ subtable.
             ts.next();
             printalltypes = true;
+        } else if ts.peek().is_kw("vardef") {
+            // J03-P2 — VARDEF= divise la variance pondérée : DF (défaut,
+            // Σw−1) et WEIGHT/WGT (Σw−Σw²/Σw) sont honorés ; toute autre
+            // valeur change la variance → ERROR explicite.
+            crate::procs::common::consume_option_eq(ts, "VARDEF")?;
+            let tok = ts.peek().clone();
+            match tok.ident().map(|s| s.to_ascii_lowercase()).as_deref() {
+                Some("df") => {
+                    ts.next();
+                    vardef = VarDef::Df;
+                }
+                Some("weight" | "wgt") => {
+                    ts.next();
+                    vardef = VarDef::Weight;
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unexpected option 'VARDEF={}' on PROC {} statement.",
+                            tok.ident().unwrap_or("?").to_uppercase(),
+                            proc_name
+                        ),
+                        tok.span,
+                    ));
+                }
+            }
         } else if ts.peek().is_kw("alpha") {
             crate::procs::common::consume_option_eq(ts, "ALPHA")?;
             let tok = ts.peek().clone();
@@ -176,6 +204,7 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
         var,
         by,
         weight,
+        vardef,
         alpha,
         printalltypes,
         ways,

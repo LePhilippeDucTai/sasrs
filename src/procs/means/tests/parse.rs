@@ -255,57 +255,115 @@ fn compute_clm_requires_n2() {
 
 #[test]
 fn compute_weighted_hand_values() {
-    // values [1,2,3] weights [1,2,3]:
-    //   SumWgt=6, Sum=14, mean=14/6=2.33333...
-    //   CSS_w = 1*(1-m)^2 + 2*(2-m)^2 + 3*(3-m)^2 = 3.33333...
-    //   Variance = CSS_w/(n-1) = 3.33333/2 = 1.66667
-    //   Std = sqrt(1.66667) = 1.2909944
-    //   StdErr = Std/sqrt(6) = 0.5270463
-    //   CV = 100*Std/mean = 55.3283
-    //   USS_w = 1*1 + 2*4 + 3*9 = 36
+    // values [1,2,3] weights [1,2,3] (J03-P2 : VARDEF=DF → diviseur W−1) :
+    //   W=6, SumWgt=6, Sum=14, mean=14/6=2.33333...
+    //   CSS_w = 1*(1-m)^2 + 2*(2-m)^2 + 3*(3-m)^2 = 10/3
+    //   Variance = CSS_w/(W-1) = (10/3)/5 = 2/3
+    //   Std = sqrt(2/3) = 0.8164966
+    //   StdErr = Std/sqrt(6)
+    //   CV = 100*Std/mean
+    // Référence : proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm (formules pondérées).
     let pairs = vec![(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)];
-    assert_eq!(compute_weighted("n", &pairs, 0, 0.05), Value::Num(3.0));
-    assert_eq!(compute_weighted("nmiss", &pairs, 0, 0.05), Value::Num(0.0));
-    assert_eq!(compute_weighted("sum", &pairs, 0, 0.05), Value::Num(14.0));
-    assert_eq!(compute_weighted("min", &pairs, 0, 0.05), Value::Num(1.0));
-    assert_eq!(compute_weighted("max", &pairs, 0, 0.05), Value::Num(3.0));
+    assert_eq!(
+        compute_weighted("n", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(3.0)
+    );
+    assert_eq!(
+        compute_weighted("nmiss", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(0.0)
+    );
+    assert_eq!(
+        compute_weighted("sumwgt", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(6.0)
+    );
+    assert_eq!(
+        compute_weighted("sum", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(14.0)
+    );
+    assert_eq!(
+        compute_weighted("min", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(1.0)
+    );
+    assert_eq!(
+        compute_weighted("max", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(3.0)
+    );
+    // Quantiles pondérés Définition 5 (partagés avec UNIVARIATE) :
+    // W=6, cibles t=p*6 : médiane t=3 → cum 3 == t → (2+3)/2 = 2.5 ;
+    // Q1 t=1.5 → cum 3 > 1.5 → 2 ; Q3 t=4.5 → cum 6 → 3.
+    assert_eq!(
+        compute_weighted("median", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(2.5)
+    );
+    assert_eq!(
+        compute_weighted("q1", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(2.0)
+    );
+    assert_eq!(
+        compute_weighted("q3", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(3.0)
+    );
 
-    let m = match compute_weighted("mean", &pairs, 0, 0.05) {
+    let m = match compute_weighted("mean", &pairs, 0, VarDef::Df, 0.05) {
         Value::Num(f) => f,
         _ => panic!("mean numeric"),
     };
     assert!((m - 14.0 / 6.0).abs() < 1e-12, "mean = {m}");
 
-    let std = match compute_weighted("std", &pairs, 0, 0.05) {
+    let std = match compute_weighted("std", &pairs, 0, VarDef::Df, 0.05) {
         Value::Num(f) => f,
         _ => panic!("std numeric"),
     };
-    assert!((std - (5.0_f64 / 3.0).sqrt()).abs() < 1e-12, "std = {std}");
+    assert!((std - (2.0_f64 / 3.0).sqrt()).abs() < 1e-12, "std = {std}");
 
-    let se = match compute_weighted("stderr", &pairs, 0, 0.05) {
+    // VARDEF=WEIGHT : diviseur W − Σw²/W = 6 − 14/6 = 11/3 → var = 2 / (11/3).
+    let varw = match compute_weighted("std", &pairs, 0, VarDef::Weight, 0.05) {
+        Value::Num(f) => f,
+        _ => panic!("std numeric"),
+    };
+    assert!(
+        (varw - (10.0_f64 / 3.0 / (11.0_f64 / 3.0)).sqrt()).abs() < 1e-12,
+        "std VARDEF=WEIGHT = {varw}"
+    );
+
+    let se = match compute_weighted("stderr", &pairs, 0, VarDef::Df, 0.05) {
         Value::Num(f) => f,
         _ => panic!("stderr numeric"),
     };
     assert!(
-        (se - (5.0_f64 / 3.0).sqrt() / 6.0_f64.sqrt()).abs() < 1e-12,
+        (se - (2.0_f64 / 3.0).sqrt() / 6.0_f64.sqrt()).abs() < 1e-12,
         "stderr = {se}"
     );
 
-    let cv = match compute_weighted("cv", &pairs, 0, 0.05) {
+    let cv = match compute_weighted("cv", &pairs, 0, VarDef::Df, 0.05) {
         Value::Num(f) => f,
         _ => panic!("cv numeric"),
     };
-    let expected_cv = 100.0 * (5.0_f64 / 3.0).sqrt() / (14.0 / 6.0);
+    let expected_cv = 100.0 * (2.0_f64 / 3.0).sqrt() / (14.0 / 6.0);
     assert!((cv - expected_cv).abs() < 1e-9, "cv = {cv}");
 }
 
 #[test]
 fn compute_weighted_n1_std_missing() {
+    // n=1 : SAS ne calcule VAR/STD que pour n>=2 → missing, même si le
+    // diviseur W-1 serait positif (oracle weighted_stats, cas
+    // « observation-unique » / « x-manquant-seul »).
     let pairs = vec![(5.0, 2.0)];
-    assert_eq!(compute_weighted("n", &pairs, 0, 0.05), Value::Num(1.0));
-    assert_eq!(compute_weighted("mean", &pairs, 0, 0.05), Value::Num(5.0));
-    assert!(compute_weighted("std", &pairs, 0, 0.05).is_missing());
-    assert!(compute_weighted("stderr", &pairs, 0, 0.05).is_missing());
+    assert_eq!(
+        compute_weighted("n", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(1.0)
+    );
+    assert_eq!(
+        compute_weighted("mean", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(5.0)
+    );
+    assert!(compute_weighted("std", &pairs, 0, VarDef::Df, 0.05).is_missing());
+    assert!(compute_weighted("stderr", &pairs, 0, VarDef::Df, 0.05).is_missing());
+    // Les quantiles restent définis (valeur unique).
+    assert_eq!(
+        compute_weighted("median", &pairs, 0, VarDef::Df, 0.05),
+        Value::Num(5.0)
+    );
 }
 
 #[test]
@@ -378,4 +436,26 @@ fn allowed_types_types_selects_specific_crossings() {
 fn allowed_types_none_when_unrestricted() {
     let ast = means_ast_var_x();
     assert!(allowed_types(&ast, &ast.class, 0).unwrap().is_none());
+}
+
+// ──────────────────── J03-P2 : VARDEF= parsing ─────────────────────────
+
+#[test]
+fn parse_vardef_option_df_weight_and_error() {
+    let ast = parse_means("proc means data=a vardef=df; var x; weight w; run;").unwrap();
+    assert_eq!(ast.vardef, VarDef::Df);
+    // WEIGHT et son alias WGT sont honorés.
+    let ast = parse_means("proc means data=a vardef=weight; run;").unwrap();
+    assert_eq!(ast.vardef, VarDef::Weight);
+    let ast = parse_means("proc means data=a vardef=WGT; run;").unwrap();
+    assert_eq!(ast.vardef, VarDef::Weight);
+    // Valeur non supportée → ERROR explicite (jamais de repli silencieux).
+    let err = match parse_means("proc means data=a vardef=n; run;") {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("VARDEF=N doit produire une ERROR"),
+    };
+    assert!(err.contains("VARDEF=N"), "err: {err}");
+    // SUMWGT est un mot-clé de statistique reconnu.
+    let ast = parse_means("proc means data=a sumwgt; run;").unwrap();
+    assert_eq!(ast.stats, vec!["sumwgt".to_string()]);
 }

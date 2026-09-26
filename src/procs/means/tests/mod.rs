@@ -33,6 +33,7 @@ fn means_ast_var_x() -> MeansAst {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
