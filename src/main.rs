@@ -44,7 +44,17 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let source = match std::fs::read_to_string(&cli.script) {
+    // Lecture du programme en OCTETS puis décodage UTF-8 strict (contrat
+    // D-001, docs/encoding.md) : un fichier .sas qui n'est pas valide UTF-8
+    // est une ERROR qui nomme le fichier. Un BOM UTF-8 de tête est retiré
+    // silencieusement (SAS ignore le BOM).
+    let source = match std::fs::read(&cli.script)
+        .map_err(|e| e.to_string())
+        .and_then(|b| {
+            String::from_utf8(b)
+                .map(|s| s.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(s))
+                .map_err(|_| "not valid UTF-8".to_string())
+        }) {
         Ok(s) => s,
         Err(e) => {
             let _ = writeln!(

@@ -354,9 +354,20 @@ impl Compiler<'_> {
         let (lines, display, is_file) = match &infile {
             Some((crate::ast::InfileSource::Path(path), _)) => {
                 let resolved = self.session.resolve_path(path);
-                let content = std::fs::read_to_string(&resolved).map_err(|e| {
-                    SasError::runtime(format!("Unable to read INFILE '{path}': {e}"))
-                })?;
+                // Lecture en OCTETS puis décodage UTF-8 strict (contrat
+                // D-001, docs/encoding.md) : un INFILE qui n'est pas valide
+                // UTF-8 est une ERROR qui nomme le fichier. Un BOM UTF-8 de
+                // tête est retiré avant le découpage en lignes.
+                let content = std::fs::read(&resolved)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| {
+                        String::from_utf8(b)
+                            .map(|s| s.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(s))
+                            .map_err(|_| "not valid UTF-8".to_string())
+                    })
+                    .map_err(|e| {
+                        SasError::runtime(format!("Unable to read INFILE '{path}': {e}"))
+                    })?;
                 // Lignes sans le `\n` ; un `\r` final est retiré.
                 let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
                 (lines, format!("the infile '{path}'"), true)

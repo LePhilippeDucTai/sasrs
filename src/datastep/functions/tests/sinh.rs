@@ -471,3 +471,12 @@ fn length_blank_string_min_one() {
     assert_eq!(invoke("LENGTH", &[chr("")]), num(1.0));
     assert_eq!(invoke("LENGTH", &[chr("   ")]), num(1.0));
 }
+
+// J03-P3 (contrat D-001, docs/encoding.md) : LENGTH compte en CARACTÈRES,
+// pas en octets — convention session SAS LATIN1/WLATIN1.
+#[test]
+fn utf8_length_counts_characters_not_bytes() {
+    assert_eq!(invoke("LENGTH", &[chr("é")]), num(1.0));
+    assert_eq!(invoke("LENGTH", &[chr("café")]), num(4.0));
+    assert_eq!(invoke("LENGTH", &[chr("é   ")]), num(1.0));
+}

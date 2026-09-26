@@ -103,6 +103,17 @@ impl<'a> Lexer<'a> {
                         break;
                     }
                 }
+                // Séquence multi-octets : décoder le caractère UTF-8 complet
+                // (contrat D-001, docs/encoding.md — les littéraux chaîne sont
+                // décodés en UTF-8, jamais octet par octet). `src` est un
+                // `&str` valide : l'octet lu est un octet de tête et le
+                // slicing atterrit sur une frontière de caractère.
+                Some(b) if b >= 0x80 => {
+                    let char_start = self.pos - 1;
+                    let ch = self.src[char_start..].chars().next().unwrap();
+                    self.pos += ch.len_utf8() - 1;
+                    value.push(ch);
+                }
                 Some(b) => value.push(b as char),
                 None => {
                     return Err(SasError::parse(

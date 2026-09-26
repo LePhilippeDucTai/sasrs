@@ -221,3 +221,127 @@ fn cards_as_variable_name_not_armed() {
     assert!(!k.iter().any(|t| matches!(t, TokenKind::DataLines(_))));
     assert!(k.contains(&TokenKind::Ident("cards".into())));
 }
+
+// ── UTF-8 (contrat D-001, docs/encoding.md) ───────────────────────────────
+
+/// J03-P3 — les littéraux chaîne sont décodés en UTF-8 : `'café'` et le tiret
+/// cadratin deviennent des caractères, pas une séquence d'octets réinterprétés
+/// (l'ancien `b as char` produisait du mojibake).
+#[test]
+fn utf8_string_literal_decoded_as_characters() {
+    let k = kinds("t = 'café — non';");
+    assert!(k.contains(&TokenKind::Str {
+        value: "café — non".into(),
+        suffix: StrSuffix::None
+    }));
+    // Un littéral double-quoted aussi.
+    let k2 = kinds("t = \"éàü\";");
+    assert!(k2.contains(&TokenKind::Str {
+        value: "éàü".into(),
+        suffix: StrSuffix::None
+    }));
+}
+
+/// J03-P3 — bout en bout : `LENGTH('é')` vaut 1 (caractères, pas octets) et
+/// un TITLE non ASCII ressort intact dans le listing (UTF-8 valide).
+#[test]
+fn utf8_length_and_title_end_to_end() {
+    let outcome = crate::run(
+        "data work.t; l = length('é'); run;\ntitle 'Régression — économétrie';\nproc print data=work.t noobs; run;",
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 0, "log:\n{}", outcome.log);
+    assert!(
+        outcome.listing.contains(" 1"),
+        "LENGTH('é') devrait valoir 1 :\n{}",
+        outcome.listing
+    );
+    assert!(
+        outcome.listing.contains("Régression — économétrie"),
+        "TITLE non ASCII altéré :\n{}",
+        outcome.listing
+    );
+}
+
+/// J03-P3 — un BOM UTF-8 en tête d'un fichier %INCLUDE est ignoré, et un
+/// fichier inclus invalide UTF-8 produit une ERROR qui nomme le fichier.
+#[test]
+fn utf8_include_bom_stripped_and_invalid_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("bom.sas"), b"\xef\xbb\xbf%put bonjour;\n").unwrap();
+    let outcome = crate::run(
+        "%include 'bom.sas';",
+        crate::RunOptions {
+            base_dir: Some(tmp.path().to_path_buf()),
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 0, "log:\n{}", outcome.log);
+    assert!(outcome.log.contains("bonjour"), "log:\n{}", outcome.log);
+
+    std::fs::write(tmp.path().join("bad.sas"), b"x = \"a\xffb\";\n").unwrap();
+    let outcome2 = crate::run(
+        "%include 'bad.sas';",
+        crate::RunOptions {
+            base_dir: Some(tmp.path().to_path_buf()),
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome2.exit_code, 2, "log:\n{}", outcome2.log);
+    assert!(
+        outcome2.log.contains("ERROR") && outcome2.log.contains("bad.sas"),
+        "l'ERROR devrait nommer le fichier :\n{}",
+        outcome2.log
+    );
+    assert!(
+        outcome2.log.contains("UTF-8"),
+        "l'ERROR devrait mentionner UTF-8 :\n{}",
+        outcome2.log
+    );
+}
+
+/// J03-P3 — INFILE : BOM ignoré, UTF-8 invalide → ERROR nommant le fichier.
+#[test]
+fn utf8_infile_bom_stripped_and_invalid_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("bon.csv"),
+        b"\xef\xbb\xbfa;b\n1;caf\xc3\xa9\n",
+    )
+    .unwrap();
+    let outcome = crate::run(
+        "data work.t; infile 'bon.csv' delimiter=';'; input a b $; run;\nproc print data=work.t noobs; run;",
+        crate::RunOptions {
+            base_dir: Some(tmp.path().to_path_buf()),
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 0, "log:\n{}", outcome.log);
+    assert!(
+        outcome.listing.contains("café"),
+        "l'INFILE décodé devrait contenir café :\n{}",
+        outcome.listing
+    );
+
+    std::fs::write(tmp.path().join("mauvais.csv"), b"a;b\n1;caf\xe9\n").unwrap();
+    let outcome2 = crate::run(
+        "data work.t; infile 'mauvais.csv' delimiter=';'; input a b $; run;",
+        crate::RunOptions {
+            base_dir: Some(tmp.path().to_path_buf()),
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome2.exit_code, 2, "log:\n{}", outcome2.log);
+    assert!(
+        outcome2.log.contains("mauvais.csv") && outcome2.log.contains("UTF-8"),
+        "l'ERROR devrait nommer le fichier et mentionner UTF-8 :\n{}",
+        outcome2.log
+    );
+}
