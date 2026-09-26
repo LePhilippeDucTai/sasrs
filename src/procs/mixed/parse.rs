@@ -76,11 +76,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
     let mut model: Option<ModelSpec> = None;
     let mut random: Option<RandomSpec> = None;
     let mut repeated: Option<RepeatedSpec> = None;
-    let mut lsmeans: Vec<LsmeansSpec> = Vec::new();
-    let mut estimate_labels: Vec<String> = Vec::new();
-    let mut contrast_labels: Vec<String> = Vec::new();
+    let lsmeans: Vec<LsmeansSpec> = Vec::new();
+    let estimate_labels: Vec<String> = Vec::new();
+    let contrast_labels: Vec<String> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "MIXED", |ts, kw| {
         if kw == "class" {
             ts.next();
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
@@ -103,26 +103,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
             ts.next();
             repeated = Some(parse_repeated(ts)?);
             Ok(true)
-        } else if kw == "lsmeans" {
-            ts.next();
-            if let Some(spec) = parse_lsmeans(ts)? {
-                lsmeans.push(spec);
-            }
-            Ok(true)
-        } else if kw == "estimate" {
-            ts.next();
-            if let TokenKind::Str { value, .. } = &ts.peek().kind {
-                estimate_labels.push(value.clone());
-            }
-            ts.skip_to_semi();
-            Ok(true)
-        } else if kw == "contrast" {
-            ts.next();
-            if let TokenKind::Str { value, .. } = &ts.peek().kind {
-                contrast_labels.push(value.clone());
-            }
-            ts.skip_to_semi();
-            Ok(true)
+        } else if matches!(kw, "estimate" | "contrast" | "lsmeans") {
+            Err(common::unsupported_statement("MIXED", kw))
         } else {
             Ok(false)
         }
@@ -254,53 +236,4 @@ pub(super) fn parse_repeated(ts: &mut StatementStream) -> Result<RepeatedSpec> {
     ts.expect_semi()?;
 
     Ok(RepeatedSpec { subject, cov_type })
-}
-
-/// Parse the LSMEANS statement body (after `lsmeans`).
-pub(super) fn parse_lsmeans(ts: &mut StatementStream) -> Result<Option<LsmeansSpec>> {
-    // Pas d'effet nommé → statement ignoré (le `?` d'origine sur un `Option`
-    // rendait `None` ; on garde ce comportement, désormais explicite).
-    let Some(effect) = ts.peek().ident().map(str::to_string) else {
-        return Ok(None);
-    };
-    ts.next();
-
-    let mut diff = false;
-    let mut pdiff = false;
-    let mut cl = false;
-    let mut alpha = 0.05;
-
-    if ts.peek().kind == TokenKind::Slash {
-        ts.next();
-        while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-            let tk = ts.peek();
-            if tk.is_kw("diff") {
-                diff = true;
-                ts.next();
-            } else if tk.is_kw("pdiff") {
-                pdiff = true;
-                ts.next();
-            } else if tk.is_kw("cl") {
-                cl = true;
-                ts.next();
-            } else if tk.is_kw("alpha") {
-                common::consume_option_eq(ts, "ALPHA")?;
-                if let TokenKind::Num(v) = ts.peek().kind {
-                    alpha = v;
-                }
-                ts.next();
-            } else {
-                ts.next();
-            }
-        }
-    }
-    ts.expect_semi()?;
-
-    Ok(Some(LsmeansSpec {
-        effect,
-        diff,
-        pdiff,
-        cl,
-        alpha,
-    }))
 }

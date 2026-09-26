@@ -112,7 +112,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
     let mut var: Vec<String> = Vec::new();
     let mut id: Option<String> = None;
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "CLUSTER", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();

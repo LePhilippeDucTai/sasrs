@@ -29,7 +29,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     let mut freq_var: Option<String> = None;
     let mut outputs: Vec<LogisticOutput> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "LOGISTIC", |ts, kw| {
         if kw == "class" {
             ts.next(); // consume "class"
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {

@@ -35,6 +35,12 @@ pub use ods::parse_ods_statement;
 use lib::*;
 use titles::*;
 
+pub(crate) fn is_global_statement(kw: &str) -> bool {
+    matches!(kw, "libname" | "filename" | "options" | "ods")
+        || title_level(kw).is_some()
+        || footnote_level(kw).is_some()
+}
+
 /// Parse a global statement (LIBNAME, OPTIONS, or TITLEn).
 ///
 /// The leading keyword token must still be in the stream (not yet consumed);

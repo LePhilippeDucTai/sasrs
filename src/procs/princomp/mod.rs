@@ -117,7 +117,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
 
     // --- sub-statements until run;/quit; (combinateur partagé M31) ---
     let mut var: Vec<String> = Vec::new();
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "PRINCOMP", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();

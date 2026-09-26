@@ -2,8 +2,8 @@
 //!
 //! Ce module centralise les fonctions utilitaires communes afin d'éviter la
 //! duplication de code entre `means`, `freq`, `univariate`, `sort`,
-//! `transpose` et `append`. Chaque fonction est extraite verbatim de son
-//! premier site d'apparition ; aucune logique n'est modifiée.
+//! `transpose` et `append`. Le parsing partagé applique le contrat de support
+//! documenté dans `docs/support-contract.md`.
 
 use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
@@ -79,7 +79,10 @@ pub use parse::parse_dataset_opt;
 
 pub use parse::parse_out_opt;
 
-pub use parse::parse_proc_body;
+pub use parse::{
+    ignored_display_statement, parse_proc_body, parse_proc_inert_or_global,
+    unhandled_proc_statement, unsupported_statement,
+};
 
 pub use parse::parse_proc_options;
 

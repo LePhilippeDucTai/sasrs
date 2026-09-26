@@ -6,13 +6,12 @@ proc reg data=d.class;
   mtest age;
 run;
 
-title 'PROC REG: VAR / ADD / DELETE / REWEIGHT (run-group)';
+title 'PROC REG: VAR / ADD / DELETE (run-group)';
 
 proc reg data=d.class;
   var age height;
   model weight = age;
   add height;
-  reweight age < 12;
 run;
 
 title;

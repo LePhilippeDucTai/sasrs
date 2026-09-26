@@ -171,30 +171,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<PlotAst> {
 
     let mut plots: Vec<PlotStmt> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
+    crate::procs::common::parse_proc_body(ts, "PLOT", |ts, _kw| {
         if ts.peek().is_kw("plot") {
             ts.next(); // plot
             let stmt = parse_plot_request(ts)?;
             ts.expect_semi()?;
             plots.push(stmt);
         } else {
-            ts.skip_to_semi();
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     Ok(PlotAst { data_ref, plots })
 }

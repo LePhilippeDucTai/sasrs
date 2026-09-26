@@ -224,7 +224,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<SortAst> {
     let mut saw_by = false;
     let mut saw_key = false;
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "SORT", |ts, kw| {
         Ok(match kw {
             "by" => {
                 ts.next(); // consume "by"

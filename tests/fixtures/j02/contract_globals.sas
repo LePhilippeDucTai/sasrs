@@ -1,0 +1,14 @@
+data t;
+  x=1;
+  output;
+run;
+proc print data=t;
+  title 'Inner title';
+  footnote 'Inner foot';
+  options ls=100;
+  libname d 'data';
+  filename f 'input.sas';
+  ods select all;
+  format x 8.2;
+  var x;
+run;

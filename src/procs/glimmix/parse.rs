@@ -64,11 +64,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
     let mut random: Option<RandomSpec> = None;
     let mut freq_var: Option<String> = None;
     let mut weight_var: Option<String> = None;
-    let mut estimate_labels: Vec<String> = Vec::new();
-    let mut contrast_labels: Vec<String> = Vec::new();
-    let mut lsmeans: Vec<String> = Vec::new();
+    let estimate_labels: Vec<String> = Vec::new();
+    let contrast_labels: Vec<String> = Vec::new();
+    let lsmeans: Vec<String> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "GLIMMIX", |ts, kw| {
         if kw == "class" {
             ts.next();
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
@@ -103,27 +103,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
             }
             ts.expect_semi()?;
             Ok(true)
-        } else if kw == "estimate" {
-            ts.next();
-            if let TokenKind::Str { value, .. } = &ts.peek().kind {
-                estimate_labels.push(value.clone());
-            }
-            ts.skip_to_semi();
-            Ok(true)
-        } else if kw == "contrast" {
-            ts.next();
-            if let TokenKind::Str { value, .. } = &ts.peek().kind {
-                contrast_labels.push(value.clone());
-            }
-            ts.skip_to_semi();
-            Ok(true)
-        } else if kw == "lsmeans" {
-            ts.next();
-            if let Some(name) = ts.peek().ident().map(str::to_string) {
-                lsmeans.push(name);
-            }
-            ts.skip_to_semi();
-            Ok(true)
+        } else if matches!(kw, "estimate" | "contrast" | "lsmeans") {
+            Err(common::unsupported_statement("GLIMMIX", kw))
         } else {
             Ok(false)
         }

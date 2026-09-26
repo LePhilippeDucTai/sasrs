@@ -153,21 +153,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GchartAst> {
 
     let mut charts: Vec<GchartStmt> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
+    crate::procs::common::parse_proc_body(ts, "GCHART", |ts, _kw| {
         if ts.peek().is_kw("vbar") || ts.peek().is_kw("vbar3d") {
             ts.next();
             let category = expect_ident(ts, "after VBAR")?;
@@ -199,9 +185,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<GchartAst> {
                 chart_type,
             });
         } else {
-            ts.skip_to_semi();
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     Ok(GchartAst { data_ref, charts })
 }

@@ -27,29 +27,13 @@ fn parse_catalog_with_contents() {
 }
 
 #[test]
-fn parse_catalog_delete_entry() {
-    let ast =
-        parse_catalog_src("proc catalog catalog=sasuser.profile; delete myfmt / et=format; quit;")
-            .unwrap();
-    assert_eq!(ast.stmts.len(), 1);
-    match &ast.stmts[0] {
-        CatalogStmt::Delete { entries } => {
-            assert_eq!(entries, &["MYFMT".to_string()]);
-        }
-        _ => panic!("expected Delete statement"),
-    }
-}
-
-#[test]
-fn parse_catalog_copy() {
-    let ast =
-        parse_catalog_src("proc catalog catalog=work.cat; copy out=work.cat2; quit;").unwrap();
-    assert_eq!(ast.stmts.len(), 1);
-    match &ast.stmts[0] {
-        CatalogStmt::Copy { out } => {
-            assert_eq!(out.as_deref(), Some("WORK.CAT2"));
-        }
-        _ => panic!("expected Copy statement"),
+fn contract_catalog_mutations_error() {
+    for stmt in ["delete myfmt / et=format", "copy out=work.cat2"] {
+        let err = parse_catalog_src(&format!("proc catalog catalog=work.cat; {stmt}; quit;"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("not supported in PROC CATALOG"), "{err}");
     }
 }
 
@@ -83,37 +67,23 @@ fn execute_contents_empty_catalog() {
 }
 
 #[test]
-fn execute_delete_noop_with_note() {
-    let mut session = make_session();
-    let ast = CatalogAst {
-        catalog: "WORK.FORMATS".to_string(),
-        stmts: vec![CatalogStmt::Delete {
-            entries: vec!["MYFORMAT".to_string()],
-        }],
-    };
-    execute(&ast, &mut session).unwrap();
-
-    let log = session.log.into_string();
-    assert!(
-        log.contains("DELETE") || log.contains("no-op"),
-        "log: {log}"
-    );
-    assert!(log.contains("MYFORMAT"), "log: {log}");
-}
-
-#[test]
-fn execute_copy_noop_with_note() {
-    let mut session = make_session();
-    let ast = CatalogAst {
-        catalog: "WORK.CAT".to_string(),
-        stmts: vec![CatalogStmt::Copy {
-            out: Some("WORK.CAT2".to_string()),
-        }],
-    };
-    execute(&ast, &mut session).unwrap();
-
-    let log = session.log.into_string();
-    assert!(log.contains("COPY") || log.contains("no-op"), "log: {log}");
+fn contract_catalog_execute_rejects_unsupported_ast() {
+    for stmt in [
+        CatalogStmt::Delete {
+            entries: vec!["MYFORMAT".into()],
+        },
+        CatalogStmt::Copy {
+            out: Some("WORK.CAT2".into()),
+        },
+    ] {
+        let mut session = make_session();
+        let ast = CatalogAst {
+            catalog: "WORK.FORMATS".into(),
+            stmts: vec![stmt],
+        };
+        let err = execute(&ast, &mut session).unwrap_err().to_string();
+        assert!(err.contains("not supported in PROC CATALOG"), "{err}");
+    }
 }
 
 #[test]

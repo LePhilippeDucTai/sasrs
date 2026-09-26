@@ -121,42 +121,20 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
     // --- Sous-statements jusqu'à run;/quit; ---
     let mut delimiter: Option<u8> = None;
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
+    common::parse_proc_body(ts, "EXPORT", |ts, kw| {
         let kw_tok = ts.peek().clone();
-        let kw = match kw_tok.ident() {
-            Some(s) => s.to_ascii_lowercase(),
-            None => {
-                ts.skip_to_semi();
-                continue;
-            }
-        };
-        ts.next();
-
-        match kw.as_str() {
+        match kw {
             "delimiter" | "dlm" => {
+                ts.next();
                 expect_eq(ts, "DELIMITER")?;
                 let s = parse_string_or_ident(ts, "DELIMITER")?;
                 delimiter = parse_delimiter_char(&s, kw_tok.span)?;
-                ts.skip_to_semi();
+                ts.expect_semi()?;
             }
-            _ => {
-                ts.skip_to_semi();
-            }
+            _ => return Ok(false),
         }
-    }
+        Ok(true)
+    })?;
 
     let outfile = outfile.ok_or_else(|| SasError::runtime("PROC EXPORT: OUTFILE= is required."))?;
     let dbms = dbms.unwrap_or(ExportDbms::Csv);

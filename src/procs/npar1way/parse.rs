@@ -98,7 +98,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<NparAst> {
     let mut by: Vec<(String, bool)> = Vec::new();
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "NPAR1WAY", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();

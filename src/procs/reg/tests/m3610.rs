@@ -73,7 +73,7 @@ fn test_m3610_parse_mtest_and_rungroup() {
          mtest; \
          overall: mtest x1, x2; \
          var x3 x4; add x3; delete x1; \
-         reweight x1 > 5; refit; paint obs / red; run;",
+         paint obs / red; run;",
     )
     .unwrap();
     let entry = &ast.models[0];
@@ -88,8 +88,8 @@ fn test_m3610_parse_mtest_and_rungroup() {
     assert_eq!(entry.delete, vec!["x1"]);
     assert_eq!(ast.var_list, vec!["x3", "x4"]);
     // Deferred statements flagged.
-    assert!(ast.reweight_seen);
-    assert!(ast.refit_seen);
+    assert!(!ast.reweight_seen);
+    assert!(!ast.refit_seen);
     assert!(ast.paint_seen);
 }
 
@@ -259,26 +259,14 @@ fn test_m3610_add_delete_applied_to_fit() {
 }
 
 #[test]
-fn test_m3610_deferred_notes() {
-    let mut session = make_session();
-    let frame = df![
-        "y" => [2.0_f64, 4.0, 5.0, 4.0, 5.0],
-        "x" => [1.0_f64, 2.0, 3.0, 4.0, 5.0]
-    ]
-    .unwrap();
-    let ds = SasDataset {
-        df: frame,
-        vars: vec![num_meta("y"), num_meta("x")],
-    };
-    session.libs.get("WORK").unwrap().write("T", &ds).unwrap();
-    let ast =
-        parse_reg("proc reg data=work.t; model y = x; reweight x > 3; refit; paint obs; run;")
-            .unwrap();
-    execute(&ast, &mut session).unwrap();
-    let log = session.log.into_string();
-    assert!(log.contains("REWEIGHT statement"), "log: {log}");
-    assert!(log.contains("REFIT statement"), "log: {log}");
-    assert!(log.contains("PAINT statement"), "log: {log}");
+fn contract_reg_deferred_results_error() {
+    for stmt in ["reweight x > 3", "refit"] {
+        let err = parse_reg(&format!("proc reg data=work.t; model y=x; {stmt}; run;"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("not supported in PROC REG"), "{err}");
+    }
 }
 
 #[cfg(not(feature = "graphics"))]

@@ -286,7 +286,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<RankAst> {
     let mut ranks: Vec<String> = Vec::new();
     let mut by: Vec<(String, bool)> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "RANK", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();

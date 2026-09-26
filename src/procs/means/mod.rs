@@ -79,6 +79,7 @@ mod stats;
 mod types;
 
 pub use parse::parse;
+pub(crate) use parse::parse_named;
 
 // `parse_single_var` et `parse_by_list` ont été déplacés vers `procs::common`
 // (M31.2). Ré-export `pub(crate)` pour les appelants existants

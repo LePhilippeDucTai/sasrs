@@ -55,7 +55,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut output: Option<UnivariateOutput> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "UNIVARIATE", |ts, kw| {
         // Graphical statement (HISTOGRAM/QQPLOT/…) — keyword-driven via a token
         // probe rather than the lowercase `kw`, so handle it before the match.
         if let Some(kind) = graphics_kind(ts.peek()) {

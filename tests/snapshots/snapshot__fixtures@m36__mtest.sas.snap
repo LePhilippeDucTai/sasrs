@@ -23,15 +23,13 @@ NOTE: PROCEDURE REG used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
 
-7     title 'PROC REG: VAR / ADD / DELETE / REWEIGHT (run-group)';
+7     title 'PROC REG: VAR / ADD / DELETE (run-group)';
 
 8     proc reg data=d.class;
 9       var age height;
 10      model weight = age;
 11      add height;
-12      reweight age < 12;
-13    run;
-NOTE: The REWEIGHT statement (interactive observation reweighting) is not supported in this build; it was ignored.
+12    run;
 NOTE: ADD/DELETE statements were applied to the final model fit; interactive editing between RUN groups is not supported in this build.
 NOTE: There were 19 observations read from the data set D.CLASS.
 NOTE: There were 19 observations used.
@@ -39,7 +37,7 @@ NOTE: PROCEDURE REG used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
 
-14    title;
+13    title;
 
 ==== LISTING ====
                        PROC REG: MTEST multivariate tests (two responses)
@@ -110,7 +108,7 @@ Coeff Var            4.94629
            Hotelling-Lawley Trace    1.9585      15.67         2        16    0.0002
            Roy's Greatest Root       1.9585      15.67         2        16    0.0002
 
-                      PROC REG: VAR / ADD / DELETE / REWEIGHT (run-group)
+                            PROC REG: VAR / ADD / DELETE (run-group)
 
                                        The REG Procedure
                                          Model: MODEL1

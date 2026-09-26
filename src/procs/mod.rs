@@ -218,7 +218,7 @@ procs_registry! {
         // we always force noprint=true for SUMMARY; an explicit PRINT option
         // on SUMMARY is uncommon and not re-enabled here.)
         "means" | "summary" => {
-            let mut ast = means::parse(ts)?;
+            let mut ast = means::parse_named(ts, name)?;
             if name.eq_ignore_ascii_case("summary") {
                 ast.summary = true;
                 ast.noprint = true;

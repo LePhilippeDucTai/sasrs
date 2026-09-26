@@ -52,12 +52,17 @@ fn parse_import_delimiter_in_body() {
 }
 
 #[test]
-fn parse_import_guessingrows_ignored() {
-    let ast = parse_import_src(
+fn contract_import_guessingrows_error() {
+    let err = parse_import_src(
         "proc import datafile='x.csv' out=work.t dbms=csv; guessingrows=200; run;",
     )
-    .unwrap();
-    assert_eq!(ast.guessingrows, Some(200));
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(
+        err.contains("GUESSINGROWS statement is not supported"),
+        "{err}"
+    );
 }
 
 #[test]

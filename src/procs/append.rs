@@ -113,7 +113,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<AppendAst> {
     })?;
 
     // Consume through run;/quit; (sub-statements loop) (combinateur M31).
-    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
+    common::parse_proc_body(ts, "APPEND", |_ts, _kw| Ok(false))?;
 
     Ok(AppendAst {
         base,

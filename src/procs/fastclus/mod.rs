@@ -122,9 +122,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
     })?;
 
     let mut var: Vec<String> = Vec::new();
-    let mut id: Option<String> = None;
+    let id: Option<String> = None;
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "FASTCLUS", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();
@@ -132,13 +132,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
                 ts.expect_semi()?;
                 true
             }
-            "id" => {
-                ts.next();
-                let names = ts.parse_name_list()?;
-                id = names.into_iter().next();
-                ts.expect_semi()?;
-                true
-            }
+            "id" => return Err(common::unsupported_statement("FASTCLUS", "ID")),
             _ => false,
         })
     })?;

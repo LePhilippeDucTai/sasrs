@@ -70,7 +70,7 @@ NOTE: PROCEDURE PRINT used (Total process time):
             cpu time            0.00 seconds
 
 ==== LISTING ====
-                                         The SAS System
+                                      DATALINES list mode
 
                                      Obs    name     score
 
@@ -78,7 +78,7 @@ NOTE: PROCEDURE PRINT used (Total process time):
                                        2    Bob         82
                                        3    Carol       78
 
-                                         The SAS System
+                                     DATALINES column mode
 
                                      Obs    name     score
 
@@ -86,7 +86,7 @@ NOTE: PROCEDURE PRINT used (Total process time):
                                        2    Bob         82
                                        3    Carol       78
 
-                                         The SAS System
+                         MISSOVER â short lines fill with missing
 
                                        Obs    a    b    c
 

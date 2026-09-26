@@ -81,7 +81,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<AnovaAst> {
     let mut model: Option<AnovaModel> = None;
     let mut means_vars: Vec<String> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "ANOVA", |ts, kw| {
         if kw == "class" {
             ts.next();
             class_vars = ts.parse_name_list()?;

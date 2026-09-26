@@ -83,7 +83,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     let mut weight: Option<String> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "CORR", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();
