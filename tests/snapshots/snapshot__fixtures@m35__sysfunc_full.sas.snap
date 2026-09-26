@@ -9,8 +9,9 @@ s=12
 m=Hello World
 d=04JUL1776
 cash=$1,234.50
-bad=/* ERROR: Function no_such_fn not found or not supported by %SYSFUNC */
+ERROR: Function no_such_fn not found or not supported by %SYSFUNC
+bad=
 
 ==== LISTING ====
 
-==== EXIT 0 ====
+==== EXIT 2 ====

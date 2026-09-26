@@ -1,9 +1,8 @@
 /* M41.1/M41.2: %QUOTE/%NRQUOTE (new) alongside the already-implemented
    %BQUOTE/%NRBQUOTE/%SUPERQ family, exercised together since M41 audited
    the whole quoting set for SAS 9.4 fidelity.
-   NOTE: comments are scanned by the macro processor too (documented
-   simplification, see M12) - avoid writing anything resembling a real
-   percent-triggered construct inside a comment in this file. */
+   NRQUOTE and NRBQUOTE resolve first, warning about undefined Z, then mask.
+   Oracle: https://support.sas.com/documentation/cdl/en/mcrolref/62978/HTML/default/n0o0rjikrg6iezn1ltra79iamibr.htm */
 
 %let x = Z;
 %let w = %nrstr(&x);

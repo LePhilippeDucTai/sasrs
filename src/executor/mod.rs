@@ -26,9 +26,9 @@
 //!       Proc{name, ast}   → procs::execute_proc (timing inclus)
 //!       Empty             → rien
 //! ```
-//! Aucune erreur n'arrête la session (style batch SAS) sauf l'échec du
-//! lexer. Le code retour est dérivé des compteurs du LogWriter par
-//! lib.rs (0 propre / 1 warnings / 2 erreurs).
+//! Les erreurs sont journalisées ; `%ABORT` arrête la soumission, y compris
+//! les rejeux CALL EXECUTE. Son code explicite passe par Session ; sans demande,
+//! lib.rs dérive le code des compteurs (0 propre / 1 warnings / 2 erreurs).
 
 use crate::ast::{GlobalStmt, OdsAction};
 use crate::datastep;

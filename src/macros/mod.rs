@@ -230,7 +230,9 @@ pub enum AbortKind {
 impl AbortKind {
     /// Portable batch policy: plain/CANCEL report an error (2), RETURN defaults
     /// to 4 and ABEND to 5 (SAS UNIX completion codes). Explicit nonnegative n
-    /// is preserved in RunOutcome, including 0; no process::exit is performed.
+    /// is requested through Session; no process::exit is performed. The J02-P10
+    /// finalization contract raises a requested 0 to 1 when errors were counted
+    /// (including the %ABORT diagnostic). Positive n is preserved in RunOutcome.
     /// SAS leaves host/session termination to its operating environment; sasrs
     /// terminates the current run, including queued CALL EXECUTE submissions.
     /// https://support.sas.com/documentation/cdl/en/hostunx/61879/HTML/default/retcod.htm

@@ -4,7 +4,7 @@ expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {
 input_file: tests/fixtures/m35/macro_conformity.sas
 ---
 ==== LOG ====
-length_empty=1
+length_empty=0
 length_a=1
 length_abc=3
 syscc=0 syserr=0 sqlobs=0

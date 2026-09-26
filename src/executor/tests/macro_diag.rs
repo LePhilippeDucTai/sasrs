@@ -18,7 +18,10 @@ fn macro_diag_errors_are_counted_and_ordered() {
 fn macro_diag_abort_stops_program_and_returns_code() {
     for (option, code) in [
         ("return 8", 8),
-        ("return 0", 0),
+        // J02-P10's independent run_failure_tests::
+        // exit_code_requested_zero_preserves_counted_failure fixes this policy:
+        // an explicit zero cannot hide the counted %ABORT error.
+        ("return 0", 1),
         ("return", 4),
         ("abend 12", 12),
         ("abend", 5),

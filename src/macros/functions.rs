@@ -231,6 +231,7 @@ impl MacroEngine {
     /// - `length(t)` : nombre de caractères, 0 pour un argument vide.
     ///   Référence SAS %LENGTH (à distinguer de la fonction DATA step LENGTH) :
     ///   https://support.sas.com/documentation/cdl/en/mcrolref/61885/HTML/default/a000543620.htm
+    ///
     /// Rend `None` si l'arité est invalide.
     pub(super) fn eval_macro_fn(name: &str, args: &[String]) -> Option<String> {
         // M32.7 PART 2 — la table `STRING_FNS` remplace le `match name` ouvert.

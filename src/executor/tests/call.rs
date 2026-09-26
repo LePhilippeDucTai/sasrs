@@ -56,15 +56,16 @@ fn call_execute_per_row_generates_multiple_steps() {
 
 // ---- M35.3 — %LENGTH conformity ----------------------------------------
 
-/// %LENGTH of empty/null argument returns 1 (SAS behaviour).
+/// %LENGTH of empty/null argument returns 0 (unlike the DATA step LENGTH).
+/// https://support.sas.com/documentation/cdl/en/mcrolref/61885/HTML/default/a000543620.htm
 #[test]
-fn length_empty_returns_1() {
+fn length_empty_returns_0() {
     let out = run_det("%put %length();");
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
-    // %put emits the value on its own line; check for a line that is exactly "1".
+    // %put emits the value on its own line.
     assert!(
-        out.log.lines().any(|l| l == "1"),
-        "expected a line '1' in log:\n{}",
+        out.log.lines().any(|l| l == "0"),
+        "expected a line '0' in log:\n{}",
         out.log
     );
 }
