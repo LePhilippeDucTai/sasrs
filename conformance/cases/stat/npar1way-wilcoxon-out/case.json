@@ -1,0 +1,32 @@
+{
+  "id": "npar1way-wilcoxon-out",
+  "title": "PROC NPAR1WAY WILCOXON : test de Wilcoxon à 2 échantillons via OUTPUT OUT= (_WIL_, Z_WIL, P2_WIL)",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/statug/statug_npar1way_syntax.htm — SAS/STAT 9.4 User's Guide — The NPAR1WAY Procedure (WILCOXON, OUT= Data Set) — somme des rangs, Z avec correction de liens et p-value normale bilatérale recalculés indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "data_types": {
+    "wilks.csv": {
+      "group": "char",
+      "response": "num"
+    }
+  },
+  "issue": "null — divergence à ouvrir par le coordinateur : la Z de Wilcoxon applique une correction de continuité (0.5) absente de la formule de la doc SAS — _WIL_=89 conforme, mais Z_WIL=2.8353240556 produit vs 2.893187811789223 attendu (sans correction) et P2_WIL=0.0045779224 produit vs 0.00381353188258207 attendu ; P1_WIL supplémentaire géré"
+}

@@ -1,0 +1,32 @@
+{
+  "id": "glm-oneway-predicted",
+  "title": "PROC GLM : ANOVA à un facteur, valeurs ajustées (moyennes de groupe) et résidus via OUTPUT OUT=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/statug/statug_glm_syntax.htm — SAS/STAT 9.4 User's Guide — The GL Procedure — moyennes de groupe recalculées indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "data_types": {
+    "drug.csv": {
+      "drug": "char",
+      "absorb": "num"
+    }
+  },
+  "issue": "null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC GLM (ERROR: The OUTPUT statement is not supported in PROC GLM; it can affect results and cannot be ignored. — code retour 2, dataset WORK.PRED non produit) ; l'ANOVA elle-même est correcte (Model MS=72.33333, Error MS=1.0)"
+}

@@ -1,0 +1,32 @@
+{
+  "id": "reg-simple-lineart",
+  "title": "PROC REG : régression linéaire simple, coefficients via OUTEST= et valeurs ajustées/résidus via OUTPUT OUT= (p=, r=)",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/statug/statug_reg_syntax.htm — SAS/STAT 9.4 User's Guide — The REG Procedure (statements MODEL, OUTPUT ; option OUTEST=) — MCO recalculé indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "data_types": {
+    "sample.csv": {
+      "fert": "num",
+      "yield": "num"
+    }
+  },
+  "issue": "null — divergence à ouvrir par le coordinateur : colonne de la variable dépendante dans OUTEST= — sasrs produit -1 là où la doc SAS donne la SSE de l'observation _TYPE_=PARMS (0.07276190476190475 attendu) ; _RMSE_, Intercept et fert sont conformes (0.13487207342691884, 0.053333333333334565, 1.9942857142857142), de même que OUTPUT p=/r="
+}

@@ -1,0 +1,31 @@
+{
+  "id": "logistic-binary-output",
+  "title": "PROC LOGISTIC : régression logistique binaire, probabilités prédites via OUTPUT OUT= predicted=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/statug/statug_logistic_syntax.htm — SAS/STAT 9.4 User's Guide — The LOGISTIC Procedure (MODEL binaire, OUTPUT predicted=) — MLE (Newton-Raphson) recalculé indépendamment en Python 3",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "trial.csv": {
+      "dose": "num",
+      "resp": "num"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "corr-spearman-outs",
+  "title": "PROC CORR SPEARMAN : corrélation des rangs avec dataset OUTS= (diagonale à 1, rho de Spearman)",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0o3d9suqj6o2jn1kcwhf1hh9ibm.htm — SAS 9.4 Procedures — The CORR Procedure (option SPEARMAN, OUTS= Data Set) — rho recalculé indépendamment en Python 3 (Pearson des rangs moyens)",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "math",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "data_types": {
+    "htwt.csv": {
+      "height": "num",
+      "weight": "num"
+    }
+  },
+  "issue": "null — divergence à ouvrir par le coordinateur : mêmes écarts de layout qu'en Pearson — OUTS= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) au lieu des statistiques descriptives N/MEAN/STD/SUM/MIN/MAX + 2 lignes CORR de la doc ; rho de Spearman lui-même conforme (0.9428571428571428)"
+}
