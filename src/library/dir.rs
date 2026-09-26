@@ -116,24 +116,24 @@ impl LibraryProvider for DirLibrary {
 
         // 2. Métadonnées : le sidecar suit sa table. En cas d'échec, on
         //    annule le déplacement du parquet — l'état de départ est restauré.
-        if old_sidecar.is_file() {
-            if let Err(e) = std::fs::rename(&old_sidecar, &new_sidecar) {
-                let rollback = std::fs::rename(&new_path, &old_path);
-                fault_point("after_rename_rollback");
-                if let Err(rb) = rollback {
-                    return Err(SasError::runtime(format!(
-                        "failed to move metadata sidecar for {}: {e}; rolling back the parquet \
-                         move failed too: {rb}",
-                        new.to_uppercase()
-                    )));
-                }
+        if old_sidecar.is_file()
+            && let Err(e) = std::fs::rename(&old_sidecar, &new_sidecar)
+        {
+            let rollback = std::fs::rename(&new_path, &old_path);
+            fault_point("after_rename_rollback");
+            if let Err(rb) = rollback {
                 return Err(SasError::runtime(format!(
-                    "failed to move metadata sidecar for {}: {e}; the parquet move was rolled \
-                     back and {} was not renamed.",
-                    new.to_uppercase(),
-                    old.to_uppercase()
+                    "failed to move metadata sidecar for {}: {e}; rolling back the parquet \
+                         move failed too: {rb}",
+                    new.to_uppercase()
                 )));
             }
+            return Err(SasError::runtime(format!(
+                "failed to move metadata sidecar for {}: {e}; the parquet move was rolled \
+                     back and {} was not renamed.",
+                new.to_uppercase(),
+                old.to_uppercase()
+            )));
         }
         fault_point("after_rename_sidecar");
         Ok(())

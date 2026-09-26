@@ -389,9 +389,8 @@ fn orphan_sidecar_rename_rolls_back_parquet_on_sidecar_failure() {
     assert!(notes.is_empty(), "metadata must stay valid: {notes:?}");
     let v = ds.vars.iter().find(|v| v.name == "name").unwrap();
     assert_eq!(v.format.as_deref(), Some("F1."));
-    assert_eq!(
+    assert!(
         dir.path().join("src.parquet.sasmeta.json").is_file(),
-        true,
         "sidecar must be back at the old name"
     );
     assert_eq!(lib.list().unwrap(), vec!["SRC".to_string()]);
