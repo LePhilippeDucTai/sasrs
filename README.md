@@ -261,6 +261,41 @@ let outcome = run(source, RunOptions::default());
 cargo build --features s3
 ```
 
+## Storage and recovery
+
+sasrs tables live on disk as a Parquet file plus a sidecar: `<table>.parquet`
+holds the data, `<table>.parquet.sasmeta.json` holds the SAS-only metadata
+(format, label, declared character length). The design is specified in
+[ADR 0001](docs/adr/0001-stockage-parquet-sidecar.md).
+
+**Atomic write protocol.** Every write publishes the Parquet file first
+(temporary file in the same directory, fsync, atomic rename), then writes the
+metadata sidecar the same way. A crash can therefore leave only two coherent
+states: either the old table is intact, or the new data is published without
+(new) metadata. New data can never silently inherit stale metadata.
+
+**Expected diagnostics.** On read, the sidecar fingerprint (file size, row
+count, column count) is compared against the Parquet file actually present.
+A sidecar that is unreadable, malformed, or whose fingerprint no longer
+matches is IGNORED, and the log carries a `WARNING` naming the sidecar file
+and the cause. Data is always read from the Parquet file itself; metadata is
+never applied when it cannot be proven to match.
+
+**After an interruption.** Recovery needs no special tooling:
+
+1. Re-run the step that was interrupted. Temp files (`<target>.sasrs-tmp.<pid>`)
+   left behind are purged automatically at the next write to the same target.
+2. If a table was renamed mid-way (`proc datasets ... change`), the data may
+   exist under the new name without metadata, with the old sidecar left
+   orphaned at the old name — this is safe and diagnosed if applicable;
+   re-creating the old name replaces the orphan.
+3. If a `WARNING` about a sidecar persists, simply re-write the affected
+   table: the fresh sidecar replaces the stale one and the warning disappears.
+
+Simulated interruptions are exercised by the `fault-injection` feature
+(`SASRS_FAULT_INJECT` environment variable, exit code 86), covered by the
+`tests/storage_integrity.rs` suite — see the `test-fault-injection` CI job.
+
 ## License
 
 Licensed under either of

@@ -35,7 +35,8 @@ usage: scripts/check.sh lint|test|build|all
 
   lint   cargo fmt --check ; cargo clippy --all-targets -- -D warnings
          (défaut, --features graphics, --features s3)
-  test   cargo test -p sasrs ; --features graphics ; --features s3 --lib
+  test   cargo test -p sasrs ; --features graphics ; --features s3 --lib ;
+         --features fault-injection --test storage_integrity
   build  cargo build --features graphics ; --features s3
   all    lint, puis test, puis build
 EOF
@@ -76,6 +77,9 @@ run_test() {
     assert_tree_unchanged "$before"
     echo '==> cargo test --features s3 --lib'
     cargo test --locked --features s3 --lib
+    assert_tree_unchanged "$before"
+    echo '==> cargo test -p sasrs --features fault-injection --test storage_integrity'
+    cargo test --locked -p sasrs --features fault-injection --test storage_integrity
     assert_tree_unchanged "$before"
 }
 
