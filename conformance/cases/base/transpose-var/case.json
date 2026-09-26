@@ -1,0 +1,18 @@
+{
+  "id": "transpose-var",
+  "title": "PROC TRANSPOSE : transposition des variables en observations (_NAME_, COL1…)",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Procedures — PROC TRANSPOSE https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0p3mp8c9djpxan1exv4k2dtbcl6.htm (sans BY : une observation par variable transposée, colonne _NAME_ et COL1..COLn)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": { "wide.csv": { "JAN": "num", "FEB": "num" } }
+}

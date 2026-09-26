@@ -1,0 +1,23 @@
+{
+  "id": "update-master",
+  "title": "Étape DATA : UPDATE — mise à jour d'une table maître par une table de transactions, BY obligatoire",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Data Step Statements — UPDATE Statement https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lestmtsref/n0zi0al7gygfzmn12ga0djr39d77.htm (UPDATE remplace les valeurs du maître par celles de la transaction ; les observations sans transaction sont conservées telles quelles)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "required": ["NOTE: The data set WORK.MASTER has 3 observations"],
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "null — divergence à ouvrir par le coordinateur : sasrs exige KEY= pour UPDATE là où la doc SAS n'exige que BY (ERROR: An UPDATE statement requires a KEY= option)",
+  "data_types": {
+    "master.csv": { "id": "num", "price": "num" },
+    "trans.csv": { "id": "num", "price": "num" }
+  }
+}

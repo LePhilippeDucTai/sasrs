@@ -1,0 +1,22 @@
+{
+  "id": "merge-by-match",
+  "title": "Étape DATA : MERGE avec BY — appariement un-pour-un sur la clé, missing quand l'observation manque",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Data Step Statements — MERGE Statement https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lestmtsref/n1i0266q8vd7snn1o4a6gwxn9lf8.htm (avec BY, les observations sont appariées par valeur de la clé ; une table sans observation pour la clé fournit des variables missing)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "required": ["NOTE: The data set WORK.MERGED has 3 observations"],
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "customers.csv": { "id": "num", "name": "char" },
+    "orders.csv": { "id": "num", "amount": "num" }
+  }
+}

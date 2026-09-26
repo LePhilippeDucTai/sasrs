@@ -1,0 +1,19 @@
+{
+  "id": "first-last-groups",
+  "title": "Étape DATA BY : FIRST.variable / LAST.variable pour agréger par groupe",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Data Step Statements — BY Statement https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lestmtsref/n1e2cler2fcjqgn1iv4ezvxnuvgf.htm (FIRST.variable vaut 1 à la première observation d'un groupe BY, LAST.variable 1 à la dernière)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "required": ["NOTE: The data set WORK.TOTALS has 2 observations"],
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": { "sales.csv": { "region": "char", "sales": "num" } }
+}

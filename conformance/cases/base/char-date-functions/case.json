@@ -1,0 +1,19 @@
+{
+  "id": "char-date-functions",
+  "title": "Fonctions caractère (UPCASE, SUBSTR, TRIM/CATS) et date (MDY, YEAR) en étape DATA",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Functions and CALL Routines https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lefunctionsref/n0f2f52k8j9nhln14x3iv6efpzav.htm (UPCASE https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lefunctionsref/p15zik2ah6c0jvn1ugj87ev8bct7.htm, SUBSTR, TRIM, MDY https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lefunctionsref/p0x1f3p1ly3bhjn1cxa1dwfjqj34.htm, YEAR)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "required": ["NOTE: The data set WORK.WORDS has 2 observations"],
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": { "names.csv": { "name": "char", "month": "num" } }
+}

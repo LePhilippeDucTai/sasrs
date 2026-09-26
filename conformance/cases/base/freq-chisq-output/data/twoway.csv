@@ -1,0 +1,5 @@
+treatment,result,n
+active,success,8
+active,failure,2
+placebo,success,4
+placebo,failure,6

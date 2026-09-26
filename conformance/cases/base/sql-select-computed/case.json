@@ -1,0 +1,19 @@
+{
+  "id": "sql-select-computed",
+  "title": "PROC SQL : CREATE TABLE AS SELECT avec colonne calculée (alias AS) et ORDER BY",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Procedures — PROC SQL https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p18dyv11catcsyn1uh6c1a9cq62l.htm (CREATE TABLE AS SELECT, expression calculée avec alias AS, clause ORDER BY)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "math",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "required": ["NOTE: Table WORK.SCALED created"],
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": { "orders.csv": { "id": "num", "amount": "num" } }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "freq-tables-out",
+  "title": "PROC FREQ TABLES OUT= : effectifs et pourcentages par modalité",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "SAS 9.4 Procedures — PROC FREQ https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p1p2a3b4m96o2jn1o79ujoq0v3la.htm (option OUT= de TABLES : dataset avec les variables de la table, COUNT et PERCENT)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "math",
+  "tolerance": { "abs": 1e-9, "rel": 1e-9, "columns": {} },
+  "log": {
+    "forbidden": ["ERROR:"]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": { "survey.csv": { "answer": "char" } }
+}
