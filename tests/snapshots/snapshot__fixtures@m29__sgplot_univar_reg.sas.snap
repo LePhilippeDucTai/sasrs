@@ -24,6 +24,7 @@ NOTE: DATA statement used (Total process time):
 11      histogram x;
 12    run;
 NOTE: There were 20 observations read from the data set WORK.NORMAL_DATA.
+NOTE: HISTOGRAM/QQPLOT: graphical output deferred to ODS GRAPHICS (M29).
 NOTE: PROCEDURE UNIVARIATE used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
@@ -37,6 +38,8 @@ NOTE: ODS GRAPHICS ON.
 17      qqplot x;
 18    run;
 NOTE: There were 20 observations read from the data set WORK.NORMAL_DATA.
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
+NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
 NOTE: PROCEDURE UNIVARIATE used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
