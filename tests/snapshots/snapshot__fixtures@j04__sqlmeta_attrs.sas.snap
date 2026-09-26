@@ -1,0 +1,91 @@
+---
+source: tests/snapshot.rs
+assertion_line: 63
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j04/sqlmeta_attrs.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     data work.src;
+3       length name $ 12;
+4       set d.class(keep=name age height);
+5       label name='Full name';
+6     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.SRC has 19 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+7     proc sql;
+8       create table work.attr as
+9       select name label='Court' length=3 format=$3.,
+10             height / age as ratio label='Ratio h/a' format=8.3,
+11             age + 100 as older format=best5.
+12      from work.src;
+13    quit;
+NOTE: Table WORK.ATTR created, with 19 rows and 3 columns.
+NOTE: PROCEDURE SQL used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    title 'FORMAT=/LABEL=/LENGTH= in the SELECT list';
+
+15    proc print data=work.attr;
+16    run;
+NOTE: There were 19 observations read from the data set WORK.ATTR.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+17    title 'Metadata';
+
+18    proc contents data=work.attr;
+19    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                           FORMAT=/LABEL=/LENGTH= in the SELECT list
+
+                                Obs    name       ratio    older
+
+                                  1    Alf        4.929      114
+                                  2    Ali        4.346      113
+                                  3    Bar        5.023      113
+                                  4    Car        4.486      114
+                                  5    Hen        4.536      114
+                                  6    Jam        4.775      112
+                                  7    Jan        4.983      112
+                                  8    Jan        4.167      115
+                                  9    Jef        4.808      113
+                                 10    Joh        4.917      112
+                                 11    Joy        4.664      111
+                                 12    Jud        4.593      114
+                                 13    Lou        4.692      112
+                                 14    Mar        4.433      115
+                                 15    Phi        4.500      116
+                                 16    Rob        5.400      112
+                                 17    Ron        4.467      115
+                                 18    Tho        5.227      111
+                                 19    Wil        4.433      115
+
+                                            Metadata
+
+Data Set Name:  WORK.ATTR             Observations:   19
+Member Type:    DATA                  Variables:      3
+Engine:         PARQUET
+
+                      #    Variable    Type    Len    Format    Label
+
+                      1    name        Char      3    $3.       Court
+                      3    older       Num       8    best5.
+                      2    ratio       Num       8    8.3       Ratio h/a
+
+==== EXIT 0 ====

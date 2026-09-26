@@ -104,6 +104,238 @@ pub(super) fn render_listing(ds: &SasDataset, session: &mut Session) {
 // CREATE TABLE AS SELECT
 // ----------------------------------------------------------------------------
 
+/// Métadonnées SAS d'une colonne SOURCE (celles du sidecar J04-P1) qui
+/// doivent survivre à un `CREATE TABLE AS SELECT` quand la colonne est
+/// reprise telle quelle.
+struct SourceMeta {
+    format: Option<String>,
+    label: Option<String>,
+    length: usize,
+}
+
+/// Une table physique du FROM/JOIN, indexée par sa clé de résolution
+/// (alias sinon nom de table, en minuscules — cf. l'espace de noms plat du
+/// plan SQL) et par nom de colonne UPPERCASE.
+struct SourceTable {
+    key: String,
+    cols: std::collections::HashMap<String, SourceMeta>,
+}
+
+/// Charge les métadonnées des tables physiques du FROM/JOIN. Les
+/// sous-requêtes, vues SQL et dictionary tables n'ont PAS de métadonnées
+/// persistées → ignorées (leurs colonnes sortent sans format/label/longueur,
+/// comme une colonne calculée).
+fn collect_source_tables(
+    query: &ast::SelectStmt,
+    session: &mut Session,
+) -> Result<Vec<SourceTable>> {
+    let visit = |item: &crate::sql::ast::FromItem,
+                 session: &mut Session,
+                 out: &mut Vec<SourceTable>|
+     -> Result<()> {
+        if item.subquery.is_some() {
+            return Ok(());
+        }
+        let lib = item.table.libref_or_work();
+        let name = item.table.name.to_uppercase();
+        if lib == "WORK" && session.views.contains_key(&name) {
+            return Ok(());
+        }
+        if crate::sql::dictionary::dictionary_kind(&lib, &name).is_some() {
+            return Ok(());
+        }
+        // Lecture via le chemin qui APPLIQUE le sidecar (J04-P1) : les
+        // VarMeta obtenus portent format/label/longueur persistés. Les notes
+        // de lecture (coercition, sidecar invalide) vont au log.
+        let Ok(provider) = session.libs.get(&lib) else {
+            return Ok(());
+        };
+        let (ds, notes) = provider.read(&name)?;
+        for note in notes {
+            session.log.forward(&note);
+        }
+        let key = item
+            .alias
+            .clone()
+            .unwrap_or_else(|| item.table.name.clone())
+            .to_ascii_lowercase();
+        let cols = ds
+            .vars
+            .iter()
+            .map(|v| {
+                (
+                    v.name.to_uppercase(),
+                    SourceMeta {
+                        format: v.format.clone(),
+                        label: v.label.clone(),
+                        length: v.length,
+                    },
+                )
+            })
+            .collect();
+        out.push(SourceTable { key, cols });
+        Ok(())
+    };
+    let mut out = Vec::new();
+    for f in &query.from {
+        visit(f, session, &mut out)?;
+    }
+    for j in &query.joins {
+        visit(&j.table, session, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// Résout les métadonnées d'une colonne source : réf. qualifiée `t.x` →
+/// table de clé `t` ; réf. nue → première table (ordre du FROM) qui la
+/// possède, cohérent avec l'espace de noms plat du plan SQL.
+fn resolve_meta<'a>(
+    tables: &'a [SourceTable],
+    qualified: Option<&str>,
+    column: &str,
+) -> Option<&'a SourceMeta> {
+    let col = column.to_uppercase();
+    match qualified {
+        Some(q) => tables
+            .iter()
+            .find(|t| t.key == q.to_ascii_lowercase())
+            .and_then(|t| t.cols.get(&col)),
+        None => tables.iter().find_map(|t| t.cols.get(&col)),
+    }
+}
+
+/// Applique héritage + attributs `format=`/`label=`/`length=` au VarMeta `v`
+/// de la colonne de sortie. `length` sur une colonne caractère TRONQUE les
+/// valeurs (sémantique SAS) ; sur du numérique elle n'est que déclarative.
+fn apply_item_attrs(
+    v: &mut crate::dataset::VarMeta,
+    meta: Option<&SourceMeta>,
+    attrs: &ast::SqlItemAttrs,
+) -> Result<()> {
+    if let Some(m) = meta {
+        v.format = m.format.clone();
+        v.label = m.label.clone();
+        if v.ty == VarType::Char {
+            v.length = m.length;
+        }
+    }
+    if let Some(f) = &attrs.format {
+        if crate::formats::FormatSpec::parse(f).is_none() {
+            return Err(SasError::runtime(format!("The format {f} is not valid.")));
+        }
+        v.format = Some(f.clone());
+    }
+    if let Some(l) = &attrs.label {
+        v.label = Some(l.clone());
+    }
+    if let Some(n) = attrs.length {
+        v.length = n;
+    }
+    Ok(())
+}
+
+/// Tronque la colonne caractère d'index `idx` à `n` caractères (LENGTH= dans
+/// le select-list, sémantique SAS).
+fn truncate_char_column(ds: &mut SasDataset, idx: usize, n: usize) -> Result<()> {
+    let s = ds.df.get_columns()[idx].as_materialized_series().clone();
+    let Some(ca) = s.str().ok() else {
+        return Ok(());
+    };
+    let name = s.name().to_string();
+    let truncated: polars::prelude::StringChunked = ca
+        .iter()
+        .map(|o| o.map(|x| x.chars().take(n).collect::<String>()))
+        .collect();
+    // Le ChunkedArray collecti perd le nom de la série : sans le restaurer,
+    // la colonne sortirait anonyme et le sidecar ne correspondrait plus.
+    ds.df
+        .replace_column(idx, truncated.into_series().with_name(name.clone().into()))?;
+    Ok(())
+}
+
+/// J04-P4 — métadonnées après transformation SQL : une colonne reprise
+/// TELLE QUELLE (`*`, `t.*`, `x`, `t.x`, éventuellement renommée via AS)
+/// conserve format, label et longueur de sa source ; une colonne calculée
+/// n'hérite de RIEN sauf attributs explicites `FORMAT=`/`LABEL=`/`LENGTH=`
+/// du select-list.
+fn apply_source_metadata(
+    query: &ast::SelectStmt,
+    ds: &mut SasDataset,
+    session: &mut Session,
+) -> Result<()> {
+    let tables = collect_source_tables(query, session)?;
+    for it in &query.items {
+        match &it.expr {
+            // `*` : chaque colonne de sortie hérite de sa source (première
+            // table du FROM qui la possède).
+            ast::SqlExpr::Star => {
+                for v in ds.vars.iter_mut() {
+                    if let Some(m) = resolve_meta(&tables, None, &v.name) {
+                        apply_item_attrs(v, Some(m), &ast::SqlItemAttrs::default())?;
+                    }
+                }
+            }
+            // `t.*` : héritage restreint à la table de clé `t`.
+            ast::SqlExpr::QualifiedStar(k) => {
+                for v in ds.vars.iter_mut() {
+                    if let Some(m) = resolve_meta(&tables, Some(k), &v.name) {
+                        apply_item_attrs(v, Some(m), &ast::SqlItemAttrs::default())?;
+                    }
+                }
+            }
+            // Colonne nue ou qualifiée : héritage + attributs éventuels.
+            ast::SqlExpr::Base(Expr::Var(name)) => {
+                let meta = resolve_meta(&tables, None, name);
+                let out = it.alias.clone().unwrap_or_else(|| name.clone());
+                if let Some(v) = ds
+                    .vars
+                    .iter_mut()
+                    .find(|v| v.name.eq_ignore_ascii_case(&out))
+                {
+                    apply_item_attrs(v, meta, &it.attrs)?;
+                }
+            }
+            ast::SqlExpr::Qualified { table, column } => {
+                let meta = resolve_meta(&tables, Some(table), column);
+                let out = it.alias.clone().unwrap_or_else(|| column.clone());
+                if let Some(v) = ds
+                    .vars
+                    .iter_mut()
+                    .find(|v| v.name.eq_ignore_ascii_case(&out))
+                {
+                    apply_item_attrs(v, meta, &it.attrs)?;
+                }
+            }
+            // Colonne calculée / agrégat : PAS d'héritage — seuls les
+            // attributs explicites s'appliquent (règle SAS).
+            _ => {
+                let out = plan::output_name(it, query)?;
+                if let Some(v) = ds
+                    .vars
+                    .iter_mut()
+                    .find(|v| v.name.eq_ignore_ascii_case(&out))
+                {
+                    apply_item_attrs(v, None, &it.attrs)?;
+                }
+            }
+        }
+    }
+    // LENGTH= sur une colonne caractère : tronquer les VALEURS.
+    for it in &query.items {
+        if let Some(n) = it.attrs.length {
+            let out = plan::output_name(it, query).unwrap_or_default();
+            if let Some(idx) = ds
+                .vars
+                .iter()
+                .position(|v| v.name.eq_ignore_ascii_case(&out) && v.ty == VarType::Char)
+            {
+                truncate_char_column(ds, idx, n)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn exec_create_table_as(
     table: &DatasetRef,
     query: &ast::SelectStmt,
@@ -111,10 +343,13 @@ pub(super) fn exec_create_table_as(
 ) -> Result<()> {
     let lf = plan::lower_select(query, session)?;
     let df = lf.collect()?;
-    let (ds, notes) = SasDataset::from_dataframe(df)?;
+    let (mut ds, notes) = SasDataset::from_dataframe(df)?;
     for note in notes {
         session.log.forward(&note);
     }
+
+    // J04-P4 : format/label/longueur des colonnes reprises telles quelles.
+    apply_source_metadata(query, &mut ds, session)?;
 
     let libref = table.libref_or_work();
     let name = table.name.to_uppercase();

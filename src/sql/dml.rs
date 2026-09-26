@@ -202,11 +202,16 @@ pub(super) fn exec_update(
 
     // Masque WHERE : true = ligne à mettre à jour. Évalué via le chemin lazy
     // standard (normalize_specials + translate_predicate) ; sans WHERE → tout.
+    // J04-P4 : `scan_with_notes` pour transmettre les notes de lecture.
     let mask: Vec<bool> = match where_ {
         None => vec![true; n_rows],
         Some(pred) => {
             let provider = session.libs.get(&libref)?;
-            let lf = plan::normalize_specials(provider.scan(&name)?)?;
+            let (lf, notes) = provider.scan_with_notes(&name)?;
+            for note in notes {
+                session.log.forward(&note);
+            }
+            let lf = plan::normalize_specials(lf)?;
             let p = plan::translate_predicate(pred)?;
             // `with_column` (et non `select`) pour diffuser un prédicat éventuel
             // sur la hauteur de la frame.
@@ -221,8 +226,13 @@ pub(super) fn exec_update(
 
     // Évalue chaque expression d'assignation sur la frame normalisée complète,
     // puis applique aux lignes du masque (coerçue au type de la cible).
+    // J04-P4 : `scan_with_notes` pour transmettre les notes de lecture.
     let provider = session.libs.get(&libref)?;
-    let base_lf = plan::normalize_specials(provider.scan(&name)?)?;
+    let (base_lf, notes) = provider.scan_with_notes(&name)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+    let base_lf = plan::normalize_specials(base_lf)?;
     for ((_, value), &slot) in assignments.iter().zip(target_idx.iter()) {
         let expr = plan::translate_expr(value)?;
         // `with_column` diffuse les littéraux scalaires (`set x = 0`) sur toutes
@@ -260,9 +270,11 @@ pub(super) fn exec_update(
 // DELETE FROM ... [WHERE]
 // ----------------------------------------------------------------------------
 
-/// Chemin LAZY : on scanne la table, on normalise les missings spéciaux
-/// (NaN-payload → null) comme `lower_select`, puis on garde les lignes qui ne
-/// satisfont PAS le prédicat (`filter(NOT pred)`). Les helpers
+/// Chemin LAZY : on lit la table (chemin qui APPLIQUE le sidecar, J04-P4 —
+/// les métadonnées format/label/longueur doivent survivre à la
+/// réécriture), on normalise les missings spéciaux (NaN-payload → null)
+/// comme `lower_select`, puis on garde les lignes qui ne satisfont PAS le
+/// prédicat (`filter(NOT pred)`). Les helpers
 /// `plan::translate_predicate` / `plan::normalize_specials` sont exposés en
 /// `pub(crate)` exactement pour ce besoin.
 pub(super) fn exec_delete(
@@ -282,26 +294,44 @@ pub(super) fn exec_delete(
         )));
     }
 
+    // Lecture via le chemin sidecar : les VarMeta sources portent les
+    // métadonnées persistées, restaurées sur la table réécrite.
+    let (src, notes) = provider.read(&name)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+
     // Nombre de lignes initial (pour la NOTE).
-    let before = provider.scan(&name)?.collect()?.height();
+    let before = src.n_obs();
 
     let kept_df = match where_ {
         None => {
             // Suppression totale : on garde le schéma, 0 ligne.
-            provider.scan(&name)?.limit(0).collect()?
+            src.df.clone().lazy().limit(0).collect()?
         }
         Some(pred) => {
-            let lf = provider.scan(&name)?;
-            let lf = plan::normalize_specials(lf)?;
+            let lf = plan::normalize_specials(src.df.clone().lazy())?;
             let p = plan::translate_predicate(pred)?;
             lf.filter(p.not()).collect()?
         }
     };
 
     let deleted = before - kept_df.height();
-    let (ds, notes) = SasDataset::from_dataframe(kept_df)?;
+    let (mut ds, notes) = SasDataset::from_dataframe(kept_df)?;
     for note in notes {
         session.log.forward(&note);
+    }
+    // Restaure format/label/longueur des colonnes survivantes.
+    for v in ds.vars.iter_mut() {
+        if let Some(s) = src
+            .vars
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&v.name))
+        {
+            v.format = s.format.clone();
+            v.label = s.label.clone();
+            v.length = s.length;
+        }
     }
     let provider = session.libs.get(&libref)?;
     provider.write(&name, &ds)?;

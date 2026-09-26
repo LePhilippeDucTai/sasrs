@@ -38,7 +38,7 @@ pub(super) fn project_select_list(
 
 /// Nom de sortie d'un item : alias explicite, sinon nom de colonne nue,
 /// sinon nom dérivé de l'agrégat / expression.
-pub(super) fn output_name(it: &SelectItem, _query: &SelectStmt) -> Result<String> {
+pub(crate) fn output_name(it: &SelectItem, _query: &SelectStmt) -> Result<String> {
     if let Some(a) = &it.alias {
         return Ok(a.clone());
     }
