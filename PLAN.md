@@ -1,316 +1,287 @@
-# `sasrs` — Plan d'implémentation
+# PLAN — consolidation
 
-> **⚠️ Feuille de route gelée le 2026-09-23.** Ce document n'est plus le plan actif :
-> la suite du projet est pilotée par le plan de consolidation dans
-> `docs/plans/consolidation/` (jalons J01–J08, détail par part dans
-> `docs/plans/consolidation/jalons/`). Les décisions actées, l'architecture et la
-> checklist des pièges ci-dessous restent la référence en vigueur ; le devenir des
-> jalons restants M46–M66 est décrit dans « Correspondance M46–M66 → consolidation ».
+Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.
 
-Interpréteur du langage **SAS** (référence : SAS 9.4 classique, pré-Viya) écrit en **Rust**,
-moteur de données **Polars**, tables au format **Parquet**. Pas d'UI : un binaire batch
-`sasrs script.sas` qui produit une **log fidèle SAS** et un **listing** texte.
+Protocol: 3 · Plan: `959bc69d-76bf-4a77-ab01-02dcb8113c51` · Revision: 2
 
-Ce document est la feuille de route du projet. Chaque fichier source non encore implémenté
-existe déjà en **squelette compilable** : le plan détaillé du fichier (sémantique SAS à
-respecter, pièges, algorithmes) est dans le doc-commentaire en tête du fichier, les
-signatures publiques sont posées, les corps sont en `todo!()`. Un agent peut donc prendre
-un fichier, lire son en-tête, et l'implémenter sans contexte supplémentaire.
+Base: `consolidation`
 
-## Correspondance M46–M66 → consolidation
+## J02 — Diagnostics fiables : codes retour, erreurs macro, contrat « reconnu mais ignoré »
 
-La Phase G ci-dessous est **gelée à M45** : ses jalons restants ne seront pas exécutés
-tels quels. Ils sont remappés sur le plan de consolidation (`docs/plans/consolidation/`),
-qui redécoupe le travail par comportement borné (reproducer + oracle + critère
-d'acceptation par comportement) plutôt que « un jalon par proc entière ».
+### J02-P1 — Échecs d'écriture, code retour et pertes ODS
+`--log`/`--print` impossibles à écrire : ERROR sur stderr, contenu reversé sur stderr (jamais perdu), exit 2 ; stdout fermé : pas de panique, exit 2. Écriture d'un fichier ODS (CLOSE ou filet de fin de run) ou d'une image en échec : `log.error` compté avec le chemin complet — les 7 sites `note("WARNING: …")` de lib.rs, session.rs, reg/output/plots.rs et univariate/plot_graphics.rs disparaissent. Ouvrir une destination à fichier alors qu'une autre est ouverte : finaliser et écrire la précédente d'abord ; le listing produit avant `ODS HTML FILE=` reste dans le listing ; `ODS _ALL_ CLOSE` ferme la destination courante ; destination sans contenu → NOTE explicite. Panique pendant `run()` : `catch_unwind`, log partiel conservé + `ERROR: internal error …`, exit 2. Tests CLI (noms contractuels) `write_failure_*` (log, print, dossier absent, permission) et `ods_*` (fichier ODS non inscriptible, deux destinations successives) dans tests/cli.rs. Ne pas modifier le format des NOTEs de succès ni les compteurs du log. Le code sous `cfg(feature = "graphics")` n'est compilé localement que si le conteneur a fontconfig : le garder minimal et symétrique du chemin par défaut. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-| Jalons gelés | Devenir |
-|---|---|
-| **M50** — PROC PRINTTO : routage fichier réel | **J07-P5** (`docs/plans/consolidation/jalons/J07-compatibilite.md`) |
-| **M46–M49, M51–M66** — TABULATE `PCTN<>` ; REPORT FLOW/COMPUTE riche ; DATASETS APPEND/CONTENTS/MODIFY/REPAIR ; CATALOG ; OPTIONS détail par option ; LOGISTIC/GENMOD/MIXED/GLIMMIX ; PRINCOMP/FACTOR/DISCRIM/DISTANCE/CLUSTER/FASTCLUS/IML ; S3 ; GPLOT/GCHART/PLOT/SGPLOT | feuille de route avancée `docs/roadmap/avancee.md`, rédigée par **J08-P5** (`docs/plans/consolidation/jalons/J08-avance-e2e.md`) — replanification par comportement borné (oracle et acceptation par comportement), hors périmètre de la consolidation |
+Tier: T3 · Depends: none · Checks: fmt, clippy, test, j02-write-failure, j02-ods-cli, j02-no-note-diagnostics
 
-Le curseur d'exécution (jalon courant, parts terminées) vit désormais dans
-`docs/plans/consolidation/PROGRESS.md` ; `PROGRESS.md` racine est figé à M46.
+### J02-P2 — Erreurs macro comptées, %ABORT, références non résolues
+Remplacer les diagnostics réduits à un commentaire (`emit_error` → `/* … */` et les sites `/* NOTE: … */` de include.rs, control.rs, control/jump.rs, define/invoke.rs) par un canal de diagnostics du `MacroEngine` vidé par l'executor dans le log : ERROR comptées pour %EVAL/%SYSEVALF invalides, %DO emballé, %SYSFUNC inconnue, %INCLUDE illisible ou trop imbriqué, récursion, %GOTO sans label, paramètres positionnels en trop, mot-clé inconnu ; vraies NOTEs pour %SYSEXEC/%WINDOW/%SYSCALL non gérés ; textes SAS cités (SAS 9.4 Macro Language Reference). `%ABORT` : `take_abort_request` consommé par l'executor, arrêt du programme ; CANCEL/ABEND/RETURN n mappés sur le code retour et documentés. WARNINGs `Apparent symbolic reference X not resolved.` et `Apparent invocation of macro X not resolved.` là où SAS les émet. `%LENGTH` d'un argument vide vérifié contre la doc. Tests unitaires `macro_diag*` ; fixtures `tests/fixtures/j02/macro_*.sas` avec snapshots relus à la main ; snapshots existants modifiés justifiés un par un. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-## Décisions actées (ne pas rediscuter)
+Tier: T2 · Depends: none · Checks: fmt, clippy, test, j02-macro-diag, j02-macro-no-comment-diagnostics, j02-macro-sas-messages
 
-| Sujet | Décision |
-|---|---|
-| Stockage | `LIBNAME lib '/chemin';` = dossier local ; table = `<dossier>/<nom>.parquet` ; `WORK` = tempdir. Trait `LibraryProvider` pour brancher S3 plus tard (features Polars `cloud, aws` derrière un feature flag `s3`). |
-| Types | Modèle SAS strict : Numérique (f64) + Caractère uniquement. Dates = nombres (epoch **1960-01-01**) portées par des formats d'affichage. Parquet natif (int/date/datetime/bool) coercé en f64 à la lecture. |
-| Missings | `.` ⇔ null Polars ; spéciaux `._`, `.A`–`.Z` ⇔ NaN à payload (préservé par parquet). `missing::nullify_specials()` obligatoire avant tout calcul Polars natif. |
-| Macro | Phase ultérieure ; l'emplacement (`preprocess::TextStage`) est réservé dès maintenant et le parsing est incrémental bloc par bloc pour l'accueillir. |
-| PROC SQL | Parser dédié du dialecte SAS (CALCULATED, remerge, lib.table) → Polars lazy. Pas le SQLContext Polars. |
-| Sortie | Log SAS (NOTE:/WARNING:/ERROR:, compteurs d'obs, temps réel/CPU) + listing texte. `--deterministic` fige les temps pour les snapshots. Divergence assumée : pas de date/numéro de page (≡ NODATE NONUMBER). **À partir de M22 : couche ODS par trait `OutputDestination` (HTML/RTF/PDF/Excel + ODS OUTPUT→datasets), le listing texte restant la destination par défaut byte-identique.** |
-| Graphiques (M29+) | Images **PNG/SVG via crate `plotters`** routées par ODS GRAPHICS (feature `graphics`). Snapshots = log/listing + assertion d'existence + format/dimensions de l'image, jamais le pixel. Pas d'UI temps réel. |
-| Numérique statistique (M24+) | **Fait maison** dans `src/stat/` (lois normale/t/F/χ²/gamma/bêta + algèbre linéaire : Cholesky, QR, moindres carrés, Jacobi), pour le déterminisme et la stabilité des snapshots. Crates externes réservées à l'I/O lourd (`calamine`, `rust_xlsxwriter`, `printpdf`, `plotters`). PRNG MT19937 maison, graine figée sous `--deterministic`. |
-| Périmètre | **Élargi (roadmap M14–M30, voir PROGRESS.md)** vers une parité large SAS 9.4 Base + STAT + graphiques statiques : I/O fichiers plats (INFILE/INPUT/DATALINES, FILE/PUT, IMPORT/EXPORT), bibliothèque de fonctions complète, hash, compléments SQL/macro/formats, complétion des procs, **ODS** (HTML/RTF/PDF/Excel + ODS OUTPUT→datasets), **modélisation statistique** (TTEST/NPAR1WAY/REG/ANOVA/GLM/LOGISTIC/GENMOD/PRINCOMP/FACTOR/CLUSTER/DISCRIM/MIXED/GLIMMIX) et **graphiques** (SGPLOT/GPLOT/GCHART/PLOT en images PNG/SVG). Seul reste hors périmètre l'interactivité temps réel (pas d'UI : les graphiques sont des fichiers image). Procs SAS Viya (CAS) : hors périmètre. |
+### J02-P3 — Contrat « reconnu mais ignoré » : instructions de procédure
+Créer `docs/support-contract.md` : ERROR si un résultat numérique, un dataset ou le contrôle de flux peut changer ; WARNING si l'effet est d'affichage seulement ; instruction inconnue → ERROR façon SAS 180-322 ; jamais de repli silencieux ; exemples. `parse_proc_body` : sous-instruction non reconnue → ERROR au lieu de `skip_to_semi` ; helpers partagés `unsupported_statement(proc, stmt)` (ERROR) et `ignored_display_statement` (WARNING) appliqués d'un coup aux procs appelantes (BY/WEIGHT/FREQ/OUTPUT/ID/WHERE/CLASS vs FORMAT/LABEL/ATTRIB). Les instructions globales valides dans une étape PROC (TITLE, FOOTNOTE, OPTIONS, LIBNAME, ODS, FILENAME) continuent de fonctionner. Tests unitaires `contract_*` ; au moins 4 fixtures `tests/fixtures/j02/contract_*.sas` (BY dans GLM, WEIGHT dans LOGISTIC, instruction inventée, FORMAT dans une proc qui l'ignore) dont le snapshot montre le diagnostic. Un fixture existant qui utilisait une instruction ignorée garde son intention (instruction retirée ou ERROR assumée, justifiée). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-## Architecture
+Tier: T2 · Depends: J02-P2 · Checks: fmt, clippy, test, j02-contract-doc, j02-contract-tests, j02-contract-fixtures
 
-```
-source .sas
-  → preprocess::TextStage        (identité aujourd'hui ; macro %let/&var demain)
-  → lexer::Lexer                 (tokens + spans)
-  → parser::StatementStream      (découpe en blocs : global | DATA | PROC — UN bloc
-                                  à la fois, exécuté avant de parser la suite)
-  → executor                     (écho log, dispatch, timing, récupération d'erreur)
-       ├─ étape DATA : datastep::compile (PDV) → datastep::exec (boucle implicite)
-       ├─ PROCs : procs::* (un sous-parser + un exécuteur par proc)
-       └─ PROC SQL : sql::parser → sql::plan (LazyFrame)
-  ↘ session : LibraryManager (librefs→parquet), LogWriter, ListingWriter, options
-```
+### J02-P4 — Options ignorées en silence : procs Base et PROC SQL
+Via les helpers de J02-P3, options reconnues non honorées → ERROR : COMPARE `CRITERION=`/`METHOD=`/`BRIEF`/`LISTALL`/`OUT*`/`MAXPRINT=` et instructions ID/VAR/WITH/BY (implémentées en J07) ; UNIVARIATE `VARDEF=`/`PCTLDEF=` non par défaut ; options de TABLES inconnues de FREQ ; DATASETS `KILL` et options inconnues ; MEANS statistique inconnue ou non calculable dans `OUTPUT` (`clm(x)=`) ; SQL instruction inconnue, `OUTOBS=`/`INOBS=` (implémenter si trivial, sinon ERROR). Honorer UNIVARIATE `NOPRINT` et SQL `NOPRINT`. PRINTTO : supprimer la NOTE trompeuse « redirected to » ; `LOG=`/`PRINT=` → WARNING « routing not supported » jusqu'à J07-P5. PLOT : options d'affichage (`HREF=`, `VREF=`, `HAXIS=`…) → WARNING. Tests unitaires `silent_opt_*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-## État, modèle suggéré et effort par fichier
+Tier: T3 · Depends: J02-P3 · Checks: fmt, clippy, test, j02-silent-opt, j02-printto-honest
 
-Tous les tableaux de jalons partagent le même schéma :
-**Tâche | Jalon | État | Modèle | Effort | Notes**.
-Légende état : ✅ fait (implémenté + tests, cases cochées dans `PROGRESS.md`) · 🔶 en cours ·
-⬜ à faire. Modèle suggéré : **Sonnet** (économique — tâche cadrée/mécanique), **Opus**
-(raisonnement soutenu), **Fable** (sémantique SAS pointue, risques d'erreurs subtiles) ;
-« — » quand la tâche est faite et que la question ne se pose plus. L'effort est celui du
-modèle suggéré. Un modèle supérieur peut toujours prendre la tâche d'un inférieur ;
-l'inverse est déconseillé pour les tâches marquées Fable.
+### J02-P5 — Replis silencieux de modélisation
+GENMOD : `DIST=`/`LINK=` inconnus → ERROR (plus de repli POISSON/lien canonique) ; `LINK=POWER(λ)` → ERROR sauf λ=-1 ; options MODEL inconnues (`OFFSET=`…) → ERROR. LOGISTIC : `DESCENDING`/`ORDER=` honorés ou ERROR ; `LINK=` inconnu et options MODEL inconnues → ERROR ; CLASS `(PARAM= REF=)` analysé correctement (plus de jetons pris pour des variables), `PARAM=REF` et `REF=FIRST|LAST` honorés, le reste → ERROR. MIXED/GLIMMIX : `TYPE=`/`METHOD=` inconnus → ERROR ; `DDFM=` autre que CONTAIN → ERROR. DISCRIM : `METHOD≠NORMAL`, `POOL=NO|TEST`, `POOL=` inconnu → ERROR (plus de repli LDA). `common::model::parse_effect_list` : `a*b`, `a(b)` → ERROR dans les procs qui les aplatissaient. REG : options PROC/MODEL inconnues → ERROR. Tests unitaires `model_fallback_*` ; syntaxe de référence = doc SAS/STAT 9.4 citée. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-### Fondations (jalon M1 — faites)
+Tier: T2 · Depends: J02-P4 · Checks: fmt, clippy, test, j02-model-fallback
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| `Cargo.toml` (workspace + crate) | M1 | ✅ | — | — | Polars 0.46 (lazy, parquet, dtypes), clap, insta |
-| `src/error.rs` | M1 | ✅ | — | — | SasError (parse/runtime/io/polars) |
-| `src/source.rs` | M1 | ✅ | — | — | spans → lignes (écho log) |
-| `src/token.rs` | M1 | ✅ | — | — | tokens, spans, suffixes de littéraux `d/t/dt/n` |
-| `src/lexer.rs` | M1 | ✅ | — | — | lexer manuel : opérateurs-mots SAS, `'...'d`, commentaires |
-| `src/value.rs` | M1 | ✅ | — | — | `Value`, 28 missings, `sas_cmp` (`.=.` vrai !), BESTw. |
-| `src/missing.rs` | M1 | ✅ | — | — | NaN-payload ⇔ missings spéciaux, `nullify_specials` |
-| `src/dataset.rs` | M1 | ✅ | — | — | lecture/écriture parquet + coercition types→SAS (dates 1960) |
-| `src/library.rs` | M1 | ✅ | — | — | trait `LibraryProvider`, `DirLibrary`, WORK tempdir |
-| `src/log.rs` | M1 | ✅ | — | — | écho numéroté, NOTE/WARNING/ERROR, timing réel/CPU |
-| `src/listing.rs` | M1 | ✅ | — | — | titres centrés, tables monospace |
-| `src/session.rs` | M1 | ✅ | — | — | état de session (libs, log, listing, options, _LAST_) |
-| `src/preprocess.rs` | M1 | ✅ | — | — | `TextStage` (emplacement macro) |
-| `src/ast.rs` | M1 | ✅ | — | — | AST blocs/expressions/étape DATA |
-| `src/lib.rs`, `src/main.rs` | M1 | ✅ | — | — | API `run()`, CLI `sasrs` (clap) |
-| `tests/common/mod.rs` | M1 | ✅ | — | — | génération parquet sashelp.class |
+### J02-P6 — Convergence et singularité véridiques
+Les listings n'affirment la convergence que si elle est atteinte : GENMOD (ligne « Convergence criterion … satisfied » après l'ajustement ; épuisement du step-halving = non-convergence), GLIMMIX (PQL, Laplace : drapeau Nelder-Mead respecté), MIXED (général et legacy), LOGISTIC (binaire ; ordinal : un pas singulier ne fait plus `break` en silence). Non-convergence → WARNING SAS (« Convergence was not attained… », « The maximum likelihood estimate may not exist… ») au lieu d'une NOTE ou du silence ; composante de variance tronquée à 0 → NOTE « Estimated G matrix is not positive definite. » ; λ plafonné → NOTE. GLM/ANOVA de rang incomplet : ERROR explicite (plus de SSE/SE NaN silencieux) tant que l'inverse généralisée n'existe pas. Tests unitaires `convergence_*` (non-convergence, séparation quasi complète, plan singulier) ; messages cités de la doc SAS. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-### Jalon M1 — rendre le pipeline exécutable (fait)
+Tier: T3 · Depends: J02-P5 · Checks: fmt, clippy, test, j02-convergence
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| `src/parser/mod.rs` | M1 | ✅ | **Opus** | élevé | `StatementStream`, découpeur de blocs, récupération d'erreur — c'est la pièce architecturale (couture macro + grammaires par proc) |
-| `src/parser/expr.rs` | M1 | ✅ | **Opus** | élevé | Pratt avec la précédence SAS *inhabituelle* (`NOT` lie fort, `**` droite-associatif), littéraux date, missings spéciaux `.a` |
-| `src/parser/datastep.rs` | M1 | ✅ | **Opus** | moyen | statements M1 (SET/assign/IF/DO/OUTPUT/KEEP/DROP/STOP), erreurs "not yet implemented" propres |
-| `src/parser/global.rs` | M1 | ✅ | **Sonnet** | faible | LIBNAME / TITLE / OPTIONS |
-| `src/datastep/pdv.rs` | M1 | ✅ | **Sonnet** | moyen | PDV : lookup insensible casse, troncature longueur char, reset non-retenues |
-| `src/datastep/mod.rs` | M1 | ✅ | **Fable** | élevé | compilation : PDV en ordre de première référence, inférence type/longueur, KEEP/DROP, output implicite — sémantique SAS dense |
-| `src/datastep/exec.rs` | M1 | ✅ | **Fable** | élevé | boucle implicite (fin d'étape AU MILIEU de l'itération sur EOF), flux NextIter/EndStep, builders de sortie, NOTEs exactes |
-| `src/datastep/eval.rs` | M1 | ✅ | **Opus** | moyen-élevé | coercitions, propagation missing, comparaisons via `sas_cmp`, notes de conversion |
-| `src/datastep/functions.rs` | M1 | ✅ | **Sonnet** | moyen | dispatch table-driven ~25 fonctions (SUM ignore les missings !), tests table-driven |
-| `src/executor.rs` | M1 | ✅ | **Opus** | moyen | boucle blocs→exécution, exécution des statements globaux, timing |
-| `src/procs/mod.rs` | M1 | ✅ | **Sonnet** | faible | registre parse/execute des procs |
-| `src/procs/print.rs` | M1 | ✅ | **Sonnet** | moyen | PROC PRINT (Obs/VAR/NOOBS, alignements, _LAST_) |
-| `tests/snapshot.rs` | M1 | ✅ | **Sonnet** | faible | actif — les 3 fixtures m1/ sont verrouillées (log + listing + exit), vérifiées à la main |
+### J02-P9 — Garde CI : jobs agrégés figés et parité check.sh
+Résidus de J02-P0 (watch-points a et b) : `scripts/check_ci_structure.py` fige la liste attendue des jobs agrégés par `ci-ok` (fmt, clippy, clippy-graphics, clippy-s3, test, test-graphics, test-s3) — un job supprimé partout (workflow + needs) fait désormais échouer ; parité : chaque commande cargo d'un step `run` de ci.yml existe à l'identique dans `scripts/check.sh` (message nommant la commande manquante). Nouveau mode `--self-test` sur des copies temporaires : arbre intact → 0 ; job retiré partout → 1 ; commande cargo retirée de check.sh → 1 ; `continue-on-error` sur ci-ok → 1 ; `--self-test` sort 0 seulement si toutes ces attentes tiennent. En tête de script : tout ajout de job CI met à jour la liste. Ne modifier ni ci.yml ni check.sh. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-**Definition of done M1** : `cargo test -p sasrs` vert avec les snapshots activés ;
-`sasrs tests/fixtures/m1/set_filter.sas` affiche les ados de CLASS avec une log plausible.
+Tier: T4 · Depends: none · Checks: ci-structure, j02-ci-guard-selftest
 
-### Jalons M2+ (faits)
+### J02-P7 — Documentation de couverture honnête (J02)
+README.md : section `## Exit codes` (0/1/2, cas CLI dont échecs d'écriture) et lien vers `docs/support-contract.md` ; chaque ligne des tableaux de couverture confrontée au code : retirer ou qualifier les affirmations fausses (FACTOR `QUARTIMAX`/OBLIMIN = ERROR, GLIMMIX `METHOD=QUAD` = ERROR, SGPLOT `GROUP=`/`RESPONSE=`/`STAT=`/`SCALE=`/`TYPE=` non rendus, PLOT `=group`, GCHART HBAR dessiné en VBAR, `ODS GRAPHICS RESET=`, PRINTTO, COMPARE, MEANS WEIGHT — quantiles non pondérés jusqu'à J03 —, options devenues ERROR en J02). `docs/support-contract.md` : tableau des comportements passés d'« ignoré » à ERROR/WARNING en J02. Doc-comments `//!` périmés de GENMOD (« Gamma errors »), PRINCOMP (OUT=), GPLOT, GCHART (PIE), GLIMMIX (NOTEs promises), MIXED. CONTRIBUTING.md : la feuille de route active est le manifeste `.mission-control/plans/consolidation/plan.json` (vues générées dans docs/plans/consolidation/, état dans Mission Control) ; retirer la référence aux contrats `jalons/` du plan V2. Ne modifier aucun code exécutable. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| Étape DATA : RETAIN, DO itératif, arrays, sum statement, LENGTH, WHERE, options de dataset, sorties multiples | M2 | ✅ | **Fable** | élevé | étend parser/datastep + compile/exec ; missings spéciaux bout en bout |
-| `src/procs/sort.rs` | M3 | ✅ | **Opus** | moyen | collation : colonne compagnon de rang des missings (le piège est documenté dans le fichier) |
-| SET/MERGE avec BY, FIRST./LAST., IN= | M3 | ✅ | **Fable** | élevé | match-merge SAS exact (persistance du côté court) ; tests contre sorties SAS calculées à la main |
-| `src/formats/mod.rs` | M4 | ✅ | **Sonnet** | moyen | FormatSpec, catalogue, résolution user→builtin→fallback |
-| `src/formats/builtin.rs` | M4 | ✅ | **Sonnet** | moyen-élevé | table-driven, beaucoup de cas ; informat `5.2` piège des décimales implicites |
-| `src/formats/userdef.rs` + `src/procs/format.rs` | M4 | ✅ | **Sonnet** | moyen | plages low-<high, OTHER |
-| Persistance VarMeta (`dataset.rs`) | M4 | ✅ | **Opus** | moyen | FAIT (box 2). Polars 0.46 `ParquetWriter` n'expose **aucune** API KV parquet → format/label persistés dans un sidecar JSON `<table>.parquet.sasmeta.json` (écrit seulement si une var porte un format/label → round-trip identique sinon, snapshots stables). API isolée dans `dataset.rs`. |
-| `src/procs/contents.rs` | M4 | ✅ | **Sonnet** | faible | métadonnées seulement |
-| `src/procs/means.rs` | M5 | ✅ | **Opus** | élevé | combinatoire `_TYPE_`/`_FREQ_` de CLASS |
-| `src/procs/freq.rs` | M5 | ✅ | **Opus** | moyen | 1 et 2 voies, option MISSING |
-| `src/procs/univariate.rs` | M5 | ✅ | **Opus** | moyen-élevé | quantiles **définition 5** à la main (pas ceux de Polars) |
-| `src/sql/ast.rs` | M6 | ✅ | **Sonnet** | faible | types posés, compléter au fil du parser |
-| `src/sql/parser.rs` | M6 | ✅ | **Opus** | élevé | mots-clés contextuels, CALCULATED, BETWEEN/IS NULL/LIKE |
-| `src/sql/plan.rs` | M6 | ✅ | **Fable** | élevé | remerge + NOTE exacte, `= .` → is_null, join_nulls, ORDER BY missings premiers |
-| `src/procs/transpose.rs` | M7 | ✅ | **Opus** | moyen-élevé | nommage `_NAME_`/`COLn`/ID — ne pas utiliser le pivot Polars |
-| `src/procs/append.rs` | M7 | ✅ | **Sonnet** | moyen | règles FORCE |
-| `src/procs/datasets.rs` | M7 | ✅ | **Sonnet** | moyen | run-group, delete/change ; ajouter `rename` au trait LibraryProvider |
-| Préprocesseur macro (`preprocess.rs`) : %let, &var, %macro/%mend, %if/%do, CALL SYMPUT | M8 | ✅ | **Fable** | élevé | fait — puis complété (M11/M12/M19/M35/M41) et déplacé dans `src/macros/` (M32) |
-| `S3Library` derrière feature `s3` | M8 | ✅ | — | moyen | même trait `LibraryProvider`, scan parquet via URI `s3://` ; non branché ; cloud réel = features Polars `cloud`/`aws` (suite) |
-| `src/datastep/fastpath.rs` — fast-path vectorisé des steps simples (SET+assign → LazyFrame) | M8 | ✅ | — | élevé | opt-in (`Session.vectorize`/`--vectorize`), OFF par défaut ; v1 = SET simple + assignations numériques (littéraux/copies/+−*), prouvé équivalent au chemin ligne-à-ligne (tests bit-à-bit + log) ; subsetting IF / `/` / `**` / char repliés sur la boucle |
+Tier: T5 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P5, J02-P6, J02-P9 · Checks: fmt, clippy, test, j02-readme-contract, j02-contributing-v3
 
-### Jalons M9–M11 (extension — roadmap dans PROGRESS.md) — faits
+### J02-P8 — Review J02
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J02 : aucune ERROR/WARNING nouvelle sans test ; exit codes CLI réellement 2 sur échec d'écriture ; efficacité du garde CI (J02-P9) démontrée par son self-test. Ne rien modifier ; tout finding bloquant devient une unité corrective.
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| `src/procs/common.rs` | M9 | ✅ | — | moyen | `decode_column`/`sample_std`/`partition_numeric`/`group_by_keys` extraits (verbatim) ; means/freq/univariate/sort/transpose/append rebranchés ; refactor pur, sorties inchangées (`resolve_input` laissé par-proc) |
-| `src/procs/corr.rs` | M9 | ✅ | — | moyen | Pearson (VAR/WITH), Simple Statistics, matrice r + `Prob>|r|` (t-CDF via betai), N appariés ; NOSIMPLE/NOPROB/NOCORR ; OUT= = erreur (suite) ; réutilise common |
-| `src/procs/rank.rs` | M9 | ✅ | — | moyen | VAR/RANKS, GROUPS=, TIES=(MEAN/LOW/HIGH/DENSE), DESCENDING, OUT= ; collation `sas_cmp`, missing→missing ; BY + méthodes alt. = erreur (suite) |
-| `src/procs/tabulate.rs` | M9 | ✅ | — | élevé | v1 listing : CLASS/VAR, `table` 1–2 dims (empilement/croisement/parenthèses), stats N/NMISS/SUM/MEAN/MIN/MAX/STD ; en-têtes plats, 3ᵉ dim + croisements 2 VAR/stats + PCTN/formats différés (erreurs) |
-| `src/procs/report.rs` | M9 | ✅ | — | élevé | v1 listing : COLUMN + DEFINE (DISPLAY/ORDER/GROUP/ANALYSIS+stat) ; détail ou sommaire groupé ; ACROSS/COMPUTE/BREAK/RBREAK/LINE/WHERE/OUT= différés (erreurs) |
-| BY-group + WEIGHT + CI dans means/univariate ; CHISQ + options FREQ | M10 | ✅ | **Opus** | élevé | étend les procs M5 ; `partition_weighted`, quantile t, χ² Pearson |
-| `src/macros/` (depuis `preprocess.rs`) — processeur macro complet | M11 | ✅ | **Fable** | élevé | voir §Macro M11 ci-dessous ; 7 unités incrémentales |
+Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P5, J02-P6, J02-P9, J02-P7 · Checks: fmt, clippy, test, j02-write-failure, j02-ods-cli, j02-no-note-diagnostics, j02-macro-diag, j02-macro-no-comment-diagnostics, j02-macro-sas-messages, j02-contract-doc, j02-contract-tests, j02-contract-fixtures, j02-silent-opt, j02-printto-honest, j02-model-fallback, j02-convergence, ci-structure, j02-ci-guard-selftest, j02-readme-contract, j02-contributing-v3, clippy-s3, test-s3-lib
 
-### Macro M11 — architecture (décision actée)
+## J03 — Divergences numériques et encodage
 
-> **MAJ M32** : le processeur macro vit désormais dans le module `src/macros/`
-> (`mod.rs` façade + `error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/
-> `define`/`include`/`expand`). `src/preprocess.rs` n'est plus qu'un shim de re-export
-> (`pub use crate::macros::*`) ; les références historiques à `preprocess.rs` ci-dessous
-> désignent ce module.
+### J03-P1 — Oracle indépendant des statistiques pondérées
+Script Python (bibliothèque standard seulement) `tools/oracles/weighted_stats.py` implémentant depuis la doc SAS 9.4 (URLs citées dans le JSON) : N, NMISS, SUMWGT, MEAN, VAR/STD (VARDEF=DF et WEIGHT), MEDIAN, P1…P99, Q1, Q3, QRANGE pondérés (définition 5 pondérée), poids nuls, négatifs et manquants selon PROC MEANS et PROC UNIVARIATE (EXCLNPWGT inclus). `tests/oracles/weighted_stats.json` : au moins 8 cas (poids très déséquilibrés, fractionnaires, nuls, négatifs, manquants, tous égaux = définition 5 non pondérée, une seule observation, poids cumulé exactement sur une borne), chacun avec `provenance` et `expected` ; `--check` recalcule et compare, exit ≠ 0 en cas d'écart. Indépendance : ne pas lire src/procs/means, src/procs/univariate ni src/procs/common/stats.rs ; règle SAS incertaine → champ `uncertain` dans le cas. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-Modèle choisi : **expansion texte→texte PRE-lexer, interfoliée** avec la boucle de
-`executor::run_program`, état dans `Session` (pas de transformeur de tokens : les corps
-de `%macro` contiennent du texte SAS arbitraire, et `%str`/`%nrstr` masquent des caractères
-au scanner — naturellement un travail au niveau texte ; c'est aussi le modèle réel de SAS).
+Tier: T4 · Depends: J02-P8 · Checks: j03-oracle-check, j03-oracle-cases
 
-- **État** : nouveau `pub macro_engine: MacroEngine` sur `Session` (construit dans `Session::new`
-  depuis `deterministic`). `MacroEngine { symbols: SymbolTable{global, scopes}, macros: HashMap<String,MacroDef>, deterministic, guard }`.
-- **Seam** : `executor::run_program` ne reçoit plus un source pré-expansé ; il itère sur des
-  **segments bruts** (`RawSegmenter`, découpe aux frontières top-level en respectant
-  `%macro…%mend` et le masquage `%str/%nrstr`), appelle `macro_engine.expand_open_code(raw)`,
-  puis lexe/parse/exécute le texte expansé via un `StatementStream` transitoire (les bras du
-  match `Block` sont réutilisés tels quels). `lib.rs` cesse de pré-expanser.
-- **CALL SYMPUT** : `EvalCtx` (construit par étape, sans `&mut Session`) gagne
-  `symput_writes: Vec<(String,String)>` ; `DsStmt::CallRoutine` y pousse ; APRÈS l'exécution de
-  l'étape, `exec::execute` draine vers `macro_engine.set_symbol_global` (visible au segment
-  suivant — fidèle à SAS : invisible dans la même étape). `SYMGET` lit un instantané
-  `EvalCtx.macro_symbols_snapshot` pris en début d'étape.
-- **Écho log** : afficher les n° de ligne ORIGINAUX (pas le texte généré ; MPRINT hors périmètre).
-- **Vars auto / déterminisme** : `&SYSDATE9`/`&SYSTIME`/`&SYSVER` figées sous `--deterministic`
-  (sinon snapshots instables). `today_sas()` doit devenir deterministic-aware si SYSDATE9 en dérive.
-- **Invariant de bascule (M11.7)** : `expand_open_code` est l'IDENTITÉ pour tout segment sans
-  déclencheur macro résolu → les 789 tests + snapshots restent octet-identiques sans `--features`.
-- Découpage en 7 unités commit+push : voir PROGRESS.md (M11.1 … M11.7).
+### J03-P3 — Contrat d'encodage, lexer UTF-8 et BOM
+`docs/encoding.md` : contrat D-001 (longueurs et troncatures en caractères = session SAS LATIN1/WLATIN1 ; jamais d'UTF-8 invalide ; écart avec une session SAS UTF-8 ; entrées UTF-8 strictes, BOM ignoré ; sorties UTF-8, RTF échappé, PDF `?` documenté). Lexer : littéraux chaîne décodés en UTF-8 (fin du `b as char` de lexer/literal.rs) ; identifiants toujours ASCII. BOM UTF-8 retiré du source `.sas`, des fichiers `%INCLUDE` et `INFILE` ; UTF-8 invalide → ERROR nommant le fichier (plus de commentaire silencieux dans `%INCLUDE`). `VarMeta.length` documenté « caractères » ; commentaire faux de procs/append.rs corrigé. Snapshots m16 `constructions` et m34 `glimmix_links_laplace` corrigés (tiret cadratin en mojibake) avec justification. Tests `utf8*` (LENGTH('é')=1, TITLE non ASCII, BOM, UTF-8 invalide). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-### Phase E (M31–M35) — qualité & complétion (roadmap dans PROGRESS.md)
+Tier: T3 · Depends: J02-P8 · Checks: fmt, clippy, test, j03-encoding-doc, j03-utf8, j03-no-mojibake
 
-Chantier demandé après la complétion de M30. Trois axes : (1) **refactorisation en style
-fonctionnel** + généralisation/réduction de complexité (M31, M32) ; (2) **complétion maximale
-des options** des procs partiellement supportés (M33, M34) ; (3) **support total des macros**
-(M35). Invariant sur les jalons de refactor : sortie **octet-identique** (zéro `.snap.new`),
-commits d'extraction « move-only ». Les jalons de complétion font rétrécir en miroir la colonne
-« non couvert » des tableaux de couverture de `README.md`.
+### J03-P4 — Formats et informats sans découpe d'octets
+`$w.`, `$CHAR`, `$F`, `$QUOTE`, `$HEX`, `$UPCASE` et le repli de formats/mod.rs : troncature et remplissage en caractères, plus aucune panique sur du multioctet (fin de `out.truncate(w)` en octets). `right_justify` en caractères (plus de « afé » pour « Café » w=4) ; informat `$w.` en caractères ; informat DATE protégé contre le non-ASCII ; largeur par défaut des formats utilisateur en caractères. PROC REPORT : `pad_cell`, largeurs de colonnes et longueurs inférées de `OUT=` en caractères. Tests `multibyte*` (accents, CJK, emoji, largeur limite, espaces finaux) pour chaque fonction corrigée ; contrat : docs/encoding.md. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| Couche de parsing PROC partagée (`src/procs/common.rs` : `parse_proc_options`/`parse_proc_body`/`expect_eq`/`parse_dataset_opt`/`unknown_option_error`/`resolve_last_dataset` + `parse_by`/`parse_var_list`/`parse_class`/`parse_weight`) puis migration des ~40 procs | M31 | ✅ | **Opus** | élevé | combinateurs purs pilotés par closure `FnMut(&mut StatementStream,&str)->Result<bool>` ; migration par tiers (canaris `print`/`sort` → Tier B 6/7 → Tier C 6/6 → Tier D 16/17) ; `unknown_option_error` reproduit message+span à l'octet ; messages divergents (`means`/`freq`/…), `iml`, `catalog`, `report` body gardés inline. ~−1500 lignes, 0 `.snap.new` |
-| Scission `src/preprocess.rs` → module `src/macros/` (`mod`/`error`/`scan`/`symbols`/`quoting`/`eval`/`functions`/`control`/`define`/`include`/`expand`) | M32 | ✅ | **Opus** | élevé | `preprocess.rs` (4757 l.) → 12 fichiers `src/macros/` (façade `mod.rs` 1497 l. : struct + `new`/`expand_open_code`/`TextStage`/`RawSegmenter`) ; façade `preprocess` re-export (imports inchangés) ; déplacements verbatim via blocs `impl MacroEngine` en sous-module (0 changement d'appel) ; généralisations livrées : `apply_quoting` unifié (5 fns quoting + `%q*`), registre `functions::lookup` (string-fns) ; `tokenize_eval` déjà partagé. Octet-identique |
-| Complétion options procs Base/descriptifs : FREQ (BY/WEIGHT/LIST/≥3 voies/Fisher r×c), UNIVARIATE (probplot/cdfplot/pondéré), MEANS (WAYS/TYPES/percentiles), TABULATE (OUT=/4ᵉ dim/PCTN<>), REPORT (FORMAT=/COMPUTE complexe), PRINT/CONTENTS/DATASETS/SORT/APPEND | M33 | ✅ | **Opus/Fable** | élevé | détail dans PROGRESS.md ; fixtures `tests/fixtures/m33/` ; README 🟡→✅ |
-| Complétion options procs stat/modélisation : CORR (partial/Hoeffding/pondéré), TTEST/NPAR1WAY (BY/scores/exact), REG (NOINT/SELECTION=), ANOVA/GLM (interactions/CLASS multiples), LOGISTIC/GENMOD (CLASS/LINK=/DIST=GAMMA/multinomial), MIXED/GLIMMIX (AR(1)/UN/NOINT/LAPLACE), PRINCOMP/FACTOR/DISCRIM (OUT= scoring), CLUSTER (OUTTREE=), IML (SHAPE/DET/EIGEN/`a:b`), graphiques résiduels | M34 | ✅ | **Opus/Fable** | très élevé | détail dans PROGRESS.md ; oracles vérifiés vs SAS 9.4 ; fixtures `tests/fixtures/m34/` |
-| Macro complétion totale : `%SYSFUNC` délégué à toute la lib `functions::call`, `%INCLUDE` fileref/non-quoté/stdin, `%LENGTH("")`→1, vars auto restantes, audit exhaustif statements/fonctions macro | M35 | ✅ | **Opus** | élevé | détail dans PROGRESS.md ; snapshots m1–m34 inchangés ; tableau Macro README → ✅ |
+Tier: T3 · Depends: J03-P3 · Checks: fmt, clippy, test, j03-multibyte, j03-no-byte-truncate
 
-### Phase F (M36) — `PROC REG` : complétion exhaustive (roadmap dans PROGRESS.md)
+### J03-P5 — Largeurs de mise en page et longueurs inférées en caractères
+Centrage des titres et largeurs de colonnes du listing, de RTF, PDF et IML calculés en caractères. Longueurs `VarMeta` inférées depuis les données en caractères : CNTLOUT (PROC FORMAT), DISTANCE, FREQ `OUT=`. Tests `char_width*` (table à valeurs accentuées alignée, longueur CNTLOUT d'un label accentué). Ne pas toucher TRANSPOSE (J07) ni UNIVARIATE (J03-P2). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-Demandée après M34.4 : amener `PROC REG` à **✅** en couvrant TOUTE la surface SAS 9.4 restante.
-Jalon de complétion d'options ⇒ invariant d'octet-identité (snapshots m1–m35 inchangés ; le chemin
-OLS + NOINT/SELECTION= déjà livré reste tel quel ; nouveau comportement seulement sur la nouvelle
-syntaxe). 11 cases (M36.1–M36.11) + DoD, chacune rétrécissant la colonne « non couvert » du README REG.
+Tier: T4 · Depends: J03-P4 · Checks: fmt, clippy, test, j03-char-width
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| `TEST`/`RESTRICT` (hypothèses & restrictions linéaires sur β) ; `CLB`/`ALPHA=`/`CLI`/`CLM` + `OUTPUT` STDP/STDI/STDR/LCL/UCL/LCLM/UCLM ; diagnostics d'observation (`R`/`INFLUENCE` + STUDENT/RSTUDENT/COOKD/H/PRESS/DFFITS/COVRATIO/DFBETAS) ; colinéarité/spec (`COLLIN`/`VIF`/`TOL`/`SPEC`/`DW`/`ACOV`) ; SS partielles (`SS1`/`SS2`/`STB`/`PCORR`/`SCORR`/`SEQB`) ; `SELECTION=RSQUARE/ADJRSQ/CP/MAXR/MINR` (+BEST=/INCLUDE=/…) ; `WEIGHT`/`FREQ`/`BY`/`ID` ; `OUTEST=`/`OUTSSCP=`/`SIMPLE`/`CORR`/`COVB`/`XPX` ; `RIDGE=`/`PCOMIT=` ; `MTEST` + édition interactive (ADD/DELETE/REWEIGHT/REFIT/PAINT) ; panel `PLOTS=` complet | M36 | ✅ | **Opus/Fable** | élevé→très élevé | M36.1–M36.11, détail dans PROGRESS.md ; fixtures `tests/fixtures/m36/` ; **README `REG` → ✅** |
+### J03-P6 — Divergences de l'étape DATA
+UPDATE : transactions sans maître ajoutées, toutes les transactions d'une même clé appliquées dans l'ordre, valeurs manquantes de transaction sans effet (sauf `UPDATEMODE=NOMISSINGCHECK`) — valeurs attendues copiées de l'exemple documenté SAS (URL en commentaire). FIND : position de départ selon la doc (`FIND('abc','a')` = 1) ; corriger le test intnx.rs qui verrouille l'erreur. FORMAT/ATTRIB sur une variable inconnue : variable créée comme en SAS. REPEAT plafonné en caractères ; STRIP/CATS/CATX/COMPBL : blancs retirés selon la doc (espaces, pas les tabulations). Tests `datastep_divergence*`, chaque valeur attendue avec sa source ; fixtures `tests/fixtures/j03/datastep_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-### Phase G (M37–M66) — tout 🟡 (+ 🔴 faisable) → ✅ (roadmap dans PROGRESS.md)
+Tier: T3 · Depends: J03-P5 · Checks: fmt, clippy, test, j03-datastep-divergence
 
-Demandée après M36 : amener **toutes** les fonctionnalités partielles (26 🟡) et les 🔴 faisables à
-**✅** dans les tableaux de couverture du README. Décisions actées : implémentation **intégrale quel
-que soit l'effort** (vraie numérique GEE/Kenward-Roger/ML factor/QUAD/CCC/Fisher r×c, catalogues
-persistants, rendu graphique complet) ; **un jalon par gros proc** ; bloc d'**infrastructure
-partagée** (M37–M42) construit une fois et réutilisé. Restent 🔴 documentés (environnement/interactif) :
-`X`, `%SYSEXEC`/`%WINDOW`/`%DISPLAY`/`%SYSLPUT`/`%SYSRPUT`, `.sas7bcat` binaire (→ sidecar JSON).
-Invariant de complétion d'options : octet-identité des snapshots m1–m36 (tout gardé derrière une
-option/statement neuf). Détail des cases dans `PROGRESS.md`.
+### J03-P2 — Statistiques pondérées MEANS/SUMMARY et UNIVARIATE
+`weighted_quantile_def5` déplacé dans procs/common/stats.rs et utilisé par MEANS/SUMMARY pour MEDIAN, percentiles et QRANGE sous WEIGHT, dans les quatre chemins (listing, PRINTALLTYPES/WAYS/TYPES, `OUTPUT OUT=`, ODS `Summary`). N/NMISS/SUMWGT et poids ≤ 0 conformes à l'oracle (EXCLNPWGT honoré ou ERROR explicite). UNIVARIATE : `OUTPUT OUT=` honore WEIGHT (moyenne, écart-type, somme, quantiles) ; tests de normalité et capture ODS sous WEIGHT conformes (calcul, ou NOTE SAS s'ils ne sont pas disponibles) ; titre « Quantiles (Definition 5) » vérifié ; `//!` de univariate/mod.rs à jour. `tests/weighted_oracle.rs` exécute chaque cas de tests/oracles/weighted_stats.json de bout en bout via `sasrs::run` (DATALINES + `OUTPUT OUT=` relu), tolérance relative 1e-10 ; un cas `uncertain` en échec est signalé, jamais réécrit. L'oracle est hors périmètre : ne pas le modifier. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-| Tâche | Jalon | État | Modèle | Effort | Notes |
-|---|---|---|---|---|---|
-| Bloc 0 — moteur linéaire partagé `lincom` + digamma/trigamma | M37 | ✅ | **Opus** | élevé | `LinCombEngine`, `class_coding(Param)`, `score_test` (extrait de `glm.rs`) |
-| Bloc 0 — langage global + ODS capture/sélection : TITLE1–9/FOOTNOTE, OPTIONS appliquées, ODS OUTPUT généralisé, ODS SELECT/EXCLUDE, `%INCLUDE *`/FILENAME device | M38 | ✅ | **Fable** | moyen-élevé | fait (M38.1–.5 + DoD) ; cellules README OPTIONS/ODS restées 🟡 honnêtement (voir DoD M38 dans PROGRESS.md) |
-| Bloc 0 — store de catalogue de format persistant : sidecar JSON par libref, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`/`FMTSEARCH=` | M39 | ✅ | **Sonnet** | moyen | fait (M39.1–.3 + DoD : sidecar `LIB=`, `CNTLIN=`/`CNTLOUT=`, `FMTLIB`, `FMTSEARCH=`) ; reliquat PICTURE/2-niveaux → M43 |
-| Bloc 0 — DATA step : multiple `SET`, CALL routines, `WHERE` standalone, `INFORMAT` | M40 | ✅ | **Fable** | élevé | fait (M40.1–.3 + DoD : PRX via `fancy-regex`, sites SET indépendants, WHERE ≡ WHERE= par dataset, INFORMAT→modified list input) ; refus documentés : BY/POINT= × SET multiples, WHERE × UPDATE/MODIFY, `CALL STDIZE` inexistant en DATA step |
-| Bloc 0 — macro quoting complet : `%BQUOTE`/`%NRBQUOTE`/`%SUPERQ` + `%SYSCALL`/`%SYSMACDELETE` | M41 | ✅ | **Fable** | moyen-élevé | le quoting macro est la zone la plus subtile du langage |
-| Bloc 0 — PROC SQL : dictionnaires (`DICTIONARY.*`), `CONTAINS`, `SOUNDS LIKE` | M42 | ✅ | **Opus** | moyen | ajouts cadrés au parser/plan SQL existants |
-| Bloc 1 — PROC FORMAT : complétion totale | M43 | ✅ | **Sonnet** | moyen | — |
-| Bloc 1 — PROC FREQ : Fisher exact r×c | M44 | ✅ | **Fable** | élevé | algorithme réseau (Mehta-Patel) — numérique délicate |
-| Bloc 1 — PROC UNIVARIATE : pondération + plots | M45 | ✅ | **Opus** | moyen | — |
-| Bloc 1 — PROC TABULATE : `PCTN<dim>` | M46 | ⬜ | **Fable** | moyen-élevé | règles de dénominateur PCTN — SAS pointu |
-| Bloc 1 — PROC REPORT : DEFINE FLOW + COMPUTE riche | M47 | ⬜ | **Fable** | moyen-élevé | ordre d'évaluation des COMPUTE + variables automatiques — SAS pointu |
-| Bloc 1 — PROC DATASETS : APPEND/CONTENTS/MODIFY/REPAIR | M48 | ⬜ | **Sonnet** | moyen | — |
-| Bloc 1 — PROC CATALOG : catalogues réels | M49 | ⬜ | **Sonnet** | moyen | mécanique une fois le store M39 posé |
-| Bloc 1 — PROC PRINTTO : routage fichier réel | M50 | ⬜ | **Sonnet** | moyen | plomberie de redirection log/listing |
-| Bloc 1 — PROC OPTIONS : détail par option | M51 | ⬜ | **Sonnet** | faible | — |
-| Bloc 2 — PROC LOGISTIC : complétion totale | M52 | ⬜ | **Fable** | élevé | réutilise M37 `lincom` (comme tout le bloc 2) |
-| Bloc 2 — PROC GENMOD : complétion totale (GEE) | M53 | ⬜ | **Fable** | élevé | équations d'estimation généralisées — numérique délicate |
-| Bloc 2 — PROC MIXED : complétion totale (Kenward-Roger) | M54 | ⬜ | **Fable** | très élevé | ajustement KR des ddl — le plus dur du bloc, reste très élevé même pour Fable |
-| Bloc 2 — PROC GLIMMIX : complétion totale (QUAD) | M55 | ⬜ | **Fable** | très élevé | quadrature adaptative — idem M54 |
-| Bloc 3 — PROC PRINCOMP : complétion totale | M56 | ⬜ | **Opus** | élevé | — |
-| Bloc 3 — PROC FACTOR : complétion totale (ML) | M57 | ⬜ | **Fable** | élevé | extraction ML + rotations — numérique délicate |
-| Bloc 3 — PROC DISCRIM : complétion totale | M58 | ⬜ | **Fable** | élevé | quadratique/kernel/validation croisée |
-| Bloc 3 — PROC DISTANCE : complétion totale | M59 | ⬜ | **Opus** | moyen | — |
-| Bloc 3 — PROC CLUSTER : complétion totale (CCC) | M60 | ⬜ | **Opus** | élevé | — |
-| Bloc 3 — PROC FASTCLUS : complétion totale | M61 | ⬜ | **Opus** | moyen | — |
-| Bloc 3 — PROC IML : complétion totale | M62 | ⬜ | **Fable** | élevé | complétion d'un langage dans le langage — sémantique dense |
-| Bloc 4 — PROC GPLOT : complétion totale | M63 | ⬜ | **Opus** | élevé | réutilise `src/graphics/render.rs` ; testé `--features graphics` (comme tout le bloc 4) |
-| Bloc 4 — PROC GCHART : complétion totale | M64 | ⬜ | **Opus** | moyen | — |
-| Bloc 4 — PROC PLOT : complétion totale | M65 | ⬜ | **Opus** | moyen | — |
-| Bloc 4 — PROC SGPLOT : complétion totale | M66 | ⬜ | **Opus** | élevé | — |
+Tier: T2 · Depends: J03-P1, J03-P6 · Checks: fmt, clippy, test, j03-weighted-oracle, j03-weighted-def5-shared, j03-oracle-check
 
-Pièces transverses (construire UNE fois) : `src/procs/lincom.rs` (LSMEANS/ESTIMATE/CONTRAST/score,
-extrait de `glm.rs`) ; généralisation ODS OUTPUT + SELECT/EXCLUDE (`session.rs`/`output/mod.rs`) ;
-store catalogue sidecar (`formats/mod.rs`) ; titres multiples (trait `OutputDestination`) ;
-digamma/trigamma (`stat/dists.rs`). Ordre dur : Bloc 0 avant ses consommateurs ; graphiques en dernier.
+### J03-P7 — Documentation de couverture (J03)
+README.md : lignes MEANS/SUMMARY et UNIVARIATE (WEIGHT pondéré, y compris `OUTPUT OUT=` ; EXCLNPWGT ; ce qui reste non couvert), courte section encodage + lien `docs/encoding.md`, DATA step (UPDATE, FIND), limite « caractères » dans la ligne LENGTH. `docs/support-contract.md` : lignes J03. Audit README vs comportement réel des zones touchées en J03. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-**Curseur (2026-08-11)** : M1–M40 terminés ; **jalon courant M41** (reprendre à M41.1) ;
-M41–M66 à faire — le détail case par case est dans `PROGRESS.md`.
+Tier: T5 · Depends: J03-P1, J03-P2, J03-P3, J03-P4, J03-P5, J03-P6 · Checks: j03-readme
 
-**MAJ modèles (2026-08-11)** : **Fable est de nouveau disponible** → les colonnes
-Modèle/Effort des jalons restants ont été recalibrées ci-dessus : Fable sur les jalons à
-sémantique SAS pointue (M38, M40, M41, M46, M47) et à numérique délicate (M44, M52–M55,
-M57, M58, M62), Sonnet sur ce qui est devenu mécanique (M39, M49, M50), Opus pour le reste.
-L'effort affiché est celui du modèle retenu (confier un jalon à un modèle inférieur remonte
-l'effort d'un cran). En cas d'écart avec les annotations par case de `PROGRESS.md`
-(antérieures), ce tableau fait foi pour le choix du modèle.
+### J03-P8 — Review J03
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J03 : l'oracle pondéré est indépendant de l'implémentation (auteur, contenu, sources) ; aucun snapshot ne verrouille une troncature en octets. Ne rien modifier ; tout finding bloquant devient une unité corrective.
 
-### Phases Q — revue de code (intercalées, terminées)
+Tier: T2 · Depends: J03-P1, J03-P3, J03-P4, J03-P5, J03-P6, J03-P2, J03-P7 · Checks: j03-oracle-check, j03-oracle-cases, fmt, clippy, test, j03-encoding-doc, j03-utf8, j03-no-mojibake, j03-multibyte, j03-no-byte-truncate, j03-char-width, j03-datastep-divergence, j03-weighted-oracle, j03-weighted-def5-shared, j03-readme, clippy-s3, test-s3-lib, ci-structure
 
-Trois campagnes transverses de qualité, closes (détail MQ1–MQ9 dans `PROGRESS.md`) :
-Q1/Q2 (MQ1–MQ6 : déduplications, extractions de helpers, scissions move-only —
-byte-identiques) et Q3 (MQ7–MQ9 : `rustfmt.toml` + `cargo fmt` sur tout le dépôt,
-clippy 357 → **0** avec `-D warnings`, ~60 helpers dupliqués supprimés (≈ −1 500 lignes),
-3 crashs atteignables depuis un script SAS corrigés). Invariant tenu : sortie
-octet-identique des snapshots.
+## J04 — Intégrité du stockage et des métadonnées
 
-### Conseils d'orchestration
+### J04-P1 — Protocole d'écriture atomique parquet + sidecar
+ADR `docs/adr/0001-stockage-parquet-sidecar.md` (contexte, options, `## Décision`, conséquences, stratégie de récupération) ; option recommandée : temporaires dans le même dossier + fsync + rename ; empreinte du parquet (taille, lignes, colonnes) dans le sidecar ; sidecar dont l'empreinte ne correspond pas = périmé → ignoré avec diagnostic ; ordre d'écriture tel qu'une interruption ne publie jamais de nouvelles données avec des métadonnées fausses. Implémentation dans `SasDataset::write_parquet`/`write_sidecar` et `DirLibrary::write` ; temporaires orphelins nettoyés ou ignorés par `list`. Feature cargo `fault-injection` (hors défaut) : points d'arrêt nommés (`after_parquet_tmp`, `after_parquet_rename`, `after_sidecar_tmp`…) pilotés par `SASRS_FAULT_INJECT`, sans coût hors feature. Tests `atomic_write*`. Ne changer ni le format Parquet ni la décision « sidecar JSON ». Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-- **Ordre M1 strict** : `parser/mod.rs` → `parser/expr.rs` → `parser/{datastep,global}.rs`
-  → `datastep/pdv.rs` → `datastep/{mod,eval,functions}.rs` → `datastep/exec.rs` →
-  `procs/{mod,print}.rs` → `executor.rs` → activer `tests/snapshot.rs`.
-  Paralléliser : `functions.rs`, `global.rs`, `procs/print.rs` sont indépendants.
-- Chaque PR/fichier : implémenter AUSSI les tests unitaires esquissés dans l'en-tête.
-- Ne jamais contourner `Value::sas_cmp` ni `missing::nullify_specials` (voir la checklist).
+Tier: T2 · Depends: J03-P8 · Checks: fmt, clippy, test, clippy-s3, test-s3-lib, j04-adr-storage, j04-atomic-write, j04-build-fault-injection
 
-## Checklist des pièges (à vérifier à chaque revue)
+### J04-P2 — Suppression, renommage et échange sans orphelins
+`delete` supprime aussi le sidecar ; `rename` refuse une destination existante (ERROR, comme PROC DATASETS CHANGE), supprime tout sidecar orphelin de la destination et annule le déplacement du parquet si celui du sidecar échoue ; EXCHANGE : rollback en cas d'échec intermédiaire ; `unique_temp_name` vérifie aussi les sidecars ; `list`/`exists`/`read` cohérents sur la casse. CSV : `scan` transmet les notes de coercition (WARNING 2^53). Tests `orphan_sidecar*` (delete, rename vers une cible avec sidecar orphelin, échec simulé via `fault-injection`, EXCHANGE). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-1. **NaN ≠ null Polars** : `nullify_specials()` avant toute agrégation/jointure native.
-2. **`. = .` est VRAI en SAS** : toute comparaison passe par `Value::sas_cmp` ; en SQL,
-   `join_nulls` + traduction `= .` → `is_null()`.
-3. **Jamais `DataFrame::get_row`** dans la boucle implicite — downcast chunked une fois
-   par colonne (déjà la convention dans `datastep::InputData`).
-4. **i64 > 2^53** : WARNING perte de précision à la lecture (fait dans `dataset.rs`).
-5. **Tri** : les flags nulls de Polars ignorent les missings spéciaux → colonne de rang.
-6. **Longueur char fixe** : troncature à l'assignation PDV ; comparaison ignore les blancs finaux.
-7. **NOTEs du log au pluriel invariable** ("1 variables.") — c'est fidèle à SAS, ne pas "corriger".
-8. **LAG/DIF** (M2+) : une file FIFO **par site d'appel**, pas par variable.
+Tier: T3 · Depends: J04-P1 · Checks: fmt, clippy, test, clippy-s3, j04-orphan-sidecar
 
-## Vérification
+### J04-P3 — Sidecar corrompu ou invalide : diagnostic explicite
+Sidecar illisible, JSON invalide, type de champ faux, longueur incompatible avec le type ou inférieure à la plus longue valeur, empreinte périmée : WARNING compté (ligne `WARNING:` relayée par `log.forward`) nommant le fichier et la cause ; métadonnées fautives ignorées, données lues ; plus aucun `.ok()` silencieux. Entrées de variables absentes du parquet : NOTE. Tests `sidecar_invalid*` (un par cause). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
 
-- `cargo test -p sasrs` : tests unitaires des fondations (lexer, sas_cmp,
-  NaN-payload, log, listing) — déjà verts ; snapshots insta dès la fin de M1.
-- Snapshots : `tests/snapshot.rs` exécute chaque `tests/fixtures/**/*.sas` en
-  `--deterministic` et verrouille `log + listing + code retour`. Les parquets d'entrée
-  sont générés par `tests/common/mod.rs` (clone de sashelp.class), jamais commités.
-- Oracle : pour les nouvelles fixtures, comparer à une sortie SAS 9.4 réelle (ou WPS /
-  documentation SAS) avant d'accepter le snapshot — verrouiller la fidélité, pas
-  l'auto-cohérence.
-- Manuel : `cargo run -p sasrs --bin sasrs -- tests/fixtures/m1/set_filter.sas`
-  (depuis un répertoire contenant `data/class.parquet`).
+Tier: T3 · Depends: J04-P1 · Checks: fmt, clippy, test, j04-sidecar-invalid
+
+### J04-P4 — Métadonnées après transformations SQL
+`CREATE TABLE AS SELECT` conserve format, label et longueur des colonnes sources reprises telles quelles (règles SAS : colonne calculée sans métadonnées sauf `FORMAT=`/`LABEL=`/`LENGTH=` dans le SELECT) ; les lectures SQL passent par le chemin qui applique le sidecar ; sql/dictionary.rs transmet les notes de lecture au log. Tests `sql_metadata*` ; fixture `tests/fixtures/j04/sqlmeta_*.sas` (PROC CONTENTS après CREATE TABLE AS). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J04-P1 · Checks: fmt, clippy, test, j04-sql-metadata
+
+### J04-P5 — Tests d'interruption et de corruption simulées, doc de récupération
+Suite adversariale `tests/storage_integrity.rs` (en tête `#![cfg(feature = "fault-injection")]`), écrite sans modifier src/ : pour chaque point d'injection, un programme SAS réel écrit/remplace/supprime/renomme une table, est interrompu, puis un run suivant lit soit l'ancien état cohérent soit le nouveau — jamais données nouvelles + métadonnées fausses sans diagnostic ; round-trip données + métadonnées (formats, labels, longueurs, missings spéciaux) ; sidecars corrompus générés. Défaut trouvé → blocked avec reproducer (pas de correction ici). CI : job `test-fault-injection` (`cargo test --locked -p sasrs --features fault-injection --test storage_integrity`) agrégé par ci-ok, même commande dans scripts/check.sh, liste figée de check_ci_structure.py mise à jour. README : section `## Storage and recovery` (protocole, diagnostics, conduite après interruption) + lien vers docs/adr/0001-stockage-parquet-sidecar.md. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J04-P2, J04-P3, J04-P4 · Checks: fmt, clippy, test, ci-structure, j04-storage-integrity, j04-ci-fault-injection, j04-readme-recovery
+
+### J04-P6 — Review J04
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J04 : la suite storage_integrity est écrite indépendamment de l'implémentation et mord (preuve par mutation d'un point d'injection) ; aucun chemin de lecture n'ignore plus un sidecar en silence. Ne rien modifier ; tout finding bloquant devient une unité corrective.
+
+Tier: T2 · Depends: J04-P1, J04-P2, J04-P3, J04-P4, J04-P5 · Checks: fmt, clippy, test, clippy-s3, test-s3-lib, j04-adr-storage, j04-atomic-write, j04-build-fault-injection, j04-orphan-sidecar, j04-sidecar-invalid, j04-sql-metadata, ci-structure, j04-storage-integrity, j04-ci-fault-injection, j04-readme-recovery
+
+## J05 — Validation industrielle : conformité, propriétés, différentiel
+
+### J05-P1 — Structure du corpus de conformité et exécuteur
+Cas `conformance/cases/<groupe>/<id>/` (groupes example, base, stat, compat…) : `program.sas`, `data/*.csv`, `expected/<dataset>.csv`, `case.json` (`id`, `title`, `provenance` {`kind`: sas-doc | sas-run | independent-oracle, `source` (URL ou référence), `sas_version`, `options`}, `validates`: math | sas-behaviour, `tolerance` {abs, rel} par défaut et par colonne, `log` {required, forbidden (regex)}, `exit_code`, `status`: validated | known-divergence (+ `issue`)), décrit dans conformance/schema.md et conformance/README.md. `tests/conformance.rs` : pour chaque cas, tempdir, CSV → parquet (types de case.json), `run` avec `work_dir` fixé, relecture des datasets attendus, comparaison avec tolérances (missings SAS comparés comme tels) ; un cas `known-divergence` doit échouer, sinon le test signale « à promouvoir » et échoue ; rapport par cas. Deux cas sous conformance/cases/example/. Indépendant des snapshots insta. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J04-P6 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-layout
+
+### J05-P2 — Cas de conformité Base issus de la documentation SAS
+Au moins 10 cas sous conformance/cases/base/ reprenant des exemples publiés de la doc SAS 9.4 avec leur sortie (URL exacte dans `provenance`) : étape DATA (RETAIN, FIRST./LAST., MERGE BY, UPDATE, tableaux), SORT NODUPKEY, FORMAT, MEANS CLASS/OUTPUT, FREQ CHISQ, TRANSPOSE, SQL jointures et remerge, fonctions caractère/date. Valeurs attendues recopiées de la doc, jamais produites par sasrs ; cas en échec → `known-divergence` décrit (issue GitHub ouverte par le coordinateur, pas par le worker). Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J05-P1 · Checks: j05-conformance, j05-cases-base
+
+### J05-P3 — Cas de conformité statistiques
+Au moins 8 cas sous conformance/cases/stat/ depuis les exemples « Getting Started »/« Examples » publiés de SAS/STAT et Base 9.4 : REG, TTEST, CORR (Pearson, Spearman), UNIVARIATE (pondéré inclus), FREQ Fisher, NPAR1WAY, GLM, LOGISTIC binaire ; tolérances justifiées par la précision imprimée dans la doc ; `validates: math` pour un résultat mathématique (oracle indépendant), `sas-behaviour` pour une sortie SAS ; cas en échec → `known-divergence`. Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J05-P1 · Checks: j05-conformance, j05-cases-stat
+
+### J05-P4 — Tests de propriétés
+`proptest` en dev-dependency (Cargo.lock mis à jour et commité) ; `tests/properties.rs` : `Value::sas_cmp` ordre total cohérent avec l'ordre SAS des missings (`._` < `.` < `.A` … `.Z` < nombres) ; missings spéciaux préservés par un aller-retour parquet ; round-trip `VarMeta` (format, label, longueur) par write/read ; troncature PDV jamais d'UTF-8 invalide et ≤ longueur en caractères ; formats `$w.` et `w.d` sans panique, largeur en caractères ; SORT stable et conforme à `sas_cmp`. Nombre de cas borné (< 30 s), graine reproductible. Défaut trouvé → blocked avec reproducer minimal. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J04-P6 · Checks: fmt, clippy, test, j05-properties
+
+### J05-P5 — Différentiel chemin vectorisé / ligne à ligne
+`tests/differential.rs` : chaque fixture tests/fixtures/**/*.sas exécutée avec `vectorize` vrai et faux → log (hors NOTE propre au fast-path), listing et datasets produits identiques ; programmes DATA step générés (proptest) : SET + assignations numériques, missings spéciaux, KEEP/DROP/RENAME/FORMAT/LABEL, 0 ligne, FIRSTOBS/OBS. Écart trouvé : corriger le fast-path (repli vers la boucle si non équivalent) avec test de non-régression. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J05-P4 · Checks: fmt, clippy, test, j05-differential
+
+### J05-P6 — CI de conformité et couverture validée publique
+`scripts/conformance_report.py` (bibliothèque standard) génère conformance/STATUS.md (par PROC/zone : cas validés, divergences connues, provenance) ; `--check` échoue si le fichier commité est périmé. CI : jobs conformance (`--test conformance` + `conformance_report.py --check`), properties (`--test properties`) et differential (`--test differential`) agrégés par ci-ok ; liste figée de check_ci_structure.py et scripts/check.sh mis à jour. README : la marque « validé contre référence » renvoie à conformance/STATUS.md ; aucune ligne ne revendique « validé » sans cas. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J05-P2, J05-P3, J05-P5 · Checks: ci-structure, j05-conformance-status, j05-ci-validation-jobs, j05-readme-status
+
+### J05-P7 — Review J05
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J05 : les valeurs attendues du corpus proviennent de la doc SAS publiée ou d'un oracle indépendant (jamais de sasrs) ; un cas known-divergence qui passerait fait bien échouer le runner. Ne rien modifier ; tout finding bloquant devient une unité corrective.
+
+Tier: T2 · Depends: J05-P1, J05-P2, J05-P3, J05-P4, J05-P5, J05-P6 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-layout, j05-cases-base, j05-cases-stat, j05-properties, j05-differential, ci-structure, j05-conformance-status, j05-ci-validation-jobs, j05-readme-status, j04-storage-integrity, clippy-s3, test-s3-lib
+
+## J06 — Utilisabilité : API Session, Python, distribution, documentation
+
+### J06-P1 — Façade publique sasrs::api (ADR)
+ADR `docs/adr/0002-api-publique.md` (`## Décision`) : surface stable `sasrs::api`, politique de compatibilité (semver ; internes `#[doc(hidden)]` plutôt que cassés), types exposés. `api::Session` : `new(Options)`, `submit(&str) -> Submission` (log, compteurs, code retour) répétable sur la même session, `register_dataset(libref, name, DataFrame, métadonnées optionnelles)`, `dataset(libref, name) -> (DataFrame, Vec<VarMeta>)`, `close() -> CloseReport` (finalise les destinations ODS, supprime WORK) ; erreurs typées. `run()` et `RunOutcome` conservés, réimplémentés sur la façade, sortie inchangée. `tests/api.rs` : deux soumissions partageant WORK et macros, injection puis relecture avec métadonnées, `close`. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T2 · Depends: J05-P7 · Checks: fmt, clippy, test, j06-adr-api, j06-api
+
+### J06-P2 — Diagnostics structurés et fichiers produits
+`LogWriter` conserve une liste de diagnostics `{severity: Note|Warning|Error, line: Option<u32>, step, message}` en plus du texte (inchangé octet pour octet), exposée par `Submission` et `RunOutcome` (champ ajouté). Registre des fichiers produits (ODS HTML/RTF/PDF/Excel, images) : chemin, type, proc ; exposé par `Submission`/`CloseReport`. Tests `diagnostics*` et `produced_files*` dans tests/api.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J06-P1 · Checks: fmt, clippy, test, j06-api-diagnostics, j06-api-produced-files
+
+### J06-P3 — Exemples autonomes testés
+`examples/data/` (CSV), `examples/cli/analysis.sas` + sortie attendue documentée, `examples/quickstart.rs` (façade `api` : soumettre, relire une table, afficher un diagnostic ; imprime `OK` en dernière ligne). `tests/examples.rs` exécute l'exemple CLI via le binaire et vérifie la table produite et le code retour. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J06-P2 · Checks: fmt, clippy, test, j06-examples, j06-quickstart
+
+### J06-P4 — Wrapper Python durci et testé
+python/src/sasrs_py/cli.py : timeout réseau, message clair sans traceback (réseau absent, HTTP 404, plateforme non supportée, SHA invalide), cache indexé par SHA (pas de re-hachage si un marqueur vérifié existe), verrou de fichier pour les lancements concurrents, nettoyage des temporaires orphelins, repli sûr si `os.replace` échoue sous Windows et que le binaire en place est valide. `python/tests/` (unittest, bibliothèque standard, `urlopen` et plateforme simulés) : cache absent, cache corrompu, réseau absent, plateforme non supportée, deux lancements concurrents, SHA incorrect. python/README.md : le wrapper télécharge et lance un binaire ; limites. CI : job Python (3.9 et dernière) agrégé par ci-ok ; liste figée de check_ci_structure.py et scripts/check.sh mis à jour. Le watchdog Hermes réécrit les lignes SHA de cli.py sur main (R-001) : prévoir le conflit. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J05-P7 · Checks: ci-structure, j06-python-tests, j06-ci-python-job
+
+### J06-P5 — Distribution versionnée et manifeste de build
+`.github/workflows/release.yml` sur tag `v*` : binaires linux x86_64, windows x86_64, macOS arm64 ; `SHA256SUMS` ; `manifest.json` (version, commit, features, rustc, cible) ; assets jamais remplacés (échec si la release existe). `build.rs` : commit et features embarqués ; `sasrs --version` → `sasrs <version> (commit <sha|unknown>, features: …)` en tolérant l'absence de git (le conteneur de build n'en a pas). Wrapper Python épinglé sur `v<version>` avec SHA issus de `SHA256SUMS` embarqués ; plus de réécriture externe. `docs/release.md` : procédure, immutabilité, arrêt du watchdog Hermes (R-001). Ne publier aucune release ni poser de tag (geste utilisateur). Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J06-P4 · Checks: fmt, clippy, test, j06-release-workflow, j06-version-manifest, j06-release-doc, j06-python-tests
+
+### J06-P6 — Plan d'une API Python native
+ADR `docs/adr/0003-api-python.md` (`## Décision`) : faisabilité pyo3/maturin au-dessus de `sasrs::api`, échange de DataFrames (Arrow/Polars, pandas), roues par plateforme, coût de build Polars, coexistence avec la voie CLI ; recommandation et items pour la feuille de route (J08-P5). Pas de code. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J05-P7 · Checks: j06-adr-python
+
+### J06-P7 — Parcours nouvel utilisateur
+`docs/getting-started.md` : installation depuis un environnement vierge (binaire de release, `cargo install`, Python), premier programme, récupérer une table (CLI `--work` + parquet, Rust `api`, Python), lire un diagnostic, codes retour. README : installation réécrite (voies réelles uniquement), bibliothèque (exemple renvoyant vers examples/quickstart.rs), features `graphics`/`s3`, lien vers docs/getting-started.md. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T5 · Depends: J06-P3, J06-P5, J06-P6 · Checks: j06-getting-started
+
+### J06-P8 — Review J06
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J06 : un nouvel utilisateur peut installer, exécuter un programme, récupérer une table et comprendre une erreur sans lire PLAN.md ni PROGRESS.md ; l'API n'expose aucun module interne par accident. Ne rien modifier ; tout finding bloquant devient une unité corrective.
+
+Tier: T2 · Depends: J06-P1, J06-P2, J06-P3, J06-P4, J06-P5, J06-P6, J06-P7 · Checks: fmt, clippy, test, j06-adr-api, j06-api, j06-api-diagnostics, j06-api-produced-files, j06-examples, j06-quickstart, ci-structure, j06-python-tests, j06-ci-python-job, j06-release-workflow, j06-version-manifest, j06-release-doc, j06-adr-python, j06-getting-started, j04-storage-integrity, j05-conformance-status, clippy-s3, test-s3-lib
+
+## J07 — Compatibilité à forte valeur (1) : MEANS, COMPARE, TRANSPOSE, PRINTTO, informats
+
+### J07-P1 — Oracles de conformité écrits avant l'implémentation
+Cas `known-divergence` sous conformance/cases/compat/{means,compare,transpose,printto,informat}/ (au moins 2 par sous-dossier), valeurs attendues recopiées d'exemples publiés de la doc SAS 9.4 (URL en `provenance`) : MEANS/SUMMARY (NWAY, MISSING, ORDER=, ID, MAXDEC=, CLASS `/ MISSING ORDER=`, FREQ, `OUTPUT / AUTONAME`, valeurs CLASS manquantes exclues par défaut), COMPARE (ID, VAR/WITH, CRITERION=, METHOD=, OUTNOEQUAL/OUTBASE/OUTCOMP/OUTDIF, BY), TRANSPOSE (COPY, IDLABEL, LET, SUFFIX=, LABEL=, DELIMITER=), PRINTTO (LOG=/PRINT=/NEW), informats persistés (CONTENTS). `conformance/cases/compat/ORACLE.sha256` au format sha256sum (chemins relatifs à conformance/cases/compat) couvre tous les fichiers des cas sauf case.json : J07-P2 à P6 n'en sont pas propriétaires et ne peuvent changer que le `status`. STATUS.md régénéré. Ne pas modifier src/. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J06-P8 · Checks: j05-conformance, j05-conformance-status, j07-compat-oracles, j07-compat-oracle-frozen
+
+### J07-P2 — PROC MEANS/SUMMARY : options de production
+`NWAY`, `MISSING` (PROC et CLASS), `ORDER=` (DATA/FORMATTED/FREQ/INTERNAL), `ID`, `MAXDEC=`, `DESCENDTYPES`, `COMPLETETYPES`, `CHARTYPE`, `FREQ`, `VARDEF=`, `EXCLNPWGT`, `OUTPUT` (`mean=`, `mean(x y)=`, `/ AUTONAME`), plusieurs CLASS/VAR/OUTPUT ; valeurs CLASS manquantes exclues par défaut (snapshots justifiés) ; ODS `Summary` avec colonnes CLASS/BY. Cas compat/means → `validated` (seul le statut change), STATUS.md régénéré. Tests `means_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P1 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-means-tests, j07-means-validated
+
+### J07-P3 — PROC COMPARE : outil de validation de migration
+`ID` (appariement par clé triée, observations propres à chaque table signalées), `VAR`/`WITH`, `CRITERION=`, `METHOD=ABSOLUTE|RELATIVE|EXACT|PERCENT`, `BRIEF`, `LISTALL`, `MAXPRINT=`, `OUT=` avec `OUTNOEQUAL`/`OUTBASE`/`OUTCOMP`/`OUTDIF`/`OUTPERCENT`, `BY` ; messages et `&SYSINFO` conformes à la doc ; remplace les ERROR provisoires de J02-P4. Cas compat/compare → `validated`, STATUS.md régénéré. Tests `compare_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P2 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-compare-tests, j07-compare-validated
+
+### J07-P4 — PROC TRANSPOSE complet
+`COPY`, `IDLABEL` (+ `_LABEL_`), `LET`, `SUFFIX=`, `LABEL=`, `DELIMITER=`, `PREFIX=` chaîne, plusieurs variables `ID`, `BY DESCENDING` + contrôle de tri, longueurs inférées en caractères. Cas compat/transpose → `validated`, STATUS.md régénéré. Tests `transpose_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P3 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-transpose-tests, j07-transpose-validated
+
+### J07-P5 — PROC PRINTTO : routage réel
+`LOG=`/`PRINT=` routent réellement log et listing vers des fichiers (ajout, ou remplacement avec `NEW`), `PROC PRINTTO;` rétablit les destinations ; interaction avec `--log`/`--print` et les diagnostics structurés documentée ; erreur d'ouverture → ERROR comptée ; remplace la WARNING provisoire de J02-P4. Cas compat/printto → `validated`, STATUS.md régénéré. Tests CLI `printto*` dans tests/cli.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P4 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-printto-tests, j07-printto-validated
+
+### J07-P6 — Informats persistés dans les métadonnées
+`VarMeta.informat` persisté dans le sidecar (protocole ADR 0001, rétrocompatible) ; posé par INFORMAT/ATTRIB en étape DATA, conservé par SET/MERGE ; colonne Informat de PROC CONTENTS et `OUT=` ; `MODIFY … INFORMAT` dans PROC DATASETS. Périmètre large (src entier) car `VarMeta` est construit littéralement dans ~120 sites de 42 fichiers : hors dataset/datastep/contents/datasets, se limiter à l'ajout mécanique du champ. Cas compat/informat → `validated`, STATUS.md régénéré. Tests `informat_meta*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P5 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-informat-tests, j07-informat-validated
+
+### J07-P7 — Documentation de couverture (J07)
+README.md : lignes MEANS/SUMMARY, COMPARE, TRANSPOSE, PRINTTO, CONTENTS, DATA step (informats) mises à jour avec l'état « validé » issu du corpus (lien conformance/STATUS.md) ; docs/support-contract.md à jour (ERROR provisoires de J02-P4 levés, routage PRINTTO) ; STATUS.md régénéré si besoin. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T5 · Depends: J07-P6 · Checks: j05-conformance-status, j07-docs
+
+### J07-P8 — Review J07
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J07 : ORACLE.sha256 intact (les implémenteurs n'ont changé que des statuts) ; chaque option annoncée est couverte par un cas validé. Ne rien modifier ; tout finding bloquant devient une unité corrective.
+
+Tier: T2 · Depends: J07-P1, J07-P2, J07-P3, J07-P4, J07-P5, J07-P6, J07-P7 · Checks: j05-conformance, j05-conformance-status, j07-compat-oracles, j07-compat-oracle-frozen, fmt, clippy, test, j07-means-tests, j07-means-validated, j07-compare-tests, j07-compare-validated, j07-transpose-tests, j07-transpose-validated, j07-printto-tests, j07-printto-validated, j07-informat-tests, j07-informat-validated, j07-docs, j04-storage-integrity, clippy-s3, test-s3-lib, ci-structure
+
+## J08 — XLSX, BY, ODS OUTPUT, feuille de route avancée, validation de bout en bout
+
+### J08-P1 — PROC IMPORT/EXPORT DBMS=XLSX
+IMPORT `DBMS=XLSX|EXCEL` via la crate `calamine` : `SHEET=`, `RANGE=`, `GETNAMES=`, types SAS stricts (dates Excel → dates SAS 1960), `GUESSINGROWS=` honoré ou ERROR. EXPORT `DBMS=XLSX` : réutilise l'écrivain XLSX pur Rust de output/excel.rs, extrait dans `output/xlsx.rs` ; `SHEET=`, `REPLACE`, formats appliqués selon la doc. Aller-retour EXPORT → IMPORT sans perte (valeurs, missings, dates). Tests `dbms_xlsx_*` (préfixe unique : `xlsx_` matche déjà 4 tests) ; fixtures `tests/fixtures/j08/xlsx_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J07-P8 · Checks: fmt, clippy, test, clippy-s3, j08-xlsx
+
+### J08-P2 — BY généralisé (CORR, TABULATE)
+BY (DESCENDING, contrôle de tri, en-tête de groupe SAS, `OUT=` avec variables BY) pour CORR et TABULATE via `common::by` ; invariant testé : un seul groupe = sortie sans BY. Les autres procs qui refusent BY (ERROR depuis J02-P3) le restent ; leur liste va dans la feuille de route (J08-P5). Tests `by_generalized_*` (préfixe unique : `by_group` matche déjà 4 tests) ; fixtures `tests/fixtures/j08/by_*.sas`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J08-P1 · Checks: fmt, clippy, test, j08-by
+
+### J08-P3 — Objets ODS OUTPUT supplémentaires
+Capture par nom d'objet SAS (colonnes et noms de la doc) : UNIVARIATE `Quantiles`, `ExtremeObs`, `TestsForNormality` ; FREQ `CrossTabFreqs`, `ChiSq`, `FishersExact` ; REG `ParameterEstimates`, `ANOVA`, `FitStatistics`. ODS SELECT/EXCLUDE reconnaît ces noms. Tests `ods_output_object_*` (préfixe unique : `ods_output_` matche déjà 18 tests). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T3 · Depends: J08-P2 · Checks: fmt, clippy, test, j08-ods-output
+
+### J08-P4 — Étude des adaptateurs SAS7BDAT/XPT
+ADR `docs/adr/0004-adaptateurs-sas7bdat-xpt.md` (`## Décision`) : adaptateurs aux frontières (PROC IMPORT/EXPORT, `LIBNAME … XPORT`) sans remplacer le stockage Parquet ; options (crates pur Rust, readstat via FFI, écriture XPT v5/v8), licences, encodages, métadonnées (formats, labels, longueurs), plan de tests ; recommandation et items pour la feuille de route. Pas de code. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J07-P8 · Checks: j08-adr-sas7bdat
+
+### J08-P5 — Feuille de route avancée par comportement borné
+`docs/roadmap/avancee.md` : une section `## <domaine>` par proc et pour S3, Graphiques et résidus Base (TABULATE `PCTN<>`, REPORT FLOW/COMPUTE, DATASETS APPEND/REPAIR, CATALOG, OPTIONS) ; items bornés par comportement (jamais « terminer PROC X »), chacun avec état actuel (implémenté / validé / approximation / ERROR), dépendances, oracle indépendant prévu, non-convergence, matrice singulière, paramètre sur frontière, identifiabilité, tolérances. Minimum issu de l'issue #10 : LOGISTIC, GENMOD, GLM/ANOVA, MIXED, GLIMMIX, PRINCOMP/FACTOR/DISCRIM/CLUSTER/FASTCLUS/IML, S3 (exists/list/write/delete/rename), graphiques (parse-only, images BY, légendes, styles, overlays), procs dont BY reste en ERROR, items des ADR 0003/0004. Ordre par dépendances et bénéfice ; table de correspondance ex-M46–M66 → items ; prêt pour un `/milestone-plan` suivant. PLAN.md racine : section de correspondance pointée vers la feuille de route. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T1 · Depends: J08-P4 · Checks: j08-roadmap
+
+### J08-P6 — Validation de bout en bout et contrôle des promesses de couverture
+`tests/e2e.rs` + `tests/e2e/` : programme réaliste de migration (CSV/XLSX importés → DATA step → SORT → MEANS NWAY `OUTPUT` → TRANSPOSE → COMPARE contre une table attendue → ODS OUTPUT → EXPORT XLSX), exécuté par le binaire et par `sasrs::api` ; tables comparées à des attendus issus du corpus ou d'exemples SAS publiés ; codes retour et diagnostics vérifiés. `scripts/check_coverage_claims.py` : chaque ligne marquée validée dans README a au moins un cas `validated` dans conformance/STATUS.md, sinon échec. CI : job « installation vierge » (`cargo install --path . --root <tmp>` puis l'exemple CLI de docs/getting-started.md) et job coverage-claims agrégés par ci-ok (liste figée de check_ci_structure.py, scripts/check.sh). README : lignes IMPORT/EXPORT, CORR, TABULATE, ODS OUTPUT à jour, aucune promesse au-delà de l'implémenté et validé. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+
+Tier: T4 · Depends: J08-P1, J08-P2, J08-P3 · Checks: fmt, clippy, test, ci-structure, j08-e2e, j08-coverage-claims, j08-ci-install-job
+
+### J08-P7 — Review J08
+Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Revue finale du Goal : parcours nouvel utilisateur réel, couverture publique ≤ implémenté et validé, sous-issues #5–#10 couvertes ou explicitement renvoyées à docs/roadmap/avancee.md. Ne rien modifier ; tout finding bloquant devient une unité corrective.
+
+Tier: T2 · Depends: J08-P1, J08-P2, J08-P3, J08-P4, J08-P5, J08-P6 · Checks: fmt, clippy, test, clippy-s3, j08-xlsx, j08-by, j08-ods-output, j08-adr-sas7bdat, j08-roadmap, ci-structure, j08-e2e, j08-coverage-claims, j08-ci-install-job, j04-storage-integrity, j05-conformance-status, test-s3-lib
+

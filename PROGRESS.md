@@ -1,9 +1,59 @@
-# Avancement `sasrs`
+# PROGRESS — consolidation
 
-> Ce fichier n'est plus qu'un renvoi. L'avancement réel du projet est piloté par le plan
-> Milestone V3 de consolidation : voir **`docs/plans/consolidation/PROGRESS.md`**
-> (vues générées par l'orchestrateur Mission Control).
->
-> L'historique complet de l'ère V2 (feuille de route gelée le 2026-09-23, jalons M46 et
-> Phase Q3 / MQ1–MQ9) est archivé sans perte dans `docs/plans/consolidation/v2/`.
-> Le `PLAN.md` racine reste la référence d'architecture et de décisions actées en vigueur.
+Generated from Mission Control; do not edit.
+
+| Unit | Status | Attempts |
+| --- | --- | --- |
+| J02-P1 | DONE | 2 |
+| J02-P2 | NEEDS_DECISION | 2 |
+| J02-P3 | PLANNED | 0 |
+| J02-P4 | PLANNED | 0 |
+| J02-P5 | PLANNED | 0 |
+| J02-P6 | PLANNED | 0 |
+| J02-P9 | DONE | 1 |
+| J02-P7 | PLANNED | 0 |
+| J02-P8 | PLANNED | 0 |
+| J03-P1 | PLANNED | 0 |
+| J03-P3 | PLANNED | 0 |
+| J03-P4 | PLANNED | 0 |
+| J03-P5 | PLANNED | 0 |
+| J03-P6 | PLANNED | 0 |
+| J03-P2 | PLANNED | 0 |
+| J03-P7 | PLANNED | 0 |
+| J03-P8 | PLANNED | 0 |
+| J04-P1 | PLANNED | 0 |
+| J04-P2 | PLANNED | 0 |
+| J04-P3 | PLANNED | 0 |
+| J04-P4 | PLANNED | 0 |
+| J04-P5 | PLANNED | 0 |
+| J04-P6 | PLANNED | 0 |
+| J05-P1 | PLANNED | 0 |
+| J05-P2 | PLANNED | 0 |
+| J05-P3 | PLANNED | 0 |
+| J05-P4 | PLANNED | 0 |
+| J05-P5 | PLANNED | 0 |
+| J05-P6 | PLANNED | 0 |
+| J05-P7 | PLANNED | 0 |
+| J06-P1 | PLANNED | 0 |
+| J06-P2 | PLANNED | 0 |
+| J06-P3 | PLANNED | 0 |
+| J06-P4 | PLANNED | 0 |
+| J06-P5 | PLANNED | 0 |
+| J06-P6 | PLANNED | 0 |
+| J06-P7 | PLANNED | 0 |
+| J06-P8 | PLANNED | 0 |
+| J07-P1 | PLANNED | 0 |
+| J07-P2 | PLANNED | 0 |
+| J07-P3 | PLANNED | 0 |
+| J07-P4 | PLANNED | 0 |
+| J07-P5 | PLANNED | 0 |
+| J07-P6 | PLANNED | 0 |
+| J07-P7 | PLANNED | 0 |
+| J07-P8 | PLANNED | 0 |
+| J08-P1 | PLANNED | 0 |
+| J08-P2 | PLANNED | 0 |
+| J08-P3 | PLANNED | 0 |
+| J08-P4 | PLANNED | 0 |
+| J08-P5 | PLANNED | 0 |
+| J08-P6 | PLANNED | 0 |
+| J08-P7 | PLANNED | 0 |
