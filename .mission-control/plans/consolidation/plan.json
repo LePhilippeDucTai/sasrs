@@ -1304,33 +1304,6 @@
       ]
     },
     {
-      "id": "J02-P11",
-      "milestone_id": "J02",
-      "title": "Correctif J02-P4 : UNIVARIATE NOPRINT doit encore produire les images ODS Graphics",
-      "kind": "implement",
-      "tier": "T3",
-      "size": "S",
-      "scope": "Dépend des parts J02 précédentes pour les préfixes partagés (src/procs, tests/snapshots). Décision corrective (politique permanente de Philippe) : la CI main est rouge depuis le merge J02-P4 (run GitHub 36234503369, reproduit localement dans ombre-mingw — fontconfig/ttf-liberation désormais installés) : tests/cli.rs ods_image_write_failure_is_error échoue sous --features graphics uniquement. Cause : J02-P4 a ajouté « && !ast.noprint » à la porte graphique de src/procs/univariate/mod.rs (ligne ~381), supprimant le rendu des HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT/PPPLOT sous NOPRINT ; l'écriture de l'image n'est plus tentée, l'ERROR « could not write image » n'est plus comptée, exit code 0 au lieu de 2 — régression du contrat J02-P1. Sémantique SAS : NOPRINT supprime la sortie imprimée (rapport, tables), pas les images ODS Graphics (ODS Graphics: Procedures Guide, « ODS Graphics » + NOPRINT). Correctif : rendre le rendu graphique indépendant de noprint (le rapport imprimé et les tables fitted-normal restent supprimés sous NOPRINT, OUTPUT OUT= conservé). Build par défaut : la NOTE de deferral apparaît maintenant aussi sous NOPRINT -> snapshot tests/snapshots/snapshot__fixtures@m29__sgplot_univar_reg.sas.snap mis à jour et justifié ligne par ligne dans le commit (règle CONTRIBUTING.md). Reproducer : le test CI rouge lui-même (RED avant, GREEN après). Aucun autre snapshot ne change. Cargo uniquement via distrobox enter ombre-mingw (voir l'argv des checks). Besoin d'un fichier hors périmètre -> s'arrêter en blocked avec une décision.",
-      "depends_on": [
-        "J02-P2",
-        "J02-P3",
-        "J02-P4",
-        "J02-P5",
-        "J02-P6"
-      ],
-      "files": [
-        "src/procs/univariate",
-        "tests/snapshots/snapshot__fixtures@m29__sgplot_univar_reg.sas.snap"
-      ],
-      "check_ids": [
-        "fmt",
-        "clippy",
-        "test",
-        "j02-graphics-noprint",
-        "j02-graphics-suite"
-      ]
-    },
-    {
       "id": "J02-P2",
       "milestone_id": "J02",
       "title": "Erreurs macro comptées, %ABORT, références non résolues",
@@ -1550,8 +1523,7 @@
         "J02-P6",
         "J02-P9",
         "J02-P7",
-        "J02-P10",
-        "J02-P11"
+        "J02-P10"
       ],
       "files": [],
       "check_ids": [
@@ -1577,9 +1549,7 @@
         "j02-contributing-v3",
         "clippy-s3",
         "test-s3-lib",
-        "j02-exit-code-channel",
-        "j02-graphics-noprint",
-        "j02-graphics-suite"
+        "j02-exit-code-channel"
       ],
       "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J02 : aucune ERROR/WARNING nouvelle sans test ; exit codes CLI réellement 2 sur échec d'écriture ; efficacité du garde CI (J02-P9) démontrée par son self-test. Ne rien modifier ; tout finding bloquant devient une unité corrective."
     },
@@ -1612,7 +1582,8 @@
       "size": "M",
       "scope": "`docs/encoding.md` : contrat D-001 (longueurs et troncatures en caractères = session SAS LATIN1/WLATIN1 ; jamais d'UTF-8 invalide ; écart avec une session SAS UTF-8 ; entrées UTF-8 strictes, BOM ignoré ; sorties UTF-8, RTF échappé, PDF `?` documenté). Lexer : littéraux chaîne décodés en UTF-8 (fin du `b as char` de lexer/literal.rs) ; identifiants toujours ASCII. BOM UTF-8 retiré du source `.sas`, des fichiers `%INCLUDE` et `INFILE` ; UTF-8 invalide → ERROR nommant le fichier (plus de commentaire silencieux dans `%INCLUDE`). `VarMeta.length` documenté « caractères » ; commentaire faux de procs/append.rs corrigé. Snapshots m16 `constructions` et m34 `glimmix_links_laplace` corrigés (tiret cadratin en mojibake) avec justification. Tests `utf8*` (LENGTH('é')=1, TITLE non ASCII, BOM, UTF-8 invalide). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
       "depends_on": [
-        "J02-P8"
+        "J02-P8",
+        "J03-P9"
       ],
       "files": [
         "docs/encoding.md",
@@ -1726,7 +1697,8 @@
       "scope": "`weighted_quantile_def5` déplacé dans procs/common/stats.rs et utilisé par MEANS/SUMMARY pour MEDIAN, percentiles et QRANGE sous WEIGHT, dans les quatre chemins (listing, PRINTALLTYPES/WAYS/TYPES, `OUTPUT OUT=`, ODS `Summary`). N/NMISS/SUMWGT et poids ≤ 0 conformes à l'oracle (EXCLNPWGT honoré ou ERROR explicite). UNIVARIATE : `OUTPUT OUT=` honore WEIGHT (moyenne, écart-type, somme, quantiles) ; tests de normalité et capture ODS sous WEIGHT conformes (calcul, ou NOTE SAS s'ils ne sont pas disponibles) ; titre « Quantiles (Definition 5) » vérifié ; `//!` de univariate/mod.rs à jour. `tests/weighted_oracle.rs` exécute chaque cas de tests/oracles/weighted_stats.json de bout en bout via `sasrs::run` (DATALINES + `OUTPUT OUT=` relu), tolérance relative 1e-10 ; un cas `uncertain` en échec est signalé, jamais réécrit. L'oracle est hors périmètre : ne pas le modifier. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
       "depends_on": [
         "J03-P1",
-        "J03-P6"
+        "J03-P6",
+        "J03-P9"
       ],
       "files": [
         "src/procs/common/stats.rs",
@@ -1784,7 +1756,8 @@
         "J03-P5",
         "J03-P6",
         "J03-P2",
-        "J03-P7"
+        "J03-P7",
+        "J03-P9"
       ],
       "files": [],
       "check_ids": [
@@ -1805,9 +1778,38 @@
         "j03-readme",
         "clippy-s3",
         "test-s3-lib",
-        "ci-structure"
+        "ci-structure",
+        "j02-graphics-noprint",
+        "j02-graphics-suite"
       ],
       "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J03 : l'oracle pondéré est indépendant de l'implémentation (auteur, contenu, sources) ; aucun snapshot ne verrouille une troncature en octets. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+    },
+    {
+      "id": "J03-P9",
+      "milestone_id": "J03",
+      "title": "Correctif J02-P4 : UNIVARIATE NOPRINT doit encore produire les images ODS Graphics",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "S",
+      "scope": "Dépend des parts J02 précédentes pour les préfixes partagés (src/procs, tests/snapshots). Décision corrective (politique permanente de Philippe) : la CI main est rouge depuis le merge J02-P4 (run GitHub 36234503369, reproduit localement dans ombre-mingw — fontconfig/ttf-liberation désormais installés) : tests/cli.rs ods_image_write_failure_is_error échoue sous --features graphics uniquement. Cause : J02-P4 a ajouté « && !ast.noprint » à la porte graphique de src/procs/univariate/mod.rs (ligne ~381), supprimant le rendu des HISTOGRAM/QQPLOT/PROBPLOT/CDFPLOT/PPPLOT sous NOPRINT ; l'écriture de l'image n'est plus tentée, l'ERROR « could not write image » n'est plus comptée, exit code 0 au lieu de 2 — régression du contrat J02-P1. Sémantique SAS : NOPRINT supprime la sortie imprimée (rapport, tables), pas les images ODS Graphics (ODS Graphics: Procedures Guide, « ODS Graphics » + NOPRINT). Correctif : rendre le rendu graphique indépendant de noprint (le rapport imprimé et les tables fitted-normal restent supprimés sous NOPRINT, OUTPUT OUT= conservé). Build par défaut : la NOTE de deferral apparaît maintenant aussi sous NOPRINT -> snapshot tests/snapshots/snapshot__fixtures@m29__sgplot_univar_reg.sas.snap mis à jour et justifié ligne par ligne dans le commit (règle CONTRIBUTING.md). Reproducer : le test CI rouge lui-même (RED avant, GREEN après). Aucun autre snapshot ne change. Cargo uniquement via distrobox enter ombre-mingw (voir l'argv des checks). Besoin d'un fichier hors périmètre -> s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P2",
+        "J02-P3",
+        "J02-P4",
+        "J02-P5",
+        "J02-P6"
+      ],
+      "files": [
+        "src/procs/univariate",
+        "tests/snapshots/snapshot__fixtures@m29__sgplot_univar_reg.sas.snap"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-graphics-noprint",
+        "j02-graphics-suite"
+      ]
     },
     {
       "id": "J04-P1",
