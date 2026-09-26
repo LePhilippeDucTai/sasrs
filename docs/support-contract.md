@@ -43,6 +43,33 @@ diagnostic honnête (réf. merges `2ad236e`, `965e578`, `d4eec6f`) :
 | DISCRIM | `METHOD=` autre que NORMAL, `POOL=NO\|TEST`, `POOL=` inconnu | repli silencieux LDA + NOTE | **ERROR** |
 | GENMOD / LOGISTIC / MIXED / GLIMMIX | non-convergence, séparation, G non définie positive | « converged » imprimé sans vérification, NOTE | **WARNING** SAS-fidèle, message de non-convergence véridique |
 
+## Précisions J03 (statistiques pondérées, encodage, étape DATA)
+
+Le jalon J03 n'ajoute pas de nouvelle règle de sévérité ; il précise le
+comportement réel des zones touchées, documenté honnêtement ci-dessous :
+
+- MEANS/SUMMARY sous `WEIGHT` : partition stricte SAS — un poids manquant ou
+  ≤ 0 exclut l'observation de N **et** de NMiss (une valeur x manquante avec un
+  poids valide compte dans NMiss). `VARDEF=` est honoré (DF → Σw−1, WEIGHT →
+  Σw−Σw²/Σw). Toutes les statistiques, y compris `MEDIAN` et les percentiles
+  (définition 5 pondérée, position par poids cumulés) et `OUTPUT OUT=
+  stat(var)=name`, sont pondérées ; une statistique non calculable dans
+  `OUTPUT` reste une ERROR (voir table J02).
+- UNIVARIATE sous `WEIGHT` : par défaut un poids nul ou négatif compte 0 dans
+  Σw et les moments mais l'observation **reste dans N** (sémantique SAS) ;
+  `EXCLNPWGT` l'exclut de l'analyse, N compris, tout comme un poids manquant.
+  `NORMAL`/`NORMALTEST` sous `WEIGHT` est indisponible (doc SAS) → NOTE dans le
+  log, aucune section, aucun repli silencieux. `OUTPUT OUT=` restitue les
+  mêmes statistiques pondérées que le listing.
+- Encodage : le contrat D-001 ([docs/encoding.md](encoding.md)) prime — longueurs
+  et troncatures en **caractères** (`LENGTH('é')` = 1), entrées UTF-8 strictes
+  avec BOM ignoré, jamais de repli lossy silencieux.
+- Étape DATA : `FIND`/`FINDC` commencent à la position de départ **incluse**
+  (1-based, positions en caractères) ; seuls les modificateurs `i` sont
+  honorés. `UPDATE` honore `UPDATEMODE=`/`UPDATE=` (`MISSINGCHECK` par défaut,
+  `NOMISSINGCHECK`) aux deux formes documentées par SAS ; `NOMISSINGCHECK` laisse une valeur manquante de la transaction écraser celle du
+maître (le défaut `MISSINGCHECK` l'empêche).
+
 ## Catalogue et exemples
 
 - `unsupported_statement(proc, stmt)` : ERROR « The BY statement is not supported
