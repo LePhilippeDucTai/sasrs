@@ -7,6 +7,26 @@ fn new_session() -> Session {
 }
 
 #[test]
+fn exit_code_request_is_consumed_once() {
+    let mut session = new_session();
+    assert_eq!(session.take_requested_exit_code(), None);
+    session.request_exit_code(8);
+    assert_eq!(session.take_requested_exit_code(), Some(8));
+    assert_eq!(session.take_requested_exit_code(), None);
+    session.request_exit_code(0);
+    assert_eq!(session.take_requested_exit_code(), Some(0));
+    assert_eq!(session.take_requested_exit_code(), None);
+}
+
+#[test]
+fn exit_code_latest_request_replaces_pending_code() {
+    let mut session = new_session();
+    session.request_exit_code(8);
+    session.request_exit_code(4);
+    assert_eq!(session.take_requested_exit_code(), Some(4));
+}
+
+#[test]
 fn default_ods_options_are_sas_defaults() {
     let s = new_session();
     assert!(!s.ods_options.nocenter);

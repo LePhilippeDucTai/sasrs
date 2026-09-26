@@ -54,7 +54,9 @@ pub struct RunOptions {
 pub struct RunOutcome {
     pub log: String,
     pub listing: String,
-    /// 0 = propre, 1 = warnings, 2 = erreurs (esprit des codes retour SAS).
+    /// Without an explicit session request: 0 = clean, 1 = warnings, 2 = errors.
+    /// An explicit request supplies the return code, with a minimum of 1 when
+    /// errors were counted (and 0 otherwise).
     pub exit_code: i32,
 }
 
@@ -116,7 +118,9 @@ fn run_in_session(mut session: Session, execute: impl FnOnce(&mut Session)) -> R
         session.log.error(&internal_error(payload.as_ref()));
     }
     let listing = session.take_completed_listing();
-    let exit_code = if session.log.errors > 0 {
+    let exit_code = if let Some(requested) = session.take_requested_exit_code() {
+        requested.max(i32::from(session.log.errors > 0))
+    } else if session.log.errors > 0 {
         2
     } else if session.log.warnings > 0 {
         1
@@ -133,6 +137,86 @@ fn run_in_session(mut session: Session, execute: impl FnOnce(&mut Session)) -> R
 #[cfg(test)]
 mod run_failure_tests {
     use super::*;
+
+    #[test]
+    fn exit_code_requested_return_reaches_outcome() {
+        // SAS %ABORT RETURN n passes n to the host; J02-P10 supplies the
+        // session channel that the executor can use for that return code.
+        // https://support.sas.com/kb/23/addl/fusion23211_1_abort.html
+        for counted_error in [false, true] {
+            let session = Session::new(None, std::env::temp_dir(), true).unwrap();
+            let outcome = run_in_session(session, |session| {
+                session.request_exit_code(8);
+                if counted_error {
+                    session.log.error("counted failure");
+                }
+            });
+            assert_eq!(outcome.exit_code, 8);
+            assert_eq!(
+                outcome.log,
+                if counted_error {
+                    "ERROR: counted failure\n"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn exit_code_requested_zero_preserves_counted_failure() {
+        let session = Session::new(None, std::env::temp_dir(), true).unwrap();
+        let outcome = run_in_session(session, |session| {
+            session.request_exit_code(0);
+            session.log.error("counted failure");
+        });
+        assert_eq!(outcome.exit_code, 1);
+        assert_eq!(outcome.log, "ERROR: counted failure\n");
+    }
+
+    #[test]
+    fn exit_code_requested_zero_without_errors_succeeds() {
+        let session = Session::new(None, std::env::temp_dir(), true).unwrap();
+        let outcome = run_in_session(session, |session| session.request_exit_code(0));
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.log.is_empty());
+    }
+
+    #[test]
+    fn exit_code_requested_zero_preserves_finalization_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new(None, dir.path().to_path_buf(), true).unwrap();
+        let outcome = run_in_session(session, |session| {
+            session.request_exit_code(0);
+            // Writing an HTML file to an existing directory must fail.
+            session.open_destination(
+                "HTML",
+                Box::new(output::HtmlDestination::with_file(
+                    96,
+                    dir.path().to_path_buf(),
+                )),
+            );
+            session.listing.write_line("partial output");
+        });
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.log.contains("ERROR: Could not write"));
+    }
+
+    #[test]
+    fn exit_code_without_request_keeps_log_classification() {
+        for (warnings, errors, expected) in [(0, 0, 0), (1, 0, 1), (0, 1, 2), (1, 1, 2)] {
+            let session = Session::new(None, std::env::temp_dir(), true).unwrap();
+            let outcome = run_in_session(session, |session| {
+                for _ in 0..warnings {
+                    session.log.warning("counted warning");
+                }
+                for _ in 0..errors {
+                    session.log.error("counted failure");
+                }
+            });
+            assert_eq!(outcome.exit_code, expected);
+        }
+    }
 
     #[test]
     fn panic_preserves_partial_log_and_listing() {

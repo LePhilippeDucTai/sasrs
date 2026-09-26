@@ -109,6 +109,8 @@ impl Default for OdsOptions {
 pub struct Session {
     pub libs: LibraryManager,
     pub log: LogWriter,
+    /// Explicit return code awaiting consumption by run finalization.
+    requested_exit_code: Option<i32>,
     /// Destination de sortie par défaut (M22.1). Auparavant un `ListingWriter`
     /// concret ; désormais un trait object [`OutputDestination`] initialisé à
     /// [`TextListing`] (listing texte byte-identique). Le statement `ODS`
@@ -249,6 +251,19 @@ pub struct Session {
 }
 
 impl Session {
+    /// Request a return code for the current run (for example, `%ABORT RETURN`).
+    /// The latest request replaces any unconsumed request. This does not stop
+    /// execution or emit a diagnostic. Run finalization keeps counted errors
+    /// nonzero even when the requested code is zero.
+    pub fn request_exit_code(&mut self, code: i32) {
+        self.requested_exit_code = Some(code);
+    }
+
+    /// Consume the pending return code once, leaving no request behind.
+    pub fn take_requested_exit_code(&mut self) -> Option<i32> {
+        self.requested_exit_code.take()
+    }
+
     /// M38.1 — applique un statement `TITLEn` (texte ou effacement) avec la
     /// sémantique SAS, puis pousse les titres actifs à la destination courante.
     ///
@@ -307,6 +322,7 @@ impl Session {
         Ok(Session {
             libs: LibraryManager::new(work_dir)?,
             log: LogWriter::new(deterministic),
+            requested_exit_code: None,
             listing: Box::new(TextListing::new(options.ls)),
             completed_listing: String::new(),
             output_destinations: HashMap::new(),
