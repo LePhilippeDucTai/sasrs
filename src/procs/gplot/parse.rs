@@ -102,21 +102,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
     let mut symbols: Vec<SymbolDef> = Vec::new();
     let mut axes: Vec<AxisDef> = Vec::new();
 
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
+    crate::procs::common::parse_proc_body(ts, "GPLOT", |ts, _kw| {
         if ts.peek().is_kw("plot") || ts.peek().is_kw("plot2") {
             ts.next();
             // parse_plot_stmt peut avoir consommé le `;` (chemin avec `/`).
@@ -139,9 +125,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
                 ts.next();
             }
         } else {
-            ts.skip_to_semi();
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     Ok(GplotAst {
         data_ref,

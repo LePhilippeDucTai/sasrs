@@ -93,7 +93,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrinttoAst> {
     }
 
     // Parse sub-statements until `run;` or `quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |_ts, _kw| Ok(false))?;
+    common::parse_proc_body(ts, "PRINTTO", |_ts, _kw| Ok(false))?;
 
     Ok(PrinttoAst {
         log,

@@ -63,10 +63,13 @@ fn parse_unknown_option_errors() {
 }
 
 #[test]
-fn parse_unknown_substatement_skipped() {
-    // The DELETE substatement is unrecognized and should be skipped.
-    let ast = parse_transpose("proc transpose data=a out=b; delete foo; var x; run;").unwrap();
-    assert_eq!(ast.var, vec!["x".to_string()]);
+fn contract_transpose_unknown_substatement_errors() {
+    // The previous skip silently ran a different program (CONTRIBUTING §5).
+    let err = parse_transpose("proc transpose data=a out=b; delete foo; var x; run;")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("180-322") && err.contains("DELETE"), "{err}");
 }
 
 // ───────────────────────── normalize_name tests ────────────────────────

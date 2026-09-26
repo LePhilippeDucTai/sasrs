@@ -158,24 +158,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
     let mut invalues: Vec<(String, UserInformat)> = Vec::new();
     let mut pictures: Vec<(String, UserPicture)> = Vec::new();
 
-    loop {
-        // Skip stray semicolons.
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
+    crate::procs::common::parse_proc_body(ts, "FORMAT", |ts, _kw| {
         if ts.peek().is_kw("value") {
             ts.next(); // consume "value"
             let (name, uf) = parse_value_stmt(ts)?;
@@ -189,10 +172,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
             let (name, up) = parse_picture_stmt(ts)?;
             pictures.push((name, up));
         } else {
-            // Unknown sub-statement: skip it.
-            ts.skip_to_semi();
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     Ok(FormatAst {
         lib,

@@ -58,21 +58,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
     })?;
 
     // --- sub-statements until run;/quit; ---
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-
+    crate::procs::common::parse_proc_body(ts, "REPORT", |ts, _kw| {
         if ts.peek().is_kw("column") || ts.peek().is_kw("columns") {
             ts.next();
             columns = Some(ts.parse_name_list()?);
@@ -93,23 +79,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
             ts.next();
             where_ = Some(crate::parser::expr::parse_expr(ts)?);
             ts.expect_semi()?;
-        } else if is_global_stmt_kw(ts.peek().ident()) {
-            // TITLE/FOOTNOTE (and numbered variants) are global statements that
-            // SAS accepts anywhere, including inside a PROC step. We don't act on
-            // them here (global title/footnote state is owned by the executor and
-            // is set by the global statements placed before the step) — we just
-            // skip them gracefully rather than aborting the whole REPORT, matching
-            // the leniency of PROC PRINT and others.
-            ts.skip_to_semi();
         } else {
-            let span = ts.peek().span;
-            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(SasError::parse(
-                format!("Unexpected statement '{bad}' in PROC REPORT."),
-                span,
-            ));
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     Ok(ReportAst {
         data,
@@ -122,14 +96,4 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
         rbreak,
         computes,
     })
-}
-
-/// True if `ident` names a global statement (TITLE/FOOTNOTE, plain or numbered
-/// e.g. TITLE2/FOOTNOTE3) that SAS allows inside a PROC step. Used to skip such
-/// statements gracefully in the REPORT sub-statement loop.
-pub(crate) fn is_global_stmt_kw(ident: Option<&str>) -> bool {
-    let Some(w) = ident else { return false };
-    let lw = w.to_ascii_lowercase();
-    let stem = lw.trim_end_matches(|c: char| c.is_ascii_digit());
-    matches!(stem, "title" | "footnote")
 }

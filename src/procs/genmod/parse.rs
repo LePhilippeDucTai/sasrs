@@ -26,7 +26,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
     let mut model: Option<GenmodModel> = None;
     let mut freq_var: Option<String> = None;
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "GENMOD", |ts, kw| {
         if kw == "class" {
             ts.next();
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {

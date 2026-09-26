@@ -17,7 +17,7 @@
 //! - Parser le bloc jusqu'à `quit;`
 //! - `CONTENTS` : si le catalogue pointe vers un libref connu, lister les
 //!   formats utilisateur (depuis `session.format_catalog`) ; sinon listing vide.
-//! - `DELETE` / `COPY` : no-op gracieux + NOTE dans le log.
+//! - `DELETE` / `COPY` : ERROR (mutations non implémentées).
 //! - Émettre une NOTE "Procedure CATALOG used."
 //!
 //! Ce comportement est documenté comme déviation v1 ; la vraie gestion des
@@ -102,6 +102,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<CatalogAst> {
     let mut stmts: Vec<CatalogStmt> = Vec::new();
 
     loop {
+        if crate::procs::common::parse_proc_inert_or_global(ts)? {
+            continue;
+        }
+        if ts.peek().is_kw("data") || ts.peek().is_kw("proc") {
+            break;
+        }
+
         while ts.peek().kind == TokenKind::Semi {
             ts.next();
         }
@@ -134,76 +141,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<CatalogAst> {
             continue;
         }
 
-        if ts.peek().is_kw("delete") {
-            ts.next();
-            let mut entries: Vec<String> = Vec::new();
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                // Skip `/ et=<type>` option clause
-                if ts.peek().kind == TokenKind::Slash {
-                    ts.skip_to_semi();
-                    break;
-                }
-                if let Some(name) = ts.peek().ident() {
-                    entries.push(name.to_uppercase());
-                    ts.next();
-                } else {
-                    ts.next();
-                }
-            }
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            stmts.push(CatalogStmt::Delete { entries });
-            continue;
+        if ts.peek().is_kw("delete") || ts.peek().is_kw("copy") {
+            return Err(crate::procs::common::unsupported_statement(
+                "CATALOG",
+                ts.peek().ident().unwrap(),
+            ));
         }
 
-        if ts.peek().is_kw("copy") {
-            ts.next();
-            let mut out: Option<String> = None;
-            loop {
-                if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                    break;
-                }
-                if ts.peek().is_kw("out") {
-                    ts.next();
-                    if ts.peek().kind == TokenKind::Eq {
-                        ts.next();
-                        // Parse out=lib.cat
-                        if let Some(first) = ts.peek().ident() {
-                            let first = first.to_uppercase();
-                            ts.next();
-                            if ts.peek().kind == TokenKind::Dot {
-                                ts.next();
-                                if let Some(second) = ts.peek().ident() {
-                                    out = Some(format!("{}.{}", first, second.to_uppercase()));
-                                    ts.next();
-                                } else {
-                                    out = Some(first);
-                                }
-                            } else {
-                                out = Some(first);
-                            }
-                        }
-                    }
-                } else {
-                    ts.next();
-                }
-            }
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            stmts.push(CatalogStmt::Copy { out });
-            continue;
-        }
-
-        // Unknown sub-statement: record and skip
-        let kw = ts.peek().ident().unwrap_or("?").to_uppercase();
-        let kw_owned = kw.clone();
-        stmts.push(CatalogStmt::Other(kw_owned));
-        ts.skip_to_semi();
+        crate::procs::common::unhandled_proc_statement(ts, "CATALOG")?;
     }
 
     Ok(CatalogAst { catalog, stmts })
@@ -262,34 +207,14 @@ pub fn execute(ast: &CatalogAst, session: &mut Session) -> Result<()> {
                 }
             }
 
-            CatalogStmt::Delete { entries } => {
-                // No-op gracieux + NOTE
-                for entry in entries {
-                    session.log.note(&format!(
-                        "CATALOG: DELETE entry '{}' from catalog '{}' (v1: no-op).",
-                        entry, ast.catalog
-                    ));
-                }
-                if entries.is_empty() {
-                    session
-                        .log
-                        .note("CATALOG: DELETE statement (no entries specified) — no-op.");
-                }
+            CatalogStmt::Delete { .. } => {
+                return Err(super::common::unsupported_statement("CATALOG", "DELETE"));
             }
-
-            CatalogStmt::Copy { out } => {
-                let dest = out.as_deref().unwrap_or("(unspecified)");
-                session.log.note(&format!(
-                    "CATALOG: COPY from '{}' to '{}' (v1: no-op).",
-                    ast.catalog, dest
-                ));
+            CatalogStmt::Copy { .. } => {
+                return Err(super::common::unsupported_statement("CATALOG", "COPY"));
             }
-
             CatalogStmt::Other(kw) => {
-                session.log.note(&format!(
-                    "CATALOG: sub-statement '{}' is not implemented in v1 (no-op).",
-                    kw
-                ));
+                return Err(super::common::unsupported_statement("CATALOG", kw));
             }
         }
     }

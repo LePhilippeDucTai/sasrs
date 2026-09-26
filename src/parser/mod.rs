@@ -63,10 +63,18 @@ pub use block::Block;
 
 pub(crate) use block::*;
 
+/// Effects encountered while parsing a PROC, drained once by the executor even
+/// when a later statement makes that PROC invalid.
+pub(crate) enum ProcParseEffect {
+    Warning(String),
+    Global(GlobalStmt),
+}
+
 pub struct StatementStream<'a> {
     pub src: &'a SourceFile,
     toks: Vec<Token>,
     pos: usize,
+    proc_effects: Vec<ProcParseEffect>,
 }
 
 mod dataset;
@@ -74,7 +82,32 @@ mod dataset;
 impl<'a> StatementStream<'a> {
     pub fn new(src: &'a SourceFile) -> Result<Self> {
         let toks = Lexer::new(&src.text).tokenize()?;
-        Ok(StatementStream { src, toks, pos: 0 })
+        Ok(StatementStream {
+            src,
+            toks,
+            pos: 0,
+            proc_effects: Vec::new(),
+        })
+    }
+
+    pub(crate) fn warn_ignored_display(&mut self, message: String) {
+        self.proc_effects.push(ProcParseEffect::Warning(message));
+    }
+
+    pub(crate) fn take_proc_effects(&mut self) -> Vec<ProcParseEffect> {
+        std::mem::take(&mut self.proc_effects)
+    }
+
+    /// Global statements inside a PROC retain their normal execution path.
+    pub(crate) fn parse_proc_global(&mut self) -> Result<bool> {
+        let kw = self.peek().ident().unwrap_or("").to_ascii_lowercase();
+        if global::is_global_statement(&kw) {
+            let stmt = global::parse_global(self)?;
+            self.proc_effects.push(ProcParseEffect::Global(stmt));
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     pub fn peek(&self) -> &Token {

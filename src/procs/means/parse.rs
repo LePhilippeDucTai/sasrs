@@ -42,6 +42,10 @@ pub(super) fn percentile_fraction(stat: &str) -> Option<f64> {
 /// [output out=b stat(var)=name...;] ... run;`. Called AFTER "proc
 /// means"/"proc summary" has been consumed. Consumes through `run;`/`quit;`.
 pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
+    parse_named(ts, "MEANS")
+}
+
+pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<MeansAst> {
     let mut data: Option<DatasetRef> = None;
     let mut noprint = false;
     let mut printalltypes = false;
@@ -122,7 +126,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<MeansAst> {
     let mut output: Option<MeansOutput> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    crate::procs::common::parse_proc_body(ts, |ts, kw| {
+    crate::procs::common::parse_proc_body(ts, proc_name, |ts, kw| {
         Ok(match kw {
             "class" => {
                 ts.next();

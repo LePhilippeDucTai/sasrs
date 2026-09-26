@@ -1,0 +1,10 @@
+data t;
+  x=1;
+  output;
+run;
+proc sort data=t out=bad;
+  invented x;
+  by x;
+run;
+proc print data=t;
+run;

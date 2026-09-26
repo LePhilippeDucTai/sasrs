@@ -62,7 +62,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
     let mut contrasts: Vec<GlmContrast> = Vec::new();
     let mut means_vars: Vec<String> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "GLM", |ts, kw| {
         if kw == "class" {
             ts.next();
             class_vars = ts.parse_name_list()?;

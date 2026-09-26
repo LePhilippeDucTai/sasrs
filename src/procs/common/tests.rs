@@ -87,7 +87,7 @@ fn body_skips_stray_semis_and_stops_on_run() {
     // Consume the header `;` first so we are at the body.
     ts.expect_semi().unwrap();
     let mut vars: Option<Vec<String>> = None;
-    parse_proc_body(&mut ts, |ts, kw| match kw {
+    parse_proc_body(&mut ts, "FOO", |ts, kw| match kw {
         "var" => {
             ts.next();
             vars = Some(ts.parse_name_list()?);
@@ -107,36 +107,25 @@ fn body_stops_on_quit() {
     let src = SourceFile::new("proc foo; quit; data after;");
     let mut ts = proc_stream(&src);
     ts.expect_semi().unwrap();
-    parse_proc_body(&mut ts, |_ts, _kw| Ok(false)).unwrap();
+    parse_proc_body(&mut ts, "FOO", |_ts, _kw| Ok(false)).unwrap();
     assert!(ts.peek().is_kw("data"));
 }
 
 #[test]
-fn body_recovers_unknown_substatement_via_skip_to_semi() {
-    // Unknown sub-statement `bogus x y;` must be skipped, then `var a;`
-    // is dispatched, then `run;` stops.
+fn contract_unknown_statement_errors_at_original_span() {
     let src = SourceFile::new("proc foo; bogus x y; var a; run;");
     let mut ts = proc_stream(&src);
     ts.expect_semi().unwrap();
-    let mut seen: Vec<String> = Vec::new();
-    let mut vars: Option<Vec<String>> = None;
-    parse_proc_body(&mut ts, |ts, kw| {
-        seen.push(kw.to_string());
-        match kw {
-            "var" => {
-                ts.next();
-                vars = Some(ts.parse_name_list()?);
-                ts.expect_semi()?;
-                Ok(true)
-            }
-            _ => Ok(false),
+    let expected_span = ts.peek().span;
+    let err = parse_proc_body(&mut ts, "FOO", |_ts, _kw| Ok(false)).unwrap_err();
+    match err {
+        SasError::Parse { msg, span } => {
+            assert!(msg.contains("180-322"));
+            assert!(msg.contains("BOGUS") && msg.contains("PROC FOO"));
+            assert_eq!(span, expected_span);
         }
-    })
-    .unwrap();
-    // `bogus` was dispatched (returned false → skip_to_semi), then `var`.
-    assert_eq!(seen, vec!["bogus".to_string(), "var".to_string()]);
-    assert_eq!(vars, Some(vec!["a".into()]));
-    assert!(ts.at_eof());
+        other => panic!("expected parse error, got {other:?}"),
+    }
 }
 
 // ── consume_option_eq / parse_dataset_opt ─────────────────────────────────────
@@ -327,4 +316,223 @@ fn effect_terms_builds_star_chains() {
         vec![vec!["a".to_string()], vec!["b".into(), "c".into()]]
     );
     assert_eq!(ts.peek().kind, TokenKind::Slash);
+}
+
+// Oracles: CONTRIBUTING §5 (severity) and the SAS references in
+// docs/support-contract.md (180-322, global statements inside PROC).
+#[test]
+fn contract_unimplemented_semantic_statements_reject_proc() {
+    for (proc_name, statement) in [
+        ("glm", "by g"),
+        ("logistic", "weight w"),
+        ("glm", "freq n"),
+        ("glm", "output out=bad"),
+        ("glm", "id x"),
+        ("glm", "where x=1"),
+        ("reg", "class g"),
+        ("fastclus maxclusters=2", "id x"),
+        ("mixed", "estimate 'diff' x 1"),
+        ("glimmix", "lsmeans g"),
+        ("reg", "reweight x > 1"),
+        ("reg", "refit"),
+        ("catalog", "delete f"),
+        ("catalog", "copy out=other"),
+        ("import", "guessingrows=1000"),
+    ] {
+        let source = format!("proc {proc_name}; {statement}; run;");
+        let src = SourceFile::new(source);
+        let mut ts = StatementStream::new(&src).unwrap();
+        let err = ts
+            .next_block()
+            .unwrap()
+            .0
+            .err()
+            .expect(&src.text)
+            .to_string();
+        assert!(
+            err.contains("not supported") && err.contains("cannot be ignored"),
+            "{}: {err}",
+            src.text
+        );
+    }
+}
+
+#[test]
+fn contract_unknown_statement_all_proc_parsers() {
+    for header in [
+        "anova",
+        "append base=a data=b",
+        "catalog",
+        "cluster",
+        "compare",
+        "contents",
+        "corr",
+        "datasets",
+        "discrim",
+        "distance",
+        "export",
+        "factor",
+        "fastclus maxclusters=2",
+        "format",
+        "freq",
+        "gchart",
+        "genmod",
+        "glimmix",
+        "glm",
+        "gplot",
+        "import",
+        "logistic",
+        "means",
+        "mixed",
+        "npar1way",
+        "options",
+        "plot",
+        "princomp",
+        "print",
+        "printto",
+        "rank",
+        "reg",
+        "report",
+        "sgplot",
+        "sort",
+        "summary",
+        "tabulate",
+        "transpose",
+        "ttest",
+        "univariate",
+    ] {
+        let src = SourceFile::new(format!("proc {header}; invented xyz; run;"));
+        let mut ts = StatementStream::new(&src).unwrap();
+        let err = ts.next_block().unwrap().0.err().expect(header).to_string();
+        assert!(
+            err.contains("180-322") && err.contains("INVENTED"),
+            "{header}: {err}"
+        );
+    }
+}
+
+#[test]
+fn contract_display_warnings_are_drained_once_even_on_error() {
+    let src = SourceFile::new(
+        "proc foo; format x 8.2; label x='X'; attrib length label='X'; bogus; run;",
+    );
+    let mut ts = proc_stream(&src);
+    ts.expect_semi().unwrap();
+    assert!(parse_proc_body(&mut ts, "FOO", |_ts, _kw| Ok(false)).is_err());
+    let effects = ts.take_proc_effects();
+    assert_eq!(effects.len(), 3);
+    for effect in effects {
+        match effect {
+            crate::parser::ProcParseEffect::Warning(message) => {
+                assert!(message.contains("ignored in PROC FOO"));
+            }
+            _ => panic!("expected warning"),
+        }
+    }
+    assert!(ts.take_proc_effects().is_empty());
+}
+
+#[test]
+fn contract_attrib_storage_effect_is_error() {
+    for statement in ["attrib x length=3", "attrib x informat=8."] {
+        let src = SourceFile::new(format!("proc foo; {statement}; run;"));
+        let mut ts = proc_stream(&src);
+        ts.expect_semi().unwrap();
+        let err = parse_proc_body(&mut ts, "FOO", |_ts, _kw| Ok(false)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("ATTRIB statement is not supported")
+        );
+    }
+}
+
+#[test]
+fn contract_implemented_statements_keep_their_semantics() {
+    let src = SourceFile::new("proc sort data=a out=b; by descending x; run;");
+    let mut ts = proc_stream(&src);
+    let ast = crate::procs::sort::parse(&mut ts).unwrap();
+    assert_eq!(ast.by, vec![("x".to_string(), true)]);
+    assert!(ts.take_proc_effects().is_empty());
+}
+
+#[test]
+fn contract_comments_and_implicit_boundary() {
+    let src = SourceFile::new("proc foo; * comment; ;; proc print; run;");
+    let mut ts = proc_stream(&src);
+    ts.expect_semi().unwrap();
+    parse_proc_body(&mut ts, "FOO", |_ts, _kw| Ok(false)).unwrap();
+    assert!(ts.peek().is_kw("proc"));
+}
+
+#[test]
+fn contract_executor_warning_error_and_recovery() {
+    let out = crate::run(
+        "data t; x=1; output; run; proc print data=t; format x 8.2; var x; run;",
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.exit_code, 1, "{}", out.log);
+    assert_eq!(out.log.matches("WARNING:").count(), 1);
+    assert!(out.listing.contains("x"));
+
+    let out = crate::run(
+        "data t; x=1; output; run; proc sort data=t out=bad; by x; invented; run; proc print data=t; run;",
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.exit_code, 2, "{}", out.log);
+    assert!(out.log.contains("180-322"));
+    assert!(!out.log.contains("data set WORK.BAD has"));
+    assert!(out.listing.contains("x"));
+}
+
+#[test]
+fn contract_globals_execute_inside_proc() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = SourceFile::new(
+        "data t; x=1; output; run; proc print data=t; title 'Inner title'; footnote 'Inner foot'; options ls=100; libname here '.'; filename f 'input.sas'; ods select all; var x; run;",
+    );
+    let mut session = make_session();
+    session.base_dir = tmp.path().to_path_buf();
+    crate::executor::run_program(&src, &mut session);
+    assert_eq!(session.log.errors, 0);
+    assert_eq!(session.log.warnings, 0);
+    assert!(session.libs.get("HERE").is_ok());
+    // Verify actual output, not just that parsing accepted the statements.
+    let listing = session.listing.take_string();
+    assert!(listing.contains("Inner title"), "{listing}");
+    assert!(listing.contains("Inner foot"), "{listing}");
+}
+
+#[test]
+fn contract_global_error_prevents_proc_output() {
+    let outcome = crate::run(
+        "data t; x=1; output; run; proc sort data=t out=bad; libname x XLSX 'bad.xlsx'; by x; run;",
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 2, "{}", outcome.log);
+    assert!(outcome.log.contains("LIBNAME engine XLSX"));
+    assert!(!outcome.log.contains("data set WORK.BAD has"));
+}
+
+#[test]
+fn contract_globals_survive_later_proc_error_without_leaking_warnings() {
+    let outcome = crate::run(
+        "data t; x=1; output; run; proc print data=t; title 'Retained'; format x 8.2; invented; run; proc print data=t; run;",
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 2, "{}", outcome.log);
+    assert_eq!(outcome.log.matches("WARNING:").count(), 1);
+    assert_eq!(outcome.log.matches("180-322").count(), 1);
+    assert!(outcome.listing.contains("Retained"));
 }

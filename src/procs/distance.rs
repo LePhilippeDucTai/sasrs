@@ -132,7 +132,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
     }
 
     let mut var: Vec<String> = Vec::new();
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "DISTANCE", |ts, kw| {
         Ok(match kw {
             "var" => {
                 ts.next();

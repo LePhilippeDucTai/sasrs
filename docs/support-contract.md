@@ -1,0 +1,99 @@
+# Contrat de support des instructions de procédure
+
+Une instruction reconnue mais non honorée ne doit jamais provoquer de repli
+silencieux. Le contrat de sévérité est fixé par `CONTRIBUTING.md`, §5 ; les tests
+`contract_*` en sont les tests de non-régression. Il décrit le support de sasrs,
+pas une promesse que toutes les procédures de SAS sont implémentées.
+
+| Effet de l'instruction ignorée | Diagnostic | Exécution de la PROC |
+| --- | --- | --- |
+| Peut changer un résultat numérique, un dataset ou le contrôle de flux | **ERROR** | Rejet de l'étape avant son exécution |
+| Limité à une personnalisation d'affichage non implémentée | **WARNING** | Poursuite, affichage par défaut |
+| Instruction inconnue ou non valide dans ce contexte | **ERROR**, code **180-322** | Rejet de l'étape avant son exécution |
+
+Une instruction effectivement implémentée conserve sa sémantique : par exemple
+BY dans SORT, WEIGHT dans MEANS, OUTPUT dans LOGISTIC et WHERE dans PRINT. Le
+contrat est appliqué par procédure, après recherche d'un handler implémenté.
+Aucun dataset partiel ne doit être créé par une PROC rejetée au parsing. Le
+programme peut continuer à l'étape suivante. Un WARNING donne un code de sortie
+1 ; une ERROR donne 2 (hors demande explicite de sortie par `%ABORT`).
+
+## Catalogue et exemples
+
+- `unsupported_statement(proc, stmt)` : ERROR « The BY statement is not supported
+  in PROC GLM; it can affect results and cannot be ignored. » Même règle pour
+  WEIGHT dans LOGISTIC et BY/WEIGHT/FREQ/OUTPUT/ID/WHERE/CLASS dans les procédures
+  qui ne les exécutent pas. REWEIGHT/REFIT dans REG, ESTIMATE/CONTRAST/LSMEANS dans
+  MIXED et GLIMMIX, ID dans FASTCLUS, DELETE/COPY dans CATALOG et GUESSINGROWS dans
+  IMPORT sont également rejetés : enregistrer une demande sans la réaliser
+  n'est pas un support effectif.
+- `ignored_display_statement(proc, stmt)` : WARNING « The FORMAT statement is
+  ignored in PROC GLM; display customization is not supported. » Les demandes
+  locales FORMAT, LABEL et ATTRIB limitées à l'affichage suivent cette règle
+  quand elles ne sont pas implémentées. ATTRIB LENGTH ou INFORMAT est une ERROR,
+  car ces attributs peuvent changer les valeurs stockées. PAINT dans REG est
+  également une personnalisation d'affichage ignorée avec WARNING.
+- Une instruction inventée, par exemple `invented x;`, produit une ERROR
+  « 180-322: Statement 'INVENTED' is not valid or it is used out of proper order
+  in PROC GLM. » Le nom de la procédure, de l'instruction et le span du token
+  fautif sont conservés. Aucun saut silencieux vers le prochain point-virgule.
+
+```sas
+proc glm data=work.t;
+  model y=x;
+  by group;           /* ERROR : l'analyse par groupe n'est pas implémentée. */
+run;
+proc logistic data=work.t;
+  model y=x;
+  weight w;           /* ERROR : les poids ne doivent pas être perdus. */
+run;
+proc print data=work.t;
+  format x 8.2;       /* WARNING : la PROC s'exécute avec l'affichage courant. */
+run;
+```
+
+Les anciens tests qui exigeaient le saut silencieux d'une instruction inconnue
+sont remplacés par des assertions ERROR. La fixture `m36/mtest.sas` conserve son
+intention de tester MTEST et ADD : sa demande REWEIGHT non exécutée est retirée.
+Le rejet de REWEIGHT est couvert séparément par les tests `contract_*`.
+
+## Instructions globales dans une PROC
+
+TITLE, FOOTNOTE (y compris les niveaux déjà supportés), OPTIONS, LIBNAME, ODS et
+FILENAME passent par le parseur global et l'exécuteur global existants. Elles
+prennent effet, dans leur ordre source, avant l'exécution de la procédure. Elles
+ne sont ni ignorées ni considérées comme des instructions inconnues. Les effets
+déjà parsés et les avertissements sont drainés une seule fois, même si une
+instruction ultérieure invalide la PROC ; ils ne fuient pas à l'étape suivante.
+Une erreur d'exécution d'une instruction globale empêche l'exécution de la PROC
+avec un état incomplet. Les commentaires `* ... ;` et les points-virgules vides
+restent inertes ; DATA/PROC ouvre une nouvelle étape implicite.
+
+```sas
+proc print data=work.t;
+  title 'Résultats';
+  footnote 'Source interne';
+  options ls=100;
+  ods select all;
+  var x;
+run;
+```
+
+Le transport ne modifie pas le support des différentes options globales. Les
+options d'en-tête de PROC, sous-options d'une instruction implémentée et le
+langage SQL font l'objet d'unités distinctes ; cette unité couvre les
+instructions de corps de PROC et leurs anciens chemins d'ignorance.
+
+## Références indépendantes et vérification
+
+- Le [guide SAS des étapes PROC](https://support.sas.com/documentation/cdl/en/grstatproc/65235/HTML/default/p15w7pav2htadsn1pvwlbm2t7ca7.htm)
+  précise que les instructions globales sont autorisées dans une étape PROC.
+- La [documentation SAS sur les instructions globales](https://blogs.sas.com/content/sgf/2021/03/15/how-to-conditionally-execute-sas-global-statements/)
+  décrit leur effet et leur persistance pendant la session.
+- La [référence SAS du diagnostic 180-322](https://blogs.sas.com/content/sasdummy/2016/08/25/error-180-322-missing-semicolon/)
+  donne la catégorie et le texte d'erreur des instructions non valides.
+
+Ces références et la règle de sévérité préexistante de CONTRIBUTING constituent
+l'oracle indépendant. Les snapshots `j02/contract_*.sas` verrouillent les logs,
+listings et codes de sortie ; ils ne sont pas, à eux seuls, une preuve de
+conformité numérique à SAS.

@@ -13,6 +13,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<DatasetsAst> {
 
     // ── Parse sub-statements until `quit;` ───────────────────────────────────
     loop {
+        if crate::procs::common::parse_proc_inert_or_global(ts)? {
+            continue;
+        }
+        if ts.peek().is_kw("data") || ts.peek().is_kw("proc") {
+            break;
+        }
+
         // Skip stray semicolons
         while ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -69,8 +76,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DatasetsAst> {
             continue;
         }
 
-        // Unknown sub-statement: skip to `;`
-        ts.skip_to_semi();
+        crate::procs::common::unhandled_proc_statement(ts, "DATASETS")?;
     }
 
     Ok(DatasetsAst {

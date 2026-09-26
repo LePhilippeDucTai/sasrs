@@ -34,7 +34,7 @@ use crate::ast::{GlobalStmt, OdsAction};
 use crate::datastep;
 use crate::error::Result;
 use crate::log::StepTimer;
-use crate::parser::{Block, StatementStream};
+use crate::parser::{Block, ProcParseEffect, StatementStream};
 use crate::procs;
 use crate::session::Session;
 use crate::source::SourceFile;
@@ -128,6 +128,23 @@ fn run_program_inner(src: &SourceFile, session: &mut Session) -> bool {
             let lines = seg_src.lines_of_span(span);
             let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
             session.log.echo_source(&line_texts);
+            // Drain in source order, also on parse failure. Effects must not leak
+            // into the next step and global state must be ready before execution.
+            let errors_before_globals = session.log.errors;
+            for effect in stream.take_proc_effects() {
+                match effect {
+                    ProcParseEffect::Warning(message) => session.log.warning(&message),
+                    ProcParseEffect::Global(stmt) => exec_global(&stmt, session),
+                }
+            }
+            if session.log.errors > errors_before_globals
+                && matches!(&block, Ok(Block::Proc { .. }))
+            {
+                session
+                    .log
+                    .note("The SAS System stopped processing this step because of errors.");
+                continue;
+            }
             if run_one_block(block, session) {
                 return true;
             }

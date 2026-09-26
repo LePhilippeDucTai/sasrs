@@ -111,7 +111,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TransposeAst> {
     let mut id: Option<String> = None;
     let mut var: Vec<String> = Vec::new();
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "TRANSPOSE", |ts, kw| {
         Ok(match kw {
             "by" => {
                 ts.next();

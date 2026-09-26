@@ -51,49 +51,99 @@ where
     Ok(())
 }
 
-/// Pilote la boucle de sous-statements d'un PROC, jusqu'à `run;`/`quit;`
-/// (consommés avec leur `;`) ou `Eof`. Saute les `;` parasites en tête.
-///
-/// Pour chaque sous-statement, calcule le mot-clé minuscule de tête et délègue
-/// à `handle(ts, kw)`. Un `Ok(true)` signifie « sous-statement reconnu et
-/// consommé ». Un `Ok(false)` (sous-statement inconnu) déclenche la même
-/// récupération que `print.rs` : `skip_to_semi()` puis on continue.
-///
-/// Reproduit EXACTEMENT la boucle de sous-statements de `print.rs` (y compris
-/// la gestion de `run`/`quit` et de leur `;` terminal).
-pub fn parse_proc_body<F>(ts: &mut StatementStream, mut handle: F) -> Result<()>
+/// An unimplemented statement that can change data, statistics or control flow.
+/// Returning an error prevents execution of the incomplete PROC AST.
+pub fn unsupported_statement(proc_name: &str, statement: &str) -> SasError {
+    SasError::runtime(format!(
+        "The {} statement is not supported in PROC {}; it can affect results and cannot be ignored.",
+        statement.to_ascii_uppercase(),
+        proc_name.to_ascii_uppercase()
+    ))
+}
+
+/// Text of the warning queued by the parser and emitted by the executor.
+pub fn ignored_display_statement(proc_name: &str, statement: &str) -> String {
+    format!(
+        "The {} statement is ignored in PROC {}; display customization is not supported.",
+        statement.to_ascii_uppercase(),
+        proc_name.to_ascii_uppercase()
+    )
+}
+
+/// Shared fallback for statements a PROC does not implement. Called with the
+/// statement keyword still current; implemented statements always take priority.
+pub fn unhandled_proc_statement(ts: &mut StatementStream, proc_name: &str) -> Result<()> {
+    let token = ts.peek().clone();
+    let kw = token.ident().unwrap_or("?").to_ascii_lowercase();
+    match kw.as_str() {
+        "format" | "label" | "attrib" => {
+            // ATTRIB LENGTH/INFORMAT can change stored values. Do not classify
+            // such a request as a display-only customization.
+            if kw == "attrib" {
+                let mut n = 1;
+                while !matches!(ts.peek_nth(n).kind, TokenKind::Semi | TokenKind::Eof) {
+                    if (ts.peek_nth(n).is_kw("length") || ts.peek_nth(n).is_kw("informat"))
+                        && ts.peek_nth(n + 1).kind == TokenKind::Eq
+                    {
+                        return Err(unsupported_statement(proc_name, "ATTRIB"));
+                    }
+                    n += 1;
+                }
+            }
+            ts.warn_ignored_display(ignored_display_statement(proc_name, &kw));
+            ts.skip_to_semi();
+            Ok(())
+        }
+        "by" | "weight" | "freq" | "output" | "id" | "where" | "class" | "estimate"
+        | "contrast" | "lsmeans" | "reweight" | "refit" => {
+            Err(unsupported_statement(proc_name, &kw))
+        }
+        _ => Err(SasError::parse(
+            format!(
+                "180-322: Statement '{}' is not valid or it is used out of proper order in PROC {}.",
+                kw.to_ascii_uppercase(),
+                proc_name.to_ascii_uppercase()
+            ),
+            token.span,
+        )),
+    }
+}
+
+/// Consume comments and global statements in both shared and run-group loops.
+pub fn parse_proc_inert_or_global(ts: &mut StatementStream) -> Result<bool> {
+    if matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Star) {
+        ts.skip_to_semi();
+        return Ok(true);
+    }
+    ts.parse_proc_global()
+}
+
+/// Drive PROC statements through RUN/QUIT/EOF or an implicit DATA/PROC boundary.
+/// A handler returns true only for an implemented, consumed statement. Unknown
+/// statements are errors; only explicitly display-only requests may be skipped.
+pub fn parse_proc_body<F>(ts: &mut StatementStream, proc_name: &str, mut handle: F) -> Result<()>
 where
     F: FnMut(&mut StatementStream, &str) -> Result<bool>,
 {
     loop {
-        // Skip stray semicolons
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
+        if parse_proc_inert_or_global(ts)? {
+            continue;
         }
-
-        if ts.peek().kind == TokenKind::Eof {
+        if ts.at_eof() || ts.peek().is_kw("data") || ts.peek().is_kw("proc") {
             break;
         }
-
         if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next(); // consume run/quit
-            // consume the `;`
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
+            ts.next();
+            ts.expect_semi()?;
             break;
         }
-
-        // Le mot-clé de tête minusculisé ; un token non-identifiant est traité
-        // comme un sous-statement inconnu (récupération `skip_to_semi`).
         let kw = ts.peek().ident().map(|s| s.to_ascii_lowercase());
         let recognized = match &kw {
             Some(kw) => handle(ts, kw)?,
             None => false,
         };
         if !recognized {
-            // Unknown sub-statement: skip it (recovery, comme print.rs).
-            ts.skip_to_semi();
+            unhandled_proc_statement(ts, proc_name)?;
         }
     }
     Ok(())

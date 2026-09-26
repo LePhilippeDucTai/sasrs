@@ -9,7 +9,7 @@
 //! proc import datafile='chemin' out=lib.table dbms=CSV [replace];
 //!     getnames=yes|no;
 //!     delimiter='x';   /* ou dlm='x' */
-//!     guessingrows=n;  /* ignoré — Polars infère toujours sur 100 lignes */
+//!     /* GUESSINGROWS is rejected: inference length is not configurable. */
 //! run;
 //! ```
 //!
@@ -128,36 +128,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
     // --- Sous-statements jusqu'à run;/quit; ---
     let mut getnames = true;
     let mut delimiter: Option<u8> = None;
-    let mut guessingrows: Option<usize> = None;
+    let guessingrows: Option<usize> = None;
 
-    loop {
-        // Sauter les `;` isolés
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-        // Détecter `name = value ;`
+    common::parse_proc_body(ts, "IMPORT", |ts, kw| {
         let kw_tok = ts.peek().clone();
-        let kw = match kw_tok.ident() {
-            Some(s) => s.to_ascii_lowercase(),
-            None => {
-                ts.skip_to_semi();
-                continue;
-            }
-        };
-        ts.next(); // consommer le nom du sous-statement
-
-        match kw.as_str() {
+        match kw {
             "getnames" => {
+                ts.next();
                 expect_eq(ts, "GETNAMES")?;
                 let val_tok = ts.peek().clone();
                 let val = val_tok
@@ -168,29 +145,20 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
                     .to_ascii_uppercase();
                 ts.next();
                 getnames = val != "NO";
-                ts.skip_to_semi();
+                ts.expect_semi()?;
             }
             "delimiter" | "dlm" => {
+                ts.next();
                 expect_eq(ts, "DELIMITER")?;
                 let s = parse_string_or_ident(ts, "DELIMITER")?;
                 delimiter = parse_delimiter_char(&s, kw_tok.span)?;
-                ts.skip_to_semi();
+                ts.expect_semi()?;
             }
-            "guessingrows" => {
-                expect_eq(ts, "GUESSINGROWS")?;
-                // Valeur numérique : lire et ignorer
-                if let TokenKind::Num(n) = ts.peek().kind {
-                    guessingrows = Some(n as usize);
-                    ts.next();
-                }
-                ts.skip_to_semi();
-            }
-            _ => {
-                // sous-statement inconnu → ignorer
-                ts.skip_to_semi();
-            }
+            "guessingrows" => return Err(common::unsupported_statement("IMPORT", "GUESSINGROWS")),
+            _ => return Ok(false),
         }
-    }
+        Ok(true)
+    })?;
 
     let datafile =
         datafile.ok_or_else(|| SasError::runtime("PROC IMPORT: DATAFILE= is required."))?;

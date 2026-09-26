@@ -28,7 +28,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<SgplotAst> {
     let mut by_var: Option<String> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "SGPLOT", |ts, kw| {
         Ok(match kw {
             "scatter" => {
                 ts.next();

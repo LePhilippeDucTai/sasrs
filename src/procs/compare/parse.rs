@@ -63,23 +63,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         }
     }
 
-    // Parse sub-statements until `run;` or `quit;`
-    loop {
-        while ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("run") || ts.peek().is_kw("quit") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            break;
-        }
-        ts.skip_to_semi();
-    }
+    crate::procs::common::parse_proc_body(ts, "COMPARE", |_ts, _kw| Ok(false))?;
 
     let base = base.ok_or_else(|| {
         SasError::parse(

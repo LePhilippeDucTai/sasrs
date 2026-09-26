@@ -1,0 +1,10 @@
+data t;
+  x=1.234;
+  output;
+run;
+proc print data=t;
+  format x 8.2;
+  label x='Custom';
+  attrib x label='Display only';
+  var x;
+run;

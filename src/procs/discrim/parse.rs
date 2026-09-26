@@ -64,7 +64,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
     let mut id_var: Option<String> = None;
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "DISCRIM", |ts, kw| {
         Ok(match kw {
             "class" => {
                 ts.next();

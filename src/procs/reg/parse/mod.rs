@@ -37,11 +37,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
     let mut id: Vec<String> = Vec::new();
     // M36.10 run-group / VAR bookkeeping.
     let mut var_list: Vec<String> = Vec::new();
-    let mut reweight_seen = false;
-    let mut refit_seen = false;
+    let reweight_seen = false;
+    let refit_seen = false;
     let mut paint_seen = false;
 
-    common::parse_proc_body(ts, |ts, kw| {
+    common::parse_proc_body(ts, "REG", |ts, kw| {
         if kw == "model" {
             models.push(parse_model_stmt(ts, proc_all)?);
             Ok(true)
@@ -158,20 +158,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<RegAst> {
             }
             ts.expect_semi()?;
             Ok(true)
-        } else if kw == "reweight" {
-            // `REWEIGHT <condition>;` — interactive reweighting. Deferred (M36.10).
-            ts.next();
-            ts.skip_to_semi();
-            reweight_seen = true;
-            Ok(true)
-        } else if kw == "refit" {
-            // `REFIT;` — interactive refit. Deferred (M36.10).
-            ts.next();
-            ts.skip_to_semi();
-            refit_seen = true;
-            Ok(true)
+        } else if kw == "reweight" || kw == "refit" {
+            Err(common::unsupported_statement("REG", kw))
         } else if kw == "paint" {
-            // `PAINT <…>;` — interactive plot painting. Deferred (M36.10).
+            ts.warn_ignored_display(common::ignored_display_statement("REG", "PAINT"));
             ts.next();
             ts.skip_to_semi();
             paint_seen = true;

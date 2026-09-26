@@ -61,22 +61,16 @@ fn test_parse_type_cs_and_ar() {
 }
 
 #[test]
-fn test_parse_lsmeans_estimate_contrast() {
-    let ast = parse_mixed(
-        "proc mixed covtest; class g; model y = g / solution; \
-         lsmeans g / diff pdiff cl alpha=0.1; \
-         estimate 'a vs b' g 1 -1; contrast 'c' g 1 -1; run;",
-    )
-    .unwrap();
-    assert!(ast.covtest);
-    assert_eq!(ast.lsmeans.len(), 1);
-    assert_eq!(ast.lsmeans[0].effect, "g");
-    assert!(ast.lsmeans[0].diff);
-    assert!(ast.lsmeans[0].pdiff);
-    assert!(ast.lsmeans[0].cl);
-    assert!((ast.lsmeans[0].alpha - 0.1).abs() < 1e-12);
-    assert_eq!(ast.estimate_labels, vec!["a vs b"]);
-    assert_eq!(ast.contrast_labels, vec!["c"]);
+fn contract_mixed_deferred_statistics_error() {
+    for stmt in [
+        "lsmeans g / diff pdiff cl alpha=0.1",
+        "estimate 'a vs b' g 1 -1",
+        "contrast 'c' g 1 -1",
+    ] {
+        let source = format!("proc mixed covtest; class g; model y=g; {stmt}; run;");
+        let err = parse_mixed(&source).err().unwrap().to_string();
+        assert!(err.contains("not supported in PROC MIXED"), "{err}");
+    }
 }
 
 // ── invariant tests (the verified oracle) ──
