@@ -63,6 +63,7 @@ fn run_plots(
         output: None,
         normal: false,
         plots,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     session.log.into_string()

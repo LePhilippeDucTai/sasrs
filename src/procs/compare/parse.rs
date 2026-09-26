@@ -57,9 +57,30 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         } else if ts.peek().is_kw("briefsummary") {
             ts.next();
             briefsummary = true;
+        } else if ts.peek().is_kw("criterion")
+            || ts.peek().is_kw("method")
+            || ts.peek().is_kw("brief")
+            || ts.peek().is_kw("listall")
+            || ts.peek().is_kw("outbase")
+            || ts.peek().is_kw("outcomp")
+            || ts.peek().is_kw("outdif")
+            || ts.peek().is_kw("outnoequal")
+            || ts.peek().is_kw("outpercent")
+            || ts.peek().is_kw("maxprint")
+        {
+            // J02-P4 — options SAS reconnues mais non honorées : elles peuvent
+            // changer la comparaison effectuée (tolérance, sortie OUT=, volume
+            // affiché) ; l'ignorer silencieusement produirait un faux « all
+            // values equal ». ERROR via le helper du contrat J02-P3.
+            let opt = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(crate::procs::common::unsupported_statement(
+                "COMPARE",
+                &format!("{opt}="),
+            ));
         } else {
-            // Unknown option: skip it
-            ts.next();
+            // Unknown option: no silent skip (contrat J02-P3) — SAS would
+            // reject it too.
+            return Err(crate::procs::common::unknown_option_error(ts, "COMPARE"));
         }
     }
 

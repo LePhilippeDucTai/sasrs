@@ -133,6 +133,7 @@ fn normality_block_emitted_only_with_normal() {
         output: None,
         normal: true,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -167,6 +168,7 @@ fn normality_degenerate_note_no_panic() {
         output: None,
         normal: true,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();

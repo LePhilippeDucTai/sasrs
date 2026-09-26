@@ -28,6 +28,7 @@ fn execute_graphics_emits_deferred_note() {
             var: Some("x".into()),
             normal: false,
         }],
+        noprint: false,
     };
     // ODS GRAPHICS off (default) → rendering stays deferred (one NOTE).
     execute(&ast, &mut session).unwrap();
@@ -63,6 +64,7 @@ fn execute_report_contains_sections_and_median() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -117,6 +119,7 @@ fn execute_default_all_numeric_vars() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -153,6 +156,7 @@ fn execute_by_per_group_sections() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -197,6 +201,7 @@ fn execute_by_unsorted_errors() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     let r = execute(&ast, &mut session);
     assert!(r.is_err());
@@ -241,6 +246,7 @@ fn execute_output_no_by() {
         }),
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -286,6 +292,7 @@ fn execute_output_with_by() {
         }),
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -328,6 +335,7 @@ fn execute_weighted_moments() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -382,6 +390,7 @@ fn execute_weighted_no_quantiles_section() {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -535,6 +544,7 @@ fn plain_ast(var: &[&str]) -> UnivariateAst {
         output: None,
         normal: false,
         plots: vec![],
+        noprint: false,
     }
 }
 

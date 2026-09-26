@@ -168,17 +168,14 @@ pub(super) fn parse_tables(ts: &mut StatementStream) -> Result<Vec<TableRequest>
             } else if ts.peek().is_kw("list") {
                 ts.next();
                 list = true;
-            } else if let Some(name) = ts.peek().ident().map(str::to_string) {
-                // Unknown option: ignore leniently (skip the token, and any
-                // `=value` that follows).
-                ts.next();
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
-                    // skip a single value token (ident/num)
-                    if !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
-                        ts.next();
-                    }
-                }
+            } else if ts.peek().ident().is_some() {
+                // J02-P4 — unknown TABLES option: no silent skip (a typo or an
+                // unimplemented request must not look honored).
+                let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                return Err(SasError::parse(
+                    format!("Unexpected option '{bad}' on PROC FREQ TABLES statement."),
+                    ts.peek().span,
+                ));
             } else {
                 // Unexpected token among options: stop (let expect_semi catch
                 // the terminator).

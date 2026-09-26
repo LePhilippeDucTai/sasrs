@@ -118,10 +118,20 @@ pub(super) fn parse_header_options(ts: &mut StatementStream) -> Result<(String, 
         } else if ts.peek().is_kw("nolist") {
             ts.next();
             nolist = true;
+        } else if ts.peek().is_kw("kill") {
+            // J02-P4 — KILL deletes every member of the library: honoring it
+            // is out of scope here, ignoring it would be destructive-by-omission
+            // of intent → ERROR via the shared contract helper.
+            return Err(crate::procs::common::unsupported_statement(
+                "DATASETS", "KILL",
+            ));
         } else {
-            // Unknown header option: skip to `;`
-            ts.skip_to_semi();
-            break;
+            // J02-P4 — unknown header option: no silent skip to `;`.
+            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(SasError::parse(
+                format!("Unexpected option '{bad}' on PROC DATASETS statement."),
+                ts.peek().span,
+            ));
         }
     }
     Ok((lib, nolist))
@@ -205,9 +215,13 @@ pub(super) fn parse_copy_stmt(ts: &mut StatementStream) -> Result<DsOp> {
         } else if ts.peek().is_kw("in") || ts.peek().kind == TokenKind::In {
             in_lib_assign(ts, &mut in_lib)?;
         } else {
-            // Unknown COPY option: skip rest of statement.
-            ts.skip_to_semi();
-            break;
+            // J02-P4 — unknown COPY option: skipping the rest of the statement
+            // silently could drop a requested transformation → ERROR.
+            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(SasError::parse(
+                format!("Unexpected option '{bad}' on PROC DATASETS COPY statement."),
+                ts.peek().span,
+            ));
         }
     }
     if ts.peek().kind == TokenKind::Semi {

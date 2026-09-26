@@ -118,6 +118,34 @@ fn render_ascii_contains_min_max() {
 
 // ── ODS delegation tests ──────────────────────────────────────────────
 
+#[test]
+fn parse_plot_display_options_warn_and_stay_synchronized() {
+    // J02-P4 — display-only options (`/ href=… vref=… haxis=…`) warn instead
+    // of being dropped silently, and the PLOT statement still terminates
+    // cleanly (the following statements keep running).
+    let source =
+        SourceFile::new("proc plot data=t; plot y*x / href=1 vref=2 haxis=0 to 5 by 1; run;");
+    let mut ts = StatementStream::new(&source).unwrap();
+    ts.next(); // proc
+    ts.next(); // plot
+    let ast = parse(&mut ts).unwrap();
+    assert_eq!(ast.plots.len(), 1);
+    let effects = ts.take_proc_effects();
+    let warnings: Vec<&String> = effects
+        .iter()
+        .filter_map(|e| match e {
+            crate::parser::ProcParseEffect::Warning(m) => Some(m),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 3, "warnings: {warnings:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|m| m.contains("HREF=") || m.contains("VREF=") || m.contains("HAXIS="))
+    );
+}
+
 #[cfg(not(feature = "graphics"))]
 #[test]
 fn execute_with_ods_on_no_feature_defers() {

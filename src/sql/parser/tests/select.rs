@@ -469,11 +469,44 @@ fn multiple_statements_and_quit() {
 }
 
 #[test]
-fn unknown_statement_is_skipped() {
-    // RESET et TITLE sont ignorés proprement.
+fn reset_and_global_statements_keep_their_path() {
+    // RESET passe par les mêmes règles d'options que l'en-tête (NOPRINT est
+    // honoré — J02-P4) ; TITLE est une instruction globale.
     let prog = ok("reset noprint; title 'hi'; select * from a;");
     assert_eq!(prog.stmts.len(), 1);
     assert!(matches!(prog.stmts[0], SqlStmt::Select(_)));
+    assert!(prog.noprint);
+}
+
+#[test]
+fn unknown_statement_is_an_error() {
+    // J02-P4 — plus de saut silencieux d'une instruction inconnue.
+    let err = parse("invented; select * from a;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("INVENTED"), "msg: {msg}");
+    assert!(msg.contains("PROC SQL"), "msg: {msg}");
+}
+
+#[test]
+fn outobs_inobs_are_errors() {
+    // J02-P4 — OUTOBS=/INOBS= peuvent changer le résultat d'une requête et
+    // ne sont pas implémentés : ERROR, pas d'ignorance silencieuse.
+    for src in ["outobs=1; select * from a;", "inobs=1;"] {
+        let err = parse(src).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not supported"), "msg: {msg}");
+    }
+}
+
+#[test]
+fn header_noprint_is_captured_and_bare_statements_still_parse() {
+    // Le parser est aussi piloté sur des listes de statements nues : un
+    // SELECT en tête reste un statement, pas une option.
+    let prog = ok("noprint; select * from a;");
+    assert!(prog.noprint);
+    assert_eq!(prog.stmts.len(), 1);
+    let bare = ok("select * from a;");
+    assert!(!bare.noprint);
 }
 
 // ── Erreurs ──────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut var: Vec<String> = Vec::new();
     let mut normal = false;
     let mut plots: Vec<UnivariatePlot> = Vec::new();
+    let mut noprint = false;
 
     // --- PROC UNIVARIATE statement options, until `;` ---
     loop {
@@ -23,9 +24,48 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             common::consume_option_eq(ts, "DATA")?;
             data = Some(ts.parse_dataset_ref()?);
         } else if ts.peek().is_kw("noprint") {
-            // Accepted and ignored for rendering: UNIVARIATE always shows its
-            // report here. (NOPRINT only matters paired with OUTPUT in SAS.)
+            // J02-P4 — NOPRINT is now HONORED: the report sections (and the
+            // plots) are suppressed; OUTPUT OUT= datasets are still written.
             ts.next();
+            noprint = true;
+        } else if ts.peek().is_kw("vardef") {
+            // J02-P4 — only the default divisor DF is implemented; any other
+            // VARDEF= value changes every moment → ERROR, never a silent
+            // fall-back on DF.
+            common::consume_option_eq(ts, "VARDEF")?;
+            let tok = ts.peek().clone();
+            let value = tok.ident().map(|s| s.to_ascii_lowercase());
+            match value.as_deref() {
+                Some("df") => {
+                    ts.next();
+                }
+                _ => {
+                    return Err(common::unsupported_statement(
+                        "UNIVARIATE",
+                        &format!("VARDEF={}", tok.ident().unwrap_or("?").to_uppercase()),
+                    ));
+                }
+            }
+        } else if ts.peek().is_kw("pctldef") {
+            // J02-P4 — quantiles use SAS Definition 5 (the default). The other
+            // definitions (1–4) shift every quantile → ERROR.
+            common::consume_option_eq(ts, "PCTLDEF")?;
+            let tok = ts.peek().clone();
+            match tok.kind {
+                TokenKind::Num(5.0) => {
+                    ts.next();
+                }
+                _ => {
+                    let shown = match &tok.kind {
+                        TokenKind::Num(f) => format!("{f}"),
+                        _ => tok.ident().unwrap_or("?").to_uppercase(),
+                    };
+                    return Err(common::unsupported_statement(
+                        "UNIVARIATE",
+                        &format!("PCTLDEF={shown}"),
+                    ));
+                }
+            }
         } else if ts.peek().is_kw("normal") || ts.peek().is_kw("normaltest") {
             // PROC-level request for the Tests for Normality block.
             ts.next();
@@ -127,6 +167,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         output,
         normal,
         plots,
+        noprint,
     })
 }
 

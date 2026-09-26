@@ -4,7 +4,11 @@ use super::*;
 // SELECT → listing
 // ----------------------------------------------------------------------------
 
-pub(super) fn exec_select(sel: &ast::SelectStmt, session: &mut Session) -> Result<()> {
+pub(super) fn exec_select(
+    sel: &ast::SelectStmt,
+    noprint: bool,
+    session: &mut Session,
+) -> Result<()> {
     let lf = plan::lower_select(sel, session)?;
     let df = lf.collect()?;
     let (ds, notes) = SasDataset::from_dataframe(df)?;
@@ -12,7 +16,11 @@ pub(super) fn exec_select(sel: &ast::SelectStmt, session: &mut Session) -> Resul
         session.log.forward(&note);
     }
 
-    render_listing(&ds, session);
+    // NOPRINT (J02-P4) : pas de rendu listing — le dataset reste disponible
+    // pour la capture ODS OUTPUT ci-dessous.
+    if !noprint {
+        render_listing(&ds, session);
+    }
 
     // M42.3 — cette table de listing porte le nom d'objet ODS « SQL_Results »
     // (nom SAS réel : `ods output sql_results=ds;`) : si sa capture est

@@ -100,6 +100,10 @@ pub struct UnivariateAst {
     /// when enabled each plot is wired to the ODS GRAPHICS image infrastructure
     /// (M29.3) — an image under `--features graphics`, a deferral NOTE otherwise.
     pub plots: Vec<UnivariatePlot>,
+    /// NOPRINT (J02-P4): suppress every report section, BY heading, fitted
+    /// table and plot — OUTPUT OUT= datasets and log NOTEs are still produced.
+    /// Default false → report identical to the pre-J02-P4 output.
+    pub noprint: bool,
 }
 
 /// A graphical statement requested in PROC UNIVARIATE (M29.3).
@@ -275,12 +279,13 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
     // supprimés aussi (SAS ne produit pas de page vide). `MissingValues` entre
     // dans ce test même sans missing dans les données (léger sur-affichage de
     // l'en-tête dans ce cas limite, documenté).
-    let proc_shows = session.ods_displays("Moments")
-        || session.ods_displays("BasicMeasures")
-        || session.ods_displays("Quantiles")
-        || session.ods_displays("ExtremeObs")
-        || session.ods_displays("MissingValues")
-        || (ast.normal && session.ods_displays("TestsForNormality"));
+    let proc_shows = !ast.noprint
+        && (session.ods_displays("Moments")
+            || session.ods_displays("BasicMeasures")
+            || session.ods_displays("Quantiles")
+            || session.ods_displays("ExtremeObs")
+            || session.ods_displays("MissingValues")
+            || (ast.normal && session.ods_displays("TestsForNormality")));
     if proc_shows {
         session.listing.page_header();
         centered(session, "The UNIVARIATE Procedure");
@@ -291,6 +296,11 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             emit_by_heading(session, &by_names, by_key);
         }
         for (vi, &ci) in var_cols.iter().enumerate() {
+            // NOPRINT (J02-P4): nothing reaches the listing, but the decoding
+            // above (and the OUTPUT below) still run.
+            if !proc_shows {
+                break;
+            }
             match &weight_values {
                 Some(wv) => {
                     // Weighted path: usable (value, weight) pairs + excluded count.
@@ -347,16 +357,18 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
         // instruction graphique portant `/ NORMAL`, dans l'ordre des
         // instructions et par groupe BY (comme SAS). C'est du listing : elle
         // sort que ODS GRAPHICS soit ON ou OFF.
-        for plot in ast.plots.iter().filter(|p| p.normal) {
-            let Some(vi) = plot_var_index(plot, &var_cols, &ds) else {
-                continue;
-            };
-            let Some((mu, sigma)) =
-                fitted_normal_params(&var_values[vi], weight_values.as_deref(), grp_rows)
-            else {
-                continue;
-            };
-            emit_fitted_normal(session, &ds.vars[var_cols[vi]].name, mu, sigma);
+        if proc_shows {
+            for plot in ast.plots.iter().filter(|p| p.normal) {
+                let Some(vi) = plot_var_index(plot, &var_cols, &ds) else {
+                    continue;
+                };
+                let Some((mu, sigma)) =
+                    fitted_normal_params(&var_values[vi], weight_values.as_deref(), grp_rows)
+                else {
+                    continue;
+                };
+                emit_fitted_normal(session, &ds.vars[var_cols[vi]].name, mu, sigma);
+            }
         }
     }
 
@@ -366,7 +378,7 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
     ));
 
     // --- Graphical statements (M29.3) ---
-    if !ast.plots.is_empty() {
+    if !ast.plots.is_empty() && !ast.noprint {
         if !session.ods_graphics.enabled {
             // ODS GRAPHICS off: rendering stays deferred (byte-identical to the
             // pre-M29.3 behaviour — a single NOTE for the whole PROC step).

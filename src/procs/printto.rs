@@ -13,9 +13,12 @@
 //! v1 = implémentation minimale documentée :
 //! - Les chemins de redirection sont stockés dans la `Session` (champs
 //!   `printto_log` et `printto_print`, ajoutés à `Session` pour M21.1).
-//! - `proc printto;` nu (aucune option) réinitialise les deux destinations.
-//! - NOTE émise dans le log actuel (non redirigé) : "PROCEDURE PRINTTO used".
-//! - Le **routage réel** (écriture physique vers le fichier) est différé à M22
+//! - `proc printto;` nu (aucune option) réinitialise les deux destinations
+//!   (NOTE « reset » dans le log actuel).
+//! - `LOG=`/`PRINT=` : le routage réel n'existe pas encore — un WARNING
+//!   « routing not supported until J07-P5 » le dit honnêtement (J02-P4 ;
+//!   exit code 1), la destination par défaut reste inchangée.
+//! - Le **routage réel** (écriture physique vers le fichier) est différé à J07-P5
 //!   (couche ODS). La raison : le routage demande un trait `OutputDestination`
 //!   qui n'existe pas encore ; insérer ici un File I/O ad hoc casserait les
 //!   tests de snapshot existants (byte-identiques). Ce comportement est
@@ -136,8 +139,11 @@ pub fn execute(ast: &PrinttoAst, session: &mut Session) -> Result<()> {
     } else {
         if let Some(ref path) = ast.log {
             let resolved = session.resolve_path(path);
-            session.log.note(&format!(
-                "PROCEDURE PRINTTO: log redirected to '{}'{}.",
+            // J02-P4 — the physical routing is deferred to J07-P5: say so
+            // honestly (WARNING, exit code 1) instead of the former NOTE that
+            // claimed a redirection which never happened.
+            session.log.warning(&format!(
+                "PROCEDURE PRINTTO: LOG= routing not supported until J07-P5; the log destination is unchanged ('{}'){}.",
                 resolved.display(),
                 if ast.new { " (NEW)" } else { "" }
             ));
@@ -145,8 +151,9 @@ pub fn execute(ast: &PrinttoAst, session: &mut Session) -> Result<()> {
         }
         if let Some(ref path) = ast.print {
             let resolved = session.resolve_path(path);
-            session.log.note(&format!(
-                "PROCEDURE PRINTTO: print redirected to '{}'{}.",
+            // Same honest diagnostic for the PRINT (listing) destination.
+            session.log.warning(&format!(
+                "PROCEDURE PRINTTO: PRINT= routing not supported until J07-P5; the print destination is unchanged ('{}'){}.",
                 resolved.display(),
                 if ast.new { " (NEW)" } else { "" }
             ));
