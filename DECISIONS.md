@@ -54,3 +54,23 @@ Choice: switch_claude
 Règle du 19/09 (politique permanente) : quota Codex épuisé = relance immédiate sous dsh sans attendre le reset. Quels exécuteurs pour la suite du plan consolidation ?
 Choice: switch_dsh
 
+## aee41512-79ba-4b73-b85b-123b3e4a9a1e · resolved
+CI main rouge depuis le merge J02-P4 : ods_image_write_failure_is_error (tests/cli.rs:439) échoue sous --features graphics — NOPRINT supprime le rendu des images ODS Graphics d'UNIVARIATE. Comment corriger ?
+Choice: corrective_unit_j02_p11
+
+## 108c6385-39f1-4fce-928c-0f0fc73e1b51 · resolved
+J03-P6 bloqué : UPDATEMODE=NOMISSINGCHECK exige de toucher src/parser et src/ast (parse_dataset_ref, DatasetOptions, DsStmt::Update), hors préfixes autorisés. Comment débloquer ?
+Choice: extend_parser_scope
+
+## f6aa1e45-f2a8-4dbf-98d1-17fd70a64c3b · resolved
+J03-P6 bloqué : UPDATEMODE=NOMISSINGCHECK exige de toucher src/parser et src/ast (parse_dataset_ref, DatasetOptions, DsStmt::Update), hors préfixes autorisés. Comment débloquer ?
+Choice: extend_parser_scope
+
+## 0a017d22-92a4-471f-8826-7f83124d6151 · resolved
+J03-P2 bloqué : weighted_quantile_def5 doit vivre dans src/procs/common/stats.rs et être utilisé par MEANS/SUMMARY, mais src/procs/common/mod.rs (hors périmètre) déclare « mod stats; » en privé — l'export « pub use stats::weighted_quantile_def5; » est indispensable (E0603 reproduit puis reverté). Comment débloquer ?
+Choice: extend_common_mod
+
+## a8788660-2f2d-41db-a685-ef93804bd758 · resolved
+J03-P2 bloqué : weighted_quantile_def5 doit vivre dans src/procs/common/stats.rs et être utilisé par MEANS/SUMMARY, mais src/procs/common/mod.rs (hors périmètre) déclare « mod stats; » en privé — l'export « pub use stats::weighted_quantile_def5; » est indispensable (E0603 reproduit puis reverté). Comment débloquer ?
+Choice: extend_common_mod
+
