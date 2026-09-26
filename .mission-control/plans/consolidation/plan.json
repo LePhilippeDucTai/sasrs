@@ -2,7 +2,7 @@
   "protocol_version": 3,
   "project_id": "lephilippeductai/sasrs",
   "plan_id": "959bc69d-76bf-4a77-ab01-02dcb8113c51",
-  "revision": 3,
+  "revision": 4,
   "stub": "consolidation",
   "base_branch": "consolidation",
   "goal": "Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.",
@@ -1167,6 +1167,21 @@
       "cwd": ".",
       "timeout_seconds": 120,
       "expected_exit_code": 0
+    },
+    {
+      "id": "j02-exit-code-channel",
+      "argv": [
+        "distrobox",
+        "enter",
+        "ombre-mingw",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no; out=$(cargo test --locked -p sasrs --lib exit_code 2>&1); rc=$?; printf '%s\\n' \"$out\"; [ \"$rc\" -eq 0 ] && printf '%s\\n' \"$out\" | grep -qE 'test result: ok\\. [1-9]'"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 900,
+      "expected_exit_code": 0
     }
   ],
   "final_check_ids": [
@@ -1236,6 +1251,29 @@
       ]
     },
     {
+      "id": "J02-P10",
+      "milestone_id": "J02",
+      "title": "Correctif J02-P1 : canal de code retour explicite (prérequis J02-P2)",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "S",
+      "scope": "Décision 9881c531 (choix prerequisite) : J02-P1 n'a livré aucun canal de code retour explicite — src/lib.rs calcule RunOutcome.exit_code uniquement en 0/1/2 depuis les compteurs du log. Livrer ce prérequis manquant sans toucher au périmètre de J02-P2 : API de session explicite (par ex. Session::request_exit_code(n) / take_requested_exit_code(), consommée une fois) appelable par l'executor ; RunOutcome.exit_code honore le code demandé (SAS : %ABORT RETURN n transmet n, https://support.sas.com/kb/23/addl/fusion_1_abort.html) en cohérence avec les compteurs ERROR (un code demandé plus faible qu'un échec compté n'écrase pas l'échec). Tests unitaires exit_code* sur le raccordement session→RunOutcome (reproducer : code demandé 8 → exit_code 8 ; code demandé 0 avec ERROR comptée → 1). Ne modifie ni src/macros ni src/executor (périmètre J02-P2) ; pas de nouveau diagnostic ; aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression). Cargo uniquement via distrobox enter ombre-mingw (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
+      "depends_on": [
+        "J02-P1"
+      ],
+      "files": [
+        "src/lib.rs",
+        "src/session.rs",
+        "src/session"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "j02-exit-code-channel"
+      ]
+    },
+    {
       "id": "J02-P2",
       "milestone_id": "J02",
       "title": "Erreurs macro comptées, %ABORT, références non résolues",
@@ -1244,7 +1282,7 @@
       "size": "M",
       "scope": "Remplacer les diagnostics réduits à un commentaire (`emit_error` → `/* … */` et les sites `/* NOTE: … */` de include.rs, control.rs, control/jump.rs, define/invoke.rs) par un canal de diagnostics du `MacroEngine` vidé par l'executor dans le log : ERROR comptées pour %EVAL/%SYSEVALF invalides, %DO emballé, %SYSFUNC inconnue, %INCLUDE illisible ou trop imbriqué, récursion, %GOTO sans label, paramètres positionnels en trop, mot-clé inconnu ; vraies NOTEs pour %SYSEXEC/%WINDOW/%SYSCALL non gérés ; textes SAS cités (SAS 9.4 Macro Language Reference). `%ABORT` : `take_abort_request` consommé par l'executor, arrêt du programme ; CANCEL/ABEND/RETURN n mappés sur le code retour et documentés. WARNINGs `Apparent symbolic reference X not resolved.` et `Apparent invocation of macro X not resolved.` là où SAS les émet. `%LENGTH` d'un argument vide vérifié contre la doc. Tests unitaires `macro_diag*` ; fixtures `tests/fixtures/j02/macro_*.sas` avec snapshots relus à la main ; snapshots existants modifiés justifiés un par un. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.",
       "depends_on": [
-        "J02-P1"
+        "J02-P10"
       ],
       "files": [
         "src/macros",
@@ -1412,7 +1450,8 @@
         "J02-P4",
         "J02-P5",
         "J02-P6",
-        "J02-P9"
+        "J02-P9",
+        "J02-P10"
       ],
       "files": [
         "README.md",
@@ -1448,7 +1487,8 @@
         "J02-P5",
         "J02-P6",
         "J02-P9",
-        "J02-P7"
+        "J02-P7",
+        "J02-P10"
       ],
       "files": [],
       "check_ids": [
@@ -1473,7 +1513,8 @@
         "j02-readme-contract",
         "j02-contributing-v3",
         "clippy-s3",
-        "test-s3-lib"
+        "test-s3-lib",
+        "j02-exit-code-channel"
       ],
       "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J02 : aucune ERROR/WARNING nouvelle sans test ; exit codes CLI réellement 2 sur échec d'écriture ; efficacité du garde CI (J02-P9) démontrée par son self-test. Ne rien modifier ; tout finding bloquant devient une unité corrective."
     },
