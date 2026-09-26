@@ -21,3 +21,4 @@ fn day_num(y: i32, m: u32, d: u32) -> f64 {
 mod day;
 mod fract;
 mod informat;
+mod multibyte;

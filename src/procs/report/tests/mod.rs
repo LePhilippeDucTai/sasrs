@@ -84,5 +84,6 @@ fn def(
 }
 
 mod default;
+mod multibyte;
 mod parse;
 mod rbreak;

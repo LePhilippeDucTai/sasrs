@@ -29,7 +29,7 @@
 
 #![allow(unused_variables, dead_code)]
 
-use super::{FormatSpec, right_justify};
+use super::{FormatSpec, fit_chars, right_justify};
 use crate::value::{Value, format_best};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 
@@ -208,15 +208,7 @@ fn format_char_family(v: &Value, spec: &FormatSpec, name: &str) -> Option<String
             };
             return Some(match spec.w {
                 None => s,
-                Some(w) => {
-                    let w = w as usize;
-                    let mut out = s;
-                    out.truncate(w);
-                    while out.len() < w {
-                        out.push(' ');
-                    }
-                    out
-                }
+                Some(w) => fit_chars(&s, w as usize),
             });
         }
 
@@ -230,15 +222,7 @@ fn format_char_family(v: &Value, spec: &FormatSpec, name: &str) -> Option<String
             let quoted = format!("\"{}\"", inner);
             return Some(match spec.w {
                 None => quoted,
-                Some(w) => {
-                    let w = w as usize;
-                    let mut out = quoted;
-                    out.truncate(w);
-                    while out.len() < w {
-                        out.push(' ');
-                    }
-                    out
-                }
+                Some(w) => fit_chars(&quoted, w as usize),
             });
         }
 
@@ -252,15 +236,7 @@ fn format_char_family(v: &Value, spec: &FormatSpec, name: &str) -> Option<String
             let hex: String = s.bytes().map(|b| format!("{:02X}", b)).collect();
             return Some(match spec.w {
                 None => hex,
-                Some(w) => {
-                    let w = w as usize;
-                    let mut out = hex;
-                    out.truncate(w);
-                    while out.len() < w {
-                        out.push(' ');
-                    }
-                    out
-                }
+                Some(w) => fit_chars(&hex, w as usize),
             });
         }
 
@@ -273,15 +249,7 @@ fn format_char_family(v: &Value, spec: &FormatSpec, name: &str) -> Option<String
             };
             return Some(match spec.w {
                 None => s,
-                Some(w) => {
-                    let w = w as usize;
-                    let mut out = s;
-                    out.truncate(w);
-                    while out.len() < w {
-                        out.push(' ');
-                    }
-                    out
-                }
+                Some(w) => fit_chars(&s, w as usize),
             });
         }
 

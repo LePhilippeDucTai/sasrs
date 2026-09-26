@@ -244,7 +244,10 @@ pub(super) fn write_table_noheader(session: &mut Session, aligns: &[Align], rows
     let mut widths = vec![0usize; ncol];
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.len());
+            // J03-P4 — largeur en CARACTÈRES (contrat D-001) : `cell.len()`
+            // comptait des octets et décalait l'alignement des cellules
+            // accentuées/CJK/emoji.
+            widths[i] = widths[i].max(cell.chars().count());
         }
     }
     for row in rows {
@@ -254,15 +257,16 @@ pub(super) fn write_table_noheader(session: &mut Session, aligns: &[Align], rows
                 line.push_str("  ");
             }
             let w = widths[i];
+            let clen = cell.chars().count();
             match aligns[i] {
                 Align::Right => {
-                    let pad = w.saturating_sub(cell.len());
+                    let pad = w.saturating_sub(clen);
                     line.push_str(&" ".repeat(pad));
                     line.push_str(cell);
                 }
                 Align::Left => {
                     line.push_str(cell);
-                    let pad = w.saturating_sub(cell.len());
+                    let pad = w.saturating_sub(clen);
                     line.push_str(&" ".repeat(pad));
                 }
             }
@@ -303,10 +307,11 @@ pub(super) fn write_table_layout(
         match plan[i].width {
             Some(w) => widths[i] = w,
             None => {
-                let mut w = headers[i].len();
+                // J03-P4 — largeur auto en CARACTÈRES (contrat D-001).
+                let mut w = headers[i].chars().count();
                 for row in rows {
                     if let Some(cell) = row.get(i) {
-                        w = w.max(cell.len());
+                        w = w.max(cell.chars().count());
                     }
                 }
                 widths[i] = w;
@@ -318,12 +323,15 @@ pub(super) fn write_table_layout(
     // emitted as left indentation).
     let spacing: Vec<usize> = plan.iter().map(|c| c.spacing.unwrap_or(2)).collect();
 
+    // J03-P4 — `pad_cell` travaille en CARACTÈRES (contrat D-001) :
+    // troncature sur frontière de caractère (l'ancien `s.truncate(w)`
+    // paniquait sur un multioctet) et remplissage compté en caractères.
     let pad_cell = |cell: &str, w: usize, align: Align| -> String {
         let mut s = cell.to_string();
-        if s.len() > w {
-            s.truncate(w);
+        if s.chars().count() > w {
+            s = s.chars().take(w).collect();
         }
-        let pad = w.saturating_sub(s.len());
+        let pad = w.saturating_sub(s.chars().count());
         match align {
             Align::Right => format!("{}{}", " ".repeat(pad), s),
             Align::Left => format!("{}{}", s, " ".repeat(pad)),

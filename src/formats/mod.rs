@@ -371,21 +371,10 @@ impl FormatCatalog {
 
         // 3. Fallback.
         match v {
-            Value::Char(s) => {
-                match spec.w {
-                    None => s.clone(),
-                    Some(w) => {
-                        let w = w as usize;
-                        // Left-justify: truncate or pad with spaces.
-                        let mut out = s.clone();
-                        out.truncate(w);
-                        while out.len() < w {
-                            out.push(' ');
-                        }
-                        out
-                    }
-                }
-            }
+            Value::Char(s) => match spec.w {
+                None => s.clone(),
+                Some(w) => fit_chars(s, w as usize),
+            },
             Value::Num(n) => {
                 let w = spec.w.unwrap_or(12) as usize;
                 let s = format_best(*n, w);
@@ -429,18 +418,38 @@ impl FormatCatalog {
     }
 }
 
-/// Right-justify `s` in a field of width `w`, truncating if longer.
+/// Right-justify `s` in a field of width `w` **caractères** (contrat
+/// d'encodage D-001, docs/encoding.md), tronquant si plus long. L'ancienne
+/// version découpait sur des offsets d'octets (`s[s.len()-w..]`) : « Café »
+/// sur w=4 rendait « afé » (perte de l'octet de tête de « é ») et une
+/// largeur qui tombait au milieu d'un caractère multioctet paniquait le
+/// process sur « byte index is not a char boundary ».
 pub(crate) fn right_justify(s: &str, w: usize) -> String {
     if w == 0 {
         return String::new();
     }
-    if s.len() >= w {
+    let n = s.chars().count();
+    if n >= w {
         // Truncate from the right (keep rightmost w chars, SAS overflow rule).
         // Actually SAS fills with * on overflow; but for missing/name we truncate.
-        s[s.len().saturating_sub(w)..].to_string()
+        s.chars().skip(n - w).collect()
     } else {
-        format!("{:>width$}", s, width = w)
+        format!("{}{}", " ".repeat(w - n), s)
     }
+}
+
+/// Ajuste `s` à exactement `w` **caractères**, justifié à gauche : tronque
+/// sur une frontière de caractère (jamais d'octet) puis complète par des
+/// espaces. Remplace l'ancien idiome de troncature d'octet + remplissage
+/// par `len()` des formats caractère (`$w.`, `$CHAR`, `$F`, `$QUOTE`,
+/// `$HEX`, `$UPCASE`) et du repli du catalogue — voir docs/encoding.md.
+pub(crate) fn fit_chars(s: &str, w: usize) -> String {
+    let mut out = String::with_capacity(s.len().max(w));
+    out.extend(s.chars().take(w));
+    for _ in out.chars().count()..w {
+        out.push(' ');
+    }
+    out
 }
 
 #[cfg(test)]
