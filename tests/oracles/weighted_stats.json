@@ -1,0 +1,205 @@
+{
+  "description": "Oracle indépendant des statistiques pondérées (J03-P1). Les valeurs `expected` sont calculées à la main depuis les formules de la documentation SAS 9.4 (PROC MEANS / PROC UNIVARIATE) et vérifiées par `python3 -B tools/oracles/weighted_stats.py --check` (recalcul et comparaison, exit != 0 en cas d'écart).",
+  "tolerance": 1e-9,
+  "references": [
+    "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm",
+    "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p0vawoeemeemvn13cxap99m1z3th.htm",
+    "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm",
+    "https://support.sas.com/documentation/cdl/en/proc/61895/HTML/default/a002473616.htm"
+  ],
+  "cases": [
+    {
+      "id": "poids-tres-desequilibres",
+      "description": "Poids très déséquilibrés (1000 contre 1) : la moyenne pondérée est tirée vers x=1, SUMWGT=1003, VARDEF=DF divise par W-1=1002.",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [1, 2, 3, 4], "w": [1000, 1, 1, 1] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm",
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm"
+      ],
+      "expected": {
+        "n": 4, "nmiss": 0, "sumwgt": 1003,
+        "mean": 1.0059820538384846,
+        "var": 0.013936235207062657,
+        "std": 0.11805183271220752,
+        "median": 1, "q1": 1, "q3": 1, "qrange": 0, "p1": 1, "p99": 1
+      }
+    },
+    {
+      "id": "poids-fractionnaires",
+      "description": "Poids fractionnaires (0.5, 1.25, 2.25) : W=4 exactement, MEAN=97.5/4=24.375, VARDEF=DF divise par W-1=3.",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [10, 20, 30], "w": [0.5, 1.25, 2.25] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "expected": {
+        "n": 3, "nmiss": 0, "sumwgt": 4.0,
+        "mean": 24.375,
+        "var": 66.14583333333333,
+        "std": 8.133008873312394,
+        "median": 30, "q1": 20, "q3": 30, "qrange": 10, "p1": 10, "p99": 30
+      }
+    },
+    {
+      "id": "poids-nul-means",
+      "description": "Poids nul en mode PROC MEANS : l'observation (x=5, w=0) est exclue de l'analyse (N=2, sumwgt=2, l'observation n'entre pas dans les quantiles).",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [1, 5, 9], "w": [1, 0, 1] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm"
+      ],
+      "expected": {
+        "n": 2, "nmiss": 0, "sumwgt": 2,
+        "mean": 5.0,
+        "var": 32.0,
+        "std": 5.656854249492381,
+        "median": 5, "q1": 1, "q3": 9, "qrange": 8, "p1": 1, "p99": 9
+      }
+    },
+    {
+      "id": "poids-nul-univariate-defaut",
+      "description": "Mêmes données en PROC UNIVARIATE sans EXCLNPWGT : l'observation à poids nul reste comptée dans N=3 mais pèse 0 dans SUMWGT, MEAN, VAR et n'entre pas dans les quantiles pondérés.",
+      "mode": "univariate",
+      "vardef": "df",
+      "data": { "x": [1, 5, 9], "w": [1, 0, 1] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p0vawoeemeemvn13cxap99m1z3th.htm"
+      ],
+      "expected": {
+        "n": 3, "nmiss": 0, "sumwgt": 2.0,
+        "mean": 5.0,
+        "var": 32.0,
+        "std": 5.656854249492381,
+        "median": 5, "q1": 1, "q3": 9, "qrange": 8, "p1": 1, "p99": 9
+      }
+    },
+    {
+      "id": "poids-negatif-exclnpwgt",
+      "description": "Poids négatif (-1) et nul (0) avec EXCLNPWGT : les deux observations sont exclues (N=2 sur x=[2,6], W=5, MEAN=(3*2+2*6)/5=3.6).",
+      "mode": "univariate-exclnpwgt",
+      "vardef": "df",
+      "data": { "x": [2, 4, 6, 8], "w": [3, -1, 2, 0] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p0vawoeemeemvn13cxap99m1z3th.htm"
+      ],
+      "expected": {
+        "n": 2, "nmiss": 0, "sumwgt": 5,
+        "mean": 3.6,
+        "var": 4.8,
+        "std": 2.1908902300206643,
+        "median": 2, "q1": 2, "q3": 6, "qrange": 4, "p1": 2, "p99": 6
+      }
+    },
+    {
+      "id": "poids-manquant-et-x-manquant",
+      "description": "Poids manquant (w=. exclut l'observation) et x manquant (compté dans NMISS=1, exclu de N) : restent x=[1,3] avec w=[2,1], W=3, MEAN=5/3, VARDEF=DF divise par W-1=2.",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [1, null, 7, 3], "w": [2, 3, null, 1] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm",
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "expected": {
+        "n": 2, "nmiss": 1, "sumwgt": 3,
+        "mean": 1.6666666666666667,
+        "var": 1.3333333333333333,
+        "std": 1.1547005383792515,
+        "median": 1, "q1": 1, "q3": 3, "qrange": 2, "p1": 1, "p99": 3
+      }
+    },
+    {
+      "id": "poids-egaux-def5",
+      "description": "Tous les poids égaux (=2) : les statistiques pondérées redonnent la définition 5 non pondérée (médiane=4.5 par moyenne des 4e et 5e valeurs, Q1=2.5, Q3=6.5), VARDEF=DF divise par n-1.",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [1, 2, 3, 4, 5, 6, 7, 8], "w": [2, 2, 2, 2, 2, 2, 2, 2] },
+      "provenance": [
+        "https://support.sas.com/documentation/cdl/en/proc/61895/HTML/default/a002473616.htm",
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "expected": {
+        "n": 8, "nmiss": 0, "sumwgt": 16,
+        "mean": 4.5,
+        "var": 5.6,
+        "std": 2.3664319132398464,
+        "median": 4.5, "q1": 2.5, "q3": 6.5, "qrange": 4.0, "p1": 1, "p99": 8
+      }
+    },
+    {
+      "id": "poids-egaux-vardef-weight",
+      "description": "Mêmes données avec VARDEF=WEIGHT : dénominateur = W - sum(w_i^2)/W = 16 - 32/16 = 14, VAR = 84/14 = 6.",
+      "mode": "means",
+      "vardef": "weight",
+      "data": { "x": [1, 2, 3, 4, 5, 6, 7, 8], "w": [2, 2, 2, 2, 2, 2, 2, 2] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm",
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "expected": {
+        "n": 8, "nmiss": 0, "sumwgt": 16,
+        "mean": 4.5,
+        "var": 6.0,
+        "std": 2.449489742783178,
+        "median": 4.5, "q1": 2.5, "q3": 6.5, "qrange": 4.0, "p1": 1, "p99": 8
+      }
+    },
+    {
+      "id": "observation-unique",
+      "description": "Une seule observation : N=1, MEAN=42, quantiles=42, mais VAR/STD sont manquantes (SAS ne calcule VAR que pour n>=2).",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [42], "w": [7] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "uncertain": "La règle VAR/STD manquantes pour n=1 est la table « statistics computed » de la doc PROC MEANS (n>=2 requis) ; le comportement exact avec poids (dénominateur W-1=0) n'a pas pu être revalidé contre la doc en ligne (HTTP 202) — à confirmer contre une sortie SAS réelle.",
+      "expected": {
+        "n": 1, "nmiss": 0, "sumwgt": 7,
+        "mean": 42.0,
+        "var": null,
+        "std": null,
+        "median": 42, "q1": 42, "q3": 42, "qrange": 0, "p1": 42, "p99": 42
+      }
+    },
+    {
+      "id": "borne-cumulee-exacte",
+      "description": "Somme cumulée des poids tombant exactement sur une borne : w=[1,1,2], W=4. Médiane : cum=2=0.5*W → moyenne de 2 et 3 = 2.5 ; Q1 : cum=1=0.25*W → (1+2)/2=1.5 ; Q3 : cum atteint 3 entre les observations → 3 (pas de moyenne).",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [1, 2, 3], "w": [1, 1, 2] },
+      "provenance": [
+        "https://support.sas.com/documentation/cdl/en/proc/61895/HTML/default/a002473616.htm"
+      ],
+      "expected": {
+        "n": 3, "nmiss": 0, "sumwgt": 4,
+        "mean": 2.25,
+        "var": 0.9166666666666666,
+        "std": 0.9574271077563381,
+        "median": 2.5, "q1": 1.5, "q3": 3, "qrange": 1.5, "p1": 1, "p99": 3
+      }
+    },
+    {
+      "id": "x-manquant-seul",
+      "description": "x manquant avec poids valides : NMISS=1, N=1 sur l'observation restante, VAR/STD manquantes (n=1), quantiles = 5.",
+      "mode": "means",
+      "vardef": "df",
+      "data": { "x": [5, null], "w": [2, 1] },
+      "provenance": [
+        "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.2/proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm"
+      ],
+      "uncertain": "Même réserve que observation-unique : VAR/STD manquantes pour n=1 (table « statistics computed » de PROC MEANS).",
+      "expected": {
+        "n": 1, "nmiss": 1, "sumwgt": 2,
+        "mean": 5.0,
+        "var": null,
+        "std": null,
+        "median": 5, "q1": 5, "q3": 5, "qrange": 0, "p1": 5, "p99": 5
+      }
+    }
+  ]
+}
