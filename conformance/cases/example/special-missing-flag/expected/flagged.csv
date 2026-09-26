@@ -1,0 +1,6 @@
+NAME,SCORE,BONUS,ADJUSTED,FLAG
+Ann,10,0.5,1,high
+Bob,.A,.,.,spec-A
+Cy,.,1,2,missing
+Dee,._,2.5,5,low
+Eve,4,3,6,low
