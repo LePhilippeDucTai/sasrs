@@ -1,0 +1,35 @@
+{
+  "id": "data-array-impute",
+  "title": "Étape DATA : ARRAY + DO itératif pour imputer les missings, puis somme des éléments",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lestmtsref/n1iojz9ldjjyyjn17irrpcnxff3u.htm — SAS 9.4 Data Step Statements — ARRAY Statement  (exemple de traitement itératif des éléments d'un tableau avec un DO)",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "required": [
+      "NOTE: The data set WORK.SCORED has 2 observations"
+    ],
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "raw.csv": {
+      "m1": "num",
+      "m2": "num",
+      "m3": "num"
+    }
+  }
+}

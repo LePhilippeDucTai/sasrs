@@ -1,0 +1,31 @@
+{
+  "id": "sort-nodupkey",
+  "title": "PROC SORT NODUPKEY : tri par clé et suppression des doublons de clé dans OUT=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0e2j8ieote8jkn1syu81xyx9ffl.htm — SAS 9.4 Procedures — PROC SORT  (option NODUPKEY : élimine les observations dupliquées sur la valeur de la clé BY)",
+    "sas_version": "9.4M5",
+    "options": [
+      "--deterministic"
+    ]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {
+    "abs": 1e-09,
+    "rel": 1e-09,
+    "columns": {}
+  },
+  "log": {
+    "forbidden": [
+      "ERROR:"
+    ]
+  },
+  "exit_code": 0,
+  "status": "validated",
+  "data_types": {
+    "dups.csv": {
+      "key": "char",
+      "val": "num"
+    }
+  }
+}
