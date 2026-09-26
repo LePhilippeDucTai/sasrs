@@ -234,6 +234,227 @@ fn atomic_write_delete_removes_sidecar_too() {
     assert!(dir_entries(dir.path()).is_empty());
 }
 
+// ── J04-P3 : sidecar corrompu ou invalide — diagnostic explicite ────────
+//
+// Chaque cause d'invalidité a son test (un par cause) : sidecar illisible,
+// UTF-8 invalide, JSON malformé, type de champ faux, longueur incompatible
+// avec le type, longueur inférieure à la plus longue valeur, empreinte
+// périmée — plus la NOTE pour une entrée de variable absente du parquet.
+// Invariant commun : les DONNÉES sont lues, les métadonnées fautives sont
+// ignorées, et un WARNING compte (ligne « WARNING: … » relayée par
+// `log.forward`) nommant le fichier sidecar ET la cause.
+
+/// Dataset `x` (num) + `c` (char, valeurs de 4 caractères) avec format,
+/// libellé et longueur déclarée 8 : produit un sidecar VALIDE, qu'on
+/// corrompra ensuite de manière ciblée.
+fn sidecar_ds(rows: usize) -> SasDataset {
+    let x: Vec<f64> = (0..rows).map(|i| i as f64).collect();
+    let c: Vec<String> = (0..rows).map(|i| format!("v{i:03}")).collect();
+    let df = df!("x" => x, "c" => c).unwrap();
+    let mut ds = SasDataset::from_dataframe(df).unwrap().0;
+    for v in &mut ds.vars {
+        if v.ty == VarType::Char {
+            v.format = Some("F1.".to_string());
+            v.label = Some("lab".to_string());
+            v.length = 8;
+        }
+    }
+    ds
+}
+
+/// Écrit la fixture puis REMPLACE le sidecar valide par `content` brut.
+fn raw_sidecar(path: &Path, content: &[u8]) {
+    std::fs::write(sidecar_path(path), content).unwrap();
+}
+
+/// Écrit la fixture puis mute le JSON du sidecar valide (empreinte intacte).
+fn mutate_sidecar(path: &Path, f: impl FnOnce(&mut serde_json::Value)) {
+    let sc = sidecar_path(path);
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sc).unwrap()).unwrap();
+    f(&mut v);
+    std::fs::write(&sc, serde_json::to_string(&v).unwrap()).unwrap();
+}
+
+/// Exactement UN WARNING compté, nommant le fichier sidecar et `cause`.
+fn assert_one_warning(notes: &[String], path: &Path, cause: &str) {
+    let sc = sidecar_path(path).display().to_string();
+    let hits: Vec<&String> = notes
+        .iter()
+        .filter(|n| n.starts_with("WARNING: ") && n.contains(&sc) && n.contains(cause))
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one WARNING naming {sc} and {cause} in {notes:?}"
+    );
+}
+
+fn var<'a>(ds: &'a SasDataset, name: &str) -> &'a VarMeta {
+    ds.vars.iter().find(|v| v.name == name).unwrap()
+}
+
+/// Sidecar illisible (erreur de lecture ≠ absent) : WARNING nommant la cause,
+/// métadonnées ignorées, données lues.
+#[test]
+fn sidecar_invalid_unreadable_warns_and_reads_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    // Un répertoire à la place du sidecar : la lecture échoue (EISDIR),
+    // ce qui n'est PAS « fichier absent ».
+    let sc = sidecar_path(&path);
+    std::fs::remove_file(&sc).unwrap();
+    std::fs::create_dir(&sc).unwrap();
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3, "data must be readable");
+    assert_eq!(var(&back, "c").format, None, "metadata must be ignored");
+    assert_one_warning(&notes, &path, "Unreadable metadata sidecar");
+}
+
+/// Sidecar en UTF-8 invalide : WARNING (cause explicite), données lues.
+#[test]
+fn sidecar_invalid_utf8_warns_and_reads_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    raw_sidecar(&path, b"\xff\xfe\x00{\"fingerprint\":");
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(var(&back, "c").format, None);
+    assert_one_warning(&notes, &path, "not valid UTF-8");
+}
+
+/// JSON syntaxiquement invalide : WARNING (cause « malformed JSON »).
+#[test]
+fn sidecar_invalid_json_warns_and_reads_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    raw_sidecar(&path, b"{\"fingerprint\": ");
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(var(&back, "c").format, None);
+    assert_one_warning(&notes, &path, "malformed JSON");
+}
+
+/// JSON bien formé mais type de champ faux (format numérique au lieu de
+/// chaîne) : WARNING, TOUT le sidecar est ignoré.
+#[test]
+fn sidecar_invalid_field_type_warns_and_reads_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        v["vars"]["C"]["format"] = serde_json::json!(5);
+    });
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(
+        var(&back, "c").format,
+        None,
+        "faulty metadata must be ignored"
+    );
+    assert_eq!(
+        var(&back, "c").label,
+        None,
+        "whole invalid sidecar is ignored"
+    );
+    assert_one_warning(&notes, &path, "Invalid metadata sidecar");
+}
+
+/// Longueur déclarée pour une variable NUMÉRIQUE : incompatible avec le type
+/// (le modèle SAS fixe 8) → WARNING ciblé, longueur ignorée, le reste
+/// (format/libellé) s'applique.
+#[test]
+fn sidecar_invalid_length_for_numeric_warns_and_ignores_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        v["vars"]["X"]["length"] = serde_json::json!(3);
+    });
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(var(&back, "x").length, 8, "numeric length stays 8");
+    assert_eq!(
+        var(&back, "c").format.as_deref(),
+        Some("F1."),
+        "valid metadata for other vars still applies"
+    );
+    assert_one_warning(&notes, &path, "numeric");
+}
+
+/// Longueur déclarée INFÉRIEURE à la plus longue valeur (4 caractères) :
+/// WARNING ciblé, la longueur INFÉRÉE du parquet est conservée.
+#[test]
+fn sidecar_invalid_length_shorter_than_longest_value_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        v["vars"]["C"]["length"] = serde_json::json!(2);
+    });
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(var(&back, "c").length, 4, "inferred length must be kept");
+    assert_eq!(var(&back, "c").format.as_deref(), Some("F1."));
+    assert_one_warning(&notes, &path, "shorter than the longest value");
+}
+
+/// Empreinte périmée (cause historique de J04-P1) : WARNING, sidecar ignoré.
+#[test]
+fn sidecar_invalid_stale_fingerprint_warns_and_reads_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        v["fingerprint"]["rows"] = serde_json::json!(99);
+    });
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(var(&back, "c").format, None);
+    assert_one_warning(&notes, &path, "Stale metadata sidecar");
+}
+
+/// Entrée pour une variable absente du parquet : NOTE (pas un WARNING —
+/// informatif), entrée ignorée, aucune métadonnée valide perdue.
+#[test]
+fn sidecar_entry_for_missing_variable_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        v["vars"]["GHOST"] = serde_json::json!({ "format": "F9." });
+    });
+
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert_eq!(back.n_obs(), 3);
+    assert_eq!(
+        var(&back, "c").format.as_deref(),
+        Some("F1."),
+        "valid metadata still applies"
+    );
+    let sc = sidecar_path(&path).display().to_string();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("NOTE: ") && n.contains(&sc) && n.contains("GHOST")),
+        "missing a NOTE for the ghost entry: {notes:?}"
+    );
+    assert!(
+        notes.iter().all(|n| !n.starts_with("WARNING: ")),
+        "no WARNING expected here: {notes:?}"
+    );
+}
+
 /// Tests d'interruption : le binaire de test est relancé en PROCESSUS ENFANT
 /// avec `SASRS_FAULT_INJECT` posé ; le point de panne tue l'enfant
 /// (exit 86), exactement comme un kill pendant l'écriture. L'état sur disque
