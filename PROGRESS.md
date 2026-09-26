@@ -25,9 +25,9 @@ Generated from Mission Control; do not edit.
 | J03-P9 | DONE | 1 |
 | J04-P1 | DONE | 1 |
 | J04-P2 | DONE | 1 |
-| J04-P3 | READY | 0 |
-| J04-P4 | READY | 0 |
-| J04-P5 | PLANNED | 0 |
+| J04-P3 | DONE | 2 |
+| J04-P4 | DONE | 1 |
+| J04-P5 | READY | 0 |
 | J04-P6 | PLANNED | 0 |
 | J05-P1 | PLANNED | 0 |
 | J05-P2 | PLANNED | 0 |

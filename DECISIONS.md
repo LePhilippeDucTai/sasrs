@@ -74,3 +74,7 @@ Choice: extend_common_mod
 J03-P2 bloqué : weighted_quantile_def5 doit vivre dans src/procs/common/stats.rs et être utilisé par MEANS/SUMMARY, mais src/procs/common/mod.rs (hors périmètre) déclare « mod stats; » en privé — l'export « pub use stats::weighted_quantile_def5; » est indispensable (E0603 reproduit puis reverté). Comment débloquer ?
 Choice: extend_common_mod
 
+## 3410b5bf-013d-42b3-9e54-f7912f513984 · resolved
+How to resolve the collision between the mandated unreadable-sidecar WARNING and the out-of-scope assertion notes_a.is_empty() in src/procs/datasets/tests.rs?
+Choice: edit_rollback_test
+
