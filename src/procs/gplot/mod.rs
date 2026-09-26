@@ -13,8 +13,9 @@
 //!   (`gplot_{N}.png`) et la NOTE « Output '...' (WxH) written. » est émise.
 //!
 //! v1 ne rend que le PREMIER statement PLOT (NOTE pour les suivants). Les
-//! statements globaux SYMBOL et AXIS, lorsqu'ils apparaissent DANS le bloc
-//! PROC, sont parsés sans erreur puis ignorés (NOTE de différé).
+//! statements SYMBOLn et AXISn présents dans le bloc PROC sont honorés sous
+//! `--features graphics` (INTERPOL=JOIN, VALUE=, COLOR=, ORDER=, LABEL=) ;
+//! leurs sous-options non implémentées restent l'objet d'une NOTE de différé.
 //!
 //! # Invariant build par défaut
 //!

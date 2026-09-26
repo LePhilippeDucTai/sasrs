@@ -7,8 +7,8 @@
 //!
 //! ## Périmètre
 //! - Options du statement PROC : `data=`, `cov` (matrice de covariance au lieu
-//!   de corrélation), `n=` (nombre de composantes à afficher), `out=`
-//!   (parse-accepté ; les scores ne sont pas calculés en v1).
+//!   de corrélation), `n=` (nombre de composantes à afficher), `out=` (dataset
+//!   des scores : colonnes d'entrée + `Prin1..Prink`, variance = valeur propre).
 //! - `var` : variables numériques analysées (obligatoire, >= 2).
 //! - Différé : `partial`, `weight`, `outstat=`, entrée TYPE=CORR, ODS plots.
 //!

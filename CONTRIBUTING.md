@@ -5,10 +5,14 @@ Les règles ci-dessous transcrivent les « Exigences spécifiques pour des déve
 100 % agents IA » de l'[issue #11](https://github.com/LePhilippeDucTai/sasrs/issues/11) ;
 elles s'appliquent à toute contribution, agent ou humain.
 
-La feuille de route active est le plan de consolidation dans `docs/plans/consolidation/`
-(jalons J01–J08, contrats par part dans `docs/plans/consolidation/jalons/`). L'ancienne
-roadmap M1–M66 de `PLAN.md`/`PROGRESS.md` racine est gelée ; son remapping est décrit
-dans `PLAN.md` § « Correspondance M46–M66 → consolidation ».
+La feuille de route active est le manifeste `.mission-control/plans/consolidation/plan.json`
+(source de vérité : révision, découpage en unités, checks exécutables) ; les vues
+lisibles sont générées dans `docs/plans/consolidation/` et l'état d'avancement
+(unités DONE/NEEDS_DECISION, décisions, candidats de vérification) vit dans
+Mission Control — ne pas l'éditer à la main depuis ces vues. L'ancienne roadmap
+M1–M66 de `PLAN.md`/`PROGRESS.md` racine et les contrats `jalons/` du plan V2 sont
+gelés ; le remapping de l'ancienne roadmap est décrit dans `PLAN.md` §
+« Correspondance M46–M66 → consolidation ».
 
 ## 1. La CI arbitre, jamais la parole d'un agent
 
