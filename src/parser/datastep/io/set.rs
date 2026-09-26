@@ -83,11 +83,16 @@ pub(crate) fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
     Ok(DsStmt::Merge(specs))
 }
 
-/// `update master[(where=(...))] transaction key=k1 k2;` (M16.5) — fusion
+/// `update master[(where=(...))] transaction <(updatemode=...)> key=k1 k2
+/// <updatemode=missingcheck|nomissingcheck>;` (M16.5, J03-P6) — fusion
 /// maître/transaction. Le maître et la transaction sont deux références de
-/// dataset ; seul le maître accepte des options de dataset (en pratique
-/// `(where=(...))`, dont on extrait l'expression). `key=` est OBLIGATOIRE et
-/// porte une liste (≥1) de noms de variables clé séparés par des espaces.
+/// dataset ; seul le maître accepte `where=` (keep/drop/rename/in= sur le
+/// maître, toute autre option que `updatemode=` sur la transaction → erreur).
+/// `UPDATEMODE=` est accepté aux DEUX formes documentées par SAS : option
+/// parenthésée sur la transaction, ou option nue en fin de statement (forme
+/// des exemples « Update Data » du chapitre 21 du SAS Language Reference by
+/// Example : https://go.documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/lepg/content/lepg.pdf).
+/// `key=` est OBLIGATOIRE et porte une liste (≥1) de noms de variables clé.
 pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     let upd_tok = ts.peek().clone();
     ts.next(); // `update`
@@ -101,7 +106,12 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     // que `where=` (keep/drop/rename/in= sur UPDATE non supportés → erreur).
     let master_spec = ts.parse_dataset_spec()?;
     let opts = &master_spec.options;
-    if opts.keep.is_some() || opts.drop.is_some() || !opts.rename.is_empty() || opts.in_.is_some() {
+    if opts.keep.is_some()
+        || opts.drop.is_some()
+        || !opts.rename.is_empty()
+        || opts.in_.is_some()
+        || opts.updatemode.is_some()
+    {
         return Err(SasError::parse(
             "Only the WHERE= data set option is supported on the UPDATE master data set.",
             upd_tok.span,
@@ -109,10 +119,75 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     let master_where = master_spec.options.where_.clone();
     let master = master_spec.dref;
-    // La transaction : une simple référence (pas d'options).
-    let transaction = ts.parse_dataset_ref()?;
-    // `key=` obligatoire.
-    let key_vars = parse_key_option(ts)?;
+    // La transaction : une référence ; seule `updatemode=` est acceptée
+    // (parenthésée après le nom).
+    let trans_spec = ts.parse_dataset_spec()?;
+    let topts = &trans_spec.options;
+    if topts.keep.is_some()
+        || topts.drop.is_some()
+        || !topts.rename.is_empty()
+        || topts.in_.is_some()
+        || topts.where_.is_some()
+    {
+        return Err(SasError::parse(
+            "Only the UPDATEMODE= data set option is supported on the UPDATE transaction data set.",
+            upd_tok.span,
+        ));
+    }
+    let transaction = trans_spec.dref;
+    let mut nomissingcheck = matches!(topts.updatemode.as_deref(), Some("nomissingcheck"));
+    // `key=` obligatoire ; `updatemode=` nue (fin de statement) optionnelle,
+    // au plus une fois. Les options apparaissent dans n'importe quel ordre.
+    let mut key_vars: Vec<String> = Vec::new();
+    while let Some(kw) = ts.peek().ident() {
+        if ts.peek2().kind != TokenKind::Eq {
+            break;
+        }
+        let kw = kw.to_ascii_lowercase();
+        let kw_tok = ts.peek().clone();
+        match kw.as_str() {
+            "key" => {
+                if !key_vars.is_empty() {
+                    return Err(SasError::parse(
+                        "UPDATE option KEY= specified more than once",
+                        kw_tok.span,
+                    ));
+                }
+                key_vars = parse_key_option(ts)?;
+            }
+            "updatemode" => {
+                if topts.updatemode.is_some() {
+                    return Err(SasError::parse(
+                        "UPDATE option UPDATEMODE= specified more than once",
+                        kw_tok.span,
+                    ));
+                }
+                ts.next(); // `updatemode`
+                ts.next(); // `=`
+                let val_tok = ts.peek().clone();
+                let Some(val) = val_tok.ident().map(str::to_ascii_lowercase) else {
+                    return Err(SasError::parse(
+                        "expected MISSINGCHECK or NOMISSINGCHECK after UPDATEMODE=",
+                        val_tok.span,
+                    ));
+                };
+                if !matches!(val.as_str(), "missingcheck" | "nomissingcheck") {
+                    return Err(SasError::parse(
+                        "The UPDATEMODE= option expects MISSINGCHECK or NOMISSINGCHECK.",
+                        val_tok.span,
+                    ));
+                }
+                ts.next();
+                nomissingcheck = val == "nomissingcheck";
+            }
+            other => {
+                return Err(SasError::parse(
+                    format!("unknown UPDATE option {other}="),
+                    kw_tok.span,
+                ));
+            }
+        }
+    }
     if key_vars.is_empty() {
         return Err(SasError::parse(
             "An UPDATE statement requires a KEY= option with at least one variable.",
@@ -125,6 +200,7 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
         master_where,
         transaction,
         key_vars,
+        nomissingcheck,
     })
 }
 

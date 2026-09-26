@@ -281,6 +281,9 @@ struct PendingUpdate {
     master_display: String,
     key_names: Vec<String>,
     master_where: Option<Expr>,
+    /// UPDATEMODE=NOMISSINGCHECK (J03-P6) : les valeurs MANQUANTES de la
+    /// transaction superposent aussi le maître.
+    nomissingcheck: bool,
 }
 
 /// État intermédiaire d'un MODIFY pendant la compilation.
@@ -328,7 +331,8 @@ impl Compiler<'_> {
                 master_where,
                 transaction,
                 key_vars,
-            } => self.compile_update(master, master_where, transaction, key_vars),
+                nomissingcheck,
+            } => self.compile_update(master, master_where, transaction, key_vars, *nomissingcheck),
             // MODIFY (M16.5) : un dataset, modification EN PLACE.
             DsStmt::Modify {
                 dataset,

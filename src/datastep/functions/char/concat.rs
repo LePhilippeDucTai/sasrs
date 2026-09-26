@@ -9,17 +9,19 @@ pub(crate) fn fn_cat(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     Value::Char(result)
 }
 
-/// CATS: strip each arg, then concatenate.
+/// CATS: strip each arg, then concatenate. « Strip » per the SAS doc (I18N
+/// level 0) : leading/trailing SPACES only (0x20), not tabs/newlines (J03-P6).
 pub(crate) fn fn_cats(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let mut result = String::new();
     for a in args {
         let s = coerce_char(a);
-        result.push_str(s.trim());
+        result.push_str(s.trim_matches(' '));
     }
     Value::Char(result)
 }
 
-/// CATX(sep, ...): strip each arg; skip blank args; join with separator.
+/// CATX(sep, ...): strip each arg (spaces only, 0x20 — J03-P6); join with
+/// separator, skipping items that contain no non-blank character.
 pub(crate) fn fn_catx(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     if args.is_empty() {
         return Value::Char(String::new());
@@ -27,7 +29,7 @@ pub(crate) fn fn_catx(args: &[Value], _ctx: &mut EvalCtx) -> Value {
     let sep = coerce_char(&args[0]);
     let parts: Vec<String> = args[1..]
         .iter()
-        .map(|a| coerce_char(a).trim().to_string())
+        .map(|a| coerce_char(a).trim_matches(' ').to_string())
         .filter(|s| !s.is_empty())
         .collect();
     Value::Char(parts.join(&sep))

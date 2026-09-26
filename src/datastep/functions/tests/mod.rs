@@ -138,6 +138,7 @@ fn num_val(v: Value) -> f64 {
     }
 }
 
+mod datastep_divergence;
 mod intnx;
 mod probbnml;
 mod prx;

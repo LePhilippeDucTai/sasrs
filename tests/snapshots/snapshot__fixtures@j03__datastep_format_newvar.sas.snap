@@ -1,0 +1,38 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j03/datastep_format_newvar.sas
+---
+==== LOG ====
+
+1     data work.fmtnew;
+2       length base $8;
+3       format newnum 8.2;
+4       attrib newlbl label='Etiquette J03';
+5       base = 'x';
+6       newnum = 1.5;
+7       newlbl = 2;
+8       output;
+9     run;
+NOTE: The data set WORK.FMTNEW has 1 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title "J03-P6 FORMAT/ATTRIB créent la variable inconnue";
+
+11    proc print data=work.fmtnew label;
+12    run;
+NOTE: There were 1 observations read from the data set WORK.FMTNEW.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                        J03-P6 FORMAT/ATTRIB créent la variable inconnue
+
+                            Obs    base      newnum    Etiquette J03
+
+                              1    x           1.50                2
+
+==== EXIT 0 ====

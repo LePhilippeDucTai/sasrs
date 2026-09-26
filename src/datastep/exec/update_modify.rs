@@ -1,15 +1,55 @@
 use super::*;
 
-/// Exécute une étape DATA pilotée par un UPDATE (M16.5).
+/// Élément du plan d'exécution d'un UPDATE (J03-P6) : soit une obs maître
+/// (retenue après WHERE=), soit une obs de transaction SANS maître — SAS
+/// l'AJOUTE comme nouvelle observation du dataset de sortie (Language
+/// Reference by Example, ch. 21 : « If an observation in the transaction
+/// data set does not have a corresponding observation in the master data
+/// set, then SAS adds an observation to the master output data set. »).
+enum UpdatePlanItem {
+    Master(usize),
+    NewTrans(usize),
+}
+
+/// Ordre total sur une clé multi-variables (pour interclasser les
+/// transactions sans maître parmi les obs maître — SAS exige les deux
+/// datasets triés par clé ; en cas de types hétérogènes ou de clés de types
+/// différents, on considère les clés égales et la transaction suit le
+/// maître, ce qui reste correct pour l'ordre d'émission).
+fn key_less(a: &[Value], b: &[Value]) -> bool {
+    for (x, y) in a.iter().zip(b.iter()) {
+        let ord = match (x, y) {
+            (Value::Num(u), Value::Num(v)) => u.partial_cmp(v),
+            (Value::Missing(_), Value::Num(_)) => Some(std::cmp::Ordering::Less),
+            (Value::Num(_), Value::Missing(_)) => Some(std::cmp::Ordering::Greater),
+            (Value::Char(u), Value::Char(v)) => Some(u.cmp(v)),
+            _ => None,
+        };
+        match ord {
+            Some(std::cmp::Ordering::Less) => return true,
+            Some(std::cmp::Ordering::Greater) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
+
+/// Exécute une étape DATA pilotée par un UPDATE (M16.5, J03-P6).
 ///
 /// Le maître est lu séquentiellement (pilote l'itération). Pour chaque obs
-/// maître (qui passe le WHERE= du maître), on cherche la PREMIÈRE obs de la
-/// transaction de même clé ; si trouvée, on superpose ses variables NON
-/// MANQUANTES (hors clés) au PDV. Le corps de l'étape s'exécute puis l'obs est
-/// sortie (output implicite, sauf OUTPUT explicite). Les obs de transaction
-/// sans maître correspondant sont IGNORÉES en v1 (divergence documentée vs SAS,
-/// qui les insère). Plusieurs transactions pour une même clé : seule la
-/// PREMIÈRE est appliquée.
+/// maître (qui passe le WHERE= du maître), on superpose TOUTES les obs de la
+/// transaction de même clé, DANS L'ORDRE ; par défaut (MISSINGCHECK) seules
+/// les valeurs NON MANQUANTES (hors clés) écrasent le PDV — avec
+/// UPDATEMODE=NOMISSINGCHECK, les valeurs manquantes écrasent aussi. Les obs
+/// de transaction SANS maître correspondant sont AJOUTÉES comme nouvelles
+/// observations (interclassées par clé, comme SAS qui exige des entrées
+/// triées ; toute transaction non triée restante est ajoutée en fin). Le
+/// corps de l'étape s'exécute pour CHAQUE obs produite, puis l'obs est
+/// sortie (output implicite, sauf OUTPUT explicite).
+///
+/// Sources : SAS Language Reference by Example, ch. 21 « Examples: Update
+/// Data » (Output 21.30–21.32) —
+/// https://go.documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/lepg/content/lepg.pdf
 pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
     let StepProgram {
         pdv,
@@ -38,13 +78,19 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
         .iter()
         .map(|&slot| trans.var_slots.iter().position(|&s| s == slot).unwrap())
         .collect();
-    let mut trans_index: HashMap<String, usize> = HashMap::new();
+    // J03-P6 : TOUTES les obs de transaction d'une même clé, dans l'ordre
+    // (SAS applique successivement les doublons de clé — la dernière
+    // valeur non manquante gagne, cf. Output 21.30 : Dewberry → Dill).
+    let mut trans_index: HashMap<String, Vec<usize>> = HashMap::new();
     for row in 0..trans.n_rows {
         let key_vals: Vec<Value> = trans_key_pos
             .iter()
             .map(|&pos| trans.columns[pos][row].clone())
             .collect();
-        trans_index.entry(key_string(&key_vals)).or_insert(row);
+        trans_index
+            .entry(key_string(&key_vals))
+            .or_default()
+            .push(row);
     }
     let overlay_pos: Vec<(usize, usize)> = upd
         .overlay_slots
@@ -80,19 +126,9 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
     let mut master_read = 0usize;
     let suppress_implicit_output = has_explicit_output;
 
-    // Slots issus UNIQUEMENT de la transaction (absents du maître). Comme ils
-    // sont `from_input`, `reset_non_retained` ne les blanchit pas ; il faut les
-    // remettre à MISSING au début de CHAQUE obs maître pour qu'une obs sans
-    // transaction correspondante ne « traîne » pas la valeur d'une précédente.
-    let trans_only_slots: Vec<usize> = upd
-        .overlay_slots
-        .iter()
-        .copied()
-        .filter(|s| !master.var_slots.contains(s))
-        .collect();
-
     // Séquence des obs maître RETENUES (après WHERE=). FIRST./LAST. sont
-    // calculés sur les transitions de clé BY DANS cette séquence.
+    // calculés sur les transitions de clé BY DANS la séquence émise (master
+    // + nouvelles obs de transaction).
     let mut kept_rows: Vec<usize> = Vec::with_capacity(master.n_rows);
     for m_row in 0..master.n_rows {
         if let Some(w) = &upd.master_where {
@@ -108,30 +144,137 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
         }
         kept_rows.push(m_row);
     }
-    // Clés BY de chaque obs retenue (vide si pas de BY).
-    let by_keys: Vec<Vec<Value>> = kept_rows.iter().map(|&row| keys_at(master, row)).collect();
 
-    for (seq, &m_row) in kept_rows.iter().enumerate() {
+    // Transactions sans maître : leur clé n'apparaît dans AUCUNE obs maître
+    // retenue. Elles sont émises comme nouvelles observations,
+    // interclassées par clé avec les obs maître (curseur sur la liste en
+    // ordre de transaction ; les éventuelles non consommées — transaction
+    // non triée — suivent en fin de plan, ordre de transaction).
+    // NB : la clé est celle du KEY= (slots `key_slots`), PAS celle des
+    // colonnes BY (qui peut être vide sans statement BY).
+    let master_key_pos: Vec<usize> = upd
+        .key_slots
+        .iter()
+        .map(|&slot| master.var_slots.iter().position(|&s| s == slot).unwrap())
+        .collect();
+    let master_key_vals: Vec<Vec<Value>> = kept_rows
+        .iter()
+        .map(|&row| {
+            master_key_pos
+                .iter()
+                .map(|&pos| master.columns[pos][row].clone())
+                .collect()
+        })
+        .collect();
+    let master_key_set: std::collections::HashSet<String> =
+        master_key_vals.iter().map(|k| key_string(k)).collect();
+    let unmatched: Vec<(Vec<Value>, usize)> = (0..trans.n_rows)
+        .filter(|&row| {
+            let key_vals: Vec<Value> = trans_key_pos
+                .iter()
+                .map(|&pos| trans.columns[pos][row].clone())
+                .collect();
+            !master_key_set.contains(&key_string(&key_vals))
+        })
+        .map(|row| {
+            let key_vals: Vec<Value> = trans_key_pos
+                .iter()
+                .map(|&pos| trans.columns[pos][row].clone())
+                .collect();
+            (key_vals, row)
+        })
+        .collect();
+
+    let mut plan: Vec<UpdatePlanItem> = Vec::with_capacity(kept_rows.len() + unmatched.len());
+    let mut u = 0usize;
+    for (i, &m_row) in kept_rows.iter().enumerate() {
+        while u < unmatched.len() && key_less(&unmatched[u].0, &master_key_vals[i]) {
+            plan.push(UpdatePlanItem::NewTrans(unmatched[u].1));
+            u += 1;
+        }
+        plan.push(UpdatePlanItem::Master(m_row));
+    }
+    while u < unmatched.len() {
+        plan.push(UpdatePlanItem::NewTrans(unmatched[u].1));
+        u += 1;
+    }
+    // Clés BY de CHAQUE élément du plan (pour FIRST./LAST. sur la séquence
+    // réellement émise).
+    let plan_keys: Vec<Vec<Value>> = plan
+        .iter()
+        .map(|item| match item {
+            UpdatePlanItem::Master(m_row) => keys_at(master, *m_row),
+            UpdatePlanItem::NewTrans(t_row) => trans_key_pos
+                .iter()
+                .map(|&pos| trans.columns[pos][*t_row].clone())
+                .collect(),
+        })
+        .collect();
+
+    // Slots issus UNIQUEMENT de la transaction (absents du maître). Comme ils
+    // sont `from_input`, `reset_non_retained` ne les blanchit pas ; il faut les
+    // remettre à MISSING au début de CHAQUE obs pour qu'une obs sans
+    // transaction correspondante ne « traîne » pas la valeur d'une précédente.
+    // Symétriquement, les slots issus uniquement du MAÎTRE doivent être
+    // blanchis pour une NOUVELLE obs de transaction (la variable animal est
+    // manquante pour la nouvelle obs b/g de l'exemple LEPG 21.31).
+    let trans_only_slots: Vec<usize> = upd
+        .overlay_slots
+        .iter()
+        .copied()
+        .filter(|s| !master.var_slots.contains(s))
+        .collect();
+    let master_only_slots: Vec<usize> = master
+        .var_slots
+        .iter()
+        .copied()
+        .filter(|s| !trans.var_slots.contains(s))
+        .collect();
+
+    // Remise à missing d'un slot du PDV selon son type (utilisé pour les
+    // variables présentes dans un seul des deux datasets).
+    fn blank_slot(pdv: &mut Pdv, slot: usize) {
+        let init = match pdv.vars()[slot].ty {
+            VarType::Num => Value::missing(),
+            VarType::Char => Value::Char(String::new()),
+        };
+        pdv.set(slot, init);
+    }
+
+    for (seq, item) in plan.iter().enumerate() {
         r.pdv.n_ += 1;
         r.pdv.error_ = false;
         r.pdv.reset_non_retained();
-        for &slot in &trans_only_slots {
-            let init = match r.pdv.vars()[slot].ty {
-                VarType::Num => Value::missing(),
-                VarType::Char => Value::Char(String::new()),
-            };
-            r.pdv.set(slot, init);
+        match item {
+            UpdatePlanItem::Master(m_row) => {
+                for &slot in &trans_only_slots {
+                    blank_slot(&mut r.pdv, slot);
+                }
+                load_row(&mut r.pdv, master, *m_row);
+                master_read += 1;
+            }
+            UpdatePlanItem::NewTrans(t_row) => {
+                for &slot in &master_only_slots {
+                    blank_slot(&mut r.pdv, slot);
+                }
+                // Charger la transaction : clés PUIS variables overlay.
+                for (&k, &pos) in upd.key_slots.iter().zip(&trans_key_pos) {
+                    r.pdv.set(k, trans.columns[pos][*t_row].clone());
+                }
+                for &(slot, pos) in &overlay_pos {
+                    r.pdv.set(slot, trans.columns[pos][*t_row].clone());
+                }
+            }
         }
-        load_row(&mut r.pdv, master, m_row);
-        // FIRST./LAST. par variable BY (préfixe de clés vs voisins retenus).
+        // FIRST./LAST. par variable BY (préfixe de clés vs voisins émis).
         if !upd.by.is_empty() {
-            let cur = &by_keys[seq];
+            let cur = &plan_keys[seq];
             for (i, flags) in r.ctx.by_flags.iter_mut().enumerate() {
                 let first = match seq.checked_sub(1) {
                     None => true,
-                    Some(p) => prefix_changed(cur, &by_keys[p], i),
+                    Some(p) => prefix_changed(cur, &plan_keys[p], i),
                 };
-                let last = match by_keys.get(seq + 1) {
+                let last = match plan_keys.get(seq + 1) {
                     None => true,
                     Some(next) => prefix_changed(cur, next, i),
                 };
@@ -139,17 +282,24 @@ pub(super) fn execute_update(prog: StepProgram, session: &mut Session) -> Result
                 flags.2 = last;
             }
         }
-        master_read += 1;
-        let key_vals: Vec<Value> = upd
-            .key_slots
-            .iter()
-            .map(|&slot| r.pdv.get(slot).clone())
-            .collect();
-        if let Some(&t_row) = trans_index.get(&key_string(&key_vals)) {
-            for &(slot, pos) in &overlay_pos {
-                let tv = &trans.columns[pos][t_row];
-                if !tv.is_missing() {
-                    r.pdv.set(slot, tv.clone());
+        if let UpdatePlanItem::Master(_) = item {
+            // Superposer TOUTES les transactions de la clé, dans l'ordre.
+            let key_vals: Vec<Value> = upd
+                .key_slots
+                .iter()
+                .map(|&slot| r.pdv.get(slot).clone())
+                .collect();
+            if let Some(rows) = trans_index.get(&key_string(&key_vals)) {
+                for &t_row in rows {
+                    for &(slot, pos) in &overlay_pos {
+                        let tv = &trans.columns[pos][t_row];
+                        // Défaut SAS (MISSINGCHECK) : une valeur manquante
+                        // de transaction n'a AUCUN effet ; NOMISSINGCHECK :
+                        // elle écrase aussi le maître (LEPG 21.32).
+                        if upd.nomissingcheck || !tv.is_missing() {
+                            r.pdv.set(slot, tv.clone());
+                        }
+                    }
                 }
             }
         }

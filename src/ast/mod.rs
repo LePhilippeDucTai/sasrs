@@ -267,19 +267,25 @@ pub enum DsStmt {
         whens: Vec<WhenClause>,
         otherwise: Option<Box<DsStmt>>,
     },
-    /// `update master[(where=(...))] transaction key=k1 k2;` (M16.5) — fusion
+    /// `update master[(where=(...))] transaction <(updatemode=...)> key=k1 k2
+    /// <updatemode=missingcheck|nomissingcheck>;` (M16.5, J03-P6) — fusion
     /// maître/transaction. Le maître est lu séquentiellement ; pour chaque obs
-    /// maître, la transaction correspondante (par clé `key_vars`) est
-    /// superposée (seules les valeurs NON MANQUANTES écrasent ; les variables
-    /// clé ne sont jamais écrasées). L'obs maître mise à jour est sortie. Un
-    /// statement BY optionnel restreint la fusion aux groupes BY. Seules les
-    /// options `(where=(...))` du maître sont portées par `master_where` ;
-    /// `key_vars` est la liste (non vide) des variables de clé.
+    /// maître, les transactions correspondantes (par clé `key_vars`) sont
+    /// superposées DANS L'ORDRE (seules les valeurs NON MANQUANTES écrasent,
+    /// sauf `nomissingcheck` ; les variables clé ne sont jamais écrasées).
+    /// Une transaction sans maître correspondant est AJOUTÉE comme nouvelle
+    /// observation (comme SAS). Un statement BY optionnel restreint la fusion
+    /// aux groupes BY. Seules les options `(where=(...))` du maître sont
+    /// portées par `master_where` ; la transaction n'accepte que
+    /// `updatemode=`. `nomissingcheck` est vrai si UPDATEMODE=NOMISSINGCHECK
+    /// (forme parenthésée sur la transaction OU forme nue en fin de
+    /// statement, toutes deux formes documentées par SAS).
     Update {
         master: DatasetRef,
         master_where: Option<Expr>,
         transaction: DatasetRef,
         key_vars: Vec<String>,
+        nomissingcheck: bool,
     },
     /// `modify dataset key=k1 k2;` (M16.5) — modification EN PLACE. Le dataset
     /// est lu, ses variables peuvent être modifiées par assignation, puis il

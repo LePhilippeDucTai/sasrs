@@ -130,6 +130,11 @@ pub struct UpdateData {
     pub master_where: Option<Expr>,
     /// Clés BY (vide = pas de BY) — déclaratif, sert FIRST./LAST.
     pub by: Vec<ByVar>,
+    /// UPDATEMODE=NOMISSINGCHECK (J03-P6) : les valeurs MANQUANTES de la
+    /// transaction superposent AUSSI le maître (défaut SAS MISSINGCHECK :
+    /// elles n'ont aucun effet). Source : SAS Language Reference by Example,
+    /// ch. 21, exemples « Update Data » (Output 21.31/21.32).
+    pub nomissingcheck: bool,
 }
 
 /// Données d'entrée compilées d'un statement MODIFY (M16.5). Le dataset est

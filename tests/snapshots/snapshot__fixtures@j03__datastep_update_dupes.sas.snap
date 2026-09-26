@@ -1,0 +1,75 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j03/datastep_update_dupes.sas
+---
+==== LOG ====
+
+1     data work.master;
+2       length common $1 animal $6 plant $9;
+3       input common animal plant;
+4       datalines;
+5     a Ant Apple
+6     b Bird Banana
+7     c Cat Coconut
+8     d Dog Dewberry
+9     e Eagle Eggplant
+10    f Frog Fig
+11    ;
+12    run;
+NOTE: The data set WORK.MASTER has 6 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+13    data work.plantnewdupes;
+14      length common $1 plant $9;
+15      input common plant;
+16      datalines;
+17    a Apricot
+18    b Barley
+19    c Cactus
+20    d Date
+21    d Dill
+22    e Escarole
+23    f Fennel
+24    ;
+25    run;
+NOTE: The data set WORK.PLANTNEWDUPES has 7 observations and 2 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+26    data work.master4;
+27      update work.master work.plantnewdupes key=common updatemode=missingcheck;
+28      by common;
+29    run;
+NOTE: There were 6 observations read from the data set WORK.MASTER.
+NOTE: There were 7 observations read from the data set WORK.PLANTNEWDUPES.
+NOTE: The data set WORK.MASTER4 has 6 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+30    title "J03-P6 UPDATE doublons de clé — doc LEPG 21.30";
+
+31    proc print data=work.master4;
+32    run;
+NOTE: There were 6 observations read from the data set WORK.MASTER4.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                         J03-P6 UPDATE doublons de clé — doc LEPG 21.30
+
+                              Obs    common    animal    plant
+
+                                1    a         Ant       Apricot
+                                2    b         Bird      Barley
+                                3    c         Cat       Cactus
+                                4    d         Dog       Dill
+                                5    e         Eagle     Escarole
+                                6    f         Frog      Fennel
+
+==== EXIT 0 ====
