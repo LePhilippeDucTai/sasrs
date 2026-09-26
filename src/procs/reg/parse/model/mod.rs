@@ -213,8 +213,26 @@ pub(super) fn parse_model_stmt(ts: &mut StatementStream, proc_all: bool) -> Resu
                 } else if ts.peek().is_kw("corrb") {
                     corrb = true;
                     ts.next();
+                } else if ts.peek().is_kw("cp") || ts.peek().is_kw("adjrsq") {
+                    // CP / ADJRSQ after SELECTION=RSQUARE only request an
+                    // extra display column (SAS/STAT 9.4, REG MODEL statement);
+                    // display-only → WARNING, not silently ignored (J02-P4
+                    // policy, J02-P5 keeps it an honest diagnostic).
+                    let kw = if ts.peek().is_kw("cp") { "CP" } else { "ADJRSQ" };
+                    ts.warn_ignored_display(common::ignored_display_statement(
+                        "REG", kw,
+                    ));
+                    ts.next();
                 } else {
-                    ts.next(); // skip unknown options
+                    // J02-P5 — unknown MODEL option: ERROR instead of a
+                    // silent skip (SAS/STAT 9.4, The REG Procedure, MODEL
+                    // statement options).
+                    let span = ts.peek().span;
+                    let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                    return Err(SasError::parse(
+                        format!("Unknown or unsupported MODEL option '{bad}' in PROC REG."),
+                        span,
+                    ));
                 }
             }
             break;

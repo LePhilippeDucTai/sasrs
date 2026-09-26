@@ -355,3 +355,68 @@ fn test_profile_search_matches_closed_form() {
     assert!((s2u - 7.0).abs() < 1e-2, "s2u={s2u}");
     assert!((s2e - 2.0).abs() < 1e-2, "s2e={s2e}");
 }
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The MIXED Procedure
+// (PROC statement METHOD=, MODEL statement DDFM=, RANDOM/REPEATED TYPE=).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_mixed_syntax_toc.htm
+
+#[test]
+fn model_fallback_mixed_unknown_method_is_error() {
+    // Base : METHOD=MIVQUE0 retombait silencieusement sur REML.
+    let err = parse_mixed("proc mixed method=mivque0; class s; model y = ; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("METHOD= value 'MIVQUE0'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_mixed_method_ml_nonregression() {
+    let ast = parse_mixed("proc mixed method=ml; class s; model y = ; run;").unwrap();
+    assert_eq!(ast.method, Method::Ml);
+}
+
+#[test]
+fn model_fallback_mixed_unknown_type_is_error() {
+    // Base : TYPE=SP(matrice lissée) retombait silencieusement sur TYPE=VC.
+    let err = parse_mixed(
+        "proc mixed; class s; model y = ; random intercept / subject=s type=sp(pow); run;",
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("TYPE= value 'SP'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_mixed_type_ar1_nonregression() {
+    let ast = parse_mixed(
+        "proc mixed; class s; model y = ; random intercept / subject=s type=ar(1); run;",
+    )
+    .unwrap();
+    assert_eq!(ast.random.unwrap().cov_type, CovType::Ar1);
+}
+
+#[test]
+fn model_fallback_mixed_ddfm_satterthwaite_is_error() {
+    // Base : DDFM=SATTERTHWAITE était accepté au parsing puis ignoré
+    // (NOTE différée à l'exécution, degrés de liberté CONTAIN en silence).
+    let err = parse_mixed("proc mixed; class s; model y = / ddfm=satterthwaite; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("DDFM=SATTERTHWAITE is not supported"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn model_fallback_mixed_ddfm_contain_nonregression() {
+    let ast = parse_mixed("proc mixed; class s; model y = / ddfm=contain; run;").unwrap();
+    assert_eq!(ast.model.unwrap().ddfm.as_deref(), Some("contain"));
+}
+
+#[test]
+fn model_fallback_mixed_interaction_is_error() {
+    // Base : `a*b` était aplati en effets fixes a et b.
+    let err = parse_mixed("proc mixed; class s; model y = a*b; run;").unwrap_err();
+    assert!(err.to_string().contains("Interaction"), "err: {err}");
+}

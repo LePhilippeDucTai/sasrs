@@ -3,8 +3,16 @@ use super::*;
 // ───────────────────────── Parser ─────────────────────────
 
 /// Parse PROC LOGISTIC. Called AFTER `proc logistic` has been consumed.
+///
+/// J02-P5 — fin des replis silencieux (SAS/STAT 9.4 User's Guide, The
+/// LOGISTIC Procedure) : l'option PROC `DESCENDING` est honorée, `ORDER=`
+/// et toute option PROC inconnue sont des ERROR ; dans le MODEL, un `LINK=`
+/// inconnu et toute option inconnue sont des ERROR ; le statement CLASS
+/// analyse `(PARAM= REF=)` — `PARAM=REF` avec `REF=FIRST|LAST` est honoré,
+/// tout autre PARAM= est une ERROR (plus de jetons pris pour des variables).
 pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     let mut input: Option<DatasetRef> = None;
+    let mut proc_descending = false;
 
     // PROC LOGISTIC statement options, until `;`
     loop {
@@ -17,14 +25,30 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
         }
         if ts.peek().is_kw("data") {
             input = Some(common::parse_dataset_opt(ts, "DATA")?);
-        } else {
-            // Skip unknown proc-level options (DESCENDING as proc option: ignored)
+        } else if ts.peek().is_kw("descending") || ts.peek().is_kw("desc") {
+            // PROC-level DESCENDING — honored (applies to every MODEL).
+            proc_descending = true;
             ts.next();
+        } else if ts.peek().is_kw("order") {
+            let span = ts.peek().span;
+            return Err(SasError::parse(
+                "ORDER= is not supported in PROC LOGISTIC; response level order \
+                 would silently differ from the request.",
+                span,
+            ));
+        } else {
+            // Unknown PROC-level option — ERROR instead of a silent skip.
+            let span = ts.peek().span;
+            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(SasError::parse(
+                format!("Unknown or unsupported option '{bad}' on the PROC LOGISTIC statement."),
+                span,
+            ));
         }
     }
 
     // Sub-statements until run;/quit;
-    let mut class_vars: Vec<String> = Vec::new();
+    let mut class_vars: Vec<ClassVar> = Vec::new();
     let mut model: Option<LogisticModel> = None;
     let mut freq_var: Option<String> = None;
     let mut outputs: Vec<LogisticOutput> = Vec::new();
@@ -32,13 +56,88 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     common::parse_proc_body(ts, "LOGISTIC", |ts, kw| {
         if kw == "class" {
             ts.next(); // consume "class"
+            // `var [(options)] var [(options)] … ;` — SAS/STAT 9.4, CLASS
+            // statement. Only PARAM=REF with REF=FIRST|LAST is supported.
             while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    class_vars.push(name);
+                let name = match ts.peek().ident().map(str::to_string) {
+                    Some(n) => {
+                        ts.next();
+                        n
+                    }
+                    None => {
+                        ts.next();
+                        continue;
+                    }
+                };
+                let mut ref_first = false;
+                if ts.peek().kind == TokenKind::LParen {
                     ts.next();
-                } else {
-                    ts.next();
+                    loop {
+                        if ts.peek().kind == TokenKind::RParen {
+                            ts.next();
+                            break;
+                        }
+                        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+                            break;
+                        }
+                        if ts.peek().is_kw("param") {
+                            ts.next();
+                            if ts.peek().kind == TokenKind::Eq {
+                                ts.next();
+                            }
+                            let span = ts.peek().span;
+                            if let Some(v) = ts.peek().ident().map(str::to_string) {
+                                ts.next();
+                                if !v.eq_ignore_ascii_case("ref") {
+                                    return Err(SasError::parse(
+                                        format!(
+                                            "CLASS PARAM={} is not supported in PROC LOGISTIC; \
+                                             only PARAM=REF is implemented.",
+                                            v.to_uppercase()
+                                        ),
+                                        span,
+                                    ));
+                                }
+                            } else {
+                                return Err(SasError::parse("expected a value after PARAM=", span));
+                            }
+                        } else if ts.peek().is_kw("ref") {
+                            ts.next();
+                            if ts.peek().kind == TokenKind::Eq {
+                                ts.next();
+                            }
+                            let span = ts.peek().span;
+                            if let Some(v) = ts.peek().ident().map(str::to_string) {
+                                ts.next();
+                                match v.to_ascii_lowercase().as_str() {
+                                    "first" => ref_first = true,
+                                    "last" => ref_first = false,
+                                    other => {
+                                        return Err(SasError::parse(
+                                            format!(
+                                                "CLASS REF={} is invalid; use REF=FIRST or REF=LAST.",
+                                                other.to_uppercase()
+                                            ),
+                                            span,
+                                        ));
+                                    }
+                                }
+                            } else {
+                                return Err(SasError::parse("expected a value after REF=", span));
+                            }
+                        } else {
+                            let span = ts.peek().span;
+                            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                            return Err(SasError::parse(
+                                format!(
+                                    "Unknown or unsupported CLASS option '{bad}' in PROC LOGISTIC."
+                                ),
+                                span,
+                            ));
+                        }
+                    }
                 }
+                class_vars.push(ClassVar { name, ref_first });
             }
             ts.expect_semi()?;
             Ok(true)
@@ -53,8 +152,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
             // Expect '='
             common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
 
-            // Parse predictors until '/' or ';'
-            let predictors = common::parse_effect_list(ts);
+            // Parse predictors until '/' or ';'. J02-P5 — `a*b` / `a(b)` are
+            // NOT silently flattened anymore: explicit ERROR.
+            let predictors = common::parse_effect_list_strict(ts, "LOGISTIC")?;
 
             let mut noprint = false;
             let mut link = Link::Logit;
@@ -70,17 +170,42 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
                         ts.next(); // consume "link"
                         if ts.peek().kind == TokenKind::Eq {
                             ts.next(); // consume '='
+                            let span = ts.peek().span;
                             if let Some(name) = ts.peek().ident().map(str::to_string) {
                                 link = match name.to_lowercase().as_str() {
+                                    "logit" => Link::Logit,
                                     "cloglog" | "ccll" => Link::Cloglog,
                                     "probit" | "normit" => Link::Probit,
-                                    _ => Link::Logit,
+                                    other => {
+                                        return Err(SasError::parse(
+                                            format!(
+                                                "Unknown LINK= value '{}' on the MODEL statement.",
+                                                other.to_uppercase()
+                                            ),
+                                            span,
+                                        ));
+                                    }
                                 };
                                 ts.next();
+                            } else {
+                                return Err(SasError::parse(
+                                    "expected a link name after LINK=",
+                                    span,
+                                ));
                             }
+                        } else {
+                            return Err(SasError::parse("expected '=' after LINK", ts.peek().span));
                         }
                     } else {
-                        ts.next(); // skip unknown options
+                        // Unknown MODEL option — ERROR instead of a silent skip.
+                        let span = ts.peek().span;
+                        let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                        return Err(SasError::parse(
+                            format!(
+                                "Unknown or unsupported MODEL option '{bad}' in PROC LOGISTIC."
+                            ),
+                            span,
+                        ));
                     }
                 }
             }
@@ -88,7 +213,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
             model = Some(LogisticModel {
                 response,
                 event,
-                descending,
+                // PROC-level DESCENDING applies unless the MODEL response
+                // options already requested a specific ordering/event.
+                descending: descending || proc_descending,
                 predictors,
                 noprint,
                 link,
@@ -145,7 +272,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     })?;
 
     Ok(LogisticAst {
-        data_options: LogisticDataOptions { input },
+        data_options: LogisticDataOptions {
+            input,
+            descending: proc_descending,
+        },
         class_vars,
         model,
         freq_var,

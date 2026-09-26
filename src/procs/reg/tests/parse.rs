@@ -419,3 +419,42 @@ fn parse_plot_statement_with_symbol() {
     assert_eq!(ast.plot_statements.len(), 1);
     assert_eq!(ast.plot_statements[0].y, PlotVar::Residual);
 }
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The REG Procedure
+// (PROC statement et MODEL statement options).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_reg_syntax_toc.htm
+
+#[test]
+fn model_fallback_reg_unknown_proc_option_is_error() {
+    // Base : toute option PROC inconnue était ignorée en silence.
+    let err = parse_reg("proc reg data=a edfouter; model y = x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("option 'EDFOUTER'") && msg.contains("PROC REG"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn model_fallback_reg_unknown_model_option_is_error() {
+    // Base : toute option MODEL inconnue était ignorée en silence.
+    let err = parse_reg("proc reg data=a; model y = x / tolproxy; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("MODEL option 'TOLPROXY'") && msg.contains("REG"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn model_fallback_reg_known_options_nonregression() {
+    // Non-régression : les options rendues passent toujours.
+    let ast =
+        parse_reg("proc reg data=a simple corr outest=e covout; model y = x / noint vif dw; run;")
+            .unwrap();
+    assert!(ast.simple && ast.corr);
+    let m = &ast.models[0].model;
+    assert!(m.noint && m.vif && m.dw);
+}

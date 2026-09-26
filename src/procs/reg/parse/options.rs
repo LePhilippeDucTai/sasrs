@@ -90,8 +90,14 @@ pub(super) fn parse_proc_options(ts: &mut StatementStream) -> Result<ProcOptions
             proc_all = true;
             ts.next();
         } else {
-            // Skip unknown proc-level options
-            ts.next();
+            // J02-P5 — unknown PROC-level option: ERROR instead of a silent
+            // skip (SAS/STAT 9.4, The REG Procedure, PROC statement options).
+            let span = ts.peek().span;
+            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+            return Err(SasError::parse(
+                format!("Unknown or unsupported option '{bad}' on the PROC REG statement."),
+                span,
+            ));
         }
     }
 

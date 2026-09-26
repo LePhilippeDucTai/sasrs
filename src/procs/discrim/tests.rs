@@ -83,14 +83,15 @@ fn test_parse_basic() {
 
 #[test]
 fn test_parse_options() {
+    // J02-P5 — POOL=NO is now a parse ERROR; POOL=YES parses.
     let ast = parse_discrim(
-        "proc discrim data=a out=b method=normal pool=no noclassify short; class g; var x; id name; priors proportional; run;",
+        "proc discrim data=a out=b method=normal pool=yes noclassify short; class g; var x; id name; priors proportional; run;",
     )
     .unwrap();
     assert_eq!(ast.data.as_ref().unwrap().name, "a");
     assert_eq!(ast.out.as_ref().unwrap().name, "b");
     assert_eq!(ast.method.as_deref(), Some("NORMAL"));
-    assert_eq!(ast.pool, Pool::No);
+    assert_eq!(ast.pool, Pool::Yes);
     assert_eq!(ast.priors, Priors::Proportional);
     assert!(ast.noclassify);
     assert!(ast.short);
@@ -227,4 +228,49 @@ fn test_proportional_priors() {
     // priors = 4/6, 2/6
     assert!((m.priors[0] - 4.0 / 6.0).abs() < 1e-12);
     assert!((m.priors[1] - 2.0 / 6.0).abs() < 1e-12);
+}
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The DISCRIM Procedure
+// (PROC statement METHOD=, POOL=).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_discrim_syntax_toc.htm
+
+#[test]
+fn model_fallback_discrim_method_npar_is_error() {
+    // Base : METHOD=NPAR produisait une NOTE puis un ajustement LDA (repli).
+    let err = parse_discrim("proc discrim method=npar; class g; var x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("METHOD=NPAR is not supported"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_discrim_method_normal_nonregression() {
+    let ast = parse_discrim("proc discrim method=normal; class g; var x; run;").unwrap();
+    assert_eq!(ast.method.as_deref(), Some("NORMAL"));
+    assert_eq!(ast.pool, Pool::Yes);
+}
+
+#[test]
+fn model_fallback_discrim_pool_no_is_error() {
+    // Base : POOL=NO (QDA) produisait une NOTE puis un ajustement LDA (repli).
+    let err = parse_discrim("proc discrim pool=no; class g; var x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("POOL=NO"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_discrim_pool_test_is_error() {
+    // Base : POOL=TEST produisait une NOTE puis un ajustement LDA (repli).
+    let err = parse_discrim("proc discrim pool=test; class g; var x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("POOL=TEST"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_discrim_pool_unknown_is_error() {
+    // Base : POOL=PEUT-ETRE retombait silencieusement sur POOL=YES.
+    let err = parse_discrim("proc discrim pool=maybe; class g; var x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown POOL= value 'MAYBE'"), "msg: {msg}");
 }

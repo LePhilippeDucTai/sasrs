@@ -2,13 +2,27 @@ use super::*;
 
 // ───────────────────────── Parser helpers ─────────────────────────
 
-pub(super) fn parse_cov_type(ts: &mut StatementStream) -> CovType {
+/// J02-P5 — unknown TYPE= values are an ERROR (SAS/STAT 9.4, The GLIMMIX
+/// Procedure, RANDOM/`TYPE=` covariance structures) instead of the former
+/// silent fallback to VC.
+pub(super) fn parse_cov_type(ts: &mut StatementStream) -> Result<CovType> {
+    let span = ts.peek().span;
     let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
     let t = match v.as_deref() {
+        Some("vc") | None => CovType::Vc,
         Some("cs") => CovType::Cs,
         Some("un") => CovType::Un,
         Some("ar") => CovType::Ar1,
-        _ => CovType::Vc,
+        Some(other) => {
+            return Err(SasError::parse(
+                format!(
+                    "Unknown or unsupported TYPE= value '{}' in PROC GLIMMIX; \
+                     supported: VC, CS, UN, AR(1).",
+                    other.to_uppercase()
+                ),
+                span,
+            ));
+        }
     };
     ts.next();
     if ts.peek().kind == TokenKind::LParen {
@@ -23,7 +37,7 @@ pub(super) fn parse_cov_type(ts: &mut StatementStream) -> CovType {
             ts.next();
         }
     }
-    t
+    Ok(t)
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -47,11 +61,23 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("method") {
             common::consume_option_eq(ts, "METHOD")?;
+            let span = ts.peek().span;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             method = match v.as_deref() {
+                Some("rspl") | None => Method::Rspl,
                 Some("laplace") => Method::Laplace,
+                // QUAD parses but defers with an explicit execution error.
                 Some("quad") => Method::Quad,
-                _ => Method::Rspl,
+                Some(other) => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unknown or unsupported METHOD= value '{}' in PROC GLIMMIX; \
+                             supported: RSPL, LAPLACE, QUAD.",
+                            other.to_uppercase()
+                        ),
+                        span,
+                    ));
+                }
             };
             ts.next();
         } else {
@@ -133,7 +159,9 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 
     common::expect_model_eq(ts, "expected '=' in MODEL statement")?;
 
-    let fixed = common::parse_effect_list(ts);
+    // J02-P5 — `a*b` / `a(b)` are NOT silently flattened anymore:
+    // explicit ERROR (SAS/STAT 9.4 effect syntax).
+    let fixed = common::parse_effect_list_strict(ts, "GLIMMIX")?;
 
     let mut dist_opt: Option<Distribution> = None;
     let mut link_opt: Option<LinkFunction> = None;
@@ -198,6 +226,28 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
             } else if tk.is_kw("noint") {
                 noint = true;
                 ts.next();
+            } else if tk.is_kw("ddfm") {
+                // J02-P5 — DDFM was previously swallowed as an unknown option;
+                // only CONTAIN is implemented, anything else is an ERROR.
+                common::consume_option_eq(ts, "DDFM")?;
+                let span = ts.peek().span;
+                match ts.peek().ident().map(|s| s.to_ascii_lowercase()).as_deref() {
+                    Some("contain") => {}
+                    Some(other) => {
+                        return Err(SasError::parse(
+                            format!(
+                                "DDFM={} is not supported in PROC GLIMMIX; \
+                                 only DDFM=CONTAIN is implemented.",
+                                other.to_uppercase()
+                            ),
+                            span,
+                        ));
+                    }
+                    None => {
+                        return Err(SasError::parse("expected a value after DDFM=", span));
+                    }
+                }
+                ts.next();
             } else {
                 ts.next();
             }
@@ -222,7 +272,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 
 /// Parse the RANDOM statement body (after `random`).
 pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
-    let effects = common::parse_effect_list(ts);
+    let effects = common::parse_effect_list_strict(ts, "GLIMMIX")?;
 
     let mut subject: Option<String> = None;
     let mut cov_type = CovType::Vc;
@@ -238,7 +288,7 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
                 ts.next();
             } else if tk.is_kw("type") {
                 common::consume_option_eq(ts, "TYPE")?;
-                cov_type = parse_cov_type(ts);
+                cov_type = parse_cov_type(ts)?;
             } else if tk.is_kw("solution") || tk.is_kw("s") {
                 solution = true;
                 ts.next();

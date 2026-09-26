@@ -40,6 +40,7 @@ fn make_oracle_session() -> (Session, LogisticAst) {
                 libref: Some("WORK".into()),
                 name: "COUNTS".into(),
             }),
+            descending: false,
         },
         class_vars: vec![],
         model: Some(LogisticModel {
@@ -88,7 +89,9 @@ fn test_parse_freq() {
 fn test_parse_class_allowed() {
     // CLASS declaration is valid at parse time (error only at execution)
     let ast = parse_logistic("proc logistic; class z; model y = x; run;").unwrap();
-    assert_eq!(ast.class_vars, vec!["z"]);
+    assert_eq!(ast.class_vars.len(), 1);
+    assert_eq!(ast.class_vars[0].name, "z");
+    assert!(!ast.class_vars[0].ref_first);
 }
 
 #[test]
@@ -183,8 +186,12 @@ fn test_execute_class_reproduces_binary_or() {
                 libref: Some("WORK".into()),
                 name: "CCLASS".into(),
             }),
+            descending: false,
         },
-        class_vars: vec!["x".into()],
+        class_vars: vec![ClassVar {
+            name: "x".into(),
+            ref_first: false,
+        }],
         model: Some(LogisticModel {
             response: "y".into(),
             event: None,
@@ -238,6 +245,7 @@ fn tiny_link_session(link: Link) -> (Session, LogisticAst) {
                 libref: Some("WORK".into()),
                 name: "TINY".into(),
             }),
+            descending: false,
         },
         class_vars: vec![],
         model: Some(LogisticModel {
@@ -304,6 +312,7 @@ fn test_execute_ordinal_monotone_intercepts() {
                 libref: Some("WORK".into()),
                 name: "ORD".into(),
             }),
+            descending: false,
         },
         class_vars: vec![],
         model: Some(LogisticModel {
@@ -374,4 +383,101 @@ fn test_output_predicted_in_unit_interval() {
         log.contains("WORK.PRED has"),
         "creation NOTE missing: {log}"
     );
+}
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The LOGISTIC Procedure
+// (PROC statement DESCENDING/ORDER=, MODEL statement LINK=, CLASS statement
+// PARAM=/REF=).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_logistic_syntax_toc.htm
+
+#[test]
+fn model_fallback_logistic_unknown_link_is_error() {
+    // Base : LINK=BOGUS retombait silencieusement sur LINK=LOGIT.
+    let err = parse_logistic("proc logistic; model y = x / link=bogus; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown LINK= value 'BOGUS'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_logistic_link_logit_nonregression() {
+    // Non-régression : les trois liens rendus passent toujours.
+    let cases = [
+        ("logit", Link::Logit),
+        ("probit", Link::Probit),
+        ("cloglog", Link::Cloglog),
+    ];
+    for (lk, want) in cases {
+        let src = format!("proc logistic; model y = x / link={lk}; run;");
+        let ast = parse_logistic(&src).unwrap();
+        assert_eq!(ast.model.unwrap().link, want, "link={lk}");
+    }
+}
+
+#[test]
+fn model_fallback_logistic_unknown_model_option_is_error() {
+    // Base : toute option MODEL inconnue était ignorée en silence.
+    let err = parse_logistic("proc logistic; model y = x / rsquare; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("MODEL option 'RSQUARE'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_logistic_order_is_error() {
+    // Base : ORDER= était ignoré en silence (ordre des niveaux non honoré).
+    let err = parse_logistic("proc logistic data=d order=internal; model y = x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("ORDER="), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_logistic_proc_descending_is_honored() {
+    // Base : l'option PROC DESCENDING était ignorée en silence.
+    let ast = parse_logistic("proc logistic descending; model y = x; run;").unwrap();
+    assert!(ast.data_options.descending);
+    assert!(ast.model.unwrap().descending);
+}
+
+#[test]
+fn model_fallback_logistic_class_param_ref_parsed() {
+    // Base : `class a(param=ref ref=first) b;` enregistrait AUSSI param/ref/
+    // first comme variables CLASS (jetons avalés pour des variables).
+    let ast =
+        parse_logistic("proc logistic; class a(param=ref ref=first) b; model y = x; run;").unwrap();
+    assert_eq!(ast.class_vars.len(), 2, "vars: {:?}", ast.class_vars);
+    assert_eq!(ast.class_vars[0].name, "a");
+    assert!(ast.class_vars[0].ref_first);
+    assert_eq!(ast.class_vars[1].name, "b");
+    assert!(!ast.class_vars[1].ref_first);
+}
+
+#[test]
+fn model_fallback_logistic_class_param_ref_last_default() {
+    let ast = parse_logistic("proc logistic; class a(param=ref); model y = x; run;").unwrap();
+    assert_eq!(ast.class_vars.len(), 1);
+    assert!(!ast.class_vars[0].ref_first, "REF=LAST par défaut");
+}
+
+#[test]
+fn model_fallback_logistic_class_param_non_ref_is_error() {
+    // Base : PARAM=GLM était avalé sans effet (codage différent en silence).
+    let err = parse_logistic("proc logistic; class a(param=glm); model y = x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("PARAM=GLM is not supported"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_logistic_class_ref_invalid_is_error() {
+    let err = parse_logistic("proc logistic; class a(param=ref ref=middle); model y = x; run;")
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("REF=MIDDLE is invalid"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_logistic_interaction_is_error() {
+    // Base : `a*b` était aplati en prédicteurs a et b.
+    let err = parse_logistic("proc logistic; model y = a*b; run;").unwrap_err();
+    assert!(err.to_string().contains("Interaction"), "err: {err}");
 }

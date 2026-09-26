@@ -3,13 +3,28 @@ use super::*;
 // ───────────────────────── Parser helpers ─────────────────────────
 
 /// Parse a TYPE=... value, including `ar(1)`.
-pub(super) fn parse_cov_type(ts: &mut StatementStream) -> CovType {
+///
+/// J02-P5 — unknown TYPE= values are an ERROR (SAS/STAT 9.4, The MIXED
+/// Procedure, REPEATED/RANDOM `TYPE=` covariance structures) instead of the
+/// former silent fallback to VC.
+pub(super) fn parse_cov_type(ts: &mut StatementStream) -> Result<CovType> {
+    let span = ts.peek().span;
     let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
     let t = match v.as_deref() {
+        Some("vc") | None => CovType::Vc,
         Some("cs") => CovType::Cs,
         Some("un") => CovType::Un,
         Some("ar") => CovType::Ar1,
-        _ => CovType::Vc,
+        Some(other) => {
+            return Err(SasError::parse(
+                format!(
+                    "Unknown or unsupported TYPE= value '{}' in PROC MIXED; \
+                     supported: VC, CS, UN, AR(1).",
+                    other.to_uppercase()
+                ),
+                span,
+            ));
+        }
     };
     ts.next();
     // Consume an optional `(1)` after AR.
@@ -25,7 +40,7 @@ pub(super) fn parse_cov_type(ts: &mut StatementStream) -> CovType {
             ts.next();
         }
     }
-    t
+    Ok(t)
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -52,10 +67,21 @@ pub fn parse(ts: &mut StatementStream) -> Result<MixedAst> {
             data = Some(common::parse_dataset_opt(ts, "DATA")?);
         } else if tk.is_kw("method") {
             common::consume_option_eq(ts, "METHOD")?;
+            let span = ts.peek().span;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             method = match v.as_deref() {
+                Some("reml") | None => Method::Reml,
                 Some("ml") => Method::Ml,
-                _ => Method::Reml,
+                Some(other) => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unknown or unsupported METHOD= value '{}' in PROC MIXED; \
+                             supported: REML, ML.",
+                            other.to_uppercase()
+                        ),
+                        span,
+                    ));
+                }
             };
             ts.next();
         } else if tk.is_kw("covtest") {
@@ -131,8 +157,9 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
     let response = common::parse_model_response(ts, "expected response variable in MODEL")?;
     common::expect_model_eq(ts, "expected '=' in MODEL statement")?;
 
-    // Read fixed effects until `/` or `;`.
-    let fixed = common::parse_effect_list(ts);
+    // Read fixed effects until `/` or `;`. J02-P5 — `a*b` / `a(b)` are NOT
+    // silently flattened anymore (SAS/STAT 9.4 effect syntax): ERROR.
+    let fixed = common::parse_effect_list_strict(ts, "MIXED")?;
 
     let mut solution = false;
     let mut noint = false;
@@ -154,7 +181,24 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
                 ts.next();
             } else if tk.is_kw("ddfm") {
                 common::consume_option_eq(ts, "DDFM")?;
-                ddfm = ts.peek().ident().map(|s| s.to_ascii_lowercase());
+                let span = ts.peek().span;
+                let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
+                match v.as_deref() {
+                    Some("contain") => ddfm = v,
+                    Some(other) => {
+                        return Err(SasError::parse(
+                            format!(
+                                "DDFM={} is not supported in PROC MIXED; \
+                                 only DDFM=CONTAIN is implemented.",
+                                other.to_uppercase()
+                            ),
+                            span,
+                        ));
+                    }
+                    None => {
+                        return Err(SasError::parse("expected a value after DDFM=", span));
+                    }
+                }
                 ts.next();
             } else {
                 ts.next();
@@ -175,7 +219,7 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<ModelSpec> {
 
 /// Parse the RANDOM statement body (after `random`).
 pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
-    let effects = common::parse_effect_list(ts);
+    let effects = common::parse_effect_list_strict(ts, "MIXED")?;
 
     let mut subject: Option<String> = None;
     let mut cov_type = CovType::Vc;
@@ -190,7 +234,7 @@ pub(super) fn parse_random(ts: &mut StatementStream) -> Result<RandomSpec> {
                 ts.next();
             } else if tk.is_kw("type") {
                 common::consume_option_eq(ts, "TYPE")?;
-                cov_type = parse_cov_type(ts);
+                cov_type = parse_cov_type(ts)?;
             } else {
                 ts.next();
             }
@@ -227,7 +271,7 @@ pub(super) fn parse_repeated(ts: &mut StatementStream) -> Result<RepeatedSpec> {
                 ts.next();
             } else if tk.is_kw("type") {
                 common::consume_option_eq(ts, "TYPE")?;
-                cov_type = parse_cov_type(ts);
+                cov_type = parse_cov_type(ts)?;
             } else {
                 ts.next();
             }

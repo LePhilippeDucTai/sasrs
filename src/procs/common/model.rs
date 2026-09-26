@@ -74,11 +74,73 @@ pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String
     (event, descending)
 }
 
+/// Variante stricte de [`parse_effect_list`] pour les procs qui ne rendent
+/// PAS les interactions (`a*b`, `a|b`) ni les effets imbriqués (`a(b)`) :
+/// l'ancienne liste plate aplatissait `a*b` en `a b` — un modèle DIFFÉRENT
+/// ajusté en silence. Ici, `*`, `|` ou `(` (après un identifiant) sont une
+/// erreur de parsing explicite, au nom du message de la proc appelante
+/// (`proc_name` = « GENMOD », « LOGISTIC », « MIXED », « GLIMMIX »).
+///
+/// Référence de syntaxe : SAS/STAT 9.4 User's Guide, sections « MODEL
+/// Statement » (et « RANDOM Statement ») de GENMOD/LOGISTIC/MIXED/GLIMMIX —
+/// la grammaire des effets (bar `|`, étoile `*`, parenthèses) y est définie.
+pub(crate) fn parse_effect_list_strict(
+    ts: &mut StatementStream,
+    proc_name: &str,
+) -> Result<Vec<String>> {
+    let mut effects: Vec<String> = Vec::new();
+    while ts.peek().kind != TokenKind::Semi
+        && ts.peek().kind != TokenKind::Slash
+        && ts.peek().kind != TokenKind::Eof
+    {
+        match ts.peek().kind {
+            TokenKind::Star => {
+                return Err(SasError::parse(
+                    format!(
+                        "Interaction effects (a*b) are not supported in PROC {proc_name}; \
+                         the MODEL would silently differ from the request."
+                    ),
+                    ts.peek().span,
+                ));
+            }
+            TokenKind::Or => {
+                return Err(SasError::parse(
+                    format!(
+                        "Effect combinations (a|b implies a*b) are not supported in PROC {proc_name}; \
+                         the MODEL would silently differ from the request."
+                    ),
+                    ts.peek().span,
+                ));
+            }
+            TokenKind::LParen => {
+                return Err(SasError::parse(
+                    format!(
+                        "Nested effects (a(b)) are not supported in PROC {proc_name}; \
+                         the MODEL would silently differ from the request."
+                    ),
+                    ts.peek().span,
+                ));
+            }
+            _ => {}
+        }
+        if let Some(name) = ts.peek().ident().map(str::to_string) {
+            effects.push(name);
+        }
+        ts.next();
+    }
+    Ok(effects)
+}
+
 /// Liste plate d'effets : identifiants jusqu'à `/`, `;` ou Eof (le
 /// terminateur n'est PAS consommé) ; tout autre token est ignoré. Sert aux
 /// effets fixes du MODEL (MIXED/GLIMMIX), aux prédicteurs (GENMOD/LOGISTIC)
 /// et aux effets du RANDOM (MIXED/GLIMMIX). Extrait verbatim de
 /// `mixed::parse_model`.
+///
+/// J02-P5 — ATTENTION : cette forme aplatit `a*b`/`a(b)` en identifiants
+/// séparés (un modèle différent, en silence). Les procs de modélisation
+/// utilisent désormais [`parse_effect_list_strict`].
+#[allow(dead_code)] // conservé pour les tests historiques de common/tests.rs
 pub(crate) fn parse_effect_list(ts: &mut StatementStream) -> Vec<String> {
     let mut effects: Vec<String> = Vec::new();
     while ts.peek().kind != TokenKind::Semi

@@ -50,14 +50,23 @@ impl Design {
 /// design columns, one per non-reference level; the LAST level is reference.
 /// (SAS default is EFFECT coding — documented deviation; matches PARAM=REF.)
 pub(super) fn build_design(
-    class_vars: &[String],
+    class_vars: &[ClassVar],
     predictors: &[String],
     pred_cols: &[Vec<Value>],
     n_read: usize,
 ) -> Result<Design> {
     let nb_preds = predictors.len();
-    let class_set: Vec<String> = class_vars.to_vec();
+    let class_set: Vec<String> = class_vars.iter().map(|c| c.name.clone()).collect();
     let is_class_var = |nm: &str| class_set.iter().any(|c| c.eq_ignore_ascii_case(nm));
+    // J02-P5 — REF=FIRST|LAST per CLASS variable (PARAM=REF); SAS/STAT 9.4,
+    // The LOGISTIC Procedure, CLASS statement.
+    let ref_first_of = |nm: &str| {
+        class_vars
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(nm))
+            .map(|c| c.ref_first)
+            .unwrap_or(false)
+    };
 
     let mut effects: Vec<Effect> = Vec::with_capacity(nb_preds);
     let mut col_labels: Vec<String> = Vec::new();
@@ -72,8 +81,16 @@ pub(super) fn build_design(
                     nm.to_uppercase()
                 )));
             }
-            let ref_label = value_label(&levs[levs.len() - 1]);
-            let non_ref: Vec<Value> = levs[..levs.len() - 1].to_vec();
+            // REF=LAST (default): reference = last level in sas_cmp order.
+            // REF=FIRST: reference = first level.
+            let (non_ref, ref_label) = if ref_first_of(nm) {
+                (levs[1..].to_vec(), value_label(&levs[0]))
+            } else {
+                (
+                    levs[..levs.len() - 1].to_vec(),
+                    value_label(&levs[levs.len() - 1]),
+                )
+            };
             for lv in &non_ref {
                 col_labels.push(format!("{} {}", nm, value_label(lv)));
             }

@@ -90,7 +90,8 @@ impl Link {
 #[derive(Debug, Clone)]
 pub struct LogisticAst {
     pub data_options: LogisticDataOptions,
-    pub class_vars: Vec<String>,
+    /// CLASS variables avec leur codage PARAM=REF / REF=FIRST|LAST (J02-P5).
+    pub class_vars: Vec<ClassVar>,
     pub model: Option<LogisticModel>,
     pub freq_var: Option<String>,
     pub outputs: Vec<LogisticOutput>,
@@ -99,6 +100,19 @@ pub struct LogisticAst {
 #[derive(Debug, Clone)]
 pub struct LogisticDataOptions {
     pub input: Option<DatasetRef>,
+    /// Option PROC `DESCENDING` (SAS/STAT 9.4, PROC LOGISTIC, PROC statement) :
+    /// inverser l'ordre des niveaux de la réponse pour TOUS les MODEL.
+    pub descending: bool,
+}
+
+/// Une variable CLASS du statement CLASS, avec son codage demandé.
+/// PARAM=REF avec REF=LAST (défaut SAS) ou REF=FIRST (J02-P5) ; tout autre
+/// PARAM= est une ERROR au parsing (plus de jetons avalés comme des variables).
+#[derive(Debug, Clone)]
+pub struct ClassVar {
+    pub name: String,
+    /// `true` = REF=FIRST (premier niveau = référence), `false` = REF=LAST.
+    pub ref_first: bool,
 }
 
 #[derive(Debug, Clone)]

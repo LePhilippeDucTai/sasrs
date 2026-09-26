@@ -421,3 +421,58 @@ fn test_parse_random_freq() {
     assert_eq!(r.cov_type, CovType::Vc);
     assert_eq!(r.subject.as_deref(), Some("subj"));
 }
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The GLIMMIX Procedure
+// (PROC statement METHOD=, MODEL statement DDFM=, RANDOM TYPE=).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_glimmix_syntax_toc.htm
+
+#[test]
+fn model_fallback_glimmix_unknown_method_is_error() {
+    // Base : METHOD=RMPL retombait silencieusement sur RSPL.
+    let err = parse_glimmix("proc glimmix method=rmpl; model y = x; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("METHOD= value 'RMPL'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_glimmix_method_laplace_nonregression() {
+    let ast = parse_glimmix("proc glimmix method=laplace; model y = x; run;").unwrap();
+    assert_eq!(ast.method, Method::Laplace);
+}
+
+#[test]
+fn model_fallback_glimmix_unknown_type_is_error() {
+    // Base : TYPE=CSH retombait silencieusement sur TYPE=VC.
+    let err = parse_glimmix(
+        "proc glimmix; class s; model y = x; random intercept / subject=s type=csh; run;",
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("TYPE= value 'CSH'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_glimmix_ddfm_kr_is_error() {
+    // Base : DDFM=KENWARDROGER était avalé comme option inconnue (VC en silence).
+    let err = parse_glimmix("proc glimmix; model y = x / ddfm=kenwardroger; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("DDFM=KENWARDROGER is not supported"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn model_fallback_glimmix_ddfm_contain_nonregression() {
+    let ast = parse_glimmix("proc glimmix; model y = x / ddfm=contain; run;").unwrap();
+    assert!(ast.model.is_some());
+}
+
+#[test]
+fn model_fallback_glimmix_interaction_is_error() {
+    // Base : `a*b` était aplati en effets fixes a et b.
+    let err = parse_glimmix("proc glimmix; model y = a*b; run;").unwrap_err();
+    assert!(err.to_string().contains("Interaction"), "err: {err}");
+}
