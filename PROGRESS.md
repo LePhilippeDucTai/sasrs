@@ -5,9 +5,10 @@ Generated from Mission Control; do not edit.
 | Unit | Status | Attempts |
 | --- | --- | --- |
 | J02-P1 | DONE | 2 |
-| J02-P2 | NEEDS_DECISION | 2 |
-| J02-P3 | PLANNED | 0 |
-| J02-P4 | PLANNED | 0 |
+| J02-P10 | DONE | 1 |
+| J02-P2 | DONE | 5 |
+| J02-P3 | DONE | 3 |
+| J02-P4 | NEEDS_DECISION | 2 |
 | J02-P5 | PLANNED | 0 |
 | J02-P6 | PLANNED | 0 |
 | J02-P9 | DONE | 1 |
