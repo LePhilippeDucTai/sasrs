@@ -30,6 +30,8 @@ fn x_ast() -> UnivariateAst {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],

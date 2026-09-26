@@ -61,15 +61,78 @@ pub(super) fn output_stat(stat: &str, xs: &[f64], sorted: &[f64], n_missing: usi
     }
 }
 
+/// J03-P2 — computed statistic for the WEIGHTED OUTPUT OUT= path. `pairs`
+/// follows the EXCLNPWGT-dependent partition (lax : un poids nul/négatif
+/// vaut 0 mais l'observation reste dans N ; strict : exclue), `n_missing`
+/// est le NMiss pondéré. Les quantiles ne portent que les poids > 0
+/// (`common::weighted_quantile_def5`) ; min/max/range portent les valeurs
+/// brutes (les poids ne changent pas l'étendue — doc SAS UNIVARIATE WEIGHT).
+pub(super) fn output_stat_weighted(
+    stat: &str,
+    pairs: &[(f64, f64)],
+    n_missing: usize,
+    vardef: VarDef,
+) -> Option<f64> {
+    let n = pairs.len();
+    let mut sorted_pairs: Vec<(f64, f64)> = pairs.to_vec();
+    sorted_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let sorted_pos: Vec<(f64, f64)> = sorted_pairs
+        .iter()
+        .filter(|(_, w)| *w > 0.0)
+        .cloned()
+        .collect();
+    let sorted_vals: Vec<f64> = sorted_pairs.iter().map(|(x, _)| *x).collect();
+
+    let mean = weighted_mean_css(pairs).map(|(m, _)| m);
+    let wq = |p: f64| weighted_quantile_def5(&sorted_pos, p);
+    match stat {
+        "n" => Some(n as f64),
+        "nmiss" => Some(n_missing as f64),
+        "sum" => Some(pairs.iter().map(|(x, w)| w * x).sum()),
+        "mean" => mean,
+        "std" | "stddev" => weighted_variance(pairs, vardef).map(|v| v.sqrt()),
+        "var" => weighted_variance(pairs, vardef),
+        "min" | "p0" => sorted_vals.first().copied(),
+        "max" | "p100" => sorted_vals.last().copied(),
+        "median" | "p50" => wq(0.50),
+        "q1" | "p25" => wq(0.25),
+        "q3" | "p75" => wq(0.75),
+        "p1" => wq(0.01),
+        "p5" => wq(0.05),
+        "p10" => wq(0.10),
+        "p90" => wq(0.90),
+        "p95" => wq(0.95),
+        "p99" => wq(0.99),
+        "range" => {
+            if n > 0 {
+                Some(sorted_vals[n - 1] - sorted_vals[0])
+            } else {
+                None
+            }
+        }
+        "qrange" => match (wq(0.75), wq(0.25)) {
+            (Some(a), Some(b)) => Some(a - b),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Build and write the OUTPUT OUT= dataset: one row per BY group (one overall
 /// when no BY), with BY variables followed by the requested statistic columns
 /// (each statistic keyword paired positionally with the VAR list).
+///
+/// J03-P2 — sous WEIGHT, les statistiques passent par `output_stat_weighted`
+/// (mêmes formules pondérées que le listing, VARDEF= et EXCLNPWGT honorés).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn write_output(
     session: &mut Session,
     ds: &SasDataset,
     var_cols: &[usize],
     var_values: &[Vec<Value>],
+    weight_values: Option<&[Value]>,
+    vardef: VarDef,
+    exclnpwgt: bool,
     out: &UnivariateOutput,
     by_cols: &[crate::procs::common::ByCol],
     by_groups_list: &[(Vec<Value>, Vec<usize>)],
@@ -119,31 +182,57 @@ pub(super) fn write_output(
         vars.push(meta.clone());
     }
 
-    // Precompute, per BY group, the (xs, sorted, n_missing) per analysis var.
+    // Precompute, per BY group, the per-analysis-var data (plain or weighted).
     struct VarStats {
         xs: Vec<f64>,
         sorted: Vec<f64>,
         n_missing: usize,
+        /// J03-P2 — présent uniquement sous WEIGHT (partition selon
+        /// EXCLNPWGT, cf. `partition_weighted_lax`/`_strict`).
+        pairs: Option<Vec<(f64, f64)>>,
     }
     let mut per_group: Vec<Vec<VarStats>> = Vec::with_capacity(by_groups_list.len());
     for (_key, grp_rows) in by_groups_list {
         let mut per_var: Vec<VarStats> = Vec::with_capacity(var_cols.len());
         for vv in var_values.iter() {
-            let mut xs: Vec<f64> = Vec::with_capacity(grp_rows.len());
-            let mut n_missing = 0usize;
-            for &row in grp_rows {
-                match value_to_num(&vv[row]) {
-                    Some(f) if !f.is_nan() => xs.push(f),
-                    _ => n_missing += 1,
+            match weight_values {
+                Some(wv) => {
+                    let (pairs, n_missing) = if exclnpwgt {
+                        crate::procs::common::partition_weighted_strict(vv, wv, grp_rows)
+                    } else {
+                        crate::procs::common::partition_weighted_lax(vv, wv, grp_rows)
+                    };
+                    let sorted: Vec<f64> = {
+                        let mut s: Vec<f64> = pairs.iter().map(|(x, _)| *x).collect();
+                        s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                        s
+                    };
+                    per_var.push(VarStats {
+                        xs: Vec::new(),
+                        sorted,
+                        n_missing,
+                        pairs: Some(pairs),
+                    });
+                }
+                None => {
+                    let mut xs: Vec<f64> = Vec::with_capacity(grp_rows.len());
+                    let mut n_missing = 0usize;
+                    for &row in grp_rows {
+                        match value_to_num(&vv[row]) {
+                            Some(f) if !f.is_nan() => xs.push(f),
+                            _ => n_missing += 1,
+                        }
+                    }
+                    let mut sorted = xs.clone();
+                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+                    per_var.push(VarStats {
+                        xs,
+                        sorted,
+                        n_missing,
+                        pairs: None,
+                    });
                 }
             }
-            let mut sorted = xs.clone();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            per_var.push(VarStats {
-                xs,
-                sorted,
-                n_missing,
-            });
         }
         per_group.push(per_var);
     }
@@ -155,7 +244,10 @@ pub(super) fn write_output(
                 .iter()
                 .map(|pv| {
                     let vs = &pv[vi];
-                    output_stat(stat, &vs.xs, &vs.sorted, vs.n_missing)
+                    match &vs.pairs {
+                        Some(pairs) => output_stat_weighted(stat, pairs, vs.n_missing, vardef),
+                        None => output_stat(stat, &vs.xs, &vs.sorted, vs.n_missing),
+                    }
                 })
                 .collect();
             columns.push(Series::new(outname.as_str().into(), vals).into());

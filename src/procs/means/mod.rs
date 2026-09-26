@@ -39,18 +39,29 @@
 //! n'est appelé que si `ast.weight.is_some()`. Fonctionne avec CLASS et BY
 //! (poids partitionnés par groupe), et OUTPUT OUT= utilise les stats pondérées.
 //!
-//! Formules pondérées (VARDEF=DF) — n = nb d'obs utilisables, w_i poids, x_i :
+//! Formules pondérées (J03-P2) — w_i poids, x_i valeurs, W = Σw_i :
 //!   SumWgt = Σw_i ; Sum = Σw_i x_i ; Mean = Σw_i x_i / Σw_i ;
-//!   CSS_w = Σw_i(x_i−x̄_w)² ; Variance = CSS_w/(n−1) ; Std = √Variance ;
+//!   CSS_w = Σw_i(x_i−x̄_w)² ;
+//!   Variance = CSS_w/(W−1) (VARDEF=DF, défaut) ou CSS_w/(W−Σw_i²/W)
+//!   (VARDEF=WEIGHT) — voir `common::weighted_variance` ;
+//!   Std = √Variance (n ≥ 2 requis, sinon missing) ;
 //!   StdErr = Std/√(Σw_i) (SAS pondère l'erreur-type par √ΣW) ;
 //!   CV = 100·Std/x̄_w ; Min/Max = min/max NON pondérés de x_i ; N = n ;
-//!   NMiss = nb d'obs exclues (valeur missing, poids missing, ou poids ≤ 0).
-//! Exclusions : voir `common::partition_weighted`.
+//!   NMiss = x manquants À POIDS VALIDE (un poids manquant ou ≤ 0 exclut
+//!   l'observation de l'analyse, N et NMiss compris) ;
+//!   MEDIAN / Pxx / QRANGE = quantiles pondérés Définition 5
+//!   (`common::weighted_quantile_def5`, partagé avec UNIVARIATE).
+//! Exclusions : voir `common::partition_weighted_strict`.
+//! Références (doc SAS 9.4) :
+//!   - WEIGHT/VARDEF/SUMWGT : proc/p1ays1la1f3e2tn1m8owq8h9n1df.htm
+//!   - formules : proc/n1y2f6nudl7zfjn1joclatu2h3zh.htm
+//!   - Définition 5 : a002473616.htm (support.sas.com)
 //!
-//! ## Simplifications SAS documentées (WEIGHT)
-//! - MEDIAN avec WEIGHT : la vraie médiane pondérée de SAS est complexe ;
-//!   DIFFÉRÉ. Ici MEDIAN est calculée NON pondérée (médiane simple des x_i
-//!   utilisables) — divergence assumée et documentée.
+//! ## Quantiles pondérés (J03-P2)
+//! - MEDIAN / percentiles / QRANGE sous WEIGHT sont calculés via la
+//!   Définition 5 pondérée dans les QUATRE chemins (listing,
+//!   PRINTALLTYPES/WAYS/TYPES, `OUTPUT OUT=`, ODS « Summary ») — plus de
+//!   divergence « non pondéré ».
 
 #![allow(unused_variables, dead_code)]
 
@@ -63,8 +74,8 @@ use crate::parser::StatementStream;
 use crate::procs::common::expect_eq;
 use crate::procs::common::num_var_meta;
 use crate::procs::common::{
-    by_groups, decode_column, partition_numeric, partition_weighted, resolve_by_cols, sample_std,
-    t_quantile,
+    VarDef, by_groups, decode_column, partition_numeric, partition_weighted_strict,
+    resolve_by_cols, sample_std, t_quantile, weighted_quantile_def5, weighted_variance,
 };
 use crate::session::Session;
 use crate::token::TokenKind;
@@ -106,6 +117,9 @@ pub struct MeansAst {
     /// WEIGHT variable (single numeric var). When `Some`, all statistics are
     /// computed through the weighted code path (see `compute_weighted`).
     pub weight: Option<String>,
+    /// VARDEF= divisor for the weighted variance (J03-P2). Default DF
+    /// (divisor Σw − 1); WEIGHT divides by Σw − Σw²/Σw.
+    pub vardef: VarDef,
     /// Confidence level alpha for CLM/LCLM/UCLM (SAS default 0.05). Only the
     /// CI statistics consult it; it never affects the default output.
     pub alpha: f64,
@@ -301,6 +315,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
                     weight_values.as_deref(),
                     &report_stats,
                     ast.alpha,
+                    ast.vardef,
                     grp_rows,
                 );
             } else {
@@ -315,6 +330,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
                         weight_values.as_deref(),
                         &report_stats,
                         ast.alpha,
+                        ast.vardef,
                         grp_rows,
                         ty,
                     );
@@ -337,6 +353,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             &by_cols,
             &by_groups_list,
             ast.alpha,
+            ast.vardef,
             allowed.as_ref(),
         )?;
     }
@@ -355,6 +372,7 @@ pub fn execute(ast: &MeansAst, session: &mut Session) -> Result<()> {
             weight_values.as_deref(),
             &report_stats,
             ast.alpha,
+            ast.vardef,
             &target,
         )?;
         // M38.3 — capture immédiate : signaler la production pour que la

@@ -31,6 +31,7 @@ fn execute_by_unsorted_errors() {
         var: vec!["x".into()],
         by: vec![("sex".into(), false)],
         weight: None,
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
@@ -75,6 +76,7 @@ fn execute_by_output_dataset_rows() {
         var: vec!["x".into()],
         by: vec![("sex".into(), false)],
         weight: None,
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
@@ -108,7 +110,9 @@ fn execute_by_output_dataset_rows() {
 fn execute_weight_report_and_exclusions() {
     let mut session = make_session();
     // x: 1,2,3, bad(w<=0), bad(missing w), bad(missing x)
-    // weights: 1,2,3, 5, ., 4  -> only first three usable.
+    // weights: 1,2,3, 5, ., 4  -> only first three usable. J03-P2 : NMISS
+    // ne compte QUE le x manquant à poids valide (poids 4) → 1 ; les obs
+    // à poids invalide sortent de l'analyse (ni N ni NMISS).
     let df = df![
         "x" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(9.0), Some(7.0), None],
         "w" => [Some(1.0_f64), Some(2.0), Some(3.0), Some(0.0), None, Some(4.0)]
@@ -132,6 +136,7 @@ fn execute_weight_report_and_exclusions() {
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
@@ -156,7 +161,7 @@ fn execute_weight_report_and_exclusions() {
     let mx = read_num_col(&session, "O", "mx");
     let sx = read_num_col(&session, "O", "sx");
     assert_eq!(nx, vec![Value::Num(3.0)]);
-    assert_eq!(nmx, vec![Value::Num(3.0)]); // w<=0, missing w, missing x
+    assert_eq!(nmx, vec![Value::Num(1.0)]); // x manquant à poids valide uniquement
     assert_eq!(sx, vec![Value::Num(14.0)]); // weighted sum Σw_i x_i
     if let Value::Num(m) = mx[0] {
         assert!((m - 14.0 / 6.0).abs() < 1e-12, "mean = {m}");
@@ -193,6 +198,7 @@ fn execute_weight_with_by() {
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: Some("w".into()),
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
@@ -247,6 +253,7 @@ fn execute_weight_with_class() {
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
@@ -466,6 +473,7 @@ fn ods_exclude_summary_suppresses_the_report() {
         var: vec![],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],

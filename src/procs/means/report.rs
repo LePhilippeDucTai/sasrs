@@ -10,6 +10,7 @@ pub fn stat_header(stat: &str) -> &'static str {
         "min" => "Minimum",
         "max" => "Maximum",
         "sum" => "Sum",
+        "sumwgt" => "Sum Wgt",
         "range" => "Range",
         "stderr" => "Std Error",
         "cv" => "CV",
@@ -63,6 +64,7 @@ pub(super) fn emit_report_group(
     weight_values: Option<&[Value]>,
     report_stats: &[String],
     alpha: f64,
+    vardef: VarDef,
     group_rows: &[usize],
 ) {
     let mut headers: Vec<String> = Vec::new();
@@ -91,9 +93,11 @@ pub(super) fn emit_report_group(
     // the weighted or unweighted path. CLM yields two cells (lower, upper).
     let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
         Some(wv) => {
-            let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
+            let (pairs, nmiss) = partition_weighted_strict(&var_values[vi], wv, grp_rows);
             for s in report_stats {
-                for cell in stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, alpha)) {
+                for cell in
+                    stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, vardef, alpha))
+                {
                     row.push(cell);
                 }
             }
@@ -153,6 +157,7 @@ pub(super) fn emit_report_type(
     weight_values: Option<&[Value]>,
     report_stats: &[String],
     alpha: f64,
+    vardef: VarDef,
     group_rows: &[usize],
     ty: u64,
 ) {
@@ -181,9 +186,11 @@ pub(super) fn emit_report_type(
 
     let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
         Some(wv) => {
-            let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, grp_rows);
+            let (pairs, nmiss) = partition_weighted_strict(&var_values[vi], wv, grp_rows);
             for s in report_stats {
-                for cell in stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, alpha)) {
+                for cell in
+                    stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, vardef, alpha))
+                {
                     row.push(cell);
                 }
             }

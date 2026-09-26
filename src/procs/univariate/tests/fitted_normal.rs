@@ -79,7 +79,8 @@ fn fitted_normal_params_unweighted_matches_moments() {
 
 #[test]
 fn fitted_normal_params_weighted_uses_weighted_moments() {
-    // Le jeu de m33 : x=[1,2,3,4], w=[1,2,3,4] ⇒ μ̂ = 3, σ̂² = 10/3.
+    // Le jeu de m33 : x=[1,2,3,4], w=[1,2,3,4] ⇒ μ̂ = 3 et, depuis J03-P2
+    // (VARDEF=DF → diviseur W−1 = 9), σ̂² = CSS_w/9 = 10/9.
     let values: Vec<Value> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|&v| Value::Num(v))
@@ -92,7 +93,7 @@ fn fitted_normal_params_weighted_uses_weighted_moments() {
     let (mu, sigma) = fitted_normal_params(&values, Some(&weights), &rows).unwrap();
     assert!((mu - 3.0).abs() < 1e-12, "mu = {mu}");
     assert!(
-        (sigma * sigma - 10.0 / 3.0).abs() < 1e-12,
+        (sigma * sigma - 10.0 / 9.0).abs() < 1e-12,
         "sigma^2 = {}",
         sigma * sigma
     );

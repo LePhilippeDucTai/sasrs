@@ -16,6 +16,7 @@ pub(super) fn write_ods_summary(
     weight_values: Option<&[Value]>,
     report_stats: &[String],
     alpha: f64,
+    vardef: VarDef,
     target: &DatasetRef,
 ) -> Result<()> {
     let n_obs = ds.n_obs();
@@ -52,8 +53,9 @@ pub(super) fn write_ods_summary(
             .map(|vi| {
                 let v = match weight_values {
                     Some(wv) => {
-                        let (pairs, nmiss) = partition_weighted(&var_values[vi], wv, &all_rows);
-                        compute_weighted(stat, &pairs, nmiss, alpha)
+                        let (pairs, nmiss) =
+                            partition_weighted_strict(&var_values[vi], wv, &all_rows);
+                        compute_weighted(stat, &pairs, nmiss, vardef, alpha)
                     }
                     None => {
                         let (xs, nmiss) = partition_numeric(&var_values[vi], &all_rows);
@@ -102,6 +104,7 @@ pub(super) fn ods_summary_stat_colname(stat: &str) -> String {
         "stderr" => "StdErr".to_string(),
         "cv" => "CV".to_string(),
         "median" => "Median".to_string(),
+        "sumwgt" => "SumWgt".to_string(),
         "clm" => "CLM".to_string(),
         "lclm" => "LowerCLMean".to_string(),
         "uclm" => "UpperCLMean".to_string(),
@@ -134,6 +137,7 @@ pub(super) fn write_output(
     by_cols: &[crate::procs::common::ByCol],
     by_groups_list: &[(Vec<Value>, Vec<usize>)],
     alpha: f64,
+    vardef: VarDef,
     allowed_types: Option<&std::collections::BTreeSet<u64>>,
 ) -> Result<()> {
     let k = class_cols.len();
@@ -232,8 +236,9 @@ pub(super) fn write_output(
                 for sp in &specs {
                     match weight_values {
                         Some(wv) => {
-                            let (pairs, nmiss) = partition_weighted(&sp.col, wv, grp_rows);
-                            stat_vals.push(compute_weighted(&sp.stat, &pairs, nmiss, alpha));
+                            let (pairs, nmiss) = partition_weighted_strict(&sp.col, wv, grp_rows);
+                            stat_vals
+                                .push(compute_weighted(&sp.stat, &pairs, nmiss, vardef, alpha));
                         }
                         None => {
                             let (xs, nmiss) = partition_numeric(&sp.col, grp_rows);

@@ -19,29 +19,47 @@
 //! Les missings sont exclus (compter et afficher la section Missing
 //! Values si présents).
 //!
-//! ## WEIGHT statement (jalon WEIGHT)
+//! ## WEIGHT statement (jalon WEIGHT, J03-P2)
 //! `weight <var>;` — une seule variable numérique. Quand elle est présente,
 //! les **Moments** et les mesures **Basic** mean/std/variance sont calculés
-//! avec les formules pondérées (VARDEF=DF) :
-//!   N = n (nb d'obs utilisables) ; Sum Weights = Σw_i ;
+//! avec les formules pondérées :
+//!   N = nb d'obs à x non manquant (défaut) ; Sum Weights = Σw_i ;
 //!   Sum Observations = Σw_i x_i ; Mean = Σw_i x_i / Σw_i ;
-//!   Variance = Σw_i(x_i−x̄_w)² / (n−1) ; Std = √Variance ;
-//!   Corrected SS = Σw_i(x_i−x̄_w)² ; Uncorrected SS = Σw_i x_i² ;
-//!   Coeff Variation = 100·Std/x̄_w ; Std Error Mean = Std/√(Σw_i).
-//! Exclusions : valeur missing, poids missing, ou poids ≤ 0
-//! (voir `common::partition_weighted`). Le chemin non-pondéré reste
-//! BYTE-IDENTIQUE (la pondération ne s'active que si `ast.weight.is_some()`).
+//!   Variance = Σw_i(x_i−x̄_w)² / (Σw_i − 1) (VARDEF=DF, diviseur W−1)
+//!   ou Σw_i(x_i−x̄_w)² / (Σw_i − Σw_i²/Σw_i) (VARDEF=WEIGHT) ;
+//!   Std = √Variance ; Corrected SS = Σw_i(x_i−x̄_w)² ;
+//!   Uncorrected SS = Σw_i x_i² ; Coeff Variation = 100·Std/x̄_w ;
+//!   Std Error Mean = Std/√(Σw_i).
+//!
+//! Exclusions (SAS, PROC UNIVARIATE par défaut SANS EXCLNPWGT) : un poids
+//! nul ou négatif est converti en 0 — l'observation RESTE comptée dans N
+//! mais pèse 0 dans SUMWGT/moments et n'entre pas dans les quantiles
+//! pondérés ; un x manquant est compté dans NMiss (règles
+//! `common::partition_weighted_lax`). Avec l'option **EXCLNPWGT**, les
+//! observations à poids nul, négatif ou manquant sont EXCLUSES de l'analyse
+//! (N compris — `common::partition_weighted_strict`, mêmes règles que PROC
+//! MEANS). Référence :
+//! https://support.sas.com/documentation/cdl/en/procstat/63104/HTML/default/procstat_univariate_sect021.htm
+//!
+//! ## OUTPUT OUT= sous WEIGHT (J03-P2)
+//! Les statistiques de `OUTPUT OUT=` (mean, std, var, sum, n, nmiss,
+//! quantiles…) suivent les MÊMES formules pondérées que le listing, avec
+//! les mêmes règles N/NMiss selon EXCLNPWGT.
+//!
+//! ## Tests de normalité sous WEIGHT (J03-P2)
+//! L'option NORMAL « is not available with the WEIGHT statement » (doc SAS
+//! ci-dessus) : demandée avec un WEIGHT, elle produit une NOTE dans le log
+//! et aucune section Tests for Normality.
 //!
 //! ## Simplifications SAS documentées (WEIGHT)
-//! - Skewness / Kurtosis pondérés : DIFFÉRÉ. Affichés à partir des valeurs
-//!   NON pondérées (formules g1/g2 existantes) — divergence documentée.
-//! - Quantiles pondérés (M33.2) : calculés via `weighted_quantile_def5`
-//!   (analogue pondéré de la Définition 5 — position par poids cumulés). La
-//!   section Quantiles (et Median/Q1/Q3/Range/IQR de Basic Measures) est donc
-//!   désormais affichée avec les valeurs pondérées.
-//! - Extreme Observations (M33.2) : affichées aussi sous WEIGHT. Les extrêmes
-//!   listent les VALEURS brutes (non pondérées) avec leur n° d'obs, sur les
-//!   observations utilisables (mêmes exclusions que `partition_weighted`).
+//! - Quantiles pondérés : calculés via `common::weighted_quantile_def5`
+//!   (analogue pondéré de la Définition 5 — position par poids cumulés,
+//!   partagé avec PROC MEANS depuis J03-P2). La section Quantiles (et
+//!   Median/Q1/Q3/Range/IQR de Basic Measures) est affichée avec les
+//!   valeurs pondérées.
+//! - Mode / Extreme Observations : affichés à partir des valeurs BRUTES
+//!   (non pondérées) — SAS : « The weight variable does not change how the
+//!   procedure determines the range, mode, extreme values ».
 
 #![allow(unused_variables, dead_code)]
 
@@ -53,8 +71,9 @@ use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common::num_var_meta;
 use crate::procs::common::{
-    self, by_groups, centered, decode_column, partition_weighted, phi_inv, probnorm,
-    resolve_by_cols, sample_std,
+    self, VarDef, by_groups, centered, decode_column, partition_weighted, partition_weighted_lax,
+    partition_weighted_strict, phi_inv, probnorm, resolve_by_cols, sample_std, weighted_mean_css,
+    weighted_quantile_def5, weighted_variance,
 };
 
 use crate::session::Session;
@@ -85,9 +104,17 @@ pub struct UnivariateAst {
     pub by: Vec<(String, bool)>,
     /// WEIGHT variable (single numeric var). When `Some`, the Moments and
     /// Basic Measures use the weighted formulas, and Quantiles use the weighted
-    /// Definition 5 (`weighted_quantile_def5`); Extreme Observations list the
-    /// raw extreme values (see file header).
+    /// Definition 5 (`common::weighted_quantile_def5`); Extreme Observations
+    /// list the raw extreme values (see file header).
     pub weight: Option<String>,
+    /// VARDEF= divisor for the weighted variance (J03-P2). Default DF
+    /// (divisor Σw − 1); WEIGHT divides by Σw − Σw²/Σw.
+    pub vardef: VarDef,
+    /// EXCLNPWGT PROC option (J03-P2): exclude observations with
+    /// nonpositive/missing weights from the analysis (N included). Default
+    /// false → a zero/negative weight counts 0 in the weighted formulas but
+    /// the observation stays in N (SAS default).
+    pub exclnpwgt: bool,
     pub output: Option<UnivariateOutput>,
     /// Tests for Normality requested (PROC option `normal` or `var x / normal`).
     /// When true and no WEIGHT is in effect, the "Tests for Normality" block is
@@ -285,7 +312,12 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             || session.ods_displays("Quantiles")
             || session.ods_displays("ExtremeObs")
             || session.ods_displays("MissingValues")
-            || (ast.normal && session.ods_displays("TestsForNormality")));
+            // J03-P2 — sous WEIGHT l'option NORMAL n'est pas disponible
+            // (NOTE dans le log) : la section ne s'affiche jamais, elle
+            // n'entre pas dans la porte d'affichage non plus.
+            || (ast.normal
+                && weight_values.is_none()
+                && session.ods_displays("TestsForNormality")));
     if proc_shows {
         session.listing.page_header();
         centered(session, "The UNIVARIATE Procedure");
@@ -303,20 +335,27 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             }
             match &weight_values {
                 Some(wv) => {
-                    // Weighted path: usable (value, weight) pairs + excluded count.
-                    let (pairs, n_missing) = partition_weighted(&var_values[vi], wv, grp_rows);
-                    // Also collect the usable values with their 1-based obs
-                    // numbers (in row order) for the Extreme Observations
-                    // section — extremes report the raw VALUES, not weighted,
-                    // so we mirror the exclusion rule of `partition_weighted`.
+                    // J03-P2 — partition selon EXCLNPWGT : par défaut (lax)
+                    // les poids nuls/négatifs deviennent 0 mais l'observation
+                    // reste dans N ; avec EXCLNPWGT (strict) elles sont
+                    // exclues de l'analyse, N compris.
+                    let (pairs, n_missing) = if ast.exclnpwgt {
+                        partition_weighted_strict(&var_values[vi], wv, grp_rows)
+                    } else {
+                        partition_weighted_lax(&var_values[vi], wv, grp_rows)
+                    };
+                    // Extreme Observations : valeurs BRUTES (non pondérées —
+                    // SAS : les poids ne changent pas les extrêmes). En mode
+                    // lax ce sont toutes les obs à x non manquant ; en mode
+                    // EXCLNPWGT, les seules obs utilisables.
                     let mut obs_pairs: Vec<(f64, usize)> = Vec::with_capacity(grp_rows.len());
                     for &row in grp_rows {
-                        let v = value_to_num(&var_values[vi][row]);
-                        let w = value_to_num(&wv[row]);
-                        if let (Some(vf), Some(wf)) = (v, w)
+                        if let Some(vf) = value_to_num(&var_values[vi][row])
                             && !vf.is_nan()
-                            && !wf.is_nan()
-                            && wf > 0.0
+                            && (!ast.exclnpwgt || {
+                                let w = value_to_num(&wv[row]);
+                                matches!(w, Some(wf) if !wf.is_nan() && wf > 0.0)
+                            })
                         {
                             obs_pairs.push((vf, row + 1));
                         }
@@ -328,7 +367,9 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
                         &obs_pairs,
                         n_missing,
                         grp_rows.len(),
-                    );
+                        ast.vardef,
+                        ast.normal,
+                    )?;
                 }
                 None => {
                     // Drop missings into (value, 1-based obs number) pairs, in the
@@ -404,6 +445,9 @@ pub fn execute(ast: &UnivariateAst, session: &mut Session) -> Result<()> {
             &ds,
             &var_cols,
             &var_values,
+            weight_values.as_deref(),
+            ast.vardef,
+            ast.exclnpwgt,
             out,
             &by_cols,
             &by_groups_list,

@@ -395,17 +395,25 @@ fn build_basic_measures_part(var_name: &str, rows: &[BasicMeasureRow]) -> Result
 }
 
 /// Emit the report for a single analysis variable with a WEIGHT variable in
-/// effect. `pairs` are the usable (value, weight) pairs (excluding missing
-/// values, missing weights, and weights ≤ 0); `n_missing` is the excluded
-/// count, `n_total` the group's total row count.
+/// effect. `pairs` are the `(value, effective weight)` pairs (J03-P2 : selon
+/// EXCLNPWGT — voir `partition_weighted_lax`/`partition_weighted_strict` —
+/// un poids nul/négatif vaut 0 en mode défaut, l'observation restant dans N) ;
+/// `n_missing` is the missing-x count, `n_total` the group's total row count.
 ///
 /// Moments and Basic Measures mean/std/variance use the weighted formulas
-/// (see file header). Skewness/Kurtosis use the SAS WEIGHTED g1/g2 formulas
-/// (M45.1, VARDEF=DF — see `weighted_skewness`). Quantiles use the SAS
-/// WEIGHTED Definition 5
-/// (`weighted_quantile_def5`); the Extreme Observations section lists the raw
-/// extreme VALUES with their obs numbers (extremes are not weighted in SAS).
-/// `obs_pairs` are the usable `(value, obs_number)` pairs in row order.
+/// (VARDEF=DF → diviseur Σw−1, VARDEF=WEIGHT → Σw−Σw²/Σw, cf.
+/// `common::weighted_variance`). Skewness/Kurtosis use the SAS WEIGHTED g1/g2
+/// formulas (VARDEF=DF). Quantiles use the shared SAS WEIGHTED Definition 5
+/// (`common::weighted_quantile_def5`) sur les seuls poids > 0 ; the Extreme
+/// Observations section lists the raw extreme VALUES with their obs numbers
+/// (extremes are not weighted in SAS). `obs_pairs` are the raw
+/// `(value, obs_number)` pairs in row order. `normal` demande les tests de
+/// normalité : sous WEIGHT l'option n'est pas disponible (doc SAS) → NOTE
+/// dans le log, aucune section (J03-P2).
+///
+/// `Result` : les tables « Moments » et « BasicMeasures » sont capturées par
+/// ODS OUTPUT sur ce chemin aussi depuis J03-P2 (comme le chemin non pondéré).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_variable_weighted(
     session: &mut Session,
     name: &str,
@@ -413,9 +421,11 @@ pub(super) fn emit_variable_weighted(
     obs_pairs: &[(f64, usize)],
     n_missing: usize,
     n_total: usize,
-) {
+    vardef: VarDef,
+    normal: bool,
+) -> Result<()> {
     // M38.4 — même filtrage ODS SELECT/EXCLUDE par section que le chemin non
-    // pondéré (`emit_variable`) ; pas de section normalité sur ce chemin.
+    // pondéré (`emit_variable`).
     let show_moments = session.ods_displays("Moments");
     let show_basic = session.ods_displays("BasicMeasures");
     let show_quantiles = session.ods_displays("Quantiles");
@@ -423,6 +433,15 @@ pub(super) fn emit_variable_weighted(
     let show_missing = n_missing > 0 && session.ods_displays("MissingValues");
     let show_any = show_moments || show_basic || show_quantiles || show_extremes || show_missing;
     let mut first_section = true;
+
+    // J03-P2 — NORMAL n'est pas disponible avec un WEIGHT statement (doc
+    // SAS) : NOTE explicite plutôt qu'un silence.
+    if normal {
+        session.log.note(
+            "The NORMAL option is not available with a WEIGHT statement. \
+             Tests for normality are not computed.",
+        );
+    }
 
     if show_any {
         session.listing.blank();
@@ -434,9 +453,16 @@ pub(super) fn emit_variable_weighted(
     let nf = n as f64;
 
     // Pairs sorted ascending by value, for the weighted quantiles / median /
-    // mode / range (weights stay attached to their value).
+    // mode / range (weights stay attached to their value). The quantiles
+    // themselves only carry the strictly positive weights (un poids nul
+    // n'entre pas dans les quantiles pondérés, même compté dans N).
     let mut sorted_pairs: Vec<(f64, f64)> = pairs.to_vec();
     sorted_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let sorted_pos: Vec<(f64, f64)> = sorted_pairs
+        .iter()
+        .filter(|(_, w)| *w > 0.0)
+        .cloned()
+        .collect();
 
     let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
     let sum_wx: f64 = pairs.iter().map(|(x, w)| w * x).sum();
@@ -451,11 +477,8 @@ pub(super) fn emit_variable_weighted(
         None => 0.0,
     };
     let uss_w: f64 = pairs.iter().map(|(x, w)| w * x * x).sum();
-    let variance = if n >= 2 {
-        Some(css_w / (nf - 1.0))
-    } else {
-        None
-    };
+    // J03-P2 — VARDEF= divise les moments : DF → Σw−1, WEIGHT → Σw−Σw²/Σw.
+    let variance = weighted_variance(pairs, vardef);
     let std = variance.map(|v| v.sqrt());
     let cv = match (mean_w, std) {
         (Some(m), Some(sd)) if m != 0.0 => Some(100.0 * sd / m),
@@ -478,31 +501,31 @@ pub(super) fn emit_variable_weighted(
     };
 
     // ── Moments ── (objet ODS « Moments »)
+    let moments: Vec<(&str, String, &str, String)> = vec![
+        ("N", format!("{n}"), "Sum Weights", fmt_num(sum_w)),
+        ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
+        ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
+        ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
+        (
+            "Uncorrected SS",
+            fmt_num(uss_w),
+            "Corrected SS",
+            fmt_num(css_w),
+        ),
+        (
+            "Coeff Variation",
+            fmt_opt(cv),
+            "Std Error Mean",
+            fmt_opt(std_err),
+        ),
+    ];
     if show_moments {
         section_sep(session, &mut first_section);
         centered(session, "Moments");
         session.listing.blank();
-        let moments: Vec<(&str, String, &str, String)> = vec![
-            ("N", format!("{n}"), "Sum Weights", fmt_num(sum_w)),
-            ("Mean", fmt_opt(mean_w), "Sum Observations", fmt_num(sum_wx)),
-            ("Std Deviation", fmt_opt(std), "Variance", fmt_opt(variance)),
-            ("Skewness", fmt_opt(skew), "Kurtosis", fmt_opt(kurt)),
-            (
-                "Uncorrected SS",
-                fmt_num(uss_w),
-                "Corrected SS",
-                fmt_num(css_w),
-            ),
-            (
-                "Coeff Variation",
-                fmt_opt(cv),
-                "Std Error Mean",
-                fmt_opt(std_err),
-            ),
-        ];
         let m_rows: Vec<Vec<String>> = moments
-            .into_iter()
-            .map(|(la, va, lb, vb)| vec![la.to_string(), va, lb.to_string(), vb])
+            .iter()
+            .map(|(la, va, lb, vb)| vec![la.to_string(), va.clone(), lb.to_string(), vb.clone()])
             .collect();
         session.listing.write_table(
             &[
@@ -516,13 +539,30 @@ pub(super) fn emit_variable_weighted(
         );
     }
 
+    // J03-P2 — capture ODS OUTPUT « Moments » sur le chemin pondéré (même
+    // structure typée que le chemin non pondéré). nValue de « Sum Weights »
+    // = Σw (et non N, contrairement au chemin non pondéré où Σw = n).
+    if session.ods_output_active("Moments") {
+        let nvals1: [Option<f64>; 6] = [Some(nf), mean_w, std, skew, Some(uss_w), cv];
+        let nvals2: [Option<f64>; 6] = [
+            Some(sum_w),
+            Some(sum_wx),
+            variance,
+            kurt,
+            Some(css_w),
+            std_err,
+        ];
+        let part = build_moments_part(name, &moments, &nvals1, &nvals2)?;
+        session.append_ods_output("Moments", part)?;
+    }
+
     // ── Basic Statistical Measures ── (weighted mean/std/variance; weighted
     // median/Q1/Q3/range via the weighted Definition-5 quantiles; mode is the
     // most frequent VALUE, as in the unweighted path). Objet ODS
     // « BasicMeasures ».
-    let median = weighted_quantile_def5(&sorted_pairs, 0.50);
-    let q1 = weighted_quantile_def5(&sorted_pairs, 0.25);
-    let q3 = weighted_quantile_def5(&sorted_pairs, 0.75);
+    let median = weighted_quantile_def5(&sorted_pos, 0.50);
+    let q1 = weighted_quantile_def5(&sorted_pos, 0.25);
+    let q3 = weighted_quantile_def5(&sorted_pos, 0.75);
     let iqr = match (q3, q1) {
         (Some(a), Some(b)) => Some(a - b),
         _ => None,
@@ -576,6 +616,20 @@ pub(super) fn emit_variable_weighted(
         );
     }
 
+    // J03-P2 — capture ODS OUTPUT « BasicMeasures » sur le chemin pondéré.
+    if session.ods_output_active("BasicMeasures") {
+        let part = build_basic_measures_part(
+            name,
+            &[
+                (Some("Mean"), mean_w, "Std Deviation", std),
+                (Some("Median"), median, "Variance", variance),
+                (Some("Mode"), mode_v, "Range", range),
+                (None, None, "Interquartile Range", iqr),
+            ],
+        )?;
+        session.append_ods_output("BasicMeasures", part)?;
+    }
+
     // ── Quantiles (Definition 5, weighted) ── (objet ODS « Quantiles »)
     if show_quantiles {
         section_sep(session, &mut first_section);
@@ -599,7 +653,7 @@ pub(super) fn emit_variable_weighted(
             .map(|(label, p)| {
                 vec![
                     label.to_string(),
-                    fmt_opt(weighted_quantile_def5(&sorted_pairs, *p)),
+                    fmt_opt(weighted_quantile_def5(&sorted_pos, *p)),
                 ]
             })
             .collect();
@@ -669,6 +723,8 @@ pub(super) fn emit_variable_weighted(
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
     }
+
+    Ok(())
 }
 
 /// M45.2 — « Fitted Normal Distribution » : la table de paramètres que SAS

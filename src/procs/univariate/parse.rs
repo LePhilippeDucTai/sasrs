@@ -10,6 +10,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
     let mut normal = false;
     let mut plots: Vec<UnivariatePlot> = Vec::new();
     let mut noprint = false;
+    // J03-P2 — VARDEF= (DF par défaut) et EXCLNPWGT.
+    let mut vardef = VarDef::Df;
+    let mut exclnpwgt = false;
 
     // --- PROC UNIVARIATE statement options, until `;` ---
     loop {
@@ -29,15 +32,19 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
             ts.next();
             noprint = true;
         } else if ts.peek().is_kw("vardef") {
-            // J02-P4 — only the default divisor DF is implemented; any other
-            // VARDEF= value changes every moment → ERROR, never a silent
-            // fall-back on DF.
+            // J03-P2 — VARDEF= divise la variance pondérée : DF (défaut,
+            // Σw−1) et WEIGHT/WGT (Σw−Σw²/Σw) sont honorés ; toute autre
+            // valeur change chaque moment → ERROR, jamais de repli silencieux.
             common::consume_option_eq(ts, "VARDEF")?;
             let tok = ts.peek().clone();
-            let value = tok.ident().map(|s| s.to_ascii_lowercase());
-            match value.as_deref() {
+            match tok.ident().map(|s| s.to_ascii_lowercase()).as_deref() {
                 Some("df") => {
                     ts.next();
+                    vardef = VarDef::Df;
+                }
+                Some("weight" | "wgt") => {
+                    ts.next();
+                    vardef = VarDef::Weight;
                 }
                 _ => {
                     return Err(common::unsupported_statement(
@@ -46,6 +53,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
                     ));
                 }
             }
+        } else if ts.peek().is_kw("exclnpwgt") {
+            // J03-P2 — EXCLNPWGT : exclut de l'analyse (N compris) les
+            // observations à poids nul, négatif ou manquant.
+            ts.next();
+            exclnpwgt = true;
         } else if ts.peek().is_kw("pctldef") {
             // J02-P4 — quantiles use SAS Definition 5 (the default). The other
             // definitions (1–4) shift every quantile → ERROR.
@@ -164,6 +176,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<UnivariateAst> {
         var,
         by,
         weight,
+        vardef,
+        exclnpwgt,
         output,
         normal,
         plots,

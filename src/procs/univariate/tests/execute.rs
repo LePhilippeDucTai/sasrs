@@ -21,6 +21,8 @@ fn execute_graphics_emits_deferred_note() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![UnivariatePlot {
@@ -61,6 +63,8 @@ fn execute_report_contains_sections_and_median() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -116,6 +120,8 @@ fn execute_default_all_numeric_vars() {
         var: vec![],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -153,6 +159,8 @@ fn execute_by_per_group_sections() {
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -198,6 +206,8 @@ fn execute_by_unsorted_errors() {
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -231,6 +241,8 @@ fn execute_output_no_by() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: Some(UnivariateOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
@@ -283,6 +295,8 @@ fn execute_output_with_by() {
         var: vec!["x".into()],
         by: vec![("g".into(), false)],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: Some(UnivariateOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
@@ -332,6 +346,8 @@ fn execute_weighted_moments() {
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -346,7 +362,9 @@ fn execute_weighted_moments() {
     );
     assert!(listing.contains("Variable: x"), "listing: {listing}");
     assert!(listing.contains("Moments"), "listing: {listing}");
-    // Weighted: Sum Weights = 6, Sum Observations = 14.
+    // Weighted: Sum Weights = 6, Sum Observations = 14. J03-P2 : la ligne à
+    // poids nul (w=0, x=99) RESTE comptée dans N=4 mais pèse 0 (défaut SAS
+    // sans EXCLNPWGT) — elle n'apparaît plus comme missing.
     assert!(listing.contains("Sum Weights"), "listing: {listing}");
     // M33.2: weighted Quantiles + Extreme Observations are now emitted.
     assert!(
@@ -361,8 +379,57 @@ fn execute_weighted_moments() {
         !listing.contains("not computed with a WEIGHT variable"),
         "listing: {listing}"
     );
-    // The excluded (w<=0) row counts as a missing value.
-    assert!(listing.contains("Missing Values"), "listing: {listing}");
+    // J03-P2 : un poids nul n'est PAS un x manquant — pas de section
+    // Missing Values ; en revanche la ligne reste dans N.
+    assert!(
+        !listing.contains("Missing Values"),
+        "zero weight is not missing: {listing}"
+    );
+}
+
+#[test]
+fn execute_weighted_zero_weight_counted_in_n_with_exclnpwgt_excluding() {
+    let mut session = make_session();
+    // x=[1,5,9], w=[1,0,1] — oracle weighted_stats « poids-nul-* » :
+    // défaut : N=3, SumWgt=2 ; EXCLNPWGT : N=2 (poids nul exclu).
+    let df = df!["x" => [1.0_f64, 5.0, 9.0], "w" => [1.0_f64, 0.0, 1.0]].unwrap();
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
+    write_dataset(&mut session, "T", ds);
+
+    let mut base = UnivariateAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
+        var: vec!["x".into()],
+        by: vec![],
+        weight: Some("w".into()),
+        vardef: VarDef::Df,
+        exclnpwgt: false,
+        output: None,
+        normal: false,
+        plots: vec![],
+        noprint: false,
+    };
+    execute(&base, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    // N=3 : la ligne à poids nul reste comptée ; Sum Weights = 2.
+    assert!(
+        listing.contains("N                             3    Sum Weights              2"),
+        "N/SumWgt: {listing}"
+    );
+
+    base.exclnpwgt = true;
+    execute(&base, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    // EXCLNPWGT : la ligne à poids nul est exclue → N=2, SumWgt=2.
+    assert!(
+        listing.contains("N                             2    Sum Weights              2"),
+        "N/SumWgt: {listing}"
+    );
 }
 
 #[test]
@@ -387,6 +454,8 @@ fn execute_weighted_no_quantiles_section() {
         var: vec!["x".into()],
         by: vec![],
         weight: Some("w".into()),
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -541,6 +610,8 @@ fn plain_ast(var: &[&str]) -> UnivariateAst {
         var: var.iter().map(|s| s.to_string()).collect(),
         by: vec![],
         weight: None,
+        vardef: VarDef::Df,
+        exclnpwgt: false,
         output: None,
         normal: false,
         plots: vec![],
@@ -667,4 +738,156 @@ fn ods_output_moments_two_vars_stack() {
     let vn = out.df.column("VarName").unwrap().str().unwrap();
     assert_eq!(vn.get(0), Some("x"));
     assert_eq!(vn.get(6), Some("y"));
+}
+
+// ──────────────── J03-P2 : NORMAL/WEIGHT, ODS, OUTPUT pondérés ─────────
+
+/// Base pondérée : x=[1,5,9], w=[1,0,1] (oracle « poids-nul-univariate-defaut »
+/// : N=3, SumWgt=2, Mean=5, Var=32, Median=5, Q1=1, Q3=9).
+fn weighted_session() -> Session {
+    let mut session = make_session();
+    let df = df!["x" => [1.0_f64, 5.0, 9.0], "w" => [1.0_f64, 0.0, 1.0]].unwrap();
+    let ds = SasDataset {
+        df,
+        vars: vec![num_meta("x"), num_meta("w")],
+    };
+    write_dataset(&mut session, "T", ds);
+    session
+}
+
+fn weighted_ast(normal: bool) -> UnivariateAst {
+    UnivariateAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "T".into(),
+        }),
+        var: vec!["x".into()],
+        by: vec![],
+        weight: Some("w".into()),
+        vardef: VarDef::Df,
+        exclnpwgt: false,
+        output: None,
+        normal,
+        plots: vec![],
+        noprint: false,
+    }
+}
+
+#[test]
+fn execute_weighted_normal_option_notes_and_skips_section() {
+    // Doc SAS UNIVARIATE WEIGHT : « The ... NORMAL ... options are not
+    // available with the WEIGHT statement » → NOTE, pas de section.
+    let mut session = weighted_session();
+    execute(&weighted_ast(true), &mut session).unwrap();
+    let log = session.log.into_string();
+    assert!(
+        log.contains("NORMAL option is not available with a WEIGHT statement"),
+        "log: {log}"
+    );
+    let listing = session.listing.take_string();
+    assert!(
+        !listing.contains("Tests for Normality"),
+        "listing: {listing}"
+    );
+    // Le titre « Quantiles (Definition 5) » reste vérifié sous WEIGHT.
+    assert!(
+        listing.contains("Quantiles (Definition 5)"),
+        "listing: {listing}"
+    );
+}
+
+#[test]
+fn execute_weighted_ods_output_captures_moments_and_basic() {
+    // J03-P2 — la capture ODS OUTPUT fonctionne aussi sous WEIGHT (même
+    // structure typée que le chemin non pondéré).
+    let mut session = weighted_session();
+    session.set_ods_output(&[
+        (
+            "Moments".into(),
+            DatasetRef {
+                libref: None,
+                name: "mom".into(),
+            },
+        ),
+        (
+            "BasicMeasures".into(),
+            DatasetRef {
+                libref: None,
+                name: "bas".into(),
+            },
+        ),
+    ]);
+    execute(&weighted_ast(false), &mut session).unwrap();
+    session.flush_ods_output().unwrap();
+    let (mom, _) = session.libs.get("WORK").unwrap().read("MOM").unwrap();
+    // VarName + 6 lignes de paires (Label, cValue, nValue).
+    assert_eq!(mom.n_obs(), 6);
+    let names: Vec<&str> = mom.vars.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "VarName", "Label1", "cValue1", "nValue1", "Label2", "cValue2", "nValue2"
+        ]
+    );
+    // Valeurs pleines précision : N=3 (la ligne à poids nul reste comptée),
+    // Sum Weights=2, Mean=5, Variance=32 (W−1 = 1).
+    let nv1 = read_num_col(&session, "MOM", "nValue1");
+    let nv2 = read_num_col(&session, "MOM", "nValue2");
+    assert_eq!(nv1[0], Value::Num(3.0));
+    assert_eq!(nv2[0], Value::Num(2.0));
+    assert_eq!(nv1[1], Value::Num(5.0));
+    if let Value::Num(v) = nv2[2] {
+        assert!((v - 32.0).abs() < 1e-12, "var = {v}");
+    } else {
+        panic!("var numérique");
+    }
+    let (bas, _) = session.libs.get("WORK").unwrap().read("BAS").unwrap();
+    assert_eq!(bas.n_obs(), 4);
+}
+
+#[test]
+fn execute_weighted_output_out_honors_weight_and_vardef() {
+    // OUTPUT OUT= pondéré : Mean=5, Std=√32, Median=5, Q1=1, Q3=9, et
+    // VARDEF=WEIGHT change le diviseur (W−Σw²/W = 2−2/2 = 1 → même 32 ici ;
+    // vérifié sur un jeu où les diviseurs diffèrent ci-dessous).
+    let mut session = weighted_session();
+    let mut ast = weighted_ast(false);
+    ast.output = Some(UnivariateOutput {
+        out: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "O".into(),
+        },
+        specs: vec![
+            ("mean".into(), vec!["om".into()]),
+            ("std".into(), vec!["os".into()]),
+            ("median".into(), vec!["omed".into()]),
+            ("q1".into(), vec!["oq1".into()]),
+            ("q3".into(), vec!["oq3".into()]),
+            ("n".into(), vec!["on".into()]),
+        ],
+    });
+    execute(&ast, &mut session).unwrap();
+    assert_eq!(read_num_col(&session, "O", "om"), vec![Value::Num(5.0)]);
+    if let Value::Num(s) = read_num_col(&session, "O", "os")[0] {
+        assert!((s - 32.0_f64.sqrt()).abs() < 1e-12, "std = {s}");
+    } else {
+        panic!("std numérique");
+    }
+    assert_eq!(read_num_col(&session, "O", "omed"), vec![Value::Num(5.0)]);
+    assert_eq!(read_num_col(&session, "O", "oq1"), vec![Value::Num(1.0)]);
+    assert_eq!(read_num_col(&session, "O", "oq3"), vec![Value::Num(9.0)]);
+    // N=3 par défaut (poids nul compté) ; EXCLNPWGT → N=2.
+    assert_eq!(read_num_col(&session, "O", "on"), vec![Value::Num(3.0)]);
+    let mut session = weighted_session();
+    let mut ast = weighted_ast(false);
+    ast.exclnpwgt = true;
+    ast.output = Some(UnivariateOutput {
+        out: DatasetRef {
+            libref: Some("WORK".into()),
+            name: "O2".into(),
+        },
+        specs: vec![("n".into(), vec!["on".into()])],
+    });
+    execute(&ast, &mut session).unwrap();
+    assert_eq!(read_num_col(&session, "O2", "on"), vec![Value::Num(2.0)]);
 }
