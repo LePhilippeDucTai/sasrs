@@ -8,8 +8,8 @@ Generated from Mission Control; do not edit.
 | J02-P10 | DONE | 1 |
 | J02-P2 | DONE | 5 |
 | J02-P3 | DONE | 3 |
-| J02-P4 | NEEDS_DECISION | 2 |
-| J02-P5 | PLANNED | 0 |
+| J02-P4 | DONE | 4 |
+| J02-P5 | READY | 0 |
 | J02-P6 | PLANNED | 0 |
 | J02-P9 | DONE | 1 |
 | J02-P7 | PLANNED | 0 |

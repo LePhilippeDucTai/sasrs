@@ -2,7 +2,7 @@
 
 Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.
 
-Protocol: 3 · Plan: `959bc69d-76bf-4a77-ab01-02dcb8113c51` · Revision: 8
+Protocol: 3 · Plan: `959bc69d-76bf-4a77-ab01-02dcb8113c51` · Revision: 9
 
 Base: `consolidation`
 

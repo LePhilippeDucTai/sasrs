@@ -46,7 +46,11 @@ Choice: extend_test_scope
 Comment rendre le périmètre compatible avec l’exigence UNIVARIATE NOPRINT ?
 Choice: extend_univariate_scope
 
-## c8371f5a-d1dc-4e26-a9e5-c6a2923e1043 · pending
+## c8371f5a-d1dc-4e26-a9e5-c6a2923e1043 · resolved
 Le quota du compte Codex est épuisé jusqu'au 27/09 16:56 : comment poursuivre les exécuteurs du plan consolidation ?
-Choice: pending
+Choice: switch_claude
+
+## 55a73852-c7f1-4dcf-9ed9-5c078b0f4b75 · resolved
+Règle du 19/09 (politique permanente) : quota Codex épuisé = relance immédiate sous dsh sans attendre le reset. Quels exécuteurs pour la suite du plan consolidation ?
+Choice: switch_dsh
 
