@@ -141,6 +141,30 @@ jobs:
             exit 1
           fi
 
+  test-fault-injection:
+    name: test (fault-injection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fault-injection
+      # J04-P5 : interruptions simulées du protocole d'écriture atomique
+      # parquet + sidecar (ADR 0001) via SASRS_FAULT_INJECT — l'enfant meurt
+      # en exit 86 au point d'injection, le parent relit l'état disque.
+      - name: cargo test --features fault-injection --test storage_integrity
+        run: cargo test --locked -p sasrs --features fault-injection --test storage_integrity
+      - name: git status --porcelain doit être vide
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "::error::Arbre de travail sale après les tests (fichier .snap.new oublié ?)"
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
   ci-ok:
     name: ci-ok
     needs:
@@ -151,6 +175,7 @@ jobs:
       - test
       - test-graphics
       - test-s3
+      - test-fault-injection
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
