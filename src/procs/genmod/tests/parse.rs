@@ -185,3 +185,65 @@ fn test_gamma_pearson_dispersion() {
         "expected Scale={scale_str} (1/φ) in listing:\n{listing}"
     );
 }
+
+// ── J02-P5 : model_fallback_* — plus de replis silencieux ──────────────
+//
+// Syntaxe de référence : SAS/STAT 9.4 User's Guide, The GENMOD Procedure
+// (MODEL statement : DIST=, LINK= — dont la famille POWER(λ) — et options).
+// https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_genmod_syntax_toc.htm
+
+#[test]
+fn model_fallback_genmod_unknown_dist_is_error() {
+    // Base (avant J02-P5) : DIST=BOGUS retombait SILENCIEUSEMENT sur POISSON.
+    let err = parse_genmod("proc genmod; model y = x / dist=bogus; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown DIST= value 'BOGUS'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_genmod_unknown_link_is_error() {
+    // Base : LINK=BOGUS retombait silencieusement sur le lien canonique.
+    let err = parse_genmod("proc genmod; model y = x / link=bogus; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown LINK= value 'BOGUS'"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_genmod_power_minus1_is_reciprocal() {
+    // Non-régression : LINK=POWER(-1) ≡ RECIPROCAL reste accepté.
+    let ast = parse_genmod("proc genmod; model y = x / link=power(-1); run;").unwrap();
+    assert_eq!(ast.model.unwrap().link, LinkFunction::Reciprocal);
+}
+
+#[test]
+fn model_fallback_genmod_power_other_lambda_is_error() {
+    // Base : LINK=POWER(λ) (λ quelconque) était traité comme RECIPROCAL.
+    let err = parse_genmod("proc genmod; model y = x / link=power(2); run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("POWER(2) is not supported"), "msg: {msg}");
+}
+
+#[test]
+fn model_fallback_genmod_unknown_model_option_is_error() {
+    // Base : OFFSET=z (toute option inconnue) était ignoré en silence.
+    let err = parse_genmod("proc genmod; model y = x / dist=poisson offset=z; run;").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("MODEL option 'OFFSET'") && msg.contains("GENMOD"),
+        "msg: {msg}"
+    );
+}
+
+#[test]
+fn model_fallback_genmod_interaction_is_error() {
+    // Base : `a*b` était aplati en prédicteurs a et b (un modèle différent).
+    let err = parse_genmod("proc genmod; model y = a*b; run;").unwrap_err();
+    assert!(err.to_string().contains("Interaction"), "err: {err}");
+}
+
+#[test]
+fn model_fallback_genmod_nested_effect_is_error() {
+    // Base : `a(b)` était aplati en prédicteurs a et b.
+    let err = parse_genmod("proc genmod; model y = a(b); run;").unwrap_err();
+    assert!(err.to_string().contains("Nested"), "err: {err}");
+}

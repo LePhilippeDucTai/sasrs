@@ -31,16 +31,60 @@ pub fn parse(ts: &mut StatementStream) -> Result<DiscrimAst> {
         } else if tk.is_kw("outstat") {
             outstat = Some(common::parse_dataset_opt(ts, "OUTSTAT")?);
         } else if tk.is_kw("method") {
+            // J02-P5 — plus de repli silencieux vers LDA : seul METHOD=NORMAL
+            // est rendu (SAS/STAT 9.4, The DISCRIM Procedure).
             common::consume_option_eq(ts, "METHOD")?;
-            method = ts.peek().ident().map(|s| s.to_ascii_uppercase());
+            let span = ts.peek().span;
+            let v = ts.peek().ident().map(|s| s.to_ascii_uppercase());
+            match v.as_deref() {
+                Some("NORMAL") => method = v,
+                Some(other) => {
+                    return Err(SasError::parse(
+                        format!(
+                            "METHOD={} is not supported in PROC DISCRIM; \
+                             only METHOD=NORMAL is implemented.",
+                            other
+                        ),
+                        span,
+                    ));
+                }
+                None => {
+                    return Err(SasError::parse("expected a value after METHOD=", span));
+                }
+            }
             ts.next();
         } else if tk.is_kw("pool") {
+            // J02-P5 — POOL=NO (QDA) et POOL=TEST ne retombent plus sur la
+            // covariance pooled : ERROR explicite ; POOL= inconnu : ERROR.
             common::consume_option_eq(ts, "POOL")?;
+            let span = ts.peek().span;
             let v = ts.peek().ident().map(|s| s.to_ascii_lowercase());
             pool = match v.as_deref() {
-                Some("no") => Pool::No,
-                Some("test") => Pool::Test,
-                _ => Pool::Yes,
+                Some("yes") | None => Pool::Yes,
+                Some("no") => {
+                    return Err(SasError::parse(
+                        "POOL=NO (quadratic discriminant analysis) is not supported \
+                         in PROC DISCRIM; only POOL=YES is implemented.",
+                        span,
+                    ));
+                }
+                Some("test") => {
+                    return Err(SasError::parse(
+                        "POOL=TEST is not supported in PROC DISCRIM; \
+                         only POOL=YES is implemented.",
+                        span,
+                    ));
+                }
+                Some(other) => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unknown POOL= value '{}' in PROC DISCRIM; \
+                             use POOL=YES.",
+                            other.to_uppercase()
+                        ),
+                        span,
+                    ));
+                }
             };
             ts.next();
         } else if tk.is_kw("noclassify") {
@@ -142,23 +186,7 @@ pub(super) fn check_options<'a>(ast: &'a DiscrimAst, session: &mut Session) -> R
     }
 
     // Parse-accepted options that are not implemented → NOTE.
-    if let Some(m) = &ast.method
-        && m != "NORMAL"
-    {
-        session.log.note(&format!(
-            "METHOD={} is not implemented; using NORMAL (LDA).",
-            m
-        ));
-    }
-    match ast.pool {
-        Pool::No => session
-            .log
-            .note("POOL=NO (QDA) is not implemented; using pooled covariance (LDA)."),
-        Pool::Test => session
-            .log
-            .note("POOL=TEST is not implemented; using pooled covariance (LDA)."),
-        Pool::Yes => {}
-    }
+    // (METHOD≠NORMAL et POOL=NO|TEST sont des ERROR au parsing depuis J02-P5.)
     if ast.outstat.is_some() {
         session
             .log

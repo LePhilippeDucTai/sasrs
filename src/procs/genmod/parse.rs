@@ -51,8 +51,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
             // Expect '='
             common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
 
-            // Predictors until '/' or ';'
-            let predictors = common::parse_effect_list(ts);
+            // Predictors until '/' or ';'. J02-P5 — `a*b` / `a(b)` are NOT
+            // silently flattened anymore (SAS/STAT 9.4, GENMOD « MODEL
+            // Statement » effect syntax): they are an explicit ERROR.
+            let predictors = common::parse_effect_list_strict(ts, "GENMOD")?;
 
             let mut dist_opt: Option<Distribution> = None;
             let mut link_opt: Option<LinkFunction> = None;
@@ -62,41 +64,106 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
 
             if ts.peek().kind == TokenKind::Slash {
                 ts.next(); // consume '/'
-                // Parse options
+                // Parse options. J02-P5 — fin des replis silencieux
+                // (SAS/STAT 9.4 User's Guide, The GENMOD Procedure) :
+                // DIST=/LINK= inconnus, LINK=POWER(λ) avec λ≠-1 et toute
+                // option MODEL inconnue (p.ex. OFFSET=) sont des ERROR.
                 while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
                     if ts.peek().is_kw("dist") {
                         ts.next();
                         if ts.peek().kind == TokenKind::Eq {
                             ts.next();
                         }
+                        let span = ts.peek().span;
                         if let Some(name) = ts.peek().ident().map(str::to_string) {
                             ts.next();
-                            match name.to_ascii_lowercase().as_str() {
-                                "poisson" => dist_opt = Some(Distribution::Poisson),
-                                "binomial" => dist_opt = Some(Distribution::Binomial),
-                                "normal" => dist_opt = Some(Distribution::Normal),
-                                "gamma" => dist_opt = Some(Distribution::Gamma),
-                                _ => {} // ignore unknown
-                            }
+                            dist_opt = Some(match name.to_ascii_lowercase().as_str() {
+                                "poisson" => Distribution::Poisson,
+                                "binomial" | "bin" => Distribution::Binomial,
+                                "normal" => Distribution::Normal,
+                                "gamma" => Distribution::Gamma,
+                                other => {
+                                    return Err(SasError::parse(
+                                        format!(
+                                            "Unknown DIST= value '{}' on the MODEL statement.",
+                                            other.to_uppercase()
+                                        ),
+                                        span,
+                                    ));
+                                }
+                            });
+                        } else {
+                            return Err(SasError::parse(
+                                "expected a distribution name after DIST=",
+                                span,
+                            ));
                         }
                     } else if ts.peek().is_kw("link") {
                         ts.next();
                         if ts.peek().kind == TokenKind::Eq {
                             ts.next();
                         }
+                        let span = ts.peek().span;
                         if let Some(name) = ts.peek().ident().map(str::to_string) {
                             ts.next();
-                            match name.to_ascii_lowercase().as_str() {
-                                "log" => link_opt = Some(LinkFunction::Log),
-                                "logit" => link_opt = Some(LinkFunction::Logit),
-                                "identity" => link_opt = Some(LinkFunction::Identity),
-                                "reciprocal" | "inverse" | "power" => {
-                                    // POWER(-1) ≈ reciprocal; treat POWER as
-                                    // reciprocal here (full power family deferred).
-                                    link_opt = Some(LinkFunction::Reciprocal)
+                            link_opt = Some(match name.to_ascii_lowercase().as_str() {
+                                "log" => LinkFunction::Log,
+                                "logit" => LinkFunction::Logit,
+                                "identity" => LinkFunction::Identity,
+                                "reciprocal" | "inverse" => LinkFunction::Reciprocal,
+                                // LINK=POWER(λ) — seule λ = -1 (l'inverse) est
+                                // rendue ; toute autre puissance serait un
+                                // modèle différent ajusté en silence.
+                                "power" => {
+                                    if ts.peek().kind == TokenKind::LParen {
+                                        ts.next();
+                                        let neg = ts.peek().kind == TokenKind::Minus;
+                                        if neg {
+                                            ts.next();
+                                        }
+                                        if let TokenKind::Num(v) = ts.peek().kind {
+                                            ts.next();
+                                            let lambda = if neg { -v } else { v };
+                                            if ts.peek().kind == TokenKind::RParen {
+                                                ts.next();
+                                            }
+                                            if (lambda - (-1.0)).abs() < 1e-12 {
+                                                LinkFunction::Reciprocal
+                                            } else {
+                                                return Err(SasError::parse(
+                                                    format!(
+                                                        "LINK=POWER({lambda}) is not supported; only \
+                                                         POWER(-1) (the reciprocal) is implemented."
+                                                    ),
+                                                    span,
+                                                ));
+                                            }
+                                        } else {
+                                            return Err(SasError::parse(
+                                                "expected a number in LINK=POWER(...)",
+                                                ts.peek().span,
+                                            ));
+                                        }
+                                    } else {
+                                        return Err(SasError::parse(
+                                            "LINK=POWER requires a parenthesized exponent, \
+                                             e.g. LINK=POWER(-1).",
+                                            span,
+                                        ));
+                                    }
                                 }
-                                _ => {} // ignore unknown
-                            }
+                                other => {
+                                    return Err(SasError::parse(
+                                        format!(
+                                            "Unknown LINK= value '{}' on the MODEL statement.",
+                                            other.to_uppercase()
+                                        ),
+                                        span,
+                                    ));
+                                }
+                            });
+                        } else {
+                            return Err(SasError::parse("expected a link name after LINK=", span));
                         }
                     } else if ts.peek().is_kw("noprint") {
                         noprint = true;
@@ -122,7 +189,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<GenmodAst> {
                             ts.next();
                         }
                     } else {
-                        ts.next();
+                        // J02-P5 — option MODEL inconnue (p.ex. OFFSET=) :
+                        // ERROR au lieu de l'ignorer en silence.
+                        let span = ts.peek().span;
+                        let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                        return Err(SasError::parse(
+                            format!("Unknown or unsupported MODEL option '{bad}' in PROC GENMOD."),
+                            span,
+                        ));
                     }
                 }
             }
