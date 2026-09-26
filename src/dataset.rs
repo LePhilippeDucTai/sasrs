@@ -99,27 +99,9 @@ impl SasDataset {
         // datasets écrits sans format/label/longueur explicite).
         match read_sidecar(path, &fingerprint) {
             SidecarState::Valid(meta_map) => {
-                for v in &mut vars {
-                    if let Some(saved) = meta_map.get(&v.name.to_uppercase()) {
-                        // Le format/libellé/longueur sauvegardés l'emportent (y compris pour
-                        // remplacer le DATE9. inféré d'une colonne Date physique).
-                        if saved.format.is_some() {
-                            v.format = saved.format.clone();
-                        }
-                        if saved.label.is_some() {
-                            v.label = saved.label.clone();
-                        }
-                        if let Some(saved_len) = saved.length {
-                            v.length = saved_len;
-                        }
-                    }
-                }
+                apply_sidecar_meta(&mut vars, &meta_map, path, &mut notes);
             }
-            SidecarState::Stale => notes.push(format!(
-                "WARNING: Stale metadata sidecar ignored for {}: its fingerprint \
-                 no longer matches the parquet file.",
-                path.display()
-            )),
+            SidecarState::Invalid(warning) => notes.push(warning),
             SidecarState::Absent => {}
         }
 
@@ -345,24 +327,127 @@ fn write_sidecar(path: &Path, vars: &[VarMeta], fingerprint: SidecarFingerprint)
 enum SidecarState {
     /// Aucun sidecar sur disque (dataset sans métadonnées persistées).
     Absent,
-    /// Présent mais périmé : empreinte ≠ parquet, ou format illisible
-    /// (sidecar d'avant le protocole). À ignorer, avec diagnostic.
-    Stale,
+    /// Présent mais inapplicable : illisible, JSON invalide, type de champ
+    /// faux ou empreinte périmée. Porte le WARNING complet (préfixé, nommant
+    /// le fichier et la cause) — les métadonnées sont ignorées, jamais
+    /// appliquées aux données.
+    Invalid(String),
     /// Présent, lisible, et dont l'empreinte correspond au parquet lu.
     Valid(HashMap<String, SavedMeta>),
 }
 
 /// Lit le sidecar de métadonnées et le compare à l'empreinte du parquet
 /// réellement présent : seule une correspondance EXACTE rend les métadonnées
-/// applicables.
+/// applicables. Chaque mode de défaillance porte sa CAUSE propre dans le
+/// diagnostic (J04-P3) — aucun échec silencieux.
 fn read_sidecar(path: &Path, fingerprint: &SidecarFingerprint) -> SidecarState {
     let sc = sidecar_path(path);
-    let Ok(data) = std::fs::read_to_string(sc) else {
-        return SidecarState::Absent;
+    let name = sc.display();
+    // NotFound = dataset sans métadonnées persistées : normal, silencieux.
+    // Toute AUTRE erreur de lecture est un sidecar illisible : diagnostic.
+    let bytes = match std::fs::read(&sc) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SidecarState::Absent,
+        Err(e) => {
+            return SidecarState::Invalid(format!(
+                "WARNING: Unreadable metadata sidecar {name}: {e}; \
+                 its metadata was ignored."
+            ));
+        }
     };
-    match serde_json::from_str::<SidecarFile>(&data) {
-        Ok(f) if f.fingerprint == *fingerprint => SidecarState::Valid(f.vars),
-        _ => SidecarState::Stale,
+    let data = match String::from_utf8(bytes) {
+        Ok(d) => d,
+        Err(_) => {
+            return SidecarState::Invalid(format!(
+                "WARNING: Invalid metadata sidecar {name}: not valid UTF-8; \
+                 its metadata was ignored."
+            ));
+        }
+    };
+    // Deux temps pour DISTINGUER « JSON malformé » (syntaxe) de « type de
+    // champ faux » (JSON bien formé mais champs incompatibles avec le
+    // schéma du sidecar) : deux causes, deux diagnostics.
+    let value: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(e) => {
+            return SidecarState::Invalid(format!(
+                "WARNING: Invalid metadata sidecar {name}: malformed JSON ({e}); \
+                 its metadata was ignored."
+            ));
+        }
+    };
+    let file: SidecarFile = match serde_json::from_value(value) {
+        Ok(f) => f,
+        Err(e) => {
+            return SidecarState::Invalid(format!(
+                "WARNING: Invalid metadata sidecar {name}: {e}; \
+                 its metadata was ignored."
+            ));
+        }
+    };
+    if file.fingerprint != *fingerprint {
+        return SidecarState::Invalid(format!(
+            "WARNING: Stale metadata sidecar ignored for {name}: its fingerprint \
+             no longer matches the parquet file."
+        ));
+    }
+    SidecarState::Valid(file.vars)
+}
+
+/// Applique les métadonnées sauvegardées aux `VarMeta` déduits du parquet.
+/// Le format/libellé sauvegardés l'emportent (y compris pour remplacer le
+/// DATE9. inféré d'une colonne Date physique) ; la longueur déclarée n'est
+/// appliquée que si elle est COMPATIBLE : ni longueur pour une variable
+/// numérique (fixée à 8 par le modèle SAS), ni longueur inférieure à la plus
+/// longue valeur réellement présente. Chaque métadonnée fautive est ignorée
+/// avec un WARNING nommant le fichier et la cause — les données, elles,
+/// sont toujours lues. Une entrée pour une variable absente du parquet
+/// donne une NOTE (informatif, pas une corruption).
+fn apply_sidecar_meta(
+    vars: &mut [VarMeta],
+    meta_map: &HashMap<String, SavedMeta>,
+    path: &Path,
+    notes: &mut Vec<String>,
+) {
+    let sc = sidecar_path(path);
+    let name = sc.display();
+    for v in vars.iter_mut() {
+        let Some(saved) = meta_map.get(&v.name.to_uppercase()) else {
+            continue;
+        };
+        if saved.format.is_some() {
+            v.format = saved.format.clone();
+        }
+        if saved.label.is_some() {
+            v.label = saved.label.clone();
+        }
+        if let Some(len) = saved.length {
+            if v.ty != VarType::Char {
+                notes.push(format!(
+                    "WARNING: Metadata sidecar {name} declares length {len} for numeric \
+                     variable {}, but numeric length is fixed at 8; \
+                     the declared length was ignored.",
+                    v.name
+                ));
+            } else if len < v.length {
+                notes.push(format!(
+                    "WARNING: Metadata sidecar {name} declares length {len} for variable {}, \
+                     shorter than the longest value ({}); \
+                     the declared length was ignored.",
+                    v.name, v.length
+                ));
+            } else {
+                v.length = len;
+            }
+        }
+    }
+    for key in meta_map.keys() {
+        if !vars.iter().any(|v| v.name.to_uppercase() == *key) {
+            notes.push(format!(
+                "NOTE: Metadata sidecar {name} has an entry for variable {key}, which does \
+                 not exist in the parquet file; the entry was ignored."
+            ));
+        }
     }
 }
 
