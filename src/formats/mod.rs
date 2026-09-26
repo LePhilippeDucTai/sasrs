@@ -440,9 +440,9 @@ pub(crate) fn right_justify(s: &str, w: usize) -> String {
 
 /// Ajuste `s` à exactement `w` **caractères**, justifié à gauche : tronque
 /// sur une frontière de caractère (jamais d'octet) puis complète par des
-/// espaces. Remplace l'idiome `out.truncate(w)` + remplissage par `len()`
-/// des formats caractère (`$w.`, `$CHAR`, `$F`, `$QUOTE`, `$HEX`, `$UPCASE`)
-/// et du repli du catalogue — voir docs/encoding.md.
+/// espaces. Remplace l'ancien idiome de troncature d'octet + remplissage
+/// par `len()` des formats caractère (`$w.`, `$CHAR`, `$F`, `$QUOTE`,
+/// `$HEX`, `$UPCASE`) et du repli du catalogue — voir docs/encoding.md.
 pub(crate) fn fit_chars(s: &str, w: usize) -> String {
     let mut out = String::with_capacity(s.len().max(w));
     out.extend(s.chars().take(w));
