@@ -1,5 +1,5 @@
 use super::*;
-use crate::dataset::{TMP_MARKER, sidecar_path};
+use crate::dataset::{TMP_MARKER, fault_point, sidecar_path};
 
 /// A libref bound to a local directory: each table is `<dir>/<table>.parquet`.
 pub struct DirLibrary {
@@ -74,6 +74,17 @@ impl LibraryProvider for DirLibrary {
         Ok(())
     }
 
+    /// Renommage sans orphelin (J04-P2) :
+    ///
+    /// 1. destination existante → ERROR (sémantique PROC DATASETS CHANGE :
+    ///    SAS refuse le CHANGE vers un membre existant), rien n'est déplacé ;
+    /// 2. un sidecar orphelin de la destination (parquet absent) est purgé :
+    ///    il ne peut pas se faire passer pour les métadonnées de la table
+    ///    renommée (son empreinte ne correspondrait de toute façon pas, mais
+    ///    le fichier ne doit pas survivre au renommage) ;
+    /// 3. si le déplacement du sidecar échoue APRÈS celui du parquet, le
+    ///    parquet est rebasculé à son ancien nom : jamais de table renommée
+    ///    à moitié (données au nouveau nom, métadonnées à l'ancien).
     fn rename(&self, old: &str, new: &str) -> Result<()> {
         let old_path = self.table_path(old);
         if !old_path.is_file() {
@@ -83,15 +94,56 @@ impl LibraryProvider for DirLibrary {
             )));
         }
         let new_path = self.table_path(new);
-        std::fs::rename(&old_path, &new_path)?;
-
-        // Move the sidecar metadata file if it exists.
-        // Sidecar convention (from dataset.rs): `<table>.parquet.sasmeta.json`
-        let old_sidecar = sidecar_path(&old_path);
-        if old_sidecar.is_file() {
-            std::fs::rename(&old_sidecar, sidecar_path(&new_path))?;
+        if new_path.is_file() {
+            return Err(SasError::runtime(format!(
+                "Table {} already exists in this library; {} was not renamed.",
+                new.to_uppercase(),
+                old.to_uppercase()
+            )));
         }
+        let old_sidecar = sidecar_path(&old_path);
+        let new_sidecar = sidecar_path(&new_path);
+        // Sidecar orphelin de la destination (le parquet n'existe pas) : purge
+        // avant le déplacement. Best effort — un répertoire à cet emplacement
+        // n'est pas un sidecar et fera échouer le renommage plus loin.
+        if new_sidecar.is_file() {
+            let _ = std::fs::remove_file(&new_sidecar);
+        }
+
+        // 1. Données : rename atomique du parquet.
+        std::fs::rename(&old_path, &new_path)?;
+        fault_point("after_rename_parquet");
+
+        // 2. Métadonnées : le sidecar suit sa table. En cas d'échec, on
+        //    annule le déplacement du parquet — l'état de départ est restauré.
+        if old_sidecar.is_file() {
+            if let Err(e) = std::fs::rename(&old_sidecar, &new_sidecar) {
+                let rollback = std::fs::rename(&new_path, &old_path);
+                fault_point("after_rename_rollback");
+                if let Err(rb) = rollback {
+                    return Err(SasError::runtime(format!(
+                        "failed to move metadata sidecar for {}: {e}; rolling back the parquet \
+                         move failed too: {rb}",
+                        new.to_uppercase()
+                    )));
+                }
+                return Err(SasError::runtime(format!(
+                    "failed to move metadata sidecar for {}: {e}; the parquet move was rolled \
+                     back and {} was not renamed.",
+                    new.to_uppercase(),
+                    old.to_uppercase()
+                )));
+            }
+        }
+        fault_point("after_rename_sidecar");
         Ok(())
+    }
+
+    /// Le sidecar `<table>.parquet.sasmeta.json` existe-t-il (même sans le
+    /// parquet — sidecar orphelin) ? Sert à `EXCHANGE` pour choisir un nom
+    /// temporaire qui n'entre en collision avec AUCUN artefact résiduel.
+    fn sidecar_exists(&self, table: &str) -> bool {
+        sidecar_path(&self.table_path(table)).is_file()
     }
 
     fn catalog_dir(&self) -> Option<&std::path::Path> {

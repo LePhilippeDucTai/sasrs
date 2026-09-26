@@ -408,3 +408,138 @@ fn execute_modify_renames_variable_and_sets_label() {
     // DataFrame column was renamed too.
     assert!(ds.df.column("years").is_ok(), "df column renamed");
 }
+
+// ── J04-P2 : EXCHANGE sans orphelins ───────────────────────────────────────
+
+use crate::dataset::sidecar_path;
+
+/// Chemin physique d'un fichier de la bibliothèque WORK (catalog_dir).
+fn work_file(session: &Session, name: &str) -> std::path::PathBuf {
+    let dir = session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .catalog_dir()
+        .unwrap()
+        .to_path_buf();
+    dir.join(name)
+}
+
+/// Les sidecars suivent leurs tables à travers l'échange : après
+/// `exchange alpha=beta`, le format/libellé d'ALPHA se retrouve sur BETA
+/// (et réciproquement) — aucun sidecar orphelin dans le répertoire.
+#[test]
+fn orphan_sidecar_exchange_moves_sidecars_with_tables() {
+    let mut session = make_session();
+    write_dataset_with_meta(&mut session, "ALPHA"); // age, best12., "Age", 2 rows
+    write_simple_dataset(&mut session, "BETA"); // x, 2 rows
+
+    let ast = DatasetsAst {
+        ops: vec![DsOp::Exchange("ALPHA".into(), "BETA".into())],
+        ..base_ast("WORK")
+    };
+    execute(&ast, &mut session).unwrap();
+
+    // Contenus échangés : les trois renommages a→tmp, b→a, tmp→b placent le
+    // contenu d'ALPHA sous le nom BETA et vice-versa, sidecars compris.
+    let (a, _) = session.libs.get("WORK").unwrap().read("ALPHA").unwrap();
+    let (b, _) = session.libs.get("WORK").unwrap().read("BETA").unwrap();
+    assert!(a.df.column("x").is_ok(), "ALPHA = old BETA (plain x)");
+    assert!(b.df.column("age").is_ok(), "BETA = old ALPHA (age)");
+    // Le sidecar a suivi son parquet : les métadonnées d'ALPHA se lisent
+    // désormais sous BETA, sans note de péremption.
+    let age = b.vars.iter().find(|v| v.name == "age").unwrap();
+    assert_eq!(age.format.as_deref(), Some("best12."));
+    assert_eq!(age.label.as_deref(), Some("Age"));
+    // Aucun sidecar orphelin : celui d'ALPHA n'est plus à l'ancien nom.
+    assert!(
+        !work_file(&session, "alpha.parquet.sasmeta.json").exists(),
+        "sidecar must not stay at the pre-exchange name"
+    );
+    assert!(work_file(&session, "beta.parquet.sasmeta.json").is_file());
+}
+
+/// `unique_temp_name` saute aussi les noms dont SEUL un sidecar orphelin
+/// subsiste : l'échange ne doit ni écraser ni hériter d'un résidu.
+#[test]
+fn orphan_sidecar_exchange_temp_name_skips_orphan_sidecars() {
+    let mut session = make_session();
+    write_simple_dataset(&mut session, "A");
+    write_simple_dataset(&mut session, "B");
+    // Orphelin fabriqué à la main sur le premier nom candidat.
+    std::fs::write(
+        sidecar_path(&work_file(&session, "__sasrs_xchg_0__.parquet")),
+        "{\"fingerprint\":0}",
+    )
+    .unwrap();
+
+    let provider = session.libs.get("WORK").unwrap();
+    assert_eq!(
+        unique_temp_name(provider.as_ref()),
+        "__SASRS_XCHG_1__",
+        "a name with only an orphan sidecar is NOT free"
+    );
+
+    // Et l'échange fonctionne malgré le résidu.
+    let ast = DatasetsAst {
+        ops: vec![DsOp::Exchange("A".into(), "B".into())],
+        ..base_ast("WORK")
+    };
+    execute(&ast, &mut session).unwrap();
+    assert_eq!(
+        session.libs.get("WORK").unwrap().list().unwrap(),
+        vec!["A".to_string(), "B".to_string()]
+    );
+}
+
+/// Échec intermédiaire de l'échange (le sidecar de BETA ne peut pas être
+/// déplacé sur ALPHA : un répertoire occupe l'emplacement) → l'échange est
+/// ANNULÉ : chaque table retrouve son contenu et ses métadonnées, aucun
+/// fichier temporaire `__SASRS_XCHG_*` ne survit.
+#[test]
+fn orphan_sidecar_exchange_rolls_back_on_intermediate_failure() {
+    let mut session = make_session();
+    write_simple_dataset(&mut session, "ALPHA"); // 2 rows, PAS de sidecar
+    write_dataset_with_meta(&mut session, "BETA"); // age, best12., sidecar
+    // Répertoire hostile : le renommage BETA→ALPHA échouera sur le sidecar
+    // (2e étape des 3 renommages de l'échange).
+    std::fs::create_dir(sidecar_path(&work_file(&session, "alpha.parquet"))).unwrap();
+
+    let ast = DatasetsAst {
+        ops: vec![DsOp::Exchange("ALPHA".into(), "BETA".into())],
+        ..base_ast("WORK")
+    };
+    let err = execute(&ast, &mut session).unwrap_err();
+    assert!(err.to_string().contains("sidecar"), "{err}");
+
+    // État d'origine restauré.
+    let (a, notes_a) = session.libs.get("WORK").unwrap().read("ALPHA").unwrap();
+    assert_eq!(a.n_obs(), 2, "ALPHA keeps its content");
+    assert!(notes_a.is_empty(), "{notes_a:?}");
+    let (b, notes_b) = session.libs.get("WORK").unwrap().read("BETA").unwrap();
+    assert_eq!(b.n_obs(), 2, "BETA keeps its content");
+    assert!(notes_b.is_empty(), "BETA metadata intact: {notes_b:?}");
+    let age = b.vars.iter().find(|v| v.name == "age").unwrap();
+    assert_eq!(age.format.as_deref(), Some("best12."));
+    assert_eq!(
+        session.libs.get("WORK").unwrap().list().unwrap(),
+        vec!["ALPHA".to_string(), "BETA".to_string()]
+    );
+    // Aucun temporaire d'échange résiduel.
+    let dir = session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .catalog_dir()
+        .unwrap()
+        .to_path_buf();
+    let residue: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok().and_then(|d| d.file_name().into_string().ok()))
+        .filter(|n| n.contains("__sasrs_xchg"))
+        .collect();
+    assert!(
+        residue.is_empty(),
+        "exchange temporaries survived: {residue:?}"
+    );
+}

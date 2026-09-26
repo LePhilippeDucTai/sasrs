@@ -36,12 +36,32 @@ pub trait LibraryProvider: Send + Sync {
     fn read(&self, table: &str) -> Result<(SasDataset, Vec<String>)>;
     /// Lazy scan for PROC SQL.
     fn scan(&self, table: &str) -> Result<LazyFrame>;
+    /// Lazy scan AVEC les notes de coercition produites à la lecture
+    /// (WARNING 2**53, etc.). Les fournisseurs dont le scan est une lecture
+    /// eager déguisée (CSV) y rapportent les mêmes notes que `read` ;
+    /// les autres rendent une liste vide. Les consommateurs qui journalisent
+    /// (PROC SQL) doivent passer par cette variante pour ne pas perdre les
+    /// diagnostics de coercition.
+    fn scan_with_notes(&self, table: &str) -> Result<(LazyFrame, Vec<String>)> {
+        Ok((self.scan(table)?, Vec::new()))
+    }
     fn write(&self, table: &str, ds: &SasDataset) -> Result<()>;
     fn delete(&self, table: &str) -> Result<()>;
     /// Rename `old` → `new` (PROC DATASETS CHANGE statement).
-    /// Also moves the sidecar `<old>.parquet.sasmeta.json` if it exists.
-    /// Returns an error if `old` does not exist.
+    ///
+    /// J04-P2 — sans orphelin : refuse une destination existante (ERROR,
+    /// comme PROC DATASETS CHANGE), purge un éventuel sidecar orphelin de la
+    /// destination, déplace le sidecar `<old>.parquet.sasmeta.json` avec le
+    /// parquet et ANNULE le déplacement du parquet si celui du sidecar
+    /// échoue. Retourne une erreur si `old` n'existe pas.
     fn rename(&self, old: &str, new: &str) -> Result<()>;
+    /// Un sidecar de métadonnées existe-t-il pour `table`, y compris sans le
+    /// fichier de table (sidecar orphelin) ? Par défaut : non. Sert à
+    /// `EXCHANGE` (PROC DATASETS) pour choisir un nom temporaire qui ne
+    /// collide avec aucun artefact résiduel du répertoire.
+    fn sidecar_exists(&self, _table: &str) -> bool {
+        false
+    }
 
     /// True for cloud-backed providers (e.g. `S3Library`). Lets the executor /
     /// tests distinguish a cloud libref from a local `DirLibrary` without a
