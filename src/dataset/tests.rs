@@ -243,7 +243,7 @@ mod atomic_write_faults {
     use super::*;
     use std::process::{Command, Output};
 
-        // `--exact` filtre sur le chemin COMPLET du test.
+    // `--exact` filtre sur le chemin COMPLET du test.
     const DRIVER: &str = "dataset::tests::atomic_write_faults::atomic_write_fault_child_driver";
 
     fn run_child(dir: &Path, point: &str) -> Output {
