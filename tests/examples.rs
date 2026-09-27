@@ -7,7 +7,7 @@
 //! documenté dans l'en-tête de l'exemple.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Racine du dépôt (celle du manifeste, où vit `examples/`).
@@ -87,7 +87,7 @@ fn cli_example_runs_and_produces_the_summary_table() {
     let summary_path = out_dir.join("summary.csv");
     let summary = fs::read_to_string(&summary_path)
         .unwrap_or_else(|e| panic!("summary.csv illisible ({e}) : stderr :\n{stderr}"));
-    let lines: Vec<String> = summary.lines().map(|l| normalize_line(l)).collect();
+    let lines: Vec<String> = summary.lines().map(normalize_line).collect();
     assert_eq!(lines.len(), 3, "summary.csv inattendu :\n{summary}");
     assert_eq!(lines[0].to_ascii_uppercase(), "SEX,N_PATIENTS,MEAN_AGE");
     let sorted = {
@@ -150,7 +150,7 @@ fn cli_example_fails_on_broken_input() {
         String::from_utf8_lossy(&out.stderr)
     );
     let summary = fs::read_to_string(out_dir.join("summary.csv")).unwrap();
-    let lines: Vec<String> = summary.lines().map(|l| normalize_line(l)).collect();
+    let lines: Vec<String> = summary.lines().map(normalize_line).collect();
     assert_ne!(
         lines,
         vec![
