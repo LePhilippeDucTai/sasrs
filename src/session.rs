@@ -248,6 +248,12 @@ pub struct Session {
     /// M38.1 — niveaux de footnotes actives (FOOTNOTE1..FOOTNOTE9). Voir
     /// [`Session::titles`] / [`Session::set_footnote_level`].
     pub footnotes: [Option<String>; 9],
+    /// J06-P2 — registre des fichiers produits par la session : destinations
+    /// ODS matérialisées (HTML/RTF/PDF/Excel, peuplé par
+    /// [`Session::finish_destination`]) et images ODS GRAPHICS (peuplé par
+    /// [`Session::record_produced_file`]). Drainé par la façade
+    /// `sasrs::api` à chaque soumission puis à la fermeture.
+    pub produced_files: Vec<crate::api::ProducedFile>,
 }
 
 impl Session {
@@ -351,7 +357,27 @@ impl Session {
             printto_print: None,
             titles: Default::default(),
             footnotes: Default::default(),
+            produced_files: Vec::new(),
         })
+    }
+
+    /// J06-P2 — enregistre un fichier produit dans le registre de la
+    /// session ([`Session::produced_files`]). Les destinations ODS
+    /// fichier sont enregistrées automatiquement à leur finalisation
+    /// ([`Session::finish_destination`]) ; les PROCs graphiques
+    /// (SGPLOT/GPLOT/GCHART) appellent cette méthode pour chaque image
+    /// écrite sur disque.
+    pub fn record_produced_file(
+        &mut self,
+        path: std::path::PathBuf,
+        kind: crate::api::ProducedFileKind,
+        proc_name: &str,
+    ) {
+        self.produced_files.push(crate::api::ProducedFile {
+            path,
+            kind,
+            proc_name: proc_name.to_string(),
+        });
     }
 
     /// Résout un chemin de fichier externe (INFILE/FILE, PROC IMPORT/EXPORT) :
@@ -411,6 +437,13 @@ impl Session {
                         .unwrap_or("output");
                     self.log
                         .note(&format!("Writing {} file: {}", label, file_name));
+                    // J06-P2 — registre des fichiers produits (chemin,
+                    // type, destination) ; le listing texte n'est pas un
+                    // fichier et n'est pas enregistré.
+                    if let Some(kind) = crate::api::ProducedFileKind::from_dest_label(label) {
+                        let dest = self.current_destination.clone();
+                        self.record_produced_file(path, kind, &dest);
+                    }
                 }
                 Err(e) => self.log.error(&format!(
                     "Could not write {} file {}: {}",

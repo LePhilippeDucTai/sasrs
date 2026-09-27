@@ -28,6 +28,74 @@ use std::path::PathBuf;
 pub use crate::dataset::{SasDataset, VarMeta};
 pub use crate::value::VarType;
 
+/// J06-P2 — sévérité d'un diagnostic structuré du log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Note,
+    Warning,
+    Error,
+}
+
+/// J06-P2 — un diagnostic structuré du log : chaque message
+/// `NOTE:`/`WARNING:`/`ERROR:` émis pendant la soumission y est
+/// enregistré en plus du texte du log (qui reste inchangé).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// Sévérité du message.
+    pub severity: Severity,
+    /// Numéro de la dernière ligne de source échoée au moment de l'émission
+    /// (numérotation SAS du log) ; `None` avant tout écho de source.
+    pub line: Option<u32>,
+    /// Étape courante ("DATA", "PROC PRINT", …) observée sur le source ;
+    /// chaîne vide avant le premier statement `data`/`proc`.
+    pub step: String,
+    /// Message complet (première ligne du bloc, sans le préfixe
+    /// `NOTE: `/`WARNING: `/`ERROR: `).
+    pub message: String,
+}
+
+/// J06-P2 — type d'un fichier produit par la session (ODS ou image).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducedFileKind {
+    /// Destination `ODS HTML` matérialisée (`FILE=`).
+    Html,
+    /// Destination `ODS RTF`.
+    Rtf,
+    /// Destination `ODS PDF`.
+    Pdf,
+    /// Destination `ODS EXCEL`.
+    Excel,
+    /// Image ODS GRAPHICS (PNG/SVG).
+    Image,
+}
+
+impl ProducedFileKind {
+    /// Étiquette de destination ODS (`OutputDestination::dest_type_label`)
+    /// → type de fichier, quand elle correspond à un fichier matérialisé.
+    pub fn from_dest_label(label: &str) -> Option<Self> {
+        match label {
+            "HTML Body" => Some(ProducedFileKind::Html),
+            "RTF Body" => Some(ProducedFileKind::Rtf),
+            "PDF" => Some(ProducedFileKind::Pdf),
+            "Excel" => Some(ProducedFileKind::Excel),
+            _ => None,
+        }
+    }
+}
+
+/// J06-P2 — un fichier produit par la session : chemin complet, type et
+/// origine (procédure graphique ou destination ODS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducedFile {
+    /// Chemin complet du fichier écrit sur disque.
+    pub path: PathBuf,
+    /// Type de fichier (HTML/RTF/PDF/Excel ODS, image ODS GRAPHICS).
+    pub kind: ProducedFileKind,
+    /// Procédure ou destination ayant produit le fichier (ex. "HTML" pour
+    /// un fichier ODS HTML, "SGPLOT" pour une image de PROC SGPLOT).
+    pub proc_name: String,
+}
+
 /// Options de création d'une [`Session`] (ADR 0002).
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -126,6 +194,13 @@ pub struct Submission {
     pub errors: u32,
     /// Warnings comptés pendant CETTE soumission.
     pub warnings: u32,
+    /// J06-P2 — diagnostics structurés de CETTE soumission (un par message
+    /// NOTE/WARNING/ERROR, dans l'ordre d'émission).
+    pub diagnostics: Vec<Diagnostic>,
+    /// J06-P2 — fichiers produits pendant CETTE soumission (destinations
+    /// ODS matérialisées ; voir [`Session::record_produced_file`] pour les
+    /// images).
+    pub produced_files: Vec<ProducedFile>,
 }
 
 /// Rapport de fermeture de la session : reliquat de log/listing (ex. NOTEs
@@ -143,6 +218,12 @@ pub struct CloseReport {
     pub errors: u32,
     /// Warnings comptés sur toute la session.
     pub warnings: u32,
+    /// J06-P2 — diagnostics structurés émis depuis la dernière soumission
+    /// (finalisation ODS comprise).
+    pub diagnostics: Vec<Diagnostic>,
+    /// J06-P2 — fichiers produits depuis la dernière soumission
+    /// (finalisation ODS comprise).
+    pub produced_files: Vec<ProducedFile>,
 }
 
 /// Session SAS vivante derrière la façade publique (ADR 0002).
@@ -218,7 +299,8 @@ impl Session {
         let writer = std::mem::replace(&mut self.inner.log, LogWriter::new(self.deterministic));
         let errors = writer.errors - errors_before;
         let warnings = writer.warnings - warnings_before;
-        let log = writer.into_string();
+        let (log, diagnostics) = writer.into_parts();
+        let produced_files = std::mem::take(&mut self.inner.produced_files);
         self.total_errors += errors;
         self.total_warnings += warnings;
         let exit_code = match requested {
@@ -233,6 +315,8 @@ impl Session {
             exit_code,
             errors,
             warnings,
+            diagnostics,
+            produced_files,
         }
     }
 
@@ -364,7 +448,8 @@ impl Session {
         let writer = std::mem::replace(&mut self.inner.log, LogWriter::new(self.deterministic));
         let errors = writer.errors;
         let warnings = writer.warnings;
-        let log = writer.into_string();
+        let (log, diagnostics) = writer.into_parts();
+        let produced_files = std::mem::take(&mut self.inner.produced_files);
         self.total_errors += errors;
         self.total_warnings += warnings;
         let exit_code = match self.requested_exit_code {
@@ -379,6 +464,8 @@ impl Session {
             exit_code,
             errors: self.total_errors,
             warnings: self.total_warnings,
+            diagnostics,
+            produced_files,
         }
     }
 }

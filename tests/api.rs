@@ -250,3 +250,268 @@ fn close_reports_global_exit_code_and_drains() {
     assert_eq!(report.errors, 1);
     assert_eq!(report.warnings, 0);
 }
+
+// ===========================================================================
+// J06-P2 — diagnostics structurés et fichiers produits
+// =========================================================================//
+
+use sasrs::api::{Diagnostic, ProducedFile, ProducedFileKind, Severity};
+
+/// Programme couvrant les trois sévérités : NOTEs d'étape DATA, ERROR de
+/// PROC PRINT sur une table absente, WARNING d'une option non supportée.
+fn mixed_program() -> String {
+    [
+        "data work.a;",
+        "  x = 1;",
+        "  output;",
+        "run;",
+        "proc print data=work.nope;",
+        "run;",
+        "options fancy;",
+        "",
+    ]
+    .join("\n")
+}
+
+fn count_log_prefix(log: &str, prefix: &str) -> usize {
+    log.lines()
+        .filter(|l| l.starts_with(&format!("{prefix}: ")))
+        .count()
+}
+
+#[test]
+fn diagnostics_classify_severities_steps_and_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_in(dir.path());
+
+    let sub = session.submit(&mixed_program());
+    assert_eq!(sub.errors, 1, "log :\n{}", sub.log);
+    assert_eq!(sub.warnings, 1, "log :\n{}", sub.log);
+
+    // Sévérités : exactement un Error (table absente) et un Warning
+    // (option non supportée), au moins un Note (étape DATA).
+    let errors: Vec<&Diagnostic> = sub
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    let warnings: Vec<&Diagnostic> = sub
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .collect();
+    assert_eq!(errors.len(), 1, "diagnostics :{:?}", sub.diagnostics);
+    assert_eq!(warnings.len(), 1, "diagnostics :{:?}", sub.diagnostics);
+    assert!(sub.diagnostics.iter().any(|d| d.severity == Severity::Note));
+
+    // L'erreur est attribuée à l'étape PROC PRINT, pas à DATA.
+    assert_eq!(errors[0].step, "PROC PRINT", "diagnostics :{:?}", errors);
+    assert!(
+        !errors[0].message.is_empty(),
+        "le message structuré est rempli"
+    );
+
+    // Les NOTEs de l'étape DATA portent le step "DATA" et une ligne de
+    // source (l'écho précède le message).
+    let data_note = sub
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == Severity::Note && d.step == "DATA")
+        .expect("au moins une NOTE de l'étape DATA");
+    assert!(data_note.line.is_some(), "diagnostics :{:?}", data_note);
+
+    // Le WARNING d'option arrive APRÈS le proc : ligne >= ligne de l'erreur.
+    assert!(warnings[0].line.unwrap_or(0) >= errors[0].line.unwrap_or(0));
+}
+
+#[test]
+fn diagnostics_mirror_log_prefix_lines() {
+    // Oracle croisé de non-régression : chaque message NOTE/WARNING/ERROR
+    // du texte du log a exactement son pendant structuré (même sévérité,
+    // même nombre). Échoue si le texte ou les diagnostics dérivent.
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_in(dir.path());
+
+    let sub = session.submit(&mixed_program());
+    for (prefix, severity) in [
+        ("NOTE", Severity::Note),
+        ("WARNING", Severity::Warning),
+        ("ERROR", Severity::Error),
+    ] {
+        let text_count = count_log_prefix(&sub.log, prefix);
+        let struct_count = sub
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == severity)
+            .count();
+        assert_eq!(
+            text_count, struct_count,
+            " {prefix} : texte = {text_count}, structurés = {struct_count}\nlog :\n{}",
+            sub.log
+        );
+    }
+
+    // Le message structuré est le message du log sans son préfixe.
+    let first_error = sub
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == Severity::Error)
+        .unwrap();
+    let log_line = sub
+        .log
+        .lines()
+        .find(|l| l.starts_with("ERROR: "))
+        .unwrap()
+        .strip_prefix("ERROR: ")
+        .unwrap();
+    assert_eq!(first_error.message, log_line);
+
+    session.close();
+}
+
+#[test]
+fn diagnostics_are_drained_per_submission() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_in(dir.path());
+
+    let first = session.submit(&mixed_program());
+    assert!(!first.diagnostics.is_empty());
+
+    // La soumission suivante repart d'une liste vide : les diagnostics
+    // sont propres à CHAQUE soumission (même protocole que le log).
+    let second = session.submit("data work.b;\n  x = 2;\nrun;\n");
+    assert_eq!(second.exit_code, 0, "log :\n{}", second.log);
+    assert!(
+        second
+            .diagnostics
+            .iter()
+            .all(|d| d.severity == Severity::Note),
+        "diagnostics :{:?}",
+        second.diagnostics
+    );
+    assert!(
+        second.diagnostics.iter().all(|d| d.step == "DATA"),
+        "diagnostics :{:?}",
+        second.diagnostics
+    );
+    assert!(
+        second
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("WORK.B")),
+        "diagnostics :{:?}",
+        second.diagnostics
+    );
+
+    // Fermeture : le reliquat (ici vide) est transmis sans doublon des
+    // soumissions déjà rendues.
+    let report = session.close();
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn diagnostics_reach_run_outcome() {
+    // La fonction libre `run` expose les diagnostics agrégés de toute
+    // l'exécution (champ ajouté à RunOutcome).
+    let dir = tempfile::tempdir().unwrap();
+    let outcome = sasrs::run(
+        &mixed_program(),
+        sasrs::RunOptions {
+            base_dir: Some(dir.path().to_path_buf()),
+            deterministic: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(outcome.exit_code, 2);
+    assert_eq!(
+        outcome
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count(),
+        1,
+        "diagnostics :{:?}",
+        outcome.diagnostics
+    );
+    // Cohérence texte/structuré sur l'agrégat complet.
+    assert_eq!(
+        count_log_prefix(&outcome.log, "ERROR"),
+        outcome
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count()
+    );
+}
+
+#[test]
+fn produced_files_registers_ods_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_in(dir.path());
+
+    let program = [
+        "data work.a;",
+        "  x = 1;",
+        "  output;",
+        "run;",
+        "ods html file='rep.html';",
+        " proc print data=work.a;",
+        "run;",
+        "ods html close;",
+        "ods rtf file='rep.rtf';",
+        " proc print data=work.a;",
+        "run;",
+        "ods rtf close;",
+        "",
+    ]
+    .join("\n");
+    let sub = session.submit(&program);
+    assert_eq!(sub.exit_code, 0, "log :\n{}", sub.log);
+
+    // Deux fichiers produits : HTML puis RTF, dans l'ordre d'écriture.
+    assert_eq!(sub.produced_files.len(), 2, "{:?}", sub.produced_files);
+    let html: &ProducedFile = &sub.produced_files[0];
+    let rtf: &ProducedFile = &sub.produced_files[1];
+    assert_eq!(html.kind, ProducedFileKind::Html);
+    assert_eq!(html.proc_name, "HTML");
+    assert_eq!(
+        html.path.file_name().and_then(|n| n.to_str()),
+        Some("rep.html")
+    );
+    assert_eq!(rtf.kind, ProducedFileKind::Rtf);
+    assert_eq!(rtf.proc_name, "RTF");
+
+    // Les fichiers existent réellement au chemin enregistré.
+    assert!(html.path.is_file(), "attendu :{}", html.path.display());
+    assert!(rtf.path.is_file(), "attendu :{}", rtf.path.display());
+    assert!(
+        std::fs::read_to_string(&html.path)
+            .unwrap()
+            .contains("<table class=\"sas\">"),
+        "le HTML enregistré porte bien la table du PROC PRINT"
+    );
+
+    // Le registre est drainé par soumission puis à la fermeture.
+    let report = session.close();
+    assert!(
+        report.produced_files.is_empty(),
+        "{:?}",
+        report.produced_files
+    );
+}
+
+#[test]
+fn produced_files_empty_without_ods_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = session_in(dir.path());
+
+    let sub = session.submit("data work.a;\n  x = 1;\n  output;\nrun;\n");
+    assert_eq!(sub.exit_code, 0);
+    assert!(
+        sub.produced_files.is_empty(),
+        "aucun fichier ODS : registre vide, {:?}",
+        sub.produced_files
+    );
+    let report = session.close();
+    assert!(report.produced_files.is_empty());
+}
