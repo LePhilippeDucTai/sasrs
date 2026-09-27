@@ -1,0 +1,170 @@
+# Release versionnée de sasrs (J06-P5) — déclenchée sur tag `v*`.
+#
+# Publie, pour chaque tag v<version> :
+#   - sasrs-linux-x86_64.tar.gz        (target x86_64-unknown-linux-gnu)
+#   - sasrs-windows-x86_64.exe         (target x86_64-pc-windows-msvc, binaire
+#     nu : c'est le nom d'asset que le wrapper Python télécharge et vérifie)
+#   - sasrs-macos-arm64.tar.gz         (target aarch64-apple-darwin)
+#   - SHA256SUMS  : empreintes SHA-256 de tous les binaires ci-dessus
+#   - manifest.json : version, commit, features, rustc, cibles
+#
+# IMMUABILITÉ : les assets ne sont JAMAIS remplacés. Le job `guard` échoue si
+# une release existe déjà pour ce tag, et la publication finale utilise
+# `gh release create` (qui échoue lui aussi si la release existe). Un tag
+# déjà publié doit être déplacé/supprimé à la main par un humain — jamais par
+# ce workflow.
+#
+# Ce workflow ne publie ni ne pose de tag : le tag est un geste utilisateur
+# (voir docs/release.md, qui documente aussi l'arrêt du watchdog Hermes R-001
+# avant publication).
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  guard:
+    name: Immutabilité (la release ne doit pas exister)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Échouer si la release existe déjà
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::la release ${GITHUB_REF_NAME} existe déjà — les assets ne sont jamais remplacés (immutabilité). Supprimez la release/tag à la main si nécessaire."
+            exit 1
+          fi
+          echo "Aucune release existante pour ${GITHUB_REF_NAME} : publication autorisée."
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: sasrs-linux-x86_64
+            archive: sasrs-linux-x86_64.tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: sasrs-windows-x86_64
+            archive: sasrs-windows-x86_64.exe
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: sasrs-macos-arm64
+            archive: sasrs-macos-arm64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Compiler (release, features par défaut)
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Vérifier --version embarque commit et features
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(ls "target/${{ matrix.target }}/release/sasrs-linux-x86_64" \
+                   "target/${{ matrix.target }}/release/sasrs-windows-x86_64.exe" \
+                   "target/${{ matrix.target }}/release/sasrs-macos-arm64" 2>/dev/null | head -n1)"
+          test -n "${bin}"
+          out="$("${bin}" --version)"
+          printf '%s\n' "${out}"
+          printf '%s\n' "${out}" | grep -qE '^sasrs [0-9]+\.[0-9]+\.[0-9]+ \(commit ([0-9a-f]{7,40}|unknown), features: [^)]+\)$'
+      - name: Empaqueter (tar.gz, unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
+          tar -czf "dist/${{ matrix.archive }}" -C dist "${{ matrix.artifact }}"
+      - name: Empaqueter (exe nu, windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}.exe" "dist/${{ matrix.archive }}"
+      - name: Enregistrer rustc du build
+        shell: bash
+        run: rustc --version > "dist/rustc-${{ matrix.artifact }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: SHA256SUMS + manifest.json + release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist/
+        run: |
+          sha256sum sasrs-linux-x86_64.tar.gz \
+                    sasrs-windows-x86_64.exe \
+                    sasrs-macos-arm64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: manifest.json (version, commit, features, rustc, cibles)
+        working-directory: dist/
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          rustc_linux="$(cut -d' ' -f1-4 rustc-sasrs-linux-x86_64.txt | tail -n1)"
+          rustc_windows="$(cut -d' ' -f1-4 rustc-sasrs-windows-x86_64.txt | tail -n1)"
+          rustc_macos="$(cut -d' ' -f1-4 rustc-sasrs-macos-arm64.txt | tail -n1)"
+          jq -n \
+            --arg version "$version" \
+            --arg commit "$COMMIT" \
+            --argjson features '["default"]' \
+            --arg rustc "$rustc_linux" \
+            --arg rustc_windows "$rustc_windows" \
+            --arg rustc_macos "$rustc_macos" \
+            '{version: $version,
+              commit: $commit,
+              features: $features,
+              rustc: $rustc,
+              targets: {
+                "x86_64-unknown-linux-gnu": {asset: "sasrs-linux-x86_64.tar.gz", rustc: $rustc},
+                "x86_64-pc-windows-msvc": {asset: "sasrs-windows-x86_64.exe", rustc: $rustc_windows},
+                "aarch64-apple-darwin": {asset: "sasrs-macos-arm64.tar.gz", rustc: $rustc_macos}
+              }}' > manifest.json
+          cat manifest.json
+      - name: Créer la release (échoue si elle existe déjà)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/sasrs-linux-x86_64.tar.gz \
+            dist/sasrs-windows-x86_64.exe \
+            dist/sasrs-macos-arm64.tar.gz \
+            dist/SHA256SUMS \
+            dist/manifest.json \
+            --title "sasrs ${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --notes "Binaires versionnés de sasrs ${GITHUB_REF_NAME}. Empreintes dans SHA256SUMS ; métadonnées de build (version, commit, features, rustc, cibles) dans manifest.json. Les assets sont immuables : toute correction passe par un NOUVEAU tag."

@@ -9,10 +9,25 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Version complète rendue par `--version` :
+/// `sasrs <version> (commit <sha|unknown>, features: …)`.
+///
+/// Le commit et les features sont injectés par `build.rs` via
+/// `cargo:rustc-env` — le conteneur de build n'a pas forcément git, auquel
+/// cas le commit vaut `unknown` (jamais un échec de build).
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (commit ",
+    env!("SASRS_BUILD_COMMIT"),
+    ", features: ",
+    env!("SASRS_BUILD_FEATURES"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "sasrs",
-    version,
+    version = VERSION,
     about = "Interpréteur SAS (SAS 9.4 classique) sur Polars — tables Parquet"
 )]
 struct Cli {

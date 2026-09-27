@@ -214,16 +214,41 @@ fn defaults_log_to_stderr_and_listing_to_stdout() {
     );
 }
 
-/// `--version` rend la version de `Cargo.toml` du paquet.
+/// `--version` rend `sasrs <version> (commit <sha|unknown>, features: …)` —
+/// version de `Cargo.toml`, commit git et features actives embarqués par
+/// `build.rs` (le conteneur de build n'a pas forcément git : `unknown` toléré).
 #[test]
-fn version_reports_cargo_toml_version() {
+fn version_reports_commit_and_features() {
     let tmp = tempfile::tempdir().unwrap();
     let run = sasrs(tmp.path(), &["--version"]);
     assert_eq!(run.code(), 0, "stderr:\n{}", run.stderr);
-    assert!(
-        run.stdout.contains("sasrs") && run.stdout.contains(env!("CARGO_PKG_VERSION")),
-        "sortie --version inattendue : {}",
+    assert_eq!(
+        run.stdout.lines().count(),
+        1,
+        "--version doit produire UNE ligne : {}",
         run.stdout
+    );
+    let line = run.stdout.trim_end();
+    let prefix = format!("sasrs {} (commit ", env!("CARGO_PKG_VERSION"));
+    assert!(
+        line.starts_with(&prefix) && line.ends_with(')'),
+        "sortie --version inattendue (attendu `sasrs <version> (commit <sha|unknown>, \
+         features: …)`) : {line}"
+    );
+    let middle = &line[prefix.len()..line.len() - 1];
+    let (commit, features) = middle
+        .split_once(", features: ")
+        .unwrap_or_else(|| panic!("champ features absent de --version : {line}"));
+    assert!(
+        commit == "unknown"
+            || (commit.len() >= 7
+                && commit.len() <= 40
+                && commit.chars().all(|c| c.is_ascii_hexdigit())),
+        "commit ni sha hexadécimal (7-40) ni « unknown » : {commit}"
+    );
+    assert!(
+        !features.is_empty() && !features.contains(')'),
+        "liste de features vide ou mal délimitée : {features}"
     );
 }
 

@@ -18,10 +18,11 @@ Durcissement (J06-P4) :
     d'exécution, verrouillé par l'antivirus...) alors que le binaire en
     place est déjà valide, on le garde au lieu d'échouer.
 
-NOTE (conflit connu R-001) : le watchdog Hermes réécrit les lignes de SHAs
-de ce fichier sur main. Les empreintes sont donc isolées dans des
-constantes nommées, en tête de fichier, une par ligne — pour qu'un
-remplacement de ligne ne touche qu'une constante et reste repérable.
+NOTE (J06-P5, clôt R-001) : le wrapper est épinglé sur le tag v<version> et
+les empreintes sont recopiées depuis l'asset SHA256SUMS de cette release
+(procédure : docs/release.md). Le watchdog Hermes, qui réécrivait les lignes
+de SHAs sur main, est arrêté avant toute publication ; les empreintes restent
+isolées dans des constantes nommées, une par ligne, pour rester auditable.
 """
 
 import contextlib
@@ -38,10 +39,15 @@ import urllib.request
 from pathlib import Path
 
 REPO = "LePhilippeDucTai/sasrs"
-RELEASE_TAG = "python-v0.1.0"
+# Tag de release ÉPINGLÉ sur v<version> (J06-P5) : les binaires publiés par
+# .github/workflows/release.yml vivent sous ce tag, et les empreintes
+# ci-dessous sont recopiées depuis l'asset SHA256SUMS de CETTE release
+# (procédure : docs/release.md). Plus aucune réécriture externe.
+RELEASE_TAG = "v0.1.0"
 
-# --- Empreintes des assets (isolation conflit Hermes R-001 : une constante
-# --- par ligne, ne PAS regrouper plusieurs SHAs sur une même ligne).
+# --- Empreintes des assets, recopiées depuis l'asset SHA256SUMS de la
+# --- release v0.1.0 (une constante par ligne, ne PAS regrouper plusieurs
+# --- SHAs sur une même ligne — traçabilité R-001).
 SHA256_SASRS_WINDOWS_X86_64_EXE = (
     "76f82df0d5c28443c01844ca76faa4b93fe30ce278c378d6ddf7b5752cb84ee6"
 )
