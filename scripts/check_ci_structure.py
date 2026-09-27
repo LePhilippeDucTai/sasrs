@@ -63,6 +63,9 @@ EXPECTED_JOBS = (
     "conformance",
     "properties",
     "differential",
+    # J06-P4 : wrapper Python (bibliothèque standard, réseau simulé),
+    # matrice 3.9 + dernière, agrégé par ci-ok comme les autres.
+    "python",
 )
 
 

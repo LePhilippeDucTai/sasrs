@@ -38,7 +38,8 @@ usage: scripts/check.sh lint|test|build|all
   test   cargo test -p sasrs ; --features graphics ; --features s3 --lib ;
          --features fault-injection --test storage_integrity ;
          --test conformance + conformance_report.py --check ;
-         --test properties ; --test differential
+         --test properties ; --test differential ;
+         tests unittest du wrapper Python (python/tests)
   build  cargo build --features graphics ; --features s3
   all    lint, puis test, puis build
 EOF
@@ -95,6 +96,9 @@ run_test() {
     echo '==> cargo test -p sasrs --test differential'
     cargo test --locked -p sasrs --test differential
     assert_tree_unchanged "$before"
+    # J06-P4 : wrapper Python (bibliothèque standard, réseau simulé).
+    echo '==> python3 -m unittest discover -s python/tests (wrapper Python)'
+    env PYTHONPATH=python/src python3 -B -m unittest discover -s python/tests -v
 }
 
 run_build() {
