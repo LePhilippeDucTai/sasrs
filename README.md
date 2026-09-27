@@ -14,25 +14,41 @@ are backed by Parquet tables via Polars.
 > compatibility. The former milestone roadmap (`PLAN.md`, `PROGRESS.md`) is frozen;
 > see `PLAN.md` § “Correspondance M46–M66 → consolidation” for where the remaining
 > milestones went.
+>
+> New here? Start with the walkthrough in
+> [`docs/getting-started.md`](docs/getting-started.md): install from a blank
+> machine, run a first program, read back a table, and interpret diagnostics
+> and exit codes.
 
 ## Installation
+
+Three real paths, depending on what the target machine has — see
+[`docs/getting-started.md`](docs/getting-started.md) for the detailed,
+verified steps.
+
+**Release binary (no toolchain).** Each tag `v<version>` publishes
+precompiled binaries on
+[GitHub Releases](https://github.com/LePhilippeDucTai/sasrs/releases):
+`sasrs-linux-x86_64.tar.gz`, `sasrs-windows-x86_64.exe` and
+`sasrs-macos-arm64.tar.gz`, with a `SHA256SUMS` asset to verify them.
+Assets are immutable (never replaced; a broken release is fixed by a new
+tag) — see [`docs/release.md`](docs/release.md).
+
+**From source, with Rust:**
 
 ```sh
 cargo install --path .
 ```
 
-This installs the `sasrs` binary.
+This installs the `sasrs` binary into `~/.cargo/bin`.
 
-### Without Rust (Windows, via Python)
-
-If Rust can't be installed on the target machine (e.g. a locked-down
-corporate laptop) but Python is available, the `python/` subdirectory of
-this repo packages a thin Python wrapper that downloads a **precompiled
-Windows x86_64 binary** from this repo's
-[GitHub Releases](https://github.com/LePhilippeDucTai/sasrs/releases) on
+**Without Rust (Windows x86_64, via Python).** The `python/` subdirectory of
+this repo packages a thin Python wrapper (standard library only) that
+downloads the **precompiled Windows x86_64 binary** from a
+[GitHub Release](https://github.com/LePhilippeDucTai/sasrs/releases) on
 first run, verifies its SHA-256, caches it locally, and execs it (no Rust
-toolchain needed on that machine, but it does need network access to
-`github.com`). Run it directly with [uv](https://docs.astral.sh/uv/):
+toolchain needed, but it does need network access to `github.com`). Run it
+directly with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 uvx --from "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python" sasrs program.sas
@@ -44,9 +60,10 @@ Or install it into a project/environment:
 uv add "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python"
 ```
 
-Currently only a Windows x86_64 binary is published; other platforms
-raise a clear error naming the missing binary rather than failing
-silently.
+Any failure (no network, bad digest, unsupported platform) prints a clear
+message on stderr and exits with code 1 — never a traceback. Currently only
+a Windows x86_64 binary is published; other platforms use the release
+binary or `cargo install` instead.
 
 ## Usage
 
@@ -249,23 +266,44 @@ divergences is generated from the corpus in
 
 ## Library API
 
-`sasrs` is also usable as a library:
+`sasrs` is also usable as a library. The `sasrs::api` facade (ADR 0002)
+manages a session: submit SAS code, read back the tables it produced (Polars
+`DataFrame` + SAS metadata), inspect structured diagnostics, then close the
+session (temporary WORK dropped):
 
 ```rust
-use sasrs::{run, RunOptions};
+use sasrs::api::{Options, Session};
 
-let outcome = run(source, RunOptions::default());
+let mut session = Session::new(Options::default()).expect("session init");
+let submission = session.submit("data work.t; x = 1; run;");
+assert_eq!(submission.exit_code, 0);
+
+let (df, vars) = session.dataset("work", "t").unwrap();
+let report = session.close();
+```
+
+A complete, executable and tested walkthrough — import a CSV, aggregate it,
+read the resulting table with `Session::dataset`, print a structured
+diagnostic — lives in [`examples/quickstart.rs`](examples/quickstart.rs):
+
+```sh
+cargo run --locked --example quickstart
 ```
 
 ## Optional features
 
+- `graphics` — enables real image rendering for ODS GRAPHICS (PNG/SVG via
+  `plotters`): PROC SGPLOT plots, PROC UNIVARIATE `HISTOGRAM`/`QQPLOT`, PROC
+  GPLOT/GCHART. Without it, the default build stays byte-identical and the
+  procedures emit an "image deferred" NOTE instead.
+
+```sh
+cargo build --features graphics
+```
+
 - `s3` — enables an S3 storage backend for libraries
   (`libname x 's3://bucket/prefix';`), pulling in the Polars `cloud` + `aws`
   features. Off by default; the default build is unaffected.
-
-```sh
-cargo build --features s3
-```
 
 ## Storage and recovery
 
