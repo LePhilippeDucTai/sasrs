@@ -210,10 +210,37 @@ jobs:
       - name: cargo test -p sasrs --test differential
         run: cargo test --locked -p sasrs --test differential
 
+  python:
+    name: python (wrapper)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # J06-P4 : wrapper Python (python/) — bibliothèque standard uniquement,
+      # réseau et plateforme simulés dans les tests.
+      - name: Tests unittest du wrapper Python
+        run: env PYTHONPATH=python/src python3 -B -m unittest discover -s python/tests -v
+      - name: git status --porcelain doit être vide
+        run: |
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "::error::Arbre de travail sale après les tests"
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
   ci-ok:
     name: ci-ok
     needs:
       - fmt
+      - python
       - clippy
       - clippy-graphics
       - clippy-s3
