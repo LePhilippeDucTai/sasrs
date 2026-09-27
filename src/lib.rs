@@ -4,6 +4,7 @@
 //! Voir PLAN.md pour l'architecture et les décisions actées, PROGRESS.md pour
 //! l'état d'avancement jalon par jalon.
 
+pub mod api;
 pub mod ast;
 pub mod dataset;
 pub mod datastep;
@@ -31,9 +32,6 @@ pub mod testkit;
 pub mod token;
 pub mod value;
 
-use session::Session;
-use source::SourceFile;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -61,28 +59,20 @@ pub struct RunOutcome {
 }
 
 /// Exécute un programme SAS complet et rend log + listing.
+///
+/// Réimplémenté sur la façade publique [`api::Session`] (ADR 0002) : un seul
+/// chemin d'exécution sert le binaire et la bibliothèque. Sortie inchangée —
+/// log/listing concaténés de la soumission et du rapport de fermeture, code
+/// retour du bilan global.
 pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
-    let base_dir = opts
-        .base_dir
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let base_dir = if base_dir.is_absolute() {
-        base_dir
-    } else {
-        std::env::current_dir().unwrap_or_default().join(base_dir)
-    };
-    let created = catch_unwind(AssertUnwindSafe(|| {
-        Session::new(opts.work_dir, base_dir, opts.deterministic)
-    }));
-    let mut session = match created {
-        Ok(Ok(s)) => s,
-        other => {
-            let e = match other {
-                Ok(Err(e)) => e.to_string(),
-                Err(payload) => internal_error(payload.as_ref()),
-                Ok(Ok(_)) => unreachable!(),
-            };
+    let mut session = match api::Session::new(api::Options {
+        work_dir: opts.work_dir,
+        base_dir: opts.base_dir,
+        deterministic: opts.deterministic,
+        vectorize: opts.vectorize,
+    }) {
+        Ok(s) => s,
+        Err(e) => {
             return RunOutcome {
                 log: format!("ERROR: {e}\n"),
                 listing: String::new(),
@@ -90,14 +80,16 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
             };
         }
     };
-    session.vectorize = opts.vectorize;
-
-    run_in_session(session, |session| {
-        let src = SourceFile::new(source_text.to_string());
-        executor::run_program(&src, session);
-    })
+    let submission = session.submit(source_text);
+    let report = session.close();
+    RunOutcome {
+        log: format!("{}{}", submission.log, report.log),
+        listing: format!("{}{}", submission.listing, report.listing),
+        exit_code: report.exit_code,
+    }
 }
 
+#[cfg(test)]
 fn internal_error(payload: &(dyn std::any::Any + Send)) -> String {
     let message = payload
         .downcast_ref::<String>()
@@ -110,7 +102,16 @@ fn internal_error(payload: &(dyn std::any::Any + Send)) -> String {
 // Keep ownership of the session outside the unwind boundary so partial log and
 // output survive an executor panic. Finalization has its own boundary because
 // destination rendering can panic too.
-fn run_in_session(mut session: Session, execute: impl FnOnce(&mut Session)) -> RunOutcome {
+//
+// Test-only depuis la réimplémentation de `run` sur la façade `api::Session`
+// (ADR 0002) : ces tests couvrent la dérivation du code retour et la survie
+// du log partiel, désormais portées par la façade.
+#[cfg(test)]
+fn run_in_session(
+    mut session: crate::session::Session,
+    execute: impl FnOnce(&mut crate::session::Session),
+) -> RunOutcome {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| execute(&mut session))) {
         session.log.error(&internal_error(payload.as_ref()));
     }
@@ -137,6 +138,7 @@ fn run_in_session(mut session: Session, execute: impl FnOnce(&mut Session)) -> R
 #[cfg(test)]
 mod run_failure_tests {
     use super::*;
+    use crate::session::Session;
 
     #[test]
     fn exit_code_requested_return_reaches_outcome() {
