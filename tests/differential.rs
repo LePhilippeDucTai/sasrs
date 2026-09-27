@@ -74,8 +74,8 @@ fn snap_series(s: &Series) -> Vec<Cell> {
             .into_iter()
             .map(|o| Cell::F(o.map(|f| f.to_bits())))
             .collect(),
-        DataType::Int64 => s.i64().unwrap().into_iter().map(|o| Cell::I(o)).collect(),
-        DataType::Boolean => s.bool().unwrap().into_iter().map(|o| Cell::B(o)).collect(),
+        DataType::Int64 => s.i64().unwrap().into_iter().map(Cell::I).collect(),
+        DataType::Boolean => s.bool().unwrap().into_iter().map(Cell::B).collect(),
         DataType::String => s
             .str()
             .unwrap()
