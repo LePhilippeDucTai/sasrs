@@ -85,7 +85,10 @@ fn snap_series(s: &Series) -> Vec<Cell> {
         _ => {
             // Autres dtypes (date…) : rendu texte de la colonne entière castée
             // en String — suffisant pour une égalité strictement différentielle.
-            vec![Cell::Other(format!("{:?}", s.cast(&DataType::String).unwrap()))]
+            vec![Cell::Other(format!(
+                "{:?}",
+                s.cast(&DataType::String).unwrap()
+            ))]
         }
     }
 }
@@ -171,7 +174,9 @@ fn files_eq(a: &BTreeMap<String, FileSnap>, b: &BTreeMap<String, FileSnap>, orde
             } else {
                 match (va, vb) {
                     (FileSnap::Parquet(ta), FileSnap::Parquet(tb)) => {
-                        ta.names == tb.names && ta.dtypes == tb.dtypes && ta.rows_sorted == tb.rows_sorted
+                        ta.names == tb.names
+                            && ta.dtypes == tb.dtypes
+                            && ta.rows_sorted == tb.rows_sorted
                     }
                     (FileSnap::Sidecar(sa), FileSnap::Sidecar(sb)) => {
                         sidecar_sans_size(sa) == sidecar_sans_size(sb)
@@ -232,8 +237,7 @@ fn snapshot_tree(root: &Path) -> BTreeMap<String, FileSnap> {
             // Snapshot canonique : parse puis re-sérialise (serde_json Map =
             // BTreeMap ⇒ clés triées) — le CONTENU reste comparé bit à bit.
             FileSnap::Sidecar(
-                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&abs).unwrap())
-                    .unwrap(),
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&abs).unwrap()).unwrap(),
             )
         } else {
             FileSnap::Bytes(std::fs::read(&abs).unwrap())
@@ -298,7 +302,10 @@ fn assert_identical(source: &str, label: &str) {
         let off2 = execute(source, false, r);
         if files_eq(&off.files, &off2.files, true) {
             // Chemin boucle reproductible : la divergence vient du fast-path.
-            assert!(files_eq(&off.files, &on.files, true), "{label}: fichiers produits divergents (fast-path)");
+            assert!(
+                files_eq(&off.files, &on.files, true),
+                "{label}: fichiers produits divergents (fast-path)"
+            );
         } else {
             // Nondéterminisme moteur indépendant du fast-path : la comparaison
             // stricte est impossible PAR CONSTRUCTION ; on exige au moins
@@ -412,8 +419,14 @@ fn render_rhs(rhs: &Rhs, pool: &[String]) -> String {
 fn render_decl(decl: &Decl, pool: &[String]) -> String {
     let name = |i: u8| pool[(i as usize) % pool.len()].clone();
     match decl {
-        Decl::Keep(ix) => format!("keep {};", ix.iter().map(|&i| name(i)).collect::<Vec<_>>().join(" ")),
-        Decl::Drop(ix) => format!("drop {};", ix.iter().map(|&i| name(i)).collect::<Vec<_>>().join(" ")),
+        Decl::Keep(ix) => format!(
+            "keep {};",
+            ix.iter().map(|&i| name(i)).collect::<Vec<_>>().join(" ")
+        ),
+        Decl::Drop(ix) => format!(
+            "drop {};",
+            ix.iter().map(|&i| name(i)).collect::<Vec<_>>().join(" ")
+        ),
         Decl::Rename(a, b) => format!("rename {}={};", name(*a), name(*b)),
         Decl::Format(a) => format!("format {} 8.2;", name(*a)),
         Decl::Label(a) => format!("label {}='Lbl';", name(*a)),
