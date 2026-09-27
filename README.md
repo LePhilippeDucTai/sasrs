@@ -95,7 +95,10 @@ individual options of each procedure and DATA step statement. Legend:
 
 The four coverage states behind these marks — *implemented* · *validated against a
 reference* · *documented approximation* · *not supported* — are defined in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Every *validated* claim is backed by a
+concrete conformance case; the live inventory of validated cases and known
+divergences is generated from the corpus in
+[`conformance/STATUS.md`](conformance/STATUS.md).
 
 ### Procedures (PROC)
 
@@ -104,7 +107,7 @@ reference* · *documented approximation* · *not supported* — are defined in
 | `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`, `DOUBLE`, `N`; `VAR`, `BY` (per-group sections, sorted input), `ID` (replaces `Obs`), `SUM` (per-`BY`-group subtotals + grand total) | `WHERE`, `SUMBY`, `PAGEBY`, style options |
 | `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`, `TAGSORT` (no-op hint), `SORTSEQ=ASCII\|LINGUISTIC` (LINGUISTIC falls back to `sas_cmp` binary order); `BY [DESCENDING]`, `KEY=var [/ DESCENDING]` | — |
 | `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_`, `OUT=` (one row/variable: `NAME`/`TYPE` 1=num 2=char/`LENGTH`/`VARNUM`/`LABEL`/`FORMAT`), `SHORT` (flat name list), `DETAILS`/`NODETAILS` (obs/var header lines) | physical file-size/page details, ODS output object |
-| `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` | `MAXDEC=`, `NWAY`, `MISSING`, `ORDER=`, `ID`, multi-label formats, and the `EXCLNPWGT` option (UNIVARIATE-only; MEANS/SUMMARY always applies the strict exclusion below). Under `WEIGHT` (validated against the SAS documentation): strict SAS partition — an observation whose weight is missing or ≤ 0 is excluded from both N and NMiss (x missing with a valid weight counts in NMiss); `VARDEF=` is honored (DF → Σw−1, WEIGHT → Σw−Σw²/Σw); the statistics — including `MEDIAN` and the percentiles (`P1`…`P99`, `Q1`, `Q3`, `QRANGE`, weighted Definition 5, position by cumulative weight), `CLM`/`STDERR`/`CV` — are **weighted**, in the listing and in `OUTPUT OUT= stat(var)=name` alike; an uncomputable OUTPUT statistic is an ERROR rather than a silent missing column |
+| `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` | `MAXDEC=`, `NWAY`, `MISSING`, `ORDER=`, `ID`, multi-label formats, and the `EXCLNPWGT` option (UNIVARIATE-only; MEANS/SUMMARY always applies the strict exclusion below). Under `WEIGHT` (per the SAS documentation; not yet backed by a dedicated conformance case — see [`conformance/STATUS.md`](conformance/STATUS.md)): strict SAS partition — an observation whose weight is missing or ≤ 0 is excluded from both N and NMiss (x missing with a valid weight counts in NMiss); `VARDEF=` is honored (DF → Σw−1, WEIGHT → Σw−Σw²/Σw); the statistics — including `MEDIAN` and the percentiles (`P1`…`P99`, `Q1`, `Q3`, `QRANGE`, weighted Definition 5, position by cumulative weight), `CLM`/`STDERR`/`CV` — are **weighted**, in the listing and in `OUTPUT OUT= stat(var)=name` alike; an uncomputable OUTPUT statistic is an ERROR rather than a silent missing column |
 | `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID`, `VAR` | `IDLABEL`, `COPY`, `LET`, `SUFFIX=` |
 | `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE`, `NOWARN` (suppresses FORCE structural-diff warnings), `APPENDVER=Vn` (no-op hint) | — |
 | `RANK` | ✅ | `DATA=`, `OUT=`, `DESCENDING`, `TIES=(MEAN\|LOW\|HIGH\|DENSE)`, `GROUPS=`, methods `FRACTION`/`NPLUS1`/`PERCENT`/`NORMAL=(BLOM\|TUKEY\|VW)`/`SAVAGE`; `VAR`, `RANKS`, `BY` | — |
@@ -232,8 +235,11 @@ reference* · *documented approximation* · *not supported* — are defined in
 | `X` | 🔴 | not supported |
 
 > The coverage above reflects the current state of the code, not a promise: a
-> procedure is only claimed *validated* where an external reference backs it (see
-> `CONTRIBUTING.md`). What comes next — hardening, storage integrity, independent
+> procedure is only claimed *validated* where a concrete conformance case with
+> an external reference backs it — see
+> [`conformance/STATUS.md`](conformance/STATUS.md) (generated from the corpus)
+> and `CONTRIBUTING.md`. What comes next — hardening, storage integrity,
+> independent
 > validation, high-value SAS compatibility — is planned in
 > [`docs/plans/consolidation/`](docs/plans/consolidation/).
 
