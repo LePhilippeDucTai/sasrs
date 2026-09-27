@@ -5,16 +5,27 @@
 //! de fin d'étape. `StepTimer` fournit les temps réel/CPU, figés sous
 //! `--deterministic` pour que les snapshots soient stables.
 
+use crate::api::{Diagnostic, Severity};
 use std::time::Instant;
 
 /// SAS-style log writer: numbered source echo, NOTE/WARNING/ERROR lines
 /// with the standard continuation indent, and per-step timing blocks.
+///
+/// J06-P2 : en plus du texte (inchangé octet pour octet), l'écrivain
+/// accumule une liste de [`Diagnostic`] structurés — un par message
+/// NOTE/WARNING/ERROR émis via [`LogWriter::note`] /
+/// [`LogWriter::warning`] / [`LogWriter::error`] / [`LogWriter::forward`].
 pub struct LogWriter {
     buf: String,
     src_line: usize,
     pub errors: u32,
     pub warnings: u32,
     deterministic: bool,
+    /// J06-P2 — diagnostics structurés, dans l'ordre d'émission.
+    pub diagnostics: Vec<Diagnostic>,
+    /// J06-P2 — étape courante ("DATA", "PROC PRINT", …), maintenue en
+    /// observant l'écho du source (statements `data`/`proc`).
+    current_step: String,
 }
 
 impl LogWriter {
@@ -25,6 +36,8 @@ impl LogWriter {
             errors: 0,
             warnings: 0,
             deterministic,
+            diagnostics: Vec::new(),
+            current_step: String::new(),
         }
     }
 
@@ -32,9 +45,39 @@ impl LogWriter {
         self.buf
     }
 
+    /// J06-P2 — consomme l'écrivain et rend le texte du log AVEC la liste
+    /// des diagnostics structurés accumulés.
+    pub fn into_parts(self) -> (String, Vec<Diagnostic>) {
+        (self.buf, self.diagnostics)
+    }
+
     fn raw(&mut self, line: &str) {
         self.buf.push_str(line);
         self.buf.push('\n');
+    }
+
+    /// J06-P2 — étape courante dérivée d'une ligne de source échoée :
+    /// `proc xxx` → "PROC XXX", `data` → "DATA" ; inchangée sinon.
+    fn observe_step(&mut self, line: &str) {
+        let lower = line.trim_start().to_ascii_lowercase();
+        if let Some(rest) = lower
+            .strip_prefix("proc")
+            .filter(|r| r.starts_with(char::is_whitespace))
+        {
+            let name = rest
+                .trim_start()
+                .split(|c: char| !c.is_alphanumeric())
+                .next()
+                .unwrap_or_default();
+            if !name.is_empty() {
+                self.current_step = format!("PROC {}", name.to_ascii_uppercase());
+            }
+        } else if let Some(_after) = lower
+            .strip_prefix("data")
+            .filter(|r| r.is_empty() || r.starts_with(char::is_whitespace) || r.starts_with(';'))
+        {
+            self.current_step = "DATA".to_string();
+        }
     }
 
     /// Echo submitted source lines with running statement numbers,
@@ -43,13 +86,27 @@ impl LogWriter {
         self.raw("");
         for line in lines {
             self.src_line += 1;
+            self.observe_step(line);
             self.raw(&format!("{:<5} {}", self.src_line, line));
         }
     }
 
     /// A message with `PREFIX: ` on the first line and matching indent on
-    /// continuation lines, as SAS does.
+    /// continuation lines, as SAS does. Also records one structured
+    /// diagnostic (J06-P2): severity, source line of the step being
+    /// executed, current step name and the message.
     fn message(&mut self, prefix: &str, msg: &str) {
+        let severity = match prefix {
+            "ERROR" => Severity::Error,
+            "WARNING" => Severity::Warning,
+            _ => Severity::Note,
+        };
+        self.diagnostics.push(Diagnostic {
+            severity,
+            line: (self.src_line > 0).then_some(self.src_line as u32),
+            step: self.current_step.clone(),
+            message: msg.to_string(),
+        });
         let indent = " ".repeat(prefix.len() + 2);
         for (i, line) in msg.lines().enumerate() {
             if i == 0 {

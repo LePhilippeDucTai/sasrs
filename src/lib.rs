@@ -56,6 +56,9 @@ pub struct RunOutcome {
     /// An explicit request supplies the return code, with a minimum of 1 when
     /// errors were counted (and 0 otherwise).
     pub exit_code: i32,
+    /// J06-P2 — diagnostics structurés de toute l'exécution (soumission +
+    /// fermeture), dans l'ordre d'émission.
+    pub diagnostics: Vec<api::Diagnostic>,
 }
 
 /// Exécute un programme SAS complet et rend log + listing.
@@ -77,15 +80,19 @@ pub fn run(source_text: &str, opts: RunOptions) -> RunOutcome {
                 log: format!("ERROR: {e}\n"),
                 listing: String::new(),
                 exit_code: 2,
+                diagnostics: Vec::new(),
             };
         }
     };
     let submission = session.submit(source_text);
     let report = session.close();
+    let mut diagnostics = submission.diagnostics;
+    diagnostics.extend(report.diagnostics);
     RunOutcome {
         log: format!("{}{}", submission.log, report.log),
         listing: format!("{}{}", submission.listing, report.listing),
         exit_code: report.exit_code,
+        diagnostics,
     }
 }
 
@@ -132,6 +139,7 @@ fn run_in_session(
         log: session.log.into_string(),
         listing,
         exit_code,
+        diagnostics: Vec::new(),
     }
 }
 
