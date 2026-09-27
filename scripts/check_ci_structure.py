@@ -16,7 +16,7 @@
 #   4. `ci-ok` n'agrège pas TOUS les autres jobs (needs absent, vide, ou
 #      incomplet) — un job hors `needs` peut échouer sans faire échouer
 #      `ci-ok`.
-#   5. un des huit jobs obligatoires disparaît du workflow ou de `needs` ;
+#   5. un des onze jobs obligatoires disparaît du workflow ou de `needs` ;
 #   6. une commande cargo d'un step `run` manque dans scripts/check.sh.
 #
 # Sorties : exit 0 = structure intacte ; exit 1 = structure affaiblie ;
@@ -57,6 +57,12 @@ EXPECTED_JOBS = (
     "test-graphics",
     "test-s3",
     "test-fault-injection",
+    # J05-P6 : suites de validation indépendante, chacune un job dédié
+    # agrégé par ci-ok (le job conformance exécute aussi le check du
+    # rapport conformance/STATUS.md via conformance_report.py --check).
+    "conformance",
+    "properties",
+    "differential",
 )
 
 
