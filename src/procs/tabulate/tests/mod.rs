@@ -43,5 +43,6 @@ fn class_fixture(session: &mut Session) {
     write_dataset(session, "C", ds);
 }
 
+mod by;
 mod no_output;
 mod parse;

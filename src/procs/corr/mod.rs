@@ -133,6 +133,9 @@ pub struct CorrAst {
     pub partial: Vec<String>,
     /// Optional WEIGHT variable (Pearson only). None = unweighted.
     pub weight: Option<String>,
+    /// J08-P2 — BY v1 [DESCENDING v2] ; : analyse par groupe (données triées
+    /// par les variables BY, sinon ERROR — voir `common::by_groups`).
+    pub by: Vec<(String, bool)>,
     /// OUTP= / OUT= : Pearson output dataset (TYPE=CORR).
     pub outp: Option<DatasetRef>,
     /// OUTS= : Spearman output dataset (TYPE=CORR).
@@ -152,7 +155,7 @@ impl CorrAst {
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
-    let (ds, _, _) = common::open_input(&ast.data, session)?;
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
 
     let n_obs = ds.n_obs();
 
@@ -254,39 +257,42 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
     }
     let weight_vals: Option<&[Value]> = weight_col.map(|wc| decoded[&wc].as_slice());
 
-    // --- listing ---
-    session.listing.page_header();
-    centered(session, "The CORR Procedure");
-    session.listing.blank();
-
-    // Variable summary line(s), SAS style.
-    if with_cols.is_empty() {
-        let names: Vec<String> = var_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
-        session.listing.write_line(&format!(
-            "{} Variables:  {}",
-            var_cols.len(),
-            names.join(" ")
-        ));
+    // --- BY processing (J08-P2) : resolve, verify sortedness, partition. ---
+    // No BY → a single group spanning all rows (output byte-identical).
+    let by_cols = common::resolve_by_cols(&ds, &ast.by)?;
+    let by_values: Vec<Vec<Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
     } else {
-        let wnames: Vec<String> = with_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
-        let vnames: Vec<String> = var_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
-        session.listing.write_line(&format!(
-            "{} With Variables:  {}",
-            with_cols.len(),
-            wnames.join(" ")
-        ));
-        session.listing.write_line(&format!(
-            "{} Variables:  {}",
-            var_cols.len(),
-            vnames.join(" ")
-        ));
-    }
-    session.listing.blank();
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
+    };
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
 
-    // --- Simple Statistics ---
-    if !ast.nosimple {
-        emit_simple_statistics(session, &ds, &analysis_cols, &decoded, n_obs);
-    }
+    // Per-group data: decoded columns filtered to the group's rows (row indices
+    // become 0..n_g within the group, so the shared compute helpers apply
+    // unchanged), plus the group's weight slice.
+    let groups: Vec<CorrOutGroup> = by_groups_list
+        .iter()
+        .map(|(by_key, rows)| {
+            let decoded: std::collections::HashMap<usize, Vec<Value>> = decoded
+                .iter()
+                .map(|(&c, v)| (c, rows.iter().map(|&r| v[r].clone()).collect()))
+                .collect();
+            let weight = weight_vals.map(|w| rows.iter().map(|&r| w[r].clone()).collect());
+            CorrOutGroup {
+                by_key: by_key.clone(),
+                decoded,
+                weight,
+                n_obs: rows.len(),
+            }
+        })
+        .collect();
 
     // Which methods are requested (Pearson default when none specified).
     let methods: Vec<Method> = {
@@ -306,68 +312,120 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
         m
     };
 
-    // --- Correlation Coefficients (one block per requested method) ---
-    if !ast.nocorr {
-        if !partial_cols.is_empty() {
-            // PARTIAL correlation: Pearson only in this build. If the user also
-            // asked for Spearman/Kendall, note that those are not partialled.
-            if ast.spearman || ast.kendall {
-                session.log.note(
-                    "PROC CORR: partial Spearman/Kendall correlations are not yet \
-                     implemented; only Pearson partial correlations are produced.",
-                );
-            }
-            let cells = partial_pearson_matrix(&row_cols, &col_cols, &partial_cols, &decoded);
-            let k = partial_cols.len();
-            let controlling: Vec<String> = partial_cols
+    // --- listing ---
+    session.listing.page_header();
+    centered(session, "The CORR Procedure");
+    session.listing.blank();
+
+    for g in &groups {
+        // BY group heading, SAS style (J08-P2) — skipped when no BY.
+        if !by_names.is_empty() {
+            let parts: Vec<String> = by_names
                 .iter()
-                .map(|&c| ds.vars[c].name.clone())
+                .zip(&g.by_key)
+                .map(|(name, v)| format!("{}={}", name, by_heading_cell(v)))
                 .collect();
-            let heading = format!(
-                "Pearson Partial Correlation Coefficients, Controlled for: {}",
-                controlling.join(" ")
-            );
-            let _ = k; // df = n − k − 2 is applied inside partial_pvalue
-            let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
-            emit_correlations(
-                session,
-                &ds,
-                &row_cols,
-                &col_cols,
-                &CorrBlock {
-                    heading: &heading,
-                    prob_line: &prob_line,
-                    cells: &cells,
-                    noprob: ast.noprob,
-                },
-            );
+            session.listing.write_line(&parts.join(" "));
+            session.listing.blank();
+        }
+
+        // Variable summary line(s), SAS style.
+        if with_cols.is_empty() {
+            let names: Vec<String> = var_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            session.listing.write_line(&format!(
+                "{} Variables:  {}",
+                var_cols.len(),
+                names.join(" ")
+            ));
         } else {
-            for &method in &methods {
-                let cells = compute_matrix(method, &row_cols, &col_cols, &decoded, weight_vals);
-                let prob_line = match method {
-                    Method::Kendall => "Prob > |tau| under H0: Tau=0",
-                    Method::Hoeffding => "Prob > D under H0: D=0",
-                    _ => "Prob > |r| under H0: Rho=0",
-                };
+            let wnames: Vec<String> = with_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            let vnames: Vec<String> = var_cols.iter().map(|&c| ds.vars[c].name.clone()).collect();
+            session.listing.write_line(&format!(
+                "{} With Variables:  {}",
+                with_cols.len(),
+                wnames.join(" ")
+            ));
+            session.listing.write_line(&format!(
+                "{} Variables:  {}",
+                var_cols.len(),
+                vnames.join(" ")
+            ));
+        }
+        session.listing.blank();
+
+        // --- Simple Statistics ---
+        if !ast.nosimple {
+            emit_simple_statistics(session, &ds, &analysis_cols, &g.decoded, g.n_obs);
+        }
+
+        // --- Correlation Coefficients (one block per requested method) ---
+        if !ast.nocorr {
+            if !partial_cols.is_empty() {
+                // PARTIAL correlation: Pearson only in this build. If the user also
+                // asked for Spearman/Kendall, note that those are not partialled.
+                if ast.spearman || ast.kendall {
+                    session.log.note(
+                        "PROC CORR: partial Spearman/Kendall correlations are not yet \
+                         implemented; only Pearson partial correlations are produced.",
+                    );
+                }
+                let cells = partial_pearson_matrix(&row_cols, &col_cols, &partial_cols, &g.decoded);
+                let controlling: Vec<String> = partial_cols
+                    .iter()
+                    .map(|&c| ds.vars[c].name.clone())
+                    .collect();
+                let heading = format!(
+                    "Pearson Partial Correlation Coefficients, Controlled for: {}",
+                    controlling.join(" ")
+                );
+                let prob_line = "Prob > |r| under H0: Partial Rho=0".to_string();
                 emit_correlations(
                     session,
                     &ds,
                     &row_cols,
                     &col_cols,
                     &CorrBlock {
-                        heading: method.heading(),
-                        prob_line,
+                        heading: &heading,
+                        prob_line: &prob_line,
                         cells: &cells,
                         noprob: ast.noprob,
                     },
                 );
+            } else {
+                for &method in &methods {
+                    let cells = compute_matrix(
+                        method,
+                        &row_cols,
+                        &col_cols,
+                        &g.decoded,
+                        g.weight.as_deref(),
+                    );
+                    let prob_line = match method {
+                        Method::Kendall => "Prob > |tau| under H0: Tau=0",
+                        Method::Hoeffding => "Prob > D under H0: D=0",
+                        _ => "Prob > |r| under H0: Rho=0",
+                    };
+                    emit_correlations(
+                        session,
+                        &ds,
+                        &row_cols,
+                        &col_cols,
+                        &CorrBlock {
+                            heading: method.heading(),
+                            prob_line,
+                            cells: &cells,
+                            noprob: ast.noprob,
+                        },
+                    );
+                }
             }
         }
     }
 
     // --- OUT= / OUTP= / OUTS= / OUTK= : TYPE=CORR datasets ---
     // The CORR block of the output dataset is square (analysis × analysis),
-    // independent of WITH.
+    // independent of WITH. With BY (J08-P2), one MEAN/STD/N/CORR block per
+    // BY group, the BY variables in head columns.
     let out_targets: [(Method, &Option<DatasetRef>); 3] = [
         (Method::Pearson, &ast.outp),
         (Method::Spearman, &ast.outs),
@@ -375,13 +433,22 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
     ];
     for (method, target) in out_targets {
         if let Some(target) = target {
-            let out_ds =
-                build_out_dataset(method, &ds, &analysis_cols, &decoded, weight_vals, n_obs)?;
+            let out_ds = build_out_dataset(method, &ds, &analysis_cols, &by_cols, &groups)?;
             write_out_dataset(session, target, out_ds)?;
         }
     }
 
     Ok(())
+}
+
+/// BY-key cell rendering for the group heading line (J08-P2) — same
+/// convention as `common::by::by_cell` (char trimmed, BEST12. for nums).
+fn by_heading_cell(v: &Value) -> String {
+    match v {
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(k) => k.display(),
+        Value::Char(s) => s.trim_end().to_string(),
+    }
 }
 
 use crate::procs::common::centered;

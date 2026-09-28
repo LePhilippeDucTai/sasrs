@@ -157,6 +157,9 @@ pub struct TabulateAst {
     pub data: Option<DatasetRef>,
     class: Vec<String>,
     var: Vec<String>,
+    /// J08-P2 — BY v1 [DESCENDING v2] ; : table par groupe (données triées
+    /// par les variables BY, sinon ERROR — voir `common::by_groups`).
+    by: Vec<(String, bool)>,
     /// Page dimension (None unless three comma-separated dimensions given).
     page: Option<DimExpr>,
     /// Row dimension (None when only a column dimension was given).
@@ -210,7 +213,7 @@ fn parse_table_statement(ts: &mut StatementStream) -> Result<ParsedTable> {
 // ───────────────────────── execute ─────────────────────────
 
 pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
-    let (ds, _, _) = common::open_input(&ast.data, session)?;
+    let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
     let n_obs = ds.n_obs();
 
     // Resolve CLASS and VAR columns (validate existence; VAR must be numeric).
@@ -265,22 +268,22 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         var_values.push((*ci, decode_column(&ds, *ci)?));
     }
 
-    // Expand column and (optional) row dimensions into cell lists.
-    let col_cells = expand_dim(&ast.col, &class_cols, &var_cols, &class_values, n_obs)?;
-    let row_cells: Vec<Cell> = match &ast.row {
-        Some(r) => expand_dim(r, &class_cols, &var_cols, &class_values, n_obs)?,
-        None => vec![Cell { atoms: Vec::new() }], // single anonymous row
+    // --- BY processing (J08-P2) : resolve, verify sortedness, partition. ---
+    // No BY → a single group spanning all rows (output byte-identical).
+    let by_cols = common::resolve_by_cols(&ds, &ast.by)?;
+    let by_values: Vec<Vec<Value>> = by_cols
+        .iter()
+        .map(|c| decode_column(&ds, c.col_idx))
+        .collect::<Result<_>>()?;
+    let by_groups_list: Vec<(Vec<Value>, Vec<usize>)> = if by_cols.is_empty() {
+        vec![(Vec::new(), (0..n_obs).collect())]
+    } else {
+        let descending: Vec<bool> = by_cols.iter().map(|c| c.descending).collect();
+        let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
+        let in_display = format!("{in_libref}.{in_table}");
+        common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
     };
-
-    // Expand the (optional) page dimension. Without a page dimension we render
-    // a single, page-less section (byte-identical to the pre-page behaviour).
-    let page_cells: Vec<Option<Cell>> = match &ast.page {
-        Some(p) => expand_dim(p, &class_cols, &var_cols, &class_values, n_obs)?
-            .into_iter()
-            .map(Some)
-            .collect(),
-        None => vec![None],
-    };
+    let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
 
     // Clone the user-format catalog once so cell formatting (which borrows it)
     // does not clash with the mutable `session.listing` borrow below. Empty on
@@ -298,87 +301,149 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         .write_line(&format!("{}{}", " ".repeat(pad), title));
     session.listing.blank();
 
-    for page in &page_cells {
-        // Page label line (only when a page dimension is present).
-        if let Some(pc) = page {
-            session.listing.write_line(&format!(
-                "{}={}",
-                page_dim_name(ast, &ds),
-                cell_label(pc, &ds)
-            ));
+    // --- OUT= cell dataset (M33.4, BY en J08-P2) : cellules calculées par
+    // groupe, assemblées après la boucle de rendu. ---
+    let want_out = ast.out.is_some();
+    let mut out_groups: Vec<(Vec<Value>, Vec<OutCell>)> = Vec::new();
+
+    for (by_key, rows) in &by_groups_list {
+        // BY group heading, SAS style (J08-P2) — skipped when no BY.
+        if !by_names.is_empty() {
+            let parts: Vec<String> = by_names
+                .iter()
+                .zip(by_key)
+                .map(|(name, v)| format!("{}={}", name, by_heading_cell(v)))
+                .collect();
+            session.listing.write_line(&parts.join(" "));
             session.listing.blank();
         }
-        let page_atoms: &[Atom] = match page {
-            Some(pc) => &pc.atoms,
-            None => &[],
+
+        // Per-group data: CLASS/VAR columns filtered to the group's rows (row
+        // indices become 0..n_g within the group) so the dimension expansion
+        // and cell computation apply unchanged.
+        let n_g = rows.len();
+        let class_values_g: Vec<(usize, Vec<Value>)> = class_values
+            .iter()
+            .map(|(c, v)| (*c, rows.iter().map(|&r| v[r].clone()).collect()))
+            .collect();
+        let var_values_g: Vec<(usize, Vec<Value>)> = var_values
+            .iter()
+            .map(|(c, v)| (*c, rows.iter().map(|&r| v[r].clone()).collect()))
+            .collect();
+
+        // Expand column and (optional) row dimensions into cell lists. With
+        // BY, only the levels OBSERVED in the group appear (comportement SAS).
+        let col_cells = expand_dim(&ast.col, &class_cols, &var_cols, &class_values_g, n_g)?;
+        let row_cells: Vec<Cell> = match &ast.row {
+            Some(r) => expand_dim(r, &class_cols, &var_cols, &class_values_g, n_g)?,
+            None => vec![Cell { atoms: Vec::new() }], // single anonymous row
         };
 
-        // Build this section's listing table.
-        let mut headers: Vec<String> = Vec::with_capacity(col_cells.len() + 1);
-        let stub_title = match &ast.row {
-            Some(_) => String::new(),
-            None => "Table".to_string(),
+        // Expand the (optional) page dimension. Without a page dimension we render
+        // a single, page-less section (byte-identical to the pre-page behaviour).
+        let page_cells: Vec<Option<Cell>> = match &ast.page {
+            Some(p) => expand_dim(p, &class_cols, &var_cols, &class_values_g, n_g)?
+                .into_iter()
+                .map(Some)
+                .collect(),
+            None => vec![None],
         };
-        headers.push(stub_title);
-        for cc in &col_cells {
-            headers.push(cell_label(cc, &ds));
-        }
-        let mut aligns: Vec<Align> = vec![Align::Left];
-        aligns.extend(std::iter::repeat_n(Align::Right, col_cells.len()));
 
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(row_cells.len());
-        for rc in &row_cells {
-            let stub = if rc.atoms.is_empty() {
-                String::new()
-            } else {
-                cell_label(rc, &ds)
-            };
-            let mut out_row: Vec<String> = vec![stub];
-            for cc in &col_cells {
-                // Merge page + row + column cell atoms.
-                let merged: Vec<Atom> = page_atoms
-                    .iter()
-                    .chain(rc.atoms.iter())
-                    .chain(cc.atoms.iter())
-                    .cloned()
-                    .collect();
-                let value = compute_cell(
-                    &merged,
-                    &var_values,
-                    &class_values,
-                    n_obs,
-                    table_format,
-                    &catalog,
-                )?;
-                out_row.push(value);
+        for page in &page_cells {
+            // Page label line (only when a page dimension is present).
+            if let Some(pc) = page {
+                session.listing.write_line(&format!(
+                    "{}={}",
+                    page_dim_name(ast, &ds),
+                    cell_label(pc, &ds)
+                ));
+                session.listing.blank();
             }
-            rows.push(out_row);
+            let page_atoms: &[Atom] = match page {
+                Some(pc) => &pc.atoms,
+                None => &[],
+            };
+
+            // Build this section's listing table.
+            let mut headers: Vec<String> = Vec::with_capacity(col_cells.len() + 1);
+            let stub_title = match &ast.row {
+                Some(_) => String::new(),
+                None => "Table".to_string(),
+            };
+            headers.push(stub_title);
+            for cc in &col_cells {
+                headers.push(cell_label(cc, &ds));
+            }
+            let mut aligns: Vec<Align> = vec![Align::Left];
+            aligns.extend(std::iter::repeat_n(Align::Right, col_cells.len()));
+
+            let mut rows_out: Vec<Vec<String>> = Vec::with_capacity(row_cells.len());
+            for rc in &row_cells {
+                let stub = if rc.atoms.is_empty() {
+                    String::new()
+                } else {
+                    cell_label(rc, &ds)
+                };
+                let mut out_row: Vec<String> = vec![stub];
+                for cc in &col_cells {
+                    // Merge page + row + column cell atoms.
+                    let merged: Vec<Atom> = page_atoms
+                        .iter()
+                        .chain(rc.atoms.iter())
+                        .chain(cc.atoms.iter())
+                        .cloned()
+                        .collect();
+                    let value = compute_cell(
+                        &merged,
+                        &var_values_g,
+                        &class_values_g,
+                        n_g,
+                        table_format,
+                        &catalog,
+                    )?;
+                    out_row.push(value);
+                }
+                rows_out.push(out_row);
+            }
+
+            session.listing.write_table(&headers, &aligns, &rows_out);
+            if page.is_some() {
+                session.listing.blank();
+            }
         }
 
-        session.listing.write_table(&headers, &aligns, &rows);
-        if page.is_some() {
-            session.listing.blank();
+        if want_out {
+            let cells = compute_out_cells(
+                &ds,
+                &class_cols,
+                &var_values_g,
+                &class_values_g,
+                &page_cells,
+                &row_cells,
+                &col_cells,
+                n_g,
+            )?;
+            out_groups.push((by_key.clone(), cells));
         }
     }
 
     // --- OUT= cell dataset (M33.4) ---
     if let Some(out) = &ast.out {
-        write_out_dataset(
-            session,
-            &ds,
-            &class_cols,
-            &var_values,
-            &class_values,
-            &page_cells,
-            &row_cells,
-            &col_cells,
-            n_obs,
-            out,
-        )?;
+        write_out_dataset(session, &ds, &class_cols, &by_cols, &out_groups, out)?;
     } else {
         // No OUT= → do NOT touch session.last_dataset (byte-identical default).
     }
     Ok(())
+}
+
+/// BY-key cell rendering for the group heading line (J08-P2) — same
+/// convention as `common::by::by_cell` (char trimmed, BEST12. for nums).
+fn by_heading_cell(v: &Value) -> String {
+    match v {
+        Value::Num(f) => format_best(*f, 12),
+        Value::Missing(k) => k.display(),
+        Value::Char(s) => s.trim_end().to_string(),
+    }
 }
 
 #[cfg(test)]
