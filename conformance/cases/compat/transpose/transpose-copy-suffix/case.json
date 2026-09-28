@@ -11,7 +11,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "issue": "sasrs #11 (sous-issue compat) — PROC TRANSPOSE : instruction COPY (padding a hauteur des observations d'entree) et option SUFFIX= non implementees",
   "data_types": {
     "t.csv": {"grader": "char", "score": "num"}
