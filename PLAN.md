@@ -2,7 +2,7 @@
 
 Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.
 
-Protocol: 3 · Plan: `959bc69d-76bf-4a77-ab01-02dcb8113c51` · Revision: 15
+Protocol: 3 · Plan: `959bc69d-76bf-4a77-ab01-02dcb8113c51` · Revision: 18
 
 Base: `consolidation`
 
@@ -229,7 +229,7 @@ Tier: T4 · Depends: J06-P8 · Checks: j05-conformance, j05-conformance-status, 
 Tier: T3 · Depends: J07-P1 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-means-tests, j07-means-validated
 
 ### J07-P3 — PROC COMPARE : outil de validation de migration
-`ID` (appariement par clé triée, observations propres à chaque table signalées), `VAR`/`WITH`, `CRITERION=`, `METHOD=ABSOLUTE|RELATIVE|EXACT|PERCENT`, `BRIEF`, `LISTALL`, `MAXPRINT=`, `OUT=` avec `OUTNOEQUAL`/`OUTBASE`/`OUTCOMP`/`OUTDIF`/`OUTPERCENT`, `BY` ; messages et `&SYSINFO` conformes à la doc ; remplace les ERROR provisoires de J02-P4. Cas compat/compare → `validated`, STATUS.md régénéré. Tests `compare_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+`ID` (appariement par clé triée, observations propres à chaque table signalées), `VAR`/`WITH`, `CRITERION=`, `METHOD=ABSOLUTE|RELATIVE|EXACT|PERCENT`, `BRIEF`, `LISTALL`, `MAXPRINT=`, `OUT=` avec `OUTNOEQUAL`/`OUTBASE`/`OUTCOMP`/`OUTDIF`/`OUTPERCENT`, `BY` ; messages et `&SYSINFO` conformes à la doc ; remplace les ERROR provisoires de J02-P4. Cas compat/compare → `validated`, STATUS.md régénéré. Tests `compare_compat*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Mise à jour de l'oracle provisoire J02-P4 src/sql/tests/silent_options.rs : retrait des 13 entrées PROC COMPARE (lignes 18-30) dont l'attente exit 2/ERROR devient fausse (décision d7a507c8).
 
 Tier: T3 · Depends: J07-P2 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-compare-tests, j07-compare-validated
 
@@ -239,12 +239,12 @@ Tier: T3 · Depends: J07-P2 · Checks: fmt, clippy, test, j05-conformance, j05-c
 Tier: T3 · Depends: J07-P3 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-transpose-tests, j07-transpose-validated
 
 ### J07-P5 — PROC PRINTTO : routage réel
-`LOG=`/`PRINT=` routent réellement log et listing vers des fichiers (ajout, ou remplacement avec `NEW`), `PROC PRINTTO;` rétablit les destinations ; interaction avec `--log`/`--print` et les diagnostics structurés documentée ; erreur d'ouverture → ERROR comptée ; remplace la WARNING provisoire de J02-P4. Cas compat/printto → `validated`, STATUS.md régénéré. Tests CLI `printto*` dans tests/cli.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+`LOG=`/`PRINT=` routent réellement log et listing vers des fichiers (ajout, ou remplacement avec `NEW`), `PROC PRINTTO;` rétablit les destinations ; interaction avec `--log`/`--print` et les diagnostics structurés documentée ; erreur d'ouverture → ERROR comptée ; remplace la WARNING provisoire de J02-P4. Cas compat/printto → `validated`, STATUS.md régénéré. Tests CLI `printto*` dans tests/cli.rs. Aucun snapshot existant ne change (tests/snapshots hors périmètre). Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Mise à jour de l'oracle provisoire J02-P4 src/sql/tests/silent_options.rs : le test silent_opt_printto_warns_honestly reflète le routage PRINTTO réel (décision d7a507c8).
 
 Tier: T3 · Depends: J07-P4 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-printto-tests, j07-printto-validated
 
 ### J07-P6 — Informats persistés dans les métadonnées
-`VarMeta.informat` persisté dans le sidecar (protocole ADR 0001, rétrocompatible) ; posé par INFORMAT/ATTRIB en étape DATA, conservé par SET/MERGE ; colonne Informat de PROC CONTENTS et `OUT=` ; `MODIFY … INFORMAT` dans PROC DATASETS. Périmètre large (src entier) car `VarMeta` est construit littéralement dans ~120 sites de 42 fichiers : hors dataset/datastep/contents/datasets, se limiter à l'ajout mécanique du champ. Cas compat/informat → `validated`, STATUS.md régénéré. Tests `informat_meta*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision.
+`VarMeta.informat` persisté dans le sidecar (protocole ADR 0001, rétrocompatible) ; posé par INFORMAT/ATTRIB en étape DATA, conservé par SET/MERGE ; colonne Informat de PROC CONTENTS et `OUT=` ; `MODIFY … INFORMAT` dans PROC DATASETS. Périmètre large (src entier) car `VarMeta` est construit littéralement dans ~120 sites de 42 fichiers : hors dataset/datastep/contents/datasets, se limiter à l'ajout mécanique du champ. Cas compat/informat → `validated`, STATUS.md régénéré. Tests `informat_meta*`. Règles : CONTRIBUTING.md (reproducer + test de non-régression ; l'implémenteur n'écrit pas le seul oracle ; ligne `Snapshot: <fixture> — <raison>` dans le commit pour chaque .snap modifié). Cargo uniquement via `distrobox enter ombre-mingw` (voir l'argv des checks). Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Ajout mécanique `informat: None,` aux littéraux VarMeta de tests/api.rs et tests/properties.rs (aucun changement d'attendu) — décision 458731b3.
 
 Tier: T3 · Depends: J07-P5 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-informat-tests, j07-informat-validated
 
@@ -256,7 +256,12 @@ Tier: T5 · Depends: J07-P6 · Checks: j05-conformance-status, j07-docs
 ### J07-P8 — Review J07
 Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Points propres à J07 : ORACLE.sha256 intact (les implémenteurs n'ont changé que des statuts) ; chaque option annoncée est couverte par un cas validé. Ne rien modifier ; tout finding bloquant devient une unité corrective.
 
-Tier: T2 · Depends: J07-P1, J07-P2, J07-P3, J07-P4, J07-P5, J07-P6, J07-P7 · Checks: j05-conformance, j05-conformance-status, j07-compat-oracles, j07-compat-oracle-frozen, fmt, clippy, test, j07-means-tests, j07-means-validated, j07-compare-tests, j07-compare-validated, j07-transpose-tests, j07-transpose-validated, j07-printto-tests, j07-printto-validated, j07-informat-tests, j07-informat-validated, j07-docs, j04-storage-integrity, clippy-s3, test-s3-lib, ci-structure
+Tier: T2 · Depends: J07-P1, J07-P2, J07-P3, J07-P4, J07-P5, J07-P6, J07-P7, J07-P9 · Checks: j05-conformance, j05-conformance-status, j07-compat-oracles, j07-compat-oracle-frozen, fmt, clippy, test, j07-means-tests, j07-means-validated, j07-compare-tests, j07-compare-validated, j07-transpose-tests, j07-transpose-validated, j07-printto-tests, j07-printto-validated, j07-informat-tests, j07-informat-validated, j07-docs, j04-storage-integrity, clippy-s3, test-s3-lib, ci-structure
+
+### J07-P9 — Correctif J07-P8 : PROC COMPARE MAXPRINT= effectif + doc support-contract exacte
+Correctif du finding bloquant de la revue J07-P8 (attempt ddfc4532) : (1) MAXPRINT= doit avoir un effet runtime réel dans src/procs/compare — limiter le nombre de différences affichées par observation et le nombre total d'observations avec différences imprimées (MAXPRINT=n|(n,p) conformément à la doc SAS 9.4 : n = différences par observation, p = observations avec différences ; message NOTE quand la limite tronque l'affichage), reproducer + test de non-régression compare_compat* qui échoue si MAXPRINT est sans effet ; (2) docs/support-contract.md §COMPARE corrigé pour refléter exactement le comportement (plus d'énoncé obsolète sur BRIEF/LISTALL/OUTPERCENT=/MAXPRINT= en ERROR) ; (3) la justification des snapshots régénérés en 6ce97cf (m21, m39, m40, m43) est documentée dans le message du commit correctif (ligne `Snapshot:` récapitulative) — l'historique existant n'est PAS réécrit. Aucun oracle compat modifié (ORACLE.sha256 gelé).
+
+Tier: T3 · Depends: J07-P7 · Checks: fmt, clippy, test, j05-conformance, j05-conformance-status, j07-compat-oracle-frozen, j07-compare-tests, j07-compare-validated, j07-docs
 
 ## J08 — XLSX, BY, ODS OUTPUT, feuille de route avancée, validation de bout en bout
 
@@ -294,19 +299,4 @@ Tier: T4 · Depends: J08-P1, J08-P2, J08-P3 · Checks: fmt, clippy, test, ci-str
 Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Revue finale du Goal : parcours nouvel utilisateur réel, couverture publique ≤ implémenté et validé, sous-issues #5–#10 couvertes ou explicitement renvoyées à docs/roadmap/avancee.md. Ne rien modifier ; tout finding bloquant devient une unité corrective.
 
 Tier: T2 · Depends: J08-P1, J08-P2, J08-P3, J08-P4, J08-P5, J08-P6 · Checks: fmt, clippy, test, clippy-s3, j08-xlsx, j08-by, j08-ods-output, j08-adr-sas7bdat, j08-roadmap, ci-structure, j08-e2e, j08-coverage-claims, j08-ci-install-job, j04-storage-integrity, j05-conformance-status, test-s3-lib
-
-## Correspondance feuille de route avancée
-
-La suite « avancée » au-delà de la consolidation (ex-jalons M46–M66 du plan V2,
-issue #10) est replanifiée par comportement borné dans
-[`docs/roadmap/avancee.md`](docs/roadmap/avancee.md) (rédigée par J08-P5) :
-une section par domaine — LOGISTIC, GENMOD, GLM/ANOVA, MIXED, GLIMMIX,
-multivarié (PRINCOMP/FACTOR/DISCRIM/CLUSTER/FASTCLUS), IML, S3, graphiques,
-résidus Base (TABULATE `PCTN<>`, REPORT FLOW/COMPUTE, DATASETS
-APPEND/REPAIR, CATALOG, OPTIONS), procs dont BY reste en ERROR, items des ADR
-0003 (API Python native) et 0004 (adaptateurs sas7bdat/XPT) — chaque item
-portant état actuel (implémenté / validé / approximation / ERROR),
-dépendances, oracle indépendant prévu et critère d'acceptation, avec la table
-de correspondance ex-M46–M66 et l'ordre recommandé pour un `/milestone-plan`
-suivant.
 

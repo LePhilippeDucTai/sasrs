@@ -78,3 +78,15 @@ Choice: extend_common_mod
 How to resolve the collision between the mandated unreadable-sidecar WARNING and the out-of-scope assertion notes_a.is_empty() in src/procs/datasets/tests.rs?
 Choice: edit_rollback_test
 
+## d7a507c8-48d2-4a06-96f4-8b75ac6f783a · resolved
+Le check `test` exige la mise a jour de src/sql/tests/silent_options.rs (oracle provisoire J02-P4 : 13 options PROC COMPARE attendues exit 2/ERROR, desormais implementees) hors des prefixes autorises de J07-P3. Etendre le perimetre ?
+Choice: extend-scope-silent-options
+
+## 1b9bf228-9b6a-4e44-bc7d-4f0a5ed3a785 · resolved
+Relancer J07-P6 avec le bon base_sha (erreur de brief du coordinateur, pas du depot) ?
+Choice: relaunch-correct-base
+
+## 458731b3-4510-41f4-914a-38f490b0ff89 · resolved
+Etendre le perimetre de J07-P6 a tests/api.rs et tests/properties.rs pour l'ajout mecanique de informat: None aux 9 litteraux VarMeta (aucun changement d'attendu), afin que clippy --all-targets et cargo test passent ?
+Choice: extend-j07p6-test-files
+
