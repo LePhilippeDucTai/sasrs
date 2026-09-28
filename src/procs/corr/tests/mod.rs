@@ -28,6 +28,7 @@ fn base_ast(table: &str) -> CorrAst {
         with: vec![],
         partial: vec![],
         weight: None,
+        by: vec![],
         outp: None,
         outs: None,
         outk: None,
@@ -51,6 +52,7 @@ fn replicate(xs: &[f64], ws: &[usize]) -> Vec<f64> {
     out
 }
 
+mod by;
 mod execute1;
 mod execute2;
 mod parse;

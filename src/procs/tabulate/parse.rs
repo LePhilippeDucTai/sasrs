@@ -58,6 +58,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
     // --- sub-statements until run;/quit; ---
     let mut class: Vec<String> = Vec::new();
     let mut var: Vec<String> = Vec::new();
+    let mut by: Vec<(String, bool)> = Vec::new();
     let mut page: Option<DimExpr> = None;
     let mut row: Option<DimExpr> = None;
     let mut col: Option<DimExpr> = None;
@@ -75,6 +76,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
                 ts.next();
                 var.extend(ts.parse_name_list()?);
                 ts.expect_semi()?;
+                true
+            }
+            // J08-P2 — BY v1 [DESCENDING v2] ; : table par groupe (même
+            // grammaire que MEANS/COMPARE, via le module partagé common::by).
+            "by" => {
+                ts.next();
+                by.extend(common::parse_by(ts)?);
                 true
             }
             "table" | "tables" => {
@@ -96,6 +104,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         data,
         class,
         var,
+        by,
         page,
         row,
         col,

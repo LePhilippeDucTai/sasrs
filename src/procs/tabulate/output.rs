@@ -1,6 +1,7 @@
 use super::*;
 
 /// One row of the OUT= cell dataset.
+#[derive(Clone)]
 pub(super) struct OutCell {
     /// Per-CLASS-variable cell value (level value when active, else missing).
     pub(super) class_cells: Vec<Value>,
@@ -11,11 +12,11 @@ pub(super) struct OutCell {
     pub(super) stats: Vec<(String, Value)>,
 }
 
-/// Build and write the OUT= cell dataset (M33.4). See the file header for the
-/// chosen naming convention. One observation per rendered cell.
+/// Compute the OUT= cells of ONE BY group (J08-P2 : le calcul est fait sur
+/// les colonnes CLASS/VAR filtrées aux lignes du groupe). Une cellule par
+/// combinaison page×ligne×colonne, dans l'ordre de rendu.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn write_out_dataset(
-    session: &mut Session,
+pub(super) fn compute_out_cells(
     ds: &SasDataset,
     class_cols: &[(String, usize)],
     var_values: &[(usize, Vec<Value>)],
@@ -24,8 +25,7 @@ pub(super) fn write_out_dataset(
     row_cells: &[Cell],
     col_cells: &[Cell],
     n_obs: usize,
-    out: &DatasetRef,
-) -> Result<()> {
+) -> Result<Vec<OutCell>> {
     let mut out_rows: Vec<OutCell> = Vec::new();
 
     for (page_idx, page) in page_cells.iter().enumerate() {
@@ -88,14 +88,69 @@ pub(super) fn write_out_dataset(
             }
         }
     }
+    Ok(out_rows)
+}
+
+/// Build and write the OUT= cell dataset (M33.4). See the file header for the
+/// chosen naming convention. One observation per rendered cell; with BY
+/// (J08-P2) les variables BY ouvrent le dataset, une section de cellules par
+/// groupe. Without BY the layout is byte-identical to the pre-J08 form.
+pub(super) fn write_out_dataset(
+    session: &mut Session,
+    ds: &SasDataset,
+    class_cols: &[(String, usize)],
+    by_cols: &[common::ByCol],
+    groups: &[(Vec<Value>, Vec<OutCell>)],
+    out: &DatasetRef,
+) -> Result<()> {
+    // Flatten the per-group cells, remembering each row's BY key.
+    let mut out_rows: Vec<OutCell> = Vec::new();
+    let mut row_keys: Vec<&[Value]> = Vec::new();
+    for (by_key, cells) in groups {
+        for c in cells {
+            out_rows.push(c.clone());
+            row_keys.push(by_key);
+        }
+    }
 
     // Build the DataFrame column-by-column.
     let n_rows = out_rows.len();
     let mut columns: Vec<Column> = Vec::new();
     let mut vars: Vec<VarMeta> = Vec::new();
 
-    // CLASS columns (copy input VarMeta; encode per-row values).
+    // BY columns first (J08-P2) — values from the group key of each row.
+    for (bi, bc) in by_cols.iter().enumerate() {
+        let meta = &ds.vars[bc.col_idx];
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> =
+                    row_keys.iter().map(|k| value_to_num(&k[bi])).collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<Option<String>> = row_keys
+                    .iter()
+                    .map(|k| match &k[bi] {
+                        Value::Char(s) if s.is_empty() => None,
+                        Value::Char(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+        vars.push(meta.clone());
+    }
+
+    // CLASS columns (copy input VarMeta; encode per-row values). A CLASS
+    // variable that is ALSO a BY variable is already materialized by its BY
+    // column (same values) — skip it to avoid a duplicate column name
+    // (J08-P2 ; SAS ne duplique pas la variable non plus).
     for (ci, (_, col_idx)) in class_cols.iter().enumerate() {
+        if by_cols.iter().any(|bc| bc.col_idx == *col_idx) {
+            continue;
+        }
         let meta = &ds.vars[*col_idx];
         let series = match meta.ty {
             VarType::Num => {

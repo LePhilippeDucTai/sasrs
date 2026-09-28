@@ -81,6 +81,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
     let mut with: Vec<String> = Vec::new();
     let mut partial: Vec<String> = Vec::new();
     let mut weight: Option<String> = None;
+    let mut by: Vec<(String, bool)> = Vec::new();
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
     common::parse_proc_body(ts, "CORR", |ts, kw| {
@@ -113,6 +114,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
                 weight = Some(names.into_iter().next().unwrap());
                 true
             }
+            // J08-P2 — BY v1 [DESCENDING v2] ; : analyse par groupe (même
+            // grammaire que MEANS/COMPARE, via le module partagé common::by).
+            "by" => {
+                ts.next();
+                by.extend(common::parse_by(ts)?);
+                true
+            }
             _ => false,
         })
     })?;
@@ -130,6 +138,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CorrAst> {
         with,
         partial,
         weight,
+        by,
         outp,
         outs,
         outk,
