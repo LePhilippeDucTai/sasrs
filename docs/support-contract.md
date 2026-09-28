@@ -26,13 +26,13 @@ diagnostic honnête (réf. merges `2ad236e`, `965e578`, `d4eec6f`) :
 
 | PROC / statement | Demande | Avant | Depuis J02 |
 | --- | --- | --- | --- |
-| COMPARE | `CRITERION=`, `METHOD=`, `BRIEF`, `LISTALL`, `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=`/`OUTPERCENT=`, `MAXPRINT=`, option inconnue | ignorée en silence | **ERROR** |
+| COMPARE | `BRIEF`, `LISTALL`, `OUTPERCENT=`, `MAXPRINT=`, option inconnue | ignorée en silence | **ERROR** — depuis J07, les options `CRITERION=`, `METHOD=ABSOLUTE\|RELATIVE`, `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=` et les instructions `ID`, `VAR`/`WITH`, `BY` sont réellement implémentées et ne relèvent plus de ce diagnostic (cas `compat/compare/*` validés, cf. [`conformance/STATUS.md`](../conformance/STATUS.md)) |
 | UNIVARIATE | `VARDEF=` / `PCTLDEF=` autres que DF / définition 5 | ignorées | **ERROR** |
 | FREQ | option inconnue d'un statement `TABLES` | skip silencieux | **ERROR** |
 | DATASETS | `KILL` ; options inconnues de l'en-tête et de `COPY` | ignorées | **ERROR** |
 | MEANS/SUMMARY | statistique non calculable nommée dans `OUTPUT` (ex. `clm(x)=`) | colonne missing silencieuse | **ERROR** |
 | SQL | `OUTOBS=` / `INOBS=` ; instruction inconnue | ignorées | **ERROR** |
-| PRINTTO | `LOG=` / `PRINT=` (routage réel non implémenté) | NOTE trompeuse « redirected to » | **WARNING** (« routing not supported until J07-P5 », exit 1) |
+| PRINTTO | (levé en J07 — voir §J07) | NOTE trompeuse « redirected to » | **WARNING** jusqu'à J07 (« routing not supported ») ; depuis J07, `LOG=`/`PRINT=` routent réellement le journal / le listing vers le fichier, `NEW` remplace le contenu existant et un `PROC PRINTTO;` nu retablit les destinations par défaut (cas `compat/printto/*` validés) |
 | PLOT | options d'affichage après `/` (`HREF=`, `VREF=`, `HAXIS=`, …) ; `=group` | skip silencieux / désynchronisation du run-group | **WARNING** par option ; `=group` → NOTE (une seule couleur de symbole) |
 | GENMOD | `DIST=`/`LINK=` inconnue, option MODEL inconnue (ex. `OFFSET=`) | repli silencieux sur NORMAL/IDENTITY | **ERROR** |
 | LOGISTIC | `ORDER=` et options PROC inconnues ; `LINK=` inconnue ; options MODEL inconnues ; `PARAM=` autre que REF | repli silencieux | **ERROR** |
@@ -69,6 +69,34 @@ comportement réel des zones touchées, documenté honnêtement ci-dessous :
   honorés. `UPDATE` honore `UPDATEMODE=`/`UPDATE=` (`MISSINGCHECK` par défaut,
   `NOMISSINGCHECK`) aux deux formes documentées par SAS ; `NOMISSINGCHECK` laisse une valeur manquante de la transaction écraser celle du
 maître (le défaut `MISSINGCHECK` l'empêche).
+
+## Précisions J07 (levée des diagnostics provisoires J02-P4)
+
+Les diagnostics provisoires posés en J02-P4 sur COMPARE, TRANSPOSE, PRINTTO et
+les informats sont levés : les comportements correspondants sont réellement
+implémentés et validés par le corpus (cas `compat/*`, cf.
+[`conformance/STATUS.md`](../conformance/STATUS.md)) :
+
+- **COMPARE** : `CRITERION=` (+ `METHOD=ABSOLUTE\|RELATIVE`), `OUTBASE=` /
+  `OUTCOMP=` / `OUTDIF=` / `OUTNOEQUAL=` (`_TYPE_` BASE/COMP/DIF, `_OBS_`),
+  `ID`, `VAR`/`WITH` et `BY` sont honorés. Seuls `BRIEF`, `LISTALL`,
+  `OUTPERCENT=`, `MAXPRINT=` et les options inconnues restent des ERROR.
+- **TRANSPOSE** : `IDLABEL` (+ `LABEL=`), `COPY` (une observation de sortie par
+  observation d'entrée, complétée par des missings), `SUFFIX=`, `LET`
+  (dernière occurrence des `ID` dupliquées) et `ID` multi-variables avec
+  `DELIMITER=` sont honorés.
+- **PRINTTO** : `LOG=` / `PRINT=` routent physiquement le journal / le listing
+  vers le fichier externe, `NEW` remplace le contenu existant, et un
+  `PROC PRINTTO;` nu retablit les destinations par défaut. L'ancien WARNING
+  (« routing not supported », code de sortie 1) n'est plus émis.
+- **Informats (étape DATA / PROC CONTENTS)** : les informats — explicites dans
+  `INPUT` ou déclarées par l'instruction `INFORMAT` / `ATTRIB INFORMAT=` — sont
+  persistés dans les métadonnées du dataset et restitués par
+  `PROC CONTENTS OUT=` (`INFORMAT`, `INFORML`, `INFORMD`). L'ancienne
+  limitation « informats are not persisted in dataset metadata » n'existe plus.
+- **MEANS/SUMMARY** : `CLASS / MISSING`, `NWAY`, `ORDER=FREQ`, `FREQ` (pondère
+  N et STD), `ID` copiée dans `OUT=` et `OUTPUT OUT=` avec `AUTONAME` /
+  `MAXDEC=` sont honorés et validés.
 
 ## Catalogue et exemples
 
