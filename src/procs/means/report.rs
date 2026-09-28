@@ -24,14 +24,19 @@ pub fn stat_header(stat: &str) -> &'static str {
     }
 }
 
-/// Render a single computed stat value into a listing cell.
-pub(super) fn fmt_stat_cell(stat: &str, v: &Value) -> String {
+/// Render a single computed stat value into a listing cell. MAXDEC= (J07-P2)
+/// fixes the number of decimals of the printed report only — N/NMiss stay
+/// integers and missings render as their dot form.
+pub(super) fn fmt_stat_cell(stat: &str, v: &Value, maxdec: Option<usize>) -> String {
     match v {
         Value::Num(f) => {
             if stat == "n" || stat == "nmiss" {
                 format!("{}", *f as i64)
             } else {
-                format_best(*f, 12)
+                match maxdec {
+                    Some(d) => format!("{:.*}", d, f),
+                    None => format_best(*f, 12),
+                }
             }
         }
         Value::Missing(k) => k.display(),
@@ -50,28 +55,16 @@ pub(super) fn emit_by_heading(session: &mut Session, by_names: &[String], by_key
     session.listing.blank();
 }
 
-/// Emit one MEANS report table for the rows in `group_rows` (the full row set
-/// when no BY is active). Does NOT emit the procedure title (caller does that
-/// once). CLASS grouping is applied within `group_rows` only.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn emit_report_group(
-    session: &mut Session,
-    ds: &SasDataset,
-    class_cols: &[usize],
-    class_values: &[Vec<Value>],
-    var_cols: &[usize],
-    var_values: &[Vec<Value>],
-    weight_values: Option<&[Value]>,
-    report_stats: &[String],
-    alpha: f64,
-    vardef: VarDef,
-    group_rows: &[usize],
-) {
+/// Emit one MEANS report table for the rows in `analysis_rows` (the full row
+/// set when no BY is active). Does NOT emit the procedure title (caller does
+/// that once). CLASS grouping is applied within `analysis_rows` only.
+pub(super) fn emit_report_group(session: &mut Session, ctx: &ExecCtx, analysis_rows: &[usize]) {
+    let ds = ctx.ds;
     let mut headers: Vec<String> = Vec::new();
     let mut aligns: Vec<Align> = Vec::new();
 
     // Leading CLASS columns (only when CLASS present).
-    for &ci in class_cols {
+    for &ci in ctx.class_cols {
         headers.push(ds.vars[ci].name.clone());
         aligns.push(match ds.vars[ci].ty {
             VarType::Num => Align::Right,
@@ -82,51 +75,41 @@ pub(super) fn emit_report_group(
     aligns.push(Align::Left);
     // CLM expands to two columns; LCLM/UCLM to one CL column each; all others
     // to a single column. Header text reflects the confidence level.
-    for s in report_stats {
-        for h in stat_report_headers(s, alpha) {
+    for s in ctx.report_stats {
+        for h in stat_report_headers(s, ctx.alpha) {
             headers.push(h);
             aligns.push(Align::Right);
         }
     }
 
-    // Append the per-stat cells for one analysis variable to `row`, choosing
-    // the weighted or unweighted path. CLM yields two cells (lower, upper).
-    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
-        Some(wv) => {
-            let (pairs, nmiss) = partition_weighted_strict(&var_values[vi], wv, grp_rows);
-            for s in report_stats {
-                for cell in
-                    stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, vardef, alpha))
-                {
-                    row.push(cell);
-                }
-            }
-        }
-        None => {
-            let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
-            for s in report_stats {
-                for cell in stat_report_cells(s, &|st| compute(st, &xs, nmiss, alpha)) {
-                    row.push(cell);
-                }
+    // Append the per-stat cells for one analysis variable to `row`, through
+    // the shared FREQ / WEIGHT / plain path (J07-P2).
+    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| {
+        for s in ctx.report_stats {
+            for cell in stat_report_cells_maxdec(s, ctx.maxdec, &|st| {
+                ctx.stat_over(&ctx.var_values[vi], grp_rows, st)
+            }) {
+                row.push(cell);
             }
         }
     };
 
     let mut rows: Vec<Vec<String>> = Vec::new();
 
-    if class_cols.is_empty() {
+    if ctx.class_cols.is_empty() {
         // One section over the group's rows: one row per analysis variable.
-        for (vi, vname_idx) in var_cols.iter().enumerate() {
+        for (vi, vname_idx) in ctx.var_cols.iter().enumerate() {
             let mut row = vec![ds.vars[*vname_idx].name.clone()];
-            push_cells(&mut row, vi, group_rows);
+            push_cells(&mut row, vi, analysis_rows);
             rows.push(row);
         }
     } else {
-        // CLASS grouping restricted to this BY group's rows.
-        let cv_refs: Vec<&Vec<Value>> = class_values.iter().collect();
-        let groups = group_by_keys_subset(&cv_refs, group_rows);
+        // CLASS grouping restricted to this BY group's analysis rows,
+        // ordered per ORDER= (J07-P2).
+        let active: Vec<usize> = (0..ctx.class_cols.len()).collect();
+        let groups = ctx.ordered_groups(&active, analysis_rows);
         for (key, grp_rows) in &groups {
-            for (vi, vname_idx) in var_cols.iter().enumerate() {
+            for (vi, vname_idx) in ctx.var_cols.iter().enumerate() {
                 let mut row: Vec<String> = Vec::new();
                 for kv in key {
                     row.push(class_cell(kv));
@@ -143,32 +126,24 @@ pub(super) fn emit_report_group(
 
 /// Emit one MEANS report subtable for a single `_TYPE_` mask `ty` (M33.3,
 /// PRINTALLTYPES / WAYS / TYPES). Only the CLASS variables ACTIVE in `ty` head
-/// the table; rows are grouped by those active variables within `group_rows`.
-/// `ty`=0 → no CLASS columns (the overall section). The combined default-path
-/// table is still produced by `emit_report_group`; this is the per-type path.
-#[allow(clippy::too_many_arguments)]
+/// the table; rows are grouped by those active variables within
+/// `analysis_rows`. `ty`=0 → no CLASS columns (the overall section). The
+/// combined default-path table is still produced by `emit_report_group`.
 pub(super) fn emit_report_type(
     session: &mut Session,
-    ds: &SasDataset,
-    class_cols: &[usize],
-    class_values: &[Vec<Value>],
-    var_cols: &[usize],
-    var_values: &[Vec<Value>],
-    weight_values: Option<&[Value]>,
-    report_stats: &[String],
-    alpha: f64,
-    vardef: VarDef,
-    group_rows: &[usize],
+    ctx: &ExecCtx,
+    analysis_rows: &[usize],
     ty: u64,
 ) {
-    let k = class_cols.len();
+    let ds = ctx.ds;
+    let k = ctx.class_cols.len();
     // Active CLASS positions for this _TYPE_: bit (k-1-i) set ⇔ class i active.
     let active: Vec<usize> = (0..k).filter(|&i| (ty >> (k - 1 - i)) & 1 == 1).collect();
 
     let mut headers: Vec<String> = Vec::new();
     let mut aligns: Vec<Align> = Vec::new();
     for &i in &active {
-        let ci = class_cols[i];
+        let ci = ctx.class_cols[i];
         headers.push(ds.vars[ci].name.clone());
         aligns.push(match ds.vars[ci].ty {
             VarType::Num => Align::Right,
@@ -177,30 +152,19 @@ pub(super) fn emit_report_type(
     }
     headers.push("Variable".to_string());
     aligns.push(Align::Left);
-    for s in report_stats {
-        for h in stat_report_headers(s, alpha) {
+    for s in ctx.report_stats {
+        for h in stat_report_headers(s, ctx.alpha) {
             headers.push(h);
             aligns.push(Align::Right);
         }
     }
 
-    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| match weight_values {
-        Some(wv) => {
-            let (pairs, nmiss) = partition_weighted_strict(&var_values[vi], wv, grp_rows);
-            for s in report_stats {
-                for cell in
-                    stat_report_cells(s, &|st| compute_weighted(st, &pairs, nmiss, vardef, alpha))
-                {
-                    row.push(cell);
-                }
-            }
-        }
-        None => {
-            let (xs, nmiss) = partition_numeric(&var_values[vi], grp_rows);
-            for s in report_stats {
-                for cell in stat_report_cells(s, &|st| compute(st, &xs, nmiss, alpha)) {
-                    row.push(cell);
-                }
+    let push_cells = |row: &mut Vec<String>, vi: usize, grp_rows: &[usize]| {
+        for s in ctx.report_stats {
+            for cell in stat_report_cells_maxdec(s, ctx.maxdec, &|st| {
+                ctx.stat_over(&ctx.var_values[vi], grp_rows, st)
+            }) {
+                row.push(cell);
             }
         }
     };
@@ -208,16 +172,15 @@ pub(super) fn emit_report_type(
     let mut rows: Vec<Vec<String>> = Vec::new();
     if active.is_empty() {
         // Overall (_TYPE_=0): one row per analysis variable over all group rows.
-        for (vi, vname_idx) in var_cols.iter().enumerate() {
+        for (vi, vname_idx) in ctx.var_cols.iter().enumerate() {
             let mut row = vec![ds.vars[*vname_idx].name.clone()];
-            push_cells(&mut row, vi, group_rows);
+            push_cells(&mut row, vi, analysis_rows);
             rows.push(row);
         }
     } else {
-        let active_refs: Vec<&Vec<Value>> = active.iter().map(|&i| &class_values[i]).collect();
-        let groups = group_by_keys_subset(&active_refs, group_rows);
+        let groups = ctx.ordered_groups(&active, analysis_rows);
         for (key, grp_rows) in &groups {
-            for (vi, vname_idx) in var_cols.iter().enumerate() {
+            for (vi, vname_idx) in ctx.var_cols.iter().enumerate() {
                 let mut row: Vec<String> = Vec::new();
                 for kv in key {
                     row.push(class_cell(kv));
@@ -272,15 +235,20 @@ pub(super) fn percentile_header(stat: &str) -> Option<String> {
     }
 }
 
-/// Report cell(s) for a stat, computing values via `f` (the unweighted or
-/// weighted `compute*` closure). CLM emits two cells (LCLM then UCLM).
-pub(super) fn stat_report_cells(stat: &str, f: &dyn Fn(&str) -> Value) -> Vec<String> {
+/// Report cell(s) for a stat, computing values via `f` (the FREQ, weighted
+/// or unweighted `compute*` closure). CLM emits two cells (LCLM then UCLM).
+/// `maxdec` (J07-P2) applies to the printed report only.
+pub(super) fn stat_report_cells_maxdec(
+    stat: &str,
+    maxdec: Option<usize>,
+    f: &dyn Fn(&str) -> Value,
+) -> Vec<String> {
     match stat {
         "clm" => vec![
-            fmt_stat_cell("lclm", &f("lclm")),
-            fmt_stat_cell("uclm", &f("uclm")),
+            fmt_stat_cell("lclm", &f("lclm"), maxdec),
+            fmt_stat_cell("uclm", &f("uclm"), maxdec),
         ],
-        _ => vec![fmt_stat_cell(stat, &f(stat))],
+        _ => vec![fmt_stat_cell(stat, &f(stat), maxdec)],
     }
 }
 

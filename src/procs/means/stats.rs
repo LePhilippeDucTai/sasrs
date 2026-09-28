@@ -269,3 +269,153 @@ pub(super) fn median(xs: &[f64]) -> Option<f64> {
         Some((v[n / 2 - 1] + v[n / 2]) / 2.0)
     }
 }
+
+// ── FREQ statement (J07-P2) ────────────────────────────────────────────
+
+/// Partition for the FREQ statement: each observation counts `w` times.
+/// Weights are truncated to integers (SAS semantics); observations whose
+/// FREQ value is missing or `< 1` (0 after truncation) are excluded.
+/// Returns the usable `(value, weight)` pairs and the Σw of the excluded
+/// observations with a non-missing analysis value (weighted NMiss).
+pub(super) fn partition_freq(
+    value_col: &[Value],
+    freq_col: &[Value],
+    rows: &[usize],
+) -> (Vec<(f64, f64)>, usize) {
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    let mut nmiss_w: usize = 0;
+    for &r in rows {
+        let v = value_to_num(&value_col[r]).filter(|f| !f.is_nan());
+        // Truncation to integer, exclusion when missing or < 1.
+        let w = value_to_num(&freq_col[r])
+            .map(|f| f.trunc())
+            .filter(|f| *f >= 1.0);
+        match (v, w) {
+            (Some(vf), Some(wf)) => pairs.push((vf, wf)),
+            // Missing analysis value at a valid frequency → weighted NMiss.
+            (None, Some(wf)) => nmiss_w += wf as usize,
+            // Invalid frequency (missing or < 1) → excluded from the analysis.
+            _ => {}
+        }
+    }
+    (pairs, nmiss_w)
+}
+
+/// Statistics under the FREQ statement (J07-P2): like `compute_weighted`
+/// but N / NMiss / SumWgt count Σw (each observation counts w times) and the
+/// variance divisor is Σw − 1 as soon as Σw ≥ 2 — a single observation with
+/// w = 2 therefore yields STD = 0 (two replicated values), not a missing.
+pub(super) fn compute_freq(
+    stat: &str,
+    pairs: &[(f64, f64)],
+    n_missing_w: usize,
+    vardef: VarDef,
+    alpha: f64,
+) -> Value {
+    let n = pairs.len();
+    let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
+    let (mean_w, css) =
+        crate::procs::common::weighted_mean_css(pairs).unwrap_or((f64::NAN, f64::NAN));
+    // Replicated variance: divisor Σw − 1 (VARDEF=DF analog). A positive
+    // replication count is what matters, not the raw observation count.
+    let variance = if css.is_nan() || sum_w < 2.0 {
+        None
+    } else if vardef == VarDef::Df {
+        Some(css / (sum_w - 1.0))
+    } else {
+        weighted_variance(pairs, vardef)
+    };
+    let std = variance.map(|v| v.sqrt());
+
+    if matches!(stat, "lclm" | "uclm" | "clm") {
+        match (mean_w.is_finite().then_some(mean_w), std) {
+            (Some(m), Some(s)) if n >= 1 && sum_w > 0.0 => {
+                let stderr = s / sum_w.sqrt();
+                return clm_value(stat, m, stderr, n.max(2), alpha);
+            }
+            _ => return Value::missing(),
+        }
+    }
+
+    match stat {
+        // N counts observations × frequency.
+        "n" => Value::Num(sum_w),
+        "sumwgt" => Value::Num(sum_w),
+        // NMiss counts excluded observations × frequency.
+        "nmiss" => Value::Num(n_missing_w as f64),
+        "min" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                Value::Num(pairs.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min))
+            }
+        }
+        "max" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                Value::Num(
+                    pairs
+                        .iter()
+                        .map(|(x, _)| *x)
+                        .fold(f64::NEG_INFINITY, f64::max),
+                )
+            }
+        }
+        "range" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                let mn = pairs.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+                let mx = pairs
+                    .iter()
+                    .map(|(x, _)| *x)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                Value::Num(mx - mn)
+            }
+        }
+        "sum" => Value::Num(pairs.iter().map(|(x, w)| w * x).sum()),
+        "mean" => {
+            if n == 0 {
+                Value::missing()
+            } else {
+                Value::Num(mean_w)
+            }
+        }
+        "std" | "stddev" => match std {
+            Some(s) => Value::Num(s),
+            None => Value::missing(),
+        },
+        "stderr" => match std {
+            Some(s) if sum_w > 0.0 => Value::Num(s / sum_w.sqrt()),
+            _ => Value::missing(),
+        },
+        "cv" => match (n > 0 && mean_w.is_finite() && mean_w != 0.0, std) {
+            (true, Some(s)) => Value::Num(100.0 * s / mean_w),
+            _ => Value::missing(),
+        },
+        // Percentiles under FREQ: weighted Definition 5 over (x, w).
+        other if percentile_fraction(other).is_some() || other == "qrange" => {
+            if n == 0 {
+                return Value::missing();
+            }
+            let mut sorted: Vec<(f64, f64)> = pairs.to_vec();
+            sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+            if other == "qrange" {
+                return match (
+                    weighted_quantile_def5(&sorted, 0.75),
+                    weighted_quantile_def5(&sorted, 0.25),
+                ) {
+                    (Some(q3), Some(q1)) => Value::Num(q3 - q1),
+                    _ => Value::missing(),
+                };
+            }
+            let p = percentile_fraction(other).unwrap();
+            match weighted_quantile_def5(&sorted, p) {
+                Some(q) => Value::Num(q),
+                None => Value::missing(),
+            }
+        }
+        _ => Value::missing(),
+    }
+}

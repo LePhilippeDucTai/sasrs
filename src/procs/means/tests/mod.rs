@@ -33,15 +33,26 @@ fn means_ast_var_x() -> MeansAst {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: None,
+        output: vec![],
     }
 }
 
+mod compat;
 mod execute1;
 mod execute2;
 mod parse;

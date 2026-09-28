@@ -31,18 +31,33 @@ fn execute_ways_restricts_output_rows() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![1],
         types: vec![],
-        output: Some(MeansOutput {
+        output: vec![MeansOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
                 name: "O".into(),
             },
-            specs: vec![("sum".into(), "x".into(), "sx".into())],
-        }),
+            specs: vec![OutSpec {
+                stat: "sum".into(),
+                vars: vec!["x".into()],
+                names: vec!["sx".into()],
+            }],
+            autoname: false,
+        }],
     };
     execute(&ast, &mut session).unwrap();
     // WAYS 1 → only _TYPE_=1 (h levels {1,2}: 2 rows) and _TYPE_=2 (g
@@ -91,22 +106,45 @@ fn execute_output_k0_no_class() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: Some(MeansOutput {
+        output: vec![MeansOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
                 name: "O".into(),
             },
             specs: vec![
-                ("mean".into(), "x".into(), "m".into()),
-                ("n".into(), "x".into(), "cnt".into()),
-                ("nmiss".into(), "x".into(), "nm".into()),
+                OutSpec {
+                    stat: "mean".into(),
+                    vars: vec!["x".into()],
+                    names: vec!["m".into()],
+                },
+                OutSpec {
+                    stat: "n".into(),
+                    vars: vec!["x".into()],
+                    names: vec!["cnt".into()],
+                },
+                OutSpec {
+                    stat: "nmiss".into(),
+                    vars: vec!["x".into()],
+                    names: vec!["nm".into()],
+                },
             ],
-        }),
+            autoname: false,
+        }],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -151,18 +189,33 @@ fn execute_output_k1() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: Some(MeansOutput {
+        output: vec![MeansOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
                 name: "O".into(),
             },
-            specs: vec![("mean".into(), "x".into(), "mx".into())],
-        }),
+            specs: vec![OutSpec {
+                stat: "mean".into(),
+                vars: vec!["x".into()],
+                names: vec!["mx".into()],
+            }],
+            autoname: false,
+        }],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -222,18 +275,33 @@ fn execute_output_k2_type_set_and_rowcount() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: Some(MeansOutput {
+        output: vec![MeansOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
                 name: "O".into(),
             },
-            specs: vec![("sum".into(), "x".into(), "sx".into())],
-        }),
+            specs: vec![OutSpec {
+                stat: "sum".into(),
+                vars: vec!["x".into()],
+                names: vec!["sx".into()],
+            }],
+            autoname: false,
+        }],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -295,12 +363,22 @@ fn execute_report_contains_title_and_var() {
         var: vec![],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: None,
+        output: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -337,12 +415,22 @@ fn execute_noprint_writes_nothing_to_listing() {
         var: vec![],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: None,
+        output: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -377,21 +465,40 @@ fn execute_clm_output_readback() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: Some(MeansOutput {
+        output: vec![MeansOutput {
             out: DatasetRef {
                 libref: Some("WORK".into()),
                 name: "O".into(),
             },
             specs: vec![
-                ("lclm".into(), "x".into(), "lo".into()),
-                ("uclm".into(), "x".into(), "hi".into()),
+                OutSpec {
+                    stat: "lclm".into(),
+                    vars: vec!["x".into()],
+                    names: vec!["lo".into()],
+                },
+                OutSpec {
+                    stat: "uclm".into(),
+                    vars: vec!["x".into()],
+                    names: vec!["hi".into()],
+                },
             ],
-        }),
+            autoname: false,
+        }],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -427,12 +534,22 @@ fn execute_clm_report_headers() {
         var: vec!["x".into()],
         by: vec![],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: None,
+        output: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -476,12 +593,22 @@ fn execute_by_per_group_report_and_headings() {
         var: vec!["x".into()],
         by: vec![("sex".into(), false)],
         weight: None,
+        freq: None,
+        id: vec![],
+        nway: false,
+        missing: false,
+        order: ClassOrder::Internal,
+        maxdec: None,
+        descendtypes: false,
+        completetypes: false,
+        chartype: false,
+        exclnpwgt: false,
         vardef: VarDef::Df,
         alpha: 0.05,
         printalltypes: false,
         ways: vec![],
         types: vec![],
-        output: None,
+        output: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
