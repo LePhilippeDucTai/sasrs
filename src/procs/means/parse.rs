@@ -55,6 +55,15 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
     let mut alpha: f64 = 0.05;
     // J03-P2 — VARDEF= (DF par défaut) pour la variance pondérée.
     let mut vardef = VarDef::Df;
+    // J07-P2 — options de production.
+    let mut nway = false;
+    let mut missing = false;
+    let mut order = ClassOrder::Internal;
+    let mut maxdec: Option<usize> = None;
+    let mut descendtypes = false;
+    let mut completetypes = false;
+    let mut chartype = false;
+    let mut exclnpwgt = false;
 
     // --- PROC MEANS statement options, until `;` ---
     loop {
@@ -79,6 +88,72 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
             // PRINTALLTYPES (M33.3): print every generated _TYPE_ subtable.
             ts.next();
             printalltypes = true;
+        } else if ts.peek().is_kw("nway") {
+            // J07-P2 — NWAY: OUT= keeps only the observations with the
+            // highest _TYPE_ value (all CLASS variables crossed).
+            ts.next();
+            nway = true;
+        } else if ts.peek().is_kw("missing") {
+            // J07-P2 — MISSING: observations with missing CLASS values form
+            // their own class level instead of being excluded.
+            ts.next();
+            missing = true;
+        } else if ts.peek().is_kw("descendtypes") {
+            // J07-P2 — DESCENDTYPES: _TYPE_ values in descending order.
+            ts.next();
+            descendtypes = true;
+        } else if ts.peek().is_kw("completetypes") {
+            // J07-P2 — COMPLETETYPES: all level combinations in OUT=, even
+            // unobserved ones (freq 0, missing statistics).
+            ts.next();
+            completetypes = true;
+        } else if ts.peek().is_kw("chartype") {
+            // J07-P2 — CHARTYPE: _TYPE_ as a character mask ('101').
+            ts.next();
+            chartype = true;
+        } else if ts.peek().is_kw("exclnpwgt") {
+            // J07-P2 — EXCLNPWGT: exclude observations with a nonpositive
+            // WEIGHT/FREQ value from the analysis (the strict partition
+            // already excludes them; the option makes it explicit).
+            ts.next();
+            exclnpwgt = true;
+        } else if ts.peek().is_kw("order") {
+            // J07-P2 — ORDER= DATA|FORMATTED|FREQ|INTERNAL (défaut INTERNAL).
+            crate::procs::common::consume_option_eq(ts, "ORDER")?;
+            let tok = ts.peek().clone();
+            let val = tok.ident().map(|s| s.to_ascii_lowercase());
+            match val.as_deref().and_then(ClassOrder::parse) {
+                Some(o) => {
+                    ts.next();
+                    order = o;
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unexpected option 'ORDER={}' on PROC {} statement.",
+                            tok.ident().unwrap_or("?").to_uppercase(),
+                            proc_name
+                        ),
+                        tok.span,
+                    ));
+                }
+            }
+        } else if ts.peek().is_kw("maxdec") {
+            // J07-P2 — MAXDEC=n (0..9): decimals of the PRINTED report only,
+            // no effect on the OUTPUT OUT= dataset.
+            crate::procs::common::consume_option_eq(ts, "MAXDEC")?;
+            let tok = ts.peek().clone();
+            match tok.kind {
+                TokenKind::Num(d) if d >= 0.0 && d.fract() == 0.0 && d <= 9.0 => {
+                    ts.next();
+                    maxdec = Some(d as usize);
+                }
+                _ => {
+                    return Err(SasError::runtime(
+                        "The MAXDEC= value must be an integer between 0 and 9.",
+                    ));
+                }
+            }
         } else if ts.peek().is_kw("vardef") {
             // J03-P2 — VARDEF= divise la variance pondérée : DF (défaut,
             // Σw−1) et WEIGHT/WGT (Σw−Σw²/Σw) sont honorés ; toute autre
@@ -149,31 +224,40 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
     let mut var: Vec<String> = Vec::new();
     let mut by: Vec<(String, bool)> = Vec::new();
     let mut weight: Option<String> = None;
+    let mut freq: Option<String> = None;
+    let mut id: Vec<String> = Vec::new();
     let mut ways: Vec<usize> = Vec::new();
     let mut types: Vec<Vec<String>> = Vec::new();
-    let mut output: Option<MeansOutput> = None;
+    let mut output: Vec<MeansOutput> = Vec::new();
 
     // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    // J07-P2 — CLASS / VAR / WAYS / TYPES / ID / OUTPUT s'accumulent : SAS
+    // accepte plusieurs occurrences de chaque statement.
     crate::procs::common::parse_proc_body(ts, proc_name, |ts, kw| {
         Ok(match kw {
             "class" => {
                 ts.next();
-                class = crate::procs::common::parse_class(ts)?;
+                let (names, class_missing, class_order) = parse_class_opts(ts, proc_name)?;
+                class.extend(names);
+                missing = missing || class_missing;
+                if let Some(o) = class_order {
+                    order = o;
+                }
                 true
             }
             "ways" => {
                 ts.next();
-                ways = parse_ways(ts)?;
+                ways.extend(parse_ways(ts)?);
                 true
             }
             "types" => {
                 ts.next();
-                types = parse_types(ts)?;
+                types.extend(parse_types(ts)?);
                 true
             }
             "var" => {
                 ts.next();
-                var = crate::procs::common::parse_var_list(ts)?;
+                var.extend(crate::procs::common::parse_var_list(ts)?);
                 true
             }
             "by" => {
@@ -186,9 +270,24 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
                 weight = Some(crate::procs::common::parse_weight(ts)?);
                 true
             }
+            "freq" => {
+                // J07-P2 — FREQ var ; : chaque observation compte pour w
+                // (N, NMISS et _FREQ_ multipliés par w, variance divisée par
+                // Σw−1).
+                ts.next();
+                freq = Some(crate::procs::common::parse_weight(ts)?);
+                true
+            }
+            "id" => {
+                // J07-P2 — ID v1 v2 ... ; copiées dans l'OUT= (plus grand
+                // niveau observé par groupe).
+                ts.next();
+                id.extend(crate::procs::common::parse_var_list(ts)?);
+                true
+            }
             "output" => {
                 ts.next();
-                output = Some(parse_output(ts, proc_name)?);
+                output.push(parse_output(ts, proc_name)?);
                 true
             }
             _ => false,
@@ -204,13 +303,124 @@ pub(crate) fn parse_named(ts: &mut StatementStream, proc_name: &str) -> Result<M
         var,
         by,
         weight,
+        freq,
+        id,
         vardef,
         alpha,
         printalltypes,
+        nway,
+        missing,
+        order,
+        maxdec,
+        descendtypes,
+        completetypes,
+        chartype,
+        exclnpwgt,
         ways,
         types,
         output,
     })
+}
+
+/// Parse a CLASS statement body (after `class` was consumed) with its J07-P2
+/// options: `class v1 v2 [/ missing] [/ order=...] ;`. Returns the names,
+/// whether `/ missing` was given, and an ORDER= override (None = unchanged).
+fn parse_class_opts(
+    ts: &mut StatementStream,
+    proc_name: &str,
+) -> Result<(Vec<String>, bool, Option<ClassOrder>)> {
+    // Fast path: no `/ options` on the statement → the shared CLASS parser
+    // (M31.2). Detection scans ahead to the `;` WITHOUT consuming anything.
+    let mut look = 0usize;
+    let mut has_options = false;
+    loop {
+        match ts.peek_nth(look).kind {
+            TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::Slash => {
+                has_options = true;
+                break;
+            }
+            _ => look += 1,
+        }
+    }
+    if !has_options {
+        let names = crate::procs::common::parse_class(ts)?;
+        return Ok((names, false, None));
+    }
+
+    let mut names: Vec<String> = Vec::new();
+    let mut missing = false;
+    let mut order: Option<ClassOrder> = None;
+    loop {
+        match ts.peek().kind {
+            TokenKind::Semi => {
+                ts.next();
+                break;
+            }
+            TokenKind::Eof => break,
+            TokenKind::Slash => {
+                ts.next();
+                loop {
+                    if ts.peek().kind == TokenKind::Semi {
+                        ts.next();
+                        return Ok((names, missing, order));
+                    }
+                    if ts.peek().kind == TokenKind::Eof {
+                        return Ok((names, missing, order));
+                    }
+                    if ts.peek().is_kw("missing") {
+                        ts.next();
+                        missing = true;
+                    } else if ts.peek().is_kw("order") {
+                        crate::procs::common::consume_option_eq(ts, "ORDER")?;
+                        let tok = ts.peek().clone();
+                        let val = tok.ident().map(|s| s.to_ascii_lowercase());
+                        match val.as_deref().and_then(ClassOrder::parse) {
+                            Some(o) => {
+                                ts.next();
+                                order = Some(o);
+                            }
+                            _ => {
+                                return Err(SasError::parse(
+                                    format!(
+                                        "Unexpected option 'ORDER={}' on the CLASS statement of PROC {}.",
+                                        tok.ident().unwrap_or("?").to_uppercase(),
+                                        proc_name
+                                    ),
+                                    tok.span,
+                                ));
+                            }
+                        }
+                    } else {
+                        return Err(SasError::parse(
+                            format!(
+                                "Unexpected option '{}' on the CLASS statement of PROC {}.",
+                                ts.peek().ident().unwrap_or("?").to_uppercase(),
+                                proc_name
+                            ),
+                            ts.peek().span,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                let tok = ts.peek().clone();
+                match tok.ident() {
+                    Some(n) => {
+                        ts.next();
+                        names.push(n.to_string());
+                    }
+                    None => {
+                        return Err(SasError::parse(
+                            "expected a variable name in the CLASS statement",
+                            tok.span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok((names, missing, order))
 }
 
 /// Parse a WAYS statement body (after `ways` was consumed), through its `;`.
@@ -297,7 +507,16 @@ pub(super) fn parse_types(ts: &mut StatementStream) -> Result<Vec<Vec<String>>> 
 }
 
 /// Parse the OUTPUT statement body (after "output" was consumed), through
-/// its terminating `;`. `output out=lib.t [stat(var)=name ...] ;`
+/// its terminating `;`. J07-P2 production grammar:
+///
+/// `output out=lib.t [stat[(varlist)][= namelist]]... [/ autoname] ;`
+///
+/// - `stat(var)=name` — one analysis variable, one output name (forme M5) ;
+/// - `mean(x y)=m1 m2` — a list of variables and as many names ;
+/// - `mean=` / `mean(x y)=` — sans noms : AUTONAME nomme `<var>_<STAT>` ;
+///   sans AUTONAME, un nom explicite est exigé (stat en majuscules si une
+///   seule variable d'analyse).
+/// - `stat=` sans parenthèses s'applique à toutes les variables VAR.
 ///
 /// J02-P4 — each statistic keyword is validated: an unknown keyword, or one
 /// that has no single computable value in a dataset context (`clm(x)=` names
@@ -305,7 +524,8 @@ pub(super) fn parse_types(ts: &mut StatementStream) -> Result<Vec<Vec<String>>> 
 /// behaviour wrote a silent missing column.
 pub(super) fn parse_output(ts: &mut StatementStream, proc_name: &str) -> Result<MeansOutput> {
     let mut out: Option<DatasetRef> = None;
-    let mut specs: Vec<(String, String, String)> = Vec::new();
+    let mut specs: Vec<OutSpec> = Vec::new();
+    let mut autoname = false;
 
     loop {
         if ts.peek().kind == TokenKind::Semi {
@@ -315,69 +535,134 @@ pub(super) fn parse_output(ts: &mut StatementStream, proc_name: &str) -> Result<
         if ts.peek().kind == TokenKind::Eof {
             break;
         }
+        if ts.peek().kind == TokenKind::Slash {
+            // Statement options: `/ autoname` (J07-P2).
+            ts.next();
+            loop {
+                if ts.peek().kind == TokenKind::Semi {
+                    ts.next();
+                    return finish_output(out, specs, autoname);
+                }
+                if ts.peek().kind == TokenKind::Eof {
+                    return finish_output(out, specs, autoname);
+                }
+                if ts.peek().is_kw("autoname") {
+                    ts.next();
+                    autoname = true;
+                } else {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unexpected option '{}' in the OUTPUT statement of PROC {}.",
+                            ts.peek().ident().unwrap_or("?").to_uppercase(),
+                            proc_name
+                        ),
+                        ts.peek().span,
+                    ));
+                }
+            }
+        }
         if ts.peek().is_kw("out") {
             crate::procs::common::consume_option_eq(ts, "OUT")?;
             out = Some(ts.parse_dataset_ref()?);
-        } else if let Some(stat) = ts.peek().ident().map(str::to_string) {
-            let stat_l = stat.to_ascii_lowercase();
-            if !is_stat_keyword(&stat_l) || stat_l == "clm" {
-                return Err(crate::procs::common::unsupported_statement(
-                    proc_name,
-                    &format!("OUTPUT statistic {}", stat.to_uppercase()),
-                ));
-            }
-            // Expect `stat(var)=name`.
-            ts.next(); // stat
-            if ts.peek().kind != TokenKind::LParen {
-                return Err(SasError::parse(
-                    format!("expected '(' after statistic '{}' in OUTPUT", stat),
-                    ts.peek().span,
-                ));
-            }
-            ts.next(); // '('
-            let var = match ts.peek().ident().map(str::to_string) {
-                Some(v) => {
-                    ts.next();
-                    v
-                }
-                None => {
-                    return Err(SasError::parse(
-                        "expected a variable name inside OUTPUT statistic spec",
-                        ts.peek().span,
-                    ));
-                }
-            };
-            if ts.peek().kind != TokenKind::RParen {
-                return Err(SasError::parse(
-                    "expected ')' in OUTPUT statistic spec",
-                    ts.peek().span,
-                ));
-            }
-            ts.next(); // ')'
-            expect_eq(ts, "OUTPUT statistic")?;
-            let name = match ts.peek().ident().map(str::to_string) {
-                Some(n) => {
-                    ts.next();
-                    n
-                }
-                None => {
-                    return Err(SasError::parse(
-                        "expected an output variable name in OUTPUT statistic spec",
-                        ts.peek().span,
-                    ));
-                }
-            };
-            specs.push((stat.to_ascii_lowercase(), var, name));
-        } else {
+            continue;
+        }
+        let Some(stat) = ts.peek().ident().map(str::to_string) else {
             return Err(SasError::parse(
                 "unexpected token in OUTPUT statement",
                 ts.peek().span,
             ));
+        };
+        let stat_l = stat.to_ascii_lowercase();
+        if !is_stat_keyword(&stat_l) || stat_l == "clm" {
+            return Err(crate::procs::common::unsupported_statement(
+                proc_name,
+                &format!("OUTPUT statistic {}", stat.to_uppercase()),
+            ));
         }
-    }
+        ts.next(); // stat keyword
 
+        // Optional `(varlist)` — empty list means "every VAR variable".
+        let mut vars: Vec<String> = Vec::new();
+        if ts.peek().kind == TokenKind::LParen {
+            ts.next(); // '('
+            loop {
+                if ts.peek().kind == TokenKind::RParen {
+                    ts.next();
+                    break;
+                }
+                if ts.peek().kind == TokenKind::Eof {
+                    return Err(SasError::parse(
+                        "expected ')' in OUTPUT statistic spec",
+                        ts.peek().span,
+                    ));
+                }
+                let Some(v) = ts.peek().ident().map(str::to_string) else {
+                    return Err(SasError::parse(
+                        "expected a variable name inside OUTPUT statistic spec",
+                        ts.peek().span,
+                    ));
+                };
+                ts.next();
+                vars.push(v);
+            }
+        }
+
+        // Optional `= namelist`. A following identifier is a NAME unless the
+        // token after it is `=` (then it opens the next `stat=` spec).
+        let mut names: Vec<String> = Vec::new();
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next(); // '='
+            loop {
+                // A following identifier is a NAME unless the token after it
+                // is `=` (next `stat=` spec) or `(` (next `stat(var)` spec).
+                let is_name = match ts.peek().kind {
+                    TokenKind::Ident(_) => {
+                        !matches!(ts.peek2().kind, TokenKind::Eq | TokenKind::LParen)
+                    }
+                    _ => false,
+                };
+                if is_name {
+                    names.push(ts.peek().ident().unwrap().to_string());
+                    ts.next();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        specs.push(OutSpec {
+            stat: stat_l,
+            vars,
+            names,
+        });
+    }
+    finish_output(out, specs, autoname)
+}
+
+/// Validate and assemble a parsed OUTPUT statement (OUT= is mandatory).
+fn finish_output(
+    out: Option<DatasetRef>,
+    specs: Vec<OutSpec>,
+    autoname: bool,
+) -> Result<MeansOutput> {
     let out = out.ok_or_else(|| {
         SasError::runtime("The OUTPUT statement requires the OUT= option in PROC MEANS.")
     })?;
-    Ok(MeansOutput { out, specs })
+    // Name resolution: with AUTONAME every spec takes <var>_<STAT> names;
+    // without it, an empty name list needs exactly one analysis variable.
+    for sp in &specs {
+        if sp.names.len() > 1 && sp.vars.len() > 1 && sp.names.len() != sp.vars.len() {
+            return Err(SasError::runtime(format!(
+                "The OUTPUT statistic {} names {} variables but {} output names were given.",
+                sp.stat.to_uppercase(),
+                sp.vars.len(),
+                sp.names.len()
+            )));
+        }
+    }
+    Ok(MeansOutput {
+        out,
+        specs,
+        autoname,
+    })
 }

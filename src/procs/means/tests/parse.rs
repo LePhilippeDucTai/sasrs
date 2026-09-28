@@ -29,19 +29,15 @@ fn parse_output_specs() {
         "proc means data=a; var height; output out=b mean(height)=avg_h n(height)=n_h; run;",
     )
     .unwrap();
-    let out = ast.output.as_ref().unwrap();
+    let out = ast.output.first().unwrap();
     assert_eq!(out.out.name, "b");
-    assert_eq!(
-        out.specs,
-        vec![
-            (
-                "mean".to_string(),
-                "height".to_string(),
-                "avg_h".to_string()
-            ),
-            ("n".to_string(), "height".to_string(), "n_h".to_string()),
-        ]
-    );
+    // J07-P2 — specs étendues : (stat, vars, names).
+    assert_eq!(out.specs.len(), 2);
+    assert_eq!(out.specs[0].stat, "mean");
+    assert_eq!(out.specs[0].vars, vec!["height".to_string()]);
+    assert_eq!(out.specs[0].names, vec!["avg_h".to_string()]);
+    assert_eq!(out.specs[1].stat, "n");
+    assert_eq!(out.specs[1].names, vec!["n_h".to_string()]);
 }
 
 #[test]
