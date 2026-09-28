@@ -1,21 +1,87 @@
 use super::*;
 
+/// METHOD= — comment deux valeurs numériques sont jugées (SAS 9.4, chap. 13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpMethod {
+    Absolute,
+    Relative,
+    Exact,
+    Percent,
+}
+
+impl CmpMethod {
+    /// Valeur par défaut de METHOD= (doc SAS : ABSOLUTE).
+    pub fn parse_kw(kw: &str) -> Option<CmpMethod> {
+        Some(match kw {
+            "absolute" => CmpMethod::Absolute,
+            "relative" => CmpMethod::Relative,
+            "exact" => CmpMethod::Exact,
+            "percent" => CmpMethod::Percent,
+            _ => return None,
+        })
+    }
+}
+
 pub struct CompareAst {
     pub base: DatasetRef,
     pub compare: DatasetRef,
     pub out: Option<DatasetRef>,
     pub novalues: bool,
     pub briefsummary: bool,
+    /// J07-P3 — NOPRINT : aucun listing produit (la log et OUT= restent).
+    pub noprint: bool,
+    /// J07-P3 — BRIEF : rapport condensé (équivalent BRIEFSUMMARY).
+    pub brief: bool,
+    /// J07-P3 — LISTALL : la section valeurs liste toutes les variables
+    /// comparées, égales comprises.
+    pub listall: bool,
+    /// J07-P3 — MAXPRINT=n (défaut 50) : plafond d'écarts imprimés par
+    /// variable. Stocké ; la section listing ne détaille pas les écarts
+    /// observation par observation, le plafond ne s'y applique donc pas.
+    pub maxprint: usize,
+    /// J07-P3 — CRITERION=c (défaut 0) : seuil de jugement METHOD=.
+    pub criterion: f64,
+    /// J07-P3 — METHOD= (défaut ABSOLUTE).
+    pub method: CmpMethod,
+    /// J07-P3 — OUT= : filtres de lignes écrites.
+    pub outbase: bool,
+    pub outcomp: bool,
+    pub outdif: bool,
+    pub outnoequal: bool,
+    pub outpercent: bool,
+    /// J07-P3 — ID v1 v2 ; : appariement des observations par clé.
+    pub id: Vec<String>,
+    /// J07-P3 — VAR v1 v2 ; / WITH w1 w2 ; : paires positionnelles.
+    pub var: Vec<String>,
+    pub with: Vec<String>,
+    /// J07-P3 — BY v1 [DESCENDING v2] ; : comparaison par groupe.
+    pub by: Vec<(String, bool)>,
 }
 
-/// Parse `proc compare base=... compare=... [out=...] [novalues] [briefsummary]; run;`
-/// Called AFTER "proc compare" has been consumed.
+/// Parse `proc compare base=... compare=... [options] ; [id ...;] [var ...;]
+/// [with ...;] [by ...;] run;` — called AFTER "proc compare" has been
+/// consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
     let mut base: Option<DatasetRef> = None;
     let mut compare: Option<DatasetRef> = None;
     let mut out: Option<DatasetRef> = None;
     let mut novalues = false;
     let mut briefsummary = false;
+    let mut noprint = false;
+    let mut brief = false;
+    let mut listall = false;
+    let mut maxprint: usize = 50;
+    let mut criterion: f64 = 0.0;
+    let mut method = CmpMethod::Absolute;
+    let mut outbase = false;
+    let mut outcomp = false;
+    let mut outdif = false;
+    let mut outnoequal = false;
+    let mut outpercent = false;
+    let mut id: Vec<String> = Vec::new();
+    let mut var: Vec<String> = Vec::new();
+    let mut with: Vec<String> = Vec::new();
+    let mut by: Vec<(String, bool)> = Vec::new();
 
     // Parse header options until `;`
     loop {
@@ -57,26 +123,110 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         } else if ts.peek().is_kw("briefsummary") {
             ts.next();
             briefsummary = true;
-        } else if ts.peek().is_kw("criterion")
-            || ts.peek().is_kw("method")
-            || ts.peek().is_kw("brief")
-            || ts.peek().is_kw("listall")
-            || ts.peek().is_kw("outbase")
-            || ts.peek().is_kw("outcomp")
-            || ts.peek().is_kw("outdif")
-            || ts.peek().is_kw("outnoequal")
-            || ts.peek().is_kw("outpercent")
-            || ts.peek().is_kw("maxprint")
-        {
-            // J02-P4 — options SAS reconnues mais non honorées : elles peuvent
-            // changer la comparaison effectuée (tolérance, sortie OUT=, volume
-            // affiché) ; l'ignorer silencieusement produirait un faux « all
-            // values equal ». ERROR via le helper du contrat J02-P3.
-            let opt = ts.peek().ident().unwrap_or("?").to_uppercase();
-            return Err(crate::procs::common::unsupported_statement(
-                "COMPARE",
-                &format!("{opt}="),
-            ));
+        } else if ts.peek().is_kw("noprint") {
+            ts.next();
+            noprint = true;
+        } else if ts.peek().is_kw("brief") {
+            // J07-P3 — BRIEF (raccourci documenté de BRIEFSUMMARY).
+            ts.next();
+            brief = true;
+        } else if ts.peek().is_kw("listall") {
+            ts.next();
+            listall = true;
+        } else if ts.peek().is_kw("criterion") {
+            crate::procs::common::consume_option_eq(ts, "CRITERION")?;
+            let tok = ts.peek().clone();
+            match tok.kind {
+                TokenKind::Num(f) if f >= 0.0 => {
+                    ts.next();
+                    criterion = f;
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        "expected a non-negative number after CRITERION=",
+                        tok.span,
+                    ));
+                }
+            }
+        } else if ts.peek().is_kw("method") {
+            crate::procs::common::consume_option_eq(ts, "METHOD")?;
+            let tok = ts.peek().clone();
+            let val = tok.ident().map(|s| s.to_ascii_lowercase());
+            match val.as_deref().and_then(CmpMethod::parse_kw) {
+                Some(m) => {
+                    ts.next();
+                    method = m;
+                }
+                None => {
+                    return Err(SasError::parse(
+                        format!(
+                            "Unexpected option 'METHOD={}' on PROC COMPARE statement.",
+                            tok.ident().unwrap_or("?").to_uppercase()
+                        ),
+                        tok.span,
+                    ));
+                }
+            }
+        } else if ts.peek().is_kw("maxprint") {
+            // MAXPRINT=n | MAXPRINT=(n,p) — n écarts par variable, p par
+            // observation (p plafonné par n ; seul n est retenu, le listing
+            // ne détaille pas les écarts par observation).
+            crate::procs::common::consume_option_eq(ts, "MAXPRINT")?;
+            let tok = ts.peek().clone();
+            match tok.kind {
+                TokenKind::Num(f) if f >= 0.0 && f.fract() == 0.0 => {
+                    ts.next();
+                    maxprint = f as usize;
+                }
+                TokenKind::LParen => {
+                    ts.next();
+                    loop {
+                        let tok = ts.peek().clone();
+                        match tok.kind {
+                            TokenKind::RParen => {
+                                ts.next();
+                                break;
+                            }
+                            TokenKind::Comma => {
+                                ts.next();
+                            }
+                            TokenKind::Num(f) if f >= 0.0 && f.fract() == 0.0 => {
+                                ts.next();
+                                if maxprint == 50 {
+                                    maxprint = f as usize;
+                                }
+                            }
+                            _ => {
+                                return Err(SasError::parse(
+                                    "expected a non-negative integer in MAXPRINT=",
+                                    tok.span,
+                                ));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    return Err(SasError::parse(
+                        "expected a non-negative integer in MAXPRINT=",
+                        tok.span,
+                    ));
+                }
+            }
+        } else if ts.peek().is_kw("outbase") {
+            ts.next();
+            outbase = true;
+        } else if ts.peek().is_kw("outcomp") {
+            ts.next();
+            outcomp = true;
+        } else if ts.peek().is_kw("outdif") {
+            ts.next();
+            outdif = true;
+        } else if ts.peek().is_kw("outnoequal") {
+            ts.next();
+            outnoequal = true;
+        } else if ts.peek().is_kw("outpercent") {
+            ts.next();
+            outpercent = true;
         } else {
             // Unknown option: no silent skip (contrat J02-P3) — SAS would
             // reject it too.
@@ -84,7 +234,32 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         }
     }
 
-    crate::procs::common::parse_proc_body(ts, "COMPARE", |_ts, _kw| Ok(false))?;
+    // Sous-statements jusqu'à `run;`/`quit;` — J07-P3 : ID / VAR / WITH / BY.
+    crate::procs::common::parse_proc_body(ts, "COMPARE", |ts, kw| {
+        Ok(match kw {
+            "id" => {
+                ts.next();
+                id.extend(crate::procs::common::parse_var_list(ts)?);
+                true
+            }
+            "var" => {
+                ts.next();
+                var.extend(crate::procs::common::parse_var_list(ts)?);
+                true
+            }
+            "with" => {
+                ts.next();
+                with.extend(crate::procs::common::parse_var_list(ts)?);
+                true
+            }
+            "by" => {
+                ts.next();
+                by.extend(crate::procs::common::parse_by(ts)?);
+                true
+            }
+            _ => false,
+        })
+    })?;
 
     let base = base.ok_or_else(|| {
         SasError::parse(
@@ -98,6 +273,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
             crate::token::Span::default(),
         )
     })?;
+    if !with.is_empty() && with.len() != var.len() {
+        return Err(SasError::runtime(
+            "The WITH statement must name exactly as many variables as the VAR statement.",
+        ));
+    }
 
     Ok(CompareAst {
         base,
@@ -105,5 +285,20 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
         out,
         novalues,
         briefsummary,
+        noprint,
+        brief,
+        listall,
+        maxprint,
+        criterion,
+        method,
+        outbase,
+        outcomp,
+        outdif,
+        outnoequal,
+        outpercent,
+        id,
+        var,
+        with,
+        by,
     })
 }

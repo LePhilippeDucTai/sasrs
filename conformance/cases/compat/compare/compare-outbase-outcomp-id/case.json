@@ -11,7 +11,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "issue": "sasrs #11 (sous-issue compat) — PROC COMPARE : options OUTBASE/OUTCOMP/OUTDIF/OUTNOEQUAL et appariement VAR/WITH incomplets (lignes _TYPE_ BASE/COMP/DIF et _OBS_ divergent)",
   "data_types": {
     "base.csv": {"key": "num", "x": "num"},

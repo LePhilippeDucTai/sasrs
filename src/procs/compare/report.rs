@@ -12,8 +12,13 @@ pub(super) struct ReportCtx<'a> {
     pub(super) only_comp: &'a [String],
     pub(super) common_vars: &'a [CommonVar],
     pub(super) n_matching: usize,
-    pub(super) n_compared: usize,
-    pub(super) n_with_diffs: usize,
+    /// Nombre de paires d'observations appariées (BY/ID/position).
+    pub(super) n_matched: usize,
+    /// Nombre de paires appariées avec au moins une valeur jugée inégale.
+    pub(super) n_unequal: usize,
+    /// Observations BASE sans appariement (1-based, ordre de lecture).
+    pub(super) base_only_obs: &'a [usize],
+    pub(super) comp_only_obs: &'a [usize],
     pub(super) var_diffs: &'a [VarDiffSummary],
 }
 
@@ -22,6 +27,24 @@ pub(super) struct ReportCtx<'a> {
 pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &ReportCtx<'_>) {
     // === Data Set Summary ===
     session.listing.write_line("The COMPARE Procedure");
+    session.listing.blank();
+    session.listing.write_line(&format!(
+        "Comparison of {} with {}",
+        ctx.base_display, ctx.comp_display
+    ));
+    if ast.method == CmpMethod::Exact {
+        session.listing.write_line("(Method=EXACT)");
+    } else if ast.criterion > 0.0 {
+        let m = match ast.method {
+            CmpMethod::Absolute => "ABSOLUTE",
+            CmpMethod::Relative => "RELATIVE",
+            CmpMethod::Percent => "PERCENT",
+            CmpMethod::Exact => "EXACT",
+        };
+        session
+            .listing
+            .write_line(&format!("(Method={}, Criterion={})", m, ast.criterion));
+    }
     session.listing.blank();
     session.listing.write_line("Data Set Summary");
     session.listing.blank();
@@ -64,7 +87,6 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
     // === Variables Summary ===
     session.listing.write_line("Variables Summary");
     session.listing.blank();
-    let n_common = ctx.n_matching;
     let n_type_mismatch = ctx.common_vars.iter().filter(|cv| !cv.type_match).count();
     session.listing.write_line(&format!(
         "Number of Variables in Common: {}",
@@ -72,7 +94,7 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
     ));
     if n_type_mismatch > 0 {
         session.listing.write_line(&format!(
-            "Number of Variables with Different Types: {}",
+            "Number of Variables with Conflicting Types: {}",
             n_type_mismatch
         ));
         for cv in ctx.common_vars.iter().filter(|cv| !cv.type_match) {
@@ -86,14 +108,18 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
     }
     if !ctx.only_base.is_empty() {
         session.listing.write_line(&format!(
-            "Variables in BASE only ({}): {}",
+            "Number of Variables in {} but not in {}: {} ({})",
+            ctx.base_display,
+            ctx.comp_display,
             ctx.only_base.len(),
             ctx.only_base.join(", ")
         ));
     }
     if !ctx.only_comp.is_empty() {
         session.listing.write_line(&format!(
-            "Variables in COMPARE only ({}): {}",
+            "Number of Variables in {} but not in {}: {} ({})",
+            ctx.comp_display,
+            ctx.base_display,
             ctx.only_comp.len(),
             ctx.only_comp.join(", ")
         ));
@@ -103,65 +129,126 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
     // === Observation Summary ===
     session.listing.write_line("Observation Summary");
     session.listing.blank();
-    let n_uncompared = (ctx.base_nobs as isize - ctx.comp_nobs as isize).unsigned_abs();
     session.listing.write_line(&format!(
         "Number of Observations in Common: {}",
-        ctx.n_compared
+        ctx.n_matched
     ));
-    if ctx.n_compared < ctx.base_nobs.max(ctx.comp_nobs) {
+    if !ctx.base_only_obs.is_empty() {
         session.listing.write_line(&format!(
-            "Number of Observations Not Compared (different N): {}",
-            n_uncompared
+            "Number of Observations in {} but not in {}: {}",
+            ctx.base_display,
+            ctx.comp_display,
+            ctx.base_only_obs.len()
+        ));
+    }
+    if !ctx.comp_only_obs.is_empty() {
+        session.listing.write_line(&format!(
+            "Number of Observations in {} but not in {}: {}",
+            ctx.comp_display,
+            ctx.base_display,
+            ctx.comp_only_obs.len()
         ));
     }
     session.listing.write_line(&format!(
-        "Number of Observations with Differences: {}",
-        ctx.n_with_diffs
+        "Total Number of Observations Read from {}: {}",
+        ctx.base_display, ctx.base_nobs
     ));
     session.listing.write_line(&format!(
-        "Number of Observations in Agreement: {}",
-        ctx.n_compared - ctx.n_with_diffs
+        "Total Number of Observations Read from {}: {}",
+        ctx.comp_display, ctx.comp_nobs
+    ));
+    session.listing.blank();
+    session.listing.write_line(&format!(
+        "Number of Observations with Some Compared Variables Unequal: {}",
+        ctx.n_unequal
+    ));
+    session.listing.write_line(&format!(
+        "Number of Observations with All Compared Variables Equal: {}",
+        ctx.n_matched - ctx.n_unequal
     ));
     session.listing.blank();
 
     // === Values Comparison ===
-    if !ast.novalues && n_common > 0 {
+    if !ast.novalues && ctx.n_matching > 0 {
         session.listing.write_line("Values Comparison Summary");
         session.listing.blank();
 
-        let val_headers = vec![
-            "Variable".to_string(),
-            "Type".to_string(),
-            "N Diffs".to_string(),
-            "Max Diff".to_string(),
-        ];
-        let val_aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
-        let val_rows: Vec<Vec<String>> = ctx
+        // LISTALL : toutes les variables comparées ; sinon seulement
+        // celles avec des valeurs jugées inégales.
+        let shown: Vec<&VarDiffSummary> = ctx
             .var_diffs
             .iter()
-            .map(|vd| {
-                let max_diff_str = if vd.var_type == VarType::Num && vd.n_diffs > 0 {
-                    format!("{:.6}", vd.max_diff)
-                } else if vd.var_type == VarType::Char {
-                    String::new()
-                } else {
-                    "0".to_string()
-                };
-                vec![
-                    vd.name.clone(),
-                    type_str(vd.var_type).to_string(),
-                    vd.n_diffs.to_string(),
-                    max_diff_str,
-                ]
-            })
+            .filter(|vd| ast.listall || vd.n_diffs > 0)
             .collect();
-        session
-            .listing
-            .write_table(&val_headers, &val_aligns, &val_rows);
+        let n_equal = ctx.var_diffs.len() - ctx.var_diffs.iter().filter(|v| v.n_diffs > 0).count();
+        session.listing.write_line(&format!(
+            "Number of Variables Compared with All Observations Equal: {}",
+            n_equal
+        ));
+        session.listing.write_line(&format!(
+            "Number of Variables Compared with Some Observations Unequal: {}",
+            ctx.var_diffs.iter().filter(|v| v.n_diffs > 0).count()
+        ));
+        let total_unequal: usize = ctx.var_diffs.iter().map(|v| v.n_diffs).sum();
+        session.listing.write_line(&format!(
+            "Total Number of Values which Compare Unequal: {}",
+            total_unequal
+        ));
+        if total_unequal > 0 {
+            let max_diff = ctx
+                .var_diffs
+                .iter()
+                .filter(|v| v.var_type == VarType::Num && v.n_diffs > 0)
+                .map(|v| v.max_diff)
+                .fold(0.0_f64, f64::max);
+            session
+                .listing
+                .write_line(&format!("Maximum Difference: {max_diff}"));
+        }
+        if !shown.is_empty() {
+            session.listing.blank();
+            // LISTALL : toutes les variables comparées ; sinon seulement
+            // celles avec des valeurs jugées inégales.
+            if ast.listall {
+                session.listing.write_line("All Compared Variables");
+            } else {
+                session.listing.write_line("Variables with Unequal Values");
+            }
+            session.listing.blank();
+            let val_headers = vec![
+                "Variable".to_string(),
+                "Type".to_string(),
+                "N Diffs".to_string(),
+                "Max Diff".to_string(),
+            ];
+            let val_aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
+            let val_rows: Vec<Vec<String>> = shown
+                .iter()
+                .map(|vd| {
+                    let max_diff_str = if vd.var_type == VarType::Num && vd.n_diffs > 0 {
+                        format!("{:.6}", vd.max_diff)
+                    } else if vd.var_type == VarType::Char {
+                        String::new()
+                    } else {
+                        "0".to_string()
+                    };
+                    vec![
+                        vd.name.clone(),
+                        type_str(vd.var_type).to_string(),
+                        vd.n_diffs.to_string(),
+                        max_diff_str,
+                    ]
+                })
+                .collect();
+            session
+                .listing
+                .write_table(&val_headers, &val_aligns, &val_rows);
+        }
+        session.listing.blank();
     }
 }
 
-/// BRIEFSUMMARY: condensed report (totals only).
+/// BRIEF/BRIEFSUMMARY: condensed report (totals only).
 pub(super) fn print_brief_report(session: &mut Session, ctx: &ReportCtx<'_>) {
     session
         .listing
@@ -177,6 +264,6 @@ pub(super) fn print_brief_report(session: &mut Session, ctx: &ReportCtx<'_>) {
     ));
     session.listing.write_line(&format!(
         "Observations compared: {}  with differences: {}",
-        ctx.n_compared, ctx.n_with_diffs
+        ctx.n_matched, ctx.n_unequal
     ));
 }
