@@ -31,6 +31,9 @@ mod html;
 mod pdf;
 mod rtf;
 mod text;
+// J08-P1 : writer XLSX pur Rust partagé entre la destination ODS EXCEL et
+// PROC EXPORT `DBMS=XLSX`.
+pub(crate) mod xlsx;
 
 pub use excel::ExcelDestination;
 pub use html::HtmlDestination;

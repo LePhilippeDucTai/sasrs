@@ -91,20 +91,31 @@ fn parse_export_missing_outfile_errors() {
 }
 
 #[test]
-fn parse_export_xlsx_deferred_error() {
-    let result = parse_export_src("proc export data=work.t outfile='out.xlsx' dbms=xlsx; run;");
-    assert!(result.is_err());
-    let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("not yet implemented"), "msg: {msg}");
-    assert!(msg.contains("XLSX"), "msg: {msg}");
+fn parse_export_xlsx_with_sheet() {
+    let ast = parse_export_src(
+        "proc export data=work.t outfile='out.xlsx' dbms=xlsx replace; sheet='Data'; run;",
+    )
+    .unwrap();
+    assert_eq!(ast.dbms, ExportDbms::Xlsx);
+    assert!(ast.replace);
+    assert_eq!(ast.sheet.as_deref(), Some("Data"));
 }
 
 #[test]
-fn parse_export_excel_deferred_error() {
+fn parse_export_sheet_requires_xlsx() {
+    let result =
+        parse_export_src("proc export data=work.t outfile='out.csv' dbms=csv; sheet='S'; run;");
+    assert!(result.is_err());
+    let msg = result.err().unwrap().to_string();
+    assert!(msg.contains("SHEET="), "msg: {msg}");
+}
+
+#[test]
+fn parse_export_excel_legacy_error() {
     let result = parse_export_src("proc export data=work.t outfile='out.xlsx' dbms=excel; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("not yet implemented"), "msg: {msg}");
+    assert!(msg.contains("not supported"), "msg: {msg}");
 }
 
 // --- Tests d'exécution ---
@@ -129,6 +140,7 @@ fn execute_export_csv_basic() {
         dbms: ExportDbms::Csv,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -169,6 +181,7 @@ fn execute_export_tab_separated() {
         dbms: ExportDbms::Tab,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -199,6 +212,7 @@ fn execute_export_dlm_pipe() {
         dbms: ExportDbms::Dlm,
         replace: false,
         delimiter: Some(b'|'),
+        sheet: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -238,7 +252,9 @@ fn execute_export_roundtrip_with_import() {
         replace: false,
         getnames: true,
         delimiter: None,
+        sheet: None,
         guessingrows: None,
+        range: None,
     };
     crate::procs::import::execute(&import_ast, &mut session).unwrap();
 
@@ -252,6 +268,7 @@ fn execute_export_roundtrip_with_import() {
         dbms: ExportDbms::Csv,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     execute(&export_ast, &mut session).unwrap();
 
@@ -289,6 +306,7 @@ fn execute_export_last_dataset() {
         dbms: ExportDbms::Csv,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -309,6 +327,7 @@ fn execute_export_invalid_path_errors() {
         dbms: ExportDbms::Csv,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     let result = execute(&ast, &mut session);
     assert!(result.is_err());
@@ -322,6 +341,7 @@ fn resolve_separator_csv() {
         dbms: ExportDbms::Csv,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     assert_eq!(resolve_separator(&ast), b',');
 }
@@ -334,6 +354,7 @@ fn resolve_separator_tab() {
         dbms: ExportDbms::Tab,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     assert_eq!(resolve_separator(&ast), b'\t');
 }
@@ -346,6 +367,7 @@ fn resolve_separator_dlm_default_space() {
         dbms: ExportDbms::Dlm,
         replace: false,
         delimiter: None,
+        sheet: None,
     };
     assert_eq!(resolve_separator(&ast), b' ');
 }
@@ -358,6 +380,7 @@ fn resolve_separator_dlm_with_semicolon() {
         dbms: ExportDbms::Dlm,
         replace: false,
         delimiter: Some(b';'),
+        sheet: None,
     };
     assert_eq!(resolve_separator(&ast), b';');
 }
