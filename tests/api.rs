@@ -102,6 +102,7 @@ fn register_then_read_back_with_metadata() {
             length: 8,
             format: Some("8.2".to_string()),
             label: Some("Identifiant client".to_string()),
+            informat: None,
         },
         VarMeta {
             name: "CIV".to_string(),
@@ -109,6 +110,7 @@ fn register_then_read_back_with_metadata() {
             length: 3,
             format: Some("$3.".to_string()),
             label: Some("Civilité".to_string()),
+            informat: None,
         },
     ];
     session
@@ -169,6 +171,7 @@ fn register_dataset_rejects_incoherent_metadata() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         };
         3
     ];
@@ -191,6 +194,7 @@ fn register_dataset_rejects_incoherent_metadata() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Z".to_string(),
@@ -198,6 +202,7 @@ fn register_dataset_rejects_incoherent_metadata() {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     assert!(matches!(
