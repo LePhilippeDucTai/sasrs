@@ -314,7 +314,8 @@ pub(super) fn compute_freq(
 ) -> Value {
     let n = pairs.len();
     let sum_w: f64 = pairs.iter().map(|(_, w)| *w).sum();
-    let (mean_w, css) = crate::procs::common::weighted_mean_css(pairs).unwrap_or((f64::NAN, f64::NAN));
+    let (mean_w, css) =
+        crate::procs::common::weighted_mean_css(pairs).unwrap_or((f64::NAN, f64::NAN));
     // Replicated variance: divisor Σw − 1 (VARDEF=DF analog). A positive
     // replication count is what matters, not the raw observation count.
     let variance = if css.is_nan() || sum_w < 2.0 {
