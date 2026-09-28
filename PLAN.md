@@ -295,3 +295,18 @@ Revue indépendante du diff intégré du jalon (verify-before-done, code-review,
 
 Tier: T2 · Depends: J08-P1, J08-P2, J08-P3, J08-P4, J08-P5, J08-P6 · Checks: fmt, clippy, test, clippy-s3, j08-xlsx, j08-by, j08-ods-output, j08-adr-sas7bdat, j08-roadmap, ci-structure, j08-e2e, j08-coverage-claims, j08-ci-install-job, j04-storage-integrity, j05-conformance-status, test-s3-lib
 
+## Correspondance feuille de route avancée
+
+La suite « avancée » au-delà de la consolidation (ex-jalons M46–M66 du plan V2,
+issue #10) est replanifiée par comportement borné dans
+[`docs/roadmap/avancee.md`](docs/roadmap/avancee.md) (rédigée par J08-P5) :
+une section par domaine — LOGISTIC, GENMOD, GLM/ANOVA, MIXED, GLIMMIX,
+multivarié (PRINCOMP/FACTOR/DISCRIM/CLUSTER/FASTCLUS), IML, S3, graphiques,
+résidus Base (TABULATE `PCTN<>`, REPORT FLOW/COMPUTE, DATASETS
+APPEND/REPAIR, CATALOG, OPTIONS), procs dont BY reste en ERROR, items des ADR
+0003 (API Python native) et 0004 (adaptateurs sas7bdat/XPT) — chaque item
+portant état actuel (implémenté / validé / approximation / ERROR),
+dépendances, oracle indépendant prévu et critère d'acceptation, avec la table
+de correspondance ex-M46–M66 et l'ordre recommandé pour un `/milestone-plan`
+suivant.
+
