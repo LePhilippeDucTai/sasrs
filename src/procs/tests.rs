@@ -149,6 +149,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "y".to_string(),
@@ -156,6 +157,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

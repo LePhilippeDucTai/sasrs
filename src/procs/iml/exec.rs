@@ -341,6 +341,7 @@ pub(super) fn exec_close(ds: &str, env: &mut Env, session: &mut Session) -> Resu
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             });
         }
         let df = DataFrame::new(columns)?;

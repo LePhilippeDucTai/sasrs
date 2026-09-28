@@ -37,6 +37,7 @@ fn write_meta_table(session: &mut Session) {
             length: 12,
             format: Some("$char12.".into()),
             label: Some("Full name".into()),
+            informat: None,
         },
         VarMeta {
             name: "age".into(),
@@ -44,6 +45,7 @@ fn write_meta_table(session: &mut Session) {
             length: 8,
             format: Some("8.2".into()),
             label: Some("Age in years".into()),
+            informat: None,
         },
     ];
     write_table(session, "SRC", df, vars);

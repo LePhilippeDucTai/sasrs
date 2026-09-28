@@ -97,6 +97,7 @@ pub(super) fn write_outtree(
             length: 32,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "_PARENT_".into(),
@@ -104,6 +105,7 @@ pub(super) fn write_outtree(
             length: 32,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "_NCL_".into(),
@@ -111,6 +113,7 @@ pub(super) fn write_outtree(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "_FREQ_".into(),
@@ -118,6 +121,7 @@ pub(super) fn write_outtree(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "_HEIGHT_".into(),
@@ -125,6 +129,7 @@ pub(super) fn write_outtree(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     for name in var_names {
@@ -134,6 +139,7 @@ pub(super) fn write_outtree(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
     }
 

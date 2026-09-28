@@ -53,6 +53,7 @@ pub(super) fn write_out_dataset(
                 length: len,
                 format: None,
                 label: None,
+                informat: None,
             });
         } else {
             let vals: Vec<Option<f64>> = body.iter().map(|r| value_to_num(&r.vals[ci])).collect();
@@ -63,6 +64,7 @@ pub(super) fn write_out_dataset(
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             });
         }
     }

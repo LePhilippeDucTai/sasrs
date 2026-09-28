@@ -64,6 +64,10 @@ use chrono::{NaiveDate, NaiveTime};
 mod literal;
 mod primary;
 
+// J07-P6 — réexport : PROC DATASETS MODIFY INFORMAT lit ses tokens
+// d'informat avec le même lecteur que FORMAT/INFORMAT (découpage lexer).
+pub(crate) use primary::read_format_token;
+
 pub(crate) use literal::*;
 pub(crate) use primary::*;
 

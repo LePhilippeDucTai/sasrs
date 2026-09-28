@@ -35,6 +35,7 @@ fn write_input(session: &Session) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Name".into(),
@@ -42,6 +43,7 @@ fn write_input(session: &Session) {
             length: 7,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     session

@@ -53,12 +53,15 @@ pub enum DsOp {
     Exchange(String, String),
     /// `save m1 m2;` — delete every member of LIB= except the listed ones.
     Save(Vec<String>),
-    /// `modify m; [rename old=new ...;] [label v='..' ...;]` — variable-level
-    /// edits on member `m`.
+    /// `modify m; [rename old=new ...;] [label v='..' ...;]
+    /// [informat v token ...;]` — variable-level edits on member `m`.
     Modify {
         member: String,
         renames: Vec<(String, String)>,
         labels: Vec<(String, String)>,
+        /// J07-P6 — `informat v <token>;` : associe (ou remplace) l'informat
+        /// déclaré d'une variable ; persisté via le sidecar.
+        informats: Vec<(String, String)>,
     },
 }
 
@@ -225,6 +228,7 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                 member,
                 renames,
                 labels,
+                informats,
             } => {
                 let mu = member.to_uppercase();
                 if !provider.exists(&mu) {
@@ -275,6 +279,36 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                         None => {
                             session.log.warning(&format!(
                                 "Variable {} not found in {lib}.{mu}; not labelled.",
+                                var.to_uppercase()
+                            ));
+                        }
+                    }
+                }
+                // INFORMAT variables (J07-P6) : le token doit être un
+                // informat valide (même validation que l'étape DATA) ; la
+                // variable doit exister (WARNING sinon, comme RENAME/LABEL).
+                for (var, token) in informats {
+                    if crate::formats::FormatSpec::parse(token).is_none() {
+                        return Err(SasError::runtime(format!(
+                            "The informat {token} is not valid."
+                        )));
+                    }
+                    match ds
+                        .vars
+                        .iter()
+                        .position(|v| v.name.eq_ignore_ascii_case(var))
+                    {
+                        Some(idx) => {
+                            ds.vars[idx].informat = Some(token.clone());
+                            session.log.note(&format!(
+                                "Informat {} was assigned to variable {} in {lib}.{mu}.",
+                                token,
+                                var.to_uppercase()
+                            ));
+                        }
+                        None => {
+                            session.log.warning(&format!(
+                                "Variable {} not found in {lib}.{mu}; informat not assigned.",
                                 var.to_uppercase()
                             ));
                         }

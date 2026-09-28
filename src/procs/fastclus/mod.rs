@@ -347,6 +347,7 @@ pub fn execute(ast: &FastclusAst, session: &mut Session) -> Result<()> {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
         let out_ds = SasDataset {
             df: out_ds_df,

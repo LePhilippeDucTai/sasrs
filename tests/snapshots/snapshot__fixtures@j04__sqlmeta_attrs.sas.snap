@@ -82,10 +82,10 @@ Data Set Name:  WORK.ATTR             Observations:   19
 Member Type:    DATA                  Variables:      3
 Engine:         PARQUET
 
-                      #    Variable    Type    Len    Format    Label
+                #    Variable    Type    Len    Format    Informat    Label
 
-                      1    name        Char      3    $3.       Court
-                      3    older       Num       8    best5.
-                      2    ratio       Num       8    8.3       Ratio h/a
+                1    name        Char      3    $3.                   Court
+                3    older       Num       8    best5.
+                2    ratio       Num       8    8.3                   Ratio h/a
 
 ==== EXIT 0 ====

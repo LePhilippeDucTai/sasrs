@@ -38,6 +38,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 5,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "age".to_string(),
@@ -45,6 +46,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 8,
             format: Some("best12.".to_string()),
             label: Some("Age of subject".to_string()),
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -124,6 +126,8 @@ fn execute_basic_contents() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -163,6 +167,8 @@ fn execute_shows_format_and_label() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -196,6 +202,8 @@ fn execute_varnum_ordering() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -229,6 +237,8 @@ fn execute_varnum_ordering() {
         varnum: true,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -262,6 +272,7 @@ fn execute_all_lists_tables() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds2 = SasDataset {
         df: df2,
@@ -282,6 +293,8 @@ fn execute_all_lists_tables() {
         varnum: false,
         all: true,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -303,6 +316,8 @@ fn execute_uses_last_dataset_when_no_data() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -320,6 +335,8 @@ fn execute_no_last_dataset_errors() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -365,6 +382,8 @@ fn execute_out_dataset_shape_and_values() {
             libref: Some("WORK".into()),
             name: "META".into(),
         }),
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: false,
     };
@@ -376,7 +395,9 @@ fn execute_out_dataset_shape_and_values() {
     let cols: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
     assert_eq!(
         cols,
-        vec!["NAME", "TYPE", "LENGTH", "VARNUM", "LABEL", "FORMAT"]
+        vec![
+            "NAME", "TYPE", "LENGTH", "VARNUM", "LABEL", "FORMAT", "INFORMAT", "INFORMD", "INFORML"
+        ]
     );
 
     // Decode rows. Row 0 = name (Char → TYPE 2, LENGTH 5, VARNUM 1).
@@ -400,7 +421,7 @@ fn execute_out_dataset_shape_and_values() {
     // NOTE about the OUT= dataset.
     let log = session.log.into_string();
     assert!(
-        log.contains("The data set WORK.META has 2 observations and 6 variables."),
+        log.contains("The data set WORK.META has 2 observations and 9 variables."),
         "log: {log}"
     );
 }
@@ -417,6 +438,8 @@ fn execute_short_lists_variable_names_only() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: true,
         details: false,
     };
@@ -448,6 +471,8 @@ fn execute_details_adds_header_lines() {
         varnum: false,
         all: false,
         out: None,
+        out_keep: None,
+        out_drop: None,
         short: false,
         details: true,
     };
@@ -461,4 +486,173 @@ fn execute_details_adds_header_lines() {
         listing.contains("# Variables:"),
         "details var line: {listing}"
     );
+}
+
+// ── J07-P6 : INFORMAT / INFORML / INFORMD dans OUT= ──────────────────────
+
+/// Dataset de test avec informats : `dt` (num, date9.), `code` (char, $8.),
+/// `plain` (num, sans informat).
+fn write_informat_dataset(session: &mut Session) {
+    let df = df![
+        "dt"    => [21916.0_f64],
+        "code"  => ["XY"],
+        "plain" => [1.0_f64],
+    ]
+    .unwrap();
+    let vars = vec![
+        VarMeta {
+            name: "dt".to_string(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+            informat: Some("date9.".to_string()),
+        },
+        VarMeta {
+            name: "code".to_string(),
+            ty: VarType::Char,
+            length: 8,
+            format: None,
+            label: None,
+            informat: Some("$8.".to_string()),
+        },
+        VarMeta {
+            name: "plain".to_string(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+            informat: None,
+        },
+    ];
+    let ds = SasDataset { df, vars };
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("TYPED", &ds)
+        .unwrap();
+    session.last_dataset = Some("WORK.TYPED".to_string());
+}
+
+/// OUT= restitue INFORMAT (nom), INFORML (largeur) et INFORMD (décimales) ;
+/// sans informat : "", 0, 0 (cf. SAS 9.4, chap. 14, « OUT= Data Set »).
+#[test]
+fn informat_meta_contents_out_columns() {
+    let mut session = make_session();
+    write_informat_dataset(&mut session);
+
+    let ast = ContentsAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "TYPED".into(),
+        }),
+        varnum: false,
+        all: false,
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "META".into(),
+        }),
+        out_keep: None,
+        out_drop: None,
+        short: false,
+        details: false,
+    };
+    execute(&ast, &mut session).unwrap();
+
+    let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
+    assert_eq!(out.n_obs(), 3, "one row per variable");
+    let name = out.df.column("NAME").unwrap().str().unwrap();
+    assert_eq!(name.get(0), Some("dt"));
+    assert_eq!(name.get(1), Some("code"));
+    assert_eq!(name.get(2), Some("plain"));
+    let inf = out.df.column("INFORMAT").unwrap().str().unwrap();
+    assert_eq!(inf.get(0), Some("DATE"));
+    assert_eq!(inf.get(1), Some("$"));
+    assert_eq!(inf.get(2), Some(""));
+    let informl = out.df.column("INFORML").unwrap().f64().unwrap();
+    assert_eq!(informl.get(0), Some(9.0));
+    assert_eq!(informl.get(1), Some(8.0));
+    assert_eq!(informl.get(2), Some(0.0));
+    let informd = out.df.column("INFORMD").unwrap().f64().unwrap();
+    assert_eq!(informd.get(0), Some(0.0));
+    assert_eq!(informd.get(1), Some(0.0));
+    assert_eq!(informd.get(2), Some(0.0));
+}
+
+/// Oracle informat-contents-declared : `comma12.2` → COMMA / 12 / 2.
+#[test]
+fn informat_meta_contents_out_comma_wd() {
+    let mut session = make_session();
+    let df = df!["amount" => [1234.5_f64]].unwrap();
+    let vars = vec![VarMeta {
+        name: "amount".to_string(),
+        ty: VarType::Num,
+        length: 8,
+        format: None,
+        label: None,
+        informat: Some("comma12.2".to_string()),
+    }];
+    session
+        .libs
+        .get("WORK")
+        .unwrap()
+        .write("CMT", &SasDataset { df, vars })
+        .unwrap();
+    session.last_dataset = Some("WORK.CMT".to_string());
+
+    let src = "proc contents data=CMT out=META; run;";
+    let ast = parse_contents_full(src).unwrap();
+    // Le parse d'options OUT= doit capter keep= même mélangé aux autres.
+    execute(&ast, &mut session).unwrap();
+    let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
+    let inf = out.df.column("INFORMAT").unwrap().str().unwrap();
+    assert_eq!(inf.get(0), Some("COMMA"));
+    let informl = out.df.column("INFORML").unwrap().f64().unwrap();
+    assert_eq!(informl.get(0), Some(12.0));
+    let informd = out.df.column("INFORMD").unwrap().f64().unwrap();
+    assert_eq!(informd.get(0), Some(2.0));
+}
+
+/// `out=meta(keep=...)` : keep= sélectionne ET ORDONNE les colonnes
+/// (l'oracle gelé attend INFORMAT, INFORMD, INFORML, LENGTH, NAME, TYPE,
+/// VARNUM dans cet ordre).
+#[test]
+fn informat_meta_contents_out_keep_selects_and_orders() {
+    let mut session = make_session();
+    write_informat_dataset(&mut session);
+
+    let src = "proc contents data=TYPED out=META(keep=informat informd informl length name type varnum); run;";
+    let ast = parse_contents_full(src).unwrap();
+    assert_eq!(
+        ast.out_keep.as_deref(),
+        Some(
+            &[
+                "informat".to_string(),
+                "informd".to_string(),
+                "informl".to_string(),
+                "length".to_string(),
+                "name".to_string(),
+                "type".to_string(),
+                "varnum".to_string(),
+            ][..]
+        )
+    );
+    execute(&ast, &mut session).unwrap();
+
+    let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
+    let cols: Vec<String> = out.vars.iter().map(|v| v.name.clone()).collect();
+    assert_eq!(
+        cols,
+        vec![
+            "INFORMAT", "INFORMD", "INFORML", "LENGTH", "NAME", "TYPE", "VARNUM"
+        ]
+    );
+    // Les valeurs suivent leurs colonnes : ligne de `dt`.
+    let inf = out.df.column("INFORMAT").unwrap().str().unwrap();
+    assert_eq!(inf.get(0), Some("DATE"));
+    let len = out.df.column("LENGTH").unwrap().f64().unwrap();
+    assert_eq!(len.get(0), Some(8.0));
+    let ty = out.df.column("TYPE").unwrap().f64().unwrap();
+    assert_eq!(ty.get(0), Some(1.0));
 }

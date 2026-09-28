@@ -22,6 +22,7 @@ fn write_class(session: &Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Name".into(),
@@ -29,6 +30,7 @@ fn write_class(session: &Session, table: &str) {
             length: 7,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     session
@@ -83,6 +85,7 @@ fn write_class_full(session: &Session, table: &str) {
             length: 7,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Sex".into(),
@@ -90,6 +93,7 @@ fn write_class_full(session: &Session, table: &str) {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Age".into(),
@@ -97,6 +101,7 @@ fn write_class_full(session: &Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     session
@@ -121,6 +126,7 @@ fn write_num_ds(session: &Session, table: &str, cols: &[(&str, Vec<Option<f64>>)
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
     }
     let df = DataFrame::new(columns).unwrap();
@@ -255,6 +261,7 @@ fn write_keyed_ds(
         length: 8,
         format: None,
         label: None,
+        informat: None,
     });
     for (name, vals) in cols {
         columns.push(Series::new((*name).into(), vals.clone()).into());
@@ -264,6 +271,7 @@ fn write_keyed_ds(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
     }
     let df = DataFrame::new(columns).unwrap();
@@ -280,6 +288,7 @@ mod end;
 mod file;
 mod hash1;
 mod hash2;
+mod informat_meta;
 mod invalid;
 mod link;
 mod multiple;

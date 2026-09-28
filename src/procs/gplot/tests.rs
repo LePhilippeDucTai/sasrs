@@ -110,6 +110,7 @@ fn write_xy(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "y".into(),
@@ -117,6 +118,7 @@ fn write_xy(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -161,6 +163,7 @@ fn write_multi(session: &mut Session, table: &str) {
         length: l,
         format: None,
         label: None,
+        informat: None,
     };
     let vars = vec![
         mk("x", VarType::Num, 8),
@@ -190,6 +193,7 @@ fn build_series_two_y_vars_makes_two_series() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     };
     let ds = SasDataset {
         df,
@@ -220,6 +224,7 @@ fn build_series_group_makes_one_series_per_level() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     };
     let ds = SasDataset {
         df,

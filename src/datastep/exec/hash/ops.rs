@@ -208,6 +208,7 @@ impl Runner {
                 length: v.length,
                 format: v.format.clone(),
                 label: self.labels.get(&v.name.to_uppercase()).cloned(),
+                informat: None,
             });
         }
         // Lignes : pour chaque clé (ordre de visite), chaque entrée de données.

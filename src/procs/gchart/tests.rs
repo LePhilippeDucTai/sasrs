@@ -143,6 +143,7 @@ fn write_cats(session: &mut Session, table: &str) {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "count".into(),
@@ -150,6 +151,7 @@ fn write_cats(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -213,6 +215,7 @@ fn pie_aggregate_proportional_to_totals() {
         length: 1,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     let agg = graphics_impl::aggregate(&ds, "category", &None, ChartType::Freq).unwrap();

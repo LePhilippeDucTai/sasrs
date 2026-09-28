@@ -117,6 +117,7 @@ pub(super) fn write_out_dataset(
         length: 32,
         format: None,
         label: None,
+        informat: None,
     });
     vars.push(VarMeta {
         name: "_INTO_".into(),
@@ -124,6 +125,7 @@ pub(super) fn write_out_dataset(
         length: 32,
         format: None,
         label: None,
+        informat: None,
     });
     for k in 0..g {
         vars.push(VarMeta {
@@ -132,6 +134,7 @@ pub(super) fn write_out_dataset(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
     }
 

@@ -30,6 +30,7 @@ fn make_oracle_session() -> (Session, DiscrimAst) {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "x".into(),
@@ -37,6 +38,7 @@ fn make_oracle_session() -> (Session, DiscrimAst) {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ],
     };

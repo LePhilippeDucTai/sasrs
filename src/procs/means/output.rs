@@ -127,6 +127,7 @@ pub(super) fn write_ods_summary(
         length: name_len,
         format: None,
         label: None,
+        informat: None,
     });
 
     // Une colonne numérique par statistique demandée.

@@ -41,6 +41,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 5,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "age".to_string(),
@@ -48,6 +49,7 @@ fn write_test_dataset(session: &mut Session) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -75,6 +77,7 @@ fn write_formatted_dataset(session: &mut Session) {
             length: 5,
             format: None,
             label: Some("Pupil Name".to_string()),
+            informat: None,
         },
         VarMeta {
             name: "weight".to_string(),
@@ -82,6 +85,7 @@ fn write_formatted_dataset(session: &mut Session) {
             length: 8,
             format: Some("dollar8.".to_string()),
             label: Some("Body Weight".to_string()),
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -105,6 +109,7 @@ fn write_grouped(session: &mut Session) {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "v".into(),
@@ -112,6 +117,7 @@ fn write_grouped(session: &mut Session) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

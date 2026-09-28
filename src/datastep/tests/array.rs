@@ -435,6 +435,7 @@ fn incompatible_types_across_set_datasets_error() {
         length: 1,
         format: None,
         label: None,
+        informat: None,
     }];
     s.libs
         .get("WORK")

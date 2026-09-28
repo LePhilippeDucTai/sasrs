@@ -23,6 +23,7 @@ fn write_num_dataset(session: &mut Session, table: &str, name: &str, xs: Vec<Opt
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(table, &ds).unwrap();

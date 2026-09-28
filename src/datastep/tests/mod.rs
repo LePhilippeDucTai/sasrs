@@ -23,6 +23,7 @@ fn write_class(session: &Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Name".into(),
@@ -30,6 +31,7 @@ fn write_class(session: &Session, table: &str) {
             length: 7,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     session
@@ -67,6 +69,7 @@ fn write_weights(session: &Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "Weight".into(),
@@ -74,6 +77,7 @@ fn write_weights(session: &Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     session

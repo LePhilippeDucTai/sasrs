@@ -12,6 +12,7 @@ pub(super) fn rebuild_with_retained(pdv: &Pdv, retained: &HashSet<usize>) -> Pdv
             retained: v.retained || retained.contains(&i),
             from_input: v.from_input,
             format: v.format.clone(),
+            informat: v.informat.clone(),
             temporary: v.temporary,
         });
         debug_assert_eq!(slot, i, "rebuild must preserve slot indices");

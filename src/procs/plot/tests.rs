@@ -26,6 +26,7 @@ fn write_xy(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "y".into(),
@@ -33,6 +34,7 @@ fn write_xy(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

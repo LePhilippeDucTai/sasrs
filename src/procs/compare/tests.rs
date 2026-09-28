@@ -44,6 +44,7 @@ fn write_numeric_ds(session: &mut Session, name: &str, x_vals: &[f64], y_vals: &
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "y".into(),
@@ -51,6 +52,7 @@ fn write_numeric_ds(session: &mut Session, name: &str, x_vals: &[f64], y_vals: &
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -65,6 +67,7 @@ fn write_char_ds(session: &mut Session, name: &str, vals: &[&str]) {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
@@ -155,6 +158,7 @@ fn execute_variable_only_in_base() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "z".into(),
@@ -162,6 +166,7 @@ fn execute_variable_only_in_base() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let df_comp = df!["x" => [1.0_f64, 2.0]].unwrap();
@@ -171,6 +176,7 @@ fn execute_variable_only_in_base() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -218,6 +224,7 @@ fn execute_type_mismatch_reported() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let df_comp = df!["x" => ["a", "b"]].unwrap();
     let vars_comp = vec![VarMeta {
@@ -226,6 +233,7 @@ fn execute_type_mismatch_reported() {
         length: 1,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -304,6 +312,7 @@ fn execute_missing_equality() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -651,6 +660,7 @@ fn compare_compat_sysinfo_bits() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "z".into(),
@@ -658,6 +668,7 @@ fn compare_compat_sysinfo_bits() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let df_comp = df!["x" => [1.0_f64]].unwrap();
@@ -667,6 +678,7 @@ fn compare_compat_sysinfo_bits() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -705,6 +717,7 @@ fn compare_compat_sysinfo_bits() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let df_comp = df!["x" => ["a"]].unwrap();
     let vars_comp = vec![VarMeta {
@@ -713,6 +726,7 @@ fn compare_compat_sysinfo_bits() {
         length: 1,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -781,6 +795,7 @@ fn write_input_ds(session: &mut Session, name: &str, df: DataFrame, spec: Vec<&s
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             }
         })
         .collect();

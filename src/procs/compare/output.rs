@@ -236,6 +236,7 @@ pub(super) fn write_out_dataset(
             length: c.length,
             format: None,
             label: None,
+            informat: None,
         });
     }
     let type_col: StringChunked = rows.iter().map(|r| Some(r.row_type)).collect();
@@ -248,6 +249,7 @@ pub(super) fn write_out_dataset(
         length: 8,
         format: None,
         label: Some("Type of Observation".to_string()),
+        informat: None,
     });
     vars.push(VarMeta {
         name: "_OBS_".to_string(),
@@ -255,6 +257,7 @@ pub(super) fn write_out_dataset(
         length: 8,
         format: None,
         label: Some("Observation Number".to_string()),
+        informat: None,
     });
 
     let df = DataFrame::new(columns)

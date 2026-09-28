@@ -424,6 +424,7 @@ fn use_read_all_close_reads_dataset() {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "y".into(),
@@ -431,6 +432,7 @@ fn use_read_all_close_reads_dataset() {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ];
         session

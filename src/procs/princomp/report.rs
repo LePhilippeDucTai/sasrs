@@ -215,6 +215,7 @@ pub(super) fn write_out_dataset(
             length: 8,
             format: None,
             label: None,
+            informat: None,
         });
     }
 

@@ -90,12 +90,12 @@ Data Set Name:  WORK.SRC              Observations:   19
 Member Type:    DATA                  Variables:      4
 Engine:         PARQUET
 
-                    #    Variable    Type    Len    Format      Label
+              #    Variable    Type    Len    Format      Informat    Label
 
-                    3    age         Num       8
-                    4    height      Num       8    8.2         Height (in)
-                    1    name        Char     12    $char12.    Full name
-                    2    sex         Char      1
+              3    age         Num       8
+              4    height      Num       8    8.2                     Height (in)
+              1    name        Char     12    $char12.                Full name
+              2    sex         Char      1
 
                    CREATE TABLE AS SELECT — columns taken as-is keep metadata
 
@@ -103,11 +103,11 @@ Data Set Name:  WORK.KEPT             Observations:   19
 Member Type:    DATA                  Variables:      3
 Engine:         PARQUET
 
-                    #    Variable    Type    Len    Format      Label
+              #    Variable    Type    Len    Format      Informat    Label
 
-                    3    age         Num       8
-                    2    h           Num       8    8.2         Height (in)
-                    1    name        Char     12    $char12.    Full name
+              3    age         Num       8
+              2    h           Num       8    8.2                     Height (in)
+              1    name        Char     12    $char12.                Full name
 
                    CREATE TABLE AS SELECT — calculated column has no metadata
 
@@ -115,10 +115,10 @@ Data Set Name:  WORK.CALC             Observations:   19
 Member Type:    DATA                  Variables:      2
 Engine:         PARQUET
 
-                     #    Variable    Type    Len    Format      Label
+               #    Variable    Type    Len    Format      Informat    Label
 
-                     1    name        Char     12    $char12.    Full name
-                     2    ratio       Num       8
+               1    name        Char     12    $char12.                Full name
+               2    ratio       Num       8
 
                        After DELETE FROM — metadata survives the rewrite
 
@@ -126,11 +126,11 @@ Data Set Name:  WORK.SRC              Observations:   18
 Member Type:    DATA                  Variables:      4
 Engine:         PARQUET
 
-                    #    Variable    Type    Len    Format      Label
+              #    Variable    Type    Len    Format      Informat    Label
 
-                    3    age         Num       8
-                    4    height      Num       8    8.2         Height (in)
-                    1    name        Char     12    $char12.    Full name
-                    2    sex         Char      1
+              3    age         Num       8
+              4    height      Num       8    8.2                     Height (in)
+              1    name        Char     12    $char12.                Full name
+              2    sex         Char      1
 
 ==== EXIT 0 ====

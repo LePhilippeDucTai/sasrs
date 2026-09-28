@@ -171,6 +171,7 @@ fn small_ds() -> (crate::session::Session, ()) {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "t".into(),
@@ -178,6 +179,7 @@ fn small_ds() -> (crate::session::Session, ()) {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "y".into(),
@@ -185,6 +187,7 @@ fn small_ds() -> (crate::session::Session, ()) {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ],
     };
@@ -473,6 +476,7 @@ fn convergence_mixed_converged_fit_claims_criteria_met() {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "y".into(),
@@ -480,6 +484,7 @@ fn convergence_mixed_converged_fit_claims_criteria_met() {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ],
     );
@@ -520,6 +525,7 @@ fn convergence_mixed_truncated_variance_gives_g_not_pd_note() {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "y".into(),
@@ -527,6 +533,7 @@ fn convergence_mixed_truncated_variance_gives_g_not_pd_note() {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ],
     );
@@ -563,6 +570,7 @@ fn convergence_mixed_lambda_capped_gives_boundary_note() {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             VarMeta {
                 name: "y".into(),
@@ -570,6 +578,7 @@ fn convergence_mixed_lambda_capped_gives_boundary_note() {
                 length: 8,
                 format: None,
                 label: None,
+                informat: None,
             },
         ],
     );
