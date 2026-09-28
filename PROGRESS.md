@@ -42,11 +42,11 @@ Generated from Mission Control; do not edit.
 | J06-P4 | DONE | 2 |
 | J06-P5 | DONE | 3 |
 | J06-P6 | DONE | 1 |
-| J06-P7 | RUNNING | 1 |
-| J06-P8 | PLANNED | 0 |
-| J07-P1 | PLANNED | 0 |
-| J07-P2 | PLANNED | 0 |
-| J07-P3 | PLANNED | 0 |
+| J06-P7 | DONE | 1 |
+| J06-P8 | DONE | 1 |
+| J07-P1 | DONE | 1 |
+| J07-P2 | DONE | 1 |
+| J07-P3 | READY | 0 |
 | J07-P4 | PLANNED | 0 |
 | J07-P5 | PLANNED | 0 |
 | J07-P6 | PLANNED | 0 |
