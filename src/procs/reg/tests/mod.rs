@@ -283,6 +283,7 @@ fn run_plots(
 mod by_heading;
 mod execute;
 mod m3610;
+mod ods_output_objects;
 mod ols;
 mod oracle1;
 mod oracle2;

@@ -4,13 +4,18 @@ use super::*;
 /// hypergeometric probabilities ≤ that of the observed table), plus the
 /// left/right one-sided tails and the observed table probability. General
 /// r×c tables (M44.1) take the Freeman-Halton path in `fisher_rxc`.
+///
+/// `table_label` est le libellé SAS de la table (« Table of R by C »),
+/// porté par la colonne `Table` de la capture ODS OUTPUT « FishersExact »
+/// (J08-P3) et par les WARNINGs éventuels.
 pub(super) fn fisher_block(
     session: &mut Session,
+    table_label: &str,
     freq: &[Vec<usize>],
     row_tot: &[usize],
     col_tot: &[usize],
     grand: usize,
-) {
+) -> Result<()> {
     let nr = row_tot.len();
     let nc = col_tot.len();
     session.listing.blank();
@@ -21,11 +26,11 @@ pub(super) fn fisher_block(
         session
             .listing
             .write_line("Fisher's Exact Test is not computable for this table.");
-        return;
+        return Ok(());
     }
     if nr != 2 || nc != 2 {
-        fisher_rxc(session, freq, row_tot, col_tot, grand);
-        return;
+        fisher_rxc(session, table_label, freq, row_tot, col_tot, grand)?;
+        return Ok(());
     }
 
     // Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
@@ -82,6 +87,45 @@ pub(super) fn fisher_block(
         vec!["Two-sided Pr <= P".to_string(), fmt_chisq_p(clamp(p_two))],
     ];
     session.listing.write_table(&headers, &aligns, &rows);
+
+    // J08-P3 — capture ODS OUTPUT « FishersExact » : structure SAS réelle
+    // (template Base.Freq.FishersExact) — UNE observation, une colonne-triple
+    // (Name_i, cValue_i, nValue_i) par statistique, cValue = valeur affichée,
+    // nValue = valeur numérique pleine précision.
+    if session.ods_output_active("FishersExact") {
+        let part = build_fisher_part(
+            table_label,
+            &[
+                (
+                    "Cell (1,1) Frequency (F)",
+                    format!("{a_obs}"),
+                    Some(a_obs as f64),
+                ),
+                (
+                    "Left-sided Pr <= F",
+                    fmt_chisq_p(clamp(p_left)),
+                    Some(clamp(p_left)),
+                ),
+                (
+                    "Right-sided Pr >= F",
+                    fmt_chisq_p(clamp(p_right)),
+                    Some(clamp(p_right)),
+                ),
+                (
+                    "Table Probability (P)",
+                    fmt_chisq_p(clamp(p_obs)),
+                    Some(clamp(p_obs)),
+                ),
+                (
+                    "Two-sided Pr <= P",
+                    fmt_chisq_p(clamp(p_two)),
+                    Some(clamp(p_two)),
+                ),
+            ],
+        )?;
+        session.append_ods_output("FishersExact", part)?;
+    }
+    Ok(())
 }
 
 // ───────────────── M44.1 — Freeman-Halton (r×c Fisher exact) ─────────────────
@@ -388,11 +432,12 @@ pub(super) fn fisher_rxc_compute(
 /// generalize). A Monte-Carlo estimate is explicitly labeled as such.
 fn fisher_rxc(
     session: &mut Session,
+    table_label: &str,
     freq: &[Vec<usize>],
     row_tot: &[usize],
     col_tot: &[usize],
     grand: usize,
-) {
+) -> Result<()> {
     let res = fisher_rxc_compute(
         freq,
         row_tot,
@@ -419,6 +464,29 @@ fn fisher_rxc(
             res.count
         ));
     }
+
+    // J08-P3 — capture ODS OUTPUT « FishersExact » (chemin r×c) : deux
+    // colonnes-triples seulement — l'union diagonale de M38.3 empile quand
+    // même ce fragment avec les tranches 2×2 à cinq triples.
+    if session.ods_output_active("FishersExact") {
+        let part = build_fisher_part(
+            table_label,
+            &[
+                (
+                    "Table Probability (P)",
+                    fmt_chisq_p(res.p_obs.clamp(0.0, 1.0)),
+                    Some(res.p_obs.clamp(0.0, 1.0)),
+                ),
+                (
+                    "Pr <= P",
+                    fmt_chisq_p(res.p_two),
+                    Some(res.p_two.clamp(0.0, 1.0)),
+                ),
+            ],
+        )?;
+        session.append_ods_output("FishersExact", part)?;
+    }
+    Ok(())
 }
 
 /// Cochran-Armitage trend test. Requires a 2-row (or 2-column) table; the
@@ -711,7 +779,7 @@ pub(super) fn chisq_block(
     row_tot: &[f64],
     col_tot: &[f64],
     grand: f64,
-) {
+) -> Result<()> {
     session.listing.blank();
     session
         .listing
@@ -731,7 +799,7 @@ pub(super) fn chisq_block(
         session
             .listing
             .write_line("Chi-Square statistics are not computable for this table.");
-        return;
+        return Ok(());
     }
 
     let g = grand;
@@ -778,4 +846,81 @@ pub(super) fn chisq_block(
         ],
     ];
     session.listing.write_table(&headers, &aligns, &rows);
+
+    // J08-P3 — capture ODS OUTPUT « ChiSq » : structure SAS réelle (Table,
+    // Statistic, DF, Value, Prob) — une ligne par statistique, valeurs en
+    // pleine précision.
+    if session.ods_output_active("ChiSq") {
+        let part = build_chisq_part(
+            &format!("Table of {row_name} by {col_name}"),
+            &[
+                ("Chi-Square", df_f, pearson, p_pearson),
+                ("Likelihood Ratio Chi-Square", df_f, lratio, p_lratio),
+            ],
+        )?;
+        session.append_ods_output("ChiSq", part)?;
+    }
+    Ok(())
+}
+
+/// J08-P3 — tranche typée de la table ODS « ChiSq » : colonnes Table,
+/// Statistic, DF, Value, Prob (template Base.Freq.Chisq, deux voies).
+pub(super) fn build_chisq_part(table: &str, rows: &[(&str, f64, f64, f64)]) -> Result<SasDataset> {
+    let n = rows.len();
+    let table_col: Vec<Option<String>> = vec![Some(table.to_string()); n];
+    let statistic: Vec<Option<String>> = rows.iter().map(|r| Some(r.0.to_string())).collect();
+    let df: Vec<Option<f64>> = rows.iter().map(|r| Some(r.1)).collect();
+    let value: Vec<Option<f64>> = rows.iter().map(|r| Some(r.2)).collect();
+    let prob: Vec<Option<f64>> = rows.iter().map(|r| Some(r.3)).collect();
+
+    let stat_len = statistic
+        .iter()
+        .flatten()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let columns: Vec<Column> = vec![
+        Series::new("Table".into(), table_col).into(),
+        Series::new("Statistic".into(), statistic).into(),
+        Series::new("DF".into(), df).into(),
+        Series::new("Value".into(), value).into(),
+        Series::new("Prob".into(), prob).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("Table", crate::listing::char_width(table).max(8)),
+        crate::procs::common::char_var_meta("Statistic", stat_len),
+        num_var_meta("DF"),
+        num_var_meta("Value"),
+        num_var_meta("Prob"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
+}
+
+/// J08-P3 — tranche typée de la table ODS « FishersExact » : UNE observation,
+/// colonnes Table puis un triple (Name_i, cValue_i, nValue_i) par statistique
+/// (template Base.Freq.FishersExact — même agencement horizontal que les
+/// Moments d'UNIVARIATE).
+fn build_fisher_part(table: &str, stats: &[(&str, String, Option<f64>)]) -> Result<SasDataset> {
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+    columns.push(Series::new("Table".into(), vec![Some(table.to_string())]).into());
+    vars.push(crate::procs::common::char_var_meta(
+        "Table",
+        crate::listing::char_width(table).max(8),
+    ));
+    for (i, (name, cval, nval)) in stats.iter().enumerate() {
+        let ni = format!("Name{}", i + 1);
+        let ci = format!("cValue{}", i + 1);
+        let vi = format!("nValue{}", i + 1);
+        columns.push(Series::new(ni.as_str().into(), vec![Some(name.to_string())]).into());
+        vars.push(crate::procs::common::char_var_meta(&ni, name.len().max(1)));
+        columns.push(Series::new(ci.as_str().into(), vec![Some(cval.clone())]).into());
+        vars.push(crate::procs::common::char_var_meta(&ci, cval.len().max(1)));
+        columns.push(Series::new(vi.as_str().into(), vec![*nval]).into());
+        vars.push(num_var_meta(&vi));
+    }
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
 }

@@ -415,7 +415,7 @@ fn chisq_one_way_equal_proportions() {
             freq: 40.0,
         },
     ];
-    let out = run_block(|s| chisq_one_way_block(s, &cats));
+    let out = run_block(|s| chisq_one_way_block(s, "x", &cats).unwrap());
     assert!(
         out.contains("Chi-Square Test for Equal Proportions"),
         "{out}"
@@ -445,7 +445,7 @@ fn chisq_one_way_uniform_is_zero() {
             freq: 25.0,
         },
     ];
-    let out = run_block(|s| chisq_one_way_block(s, &cats));
+    let out = run_block(|s| chisq_one_way_block(s, "x", &cats).unwrap());
     assert!(out.contains("0.0000"), "{out}");
 }
 
@@ -455,7 +455,7 @@ fn chisq_one_way_degenerate_note() {
         value: Value::Num(1.0),
         freq: 5.0,
     }];
-    let out = run_block(|s| chisq_one_way_block(s, &cats));
+    let out = run_block(|s| chisq_one_way_block(s, "x", &cats).unwrap());
     assert!(out.contains("not computable"), "{out}");
 }
 
