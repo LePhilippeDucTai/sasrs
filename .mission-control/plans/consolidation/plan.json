@@ -2,7 +2,7 @@
  "protocol_version": 3,
  "project_id": "lephilippeductai/sasrs",
  "plan_id": "959bc69d-76bf-4a77-ab01-02dcb8113c51",
- "revision": 17,
+ "revision": 18,
  "stub": "consolidation",
  "base_branch": "consolidation",
  "goal": "Consolider sasrs avant toute extension (issue #11, sous-issues #5–#10), depuis la branche consolidation où J01 et J02-P0 du plan V2 sont livrés : plus aucun résultat silencieusement faux (codes retour, diagnostics macro, contrat « reconnu mais ignoré », statistiques pondérées, encodage en caractères — J02–J03), stockage parquet + sidecar et métadonnées intègres (J04), validation indépendante par corpus de conformité, tests de propriétés et différentiels (J05), API Session, Python et distribution versionnée utilisables par un nouvel utilisateur (J06), compatibilité SAS à forte valeur et feuille de route avancée bornée (J07–J08). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante ; la fusion dans main reste soumise au check GitHub ci-ok.",
@@ -2583,7 +2583,8 @@
     "J07-P4",
     "J07-P5",
     "J07-P6",
-    "J07-P7"
+    "J07-P7",
+    "J07-P9"
    ],
    "files": [],
    "check_ids": [
@@ -2797,6 +2798,35 @@
     "test-s3-lib"
    ],
    "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, code-review, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier reproducers, tests de non-régression, justification `Snapshot:` de chaque .snap modifié, indépendance des oracles, et qu'aucune documentation ne promet plus que le code. Revue finale du Goal : parcours nouvel utilisateur réel, couverture publique ≤ implémenté et validé, sous-issues #5–#10 couvertes ou explicitement renvoyées à docs/roadmap/avancee.md. Ne rien modifier ; tout finding bloquant devient une unité corrective."
+  },
+  {
+   "id": "J07-P9",
+   "milestone_id": "J07",
+   "title": "Correctif J07-P8 : PROC COMPARE MAXPRINT= effectif + doc support-contract exacte",
+   "kind": "implement",
+   "tier": "T3",
+   "size": "S",
+   "scope": "Correctif du finding bloquant de la revue J07-P8 (attempt ddfc4532) : (1) MAXPRINT= doit avoir un effet runtime réel dans src/procs/compare — limiter le nombre de différences affichées par observation et le nombre total d'observations avec différences imprimées (MAXPRINT=n|(n,p) conformément à la doc SAS 9.4 : n = différences par observation, p = observations avec différences ; message NOTE quand la limite tronque l'affichage), reproducer + test de non-régression compare_compat* qui échoue si MAXPRINT est sans effet ; (2) docs/support-contract.md §COMPARE corrigé pour refléter exactement le comportement (plus d'énoncé obsolète sur BRIEF/LISTALL/OUTPERCENT=/MAXPRINT= en ERROR) ; (3) la justification des snapshots régénérés en 6ce97cf (m21, m39, m40, m43) est documentée dans le message du commit correctif (ligne `Snapshot:` récapitulative) — l'historique existant n'est PAS réécrit. Aucun oracle compat modifié (ORACLE.sha256 gelé).",
+   "depends_on": [
+    "J07-P7"
+   ],
+   "files": [
+    "src/procs/compare",
+    "docs/support-contract.md",
+    "tests/fixtures",
+    "tests/snapshots"
+   ],
+   "check_ids": [
+    "fmt",
+    "clippy",
+    "test",
+    "j05-conformance",
+    "j05-conformance-status",
+    "j07-compat-oracle-frozen",
+    "j07-compare-tests",
+    "j07-compare-validated",
+    "j07-docs"
+   ]
   }
  ]
 }
