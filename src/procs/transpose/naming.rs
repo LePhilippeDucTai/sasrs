@@ -64,6 +64,19 @@ pub(crate) fn value_to_char(v: &Value) -> Option<String> {
     }
 }
 
+/// Equality of two value slices using SAS comparison (missing = smallest).
+pub(crate) fn value_slices_equal(a: &[Value], b: &[Value]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.sas_cmp(y) == Ordering::Equal)
+}
+
+/// CHAR cell of an IDLABEL value (trimmed; missing/num BEST12. trimmed).
+pub(crate) fn label_cell(v: &Value) -> String {
+    id_value_display(v)
+}
+
 /// Group row indices by the BY-tuple, preserving first-appearance order of
 /// the groups and input order within each group. With no BY columns, one
 /// group containing all rows in input order.
