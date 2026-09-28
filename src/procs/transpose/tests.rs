@@ -44,7 +44,7 @@ fn parse_full_statement() {
     assert_eq!(ast.out.as_ref().unwrap().name, "b");
     assert_eq!(ast.prefix.as_deref(), Some("p"));
     assert_eq!(ast.by, vec!["g".to_string()]);
-    assert_eq!(ast.id.as_deref(), Some("k"));
+    assert_eq!(ast.id, vec!["k".to_string()]);
     assert_eq!(ast.var, vec!["x".to_string(), "y".to_string()]);
 }
 
@@ -100,9 +100,17 @@ fn execute_simple_no_by_no_id() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -110,7 +118,7 @@ fn execute_simple_no_by_no_id() {
     assert_eq!(out.n_obs(), 1);
     // _NAME_ = "x"
     let name = read_col(&session, "O", "_NAME_");
-    assert_eq!(name, vec![Value::Char("x".into())]);
+    assert_eq!(name, vec![Value::Char("X".into())]);
     // COL1..COL3 = 10,20,30
     assert_eq!(read_col(&session, "O", "COL1"), vec![Value::Num(10.0)]);
     assert_eq!(read_col(&session, "O", "COL2"), vec![Value::Num(20.0)]);
@@ -132,9 +140,17 @@ fn execute_prefix_renames_cols() {
         out: Some(out_ref("O")),
         prefix: Some("V".into()),
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -162,9 +178,17 @@ fn execute_with_by_pads_shorter_group() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec!["g".into()],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -200,9 +224,17 @@ fn execute_with_id_names_columns() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: Some("k".into()),
+        id: vec!["k".into()],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -236,9 +268,17 @@ fn execute_with_id_numeric_values_normalized() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: Some("k".into()),
+        id: vec!["k".into()],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -272,9 +312,17 @@ fn execute_duplicate_id_in_group_errors() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: Some("k".into()),
+        id: vec!["k".into()],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     let r = execute(&ast, &mut session);
     assert!(r.is_err());
@@ -305,9 +353,17 @@ fn execute_mixing_char_and_numeric_makes_char_cols() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into(), "y".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -330,7 +386,7 @@ fn execute_mixing_char_and_numeric_makes_char_cols() {
 
     // _NAME_ rows are the source names x, y.
     let name = read_col(&session, "O", "_NAME_");
-    assert_eq!(name, vec![Value::Char("x".into()), Value::Char("y".into())]);
+    assert_eq!(name, vec![Value::Char("X".into()), Value::Char("Y".into())]);
 }
 
 #[test]
@@ -354,9 +410,17 @@ fn execute_default_var_all_numeric_excludes_by_and_id() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec!["g".into()],
-        id: Some("k".into()),
+        id: vec!["k".into()],
         var: vec![],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -364,7 +428,7 @@ fn execute_default_var_all_numeric_excludes_by_and_id() {
     // Single var x -> one output row.
     assert_eq!(out.n_obs(), 1);
     let name = read_col(&session, "O", "_NAME_");
-    assert_eq!(name, vec![Value::Char("x".into())]);
+    assert_eq!(name, vec![Value::Char("X".into())]);
 }
 
 #[test]
@@ -382,9 +446,17 @@ fn execute_name_option_renames_name_col() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: Some("source".into()),
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -409,9 +481,17 @@ fn execute_missing_out_errors() {
         out: None,
         prefix: None,
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     let r = execute(&ast, &mut session);
     assert!(r.is_err());
@@ -434,9 +514,17 @@ fn execute_emits_dataset_note() {
         out: Some(out_ref("O")),
         prefix: None,
         by: vec![],
-        id: None,
+        id: vec![],
         var: vec!["x".into()],
         name: None,
+        suffix: None,
+        label: None,
+        let_option: false,
+        delimiter: None,
+        by_desc: vec![],
+        notsorted: false,
+        idlabel: None,
+        copy: vec![],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -444,5 +532,253 @@ fn execute_emits_dataset_note() {
     assert!(
         log.contains("The data set WORK.O has 1 observations and"),
         "log: {log}"
+    );
+}
+
+// ─── Tests de compatibilité J07-P4 (cas conformance/cases/compat/transpose) ───
+//
+// Chaque test exécute un PROGRAMME complet via la façade `crate::run`
+// (comme le corpus de conformité et les tests compat de means/compare),
+// puis relit WORK via l'API dataset. Les attendus sont ceux des oracles
+// gelés J07-P1.
+
+use crate::{RunOptions, run};
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// Bac à sable : `data/` rempli par `setup`, WORK isolé, exécution du
+/// programme, puis relecture de toutes les tables WORK produites.
+fn compat_run_in_sandbox(
+    setup: impl FnOnce(&Path),
+    program: &str,
+) -> (i32, String, BTreeMap<String, SasDataset>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    setup(&tmp.path().join("data"));
+    let outcome = run(
+        program,
+        RunOptions {
+            work_dir: Some(work.clone()),
+            base_dir: Some(tmp.path().to_path_buf()),
+            deterministic: true,
+            vectorize: false,
+        },
+    );
+    let mut tables = BTreeMap::new();
+    for entry in std::fs::read_dir(&work).unwrap() {
+        let p = entry.unwrap().path();
+        if p.extension().is_some_and(|e| e == "parquet") {
+            let stem = p.file_stem().unwrap().to_str().unwrap().to_string();
+            if let Ok((ds, _)) = SasDataset::read_parquet(&p) {
+                tables.insert(stem.to_lowercase(), ds);
+            }
+        }
+    }
+    (outcome.exit_code, outcome.log, tables)
+}
+
+fn compat_write_input(dir: &Path, name: &str, mut df: DataFrame) {
+    use std::fs::File;
+    std::fs::create_dir_all(dir).unwrap();
+    let mut file = File::create(dir.join(format!("{name}.parquet"))).unwrap();
+    ParquetWriter::new(&mut file).finish(&mut df).unwrap();
+}
+
+fn compat_columns(tables: &BTreeMap<String, SasDataset>, table: &str) -> Vec<String> {
+    tables
+        .get(table)
+        .unwrap_or_else(|| panic!("WORK.{table} absent"))
+        .vars
+        .iter()
+        .map(|m| m.name.to_uppercase())
+        .collect()
+}
+
+fn compat_num_col(
+    tables: &BTreeMap<String, SasDataset>,
+    table: &str,
+    col: &str,
+) -> Vec<Option<f64>> {
+    let ds = tables
+        .get(table)
+        .unwrap_or_else(|| panic!("WORK.{table} absent"));
+    let idx = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(col))
+        .unwrap_or_else(|| panic!("colonne {col} absente de WORK.{table}"));
+    ds.df.get_columns()[idx]
+        .as_materialized_series()
+        .f64()
+        .unwrap()
+        .iter()
+        .collect()
+}
+
+fn compat_char_col(tables: &BTreeMap<String, SasDataset>, table: &str, col: &str) -> Vec<String> {
+    let ds = tables
+        .get(table)
+        .unwrap_or_else(|| panic!("WORK.{table} absent"));
+    let idx = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(col))
+        .unwrap_or_else(|| panic!("colonne {col} absente de WORK.{table}"));
+    ds.df.get_columns()[idx]
+        .as_materialized_series()
+        .str()
+        .unwrap()
+        .iter()
+        .map(|o| o.unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Reproduit le cas compat transpose-copy-suffix (oracle gelé J07-P1) :
+/// instruction COPY (padding a hauteur des observations d'entrée) et
+/// option SUFFIX= (colonne transposée nommée d'après la variable source).
+#[test]
+fn transpose_compat_copy_suffix() {
+    let data = |dir: &Path| {
+        compat_write_input(
+            dir,
+            "t",
+            df![
+                "grader" => ["G1", "G2", "G3"],
+                "score" => [90.0_f64, 85.0, 80.0],
+            ]
+            .unwrap(),
+        );
+    };
+    let program = r#"
+libname ind 'data';
+
+proc transpose data=ind.t out=out suffix=_s;
+  var score;
+  copy grader;
+run;
+"#;
+    let (code, log, tables) = compat_run_in_sandbox(data, program);
+    assert_eq!(code, 0, "log:\n{log}");
+    assert!(!log.contains("ERROR:"), "log:\n{log}");
+
+    // Colonnes : grader, _NAME_, SCORE_s (oracle).
+    assert_eq!(
+        compat_columns(&tables, "out"),
+        vec!["GRADER", "_NAME_", "SCORE_S"],
+        "colonnes : {:?}",
+        compat_columns(&tables, "out")
+    );
+    // 3 observations (autant que l'entrée — COPY).
+    assert_eq!(tables.get("out").unwrap().n_obs(), 3, "log:\n{log}");
+    // grader recopié tel quel ; _NAME_ = SCORE partout ; SCORE_s = 90
+    // puis padding missing (1 seule variable transposée pour 3 obs).
+    assert_eq!(
+        compat_char_col(&tables, "out", "grader"),
+        vec!["G1", "G2", "G3"]
+    );
+    assert_eq!(
+        compat_char_col(&tables, "out", "_NAME_"),
+        vec!["SCORE", "SCORE", "SCORE"]
+    );
+    assert_eq!(
+        compat_num_col(&tables, "out", "SCORE_S"),
+        vec![Some(90.0), None, None]
+    );
+}
+
+/// Reproduit le cas compat transpose-id-let-delimiter (oracle gelé
+/// J07-P1) : ID multi-variables avec DELIMITER=, LET (dernière occurrence
+/// des ID dupliquées, WARNING et non ERROR), IDLABEL et LABEL=.
+#[test]
+fn transpose_compat_id_let_delimiter() {
+    let data = |dir: &Path| {
+        compat_write_input(
+            dir,
+            "u",
+            df![
+                "grp" => ["A", "A", "A"],
+                "metric" => ["ht", "ht", "wt"],
+                "value" => [180.0_f64, 181.0, 75.0],
+                "lbl" => ["Height cm", "Height dup", "Weight kg"],
+            ]
+            .unwrap(),
+        );
+    };
+    let program = r#"
+libname ind 'data';
+
+proc transpose data=ind.u out=out let delimiter=_ label=mlabel;
+  id grp metric;
+  idlabel lbl;
+  var value;
+run;
+"#;
+    let (code, log, tables) = compat_run_in_sandbox(data, program);
+    assert_eq!(code, 0, "log:\n{log}");
+    assert!(!log.contains("ERROR:"), "log:\n{log}");
+    // LET : l'ID dupliqué (A,ht) produit un WARNING, pas un ERROR.
+    assert!(
+        log.contains("occurs twice in the same BY group"),
+        "log:\n{log}"
+    );
+
+    // Colonnes : _NAME_, mlabel, A_ht, A_wt (oracle).
+    let cols = compat_columns(&tables, "out");
+    assert_eq!(cols, vec!["_NAME_", "MLABEL", "A_HT", "A_WT"], "{cols:?}");
+    assert_eq!(tables.get("out").unwrap().n_obs(), 2);
+
+    assert_eq!(
+        compat_char_col(&tables, "out", "_NAME_"),
+        vec!["VALUE", "VALUE"]
+    );
+    // Labels de la dernière occurrence de chaque ID (LET).
+    assert_eq!(
+        compat_char_col(&tables, "out", "mlabel"),
+        vec!["Height dup", "Weight kg"]
+    );
+    // Dernière occurrence de A_ht = 181 ; A_wt = 75 ; hors diagonale :
+    // missing (oracle).
+    assert_eq!(
+        compat_num_col(&tables, "out", "A_ht"),
+        vec![Some(181.0), None]
+    );
+    assert_eq!(
+        compat_num_col(&tables, "out", "A_wt"),
+        vec![None, Some(75.0)]
+    );
+}
+
+/// Sans LET, un ID dupliqué dans un groupe arrête la procédure (ERROR
+/// SAS exacte) — le test prouve que LET change bien le comportement.
+#[test]
+fn transpose_compat_duplicate_id_without_let_errors() {
+    let data = |dir: &Path| {
+        compat_write_input(
+            dir,
+            "u",
+            df![
+                "grp" => ["A", "A", "A"],
+                "metric" => ["ht", "ht", "wt"],
+                "value" => [180.0_f64, 181.0, 75.0],
+                "lbl" => ["Height cm", "Height dup", "Weight kg"],
+            ]
+            .unwrap(),
+        );
+    };
+    let program = r#"
+libname ind 'data';
+
+proc transpose data=ind.u out=out delimiter=_;
+  id grp metric;
+  var value;
+run;
+"#;
+    let (code, log, tables) = compat_run_in_sandbox(data, program);
+    // Le programme échoue : ERROR « occurs twice in the same BY group ».
+    assert_ne!(code, 0, "log:\n{log}");
+    assert!(
+        log.contains("The ID value \"A_ht\" occurs twice in the same BY group."),
+        "log:\n{log}"
     );
 }
