@@ -15,19 +15,6 @@ fn run(src: &str) -> RunOutcome {
 #[test]
 fn silent_opt_result_options_error() {
     let cases = [
-        "proc compare base=t compare=t criterion=0.1; run;",
-        "proc compare base=t compare=t method=absolute; run;",
-        "proc compare base=t compare=t brief; run;",
-        "proc compare base=t compare=t listall; run;",
-        "proc compare base=t compare=t outbase; run;",
-        "proc compare base=t compare=t outcomp; run;",
-        "proc compare base=t compare=t outdif; run;",
-        "proc compare base=t compare=t outnoequal; run;",
-        "proc compare base=t compare=t maxprint=2; run;",
-        "proc compare base=t compare=t; id x; run;",
-        "proc compare base=t compare=t; var x; run;",
-        "proc compare base=t compare=t; with x; run;",
-        "proc compare base=t compare=t; by x; run;",
         "proc univariate data=t vardef=n; var x; run;",
         "proc univariate data=t pctldef=1; var x; run;",
         "proc freq data=t; tables x / invented; run;",

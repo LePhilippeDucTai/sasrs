@@ -1,6 +1,5 @@
 ---
 source: tests/snapshot.rs
-assertion_line: 52
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
 input_file: tests/fixtures/m43/format_width_fuzz.sas
 ---
@@ -165,6 +164,8 @@ NARROW     21              Adult      N       N        N        H        8     1
 
 The COMPARE Procedure
 
+Comparison of WORK.FMTCTL with WORK.FMTCTL2
+
 Data Set Summary
 
                  Dataset         Role       Label    Observations    Variables
@@ -179,24 +180,17 @@ Number of Variables in Common: 12
 Observation Summary
 
 Number of Observations in Common: 6
-Number of Observations with Differences: 0
-Number of Observations in Agreement: 6
+Total Number of Observations Read from WORK.FMTCTL: 6
+Total Number of Observations Read from WORK.FMTCTL2: 6
+
+Number of Observations with Some Compared Variables Unequal: 0
+Number of Observations with All Compared Variables Equal: 6
 
 Values Comparison Summary
 
-                            Variable    Type    N Diffs    Max Diff
+Number of Variables Compared with All Observations Equal: 12
+Number of Variables Compared with Some Observations Unequal: 0
+Total Number of Values which Compare Unequal: 0
 
-                            DEFAULT     Num           0           0
-                            EEXCL       Char          0
-                            END         Char          0
-                            FMTNAME     Char          0
-                            FUZZ        Num           0           0
-                            HLO         Char          0
-                            LABEL       Char          0
-                            MAX         Num           0           0
-                            MIN         Num           0           0
-                            SEXCL       Char          0
-                            START       Char          0
-                            TYPE        Char          0
 
 ==== EXIT 0 ====

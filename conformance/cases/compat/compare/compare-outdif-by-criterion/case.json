@@ -11,7 +11,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "issue": "sasrs #11 (sous-issue compat) — PROC COMPARE : METHOD=/CRITERION=, OUTNOEQUAL et traitement BY non implementes (filtrage des paires jugees egales divergent)",
   "data_types": {
     "b2.csv": {"grp": "char", "v": "num"},

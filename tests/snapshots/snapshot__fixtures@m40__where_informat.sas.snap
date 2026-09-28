@@ -117,6 +117,8 @@ NOTE: PROCEDURE PRINT used (Total process time):
 
 The COMPARE Procedure
 
+Comparison of WORK.STMT with WORK.OPT
+
 Data Set Summary
 
                    Dataset      Role       Label    Observations    Variables
@@ -131,15 +133,18 @@ Number of Variables in Common: 2
 Observation Summary
 
 Number of Observations in Common: 3
-Number of Observations with Differences: 0
-Number of Observations in Agreement: 3
+Total Number of Observations Read from WORK.STMT: 3
+Total Number of Observations Read from WORK.OPT: 3
+
+Number of Observations with Some Compared Variables Unequal: 0
+Number of Observations with All Compared Variables Equal: 3
 
 Values Comparison Summary
 
-                            Variable    Type    N Diffs    Max Diff
+Number of Variables Compared with All Observations Equal: 2
+Number of Variables Compared with Some Observations Unequal: 0
+Total Number of Values which Compare Unequal: 0
 
-                            N           Num           0           0
-                            X           Num           0           0
 
                        INFORMAT statement : lecture date9. en INPUT liste
 
