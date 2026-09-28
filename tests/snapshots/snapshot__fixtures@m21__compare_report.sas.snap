@@ -103,6 +103,13 @@ Variables with Unequal Values
                             X           Num           1    5.000000
                             Y           Num           1    5.000000
 
+Value Comparison Results
+
+             Observation    Variable    Type    Base Value    Compare Value    Diff
+
+                       2    X           Num             20               25       5
+                       3    Y           Num            300              305       5
+
 
                    REPORT mean par sexe, WHERE age>=13, RBREAK total general
 

@@ -23,8 +23,10 @@
 //!   toujours égalité stricte.
 //! - NOVALUES : omet la section « Values Comparison ». BRIEF/BRIEFSUMMARY :
 //!   rapport condensé. LISTALL : la section valeurs liste toutes les
-//!   variables comparées. MAXPRINT=n : plafond d'écarts imprimés par
-//!   variable (stocké). NOPRINT : aucun listing.
+//!   variables comparées. MAXPRINT=n | (n,p) : plafonne la section « Value
+//!   Comparison Results » à n différences par observation et p observations
+//!   avec différences (défauts 50/50 ; MAXPRINT=n seul laisse p à 50) ; une
+//!   NOTE signale la troncature. NOPRINT : aucun listing.
 //! - OUT= : dataset des différences — colonnes BY, ID, VAR, `_TYPE_`
 //!   (BASE | COMP | DIF | PERCENT) et `_OBS_` ; OUTBASE/OUTCOMP recopient
 //!   chaque observation de BASE/COMPARE ; OUTDIF écrit les différences
@@ -107,6 +109,10 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
             base_only_obs: &outcome.base_only_obs,
             comp_only_obs: &outcome.comp_only_obs,
             var_diffs: &outcome.var_diffs,
+            matches: &outcome.matches,
+            pairs: &outcome.pairs,
+            base_ds: &base_ds,
+            comp_ds: &comp_ds,
         };
         if !ast.briefsummary && !ast.brief {
             print_full_report(session, ast, &ctx);

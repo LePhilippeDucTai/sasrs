@@ -26,7 +26,7 @@ diagnostic honnête (réf. merges `2ad236e`, `965e578`, `d4eec6f`) :
 
 | PROC / statement | Demande | Avant | Depuis J02 |
 | --- | --- | --- | --- |
-| COMPARE | `BRIEF`, `LISTALL`, `OUTPERCENT=`, `MAXPRINT=`, option inconnue | ignorée en silence | **ERROR** — depuis J07, les options `CRITERION=`, `METHOD=ABSOLUTE\|RELATIVE`, `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=` et les instructions `ID`, `VAR`/`WITH`, `BY` sont réellement implémentées et ne relèvent plus de ce diagnostic (cas `compat/compare/*` validés, cf. [`conformance/STATUS.md`](../conformance/STATUS.md)) |
+| COMPARE | option inconnue | ignorée en silence | **ERROR** — depuis J07, toutes les options reconnues sont réellement implémentées : `CRITERION=`/`METHOD=`, `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=`/`OUTPERCENT=`, `BRIEF`(SUMMARY), `LISTALL`, `NOVALUES`, `NOPRINT` et `MAXPRINT=n\|(n,p)` (plafonne la section « Value Comparison Results » à n différences par observation et p observations avec différences, défauts 50/50 ; NOTE en cas de troncature), ainsi que les instructions `ID`, `VAR`/`WITH`, `BY` (cas `compat/compare/*` validés, cf. [`conformance/STATUS.md`](../conformance/STATUS.md)) |
 | UNIVARIATE | `VARDEF=` / `PCTLDEF=` autres que DF / définition 5 | ignorées | **ERROR** |
 | FREQ | option inconnue d'un statement `TABLES` | skip silencieux | **ERROR** |
 | DATASETS | `KILL` ; options inconnues de l'en-tête et de `COPY` | ignorées | **ERROR** |
@@ -79,8 +79,14 @@ implémentés et validés par le corpus (cas `compat/*`, cf.
 
 - **COMPARE** : `CRITERION=` (+ `METHOD=ABSOLUTE\|RELATIVE`), `OUTBASE=` /
   `OUTCOMP=` / `OUTDIF=` / `OUTNOEQUAL=` (`_TYPE_` BASE/COMP/DIF, `_OBS_`),
-  `ID`, `VAR`/`WITH` et `BY` sont honorés. Seuls `BRIEF`, `LISTALL`,
-  `OUTPERCENT=`, `MAXPRINT=` et les options inconnues restent des ERROR.
+  `ID`, `VAR`/`WITH` et `BY` sont honorés. `BRIEF`/`BRIEFSUMMARY` (rapport
+  condensé), `LISTALL` (la section valeurs liste toutes les variables
+  comparées), `OUTPERCENT=` (lignes PERCENT de OUT=) et `MAXPRINT=n|(n,p)`
+  le sont également depuis J07-P9 : `MAXPRINT=` plafonne la section
+  « Value Comparison Results » à n différences imprimées par observation et
+  p observations avec différences imprimées (défauts 50/50 ;
+  `MAXPRINT=n` seul laisse p à 50) et émet une NOTE quand la limite tronque
+  l'affichage. Seules les options inconnues restent des ERROR.
 - **TRANSPOSE** : `IDLABEL` (+ `LABEL=`), `COPY` (une observation de sortie par
   observation d'entrée, complétée par des missings), `SUFFIX=`, `LET`
   (dernière occurrence des `ID` dupliquées) et `ID` multi-variables avec

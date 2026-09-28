@@ -20,6 +20,51 @@ pub(super) struct ReportCtx<'a> {
     pub(super) base_only_obs: &'a [usize],
     pub(super) comp_only_obs: &'a [usize],
     pub(super) var_diffs: &'a [VarDiffSummary],
+    /// Paires appariées (jugement par observation) + datasets, pour la
+    /// section « Value Comparison Results » (J07-P9).
+    pub(super) matches: &'a [PairMatch],
+    pub(super) pairs: &'a [VarPair],
+    pub(super) base_ds: &'a SasDataset,
+    pub(super) comp_ds: &'a SasDataset,
+}
+
+/// Représentation listing d'une valeur (BEST12. pour les numériques,
+/// texte trimé pour les caractères, '.' pour un missing).
+fn fmt_value(v: &Value) -> String {
+    match v {
+        Value::Num(x) => crate::value::format_best(*x, 12),
+        Value::Char(s) => s.trim_end().to_string(),
+        Value::Missing(_) => ".".to_string(),
+    }
+}
+
+/// Diff listing d'une paire inégale : numérique → y−x (BEST12.) ;
+/// caractère → masque positionnel '.' égal / 'X' inégal (doc SAS 9.4).
+fn diff_repr(b: &Value, c: &Value, ty: VarType) -> String {
+    match ty {
+        VarType::Num => match (b, c) {
+            (Value::Num(x), Value::Num(y)) => crate::value::format_best(y - x, 12),
+            _ => ".".to_string(),
+        },
+        VarType::Char => {
+            let x = match b {
+                Value::Char(s) => s.trim_end(),
+                _ => "",
+            };
+            let y = match c {
+                Value::Char(s) => s.trim_end(),
+                _ => "",
+            };
+            let n = x.len().max(y.len());
+            let mut s = String::with_capacity(n);
+            for i in 0..n {
+                let xb = x.as_bytes().get(i).copied().unwrap_or(b' ');
+                let yb = y.as_bytes().get(i).copied().unwrap_or(b' ');
+                s.push(if xb == yb { '.' } else { 'X' });
+            }
+            s
+        }
+    }
 }
 
 /// Full listing report: Data Set Summary, Variables Summary, Observation
@@ -245,6 +290,86 @@ pub(super) fn print_full_report(session: &mut Session, ast: &CompareAst, ctx: &R
                 .write_table(&val_headers, &val_aligns, &val_rows);
         }
         session.listing.blank();
+
+        // === Value Comparison Results (plafonné par MAXPRINT=, J07-P9) ===
+        // Doc SAS 9.4 (option MAXPRINT=) : n différences imprimées par
+        // observation au maximum, p observations avec différences au
+        // maximum ; une NOTE signale la troncature.
+        print_value_comparison_results(session, ast, ctx);
+    }
+}
+
+/// Section « Value Comparison Results » : une ligne par différence jugée
+/// inégale (observation par observation), plafonnée par MAXPRINT=(n,p).
+fn print_value_comparison_results(session: &mut Session, ast: &CompareAst, ctx: &ReportCtx<'_>) {
+    let unequal_obs: Vec<&PairMatch> = ctx.matches.iter().filter(|m| m.unequal).collect();
+    if unequal_obs.is_empty() {
+        return;
+    }
+    let (max_per_obs, max_obs) = ast.maxprint;
+
+    session.listing.write_line("Value Comparison Results");
+    session.listing.blank();
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut truncated = false;
+    for m in unequal_obs.iter().take(max_obs) {
+        let mut printed_in_obs = 0usize;
+        for p in ctx.pairs {
+            let bv = get_value_at(&ctx.base_ds.df, p.base_idx, m.base_idx, p.var_type);
+            let cv = get_value_at(&ctx.comp_ds.df, p.comp_idx, m.comp_idx, p.var_type);
+            if !judged_unequal(&bv, &cv, ast.method, ast.criterion, p.var_type) {
+                continue;
+            }
+            if printed_in_obs == max_per_obs {
+                // n atteint pour cette observation : le reste est tronqué.
+                truncated = true;
+                break;
+            }
+            printed_in_obs += 1;
+            rows.push(vec![
+                (m.base_idx + 1).to_string(),
+                p.out_name.clone(),
+                type_str(p.var_type).to_string(),
+                fmt_value(&bv),
+                fmt_value(&cv),
+                diff_repr(&bv, &cv, p.var_type),
+            ]);
+        }
+    }
+    // Plus d'observations inégales que p, ou n/p nul : des différences
+    // existantes ne sont pas imprimées.
+    if unequal_obs.len() > max_obs || max_obs == 0 || max_per_obs == 0 {
+        truncated = true;
+    }
+
+    if !rows.is_empty() {
+        let res_headers = vec![
+            "Observation".to_string(),
+            "Variable".to_string(),
+            "Type".to_string(),
+            "Base Value".to_string(),
+            "Compare Value".to_string(),
+            "Diff".to_string(),
+        ];
+        let res_aligns = vec![
+            Align::Right,
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        session
+            .listing
+            .write_table(&res_headers, &res_aligns, &rows);
+        session.listing.blank();
+    }
+    if truncated {
+        session.log.note(&format!(
+            "MAXPRINT= limit reached ({} differences per observation, {} observations); some differences were not printed.",
+            max_per_obs, max_obs
+        ));
     }
 }
 
