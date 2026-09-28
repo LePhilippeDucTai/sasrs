@@ -1,0 +1,17 @@
+{
+  "id": "printto-log-new",
+  "title": "PROC PRINTTO : LOG=<fichier> NEW route le journal, puis PROC PRINTTO nu retablit les destinations par defaut",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 49 PRINTTO Procedure, PROC PRINTTO Statement : « LOG=LOG | file-specification | SAS-catalog-entry : routes the SAS log to a permanent external file » ; NEW : « replaces the existing contents of a file » ; « PROC PRINTTO ; » sans option retablit les destinations par defaut ; le programme continue de produire ses datasets",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:", "WARNING:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — PROC PRINTTO : le routage physique du log vers LOG= n'est pas implemente (WARNING « routing not supported until J07-P5 », exit code 1)",
+  "data_types": {}
+}

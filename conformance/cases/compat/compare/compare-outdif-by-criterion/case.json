@@ -1,0 +1,20 @@
+{
+  "id": "compare-outdif-by-criterion",
+  "title": "PROC COMPARE : BY, METHOD=ABSOLUTE, CRITERION=, OUT= OUTDIF OUTNOEQUAL (seules les paires jugees inegales sont ecrites)",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 13 COMPARE Procedure, « Using the CRITERION= Option » : METHOD=ABSOLUTE « the values are unequal if |y − x| exceeds the value of CRITERION » ; OUTNOEQUAL « suppresses the writing of an observation ... when all values in the observation are judged equal » ; OUTDIF ecrit _TYPE_=DIF avec la difference y − x ; _OBS_ « is a sequence number that counts the matching observations in the BY group »",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — PROC COMPARE : METHOD=/CRITERION=, OUTNOEQUAL et traitement BY non implementes (filtrage des paires jugees egales divergent)",
+  "data_types": {
+    "b2.csv": {"grp": "char", "v": "num"},
+    "c2.csv": {"grp": "char", "v": "num"}
+  }
+}

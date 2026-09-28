@@ -1,0 +1,19 @@
+{
+  "id": "transpose-copy-suffix",
+  "title": "PROC TRANSPOSE : COPY (une observation de sortie par observation d'entree, completee par des missings) et SUFFIX=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0p3mp8c9djpxan1exv4k2dtbcl6.htm — SAS 9.4 Procedures — PROC TRANSPOSE (COPY Statement : « the number of observations in the output data set is equal to the number of observations in the input data set », complement par des missings ; SUFFIX= : suffixe ajoute aux noms des variables transposees ; variables BY/COPY recopiees telles quelles dans OUT=)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — PROC TRANSPOSE : instruction COPY (padding a hauteur des observations d'entree) et option SUFFIX= non implementees",
+  "data_types": {
+    "t.csv": {"grader": "char", "score": "num"}
+  }
+}
