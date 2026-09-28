@@ -580,3 +580,49 @@ mod atomic_write_faults {
         assert_eq!(lib.list().unwrap(), vec!["T".to_string()]);
     }
 }
+
+// ── J07-P6 : persistance de l'informat dans le sidecar ───────────────────
+
+/// L'informat déclarée survit au round-trip parquet + sidecar.
+#[test]
+fn informat_meta_sidecar_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    // Le sidecar a été écrit AVANT qu'on pose l'informat : réécrivons-le
+    // avec l'informat pour le round-trip (le champ doit être sérialisé).
+    let mut ds = sidecar_ds(3);
+    for v in &mut ds.vars {
+        if v.ty == VarType::Num {
+            v.informat = Some("date9.".to_string());
+        } else {
+            v.informat = Some("$8.".to_string());
+        }
+    }
+    ds.write_parquet(&path).unwrap();
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert!(notes.is_empty(), "notes: {notes:?}");
+    let x = back.vars.iter().find(|v| v.name == "x").unwrap();
+    let c = back.vars.iter().find(|v| v.name == "c").unwrap();
+    assert_eq!(x.informat.as_deref(), Some("date9."));
+    assert_eq!(c.informat.as_deref(), Some("$8."));
+}
+
+/// RÉTROCOMPATIBILITÉ : un sidecar écrit AVANT le champ `informat` (sans
+/// le champ) se lit comme avant — informat None, aucune erreur.
+#[test]
+fn informat_meta_sidecar_without_field_reads_as_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.parquet");
+    sidecar_ds(3).write_parquet(&path).unwrap();
+    mutate_sidecar(&path, |v| {
+        if let Some(vars) = v.get_mut("vars") {
+            for (_, m) in vars.as_object_mut().unwrap().iter_mut() {
+                m.as_object_mut().unwrap().remove("informat");
+            }
+        }
+    });
+    let (back, notes) = SasDataset::read_parquet(&path).unwrap();
+    assert!(notes.is_empty(), "notes: {notes:?}");
+    assert!(back.vars.iter().all(|v| v.informat.is_none()));
+}

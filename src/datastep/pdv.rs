@@ -25,6 +25,8 @@ pub struct PdvVar {
     pub retained: bool,
     pub from_input: bool,
     pub format: Option<String>,
+    /// Informat déclaré (J07-P6) : pure métadonnée portée jusqu'à la sortie.
+    pub informat: Option<String>,
     /// Élément d'array `_TEMPORARY_` (M16.2) : n'est PAS écrit en sortie et
     /// est implicitement retenu (jamais remis à missing entre itérations).
     pub temporary: bool,
@@ -139,6 +141,20 @@ impl Pdv {
     /// déclaré l'emporte sur celui hérité de l'input.
     pub fn set_format(&mut self, slot: usize, format: String) {
         self.vars[slot].format = Some(format);
+    }
+
+    /// Associe (ou remplace) l'informat déclaré d'une variable (J07-P6) :
+    /// statements INFORMAT / ATTRIB informat= à la compilation. Comme le
+    /// format, la déclaration l'emporte sur celui hérité de l'input.
+    pub fn set_informat(&mut self, slot: usize, informat: String) {
+        self.vars[slot].informat = Some(informat);
+    }
+
+    /// Fixe la longueur déclarée d'une variable (J07-P6 : un informat `$w.`
+    /// posé avant la première utilisation détermine la longueur d'une
+    /// variable caractère, comme LENGTH).
+    pub fn set_declared_length(&mut self, slot: usize, length: usize) {
+        self.vars[slot].length = length;
     }
 
     /// Réinitialise à missing les variables NON retenues ET NON issues

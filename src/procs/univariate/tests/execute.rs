@@ -106,6 +106,7 @@ fn execute_default_all_numeric_vars() {
                 length: 1,
                 format: None,
                 label: None,
+                informat: None,
             },
             num_meta("b"),
         ],

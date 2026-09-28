@@ -90,6 +90,7 @@ fn execute_multikey_num_then_char() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "s".into(),
@@ -97,6 +98,7 @@ fn execute_multikey_num_then_char() {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -190,6 +192,7 @@ fn execute_noduprecs_whole_row() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "y".into(),
@@ -197,6 +200,7 @@ fn execute_noduprecs_whole_row() {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };
@@ -447,6 +451,7 @@ fn execute_key_descending_order() {
             length: 10,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "age".into(),
@@ -454,6 +459,7 @@ fn execute_key_descending_order() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = crate::dataset::SasDataset { df, vars };

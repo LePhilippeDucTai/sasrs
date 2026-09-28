@@ -152,6 +152,7 @@ impl Compiler<'_> {
                     retained: false,
                     from_input: true,
                     format: meta.format.clone(),
+                    informat: meta.informat.clone(),
                     temporary: false,
                 });
                 self.pdv.mark_from_input(slot);

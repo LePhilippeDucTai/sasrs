@@ -53,6 +53,7 @@ fn user_format_end_to_end_via_session_catalog() {
         length: 8,
         format: Some("SEXFMT.".to_string()),
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session

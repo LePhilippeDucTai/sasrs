@@ -44,6 +44,7 @@ fn num_var(name: &str) -> PdvVar {
         retained: false,
         from_input: false,
         format: None,
+        informat: None,
         temporary: false,
     }
 }
@@ -56,6 +57,7 @@ fn char_var(name: &str, length: usize) -> PdvVar {
         retained: false,
         from_input: false,
         format: None,
+        informat: None,
         temporary: false,
     }
 }

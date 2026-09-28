@@ -257,6 +257,7 @@ fn write_heights(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "height".into(),
@@ -264,6 +265,7 @@ fn write_heights(session: &mut Session, table: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

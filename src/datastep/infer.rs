@@ -132,6 +132,7 @@ impl Compiler<'_> {
             retained: false,
             from_input: false,
             format: None,
+            informat: None,
             temporary: false,
         })
     }
@@ -147,6 +148,7 @@ impl Compiler<'_> {
             retained: true,
             from_input: false,
             format: None,
+            informat: None,
             temporary: true,
         })
     }

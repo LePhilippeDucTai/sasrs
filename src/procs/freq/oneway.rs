@@ -308,6 +308,7 @@ fn build_one_way_freqs(
         length: f_len,
         format: None,
         label: Some(var_name.clone()),
+        informat: None,
     });
 
     // <var> : valeur brute, méta (type/longueur/format/label) de l'input.
@@ -337,6 +338,7 @@ fn build_one_way_freqs(
         length: 8,
         format: None,
         label: Some(label.to_string()),
+        informat: None,
     };
 
     // Frequency / Percent / CumFrequency / CumPercent — mêmes suppressions

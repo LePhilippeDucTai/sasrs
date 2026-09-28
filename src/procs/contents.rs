@@ -25,7 +25,7 @@
 
 use crate::ast::DatasetRef;
 use crate::dataset::SasDataset;
-use crate::error::Result;
+use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::procs::common;
@@ -40,8 +40,14 @@ pub struct ContentsAst {
     /// data=lib._all_
     pub all: bool,
     /// OUT=<ds> : écrit un dataset (une ligne par variable) au lieu du listing
-    /// normal de la table des variables (M33.7).
+    /// normal de la table des variables (M33.7). J07-P6 : les options de
+    /// dataset `out=ds(keep=...)` sont honorées (keep= sélectionne ET ordonne
+    /// les colonnes du dataset de sortie, comme l'oracle CONTENTS OUT=).
     pub out: Option<DatasetRef>,
+    /// keep= de OUT= (liste en ordre de déclaration = ordre des colonnes).
+    pub out_keep: Option<Vec<String>>,
+    /// drop= de OUT=.
+    pub out_drop: Option<Vec<String>>,
     /// SHORT : n'imprime qu'une liste à plat des noms de variables (M33.7).
     pub short: bool,
     /// DETAILS : ajoute des infos d'observations/taille au bloc d'en-tête
@@ -57,6 +63,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
     let mut varnum = false;
     let mut all = false;
     let mut out: Option<DatasetRef> = None;
+    let mut out_keep: Option<Vec<String>> = None;
+    let mut out_drop: Option<Vec<String>> = None;
     let mut short = false;
     let mut details = false;
 
@@ -78,7 +86,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
                 true
             }
             "out" => {
-                out = Some(common::parse_out_opt(ts)?);
+                common::consume_option_eq(ts, "OUT")?;
+                let spec = ts.parse_dataset_spec()?;
+                let o = &spec.options;
+                if !o.rename.is_empty() {
+                    return Err(SasError::parse(
+                        "The RENAME= dataset option is not supported on CONTENTS OUT=.",
+                        ts.peek().span,
+                    ));
+                }
+                if o.where_.is_some() || o.in_.is_some() || o.updatemode.is_some() {
+                    return Err(SasError::parse(
+                        "Only KEEP= and DROP= are supported on CONTENTS OUT=.",
+                        ts.peek().span,
+                    ));
+                }
+                out_keep = o.keep.clone();
+                out_drop = o.drop.clone();
+                out = Some(spec.dref);
                 true
             }
             "short" => {
@@ -108,6 +133,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
         varnum,
         all,
         out,
+        out_keep,
+        out_drop,
         short,
         details,
     })
@@ -216,7 +243,13 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
     // Rows are ordered by VARNUM (creation order), matching SAS's default
     // OUT= ordering (the VARNUM column makes any later re-sort lossless).
     if let Some(out_ref) = &ast.out {
-        write_out_dataset(&ds, out_ref, session)?;
+        write_out_dataset(
+            &ds,
+            out_ref,
+            ast.out_keep.as_deref(),
+            ast.out_drop.as_deref(),
+            session,
+        )?;
     }
 
     // SHORT (M33.7) : just a space-separated list of variable names (in display
@@ -254,6 +287,7 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
         "Type".to_string(),
         "Len".to_string(),
         "Format".to_string(),
+        "Informat".to_string(),
         "Label".to_string(),
     ];
     let aligns: Vec<Align> = vec![
@@ -262,6 +296,7 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
         Align::Left,  // Type
         Align::Right, // Len
         Align::Left,  // Format
+        Align::Left,  // Informat (J07-P6)
         Align::Left,  // Label
     ];
 
@@ -292,6 +327,7 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
                 type_str.to_string(),
                 v.length.to_string(),
                 v.format.as_deref().unwrap_or("").to_string(),
+                informat_display(v),
                 v.label.as_deref().unwrap_or("").to_string(),
             ]
         })
@@ -306,7 +342,13 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
 /// column documentation at the OUT= call site. Emits the standard
 /// "The data set X has N observations and M variables." NOTE and updates
 /// `_LAST_`.
-fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Session) -> Result<()> {
+fn write_out_dataset(
+    ds: &SasDataset,
+    out_ref: &DatasetRef,
+    keep: Option<&[String]>,
+    drop: Option<&[String]>,
+    session: &mut Session,
+) -> Result<()> {
     let names: Vec<Option<String>> = ds.vars.iter().map(|v| Some(v.name.clone())).collect();
     let types: Vec<Option<f64>> = ds
         .vars
@@ -331,6 +373,22 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         .map(|v| Some(v.format.clone().unwrap_or_default()))
         .collect();
 
+    // J07-P6 — INFORMAT (nom, "" si aucun), INFORML (largeur, 0 si aucun),
+    // INFORMD (décimales, 0 si aucune) : cf. SAS 9.4, chap. 14, « OUT= Data
+    // Set ». `date9.` → DATE/9/0 ; `$8.` → $/8/0 ; `comma12.2` → COMMA/12/2.
+    let informats: Vec<Option<String>> =
+        ds.vars.iter().map(|v| Some(informat_display(v))).collect();
+    let informls: Vec<Option<f64>> = ds
+        .vars
+        .iter()
+        .map(|v| Some(informat_width(v) as f64))
+        .collect();
+    let informds: Vec<Option<f64>> = ds
+        .vars
+        .iter()
+        .map(|v| Some(informat_decimals(v) as f64))
+        .collect();
+
     let columns: Vec<Column> = vec![
         Series::new("NAME".into(), names).into(),
         Series::new("TYPE".into(), types).into(),
@@ -338,6 +396,9 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         Series::new("VARNUM".into(), varnums).into(),
         Series::new("LABEL".into(), labels).into(),
         Series::new("FORMAT".into(), formats).into(),
+        Series::new("INFORMAT".into(), informats).into(),
+        Series::new("INFORMD".into(), informds).into(),
+        Series::new("INFORML".into(), informls).into(),
     ];
     let out_vars = vec![
         char_var_meta("NAME", 32),
@@ -346,8 +407,22 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         num_var_meta("VARNUM"),
         char_var_meta("LABEL", 256),
         char_var_meta("FORMAT", 49),
+        char_var_meta("INFORMAT", 32),
+        num_var_meta("INFORMD"),
+        num_var_meta("INFORML"),
     ];
     let df = DataFrame::new(columns)?;
+    // keep= sélectionne ET ORDONNE les colonnes selon la liste (J07-P6) ;
+    // drop= retire les colonnes listées. Appliqués conjointement sur le
+    // dataset complet avant l'écriture (SAS : keep= first, then drop=).
+    let mut df = df;
+    let mut out_vars = out_vars;
+    if let Some(keep) = keep {
+        apply_keep(&mut df, &mut out_vars, keep);
+    }
+    if let Some(drop) = drop {
+        apply_drop(&mut df, &mut out_vars, drop);
+    }
     let out_ds = SasDataset { df, vars: out_vars };
 
     let out_libref = out_ref.libref_or_work();
@@ -363,6 +438,67 @@ fn write_out_dataset(ds: &SasDataset, out_ref: &DatasetRef, session: &mut Sessio
         display, n_rows, n_vars
     ));
     Ok(())
+}
+
+/// Spécification de l'informat déclaré d'une variable (None si absent ou
+/// invalide — traité comme « pas d'informat »).
+fn informat_spec(v: &crate::dataset::VarMeta) -> Option<crate::formats::FormatSpec> {
+    v.informat
+        .as_deref()
+        .and_then(crate::formats::FormatSpec::parse)
+}
+
+/// Nom de l'informat pour l'affichage / la colonne INFORMAT de OUT=
+/// (« DATE », « $ », « COMMA » ; vide si aucun).
+fn informat_display(v: &crate::dataset::VarMeta) -> String {
+    informat_spec(v).map(|s| s.name.clone()).unwrap_or_default()
+}
+
+/// Largeur de l'informat (colonne INFORML de OUT=) ; 0 si aucun informat.
+fn informat_width(v: &crate::dataset::VarMeta) -> u16 {
+    informat_spec(v).and_then(|s| s.w).unwrap_or(0)
+}
+
+/// Décimales de l'informat (colonne INFORMD de OUT=) ; 0 si aucune.
+fn informat_decimals(v: &crate::dataset::VarMeta) -> u16 {
+    informat_spec(v).and_then(|s| s.d).unwrap_or(0)
+}
+
+/// keep= de OUT= : ne garde, DANS L'ORDRE DE LA LISTE, que les colonnes
+/// nommées (une colonne absente du dataset est ignorée).
+fn apply_keep(df: &mut DataFrame, out_vars: &mut Vec<crate::dataset::VarMeta>, keep: &[String]) {
+    let mut columns = Vec::with_capacity(keep.len());
+    let mut vars = Vec::with_capacity(keep.len());
+    for name in keep {
+        if let Some(idx) = out_vars
+            .iter()
+            .position(|v| v.name.eq_ignore_ascii_case(name))
+        {
+            columns.push(df.get_columns()[idx].clone());
+            vars.push(out_vars[idx].clone());
+        }
+    }
+    if let Ok(new) = DataFrame::new(columns) {
+        *df = new;
+        *out_vars = vars;
+    }
+}
+
+/// drop= de OUT= : retire les colonnes listées (l'ordre des autres est
+/// préservé).
+fn apply_drop(df: &mut DataFrame, out_vars: &mut Vec<crate::dataset::VarMeta>, drop: &[String]) {
+    let mut columns = Vec::new();
+    let mut vars = Vec::new();
+    for (idx, v) in out_vars.iter().enumerate() {
+        if !drop.iter().any(|d| v.name.eq_ignore_ascii_case(d)) {
+            columns.push(df.get_columns()[idx].clone());
+            vars.push(v.clone());
+        }
+    }
+    if let Ok(new) = DataFrame::new(columns) {
+        *df = new;
+        *out_vars = vars;
+    }
 }
 
 #[cfg(test)]

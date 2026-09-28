@@ -1,7 +1,8 @@
 ---
-source: sas_interpreter/tests/snapshot.rs
+source: tests/snapshot.rs
+assertion_line: 63
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
-input_file: sas_interpreter/tests/fixtures/m4/proc_format_contents.sas
+input_file: tests/fixtures/m4/proc_format_contents.sas
 ---
 ==== LOG ====
 
@@ -78,10 +79,10 @@ Data Set Name:  WORK.PEOPLE           Observations:   19
 Member Type:    DATA                  Variables:      3
 Engine:         PARQUET
 
-                        #    Variable    Type    Len    Format     Label
+                  #    Variable    Type    Len    Format     Informat    Label
 
-                        3    age         Num       8    agegrp.
-                        1    name        Char      7
-                        2    sex         Char      1    $sexf.
+                  3    age         Num       8    agegrp.
+                  1    name        Char      7
+                  2    sex         Char      1    $sexf.
 
 ==== EXIT 0 ====

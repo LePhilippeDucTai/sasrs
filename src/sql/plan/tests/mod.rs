@@ -36,6 +36,7 @@ fn num(name: &str) -> VarMeta {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }
 }
 
@@ -46,6 +47,7 @@ fn chr(name: &str, len: usize) -> VarMeta {
         length: len,
         format: None,
         label: None,
+        informat: None,
     }
 }
 

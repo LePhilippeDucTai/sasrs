@@ -23,6 +23,7 @@ fn write_simple_dataset(session: &mut Session, name: &str) {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
@@ -37,6 +38,7 @@ fn write_dataset_with_meta(session: &mut Session, name: &str) {
         length: 8,
         format: Some("best12.".to_string()),
         label: Some("Age".to_string()),
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write(name, &ds).unwrap();
@@ -296,6 +298,7 @@ fn parse_exchange_save_modify() {
                 member: "M".into(),
                 renames: vec![("old".into(), "new".into())],
                 labels: vec![("v".into(), "hi".into())],
+                informats: vec![],
             },
         ]
     );
@@ -342,6 +345,7 @@ fn execute_exchange_swaps_names() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     session
         .libs
@@ -391,6 +395,7 @@ fn execute_modify_renames_variable_and_sets_label() {
             member: "MTAB".into(),
             renames: vec![("age".into(), "years".into())],
             labels: vec![("years".into(), "Years old".into())],
+            informats: vec![],
         }],
         ..base_ast("WORK")
     };
@@ -550,4 +555,53 @@ fn orphan_sidecar_exchange_rolls_back_on_intermediate_failure() {
         residue.is_empty(),
         "exchange temporaries survived: {residue:?}"
     );
+}
+
+// ── J07-P6 : MODIFY ... INFORMAT ─────────────────────────────────────────
+
+/// Parse : `modify m; informat v date9.;` alimente `informats`.
+#[test]
+fn informat_meta_modify_parses_informat_substatement() {
+    let src = "proc datasets lib=work nolist; modify m; informat v date9.; quit;";
+    let source = crate::source::SourceFile::new(src);
+    let mut ts = crate::parser::StatementStream::new(&source).unwrap();
+    ts.next(); // "proc"
+    ts.next(); // "datasets"
+    let ast = parse(&mut ts).unwrap();
+    assert_eq!(
+        ast.ops,
+        vec![DsOp::Modify {
+            member: "M".into(),
+            renames: vec![],
+            labels: vec![],
+            informats: vec![("v".into(), "date9.".into())],
+        }]
+    );
+}
+
+/// Execute : l'informat posé par MODIFY est persisté dans la table (sidecar)
+/// et restitué à la relecture ; variable inconnue → WARNING, pas d'erreur.
+#[test]
+fn informat_meta_modify_persists_informat() {
+    let mut session = make_session();
+    write_dataset_with_meta(&mut session, "MTAB"); // var "age"
+
+    let ast = DatasetsAst {
+        ops: vec![DsOp::Modify {
+            member: "MTAB".into(),
+            renames: vec![],
+            labels: vec![],
+            informats: vec![("age".into(), "comma12.2".into())],
+        }],
+        ..base_ast("WORK")
+    };
+    execute(&ast, &mut session).unwrap();
+
+    let (ds, _) = session.libs.get("WORK").unwrap().read("MTAB").unwrap();
+    let age = ds
+        .vars
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case("age"))
+        .unwrap();
+    assert_eq!(age.informat.as_deref(), Some("comma12.2"));
 }

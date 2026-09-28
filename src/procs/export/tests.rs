@@ -30,6 +30,7 @@ fn write_test_dataset(session: &mut Session, name: &str) {
             length: 5,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "age".into(),
@@ -37,6 +38,7 @@ fn write_test_dataset(session: &mut Session, name: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "score".into(),
@@ -44,6 +46,7 @@ fn write_test_dataset(session: &mut Session, name: &str) {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

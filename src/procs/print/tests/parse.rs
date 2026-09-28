@@ -293,6 +293,7 @@ fn execute_note_plural_invariable() {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }];
     let ds = SasDataset { df, vars };
     session.libs.get("WORK").unwrap().write("ONE", &ds).unwrap();
@@ -470,6 +471,7 @@ fn execute_by_unsorted_errors() {
             length: 1,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "v".into(),
@@ -477,6 +479,7 @@ fn execute_by_unsorted_errors() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     let ds = SasDataset { df, vars };

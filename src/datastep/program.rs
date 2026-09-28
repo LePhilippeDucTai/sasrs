@@ -116,6 +116,27 @@ pub fn compile(ast: &DataStepAst, session: &mut Session) -> Result<StepProgram> 
         }
     }
 
+    // J07-P6 — INFORMAT/ATTRIB informat= : l'informat déclaré est persisté
+    // dans les métadonnées de sortie (VarMeta.informat → sidecar). Comme
+    // FORMAT, appliqué en FIN de compilation : toutes les variables sont au
+    // PDV, l'ordre déclaration/référence n'importe pas. Un informat `$w.`
+    // sur une variable caractère fixe en outre sa longueur déclarée à `w`
+    // (l'informat posé avant la première utilisation fixe la longueur,
+    // comme LENGTH) ; pour du numérique la longueur reste 8 (modèle SAS).
+    let informats = std::mem::take(&mut c.informats);
+    for (name, token) in &informats {
+        if let Some(slot) = c.pdv.slot(name) {
+            c.pdv.set_informat(slot, token.clone());
+            if let Some(spec) = crate::formats::FormatSpec::parse(token)
+                && c.pdv.vars()[slot].ty == VarType::Char
+                && spec.name.starts_with('$')
+                && let Some(w) = spec.w
+            {
+                c.pdv.set_declared_length(slot, w as usize);
+            }
+        }
+    }
+
     // RETAIN sans valeur initiale — SIMPLIFICATION M2 ASSUMÉE : en vrai
     // SAS, `retain x;` ne fige PAS le type — la variable le prend à sa
     // prochaine référence. Pour approcher ça sans bouleverser la passe

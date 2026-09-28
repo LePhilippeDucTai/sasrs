@@ -134,6 +134,7 @@ pub(super) fn write_out_dataset(
         length: type_len,
         format: None,
         label: None,
+        informat: None,
     });
 
     // _PAGE_ and _TABLE_.
@@ -193,6 +194,7 @@ pub(super) fn out_num_meta(name: &str) -> VarMeta {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }
 }
 

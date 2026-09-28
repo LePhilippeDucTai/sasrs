@@ -294,6 +294,7 @@ pub fn run(prog: StepProgram, session: &mut Session) -> Result<StepStats> {
             length: v.length,
             format: v.format.clone(),
             label: labels.get(&v.name.to_uppercase()).cloned(),
+            informat: None,
         });
     }
     let n_out = out_cols.first().map_or(n_rows, |c| c.len());

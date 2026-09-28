@@ -45,6 +45,7 @@ fn num_meta(name: &str) -> VarMeta {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }
 }
 
@@ -231,6 +232,7 @@ proptest! {
                 length: char_len,
                 format: Some(char_format.clone()),
                 label: label_opt.clone(),
+                informat: None,
             },
             VarMeta {
                 name: "N".to_string(),
@@ -238,6 +240,7 @@ proptest! {
                 length: 8,
                 format: Some(num_format.clone()),
                 label: None,
+                informat: None,
             },
         ];
         let df = df![
@@ -481,6 +484,7 @@ proptest! {
                     length: 2,
                     format: None,
                     label: None,
+                    informat: None,
                 },
                 num_meta("ORD"),
             ],

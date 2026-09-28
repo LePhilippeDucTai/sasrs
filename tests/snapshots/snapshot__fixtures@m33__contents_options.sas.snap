@@ -1,6 +1,6 @@
 ---
 source: tests/snapshot.rs
-assertion_line: 50
+assertion_line: 63
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
 input_file: tests/fixtures/m33/contents_options.sas
 ---
@@ -24,7 +24,7 @@ NOTE: DATA statement used (Total process time):
 
 6     proc contents data=class out=meta;
 7     run;
-NOTE: The data set WORK.META has 5 observations and 6 variables.
+NOTE: The data set WORK.META has 5 observations and 9 variables.
 NOTE: PROCEDURE CONTENTS used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
@@ -59,23 +59,23 @@ Data Set Name:  WORK.CLASS            Observations:   19
 Member Type:    DATA                  Variables:      5
 Engine:         PARQUET
 
-                        #    Variable    Type    Len    Format    Label
+                  #    Variable    Type    Len    Format    Informat    Label
 
-                        3    age         Num       8
-                        4    height      Num       8
-                        1    name        Char      7
-                        2    sex         Char      1
-                        5    weight      Num       8
+                  3    age         Num       8
+                  4    height      Num       8
+                  1    name        Char      7
+                  2    sex         Char      1
+                  5    weight      Num       8
 
                   CONTENTS OUT= : one row per variable (locked via PROC PRINT)
 
-                  Obs    NAME      TYPE    LENGTH    VARNUM    LABEL    FORMAT
+ Obs    NAME      TYPE    LENGTH    VARNUM    LABEL    FORMAT    INFORMAT    INFORMD    INFORML
 
-                    1    name         2         7         1
-                    2    sex          2         1         2
-                    3    age          1         8         3
-                    4    height       1         8         4
-                    5    weight       1         8         5
+   1    name         2         7         1                                         0          0
+   2    sex          2         1         2                                         0          0
+   3    age          1         8         3                                         0          0
+   4    height       1         8         4                                         0          0
+   5    weight       1         8         5                                         0          0
 
                CONTENTS DETAILS : extra observation/variable lines in the header
 
@@ -85,13 +85,13 @@ Engine:         PARQUET
 # Observations: 19
 # Variables:    5
 
-                        #    Variable    Type    Len    Format    Label
+                  #    Variable    Type    Len    Format    Informat    Label
 
-                        3    age         Num       8
-                        4    height      Num       8
-                        1    name        Char      7
-                        2    sex         Char      1
-                        5    weight      Num       8
+                  3    age         Num       8
+                  4    height      Num       8
+                  1    name        Char      7
+                  2    sex         Char      1
+                  5    weight      Num       8
 
                          CONTENTS SHORT : flat variable-name list only
 

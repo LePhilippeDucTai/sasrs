@@ -337,7 +337,9 @@ pub(super) fn parse_modify_stmt(ts: &mut StatementStream) -> Result<DsOp> {
     }
     let mut renames: Vec<(String, String)> = Vec::new();
     let mut labels: Vec<(String, String)> = Vec::new();
-    // Consume RENAME / LABEL sub-statements that belong to this MODIFY.
+    let mut informats: Vec<(String, String)> = Vec::new();
+    // Consume RENAME / LABEL / INFORMAT sub-statements that belong to this
+    // MODIFY.
     loop {
         while ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -346,6 +348,8 @@ pub(super) fn parse_modify_stmt(ts: &mut StatementStream) -> Result<DsOp> {
             parse_modify_renames(ts, &mut renames)?;
         } else if ts.peek().is_kw("label") {
             parse_modify_labels(ts, &mut labels)?;
+        } else if ts.peek().is_kw("informat") {
+            parse_modify_informats(ts, &mut informats)?;
         } else {
             break;
         }
@@ -354,6 +358,7 @@ pub(super) fn parse_modify_stmt(ts: &mut StatementStream) -> Result<DsOp> {
         member: member.to_uppercase(),
         renames,
         labels,
+        informats,
     })
 }
 
@@ -431,6 +436,34 @@ pub(super) fn parse_modify_labels(
         };
         ts.next();
         labels.push((var, text));
+    }
+    if ts.peek().kind == TokenKind::Semi {
+        ts.next();
+    }
+    Ok(())
+}
+
+/// MODIFY sub-statement `informat v <token> ... ;` (J07-P6) — chaque item
+/// associe un token d'informat à une variable. Le token est lu via le même
+/// lecteur que les statements FORMAT/INFORMAT de l'étape DATA (robuste au
+/// découpage du lexer : `date9.` = Ident collé à un `.`).
+pub(super) fn parse_modify_informats(
+    ts: &mut StatementStream,
+    informats: &mut Vec<(String, String)>,
+) -> Result<()> {
+    ts.next(); // consume "informat"
+    loop {
+        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        let v_tok = ts.peek().clone();
+        let Some(var) = v_tok.ident().map(str::to_string) else {
+            ts.skip_to_semi();
+            break;
+        };
+        ts.next();
+        let token = crate::parser::expr::read_format_token(ts)?;
+        informats.push((var, token));
     }
     if ts.peek().kind == TokenKind::Semi {
         ts.next();

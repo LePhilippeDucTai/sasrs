@@ -43,6 +43,10 @@ pub struct VarMeta {
     pub length: usize,
     pub format: Option<String>,
     pub label: Option<String>,
+    /// Informat déclaré (INFORMAT / ATTRIB informat= de l'étape DATA, MODIFY
+    /// INFORMAT de PROC DATASETS) — J07-P6 : pure métadonnée, persistée dans
+    /// le sidecar (rétrocompatible : champ absent → None).
+    pub informat: Option<String>,
 }
 
 /// A SAS dataset: a Polars DataFrame restricted to the SAS type model
@@ -194,6 +198,11 @@ struct SavedMeta {
     label: Option<String>,
     #[serde(default)]
     length: Option<usize>,
+    /// Informat déclaré (J07-P6). `#[serde(default)]` : un sidecar écrit
+    /// avant le champ se lit comme avant (rétrocompatible), champ absent →
+    /// informat None.
+    #[serde(default)]
+    informat: Option<String>,
 }
 
 /// Chemin du sidecar JSON associé à un fichier parquet (`t.parquet` →
@@ -281,7 +290,10 @@ fn write_sidecar(path: &Path, vars: &[VarMeta], fingerprint: SidecarFingerprint)
     // Orphelins d'une tentative précédente — purgés même sans métadonnées.
     clean_orphan_temps(&sc)?;
     let has_meta = vars.iter().any(|v| {
-        v.format.is_some() || v.label.is_some() || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
+        v.format.is_some()
+            || v.label.is_some()
+            || v.informat.is_some()
+            || (v.ty == VarType::Char && v.length > 1) // Save declared lengths > 1
     });
     if !has_meta {
         // Pas de métadonnées : on retire l'éventuel sidecar APRÈS la
@@ -303,6 +315,7 @@ fn write_sidecar(path: &Path, vars: &[VarMeta], fingerprint: SidecarFingerprint)
                     } else {
                         None
                     },
+                    informat: v.informat.clone(),
                 },
             )
         })
@@ -421,6 +434,9 @@ fn apply_sidecar_meta(
         if saved.label.is_some() {
             v.label = saved.label.clone();
         }
+        if saved.informat.is_some() {
+            v.informat = saved.informat.clone();
+        }
         if let Some(len) = saved.length {
             if v.ty != VarType::Char {
                 notes.push(format!(
@@ -458,6 +474,7 @@ fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Ser
         length: 8,
         format: format.map(str::to_string),
         label: None,
+        informat: None,
     };
 
     let series = match s.dtype() {
@@ -534,6 +551,7 @@ fn coerce_series(name: &str, s: &Series, notes: &mut Vec<String>) -> Result<(Ser
                     length: max_len,
                     format: None,
                     label: None,
+                    informat: None,
                 },
             ));
         }

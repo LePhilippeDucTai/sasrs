@@ -556,6 +556,7 @@ fn merge_variable_overlap_rightmost_wins() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
         VarMeta {
             name: "v".into(),
@@ -563,6 +564,7 @@ fn merge_variable_overlap_rightmost_wins() {
             length: 8,
             format: None,
             label: None,
+            informat: None,
         },
     ];
     s.libs

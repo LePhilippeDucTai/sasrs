@@ -217,6 +217,7 @@ pub(super) fn write_runner_outputs(
                 ty: v.ty,
                 length: v.length,
                 format: v.format.clone(),
+                informat: v.informat.clone(),
                 label,
             });
         }

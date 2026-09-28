@@ -77,6 +77,7 @@ pub fn num_var_meta(name: &str) -> VarMeta {
         length: 8,
         format: None,
         label: None,
+        informat: None,
     }
 }
 
@@ -90,5 +91,6 @@ pub fn char_var_meta(name: &str, length: usize) -> VarMeta {
         length,
         format: None,
         label: None,
+        informat: None,
     }
 }
