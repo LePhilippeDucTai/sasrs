@@ -66,16 +66,32 @@ fn silent_opt_sql_noprint_keeps_create_and_restores_printing() {
 }
 
 #[test]
-fn silent_opt_printto_warns_honestly() {
-    let out = run("proc printto log='unused.log' print='unused.lst'; run;");
-    assert_eq!(out.exit_code, 1, "{}", out.log);
-    assert_eq!(
-        out.log.matches("routing not supported").count(),
-        2,
-        "{}",
-        out.log
+fn silent_opt_printto_routes_for_real() {
+    // J07-P5 — PRINTTO route réellement log et listing : plus de WARNING
+    // « reconnu mais ignoré ». Le segment routé part dans les fichiers, le
+    // reset ramène les destinations par défaut.
+    let dir = tempfile::tempdir().unwrap();
+    let out = crate::run(
+        "proc printto log='used.log' print='used.lst'; run;\n\
+         data _null_; put 'IN_ROUTE'; run;\n\
+         proc printto; run;\n\
+         data _null_; put 'AFTER_RESET'; run;",
+        RunOptions {
+            deterministic: true,
+            base_dir: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        },
     );
-    assert!(!out.log.contains("redirected to"), "{}", out.log);
+    assert_eq!(out.exit_code, 0, "{}", out.log);
+    assert!(!out.log.contains("WARNING"), "{}", out.log);
+    assert!(!out.log.contains("ERROR"), "{}", out.log);
+    // Le PUT routé part dans used.log, pas dans le log par défaut ; après le
+    // reset les lignes reviennent au log par défaut.
+    assert!(!out.log.contains("IN_ROUTE"), "{}", out.log);
+    assert!(out.log.contains("AFTER_RESET"), "{}", out.log);
+    let routed_log = std::fs::read_to_string(dir.path().join("used.log")).unwrap();
+    assert!(routed_log.contains("IN_ROUTE"), "{routed_log}");
+    assert!(!routed_log.contains("AFTER_RESET"), "{routed_log}");
 }
 
 #[test]

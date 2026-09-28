@@ -8,21 +8,22 @@
 //! proc printto; run;   /* reset — rétablit les destinations par défaut */
 //! ```
 //!
-//! # Sémantique v1
+//! # Sémantique (J07-P5 — routage réel)
 //!
-//! v1 = implémentation minimale documentée :
-//! - Les chemins de redirection sont stockés dans la `Session` (champs
-//!   `printto_log` et `printto_print`, ajoutés à `Session` pour M21.1).
-//! - `proc printto;` nu (aucune option) réinitialise les deux destinations
-//!   (NOTE « reset » dans le log actuel).
-//! - `LOG=`/`PRINT=` : le routage réel n'existe pas encore — un WARNING
-//!   « routing not supported until J07-P5 » le dit honnêtement (J02-P4 ;
-//!   exit code 1), la destination par défaut reste inchangée.
-//! - Le **routage réel** (écriture physique vers le fichier) est différé à J07-P5
-//!   (couche ODS). La raison : le routage demande un trait `OutputDestination`
-//!   qui n'existe pas encore ; insérer ici un File I/O ad hoc casserait les
-//!   tests de snapshot existants (byte-identiques). Ce comportement est
-//!   documenté comme déviation connue.
+//! - `LOG='path'` : le log produit APRÈS le `PROC PRINTTO` part
+//!   réellement vers le fichier (mode ajout ; `NEW` remplace le contenu
+//!   existant). Le segment routé ne rejoint jamais le log par défaut.
+//! - `PRINT='path'` : même routage réel pour le listing.
+//! - `PROC PRINTTO;` nu rétablit les destinations par défaut (les segments
+//!   routés en cours sont écrits dans leurs fichiers).
+//! - Précédence (doc SAS 9.4) : la dernière destination PRINTTO ouverte
+//!   gagne pendant le run ; `--log`/`--print` de la CLI restent les
+//!   destinations par défaut INITIALES (ils reçoivent tout ce qui n'est pas
+//!   routé par PRINTTO). Les diagnostics structurés (J06-P2) couvrent tout
+//!   le run, segments routés compris ; les compteurs WARNING/ERROR (donc le
+//!   code retour) aussi.
+//! - Erreur d'ouverture de fichier → ERROR comptée (exit 2), la destination
+//!   en cours reste inchangée.
 //!
 //! # Invariant IMPORTANT
 //!
@@ -127,37 +128,41 @@ fn parse_path_or_ident(ts: &mut StatementStream) -> Result<String> {
     }
 }
 
-/// Execute PROC PRINTTO.
+/// Execute PROC PRINTTO (J07-P5 — routage réel).
 pub fn execute(ast: &PrinttoAst, session: &mut Session) -> Result<()> {
     if ast.reset {
-        // Reset both destinations
+        // Reset both destinations: flush any open route to its file, then
+        // restore the defaults.
+        session.close_print_route();
+        session.log.end_route();
         session.printto_log = None;
-        session.printto_print = None;
         session
             .log
             .note("PROCEDURE PRINTTO: log and print destinations reset to default.");
     } else {
         if let Some(ref path) = ast.log {
             let resolved = session.resolve_path(path);
-            // J02-P4 — the physical routing is deferred to J07-P5: say so
-            // honestly (WARNING, exit code 1) instead of the former NOTE that
-            // claimed a redirection which never happened.
-            session.log.warning(&format!(
-                "PROCEDURE PRINTTO: LOG= routing not supported until J07-P5; the log destination is unchanged ('{}'){}.",
-                resolved.display(),
-                if ast.new { " (NEW)" } else { "" }
-            ));
-            session.printto_log = Some(resolved);
+            match session.log.begin_route(&resolved, ast.new) {
+                Ok(()) => {
+                    session.printto_log = Some(resolved);
+                }
+                Err(e) => session.log.error(&format!(
+                    "PROCEDURE PRINTTO: cannot open log destination '{}': {}",
+                    resolved.display(),
+                    e
+                )),
+            }
         }
         if let Some(ref path) = ast.print {
             let resolved = session.resolve_path(path);
-            // Same honest diagnostic for the PRINT (listing) destination.
-            session.log.warning(&format!(
-                "PROCEDURE PRINTTO: PRINT= routing not supported until J07-P5; the print destination is unchanged ('{}'){}.",
-                resolved.display(),
-                if ast.new { " (NEW)" } else { "" }
-            ));
-            session.printto_print = Some(resolved);
+            match session.open_print_route(resolved.clone(), ast.new) {
+                Ok(()) => {}
+                Err(e) => session.log.error(&format!(
+                    "PROCEDURE PRINTTO: cannot open print destination '{}': {}",
+                    resolved.display(),
+                    e
+                )),
+            }
         }
         if ast.log.is_none() && ast.print.is_none() {
             // Options were present but none we recognize — treat as no-op

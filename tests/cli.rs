@@ -514,3 +514,118 @@ fn utf8_invalid_source_is_error_naming_file() {
         run.stderr
     );
 }
+
+// ── PROC PRINTTO : routage réel log/print (J07-P5) ────────────────────────
+
+/// Programme qui route log+listing vers des fichiers puis rétablit les
+/// destinations par défaut : la table de PROC PRINT part dans le listing
+/// routé, le PUT d'après-reset revient au log par défaut.
+const PRINTTO_ROUTE_AND_RESET: &str = r#"
+data work.a;
+    x = 42;
+run;
+
+proc printto log='moved.log' print='moved.lst';
+run;
+
+proc print data=work.a;
+run;
+
+proc printto;
+run;
+
+data _null_;
+    put 'AFTER_RESET';
+run;
+"#;
+
+/// `--log`/`--print` restent les destinations par défaut initiales : le
+/// segment routé part dans moved.log/moved.lst, le reste dans les fichiers
+/// CLI, et le code retour reste 0 (aucun WARNING/ERROR).
+#[test]
+fn printto_routes_log_and_print_to_files() {
+    let case = run_sas(
+        PRINTTO_ROUTE_AND_RESET,
+        &["--log", "default.log", "--print", "default.lst"],
+    );
+    assert_eq!(case.run.code(), 0, "stderr:\n{}", case.run.stderr);
+
+    let moved_log = std::fs::read_to_string(case.dir().join("moved.log")).unwrap();
+    let moved_lst = std::fs::read_to_string(case.dir().join("moved.lst")).unwrap();
+    let default_log = std::fs::read_to_string(case.dir().join("default.log")).unwrap();
+    let default_lst = std::fs::read_to_string(case.dir().join("default.lst")).unwrap();
+
+    // L'écho et les NOTEs du PROC PRINT routé partent dans moved.log.
+    assert!(moved_log.contains("proc print data=work.a"), "{moved_log}");
+    assert!(
+        !default_log.contains("proc print data=work.a"),
+        "{default_log}"
+    );
+    // Le PUT d'après-reset revient au log par défaut, jamais au segment routé.
+    assert!(default_log.contains("AFTER_RESET"), "{default_log}");
+    assert!(!moved_log.contains("AFTER_RESET"), "{moved_log}");
+    // La table part dans le listing routé, pas dans le listing par défaut.
+    assert!(moved_lst.contains("42"), "{moved_lst}");
+    assert!(!default_lst.contains("42"), "{default_lst}");
+    // Aucun diagnostic d'échec.
+    assert!(!default_log.contains("ERROR:"), "{default_log}");
+    assert!(!default_log.contains("WARNING:"), "{default_log}");
+}
+
+/// NEW remplace le contenu existant ; sans NEW le routage ajoute.
+#[test]
+fn printto_log_new_replaces_and_default_appends() {
+    let prog = "proc printto log='moved.log' new;\nrun;\ndata _null_; put 'MARK'; run;\n";
+    let tmp = tempfile::tempdir().unwrap();
+    // Contenu préexistant : avec NEW, il DOIT disparaître (1 seul MARK).
+    std::fs::write(tmp.path().join("moved.log"), "PRE MARK\n").unwrap();
+    let script = tmp.path().join("prog.sas");
+    std::fs::write(&script, prog).unwrap();
+    let run = sasrs(tmp.path(), &[script.to_str().unwrap()]);
+    assert_eq!(run.code(), 0, "stderr:\n{}", run.stderr);
+    let log = std::fs::read_to_string(tmp.path().join("moved.log")).unwrap();
+    // NB : « MARK » apparaît aussi dans l'écho du source (`put 'MARK';`) ;
+    // la preuve du NEW est la disparition du contenu préexistant.
+    assert!(!log.contains("PRE MARK"), "NEW devrait remplacer : {log}");
+    assert!(
+        log.contains("MARK"),
+        "le nouveau contenu doit être là : {log}"
+    );
+
+    let append_prog = "proc printto log='moved.log';\nrun;\ndata _null_; put 'MARK'; run;\n";
+    let tmp = tempfile::tempdir().unwrap();
+    // Contenu préexistant : sans NEW, le routage DOIT conserver (mode ajout).
+    std::fs::write(tmp.path().join("moved.log"), "PRE MARK\n").unwrap();
+    let script = tmp.path().join("prog.sas");
+    std::fs::write(&script, append_prog).unwrap();
+    let run = sasrs(tmp.path(), &[script.to_str().unwrap()]);
+    assert_eq!(run.code(), 0, "stderr:\n{}", run.stderr);
+    let log = std::fs::read_to_string(tmp.path().join("moved.log")).unwrap();
+    assert!(
+        log.contains("PRE MARK"),
+        "sans NEW le contenu préexistant doit survivre : {log}"
+    );
+}
+
+/// Erreur d'ouverture de la destination → ERROR comptée, exit 2, message qui
+/// nomme le chemin.
+#[test]
+fn printto_unwritable_log_destination_is_error() {
+    let prog = "proc printto log='no/such/dir/moved.log';\nrun;\ndata _null_; put 'AFTER'; run;";
+    let case = run_sas(prog, &[]);
+    assert_eq!(case.run.code(), 2, "stderr:\n{}", case.run.stderr);
+    assert!(
+        case.run
+            .stderr
+            .contains("ERROR: PROCEDURE PRINTTO: cannot open log destination"),
+        "{}",
+        case.run.stderr
+    );
+    assert!(
+        case.run
+            .stderr
+            .contains(case.dir().join("no/such/dir/moved.log").to_str().unwrap()),
+        "{}",
+        case.run.stderr
+    );
+}
