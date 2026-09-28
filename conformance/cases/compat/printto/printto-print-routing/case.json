@@ -1,0 +1,17 @@
+{
+  "id": "printto-print-routing",
+  "title": "PROC PRINTTO : PRINT=<fichier> route le listing, puis PROC PRINTTO nu retablit les destinations par defaut",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 49 PRINTTO Procedure, PROC PRINTTO Statement : « PRINT= | file-specification : routes procedure output to a permanent external file » ; « PROC PRINTTO ; » sans option retablit les destinations par defaut ; le programme continue de produire ses datasets",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:", "WARNING:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — PROC PRINTTO : le routage physique du listing vers PRINT= n'est pas implemente (WARNING « routing not supported until J07-P5 », exit code 1)",
+  "data_types": {}
+}

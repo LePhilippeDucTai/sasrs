@@ -1,0 +1,17 @@
+{
+  "id": "informat-contents-date",
+  "title": "Informat date9. persistee : PROC CONTENTS OUT= restitue INFORMAT=DATE, INFORML=9, INFORMD=0 pour la variable numerique",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 14 CONTENTS Procedure, « OUT= Data Set » : INFORMAT = nom de l'informat associee, INFORML = « informat length », INFORMD = « number of decimals ... 0 if you do not specify decimals » ; TYPE 1=numerique, 2=caractere ; l'ordre des observations suit VARNUM",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — l'informat date9. declaree n'est pas persistee dans les metadonnees ; PROC CONTENTS OUT= ne restitue ni INFORMAT ni INFORML/INFORMD",
+  "data_types": {}
+}

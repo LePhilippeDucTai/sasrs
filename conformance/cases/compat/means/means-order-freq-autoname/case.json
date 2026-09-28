@@ -1,0 +1,19 @@
+{
+  "id": "means-order-freq-autoname",
+  "title": "PROC MEANS : ORDER=FREQ (effectifs décroissants), FREQ (pondération de N et STD), ID copiée, OUTPUT / AUTONAME, MAXDEC=",
+  "provenance": {
+    "kind": "sas-doc",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0zn9ag9s3c8cnn1v6k9f5fixg7f.htm — SAS 9.4 Procedures — PROC MEANS (ORDER=FREQ : « orders values by descending frequency count » ; FREQ : N et la variance pondérés par la variable FREQ, divisor Σw−1 ; ID : variables ID copiées dans OUT= ; AUTONAME : « the combination of the analysis variable name and the statistic-keyword » ; MAXDEC= : « no effect » sur l'OUT=)",
+    "sas_version": "9.4M5",
+    "options": ["--deterministic"]
+  },
+  "validates": "sas-behaviour",
+  "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
+  "log": {"forbidden": ["ERROR:"]},
+  "exit_code": 0,
+  "status": "known-divergence",
+  "issue": "sasrs #11 (sous-issue compat) — PROC MEANS : ORDER=FREQ, instruction FREQ (pondération) et OUTPUT / AUTONAME non implémentés",
+  "data_types": {
+    "weights.csv": {"group": "char", "value": "num", "w": "num", "price": "num"}
+  }
+}
