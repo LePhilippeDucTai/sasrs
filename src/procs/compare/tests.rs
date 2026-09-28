@@ -85,7 +85,7 @@ fn parse_minimal() {
     assert!(!ast.briefsummary);
     assert_eq!(ast.method, CmpMethod::Absolute);
     assert_eq!(ast.criterion, 0.0);
-    assert_eq!(ast.maxprint, 50);
+    assert_eq!(ast.maxprint, (50, 50));
 }
 
 #[test]
@@ -1035,7 +1035,7 @@ fn compare_compat_maxprint_listall_parse() {
         "proc compare base=work.a compare=work.b maxprint=10 listall brief noprint; run;",
     )
     .unwrap();
-    assert_eq!(ast.maxprint, 10);
+    assert_eq!(ast.maxprint, (10, 50));
     assert!(ast.listall);
     assert!(ast.brief);
     assert!(ast.noprint);
@@ -1043,7 +1043,7 @@ fn compare_compat_maxprint_listall_parse() {
     // MAXPRINT=(n,p)
     let ast =
         parse_compare_src("proc compare base=work.a compare=work.b maxprint=(10,5); run;").unwrap();
-    assert_eq!(ast.maxprint, 10);
+    assert_eq!(ast.maxprint, (10, 5));
 
     // LISTALL : la section valeurs titre « All Compared Variables » et
     // inclut les variables égales.
@@ -1090,4 +1090,76 @@ fn compare_compat_maxprint_listall_parse() {
         listing.contains("Variables with Unequal Values"),
         "listing : {listing}"
     );
+}
+
+/// MAXPRINT= effet runtime (J07-P9) : la section « Value Comparison
+/// Results » est plafonnée à n différences par observation et p
+/// observations avec différences ; une NOTE signale la troncature.
+#[test]
+fn compare_compat_maxprint_runtime() {
+    // 3 observations, 2 variables, tout inégal : 6 différences au total.
+    let setup = |session: &mut Session| {
+        write_input_ds(
+            session,
+            "A",
+            df!["x" => [1.0_f64, 2.0, 3.0], "y" => [10.0_f64, 20.0, 30.0]].unwrap(),
+            vec!["x:num", "y:num"],
+        );
+        write_input_ds(
+            session,
+            "B",
+            df!["x" => [4.0_f64, 5.0, 6.0], "y" => [11.0_f64, 21.0, 31.0]].unwrap(),
+            vec!["x:num", "y:num"],
+        );
+    };
+
+    // Défaut (50, 50) : tout est imprimé, aucune NOTE de troncature.
+    let mut session = make_session();
+    setup(&mut session);
+    let ast = cmp_ast("A", "B");
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    let log = session.log.into_string();
+    let results = listing
+        .split("Value Comparison Results")
+        .nth(1)
+        .unwrap_or_else(|| panic!("section absente : {listing}"));
+    let n_rows = results.lines().filter(|l| l.contains("Num")).count();
+    assert_eq!(n_rows, 6, "défaut MAXPRINT : {listing}");
+    assert!(!log.contains("MAXPRINT="), "NOTE inattendue : {log}");
+
+    // MAXPRINT=(1,2) : 1 différence par observation, 2 observations →
+    // 2 lignes, observations 3 tronquée → NOTE.
+    let mut session = make_session();
+    setup(&mut session);
+    let mut ast = cmp_ast("A", "B");
+    ast.maxprint = (1, 2);
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    let log = session.log.into_string();
+    let results = listing
+        .split("Value Comparison Results")
+        .nth(1)
+        .unwrap_or_else(|| panic!("section absente : {listing}"));
+    let n_rows = results.lines().filter(|l| l.contains("Num")).count();
+    assert_eq!(n_rows, 2, "MAXPRINT=(1,2) : {listing}");
+    assert!(log.contains("MAXPRINT="), "NOTE manquante : {log}");
+
+    // MAXPRINT=0 : aucune ligne imprimée, NOTE de troncature.
+    let mut session = make_session();
+    setup(&mut session);
+    let mut ast = cmp_ast("A", "B");
+    ast.maxprint = (0, 50);
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    let log = session.log.into_string();
+    let results = listing
+        .split("Value Comparison Results")
+        .nth(1)
+        .unwrap_or_else(|| panic!("section absente : {listing}"));
+    assert!(
+        results.lines().all(|l| !l.contains("Num")),
+        "MAXPRINT=0 : {listing}"
+    );
+    assert!(log.contains("MAXPRINT="), "NOTE manquante : {log}");
 }

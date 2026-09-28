@@ -35,10 +35,11 @@ pub struct CompareAst {
     /// J07-P3 — LISTALL : la section valeurs liste toutes les variables
     /// comparées, égales comprises.
     pub listall: bool,
-    /// J07-P3 — MAXPRINT=n (défaut 50) : plafond d'écarts imprimés par
-    /// variable. Stocké ; la section listing ne détaille pas les écarts
-    /// observation par observation, le plafond ne s'y applique donc pas.
-    pub maxprint: usize,
+    /// J07-P9 — MAXPRINT=n | (n,p) (défauts 50/50) : n plafonne le nombre
+    /// de différences imprimées par observation dans la section « Value
+    /// Comparison Results », p le nombre d'observations avec différences
+    /// imprimées. Une NOTE signale la troncature (doc SAS 9.4, MAXPRINT=).
+    pub maxprint: (usize, usize),
     /// J07-P3 — CRITERION=c (défaut 0) : seuil de jugement METHOD=.
     pub criterion: f64,
     /// J07-P3 — METHOD= (défaut ABSOLUTE).
@@ -70,7 +71,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
     let mut noprint = false;
     let mut brief = false;
     let mut listall = false;
-    let mut maxprint: usize = 50;
+    let mut maxprint: (usize, usize) = (50, 50);
     let mut criterion: f64 = 0.0;
     let mut method = CmpMethod::Absolute;
     let mut outbase = false;
@@ -168,18 +169,20 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
                 }
             }
         } else if ts.peek().is_kw("maxprint") {
-            // MAXPRINT=n | MAXPRINT=(n,p) — n écarts par variable, p par
-            // observation (p plafonné par n ; seul n est retenu, le listing
-            // ne détaille pas les écarts par observation).
+            // MAXPRINT=n | MAXPRINT=(n,p) — n : nombre max de différences
+            // imprimées par observation ; p : nombre max d'observations
+            // avec différences imprimées. MAXPRINT=n seul laisse p à 50
+            // (défauts SAS 9.4, option MAXPRINT=).
             crate::procs::common::consume_option_eq(ts, "MAXPRINT")?;
             let tok = ts.peek().clone();
             match tok.kind {
                 TokenKind::Num(f) if f >= 0.0 && f.fract() == 0.0 => {
                     ts.next();
-                    maxprint = f as usize;
+                    maxprint = (f as usize, 50);
                 }
                 TokenKind::LParen => {
                     ts.next();
+                    let mut nums: Vec<usize> = Vec::new();
                     loop {
                         let tok = ts.peek().clone();
                         match tok.kind {
@@ -192,8 +195,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
                             }
                             TokenKind::Num(f) if f >= 0.0 && f.fract() == 0.0 => {
                                 ts.next();
-                                if maxprint == 50 {
-                                    maxprint = f as usize;
+                                if nums.len() < 2 {
+                                    nums.push(f as usize);
                                 }
                             }
                             _ => {
@@ -202,6 +205,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<CompareAst> {
                                     tok.span,
                                 ));
                             }
+                        }
+                    }
+                    match nums.as_slice() {
+                        [n] => maxprint = (*n, 50),
+                        [n, p] => maxprint = (*n, *p),
+                        _ => {
+                            return Err(SasError::parse(
+                                "expected MAXPRINT=n or MAXPRINT=(n,p) with one or two non-negative integers",
+                                tok.span,
+                            ));
                         }
                     }
                 }
