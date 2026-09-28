@@ -6,6 +6,7 @@
 //! `--deterministic` pour que les snapshots soient stables.
 
 use crate::api::{Diagnostic, Severity};
+use std::io::Write;
 use std::time::Instant;
 
 /// SAS-style log writer: numbered source echo, NOTE/WARNING/ERROR lines
@@ -26,6 +27,20 @@ pub struct LogWriter {
     /// J06-P2 — étape courante ("DATA", "PROC PRINT", …), maintenue en
     /// observant l'écho du source (statements `data`/`proc`).
     current_step: String,
+    /// J07-P5 — PROC PRINTTO LOG= : route ouverte vers un fichier externe.
+    /// Tant qu'elle est active, tout ce qui est ajouté à `buf` à partir de
+    /// `start` appartient au fichier routé (vide vers le fichier à la fermeture
+    /// de la route, puis retiré du log par défaut). `None` = pas de route
+    /// (comportement byte-identique d'avant J07-P5).
+    route: Option<LogRoute>,
+}
+
+/// J07-P5 — destination LOG= ouverte par PROC PRINTTO.
+struct LogRoute {
+    /// Handle ouvert en mode append (défaut) ou truncaté (NEW).
+    file: std::fs::File,
+    /// Indice de `buf` où commence le segment routé (non encore écrit).
+    start: usize,
 }
 
 impl LogWriter {
@@ -38,17 +53,104 @@ impl LogWriter {
             deterministic,
             diagnostics: Vec::new(),
             current_step: String::new(),
+            route: None,
         }
     }
 
     pub fn into_string(self) -> String {
-        self.buf
+        self.into_parts().0
+    }
+
+    /// J07-P5 — copie du texte accumulé à ce jour (segment routé compris),
+    /// sans consommer l'écrivain — pour l'observation et les tests.
+    pub fn current_text(&self) -> String {
+        self.buf.clone()
     }
 
     /// J06-P2 — consomme l'écrivain et rend le texte du log AVEC la liste
     /// des diagnostics structurés accumulés.
-    pub fn into_parts(self) -> (String, Vec<Diagnostic>) {
+    ///
+    /// J07-P5 — une route PRINTTO encore ouverte à la consommation est vidée
+    /// vers son fichier : le segment routé ne rejoint JAMAIS le log par
+    /// défaut. Les erreurs d'ouverture, elles, ont été comptées au moment du
+    /// `PROC PRINTTO` (voir [`LogWriter::begin_route`]).
+    pub fn into_parts(mut self) -> (String, Vec<Diagnostic>) {
+        if let Err(e) = self.flush_route_segment() {
+            // Compteurs déjà lus par l'appelant : l'échec d'écriture tardif
+            // reste au moins visible dans le texte rendu.
+            let msg = format!("ERROR: Could not write routed log file: {e}");
+            self.buf.push_str(&msg);
+            self.buf.push('\n');
+        }
+        self.route = None;
         (self.buf, self.diagnostics)
+    }
+
+    /// J07-P5 — ouvre (ou remplace) la route LOG= de PROC PRINTTO. Le fichier
+    /// est ouvert immédiatement (l'échec d'ouverture remonte à l'appelant pour
+    /// une ERROR comptée) : `truncate=true` correspond à l'option `NEW`,
+    /// `truncate=false` au mode ajout par défaut. Une route déjà active est
+    /// d'abord vidée vers son fichier.
+    pub fn begin_route(&mut self, path: &std::path::Path, truncate: bool) -> std::io::Result<()> {
+        self.end_route();
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        if truncate {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
+        let file = opts.open(path)?;
+        self.route = Some(LogRoute {
+            file,
+            start: self.buf.len(),
+        });
+        Ok(())
+    }
+
+    /// J07-P5 — referme la route LOG= active (PROC PRINTTO nu, remplacement
+    /// ou fin de soumission) : le segment accumulé est écrit dans le fichier
+    /// routé puis retiré du log par défaut. Sans route active : no-op.
+    /// Un échec d'écriture devient une ERROR comptée dans le log par défaut.
+    pub fn end_route(&mut self) {
+        if let Err(e) = self.flush_route_segment() {
+            self.error(&format!("Could not write routed log file: {e}"));
+        }
+        self.route = None;
+    }
+
+    /// J07-P5 — une route LOG= est-elle actuellement ouverte ?
+    pub fn route_active(&self) -> bool {
+        self.route.is_some()
+    }
+
+    /// J07-P5 — écrit le segment routé (`buf[start..]`) dans le fichier de la
+    /// route et le retire du buffer par défaut. En cas d'échec le segment est
+    /// restauré dans `buf` (aucune perte de contenu) et l'erreur remonte.
+    fn flush_route_segment(&mut self) -> std::io::Result<()> {
+        let start = match self.route.as_ref() {
+            Some(r) => r.start,
+            None => return Ok(()),
+        };
+        let segment = self.buf.split_off(start);
+        let written = self.route.as_mut().map(|r| {
+            r.file
+                .write_all(segment.as_bytes())
+                .and_then(|_| r.file.flush())
+        });
+        match written {
+            Some(Ok(())) => {
+                if let Some(r) = self.route.as_mut() {
+                    r.start = self.buf.len();
+                }
+                Ok(())
+            }
+            Some(Err(e)) => {
+                self.buf.push_str(&segment);
+                Err(e)
+            }
+            None => Ok(()),
+        }
     }
 
     fn raw(&mut self, line: &str) {

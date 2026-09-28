@@ -11,9 +11,11 @@
 //! utilisée quand une PROC omet `DATA=`.
 
 use crate::library::LibraryManager;
+use crate::listing::Align;
 use crate::log::LogWriter;
-use crate::output::{OutputDestination, TextListing};
+use crate::output::{OutputDestination, PageState, TextListing};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 
 /// System options (OPTIONS statement). M1 honors LS=; everything else is
@@ -233,12 +235,20 @@ pub struct Session {
     pub debug_hashes: std::collections::HashMap<String, crate::datastep::HashObject>,
     /// M21.1 — PROC PRINTTO : destination de redirection du LOG.
     /// `None` = destination par défaut (LogWriter interne).
-    /// v1 : stocké mais pas encore routé (routage différé à M22 ODS).
+    /// J07-P5 — routage RÉEL : la route est portée par le `LogWriter`
+    /// ([`crate::log::LogWriter::begin_route`]) ; ce champ trace la
+    /// destination courante (affichage/reset).
     pub printto_log: Option<std::path::PathBuf>,
     /// M21.1 — PROC PRINTTO : destination de redirection du LISTING (PRINT).
     /// `None` = destination par défaut (ListingWriter interne).
-    /// v1 : stocké mais pas encore routé (routage différé à M22 ODS).
+    /// J07-P5 — routage RÉEL : la destination listing courante devient une
+    /// [`PrintDestination`] vers ce fichier ; le handle ouvert par
+    /// `PROC PRINTTO` est gardé dans `print_file` (append ou NEW).
     pub printto_print: Option<std::path::PathBuf>,
+    /// J07-P5 — handle du fichier PRINT= ouvert par le dernier
+    /// `PROC PRINTTO PRINT=` (mode ajout, ou truncaté par NEW). Consommé par
+    /// la finalisation de la route ([`Session::finish_destination`]).
+    pub(crate) print_file: Option<std::fs::File>,
     /// M38.1 — niveaux de titres actifs (TITLE1..TITLE9). `titles[i]` = texte du
     /// niveau `i+1` (`None` = niveau inactif). État GLOBAL de session, persistant
     /// entre les steps. La sémantique d'effacement SAS est appliquée par
@@ -355,6 +365,7 @@ impl Session {
             debug_hashes: std::collections::HashMap::new(),
             printto_log: None,
             printto_print: None,
+            print_file: None,
             titles: Default::default(),
             footnotes: Default::default(),
             produced_files: Vec::new(),
@@ -418,6 +429,57 @@ impl Session {
         }
     }
 
+    /// J07-P5 — `PROC PRINTTO PRINT=` : ouvre la route listing vers `path`.
+    /// Le fichier est ouvert immédiatement (mode ajout, ou remplacement avec
+    /// `new` = option NEW) ; l'échec d'ouverture remonte à l'appelant pour
+    /// une ERROR comptée. Le listing produit AVANT reste à sa destination
+    /// courante ; tout le listing produit APRÈS part vers le fichier. Une
+    /// route PRINT déjà ouverte est d'abord refermée (contenu écrit).
+    pub fn open_print_route(&mut self, path: PathBuf, new: bool) -> std::io::Result<()> {
+        self.close_print_route();
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        if new {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
+        let file = opts.open(&path)?;
+        // Vide la destination courante (contenu d'avant-la-route → listing
+        // par défaut / fichier ODS) AVANT d'installer la destination routée.
+        self.finish_destination();
+        self.print_file = Some(file);
+        self.printto_print = Some(path.clone());
+        let mut dest: Box<dyn OutputDestination> =
+            Box::new(PrintDestination::new(self.options.ls, path));
+        dest.set_titles(&Self::compact_levels(&self.titles));
+        dest.set_footnotes(&Self::compact_levels(&self.footnotes));
+        self.listing = dest;
+        self.current_destination = "PRINT".to_string();
+        Ok(())
+    }
+
+    /// J07-P5 — referme la route PRINT= active (PROC PRINTTO nu, remplacement
+    /// ou sécurité de fin de run) : le listing routé est écrit dans son
+    /// fichier et la destination listing par défaut est réinstallée. No-op
+    /// si aucune route n'est ouverte.
+    pub fn close_print_route(&mut self) {
+        if self.printto_print.is_none() {
+            return;
+        }
+        // Écrit le segment routé via le handle ouvert au PROC PRINTTO.
+        self.finish_destination();
+        self.print_file = None;
+        self.printto_print = None;
+        // Réinstalle le listing texte par défaut SANS re-finaliser (la
+        // destination routée vient d'être vidée).
+        let mut dest: Box<dyn OutputDestination> = Box::new(TextListing::new(self.options.ls));
+        dest.set_titles(&Self::compact_levels(&self.titles));
+        dest.set_footnotes(&Self::compact_levels(&self.footnotes));
+        self.listing = dest;
+        self.current_destination = "LISTING".to_string();
+    }
+
     /// Shared by CLOSE, replacement and the end-of-run safety net. Successful
     /// write NOTEs keep their historical basename-only format; errors include
     /// the complete target path and increment the ordinary error counter.
@@ -429,7 +491,24 @@ impl Session {
         });
         if let Some((path, bytes)) = output {
             let label = self.listing.dest_type_label();
-            match std::fs::write(&path, &bytes) {
+            // J07-P5 — route PRINTTO PRINT= : le fichier a été ouvert au
+            // `PROC PRINTTO` (append ou NEW) ; on écrit par ce handle, pas
+            // par un fs::write qui tronquerait le mode ajout.
+            let via_print_handle = self.printto_print.as_ref() == Some(&path);
+            let result = if via_print_handle {
+                match self.print_file.as_mut() {
+                    Some(file) => file.write_all(&bytes).and_then(|_| file.flush()),
+                    None => std::fs::write(&path, &bytes),
+                }
+            } else {
+                std::fs::write(&path, &bytes)
+            };
+            // Le handle d'une route PRINT est consommé par son unique
+            // finalisation (réouverture au prochain PROC PRINTTO PRINT=).
+            if via_print_handle {
+                self.print_file = None;
+            }
+            match result {
                 Ok(()) => {
                     let file_name = path
                         .file_name()
@@ -503,6 +582,78 @@ impl Session {
 
 pub mod ods_output;
 pub mod ods_select;
+
+/// J07-P5 — destination listing de `PROC PRINTTO PRINT=` : le rendu texte
+/// éprouvé ([`TextListing`], byte-identique), finalisé vers un fichier
+/// externe. Le handle d'écriture (append ou NEW) est porté par la session
+/// ([`Session::open_print_route`]) ; cette destination ne fait que rendre
+/// le texte et le chemin — l'écriture passe par
+/// [`Session::finish_destination`].
+pub struct PrintDestination {
+    inner: TextListing,
+    path: PathBuf,
+}
+
+impl PrintDestination {
+    pub fn new(ls: usize, path: PathBuf) -> Self {
+        PrintDestination {
+            inner: TextListing::new(ls),
+            path,
+        }
+    }
+}
+
+impl OutputDestination for PrintDestination {
+    fn page_state(&self) -> &PageState {
+        self.inner.page_state()
+    }
+
+    fn page_state_mut(&mut self) -> &mut PageState {
+        self.inner.page_state_mut()
+    }
+
+    fn page_header(&mut self) {
+        self.inner.page_header();
+    }
+
+    fn write_table(&mut self, headers: &[String], aligns: &[Align], rows: &[Vec<String>]) {
+        self.inner.write_table(headers, aligns, rows);
+    }
+
+    fn write_table_ext(
+        &mut self,
+        headers: &[String],
+        aligns: &[Align],
+        rows: &[Vec<String>],
+        double: bool,
+        totals: Option<&Vec<String>>,
+    ) {
+        self.inner
+            .write_table_ext(headers, aligns, rows, double, totals);
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.inner.write_line(line);
+    }
+
+    fn blank(&mut self) {
+        self.inner.blank();
+    }
+
+    fn take_string(&mut self) -> String {
+        self.inner.take_string()
+    }
+
+    /// J07-P5 — le contenu routé part vers le fichier PRINT= : la session
+    /// l'écrit par le handle ouvert au PROC PRINTTO.
+    fn finalize(&mut self) -> Option<(PathBuf, String)> {
+        Some((self.path.clone(), self.inner.take_string()))
+    }
+
+    fn dest_type_label(&self) -> &'static str {
+        "PRINT"
+    }
+}
 
 #[cfg(test)]
 mod tests;

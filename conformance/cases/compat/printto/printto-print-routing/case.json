@@ -11,7 +11,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:", "WARNING:"]},
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "issue": "sasrs #11 (sous-issue compat) — PROC PRINTTO : le routage physique du listing vers PRINT= n'est pas implemente (WARNING « routing not supported until J07-P5 », exit code 1)",
   "data_types": {}
 }
