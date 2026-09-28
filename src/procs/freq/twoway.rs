@@ -45,23 +45,37 @@ pub(super) fn two_way(
     }
 
     render_two_way(
-        session, req, &row_name, &col_name, &row_vals, &col_vals, &freq,
-    );
+        session,
+        req,
+        &row_name,
+        &col_name,
+        &ds.vars[row_idx],
+        &ds.vars[col_idx],
+        &row_vals,
+        &col_vals,
+        &freq,
+    )?;
     Ok(())
 }
 
 /// Render a two-way crosstab from a computed weighted frequency matrix:
 /// grid layout (default) or LIST layout (`/LIST`), followed by any requested
 /// statistic blocks. Shared by `two_way` and the n-way stratified renderer.
+///
+/// `row_meta`/`col_meta` sont les méta des variables d'axes (type/longueur),
+/// portées telles quelles par la capture ODS OUTPUT « CrossTabFreqs » (J08-P3).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_two_way(
     session: &mut Session,
     req: &TableRequest,
     row_name: &str,
     col_name: &str,
+    row_meta: &VarMeta,
+    col_meta: &VarMeta,
     row_vals: &[Value],
     col_vals: &[Value],
     freq: &[Vec<f64>],
-) {
+) -> Result<()> {
     let nr = row_vals.len();
     let nc = col_vals.len();
 
@@ -77,8 +91,8 @@ pub(super) fn render_two_way(
         );
         emit_two_way_stats(
             session, req, row_name, col_name, freq, &row_tot, &col_tot, grand,
-        );
-        return;
+        )?;
+        return Ok(());
     }
 
     // Which stacked per-cell lines to show. Display options drop a line:
@@ -215,14 +229,32 @@ pub(super) fn render_two_way(
 
     session.listing.write_table(&headers, &aligns, &rows);
 
+    // J08-P3 — capture ODS OUTPUT « CrossTabFreqs » : structure SAS réelle
+    // (template Base.Freq.CrossTabFreqs) — colonnes Table, <var ligne>,
+    // <var colonne>, Frequency, Percent, RowPercent, ColPercent ; une ligne
+    // par cellule PLUS les lignes de marges (variable d'axe manquante), comme
+    // le dataset SAS. Capturée aussi en layout LIST (même objet ODS).
+    if session.ods_output_active("CrossTabFreqs") {
+        let part = build_cross_tab_part(
+            row_name, col_name, row_meta, col_meta, row_vals, col_vals, freq, &row_tot, &col_tot,
+            grand,
+        )?;
+        session.append_ods_output("CrossTabFreqs", part)?;
+    }
+
     emit_two_way_stats(
         session, req, row_name, col_name, freq, &row_tot, &col_tot, grand,
-    );
+    )?;
+    Ok(())
 }
 
 /// Print all requested statistic blocks for a two-way table. CHISQ uses the
 /// exact (possibly weighted) frequencies; the integer-count tests
 /// (Fisher/MEASURES/AGREE/TREND) operate on a rounded copy.
+///
+/// Les blocs CHISQ et FISHER portent les noms d'objets ODS SAS « ChiSq » et
+/// « FishersExact » (J08-P3) : filtrables par ODS SELECT/EXCLUDE, capturables
+/// par ODS OUTPUT.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_two_way_stats(
     session: &mut Session,
@@ -233,9 +265,9 @@ pub(super) fn emit_two_way_stats(
     row_tot: &[f64],
     col_tot: &[f64],
     grand: f64,
-) {
-    if req.chisq {
-        chisq_block(session, row_name, col_name, freq, row_tot, col_tot, grand);
+) -> Result<()> {
+    if req.chisq && session.ods_displays("ChiSq") {
+        chisq_block(session, row_name, col_name, freq, row_tot, col_tot, grand)?;
     }
     if req.fisher || req.trend || req.measures || req.agree {
         let ifreq = round_matrix(freq);
@@ -244,8 +276,15 @@ pub(super) fn emit_two_way_stats(
             .map(|c| (0..ifreq.len()).map(|r| ifreq[r][c]).sum())
             .collect();
         let igrand: usize = irow.iter().sum();
-        if req.fisher {
-            fisher_block(session, &ifreq, &irow, &icol, igrand);
+        if req.fisher && session.ods_displays("FishersExact") {
+            fisher_block(
+                session,
+                &format!("Table of {row_name} by {col_name}"),
+                &ifreq,
+                &irow,
+                &icol,
+                igrand,
+            )?;
         }
         if req.trend {
             trend_block(session, &ifreq, &irow, &icol, igrand);
@@ -257,6 +296,7 @@ pub(super) fn emit_two_way_stats(
             agree_block(session, &ifreq, &irow, &icol, igrand);
         }
     }
+    Ok(())
 }
 
 /// Render a two-way table in LIST layout: one row per non-empty cell, with
@@ -360,6 +400,9 @@ pub(super) fn n_way(
     let col_col = &cols[k - 1];
     let row_name = &names[k - 2];
     let col_name = &names[k - 1];
+    // J08-P3 — méta des variables d'axes pour la capture CrossTabFreqs.
+    let row_meta = ds.vars[find_var(ds, &req.vars[k - 2])?].clone();
+    let col_meta = ds.vars[find_var(ds, &req.vars[k - 1])?].clone();
 
     let keep = |v: &Value| req.missing || !v.is_missing();
 
@@ -425,10 +468,142 @@ pub(super) fn n_way(
         }
 
         render_two_way(
-            session, req, row_name, col_name, &row_vals, &col_vals, &freq,
-        );
+            session, req, row_name, col_name, &row_meta, &col_meta, &row_vals, &col_vals, &freq,
+        )?;
         session.listing.blank();
     }
 
     Ok(())
+}
+
+/// J08-P3 — une ligne de la table ODS « CrossTabFreqs » en construction :
+/// (valeur de ligne, valeur de colonne, fréquence, RowPercent, ColPercent) —
+/// les valeurs d'axe sont `None` sur les lignes de marges.
+type CrossTabCell<'a> = (
+    Option<&'a Value>,
+    Option<&'a Value>,
+    f64,
+    Option<f64>,
+    Option<f64>,
+);
+
+/// J08-P3 — construit la tranche typée de la table ODS « CrossTabFreqs »
+/// pour une table à deux voies : structure du dataset SAS 9.4 réel
+/// (template Base.Freq.CrossTabFreqs) :
+///
+/// | Colonne      | Type        | Contenu                                   |
+/// |--------------|-------------|-------------------------------------------|
+/// | `Table`      | char        | `Table of <row> by <col>`                 |
+/// | `<row>`      | idem input  | valeur de ligne (manquante sur les marges)|
+/// | `<col>`      | idem input  | valeur de colonne (manquante sur les marges)|
+/// | `Frequency`  | num         | fréquence (pondérée) de la cellule/marge  |
+/// | `Percent`    | num         | 100·f/grand, pleine précision             |
+/// | `RowPercent` | num         | 100·f/total ligne (cellules seulement)    |
+/// | `ColPercent` | num         | 100·f/total colonne (cellules seulement)  |
+///
+/// Une ligne par cellule, puis les lignes de marges de ligne (colonne
+/// manquante), de colonne (ligne manquante) et le total général (les deux
+/// manquantes) — comme le dataset SAS.
+#[allow(clippy::too_many_arguments)]
+fn build_cross_tab_part(
+    row_name: &str,
+    col_name: &str,
+    row_meta: &VarMeta,
+    col_meta: &VarMeta,
+    row_vals: &[Value],
+    col_vals: &[Value],
+    freq: &[Vec<f64>],
+    row_tot: &[f64],
+    col_tot: &[f64],
+    grand: f64,
+) -> Result<SasDataset> {
+    // (valeur ligne, valeur colonne, fréquence, row_pct, col_pct)
+    let mut cells: Vec<CrossTabCell> = Vec::new();
+    let pct = |f: f64, den: f64| {
+        if den > 0.0 {
+            Some(100.0 * f / den)
+        } else {
+            None
+        }
+    };
+    for (r, rv) in row_vals.iter().enumerate() {
+        for (c, cv) in col_vals.iter().enumerate() {
+            cells.push((
+                Some(rv),
+                Some(cv),
+                freq[r][c],
+                pct(freq[r][c], row_tot[r]),
+                pct(freq[r][c], col_tot[c]),
+            ));
+        }
+    }
+    // Marges de ligne : colonne manquante.
+    for (r, rv) in row_vals.iter().enumerate() {
+        cells.push((Some(rv), None, row_tot[r], None, None));
+    }
+    // Marges de colonne : ligne manquante.
+    for (c, cv) in col_vals.iter().enumerate() {
+        cells.push((None, Some(cv), col_tot[c], None, None));
+    }
+    // Total général : les deux manquantes.
+    cells.push((None, None, grand, None, None));
+
+    let n = cells.len();
+    let table_str = format!("Table of {row_name} by {col_name}");
+    let table_col: Vec<Option<String>> = vec![Some(table_str.clone()); n];
+
+    // Colonnes d'axes typées comme l'input (char garde sa longueur SAS).
+    let axis_num = |v: Option<&Value>| v.and_then(value_to_num);
+    let axis_char = |v: Option<&Value>| -> Option<String> {
+        match v {
+            Some(Value::Char(s)) if !s.trim_end().is_empty() => Some(s.trim_end().to_string()),
+            _ => None,
+        }
+    };
+    let (row_series, row_var) = if row_meta.ty == VarType::Num {
+        let vals: Vec<Option<f64>> = cells.iter().map(|c| axis_num(c.0)).collect();
+        (
+            Series::new(row_name.into(), vals).into(),
+            num_var_meta(row_name),
+        )
+    } else {
+        let vals: Vec<Option<String>> = cells.iter().map(|c| axis_char(c.0)).collect();
+        (Series::new(row_name.into(), vals).into(), row_meta.clone())
+    };
+    let (col_series, col_var) = if col_meta.ty == VarType::Num {
+        let vals: Vec<Option<f64>> = cells.iter().map(|c| axis_num(c.1)).collect();
+        (
+            Series::new(col_name.into(), vals).into(),
+            num_var_meta(col_name),
+        )
+    } else {
+        let vals: Vec<Option<String>> = cells.iter().map(|c| axis_char(c.1)).collect();
+        (Series::new(col_name.into(), vals).into(), col_meta.clone())
+    };
+
+    let frequency: Vec<Option<f64>> = cells.iter().map(|c| Some(c.2)).collect();
+    let percent: Vec<Option<f64>> = cells.iter().map(|c| pct(c.2, grand)).collect();
+    let row_pct: Vec<Option<f64>> = cells.iter().map(|c| c.3).collect();
+    let col_pct: Vec<Option<f64>> = cells.iter().map(|c| c.4).collect();
+
+    let columns: Vec<Column> = vec![
+        Series::new("Table".into(), table_col).into(),
+        row_series,
+        col_series,
+        Series::new("Frequency".into(), frequency).into(),
+        Series::new("Percent".into(), percent).into(),
+        Series::new("RowPercent".into(), row_pct).into(),
+        Series::new("ColPercent".into(), col_pct).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("Table", crate::listing::char_width(&table_str).max(8)),
+        row_var,
+        col_var,
+        num_var_meta("Frequency"),
+        num_var_meta("Percent"),
+        num_var_meta("RowPercent"),
+        num_var_meta("ColPercent"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
 }

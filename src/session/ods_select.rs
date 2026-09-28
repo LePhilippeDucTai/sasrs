@@ -38,11 +38,12 @@
 //!   unique, « overall list » et « destination list » coïncident donc en
 //!   pratique. `ODS <dest> SELECT …` est accepté et appliqué globalement.
 //! - Une liste NOMINATIVE ne filtre que les tables qui portent déjà un nom
-//!   d'objet ODS (M38.3/M38.4 : FREQ une voie, UNIVARIATE, MEANS) ; les tables
-//!   encore anonymes s'affichent toujours, même sous `ods select autre-nom;`.
-//!   `ODS SELECT NONE`/`ODS EXCLUDE ALL` suppriment en revanche TOUTE la
-//!   sortie listing des steps suivants, tables anonymes comprises (détour de
-//!   la destination dans `procs::execute_proc`).
+//!   d'objet ODS (M38.3/M38.4/J08-P3 : FREQ une voie et deux voies
+//!   — OneWayFreqs, CrossTabFreqs, ChiSq, FishersExact —, UNIVARIATE, MEANS,
+//!   REG) ; les tables encore anonymes s'affichent toujours, même sous
+//!   `ods select autre-nom;`. `ODS SELECT NONE`/`ODS EXCLUDE ALL` suppriment
+//!   en revanche TOUTE la sortie listing des steps suivants, tables anonymes
+//!   comprises (détour de la destination dans `procs::execute_proc`).
 //! - La liste nominative n'est consommée qu'aux frontières de step de
 //!   PROCÉDURE (les étapes DATA de sasrs ne produisent pas d'objets ODS —
 //!   même divergence que le registre ODS OUTPUT).

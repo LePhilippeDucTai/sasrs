@@ -272,7 +272,7 @@ pub(super) fn run_model(
                 );
             }
         } else {
-            fit_and_print(model, dep_name, &sel_reg_names, &fit, &fit_opts, session);
+            fit_and_print(model, dep_name, &sel_reg_names, &fit, &fit_opts, session)?;
         }
 
         // --- OUTEST= (M36.8): record this fit for the per-PROC parameter-estimates

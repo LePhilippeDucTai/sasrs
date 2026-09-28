@@ -111,10 +111,11 @@ pub(super) fn one_way(
             .write_line(&format!("Frequency Missing = {}", fmt_freq(n_missing)));
     }
 
-    // CHISQ one-way: goodness-of-fit against equal proportions. Objet ODS
-    // « OneWayChiSq » (nom SAS réel), filtrable par ODS SELECT/EXCLUDE.
-    if req.chisq && session.ods_displays("OneWayChiSq") {
-        chisq_one_way_block(session, &cats);
+    // CHISQ one-way: goodness-of-fit against equal proportions. Objets ODS
+    // « OneWayChiSq » (nom historique sasrs, toujours reconnu) et « ChiSq »
+    // (nom SAS documenté, J08-P3), filtrables par ODS SELECT/EXCLUDE.
+    if req.chisq && (session.ods_displays("OneWayChiSq") || session.ods_displays("ChiSq")) {
+        chisq_one_way_block(session, &var_name, &cats)?;
     }
 
     // OUT= dataset (one-way only).
@@ -129,7 +130,16 @@ pub(super) fn one_way(
 /// (TESTP= defaulting to 1/k per category). Statistic Σ(obs-exp)²/exp with
 /// exp = N/k, DF = k-1. Degenerate cases (k < 2 or N = 0) are skipped with a
 /// graceful note.
-pub(super) fn chisq_one_way_block(session: &mut Session, cats: &[Category]) {
+///
+/// J08-P3 — le bloc porte AUSSI le nom d'objet ODS SAS « ChiSq » (nom
+/// documenté, partagé avec le CHISQ deux voies — le nom historique
+/// « OneWayChiSq » reste reconnu par ODS SELECT/EXCLUDE) : capturable par
+/// ODS OUTPUT (colonne `Table` = « Table <var> »).
+pub(super) fn chisq_one_way_block(
+    session: &mut Session,
+    var_name: &str,
+    cats: &[Category],
+) -> Result<()> {
     let k = cats.len();
     let n: f64 = cats.iter().map(|c| c.freq).sum();
 
@@ -138,7 +148,7 @@ pub(super) fn chisq_one_way_block(session: &mut Session, cats: &[Category]) {
         session
             .listing
             .write_line("Chi-Square Test for Equal Proportions is not computable for this table.");
-        return;
+        return Ok(());
     }
 
     let exp = n / k as f64;
@@ -162,6 +172,17 @@ pub(super) fn chisq_one_way_block(session: &mut Session, cats: &[Category]) {
         vec!["Pr > ChiSq".to_string(), fmt_chisq_p(p)],
     ];
     session.listing.write_table(&headers, &aligns, &rows);
+
+    // J08-P3 — capture ODS OUTPUT « ChiSq » (une voie) : mêmes colonnes que
+    // le deux voies (Table, Statistic, DF, Value, Prob).
+    if session.ods_output_active("ChiSq") {
+        let part = build_chisq_part(
+            &format!("Table {var_name}"),
+            &[("Chi-Square", df, chisq, p)],
+        )?;
+        session.append_ods_output("ChiSq", part)?;
+    }
+    Ok(())
 }
 
 /// Build and write the OUT= dataset for a one-way table: columns <var>,

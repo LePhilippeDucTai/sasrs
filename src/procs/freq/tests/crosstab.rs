@@ -105,7 +105,7 @@ fn fisher_2x2_symmetric_classic() {
     // [[3,1],[1,3]] : documented SAS two-sided p ~ 0.4857.
     let freq = vec![vec![3, 1], vec![1, 3]];
     let (rt, ct, g) = margins(&freq);
-    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    let out = run_block(|s| fisher_block(s, "Table of r by c", &freq, &rt, &ct, g).unwrap());
     assert!(out.contains("Fisher's Exact Test"), "{out}");
     assert!(out.contains("Two-sided Pr <= P"), "{out}");
     assert!(out.contains("0.4857"), "two-sided 0.4857 expected:\n{out}");
@@ -153,7 +153,7 @@ fn fisher_rxc_listing_2x3() {
     // Freeman-Halton block reporting P and Pr <= P.
     let freq = vec![vec![1, 2, 3], vec![4, 5, 6]];
     let (rt, ct, g) = margins(&freq);
-    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    let out = run_block(|s| fisher_block(s, "Table of r by c", &freq, &rt, &ct, g).unwrap());
     assert!(out.contains("Fisher's Exact Test"), "{out}");
     assert!(out.contains("Table Probability (P)"), "{out}");
     assert!(out.contains("Pr <= P"), "{out}");
@@ -301,7 +301,7 @@ fn fisher_rxc_monte_carlo_listing_label() {
         vec![5, 5, 5, 5],
     ];
     let (rt, ct, g) = margins(&freq);
-    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    let out = run_block(|s| fisher_block(s, "Table of r by c", &freq, &rt, &ct, g).unwrap());
     assert!(out.contains("Monte Carlo estimate"), "{out}");
     assert!(out.contains("10000 samples"), "{out}");
 }
@@ -317,7 +317,7 @@ fn fisher_rxc_zero_margin_degenerate() {
     assert!((res.p_obs - 1.0).abs() < 1e-12);
     assert!((res.p_two - 1.0).abs() < 1e-12);
     // And the listing renders without panicking.
-    let out = run_block(|s| fisher_block(s, &freq, &rt, &ct, g));
+    let out = run_block(|s| fisher_block(s, "Table of r by c", &freq, &rt, &ct, g).unwrap());
     assert!(out.contains("Pr <= P"), "{out}");
     assert!(out.contains("1.0000"), "{out}");
 }

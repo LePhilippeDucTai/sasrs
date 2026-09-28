@@ -115,6 +115,7 @@ fn wq(pairs: &[(f64, f64)], p: f64) -> f64 {
 
 mod execute;
 mod fitted_normal;
+mod ods_output_objects;
 mod ods_select;
 mod phi;
 mod skewness;

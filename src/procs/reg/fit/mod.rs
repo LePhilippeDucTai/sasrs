@@ -5,10 +5,12 @@ use super::*;
 
 mod anova;
 mod estimates;
+mod ods;
 mod report;
 
 use anova::*;
 use estimates::*;
+use ods::*;
 use report::*;
 
 mod ols;
@@ -244,7 +246,7 @@ pub(super) fn fit_and_print(
     fit: &OlsFit,
     opts: &FitReportOptions,
     session: &mut Session,
-) {
+) -> Result<()> {
     let &FitReportOptions {
         n_read,
         n,
@@ -309,31 +311,60 @@ pub(super) fn fit_and_print(
     // --- Standard errors / t / p for each beta — see `compute_beta_tests`.
     let (se_beta, t_beta, p_beta) = compute_beta_tests(restricted, fit, beta, mse, p_eff, error_df);
 
+    // J08-P3 — capture ODS OUTPUT (ANOVA / FitStatistics / ParameterEstimates)
+    // AVANT le retour NOPRINT : comme SAS, la capture est indépendante de
+    // l'affichage et reste produite sous NOPRINT / ODS SELECT.
+    capture_ods_outputs(
+        session,
+        dep_name,
+        model_label,
+        reg_names,
+        intercept,
+        &stats,
+        sse,
+        beta,
+        &se_beta,
+        &t_beta,
+        &p_beta,
+        p_eff,
+        restricted,
+    )?;
+
     if model.noprint {
-        return;
+        return Ok(());
     }
 
     print_report_header(n_read, n_used, model_label, by_heading, dep_name, session);
-    print_anova_table(&stats, sse, session);
-    print_fit_stats(&stats, press_stat, session);
+    // J08-P3 — chaque bloc porte son nom d'objet ODS SAS : la liste ODS
+    // SELECT/EXCLUDE gouverne l'affichage (la capture ci-dessus reste
+    // inconditionnelle).
+    if session.ods_displays("ANOVA") {
+        print_anova_table(&stats, sse, session);
+    }
+    if session.ods_displays("FitStatistics") {
+        print_fit_stats(&stats, press_stat, session);
+    }
     // Parameter estimates table — see `print_parameter_estimates`.
-    print_parameter_estimates(
-        model,
-        reg_names,
-        intercept,
-        &PeTableCtx {
-            beta,
-            se_beta: &se_beta,
-            t_beta: &t_beta,
-            p_beta: &p_beta,
-            error_df,
-            p_eff,
-            restricted,
-            tolvif,
-            seqstats,
-        },
-        session,
-    );
+    if session.ods_displays("ParameterEstimates") {
+        print_parameter_estimates(
+            model,
+            reg_names,
+            intercept,
+            &PeTableCtx {
+                beta,
+                se_beta: &se_beta,
+                t_beta: &t_beta,
+                p_beta: &p_beta,
+                error_df,
+                p_eff,
+                restricted,
+                tolvif,
+                seqstats,
+            },
+            session,
+        );
+    }
+    Ok(())
 }
 
 /// Print the degenerate "no variables entered" case for SELECTION when the

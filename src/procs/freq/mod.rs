@@ -150,19 +150,28 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
         common::by_groups(&by_values, &descending, n_obs, &by_names, &in_display)?
     };
 
-    // M38.4 — ODS SELECT/EXCLUDE : les tables une voie portent le nom d'objet
-    // ODS « OneWayFreqs » (et « OneWayChiSq » pour le bloc CHISQ une voie).
-    // Si la liste de sélection ne laisse passer AUCUN objet de ce proc,
-    // l'en-tête de page, le titre et les en-têtes BY sont supprimés aussi
-    // (comme SAS, qui ne produit pas de page vide). Les tables ≥ 2 voies ne
-    // sont pas encore nommées : elles s'affichent toujours (divergence
-    // documentée dans `session::ods_select`) et forcent donc l'en-tête.
+    // M38.4/J08-P3 — ODS SELECT/EXCLUDE : les tables une voie portent le nom
+    // d'objet ODS « OneWayFreqs » (et « OneWayChiSq »/« ChiSq » pour le bloc
+    // CHISQ une voie) ; les tables ≥ 2 voies portent « CrossTabFreqs »
+    // (grille et LIST), « ChiSq » et « FishersExact » (J08-P3). Les blocs
+    // MEASURES/AGREE/TREND restent anonymes et s'affichent toujours. Si la
+    // liste de sélection ne laisse passer AUCUN objet de ce proc, l'en-tête
+    // de page, le titre et les en-têtes BY sont supprimés aussi (comme SAS,
+    // qui ne produit pas de page vide).
     let shows_anything = ast.tables.iter().any(|req| match req.vars.len() {
         1 => {
             session.ods_displays("OneWayFreqs")
-                || (req.chisq && session.ods_displays("OneWayChiSq"))
+                || (req.chisq
+                    && (session.ods_displays("OneWayChiSq") || session.ods_displays("ChiSq")))
         }
-        _ => true,
+        _ => {
+            session.ods_displays("CrossTabFreqs")
+                || (req.chisq && session.ods_displays("ChiSq"))
+                || (req.fisher && session.ods_displays("FishersExact"))
+                || req.measures
+                || req.agree
+                || req.trend
+        }
     });
 
     if shows_anything {

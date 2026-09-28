@@ -122,5 +122,6 @@ fn margins(freq: &[Vec<usize>]) -> (Vec<usize>, Vec<usize>, usize) {
 mod crosstab;
 mod list_n_way;
 mod ods_output;
+mod ods_output_objects;
 mod ods_select;
 mod parse;

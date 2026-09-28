@@ -198,23 +198,23 @@ pub(super) fn emit_variable(
     }
 
     // ── Quantiles (Definition 5) ── (objet ODS « Quantiles »)
+    let levels: &[(&str, f64)] = &[
+        ("100% Max", 1.0),
+        ("99%", 0.99),
+        ("95%", 0.95),
+        ("90%", 0.90),
+        ("75% Q3", 0.75),
+        ("50% Median", 0.50),
+        ("25% Q1", 0.25),
+        ("10%", 0.10),
+        ("5%", 0.05),
+        ("1%", 0.01),
+        ("0% Min", 0.0),
+    ];
     if show_quantiles {
         section_sep(session, &mut first_section);
         centered(session, "Quantiles (Definition 5)");
         session.listing.blank();
-        let levels: &[(&str, f64)] = &[
-            ("100% Max", 1.0),
-            ("99%", 0.99),
-            ("95%", 0.95),
-            ("90%", 0.90),
-            ("75% Q3", 0.75),
-            ("50% Median", 0.50),
-            ("25% Q1", 0.25),
-            ("10%", 0.10),
-            ("5%", 0.05),
-            ("1%", 0.01),
-            ("0% Min", 0.0),
-        ];
         let q_rows: Vec<Vec<String>> = levels
             .iter()
             .map(|(label, p)| vec![label.to_string(), fmt_opt(quantile_def5(&sorted, *p))])
@@ -226,18 +226,32 @@ pub(super) fn emit_variable(
         );
     }
 
+    // J08-P3 — capture ODS OUTPUT « Quantiles » : structure du dataset SAS
+    // réel (template Base.Univariate.Quantiles) : VarName, Quantile, Estimate
+    // — une ligne par niveau, Estimate en pleine précision.
+    if session.ods_output_active("Quantiles") {
+        let part = build_quantiles_part(
+            name,
+            &levels
+                .iter()
+                .map(|(label, p)| (*label, quantile_def5(&sorted, *p)))
+                .collect::<Vec<_>>(),
+        )?;
+        session.append_ods_output("Quantiles", part)?;
+    }
+
     // ── Extreme Observations ── (objet ODS « ExtremeObs »)
+    // Order data by value, then by obs number (stable for ties).
+    let mut by_val: Vec<(f64, usize)> = data.to_vec();
+    by_val.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
     if show_extremes {
         section_sep(session, &mut first_section);
         centered(session, "Extreme Observations");
         session.listing.blank();
-        // Order data by value, then by obs number (stable for ties).
-        let mut by_val: Vec<(f64, usize)> = data.to_vec();
-        by_val.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(Ordering::Equal)
-                .then(a.1.cmp(&b.1))
-        });
         let k = by_val.len().min(5);
         let lowest = &by_val[..k];
         let highest = &by_val[by_val.len().saturating_sub(5)..];
@@ -287,6 +301,33 @@ pub(super) fn emit_variable(
             &[Align::Left, Align::Right, Align::Right],
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
+    }
+
+    // J08-P3 — capture ODS OUTPUT « ExtremeObs » : structure SAS réelle
+    // (VarName, Obs, Value) — les 5 plus basses puis les 5 plus hautes,
+    // chacune en ordre croissant (comme le listing).
+    if session.ods_output_active("ExtremeObs") {
+        let k = by_val.len().min(5);
+        let mut rows: Vec<(f64, usize)> = by_val[..k].to_vec();
+        rows.extend_from_slice(&by_val[by_val.len().saturating_sub(5)..]);
+        let part = build_extreme_obs_part(name, &rows)?;
+        session.append_ods_output("ExtremeObs", part)?;
+    }
+
+    // J08-P3 — capture ODS OUTPUT « TestsForNormality » : structure SAS
+    // réelle (VarName, Test, Stat, pType, pValue) — une ligne par test,
+    // comme la section listing (mêmes gardes de dégénérescence : n ≥ 3,
+    // variance positive). Sous WEIGHT l'option NORMAL n'est pas disponible
+    // (doc SAS) : ce chemin non pondéré est le seul à capturer.
+    if normal
+        && session.ods_output_active("TestsForNormality")
+        && let (Some(m), Some(sd)) = (mean, s)
+        && sd > 0.0
+        && n >= 3
+    {
+        let tests = compute_normality_tests(&sorted, m, sd, n);
+        let part = build_normality_part(name, &tests)?;
+        session.append_ods_output("TestsForNormality", part)?;
     }
 
     Ok(())
@@ -394,6 +435,118 @@ fn build_basic_measures_part(var_name: &str, rows: &[BasicMeasureRow]) -> Result
     Ok(SasDataset { df, vars })
 }
 
+/// J08-P3 — tranche typée de la table ODS « Quantiles » pour une variable :
+/// colonnes VarName, Quantile, Estimate (template
+/// Base.Univariate.Quantiles). `levels` porte les paires
+/// (libellé de quantile, estimation pleine précision) dans l'ordre du
+/// listing (100% Max → 0% Min).
+fn build_quantiles_part(var_name: &str, levels: &[(&str, Option<f64>)]) -> Result<SasDataset> {
+    let n = levels.len();
+    let varname_col: Vec<Option<String>> = vec![Some(var_name.to_string()); n];
+    let quantile: Vec<Option<String>> = levels.iter().map(|q| Some(q.0.to_string())).collect();
+    let estimate: Vec<Option<f64>> = levels.iter().map(|q| q.1).collect();
+
+    let q_len = quantile
+        .iter()
+        .flatten()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let columns: Vec<Column> = vec![
+        Series::new("VarName".into(), varname_col).into(),
+        Series::new("Quantile".into(), quantile).into(),
+        Series::new("Estimate".into(), estimate).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("VarName", 32),
+        crate::procs::common::char_var_meta("Quantile", q_len),
+        num_var_meta("Estimate"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
+}
+
+/// J08-P3 — tranche typée de la table ODS « ExtremeObs » pour une variable :
+/// colonnes VarName, Obs, Value (template Base.Univariate.ExtremeObs).
+/// `rows` porte les (valeur, n° d'obs) — 5 plus basses puis 5 plus hautes,
+/// chacune en ordre croissant.
+fn build_extreme_obs_part(var_name: &str, rows: &[(f64, usize)]) -> Result<SasDataset> {
+    let n = rows.len();
+    let varname_col: Vec<Option<String>> = vec![Some(var_name.to_string()); n];
+    let obs: Vec<Option<f64>> = rows.iter().map(|(_, o)| Some(*o as f64)).collect();
+    let value: Vec<Option<f64>> = rows.iter().map(|(v, _)| Some(*v)).collect();
+
+    let columns: Vec<Column> = vec![
+        Series::new("VarName".into(), varname_col).into(),
+        Series::new("Obs".into(), obs).into(),
+        Series::new("Value".into(), value).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("VarName", 32),
+        num_var_meta("Obs"),
+        num_var_meta("Value"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
+}
+
+/// J08-P3 — tranche typée de la table ODS « TestsForNormality » pour une
+/// variable : colonnes VarName, Test, Stat, pType, pValue (template
+/// Base.Univariate.TestsForNormality) — une ligne par test, pValue en
+/// pleine précision (manquante quand le test n'est pas calculable).
+fn build_normality_part(var_name: &str, tests: &[NormalityTest]) -> Result<SasDataset> {
+    let n = tests.len();
+    let varname_col: Vec<Option<String>> = vec![Some(var_name.to_string()); n];
+    let test: Vec<Option<String>> = tests.iter().map(|t| Some(t.name.to_string())).collect();
+    let stat: Vec<Option<String>> = tests
+        .iter()
+        .map(|t| Some(t.stat_label.to_string()))
+        .collect();
+    let p_type: Vec<Option<String>> = tests
+        .iter()
+        .map(|t| Some(normality_plabel(t.name)))
+        .collect();
+    let p_value: Vec<Option<f64>> = tests.iter().map(|t| t.p).collect();
+
+    let char_len = |vals: &[Option<String>]| {
+        vals.iter()
+            .flatten()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    };
+    let columns: Vec<Column> = vec![
+        Series::new("VarName".into(), varname_col).into(),
+        Series::new("Test".into(), test.clone()).into(),
+        Series::new("Stat".into(), stat.clone()).into(),
+        Series::new("pType".into(), p_type.clone()).into(),
+        Series::new("pValue".into(), p_value).into(),
+    ];
+    let vars = vec![
+        crate::procs::common::char_var_meta("VarName", 32),
+        crate::procs::common::char_var_meta("Test", char_len(&test)),
+        crate::procs::common::char_var_meta("Stat", char_len(&stat)),
+        crate::procs::common::char_var_meta("pType", char_len(&p_type)),
+        num_var_meta("pValue"),
+    ];
+    let df = DataFrame::new(columns)?;
+    Ok(SasDataset { df, vars })
+}
+
+/// J08-P3 — libellé SAS de la colonne pValue de « Tests for Normality »
+/// pour chaque test (`Pr < W`, `Pr > D`, …), identique au listing.
+fn normality_plabel(name: &str) -> String {
+    match name {
+        "Shapiro-Wilk" => "Pr < W",
+        "Kolmogorov-Smirnov" => "Pr > D",
+        "Cramer-von Mises" => "Pr > W-Sq",
+        "Anderson-Darling" => "Pr > A-Sq",
+        _ => "Pr",
+    }
+    .to_string()
+}
 /// Emit the report for a single analysis variable with a WEIGHT variable in
 /// effect. `pairs` are the `(value, effective weight)` pairs (J03-P2 : selon
 /// EXCLNPWGT — voir `partition_weighted_lax`/`partition_weighted_strict` —
@@ -631,23 +784,23 @@ pub(super) fn emit_variable_weighted(
     }
 
     // ── Quantiles (Definition 5, weighted) ── (objet ODS « Quantiles »)
+    let levels: &[(&str, f64)] = &[
+        ("100% Max", 1.0),
+        ("99%", 0.99),
+        ("95%", 0.95),
+        ("90%", 0.90),
+        ("75% Q3", 0.75),
+        ("50% Median", 0.50),
+        ("25% Q1", 0.25),
+        ("10%", 0.10),
+        ("5%", 0.05),
+        ("1%", 0.01),
+        ("0% Min", 0.0),
+    ];
     if show_quantiles {
         section_sep(session, &mut first_section);
         centered(session, "Quantiles (Definition 5)");
         session.listing.blank();
-        let levels: &[(&str, f64)] = &[
-            ("100% Max", 1.0),
-            ("99%", 0.99),
-            ("95%", 0.95),
-            ("90%", 0.90),
-            ("75% Q3", 0.75),
-            ("50% Median", 0.50),
-            ("25% Q1", 0.25),
-            ("10%", 0.10),
-            ("5%", 0.05),
-            ("1%", 0.01),
-            ("0% Min", 0.0),
-        ];
         let q_rows: Vec<Vec<String>> = levels
             .iter()
             .map(|(label, p)| {
@@ -664,18 +817,31 @@ pub(super) fn emit_variable_weighted(
         );
     }
 
+    // J08-P3 — capture ODS OUTPUT « Quantiles » sur le chemin pondéré
+    // (quantiles pondérés, même structure typée VarName/Quantile/Estimate).
+    if session.ods_output_active("Quantiles") {
+        let part = build_quantiles_part(
+            name,
+            &levels
+                .iter()
+                .map(|(label, p)| (*label, weighted_quantile_def5(&sorted_pos, *p)))
+                .collect::<Vec<_>>(),
+        )?;
+        session.append_ods_output("Quantiles", part)?;
+    }
+
     // ── Extreme Observations ── (raw extreme VALUES + obs numbers; extremes
     // are not weighted, matching SAS). Objet ODS « ExtremeObs ».
+    let mut by_val: Vec<(f64, usize)> = obs_pairs.to_vec();
+    by_val.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    });
     if show_extremes {
         section_sep(session, &mut first_section);
         centered(session, "Extreme Observations");
         session.listing.blank();
-        let mut by_val: Vec<(f64, usize)> = obs_pairs.to_vec();
-        by_val.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(Ordering::Equal)
-                .then(a.1.cmp(&b.1))
-        });
         let k = by_val.len().min(5);
         let lowest = &by_val[..k];
         let highest = &by_val[by_val.len().saturating_sub(5)..];
@@ -722,6 +888,16 @@ pub(super) fn emit_variable_weighted(
             &[Align::Left, Align::Right, Align::Right],
             &[vec![".".into(), format!("{n_missing}"), fmt_num(pct)]],
         );
+    }
+
+    // J08-P3 — capture ODS OUTPUT « ExtremeObs » sur le chemin pondéré :
+    // valeurs BRUTES + n° d'obs (les extrêmes ne sont pas pondérés — SAS).
+    if session.ods_output_active("ExtremeObs") {
+        let k = by_val.len().min(5);
+        let mut rows: Vec<(f64, usize)> = by_val[..k].to_vec();
+        rows.extend_from_slice(&by_val[by_val.len().saturating_sub(5)..]);
+        let part = build_extreme_obs_part(name, &rows)?;
+        session.append_ods_output("ExtremeObs", part)?;
     }
 
     Ok(())
