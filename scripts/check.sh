@@ -39,9 +39,12 @@ usage: scripts/check.sh lint|test|build|all
          --features fault-injection --test storage_integrity ;
          --test conformance + conformance_report.py --check ;
          --test properties ; --test differential ;
+         --test e2e (J08-P6) ; coverage-claims (check_coverage_claims.py) ;
          tests unittest du wrapper Python (python/tests)
   build  cargo build --features graphics ; --features s3
-  all    lint, puis test, puis build
+  install cargo install (préfixe jetable) + exemple CLI getting-started
+          (J08-P6, même séquence que le job CI « install »)
+  all    lint, puis test, puis build, puis install
 EOF
     exit 2
 }
@@ -96,6 +99,15 @@ run_test() {
     echo '==> cargo test -p sasrs --test differential'
     cargo test --locked -p sasrs --test differential
     assert_tree_unchanged "$before"
+    # J08-P6 : E2E migration (binaire + façade api) et garde des promesses
+    # « validated » du README contre le corpus conformance.
+    echo '==> cargo test -p sasrs --test e2e'
+    cargo test --locked -p sasrs --test e2e
+    assert_tree_unchanged "$before"
+    echo '==> python3 -B scripts/check_coverage_claims.py --self-test'
+    python3 -B scripts/check_coverage_claims.py --self-test
+    echo '==> python3 -B scripts/check_coverage_claims.py'
+    python3 -B scripts/check_coverage_claims.py
     # J06-P4 : wrapper Python (bibliothèque standard, réseau simulé).
     echo '==> python3 -m unittest discover -s python/tests (wrapper Python)'
     env PYTHONPATH=python/src python3 -B -m unittest discover -s python/tests -v
@@ -108,16 +120,42 @@ run_build() {
     cargo build --locked --features s3
 }
 
+# J08-P6 : installation vierge — même séquence que le job CI « install » :
+# cargo install dans un préfixe jetable, puis l'exemple CLI référencé par
+# docs/getting-started.md (§2 : examples/cli/analysis.sas, exécuté dans un
+# répertoire temporaire pour ne rien écrire dans l'arbre du dépôt).
+run_install() {
+    echo '==> cargo install (préfixe jetable)'
+    cargo install --locked --path . --root "$RUNNER_TEMP/sasrs-install"
+    echo '==> exemple CLI de docs/getting-started.md (examples/cli/analysis.sas)'
+    sandbox="$(mktemp -d)"
+    cp -r examples "$sandbox/examples"
+    mkdir -p "$sandbox/examples/out"
+    (
+        cd "$sandbox/examples"
+        export PATH="$RUNNER_TEMP/sasrs-install/bin:$PATH"
+        sasrs --version
+        sasrs cli/analysis.sas --log run.log --print run.lst
+        test -s out/summary.csv
+        test -s run.log
+    )
+    rm -rf "$sandbox"
+}
+
+RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+
 [ "$#" -eq 1 ] || usage
 MODE="$1"
 case "$MODE" in
 lint) run_lint ;;
 test) run_test ;;
 build) run_build ;;
+install) run_install ;;
 all)
     run_lint
     run_test
     run_build
+    run_install
     ;;
 *) usage ;;
 esac
