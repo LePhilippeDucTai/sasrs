@@ -66,6 +66,11 @@ EXPECTED_JOBS = (
     # J06-P4 : wrapper Python (bibliothèque standard, réseau simulé),
     # matrice 3.9 + dernière, agrégé par ci-ok comme les autres.
     "python",
+    # J08-P6 : installation vierge (cargo install dans un préfixe jetable +
+    # exemple CLI de docs/getting-started.md) et garde de cohérence des
+    # promesses « validated » du README contre le corpus conformance.
+    "install",
+    "coverage-claims",
 )
 
 

@@ -236,11 +236,50 @@ jobs:
             exit 1
           fi
 
+  install:
+    name: installation vierge (cargo install + exemple getting-started)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: cargo install --locked --path . --root "$RUNNER_TEMP/sasrs-install"
+        run: cargo install --locked --path . --root "$RUNNER_TEMP/sasrs-install"
+      # Exemple CLI de docs/getting-started.md (§2 « Premier programme », qui
+      # renvoie à l'analyse complète examples/cli/analysis.sas — le même
+      # exemple que le §1.2 « Depuis les sources : cargo install » du guide).
+      # L'exemple résout ses chemins relatifs sous le dossier du .sas : on le
+      # copie dans un répertoire jetable pour ne rien écrire dans l'arbre.
+      - name: Exemple CLI de docs/getting-started.md (examples/cli/analysis.sas)
+        run: |
+          export PATH="$RUNNER_TEMP/sasrs-install/bin:$PATH"
+          sasrs --version
+          sandbox="$(mktemp -d)"
+          cp -r examples "$sandbox/examples"
+          mkdir -p "$sandbox/examples/out"
+          cd "$sandbox/examples"
+          sasrs cli/analysis.sas --log run.log --print run.lst
+          test -s out/summary.csv
+          test -s run.log
+
+  coverage-claims:
+    name: coverage-claims (README ↔ conformance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: python3 scripts/check_coverage_claims.py
+        run: |
+          python3 -B scripts/check_coverage_claims.py --self-test
+          python3 -B scripts/check_coverage_claims.py
+
   ci-ok:
     name: ci-ok
     needs:
       - fmt
       - python
+      - install
+      - coverage-claims
       - clippy
       - clippy-graphics
       - clippy-s3
