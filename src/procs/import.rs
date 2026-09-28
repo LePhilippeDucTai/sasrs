@@ -17,9 +17,14 @@
 //! - `CSV`  → séparateur virgule (`,`)
 //! - `TAB`  → séparateur tabulation (`\t`)
 //! - `DLM`  → séparateur fourni par `DELIMITER=`/`DLM=` (défaut espace ` `)
+//! - `XLSX` / `EXCEL` → classeur Excel lu via la crate `calamine` (J08-P1) :
+//!   `SHEET=` (nom ou numéro 1-based), `RANGE=` (plage A1 style `A1:C10`,
+//!   éventuellement préfixée `Sheet1$A1:C10`), `GETNAMES=`, `GUESSINGROWS=`
+//!   (fenêtre d'inférence de types), dates Excel sérial → dates SAS 1960
+//!   (format `DATE9.`/`DATETIME20.`).
 //!
 //! ## DBMS différés (erreur propre)
-//! - `XLSX`, `EXCEL` → `SasError::runtime(...)` avec message explicite.
+//! - `XLS` (binaire legacy) → `SasError::runtime(...)` avec message explicite.
 //!
 //! ## GETNAMES
 //! - `YES` (défaut) : la première ligne donne les noms de colonnes.
@@ -60,6 +65,8 @@ pub enum ImportDbms {
     Tab,
     /// DBMS=DLM  → séparateur fourni par `delimiter=` (défaut ` `)
     Dlm,
+    /// DBMS=XLSX / EXCEL → classeur Excel via calamine (J08-P1)
+    Xlsx,
 }
 
 /// AST de PROC IMPORT.
@@ -76,8 +83,12 @@ pub struct ImportAst {
     pub getnames: bool,
     /// Séparateur explicite (DELIMITER=/DLM= dans le corps).
     pub delimiter: Option<u8>,
-    /// `GUESSINGROWS=` (ignoré ; Polars infère sur ses propres heuristiques).
+    /// `GUESSINGROWS=` (XLSX : fenêtre d'inférence des types ; CSV : refusé).
     pub guessingrows: Option<usize>,
+    /// `SHEET=` (XLSX) : nom de feuille ou numéro 1-based.
+    pub sheet: Option<String>,
+    /// `RANGE=` (XLSX) : plage A1 (`A1:C10` ou `Sheet1$A1:C10`).
+    pub range: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +139,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
     // --- Sous-statements jusqu'à run;/quit; ---
     let mut getnames = true;
     let mut delimiter: Option<u8> = None;
-    let guessingrows: Option<usize> = None;
+    let mut guessingrows: Option<usize> = None;
+    let mut sheet: Option<String> = None;
+    let mut range: Option<String> = None;
 
     common::parse_proc_body(ts, "IMPORT", |ts, kw| {
         let kw_tok = ts.peek().clone();
@@ -154,7 +167,52 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
                 delimiter = parse_delimiter_char(&s, kw_tok.span)?;
                 ts.expect_semi()?;
             }
-            "guessingrows" => return Err(common::unsupported_statement("IMPORT", "GUESSINGROWS")),
+            "guessingrows" => {
+                ts.next();
+                expect_eq(ts, "GUESSINGROWS")?;
+                let val_tok = ts.peek().clone();
+                // Honoré pour DBMS=XLSX (fenêtre d'inférence de types) ;
+                // refusé explicitement pour les DBMS texte (Polars infère
+                // seul — contrat §5 : jamais de repli silencieux).
+                if dbms.as_ref() != Some(&ImportDbms::Xlsx) {
+                    return Err(common::unsupported_statement("IMPORT", "GUESSINGROWS"));
+                }
+                let val = common::read_value(ts).ok_or_else(|| {
+                    SasError::parse(
+                        "expected a positive integer or MAX after GUESSINGROWS=",
+                        val_tok.span,
+                    )
+                })?;
+                guessingrows = Some(parse_guessingrows(&val, val_tok.span)?);
+                ts.expect_semi()?;
+            }
+            "sheet" => {
+                ts.next();
+                expect_eq(ts, "SHEET")?;
+                // Nom de feuille ou numéro 1-based (TokenKind::Num accepté).
+                let s = common::read_value(ts).ok_or_else(|| {
+                    SasError::parse("expected a sheet name or number after SHEET=", kw_tok.span)
+                })?;
+                if dbms.as_ref() != Some(&ImportDbms::Xlsx) {
+                    return Err(SasError::runtime(
+                        "PROC IMPORT: SHEET= is only valid with DBMS=XLSX.",
+                    ));
+                }
+                sheet = Some(s);
+                ts.expect_semi()?;
+            }
+            "range" => {
+                ts.next();
+                expect_eq(ts, "RANGE")?;
+                let s = parse_string_or_ident(ts, "RANGE")?;
+                if dbms.as_ref() != Some(&ImportDbms::Xlsx) {
+                    return Err(SasError::runtime(
+                        "PROC IMPORT: RANGE= is only valid with DBMS=XLSX.",
+                    ));
+                }
+                range = Some(s);
+                ts.expect_semi()?;
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -173,7 +231,30 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
         getnames,
         delimiter,
         guessingrows,
+        sheet,
+        range,
     })
+}
+
+/// Parse la valeur de `GUESSINGROWS=` : entier positif ou `MAX` (toutes les
+/// lignes, comportement par défaut de notre lecteur XLSX).
+fn parse_guessingrows(s: &str, span: crate::token::Span) -> Result<usize> {
+    let upper = s.to_ascii_uppercase();
+    if upper == "MAX" {
+        return Ok(usize::MAX);
+    }
+    upper
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            SasError::parse(
+                format!(
+                    "GUESSINGROWS value '{s}' must be a positive integer or MAX (SAS 9.4: 1 to 2147483647)."
+                ),
+                span,
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -182,38 +263,51 @@ pub fn parse(ts: &mut StatementStream) -> Result<ImportAst> {
 
 /// Execute PROC IMPORT. Appelé par `procs::execute_proc`.
 pub fn execute(ast: &ImportAst, session: &mut Session) -> Result<()> {
-    // --- Résoudre le séparateur ---
-    let sep = resolve_separator(ast)?;
-
-    // --- Lire le DataFrame avec Polars (chemin relatif résolu sous base_dir) ---
+    // --- Lire le DataFrame ---
     let path = session.resolve_path(&ast.datafile);
-    let df = CsvReadOptions::default()
-        .with_has_header(ast.getnames)
-        .with_parse_options(CsvParseOptions::default().with_separator(sep))
-        .try_into_reader_with_file_path(Some(path))
-        .map_err(|e| {
-            SasError::runtime(format!(
-                "PROC IMPORT: cannot open '{}': {}",
-                ast.datafile, e
-            ))
-        })?
-        .finish()
-        .map_err(|e| {
-            SasError::runtime(format!(
-                "PROC IMPORT: error reading '{}': {}",
-                ast.datafile, e
-            ))
-        })?;
+    let (df, extra_formats) = match &ast.dbms {
+        ImportDbms::Xlsx => xlsx::read_xlsx(ast, &path)?,
+        ImportDbms::Csv | ImportDbms::Tab | ImportDbms::Dlm => {
+            let sep = resolve_separator(ast)?;
+            let df = CsvReadOptions::default()
+                .with_has_header(ast.getnames)
+                .with_parse_options(CsvParseOptions::default().with_separator(sep))
+                .try_into_reader_with_file_path(Some(path))
+                .map_err(|e| {
+                    SasError::runtime(format!(
+                        "PROC IMPORT: cannot open '{}': {}",
+                        ast.datafile, e
+                    ))
+                })?
+                .finish()
+                .map_err(|e| {
+                    SasError::runtime(format!(
+                        "PROC IMPORT: error reading '{}': {}",
+                        ast.datafile, e
+                    ))
+                })?;
+            (df, Vec::new())
+        }
+    };
 
     // --- Renommer les colonnes si GETNAMES=NO (Polars → VAR1, VAR2, …) ---
-    let df = if !ast.getnames {
+    // XLSX produit déjà les noms VARn (ou les en-têtes sanitises) lui-même.
+    let df = if !ast.getnames && !matches!(ast.dbms, ImportDbms::Xlsx) {
         rename_to_var_n(df)?
     } else {
         df
     };
 
     // --- Coercition vers le modèle de types SAS ---
-    let (ds, notes) = SasDataset::from_dataframe(df)?;
+    let (mut ds, notes) = SasDataset::from_dataframe(df)?;
+    // XLSX : les colonnes dates converties depuis le sérial Excel portent
+    // leur format SAS (DATE9./DATETIME20.) — from_dataframe ne peut pas le
+    // déduire d'un simple Float64.
+    for (idx, fmt) in extra_formats.iter().enumerate() {
+        if let Some(f) = fmt {
+            ds.vars[idx].format = Some(f.clone());
+        }
+    }
     for note in &notes {
         session.log.forward(note);
     }
@@ -244,6 +338,7 @@ pub fn execute(ast: &ImportAst, session: &mut Session) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Résout le séparateur en octet selon DBMS + DELIMITER éventuel.
+/// DBMS=XLSX n'utilise pas de séparateur (appelé uniquement pour CSV/TAB/DLM).
 fn resolve_separator(ast: &ImportAst) -> Result<u8> {
     match &ast.dbms {
         ImportDbms::Csv => Ok(b','),
@@ -252,6 +347,7 @@ fn resolve_separator(ast: &ImportAst) -> Result<u8> {
             // DELIMITER= fourni → l'utiliser ; sinon espace (défaut SAS DLM)
             Ok(ast.delimiter.unwrap_or(b' '))
         }
+        ImportDbms::Xlsx => Ok(b','),
     }
 }
 
@@ -274,16 +370,17 @@ fn rename_to_var_n(mut df: DataFrame) -> Result<DataFrame> {
 }
 
 /// Parse un DBMS par son nom en majuscules ; renvoie une erreur propre pour
-/// les DBMS différés (XLSX/EXCEL).
+/// les DBMS différés (XLS binaire legacy).
 fn parse_dbms(name: &str, span: crate::token::Span) -> Result<ImportDbms> {
     match name {
         "CSV" => Ok(ImportDbms::Csv),
         "TAB" => Ok(ImportDbms::Tab),
         "DLM" | "DLMSTR" => Ok(ImportDbms::Dlm),
-        "XLSX" | "EXCEL" | "XLS" => Err(SasError::runtime(format!(
-            "PROC IMPORT with DBMS={name} is not yet implemented in this build \
-             (the calamine/rust_xlsxwriter crates are not available)."
-        ))),
+        "XLSX" | "EXCEL" => Ok(ImportDbms::Xlsx),
+        "XLS" => Err(SasError::runtime(
+            "PROC IMPORT with DBMS=XLS is not supported in this build \
+             (legacy binary .xls format; use DBMS=XLSX for Excel workbooks).",
+        )),
         other => Err(SasError::parse(
             format!("Unknown DBMS '{other}' for PROC IMPORT."),
             span,
@@ -321,5 +418,10 @@ fn parse_delimiter_char(s: &str, span: crate::token::Span) -> Result<Option<u8>>
 // Tests
 // ---------------------------------------------------------------------------
 
+mod xlsx;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod dbms_xlsx_tests;

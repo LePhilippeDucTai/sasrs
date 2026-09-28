@@ -64,6 +64,7 @@ serde_json = "1"
 chrono = "0.4"
 plotters = { version = "0.3.7", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "svg_backend", "line_series", "point_series", "ttf"], optional = true }
 fancy-regex = "0.19.0"
+calamine = "0.36.1"
 
 [dev-dependencies]
 insta = { version = "1", features = ["glob"] }

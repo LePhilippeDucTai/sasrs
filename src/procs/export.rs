@@ -15,9 +15,15 @@
 //! - `CSV`  → séparateur virgule (`,`)
 //! - `TAB`  → séparateur tabulation (`\t`)
 //! - `DLM`  → séparateur fourni par `DELIMITER=`/`DLM=` (défaut espace ` `)
+//! - `XLSX` → classeur Excel via le writer XLSX pur Rust partagé
+//!   (`src/output/xlsx.rs`, J08-P1) ; `SHEET=` nomme la feuille (défaut : le
+//!   nom du dataset source). Les variables numériques deviennent des cellules
+//!   numériques ; les formats date/datetime/time sont écrits comme dates
+//!   Excel (style `yyyy-mm-dd`) pour un aller-retour IMPORT sans perte ;
+//!   les missings deviennent des cellules vides.
 //!
 //! ## DBMS différés (erreur propre)
-//! - `XLSX`, `EXCEL` → `SasError::runtime(...)` avec message explicite.
+//! - `EXCEL` (legacy) → `SasError::runtime(...)` avec message explicite.
 //!
 //! ## REPLACE
 //! Option flag : si le fichier existe déjà, il est écrasé (comportement
@@ -57,6 +63,8 @@ pub enum ExportDbms {
     Tab,
     /// DBMS=DLM  → séparateur fourni par `delimiter=` (défaut ` `)
     Dlm,
+    /// DBMS=XLSX → classeur Excel (writer partagé `output::xlsx`)
+    Xlsx,
 }
 
 /// AST de PROC EXPORT.
@@ -71,6 +79,8 @@ pub struct ExportAst {
     pub replace: bool,
     /// Séparateur explicite (`DELIMITER=`/`DLM=` dans le corps).
     pub delimiter: Option<u8>,
+    /// `SHEET=` (XLSX uniquement) : nom de la feuille de sortie.
+    pub sheet: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +130,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
 
     // --- Sous-statements jusqu'à run;/quit; ---
     let mut delimiter: Option<u8> = None;
+    let mut sheet: Option<String> = None;
 
     common::parse_proc_body(ts, "EXPORT", |ts, kw| {
         let kw_tok = ts.peek().clone();
@@ -129,6 +140,23 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
                 expect_eq(ts, "DELIMITER")?;
                 let s = parse_string_or_ident(ts, "DELIMITER")?;
                 delimiter = parse_delimiter_char(&s, kw_tok.span)?;
+                ts.expect_semi()?;
+            }
+            "sheet" => {
+                ts.next();
+                expect_eq(ts, "SHEET")?;
+                let s = parse_string_or_ident(ts, "SHEET")?;
+                if dbms.as_ref() != Some(&ExportDbms::Xlsx) {
+                    return Err(SasError::runtime(
+                        "PROC EXPORT: SHEET= is only valid with DBMS=XLSX.",
+                    ));
+                }
+                if s.is_empty() {
+                    return Err(SasError::runtime(
+                        "PROC EXPORT: SHEET= must not be an empty sheet name.",
+                    ));
+                }
+                sheet = Some(s);
                 ts.expect_semi()?;
             }
             _ => return Ok(false),
@@ -145,6 +173,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ExportAst> {
         dbms,
         replace,
         delimiter,
+        sheet,
     })
 }
 
@@ -159,23 +188,27 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
 
     let n_obs = ds.n_obs();
 
-    // --- Résoudre le séparateur ---
-    let sep = resolve_separator(ast);
-
-    // --- Écrire le fichier CSV (chemin relatif résolu sous base_dir) ---
+    // --- Écrire le fichier (chemin relatif résolu sous base_dir) ---
     let out_path = session.resolve_path(&ast.outfile);
-    let mut file = File::create(&out_path).map_err(|e| {
-        SasError::runtime(format!("PROC EXPORT: cannot create '{}': {e}", ast.outfile))
-    })?;
 
-    let mut df_clone = ds.df.clone();
-    CsvWriter::new(&mut file)
-        .include_header(true)
-        .with_separator(sep)
-        .finish(&mut df_clone)
-        .map_err(|e| {
-            SasError::runtime(format!("PROC EXPORT: error writing '{}': {e}", ast.outfile))
-        })?;
+    match &ast.dbms {
+        ExportDbms::Xlsx => execute_xlsx(ast, &ds, &out_path)?,
+        ExportDbms::Csv | ExportDbms::Tab | ExportDbms::Dlm => {
+            let sep = resolve_separator(ast);
+            let mut file = File::create(&out_path).map_err(|e| {
+                SasError::runtime(format!("PROC EXPORT: cannot create '{}': {e}", ast.outfile))
+            })?;
+
+            let mut df_clone = ds.df.clone();
+            CsvWriter::new(&mut file)
+                .include_header(true)
+                .with_separator(sep)
+                .finish(&mut df_clone)
+                .map_err(|e| {
+                    SasError::runtime(format!("PROC EXPORT: error writing '{}': {e}", ast.outfile))
+                })?;
+        }
+    }
 
     // --- NOTE de fin ---
     session.log.note(&format!(
@@ -187,15 +220,170 @@ pub fn execute(ast: &ExportAst, session: &mut Session) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// DBMS=XLSX (J08-P1) — writer XLSX partagé (src/output/xlsx.rs)
+// ---------------------------------------------------------------------------
+
+/// Nom de famille d'un format SAS : préfixe alphabétique du nom, la largeur
+/// et les décimales retirées (`DATE9.` → `DATE`, `DATETIME20.` → `DATETIME`).
+fn format_family(fmt: &str) -> String {
+    fmt.to_ascii_uppercase()
+        .chars()
+        .take_while(|c| !c.is_ascii_digit())
+        .collect()
+}
+
+/// Familles de formats dont la valeur numérique SAS est une DATE (jours
+/// depuis 1960) — écrites comme dates Excel stylées.
+fn is_date_format(fmt: &str) -> bool {
+    let name = format_family(fmt);
+    matches!(
+        name.as_str(),
+        "DATE"
+            | "DATEAMPM"
+            | "YYMMDD"
+            | "YYMMDDD"
+            | "YYMMDDN"
+            | "YYMMDDS"
+            | "YYMMDDP"
+            | "YYMMDDC"
+            | "MMDDYY"
+            | "MMDDYYD"
+            | "MMDDYYN"
+            | "MMDDYYS"
+            | "MMDDYYP"
+            | "MMDDYYC"
+            | "DDMMYY"
+            | "DDMMYYD"
+            | "DDMMYYN"
+            | "DDMMYYS"
+            | "DDMMYYP"
+            | "DDMMYYC"
+            | "YYQ"
+            | "YYMON"
+            | "MONYY"
+            | "WEEKDATE"
+            | "WORDDATE"
+            | "NENGO"
+            | "EURDFDE"
+            | "MINGUO"
+            | "JULDAY"
+            | "JULIAN"
+            | "DOWNAME"
+            | "WEEKDATX"
+            | "WORDDATX"
+    )
+}
+
+/// Familles de formats dont la valeur numérique SAS est un DATETIME (secondes
+/// depuis 1960-01-01 00:00:00).
+fn is_datetime_format(fmt: &str) -> bool {
+    let name = format_family(fmt);
+    matches!(
+        name.as_str(),
+        "DATETIME" | "DTDATE" | "DTMONYY" | "DTYYQC" | "E8601DT" | "B8601DT"
+    )
+}
+
+/// Écrit le classeur XLSX via le writer partagé : une feuille (SHEET= ou le
+/// nom du dataset), en-têtes = noms de variables, cellules typées (numériques
+/// pour les numériques, dates stylées selon le format SAS, chaînes sinon,
+/// cellules vides pour les missings).
+fn execute_xlsx(
+    ast: &ExportAst,
+    ds: &crate::dataset::SasDataset,
+    out_path: &std::path::Path,
+) -> Result<()> {
+    use crate::output::xlsx::{
+        XlsxCell, XlsxSheet, sas_days_to_excel_serial, sas_seconds_to_excel_serial,
+    };
+
+    let sheet_name = ast.sheet.clone().unwrap_or_else(|| {
+        ast.data
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_default()
+    });
+    if sheet_name.is_empty() {
+        return Err(SasError::runtime(
+            "PROC EXPORT DBMS=XLSX: cannot derive a sheet name (no DATA= and no SHEET=).",
+        ));
+    }
+    // SAS limite les noms de feuilles à 31 caractères.
+    let sheet_name = sanitize_sheet_name(&sheet_name);
+
+    let headers: Vec<String> = ds.vars.iter().map(|v| v.name.clone()).collect();
+
+    let mut rows: Vec<Vec<Option<XlsxCell>>> = Vec::with_capacity(ds.df.height());
+    for row_idx in 0..ds.df.height() {
+        let mut row: Vec<Option<XlsxCell>> = Vec::with_capacity(ds.vars.len());
+        for v in ds.vars.iter() {
+            let cell = if v.ty == crate::value::VarType::Char {
+                ds.df
+                    .column(&v.name)
+                    .ok()
+                    .and_then(|c| c.as_materialized_series().str().ok())
+                    .and_then(|ca| ca.get(row_idx))
+                    .map(|s| XlsxCell::Str(s.to_string()))
+            } else {
+                ds.df
+                    .column(&v.name)
+                    .ok()
+                    .and_then(|c| c.as_materialized_series().f64().ok())
+                    .and_then(|ca| ca.get(row_idx))
+                    .map(|value| match v.format.as_deref() {
+                        Some(f) if is_date_format(f) => {
+                            XlsxCell::Date(sas_days_to_excel_serial(value))
+                        }
+                        Some(f) if is_datetime_format(f) => {
+                            XlsxCell::Date(sas_seconds_to_excel_serial(value))
+                        }
+                        // Les autres formats (dont TIME.) restent des nombres
+                        // bruts : la VALEUR survit au round-trip, pas le style.
+                        _ => XlsxCell::Num(value),
+                    })
+            };
+            row.push(cell);
+        }
+        rows.push(row);
+    }
+
+    let sheet = XlsxSheet {
+        name: sheet_name,
+        headers,
+        rows,
+    };
+    let bytes = crate::output::xlsx::xlsx_build_typed(&[sheet]);
+    std::fs::write(out_path, &bytes).map_err(|e| {
+        SasError::runtime(format!("PROC EXPORT: cannot create '{}': {e}", ast.outfile))
+    })?;
+    Ok(())
+}
+
+/// Nettoie un nom de feuille Excel : caractères interdits (`[ ] : * ? / \`)
+/// remplacés, troncature à 31 caractères (limite Excel/SAS).
+fn sanitize_sheet_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '[' | ']' | ':' | '*' | '?' | '/' | '\\' => '_',
+            other => other,
+        })
+        .collect();
+    cleaned.chars().take(31).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Helpers internes
 // ---------------------------------------------------------------------------
 
 /// Résout le séparateur en octet selon DBMS + DELIMITER éventuel.
+/// DBMS=XLSX n'utilise pas de séparateur (appelé uniquement pour CSV/TAB/DLM).
 fn resolve_separator(ast: &ExportAst) -> u8 {
     match &ast.dbms {
         ExportDbms::Csv => b',',
         ExportDbms::Tab => b'\t',
         ExportDbms::Dlm => ast.delimiter.unwrap_or(b' '),
+        ExportDbms::Xlsx => b',',
     }
 }
 
@@ -206,9 +394,10 @@ fn parse_dbms(name: &str, span: crate::token::Span) -> Result<ExportDbms> {
         "CSV" => Ok(ExportDbms::Csv),
         "TAB" => Ok(ExportDbms::Tab),
         "DLM" | "DLMSTR" => Ok(ExportDbms::Dlm),
-        "XLSX" | "EXCEL" | "XLS" => Err(SasError::runtime(format!(
-            "PROC EXPORT with DBMS={name} is not yet implemented in this build \
-             (the calamine/rust_xlsxwriter crates are not available)."
+        "XLSX" => Ok(ExportDbms::Xlsx),
+        "EXCEL" | "XLS" => Err(SasError::runtime(format!(
+            "PROC EXPORT with DBMS={name} is not supported in this build \
+             (legacy binary .xls formats; use DBMS=XLSX for Excel workbooks)."
         ))),
         other => Err(SasError::parse(
             format!("Unknown DBMS '{other}' for PROC EXPORT."),

@@ -82,23 +82,59 @@ fn parse_import_missing_out_errors() {
 }
 
 #[test]
-fn parse_import_xlsx_deferred_error() {
-    let result = parse_import_src("proc import datafile='x.xlsx' out=work.t dbms=xlsx; run;");
-    assert!(result.is_err());
-    let msg = result.err().unwrap().to_string();
-    assert!(
-        msg.contains("not yet implemented"),
-        "expected deferral message, got: {msg}"
-    );
-    assert!(msg.contains("XLSX"), "msg: {msg}");
+fn parse_import_xlsx_ok() {
+    let ast = parse_import_src(
+        "proc import datafile='x.xlsx' out=work.t dbms=xlsx replace; sheet='Data'; range='A1:C10'; getnames=yes; run;",
+    )
+    .unwrap();
+    assert_eq!(ast.dbms, ImportDbms::Xlsx);
+    assert!(ast.replace);
+    assert_eq!(ast.sheet.as_deref(), Some("Data"));
+    assert_eq!(ast.range.as_deref(), Some("A1:C10"));
+    assert!(ast.getnames);
 }
 
 #[test]
-fn parse_import_excel_deferred_error() {
-    let result = parse_import_src("proc import datafile='x.xlsx' out=work.t dbms=excel; run;");
+fn parse_import_excel_alias_ok() {
+    let ast =
+        parse_import_src("proc import datafile='x.xlsx' out=work.t dbms=excel; run;").unwrap();
+    assert_eq!(ast.dbms, ImportDbms::Xlsx);
+}
+
+#[test]
+fn parse_import_xls_legacy_still_error() {
+    let result = parse_import_src("proc import datafile='x.xls' out=work.t dbms=xls; run;");
     assert!(result.is_err());
     let msg = result.err().unwrap().to_string();
-    assert!(msg.contains("not yet implemented"), "msg: {msg}");
+    assert!(msg.contains("not supported"), "msg: {msg}");
+}
+
+#[test]
+fn parse_import_guessingrows_xlsx_ok() {
+    let ast = parse_import_src(
+        "proc import datafile='x.xlsx' out=work.t dbms=xlsx; guessingrows=100; run;",
+    )
+    .unwrap();
+    assert_eq!(ast.guessingrows, Some(100));
+}
+
+#[test]
+fn parse_import_guessingrows_max_ok() {
+    let ast = parse_import_src(
+        "proc import datafile='x.xlsx' out=work.t dbms=xlsx; guessingrows=MAX; run;",
+    )
+    .unwrap();
+    assert_eq!(ast.guessingrows, Some(usize::MAX));
+}
+
+#[test]
+fn parse_import_guessingrows_invalid_errors() {
+    let result = parse_import_src(
+        "proc import datafile='x.xlsx' out=work.t dbms=xlsx; guessingrows=abc; run;",
+    );
+    assert!(result.is_err());
+    let msg = result.err().unwrap().to_string();
+    assert!(msg.contains("GUESSINGROWS"), "msg: {msg}");
 }
 
 // --- Tests d'exécution ---
@@ -129,6 +165,8 @@ fn execute_import_csv_basic() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -168,6 +206,8 @@ fn execute_import_csv_values_correct() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -211,6 +251,8 @@ fn execute_import_tab_separated() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -245,6 +287,8 @@ fn execute_import_dlm_pipe() {
         getnames: true,
         delimiter: Some(b'|'),
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -279,6 +323,8 @@ fn execute_import_getnames_no_produces_var_n() {
         getnames: false,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -316,6 +362,8 @@ fn execute_import_sets_last_dataset() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     execute(&ast, &mut session).unwrap();
     assert_eq!(session.last_dataset.as_deref(), Some("WORK.LAST"));
@@ -335,6 +383,8 @@ fn execute_import_nonexistent_file_errors() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     let result = execute(&ast, &mut session);
     assert!(result.is_err());
@@ -355,6 +405,8 @@ fn resolve_separator_csv() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     assert_eq!(resolve_separator(&ast).unwrap(), b',');
 }
@@ -372,6 +424,8 @@ fn resolve_separator_tab() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     assert_eq!(resolve_separator(&ast).unwrap(), b'\t');
 }
@@ -389,6 +443,8 @@ fn resolve_separator_dlm_default_space() {
         getnames: true,
         delimiter: None,
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     assert_eq!(resolve_separator(&ast).unwrap(), b' ');
 }
@@ -406,6 +462,8 @@ fn resolve_separator_dlm_with_delimiter() {
         getnames: true,
         delimiter: Some(b';'),
         guessingrows: None,
+        sheet: None,
+        range: None,
     };
     assert_eq!(resolve_separator(&ast).unwrap(), b';');
 }
