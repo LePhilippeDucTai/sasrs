@@ -1,353 +1,491 @@
+<div align="center">
+
 # sasrs
 
-A SAS 9.4 language interpreter built in Rust on top of [Polars](https://pola.rs/).
+**A SAS 9.4-style language interpreter written in Rust, powered by Polars.**
 
-`sasrs` reads a classic SAS program (DATA steps, PROC steps, the macro language)
-and executes it in batch, writing a SAS-style **log** and **listing**. Datasets
-are backed by Parquet tables via Polars.
+Run classic SAS batch programs with DATA steps, PROC steps, macros, SQL and ODS — while storing datasets as open Parquet files and exposing the engine through a Rust API.
 
-> Status: work in progress. The interpreter covers a large subset of SAS 9.4
-> (DATA step, PROC SQL, the macro processor, many base/stat procedures, and ODS
-> HTML/RTF/PDF/Excel output). The active roadmap is the consolidation plan in
-> [`docs/plans/consolidation/`](docs/plans/consolidation/) — reliability of results
-> and diagnostics, storage integrity, independent validation, then high-value SAS
-> compatibility. The former milestone roadmap (`PLAN.md`, `PROGRESS.md`) is frozen;
-> see `PLAN.md` § “Correspondance M46–M66 → consolidation” for where the remaining
-> milestones went.
->
-> New here? Start with the walkthrough in
-> [`docs/getting-started.md`](docs/getting-started.md): install from a blank
-> machine, run a first program, read back a table, and interpret diagnostics
-> and exit codes.
+[![CI](https://github.com/LePhilippeDucTai/sasrs/actions/workflows/ci.yml/badge.svg)](https://github.com/LePhilippeDucTai/sasrs/actions/workflows/ci.yml)
+![Rust 2024](https://img.shields.io/badge/Rust-2024-000000?logo=rust)
+![Polars](https://img.shields.io/badge/engine-Polars-0075FF)
+![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 
-## Installation
+[Getting started](docs/getting-started.md) · [Examples](examples/) · [Conformance status](conformance/STATUS.md) · [Support contract](docs/support-contract.md) · [Contributing](CONTRIBUTING.md)
 
-Three real paths, depending on what the target machine has — see
-[`docs/getting-started.md`](docs/getting-started.md) for the detailed,
-verified steps.
+</div>
 
-**Release binary (no toolchain).** Each tag `v<version>` publishes
-precompiled binaries on
-[GitHub Releases](https://github.com/LePhilippeDucTai/sasrs/releases):
-`sasrs-linux-x86_64.tar.gz`, `sasrs-windows-x86_64.exe` and
-`sasrs-macos-arm64.tar.gz`, with a `SHA256SUMS` asset to verify them.
-Assets are immutable (never replaced; a broken release is fixed by a new
-tag) — see [`docs/release.md`](docs/release.md).
+> [!IMPORTANT]
+> **sasrs is a work in progress, not yet a drop-in replacement for SAS 9.4.**
+> The project intentionally distinguishes implemented behavior, externally validated behavior, documented approximations and unsupported features. If an unsupported behavior could change a result, sasrs is designed to report it explicitly instead of silently falling back.
 
-**From source, with Rust:**
+## Why sasrs?
+
+sasrs is aimed at teams and developers who want to execute familiar SAS-style programs while keeping the runtime, storage and integration layer open.
+
+| | What you get |
+| --- | --- |
+| 🦀 **Native Rust engine** | A standalone interpreter with no proprietary SAS runtime dependency. |
+| ⚡ **Polars execution** | Columnar execution and Parquet-backed datasets. |
+| 🧾 **Familiar SAS workflow** | DATA steps, PROC steps, macro language, PROC SQL, formats, ODS and SAS-style logs/listings. |
+| 📦 **Open storage** | WORK and assigned libraries use Parquet plus a small SAS metadata sidecar. |
+| 🔎 **Explicit diagnostics** | NOTE / WARNING / ERROR diagnostics and meaningful process exit codes. |
+| 🧩 **Embeddable API** | Use the same execution engine directly from Rust through `sasrs::api`. |
+| 🧪 **Reproducible execution** | Deterministic mode, snapshot tests, differential tests and a conformance corpus. |
+
+---
+
+## 5-minute quick start
+
+### 1. Install
+
+#### From a release binary
+
+Tagged releases publish precompiled binaries for:
+
+- Linux x86_64
+- Windows x86_64
+- macOS Apple Silicon
+
+See [GitHub Releases](https://github.com/LePhilippeDucTai/sasrs/releases) and verify the matching `SHA256SUMS` asset before execution.
+
+#### From source
 
 ```sh
+git clone https://github.com/LePhilippeDucTai/sasrs.git
+cd sasrs
 cargo install --path .
 ```
 
-This installs the `sasrs` binary into `~/.cargo/bin`.
+This installs the `sasrs` executable into `~/.cargo/bin`.
 
-**Without Rust (Windows x86_64, via Python).** The `python/` subdirectory of
-this repo packages a thin Python wrapper (standard library only) that
-downloads the **precompiled Windows x86_64 binary** from a
-[GitHub Release](https://github.com/LePhilippeDucTai/sasrs/releases) on
-first run, verifies its SHA-256, caches it locally, and execs it (no Rust
-toolchain needed, but it does need network access to `github.com`). Run it
-directly with [uv](https://docs.astral.sh/uv/):
+### 2. Write a first SAS program
 
-```sh
-uvx --from "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python" sasrs program.sas
+Create `hello.sas`:
+
+```sas
+data work.people;
+  length name $16;
+  input name $ age;
+  datalines;
+Alice 32
+Bob 45
+Carol 28
+;
+run;
+
+proc print data=work.people;
+run;
 ```
 
-Or install it into a project/environment:
+### 3. Run it
 
 ```sh
-uv add "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python"
+sasrs hello.sas
 ```
 
-Any failure (no network, bad digest, unsupported platform) prints a clear
-message on stderr and exits with code 1 — never a traceback. Currently only
-a Windows x86_64 binary is published; other platforms use the release
-binary or `cargo install` instead.
+By default:
 
-## Usage
+- the **SAS-style log** is written to stderr;
+- the **listing** is written to stdout;
+- WORK lives in a temporary directory and is removed when the process exits.
+
+The listing contains the three observations:
+
+```text
+Alice    32
+Bob      45
+Carol    28
+```
+
+A clean run exits with code `0`.
+
+To persist the log, listing and WORK library:
 
 ```sh
-sasrs program.sas
+sasrs hello.sas \
+  --log hello.log \
+  --print hello.lst \
+  --work ./work
 ```
 
-By default the log is written to stderr and the listing to stdout, mirroring a
-SAS batch run.
+The persisted WORK directory then contains files such as:
 
-| Option            | Description                                                        |
-| ----------------- | ------------------------------------------------------------------ |
-| `--log <FILE>`    | Write the log to a file instead of stderr.                         |
-| `--print <FILE>`  | Write the listing to a file instead of stdout.                     |
-| `--work <DIR>`    | WORK library directory (default: a temporary dir, dropped on exit).|
-| `--deterministic` | Deterministic output (frozen timestamps) — used by snapshot tests. |
-| `--vectorize`     | Enable the optional vectorized fast path for simple DATA steps.    |
+```text
+people.parquet
+people.parquet.sasmeta.json
+```
 
-Example:
+---
+
+## Common workflows
+
+### 1. Import CSV → aggregate with PROC SQL → export
+
+The repository contains a tested end-to-end example:
 
 ```sh
-sasrs analysis.sas --log analysis.log --print analysis.lst
+mkdir -p examples/out
+sasrs examples/cli/analysis.sas
 ```
 
-## Exit codes
+The program imports `examples/data/patients.csv`, groups patients by sex with PROC SQL, exports the result and prints it.
 
-| Code | Meaning |
-| :--: | --- |
-| `0` | Run completed with no ERROR and no WARNING in the log. |
-| `1` | Run completed, but at least one WARNING was logged (e.g. a recognized-but-deferred display option, non-convergence of an iterative fit). A requested exit code (`%ABORT RETURN n`) is raised to 1 when errors were counted. |
-| `2` | At least one ERROR: an unreadable program file, a rejected step (unsupported statement/option that could change results, unknown statement `180-322`, rank-deficient design), or an **output write failure** (`--log`/`--print`/stdout/stderr cannot be written — the buffered output is re-emitted to stderr when a requested file fails). |
+The input is:
 
-The severity rule behind these codes — ERROR for anything that could change a
-result, WARNING for display-only limitations, never a silent fallback — is the
-support contract described in [`docs/support-contract.md`](docs/support-contract.md).
+```csv
+Name,Sex,Age,Weight
+Alice,F,32,55.5
+Bob,M,45,80.0
+Carol,F,28,61.2
+Dan,M,51,92.4
+Edith,F,39,66.7
+```
 
-## Feature coverage
+Core SAS code:
 
-The tables below summarise what the interpreter supports today, down to the
-individual options of each procedure and DATA step statement. Legend:
+```sas
+proc import datafile='../data/patients.csv'
+  out=work.patients
+  dbms=csv
+  replace;
+  getnames=yes;
+run;
 
-- ✅ — covered
-- 🟡 — partial (a documented subset of options, or simplifications vs SAS 9.4)
-- 🔴 — recognised but **not supported**: using it produces an explicit diagnostic
-  (ERROR/WARNING), never a silent no-op
+proc sql;
+  create table work.summary as
+  select Sex,
+         count(*) as n_patients,
+         mean(Age) as mean_age
+  from work.patients
+  group by Sex;
+quit;
 
-The four coverage states behind these marks — *implemented* · *validated against a
-reference* · *documented approximation* · *not supported* — are defined in
-[`CONTRIBUTING.md`](CONTRIBUTING.md). Every *validated* claim is backed by a
-concrete conformance case; the live inventory of validated cases and known
-divergences is generated from the corpus in
-[`conformance/STATUS.md`](conformance/STATUS.md). The binding is enforced:
-[`scripts/check_coverage_claims.py`](scripts/check_coverage_claims.py) (a CI
-job, aggregated by `ci-ok`) fails if any « validated cases » promise in this
-README loses its backing validated case in the corpus.
+proc export data=work.summary
+  outfile='../out/summary.csv'
+  dbms=csv
+  replace;
+run;
+```
 
-### Procedures (PROC)
+Expected `summary.csv`:
 
-| PROC | State | Covered statements & options | Not covered / deferred |
-| --- | :---: | --- | --- |
-| `PRINT` | ✅ | `DATA=`, `NOOBS`, `LABEL`, `DOUBLE`, `N`; `VAR`, `BY` (per-group sections, sorted input), `ID` (replaces `Obs`), `SUM` (per-`BY`-group subtotals + grand total) | `WHERE`, `SUMBY`, `PAGEBY`, style options |
-| `SORT` | ✅ | `DATA=`, `OUT=`, `NODUPKEY`, `NODUPRECS`/`NODUP`, `TAGSORT` (no-op hint), `SORTSEQ=ASCII\|LINGUISTIC` (LINGUISTIC falls back to `sas_cmp` binary order); `BY [DESCENDING]`, `KEY=var [/ DESCENDING]` | — |
-| `CONTENTS` | ✅ | `DATA=`, `VARNUM`, `DATA=lib._ALL_`, `OUT=` (one row/variable: `NAME`/`TYPE` 1=num 2=char/`LENGTH`/`VARNUM`/`LABEL`/`FORMAT`/`INFORMAT`/`INFORML`/`INFORMD`), `SHORT` (flat name list), `DETAILS`/`NODETAILS` (obs/var header lines) | physical file-size/page details, ODS output object |
-| `MEANS` / `SUMMARY` | ✅ | `DATA=`, `NOPRINT`, `PRINTALLTYPES`, stat keywords (`N NMISS MEAN STD MIN MAX SUM RANGE STDERR CV MEDIAN CLM LCLM UCLM` + percentiles `P1 P5 P10 P20 P25 P30 P40 P50 P60 P70 P75 P80 P90 P95 P99 Q1 Q3 QRANGE`, Definition 5); `CLASS`, `VAR`, `BY`, `WEIGHT`, `WAYS`, `TYPES`, `OUTPUT OUT= stat(var)=name` (with `AUTONAME`/`AUTOLABEL`-style naming, `MAXDEC=`); `CLASS / MISSING` (missing levels included), `NWAY` (only the maximal `_TYPE_` in `OUT=`), `ORDER=FREQ` (descending frequencies), `FREQ` (weights N and STD), `ID` copied to `OUT=` — the missing-level/NWAY/ORDER=FREQ/FREQ/ID/AUTONAME/MAXDEC= behaviors are backed by the corpus (validated cases `compat/means/*`, see [`conformance/STATUS.md`](conformance/STATUS.md)) | multi-label formats, and the `EXCLNPWGT` option (UNIVARIATE-only; MEANS/SUMMARY always applies the strict exclusion below). Under `WEIGHT` (per the SAS documentation; not yet backed by a dedicated conformance case — see [`conformance/STATUS.md`](conformance/STATUS.md)): strict SAS partition — an observation whose weight is missing or ≤ 0 is excluded from both N and NMiss (x missing with a valid weight counts in NMiss); `VARDEF=` is honored (DF → Σw−1, WEIGHT → Σw−Σw²/Σw); the statistics — including `MEDIAN` and the percentiles (`P1`…`P99`, `Q1`, `Q3`, `QRANGE`, weighted Definition 5, position by cumulative weight), `CLM`/`STDERR`/`CV` — are **weighted**, in the listing and in `OUTPUT OUT= stat(var)=name` alike; an uncomputable OUTPUT statistic is an ERROR rather than a silent missing column |
-| `TRANSPOSE` | ✅ | `DATA=`, `OUT=`, `PREFIX=`, `NAME=`; `BY`, `ID` (multi-variable `ID` with `DELIMITER=`, `LET` keeps the last occurrence of duplicated `ID` values), `IDLABEL` (+ `LABEL=`), `VAR`; `COPY` (one output observation per input observation, completed with missings), `SUFFIX=` (validated cases `compat/transpose/*`, see [`conformance/STATUS.md`](conformance/STATUS.md)) | — |
-| `APPEND` | ✅ | `BASE=`, `DATA=`, `FORCE`, `NOWARN` (suppresses FORCE structural-diff warnings), `APPENDVER=Vn` (no-op hint) | — |
-| `RANK` | ✅ | `DATA=`, `OUT=`, `DESCENDING`, `TIES=(MEAN\|LOW\|HIGH\|DENSE)`, `GROUPS=`, methods `FRACTION`/`NPLUS1`/`PERCENT`/`NORMAL=(BLOM\|TUKEY\|VW)`/`SAVAGE`; `VAR`, `RANKS`, `BY` | — |
-| `CORR` | ✅ | `DATA=`, `NOSIMPLE`, `NOPROB`, `NOCORR`, `PEARSON`, `SPEARMAN`, `KENDALL`, `HOEFFDING` (D exact ≡ SAS ; `Prob > D` = approximation asymptotique Blum-Kiefer-Rosenblatt/Imhof, n≥5), `OUT=`/`OUTP=`/`OUTS=`/`OUTK=`; `VAR`, `WITH`, `WEIGHT` (Pearson, Spearman & Kendall — rangs moyens pondérés ; paires Kendall pondérées par wᵢ·wⱼ ; ≡ méthode ordinaire sur données répliquées), `PARTIAL` (Pearson partial correlation, df = n−k−2, residual/least-squares method), `BY` (sorted input — one Simple Statistics block + correlation matrix per BY group with the SAS-style group heading; `OUTP=`/`OUTS=`/`OUTK=` rows carry the BY variables) | partial Spearman/Kendall ; `Prob > D` tabulée exacte pour petit n |
-| `COMPARE` | ✅ | `BASE=`, `COMPARE=`, `OUT=`, `NOVALUES`, `BRIEFSUMMARY`; `ID`, `VAR`/`WITH`; `OUTBASE=`/`OUTCOMP=`/`OUTDIF=`/`OUTNOEQUAL=` (`_TYPE_` = BASE/COMP/DIF, `_OBS_` row id), `CRITERION=` (with `METHOD=ABSOLUTE\|RELATIVE` and `OUT=`/`OUTDIF=` writing only pairs judged unequal), `BY` (validated cases `compat/compare/*`, see [`conformance/STATUS.md`](conformance/STATUS.md)) | `BRIEF`, `LISTALL`, `OUTPERCENT=`, `MAXPRINT=` and unknown options are **ERRORs** (they could change the comparison) |
-| `IMPORT` | ✅ | `DATAFILE=`/`FILENAME=`, `OUT=`, `DBMS=(CSV\|TAB\|DLM\|XLSX\|EXCEL)`, `REPLACE`; `GETNAMES=`, `DELIMITER=`/`DLM=`; `DBMS=XLSX`/`EXCEL` — `SHEET=` (name or 1-based number), `RANGE=` (A1-style `A1:C10`, optionally prefixed `Sheet1$A1:C10`), `GETNAMES=NO` (`VAR1`…`VARn`), `GUESSINGROWS=` type-inference window, Excel serial dates → SAS 1960 dates (`DATE9.`/`DATETIME20.`) | named Excel ranges (an explicit **ERROR**, never a silent fallback) |
-| `EXPORT` | ✅ | `DATA=`, `OUTFILE=`, `DBMS=(CSV\|TAB\|DLM\|XLSX)`, `REPLACE`; `DELIMITER=`/`DLM=`; `DBMS=XLSX` — `SHEET=` names the sheet (default: the source dataset name), numerics as numeric cells, date/datetime/time formats written as Excel dates (`yyyy-mm-dd`) for a lossless IMPORT round-trip, missings as empty cells | `DBMS=EXCEL` (legacy) is an explicit **ERROR** |
-| `SQL` | ✅ | see [PROC SQL](#proc-sql) below | — |
-| `FORMAT` | 🟡 | `VALUE` (`$`/numeric, ranges `a-b`, `low-<b`, `a<-high`, value lists, `OTHER`; `MIN=`/`MAX=`/`DEFAULT=` output width control, `FUZZ=` numeric boundary tolerance — format-level options, pragmatic non-parenthesized-or-parenthesized syntax), `INVALUE` (user informats), `PICTURE` (`PREFIX=`/`MULT=`/`FILL=`); `LIB=`/`LIBRARY=libref` persistent catalogs (JSON sidecar `formats.sascat.json` in the libref directory, saved after the proc, loaded at `LIBNAME`; WORK stays in-memory; resolution: WORK first, then librefs in assignment order); `CNTLOUT=` (control dataset `FMTNAME`/`START`/`END`/`LABEL`/`TYPE`/`SEXCL`/`EEXCL`/`HLO` + `MIN`/`MAX`/`DEFAULT`/`FUZZ` when used, deterministic order) and `CNTLIN=` (rebuild from control dataset, applied before same-step `VALUE`/`INVALUE`, composes with `LIB=`) with exact round-trip; `FMTLIB` (catalog listing: name/type/length header + START/END/LABEL ranges, `LOW`/`HIGH`/`OTHER`, exclusive-bound marker); `FMTSEARCH=` honored (WORK/LIBRARY implicitly first unless explicitly positioned, resolution rebuilt on `OPTIONS`/`LIBNAME`/`PROC FORMAT`) | two-level `LIBRARY=libref.catalog`, `PICTURE` in `CNTLIN=`/`CNTLOUT=` (TYPE=P noted & skipped), `MULTILABEL`, `LENGTH=` in `CNTLIN=`/`CNTLOUT=` |
-| `FREQ` | 🟡 | `DATA=`; `TABLES` one-way, two-way (`v1*v2`) & n-way (`v1*v2*…`, stratified two-way of the last two vars) with `/MISSING /OUT= /NOPERCENT /NOROW /NOCOL /NOFREQ /NOCUM /LIST /CHISQ /FISHER` (exact for 2×2 and general r×c via Freeman-Halton full enumeration, capped at 500,000 tables) `/MEASURES /AGREE /TREND`; `WEIGHT` (sum of weights into frequencies & CHISQ), `BY`; `ODS OUTPUT OneWayFreqs` | Fisher on r×c tables past the 500,000-table enumeration cap falls back to a deterministic Monte Carlo estimate (fixed seed, 10,000 samples, explicitly labeled in the listing) instead of an exact p-value |
-| `UNIVARIATE` | ✅ | `DATA=`, `NOPRINT`, `NORMAL`/`NORMALTEST`; `VAR` (`/ normal`), `WEIGHT`, `EXCLNPWGT`, `VARDEF=` (DF default / WEIGHT), `BY` (per-group panels), `OUTPUT OUT= stat(var)=name` (weighted statistics under `WEIGHT`, same partition as the listing). Report: Moments, Basic Measures, Quantiles, Extreme Obs, Tests for Normality. With `WEIGHT`: the default SAS partition keeps an observation with a zero/negative weight counted in N but weighting 0 in SUMWGT/moments; `EXCLNPWGT` excludes it from the analysis entirely (N included), as does a missing weight. Weighted Moments (mean/std/variance, plus weighted skewness/kurtosis — SAS `g1`/`g2` with `z_i = √w_i(x_i-x̄_w)/s_w`, VARDEF=DF, reducing exactly to the unweighted formulas at `w ≡ 1`), weighted Quantiles (weighted Definition 5 — cumulative-weight position) and weighted `Median`/`Q1`/`Q3`/`Range`/`IQR`, plus Extreme Obs (raw extreme values, not reweighted); `NORMAL`/`NORMALTEST` under `WEIGHT` is unavailable (per SAS docs) → NOTE in the log, no section. Plot statements `HISTOGRAM`/`QQPLOT`/`PROBPLOT`/`CDFPLOT`/`PPPLOT`, with `/ NORMAL`: the "Fitted Normal Distribution" parameters table (ODS object `ParameterEstimates`) is listing output, emitted whether ODS GRAPHICS is on or off, with `Mu`/`Sigma` equal to the variable's Moments mean/std (weighted under `WEIGHT`). Images wired to ODS GRAPHICS → PNG/SVG under `--features graphics` (`univar_{N}`; histogram, normal-QQ/normal-probability scatter, empirical CDF, P-P scatter), with the `/ NORMAL` fitted curve overlaid on `HISTOGRAM` (density rescaled to the Percent axis) and the `y = μ̂ + σ̂x` reference line on `QQPLOT`/`PROBPLOT`; else the shared "image deferred" NOTE; nothing emitted when ODS GRAPHICS off | `/ NORMAL` draws no overlay on `CDFPLOT`/`PPPLOT` (the parameters table is still emitted); other plot-statement options (`MIDPOINTS=`, `NORMAL(MU= SIGMA=)`, …) are parsed and ignored; the image path fits on raw values, so under `WEIGHT` the drawn curve is the unweighted fit while the table reports the weighted one |
-| `TABULATE` | 🟡 | `DATA=`; `CLASS`, `VAR`, `TABLE` (1/2/3 dims), stats `N NMISS SUM MEAN MIN MAX STD PCTN PCTSUM`, `ALL`, `*` crossings, `OUT=` cell dataset, `FORMAT=`/`*f=` cell formats, `='label'` + stored LABEL in headers, `BY` (sorted input — one table per BY group with the SAS-style group heading; `OUT=` rows carry the BY variables) | group denominators `PCTN<...>` |
-| `REPORT` | 🟡 | `DATA=`, `NOWD`/`NOWINDOW`, `NOHEADER`, `HEADLINE`, `HEADSKIP`, `OUT=`; `COLUMN`, `DEFINE` (`DISPLAY`/`ORDER`/`GROUP`/`ANALYSIS`, `ORDER=`, label, `FORMAT=`, `WIDTH=`, `SPACING=`), `WHERE`, `BREAK AFTER /SUMMARIZE`, `RBREAK`, `COMPUTE` (assignment + `_Cn_`/named column refs) + `COMPUTE AFTER`/`LINE` (with `@col` pointer and trailing format) | `DEFINE` `FLOW`; richer `COMPUTE` (assignment back into computed columns with the full function library) |
-| `DATASETS` | 🟡 | `LIB=`/`LIBRARY=`, `NOLIST`; `DELETE`, `CHANGE old=new`, `COPY OUT= [IN=] [;SELECT ...]`, `EXCHANGE a=b`, `SAVE m1 m2`, `MODIFY m; RENAME old=new; LABEL v='..'`, run-group `RUN`/`QUIT` | `APPEND`, `REPAIR`, `CONTENTS` (inside DATASETS), `MODIFY` dataset-level attrs |
-| `CATALOG` | 🟡 | `CATALOG=libref.cat`; `CONTENTS` (in-memory formats), `DELETE`/`COPY` (no-op + NOTE) | real `.sas7bcat` catalogs, entry-type selection |
-| `PRINTTO` | ✅ | `LOG=`/`PRINT=` route the SAS log / procedure output to an external file, `NEW` replaces the existing file contents, and a bare `PROC PRINTTO;` restores the default destinations; the program keeps producing its datasets (validated cases `compat/printto/*`, see [`conformance/STATUS.md`](conformance/STATUS.md)) | routing to SAS catalog entries and other file references |
-| `OPTIONS` | 🟡 | `PROC OPTIONS` listing of system options | per-option detail |
-| `TTEST` | ✅ | 1-sample (H0=, ALPHA=, SIDES= with one-sided p), 2-sample CLASS (Pooled + Satterthwaite + F equality test), PAIRED; VAR/CLASS/PAIRED/BY statements; CI= confidence-limit columns (mean + std); ODS OUTPUT TTest | — |
-| `NPAR1WAY` | ✅ | CLASS (required), VAR (default all numeric), BY groups; WILCOXON/KRUSKAL flags; Wilcoxon rank-sum (Z + 2-sided p, midranks, tie correction) + exact permutation test (EXACT, n≤30); Kruskal-Wallis (H/tie_factor, χ², df=k-1); MEDIAN/SAVAGE/NORMAL(=VW) score tests (2-sample Z + one-way χ²); OUTPUT OUT= dataset (`_WIL_/Z_WIL/P2_WIL/P1_WIL`, `XP1_WIL/XP2_WIL`, `_KW_/DF_KW/P_KW`, `_MED_/_SAV_/_VW_` families) | Exact test for Median/Savage/Normal scores (Wilcoxon-rank only); BY-key OUT= columns stored as formatted strings |
-| `REG` | ✅ | `DATA=`; multiple `MODEL dep = x1 x2 … / NOINT NOPRINT SELECTION=` per run (labelled MODEL1, MODEL2…); `NOINT` (uncorrected SS, `Uncorrected Total`, no Intercept row); `SELECTION=FORWARD\|BACKWARD\|STEPWISE` with `SLENTRY=`/`SLE=`, `SLSTAY=`/`SLS=` (partial-F entry/removal + selection-summary table), `SELECTION=RSQUARE\|ADJRSQ\|CP\|MAXR\|MINR\|NONE` (all-subsets / R²-improvement: per-size or ranked model tables with R²/Adj R²/Mallows C(p)) with `BEST=`/`INCLUDE=`/`START=`/`STOP=`/`DETAILS`/`STB`; `OUTPUT OUT= PREDICTED= RESIDUAL=` (per MODEL); `WEIGHT` (weighted least squares X'WX, weighted ANOVA/leverage/residual summary), `FREQ` (replication → n/df), `BY` (by-group analysis with heading), `ID` (identification column in R/INFLUENCE/Output Statistics tables); OLS via QR, ANOVA table, R²/Adj R²/F/t-tests, parameter estimates with SE, listwise missing deletion. `TEST` statement (linear hypotheses on β: comma-separated equations → "Test … Results" table, F num/den df, Pr>F); `RESTRICT` statement (linear equality constraints → constrained LS re-estimation, restricted ANOVA/estimates + RESTRICT Lagrange-multiplier row, DF=-1); MODEL `CLB` (parameter confidence limits), `ALPHA=`, `CLM`/`CLI` (Output Statistics table: predicted, Std Error Mean Predict, CL Mean/Predict, residual) + OUTPUT keywords `STDP STDI STDR LCL UCL LCLM UCLM` (leverage-based); MODEL `R` (residual analysis: Std Error Residual, Student Residual + gauge, Cook's D, Sum/PRESS block) and `INFLUENCE` (RStudent, Hat Diag, Cov Ratio, DFFITS, per-parameter DFBETAS) + OUTPUT keywords `STUDENT RSTUDENT COOKD H PRESS DFFITS COVRATIO DFBETAS`; collinearity/specification MODEL options `VIF`/`TOL` (parameter table), `COLLIN`/`COLLINOINT` (eigenvalue condition indices + variance proportions), `SPEC` (White test χ²), `DW`/`DWPROB` (Durbin-Watson D + 1st-order autocorrelation + normal-approx p-values), `ACOV`/`HCC` (White HC0 covariance + heteroscedasticity-consistent SE table); partial SS/correlations MODEL options `SS1`/`SS2` (Type I/II SS), `STB` (standardized estimates), `PCORR1`/`PCORR2` (squared partial corr), `SCORR1`/`SCORR2` (squared semi-partial corr), `SEQB` (sequential estimates), `PRESS` (model PRESS statistic); PROC options `SIMPLE` (descriptive stats), `CORR`, `ALL`; MODEL matrix options `XPX` (crossproducts), `I` (inverse + estimates + SSE), `COVB`/`CORRB` (covariance/correlation of estimates); output datasets `OUTEST=` (+`COVOUT`/`OUTSEB`/`EDF`/`TABLEOUT`) and `OUTSSCP=`; specialized regressions `RIDGE=` (ridge estimates `(R+kI)⁻¹r_xy`, value-list/range, + `OUTVIF` ridge VIF; trace plot deferred) and `PCOMIT=` (incomplete principal-components / IPC regression) with `_TYPE_`=RIDGE/RIDGEVIF/IPC OUTEST rows; multi-response `MODEL y1 y2 = x` (a univariate analysis per response) + `MTEST` (multivariate tests: Wilks' Lambda, Pillai's Trace, Hotelling-Lawley Trace, Roy's Greatest Root via eigenvalues of E⁻¹H, with F approximations); run-group `VAR`/`ADD`/`DELETE` (applied to the final fit) — `REWEIGHT`/`REFIT`/`PAINT` parsed & NOTE-deferred; `PLOTS=`(DIAGNOSTICS/RESIDUALS/FIT/ALL/NONE, list + UNPACK/ONLY) and the traditional `PLOT y*x` statement (incl. `PREDICTED.`/`RESIDUAL.` keyword vars) → diagnostic panel (residual-by-predicted/regressor, RStudent, Cook's D-by-leverage, normal Q-Q, fit plot with CLM/CLI bands) rendered as `reg_{N}` PNG/SVG under `--features graphics`, else clean NOTE-deferred | `SELECTION=LASSO`; exact Durbin-Watson p-values (normal approx used); interactive `REWEIGHT`/`REFIT`/`PAINT` (NOTE-deferred) |
-| `ANOVA` | ✅ | `DATA=`; `CLASS` (one or more variables, distinct levels via `sas_cmp`); `MODEL y1 y2 = effects / NOPRINT` (multiple dependents; main effects, interactions `a*b`, multiple CLASS); `MEANS effect`; per-effect ANOVA table (Model/Error/Corrected Total, F/Pr>F), fit statistics (R², C.V., Root MSE, dep Mean), **Type I SS** (sequential, reference-cell) + **Type III SS** (partial, sum-to-zero effect coding → matches SAS for unbalanced designs with interactions), cell means with Std Dev | `MEANS` comparison tests (Tukey/Duncan/Scheffé), Type II/IV SS, nested/continuous-covariate effects, `BY` groups |
-| `GLM` | ✅ | `DATA=`; `CLASS` (one or more); `MODEL y1 y2 = effects / SOLUTION NOPRINT` (multiple dependents; main effects, interactions `a*b`, multiple CLASS); `LSMEANS effect / SE` (uniform marginal LS means, multi-way); `ESTIMATE`/`CONTRAST 'label' effect c…` (main effects); `MEANS effect`; ANOVA table + **Type I** (sequential) / **Type III** (sum-to-zero effect coding, SAS-matching for unbalanced+interaction) SS, fit statistics, reference-cell parameter estimates (last level = 0 / "B", interaction cross-labels), LS means with SE, Contrasts (F/Pr>F), Estimates (t/Pr>\|t\|) | `LSMEANS` comparison/adjust (Tukey/Dunnett), `ESTIMATE`/`CONTRAST` on interaction terms, Type II/IV SS, continuous covariates, `BY` groups |
-| `LOGISTIC` | 🟡 | `DATA=`; `CLASS` (reference coding, ref=last); `MODEL y(DESCENDING EVENT='val') = effects / LINK=LOGIT\|CLOGLOG\|PROBIT NOPRINT`; `FREQ var`; binary logistic + **ordinal proportional-odds (cumulative logit)** for >2 ordered levels (shared slope, ordered intercepts); Newton-Raphson MLE; Class Level Information; Model Fit Statistics (AIC/SC/-2LogL), Global Null tests (LR/Score/Wald), Analysis of ML Estimates (β/SE/Wald χ²/p), Odds Ratio Estimates (logit links); `OUTPUT OUT= PREDICTED=/P=/XBETA=` | EFFECT coding (PARAM=REF only), nominal/generalized-logit multinomial, Score Test for Proportional Odds (deferred), `BY`, `SCORE`, `UNITS`, `ROC` |
-| `GENMOD` | 🟡 | `DATA=`; `FREQ var`; `CLASS` (reference coding, ref=last); `MODEL y(DESCENDING EVENT='val') = effects / DIST= LINK= SCALE= NOSCALE NOPRINT`; DIST=POISSON (LOG), BINOMIAL (LOGIT), NORMAL (IDENTITY), **GAMMA** (canonical reciprocal or LINK=LOG, V(μ)=μ²); NR/IRLS MLE (GCONV=1e-8, μ-domain step-halving); Class Level Information; Criteria For Assessing Goodness Of Fit (Deviance/Scaled Deviance/Pearson/LL/AIC/AICC/BIC); Analysis Of Maximum Likelihood Parameter Estimates (β/SE/Wald 95% CI/Wald χ²/p, reference level DF 0); Scale parameter (fixed=1 Poisson/Binomial, √MSE Normal, Gamma Pearson-dispersion 1/φ̂ form); `SCALE=`/`NOSCALE` fix the dispersion; Response Profile (Binomial only) | exact ML (digamma) Gamma scale (Pearson approximation used), multinomial, GEE/`REPEATED`, `OFFSET=`, `ESTIMATE`/`CONTRAST`, `BY`, `OUTPUT OUT=` |
-| `PRINCOMP` | 🟡 | `DATA=`; `VAR var1 var2 …`; `N=k` (truncate display); `COV` (covariance instead of correlation); `OUT=` **component scores** (input cols + `Prin1..Prink`, score variance = eigenvalue, standardized/centered per COV); Simple Statistics; Correlation/Covariance Matrix; Eigenvalues table; Eigenvectors; deterministic sign convention | `PARTIAL`, `WEIGHT`, `TYPE=CORR` input datasets, `OUTSTAT=`, `BY` groups |
-| `FACTOR` | 🟡 | `DATA=`; `VAR var1 var2 …`; `NFACTORS=k` (or Kaiser MINEIGEN λ>1 default); `METHOD=PRINCIPAL` (default); `ROTATE=VARIMAX`/`NONE` (orthogonal) or **`ROTATE=PROMAX`** (oblique: Procrustes power target → Rotated Factor Pattern + Inter-Factor Correlations); `COV`; `OUT=` **factor scores** (regression method, input cols + `Factor1..Factorm`); Prior Communality ONE; Eigenvalues; Factor Pattern; Variance Explained; Final Communality Estimates; Rotated pattern | `METHOD=ML/ITER`, `HEYWOOD`, `ALPHA`, `SCORE`, `BY` groups; **`ROTATE=QUARTIMAX` and `ROTATE=OBLIMIN` are ERRORs** (explicit diagnostic; use VARIMAX, PROMAX or NONE) |
-| `DISTANCE` | 🟡 | `DATA=`; `VAR var1 var2 …`; `OUT=ds` (distance matrix dataset); `METHOD=EUCLID/L2` (default), `CITYBLOCK/L1`, `LINF/CHEBYCHEV`, `COSINE`, `CORR`; Distance Matrix listing (Row/Col labeled); output `_TYPE_=DISTANCE` dataset | `SHAPE=`, `FREQ`, normalization options, `ID` variable for row labels |
-| `CLUSTER` | 🟡 | `DATA=`; `VAR var1 var2 …`; `METHOD=WARD` (default), `AVERAGE`, `SINGLE`, `COMPLETE`; `ID var`; `OUTTREE=` **dendrogram dataset** (`_NAME_/_PARENT_/_NCL_/_FREQ_/_HEIGHT_` + leaf VAR coords; `_HEIGHT_`=1−RSQ monotone); Cluster History (NClusters, Clusters Joined, Freq, SPRSQ, RSQ); Lance-Williams update | `PSEUDO=`, `NOEIGEN`, `CCC`, graphical dendrogram |
-| `FASTCLUS` | 🟡 | `DATA=`; `VAR var1 var2 …`; `MAXCLUSTERS=k` (required); `OUT=ds` (with `_CLUSTER_` variable); `MAXITER=`; `CONVERGE=`; farthest-first seed selection; Cluster Summary (Freq/RMS Std/Max Distance/Nearest Cluster); Statistics for Variables (R-Square); `ID var` | `SEED=` (specific seed obs), `RADIUS=`, `DISTANCE`, fuzzy clustering, `MEAN` |
-| `DISCRIM` | 🟡 | `DATA=`; `CLASS var`; `VAR var1 var2 …`; `ID var`; `OUT=ds` (`_FROM_`, `_INTO_`, `_<k>` posteriors); `PRIORS EQUAL` (default) / `PROPORTIONAL`; `POOL=YES` (LDA); Class Level Information; Within-Class Covariance Matrices; Pooled Covariance; Pairwise D² (Mahalanobis²); Linear Discriminant Function Coefficients; Classification Results (obs-by-obs + posteriors); Error Count Estimates | `POOL=NO` (QDA), `CROSSVALIDATE`, `OUTSTAT=`, `METHOD=NPAR/KERNEL`, `THRESHOLD=`, `BY` groups |
-| `MIXED` | 🟡 | `DATA=`; `METHOD=REML` (default) / `ML`; `CLASS var1 …`; `MODEL effects = / NOINT SOLUTION` (general fixed-effects design: intercept, continuous, CLASS reference coding); `RANDOM INTERCEPT / SUBJECT=var TYPE=VC\|CS`; `REPEATED effect / SUBJECT=var TYPE=VC\|CS\|AR(1)\|UN`; estimation via closed-form (legacy VC single random intercept) or **general (RE)ML optimisation** (Nelder-Mead + restarts + coordinate polish) over the V(θ)=ZGZ'+R covariance; Covariance Parameter Estimates (`UN(i,j)`, `AR(1)`, `Residual`); Fixed-effects solution (β̂/SE/t/df/p) with Contain df; 8 listing sections | `RANDOM` slopes / multiple random effects; `TYPE=` other than VC/CS/AR(1)/UN; `LSMEANS`; `ESTIMATE`; `CONTRAST`; `COVTEST`; Kenward-Roger/Satterthwaite df; `BY` groups |
-| `GLIMMIX` | 🟡 | `DATA=`; `METHOD=RSPL` (default) / **`LAPLACE`** (single random intercept, true ML); `CLASS var1 …`; `MODEL effects[(event='val')] = … / NOINT DIST=NORMAL\|POISSON\|BINARY LINK=IDENTITY\|LOG\|LOGIT\|PROBIT\|CLOGLOG SOLUTION` (general fixed-effects design: intercept/continuous/CLASS reference coding); `RANDOM INTERCEPT / SUBJECT=var TYPE=VC`; `REPEATED … / SUBJECT=var TYPE=VC\|CS\|AR(1)\|UN` (R-side, RSPL); `FREQ var`; RSPL/PQL (Breslow-Clayton); NORMAL/IDENTITY+random ≡ REML/ML (exact); Poisson/Binary no-random ≡ GENMOD/LOGISTIC; PROBIT/CLOGLOG no-random ≡ LOGISTIC links; LAPLACE Normal+random ≡ MIXED ML (cross-validated); Generalized Chi-Square; Type III Tests; Solutions for Fixed Effects | `METHOD=QUAD` is an **ERROR** (explicit diagnostic; use RSPL or LAPLACE); `DIST=GAMMA`; une valeur `DIST=`/`LINK=` inconnue est désormais une ERROR (elle retombait silencieusement sur NORMAL/IDENTITY); `LAPLACE` with AR(1)/UN/multiple-random (NOTE); `RANDOM` slopes; `LSMEANS`; `ESTIMATE`; `CONTRAST`; `WEIGHT`; `BY` groups |
-| `IML` | 🟡 | Sub-language (own lexer/parser/evaluator). Matrix literals `{1 2, 3 4}`, `{"x" "y"}`; indexing `A[i,j]`/`A[i,*]`; operators `'` (transpose), `*` (matmul), `#` (Hadamard), `@` (Kronecker), `+ - /`, comparisons; `NROW`/`NCOL`/`DIM`/`T`; stats `SUM`/`MEAN`/`STD`/`MIN`/`MAX`/`ABS`/`SQRT`/`EXP`/`LOG`; control flow `IF/THEN/ELSE`, `DO i=a TO b [BY c]`, `DO WHILE/UNTIL`; `PRINT`; linear algebra `INV`, `SOLVE`, `EIGVAL` (symmetric), `CHOL` (upper U), `CALL QR(Q,R,A)`, `CALL SVDCD(U,D,V,A)`; I/O `CREATE ds FROM mat[COLNAME=]`, `APPEND FROM`, `CLOSE`, `USE`, `READ ALL VAR {..} INTO mat`; `SHAPE(x,nr[,nc])` (row-major reshape + recycling); range subscripts `A[1:2,1:3]`/`A[2:3,*]`; `DET`; `EIGVEC` + `CALL EIGEN(val,vec,A)` (symmetric, descending) | `READ NEXT`, `WHERE`, `LOAD`/`STORE`/`SHOW`, modules (`START`/`FINISH`) |
-| `GPLOT` | 🟡 | `DATA=`; `PLOT y*x` / `PLOT y*x=group` / `PLOT (y1 y2)*x`. Without `--features graphics`: NOTE "image deferred". With `--features graphics`: PNG/SVG via `gplot_{N}` with **multi-series overlay** (one series per Y var / per group level); `SYMBOL`n (INTERPOL=JOIN→line, VALUE=→marker, COLOR=) and `AXIS`n (ORDER=, LABEL=) honored | SYMBOL HEIGHT/WIDTH/LINE/REPEAT; AXIS log/discrete & tick formatting; PLOT2 second axis; `=group` combined with multiple Y; `VPLOT`; `BY` |
-| `GCHART` | 🟡 | `DATA=`; `VBAR`/`HBAR cat / SUMVAR= TYPE=FREQ\|SUM\|MEAN`; `PIE cat / SUMVAR= TYPE=`. Without `--features graphics`: NOTE "image deferred". With `--features graphics`: bar and **PIE** charts via `gchart_{N}` (slices proportional to FREQ/SUM/MEAN) — **HBAR is drawn as a vertical bar chart** (horizontal rendering not implemented, no diagnostic) | `SUBGROUP=`; horizontal HBAR rendering; `BY` |
-| `PLOT` | 🟡 | `DATA=`; `PLOT y*x` / `PLOT y*x='sym'` / `PLOT (y1 y2)*x`. When ODS GRAPHICS OFF: ASCII scatter in listing (20×60 grid, A/B/C overlaps, labelled axes). When ODS GRAPHICS ON: delegates to image (`plot_{N}`). `=group` and display options after `/` (`HREF=`, `VREF=`, `HAXIS=`, …) are recognized: `=group` renders all observations with a single symbol + NOTE; each display option is an explicit WARNING | `HREF=`/`VREF=`/`HAXIS=`/`VAXIS=` actual rendering; per-group symbols; multiple plots in one grid; `BY` |
-| `SGPLOT` | 🟡 | `DATA=`; statements `SCATTER x= y= / GROUP= MARKERATTRS=()`, `SERIES x= y=`, `VBAR`/`HBAR cat / RESPONSE= STAT=FREQ\|SUM\|MEAN`, `HISTOGRAM var / BINWIDTH= SCALE=`, `DENSITY`, `VBOX resp / CATEGORY=`, `REG x= y= / DEGREE=`, `LOESS x= y= / SMOOTH=`, `XAXIS`/`YAXIS LABEL= VALUES=(min to max by step) TYPE=LINEAR\|LOG\|DISCRETE`, `BY`. Without `--features graphics`: NOTE "image deferred", byte-identical default build. With `--features graphics`: PNG/SVG via `plotters`, sequential naming `{IMAGENAME\|sgplot}_{N}.{ext}`; **LOESS** (tricube local-linear smoother, SMOOTH=) and **DENSITY** (NORMAL/KERNEL) rendered as overlays; histograms as real binned bars; XAXIS/YAXIS VALUES= → forced ranges | `HBAR`/`VBOX`/`REG` rendering (parse-only under graphics → NOTE); `GROUP=` (SCATTER), `RESPONSE=`/`STAT=` (VBAR/HBAR) and `SCALE=` (HISTOGRAM) are parsed but **not used in the rendering** (bars are always raw FREQ counts, histograms raw-value bins); `MARKERATTRS=`/`LINEATTRS=` ignored; multi-plot overlays beyond primary+LOESS/DENSITY; legends; `BY`-group images |
+```csv
+Sex,N_PATIENTS,MEAN_AGE
+F,3,33
+M,2,48
+```
 
-### DATA step
+This exact logical result is exercised by `tests/examples.rs`.
 
-| Area | State | Detail |
-| --- | :---: | --- |
-| Data sources | ✅ | `SET` (incl. `END=`/`NOBS=`/`POINT=`, multi-dataset concat, multiple `SET` statements with independent cursors and per-site `END=`/`NOBS=`, bare `SET;` reading `_LAST_`), `MERGE` + `IN=` (bare `MERGE;` reads `_LAST_`), `BY` interleave, `UPDATE` (master/transaction; `UPDATEMODE=` / `UPDATE=` with `MISSINGCHECK` (default) or `NOMISSINGCHECK`, accepted both as a data set option and as an UPDATE-statement option; `NOMISSINGCHECK` lets a missing transaction value overwrite the master value (the default `MISSINGCHECK` prevents it); unsupported data set options on the transaction dataset are rejected with a clear error), `MODIFY`. `BY` and `POINT=` combined with multiple `SET` statements are rejected with a clear error |
-| Dataset options | ✅ | `KEEP=`, `DROP=`, `RENAME=(a=b)`, `WHERE=()` (`FIRSTOBS=`/`OBS=` only on `INFILE`) |
-| External input | ✅ | `INFILE` (`DELIMITER=`/`DLM=`, `DSD`, `FIRSTOBS=`, `OBS=`, `MISSOVER`, `TRUNCOVER`, `STOPOVER`, `LRECL=`), `INPUT` (list / column / formatted), `DATALINES`/`CARDS` |
-| Text output | ✅ | `FILE` (`LOG`/`PRINT`/external path), `PUT` (named / formatted / literal / `_ALL_`, `@n`/`+n`/`/`, `@`/`@@` hold) |
-| Control flow | ✅ | `IF/THEN/ELSE`, subsetting `IF`, standalone `WHERE` (pre-PDV filter on every `SET`/`MERGE` input, all sites; a dataset `WHERE=` option replaces the statement for that dataset; last `WHERE` wins with the SAS NOTE), `DO`/`END`, iterative `DO ... TO ... BY [WHILE/UNTIL]`, `DO WHILE`, `DO UNTIL`, `DO` value list, `DO OVER`, `SELECT/WHEN/OTHERWISE`, labels + `GOTO`/`LINK`/`RETURN`, `OUTPUT`, `DELETE`, `STOP` |
-| Variables & attributes | ✅ | `RETAIN`, sum statement (`var + expr`), `LENGTH` (a character length counts **characters**, not bytes — `LENGTH $2` holds `'é'` intact; see the [encoding contract](docs/encoding.md)), `FORMAT`, `INFORMAT` (default informats used by list-mode `INPUT` as modified list input; explicit `INPUT` informats win; also `ATTRIB INFORMAT=`; informats — explicit or declared — are persisted in dataset metadata and restituted by `PROC CONTENTS OUT=` as `INFORMAT`/`INFORML`/`INFORMD`, validated cases `compat/informat/*`, see [`conformance/STATUS.md`](conformance/STATUS.md)), `LABEL`, `ATTRIB`, `KEEP`, `DROP`, `ARRAY` (multi-dim, `_NUMERIC_`/`_CHARACTER_`/`_ALL_`, temporary, `DO OVER`) |
-| Automatic variables | ✅ | `_N_`, `_ERROR_`, `FIRST.`/`LAST.`, `END=`, `NOBS=`, `POINT=`, `IN=` |
-| Hash objects | ✅ | `DECLARE HASH`/`HITER`, methods `find/check/add/replace/remove/clear/output/num_items/find_next/find_prev`, `ordered:`/`duplicate:`/`multidata:`/`dataset:` |
-| `CALL` routines | ✅ | `STREAMINIT`, `SYMPUT`, `SYMPUTX`, `EXECUTE`, `MISSING`, `SORTN`, `SORTC`, `CATS`, `SCAN`, `LABEL`, `VNAME`, `PRXCHANGE` (incl. in-place, res-length/trunc/n-changes), `PRXSUBSTR`, `PRXNEXT`, `PRXPOSN`, `PRXFREE`, `PRXDEBUG` (no-op). Exotic routines (`ALLPERM`/`LEXCOMB`/`RANPERM`-family legacy RNG, `SLEEP`, `SYSTEM`, `MODULE`, `POKE`) → runtime error |
-| Not supported | 🔴 | `BY` and `POINT=` combined with multiple `SET` statements (clean error, see Data sources), `WHERE` statement with `UPDATE`/`MODIFY` or `POINT=` (clean error; the master `WHERE=` option on `UPDATE` works) |
+### 2. Use classic DATA-step transformations
 
-### DATA step / macro functions
+```sas
+data work.loans;
+  input id balance rate;
+  annual_interest = balance * rate;
+  if balance >= 100000 then segment = 2;
+  else segment = 1;
+  datalines;
+1 80000  0.035
+2 125000 0.041
+3 50000  0.029
+;
+run;
 
-~120 functions are implemented across these categories:
+proc print data=work.loans;
+  var id balance rate annual_interest segment;
+run;
+```
 
-| Category | Functions |
-| --- | --- |
-| Descriptive | `SUM MEAN MIN MAX N NMISS RANGE LARGEST SMALLEST ORDINAL COALESCE MISSING` |
-| Math | `ABS SQRT EXP LOG LOG2 LOG10 INT ROUND ROUNDZ MOD CEIL FLOOR SIGN FACT COMB PERM GAMMA LGAMMA DIGAMMA TRIGAMMA BETA` |
-| Trigonometry | `SIN COS TAN ARSIN ARCOS ATAN ATAN2 SINH COSH TANH` |
-| Strings | `UPCASE LOWCASE PROPCASE TRIM STRIP LEFT LENGTH SUBSTR SUBSTRN INDEX FIND FINDC COUNT COUNTC VERIFY SCAN CAT CATS CATX CATQ COMPRESS COMPBL TRANWRD TRANSLATE REVERSE REPEAT CHAR BYTE RANK WHICHC` |
-| Perl regex (PRX) | `PRXPARSE PRXMATCH PRXCHANGE PRXPOSN PRXPAREN` (Perl syntax via `fancy-regex`: lookaround, backreferences; flags `i m s x o`, free delimiter, `s/…/…/` substitution with `$1`/`\1` references) |
-| Dates & times | `TODAY DATE MDY YEAR MONTH DAY WEEKDAY INTCK INTNX DATEPART TIMEPART DATETIME DHMS HMS HOUR MINUTE SECOND DATDIF YRDIF JULDATE DATEJUL NLDATE` |
-| Conversion | `PUT INPUT` |
-| Distributions | `CDF PDF SDF LOGCDF QUANTILE PROBNORM PROBT PROBF PROBCHI PROBBETA PROBGAM PROBBNML POISSON` |
-| Random variates | `RAND RANUNI RANNOR RANEXP RANBIN` |
-| Macro bridge | `SYMGET` |
+Expected calculated values:
 
-`FIND`/`FINDC` search from the start position **included** (1-based, positions in characters — `find('abc','a',1)` returns 1); of the SAS modifiers only `i` (ignore case) is honored, the others are ignored.
+```text
+id   balance   rate    annual_interest   segment
+1     80000    0.035        2800             1
+2    125000    0.041        5125             2
+3     50000    0.029        1450             1
+```
 
-### Macro language
+### 3. Embed sasrs in a Rust application
 
-| Feature | State | Detail |
-| --- | :---: | --- |
-| Definition / call | ✅ | `%MACRO`/`%MEND`, positional & keyword params with defaults, `%name(args)` |
-| Variables | ✅ | `%LET`, `&var`/`&var.`, `%LOCAL`, `%GLOBAL`, nested indirection `&&&x` |
-| Control flow | ✅ | `%IF/%THEN/%ELSE`, `%DO/%END`, `%DO i=a %TO b %BY c`, `%DO %WHILE`, `%DO %UNTIL`, `%RETURN`, `%GOTO`/`%label:`, `%ABORT` (`CANCEL`/`ABEND`/`RETURN [n]`) |
-| Evaluation | ✅ | `%EVAL`, `%SYSEVALF`, `%SYSFUNC`/`%QSYSFUNC` (full DATA step function library — no whitelist — with optional trailing `format.`) |
-| Quoting | ✅ | `%STR`, `%NRSTR`, `%BQUOTE`, `%NRBQUOTE`, `%QUOTE`, `%NRQUOTE`, `%SUPERQ`, `%UNQUOTE`, `%CMPRES`, `%QCMPRES`, `%QUPCASE`, `%QLOWCASE`, `%QSUBSTR`, `%QSCAN` |
-| Utilities | ✅ | `%PUT`, `%INCLUDE` (quoted path, fileref via `FILENAME`, non-quoted path) + autocall (`SASAUTOS`), `%SYMEXIST`, `%SYSMEXIST`, `%SYSGET` |
-| Automatic vars | ✅ | `&SYSDATE(9)`, `&SYSTIME`, `&SYSDAY`, `&SYSDAYNUM`, `&SYSMONTH`, `&SYSYEAR`, `&SYSVER`, `&SYSSCP(L)`; status codes `&SYSCC`/`&SYSERR`/`&SYSRC`/`&SQLOBS`/`&SQLRC`; `&SYSLAST` (live, last dataset); env info `&SYSPROCESSNAME`, `&SYSENV`, `&SYSUSERID`, `&SYSHOSTNAME`, … |
-| Tracing | ✅ | `MPRINT`, `MLOGIC`, `SYMBOLGEN` |
-| Utilities (cont.) | ✅ | `%SYSCALL SORTN`/`SORTC` (the two CALL routines meaningful outside a DATA step — sort macro variables' values in place), `%SYSMACDELETE` (removes a compiled macro definition) |
-| Unsupported (clean NOTE) | 🔴 | `%SYSEXEC` (OS command), `%WINDOW`/`%DISPLAY` (interactive), other `%SYSCALL` routines (e.g. `SET`, `POKELONG`), `%SYSMSTORECLEAR`, `%SYSLPUT`/`%SYSRPUT` — consumed with a "not supported in this build" NOTE; unknown `%keyword` left verbatim (SAS behaviour) |
-
-### PROC SQL
-
-| Feature | State | Detail |
-| --- | :---: | --- |
-| Queries | ✅ | `SELECT [DISTINCT]`, `WHERE`, `GROUP BY` (incl. positional), `HAVING`, `ORDER BY [ASC\|DESC]`, `CALCULATED`, column/table aliases |
-| DDL/DML | ✅ | `CREATE TABLE AS`, `CREATE VIEW`, `DROP TABLE`/`VIEW`, `INSERT ... VALUES`/`SELECT`, `UPDATE ... SET`, `DELETE`, `DESCRIBE TABLE` |
-| Joins | ✅ | `INNER`, `LEFT`, `RIGHT`, `FULL`, `CROSS` |
-| Predicates | ✅ | `BETWEEN`, `IS [NOT] NULL`/`MISSING`, `LIKE` (`%`/`_`), `[NOT] CONTAINS` (substring, case-sensitive, ≡ `INDEX() > 0`), `[NOT] SOUNDS LIKE` (Soundex match), `IN`/`NOT IN`, scalar/`IN`/`EXISTS` subqueries |
-| Set operators | ✅ | `UNION [ALL]`, `EXCEPT`, `INTERSECT` |
-| Aggregates | ✅ | `COUNT(*)`, `COUNT([DISTINCT] col)`, `SUM`, `AVG`/`MEAN`, `MIN`, `MAX` |
-| Dictionary tables | ✅ | `DICTIONARY.TABLES`/`.MEMBERS`/`.COLUMNS`/`.MACROS` (+ `SASHELP.VTABLE`/`VMEMBER`/`VCOLUMN`/`VMACRO` aliases), full `WHERE`/`SELECT`/`ORDER BY` support |
-| `ODS OUTPUT` | ✅ | bare `SELECT` captured under the `SQL_Results` object name (generic capture mechanism, see the Output/ODS section below); multiple bare `SELECT`s in one `PROC SQL` step accumulate diagonally |
-
-### Output (ODS) & formats
-
-| Area | State | Detail |
-| --- | :---: | --- |
-| ODS destinations | ✅ | `LISTING` (text), `HTML`, `RTF`, `PDF`, `EXCEL` (xlsx); `ODS <dest> CLOSE`, `ODS _ALL_ CLOSE`, `FILE=`, `STYLE=` (partial) |
-| `ODS GRAPHICS` | 🟡 | `ON`/`OFF`, `WIDTH=`/`HEIGHT=`/`IMAGEFMT=(PNG\|SVG)`/`IMAGENAME=`; `RESET=` is parsed then **ignored** (graphics state is not reset to defaults). Image rendering via the optional `graphics` feature (`plotters`). Drives PROC SGPLOT plots, PROC UNIVARIATE `HISTOGRAM`/`QQPLOT`, and PROC REG residual diagnostics. Default build is byte-identical (NOTE only, no image) |
-| `ODS OUTPUT` | 🟡 | generic capture by ODS object name (typed values, diagonal union across TABLES/BY panels; registry lives for one procedure step; unknown name → SAS `WARNING: Output '…' was not created` at step end): `OneWayFreqs` (FREQ), `Moments`/`BasicMeasures` (UNIVARIATE), `Summary` (MEANS), `TTest` (TTEST), `SQL_Results` (PROC SQL bare `SELECT`, multiple `SELECT`s in one step accumulate diagonally) | other output objects (named incrementally as procs are wired) |
-| `ODS SELECT`/`EXCLUDE` | 🟡 | object-name lists, `ALL`/`NONE` (`select none` ≡ `exclude all`); SAS lifecycle: named lists consumed at the end of the next procedure step (reset to `SELECT ALL`), `ALL`/`NONE` lists persist; `ODS OUTPUT` still captures excluded tables (display-only exclusion); `SELECT NONE`/`EXCLUDE ALL` suppresses the whole proc listing while keeping LOG/`OUT=`/captures. Named objects: `OneWayFreqs`/`OneWayChiSq` (FREQ), `Moments`/`BasicMeasures`/`TestsForNormality`/`Quantiles`/`ExtremeObs`/`MissingValues`/`ParameterEstimates` (UNIVARIATE), `Summary` (MEANS) | per-destination lists (single global list), `(PERSIST)`, name filtering of not-yet-named tables (they always display except under `NONE`/`EXCLUDE ALL`) |
-| ODS — not supported | 🔴 | embedded images |
-| Built-in formats | ✅ | numeric (`w.d`, `BEST`, `COMMA`, `DOLLAR`, `Z`, `PERCENT`, `E`, `EURO`, `COMMAX`…), dates/times (`DATEw`, `DDMMYY`, `MMDDYY`, `YYMMDD`, `DATETIME`, `TIME`, `MONYY`, `WEEKDATE`, `DOWNAME`, ISO 8601 `B8601`/`E8601`…), character (`$w`, `$CHAR`, `$UPCASE`, `$HEX`, `$QUOTE`), specials (`HEX`, `BINARY`, `OCTAL`, `ROMAN`, `WORDS`, `FRACT`, `NEGPAREN`) |
-| Built-in informats | ✅ | `w.d`, `COMMA`, `DOLLAR`, `DATEw`, `MMDDYY`/`DDMMYY`/`YYMMDD`, `TIME`, `$CHAR`/`$w` |
-| User formats | 🟡 | `PROC FORMAT` `VALUE`/`INVALUE`/`PICTURE`; persistent per-libref catalogs via `LIB=` (JSON sidecar, loaded at `LIBNAME`); `CNTLOUT=`/`CNTLIN=` control datasets (round-trip; PICTURE excluded); `FMTLIB` listing; `FMTSEARCH=` ordered resolution |
-
-### Global statements
-
-| Statement | State | Detail |
-| --- | :---: | --- |
-| `LIBNAME` | ✅ | assign / `CLEAR` (path resolved against the program dir; `s3://` with the `s3` feature) |
-| `OPTIONS` | 🟡 | applied: `LINESIZE`/`LS=`, `FIRSTOBS=`, `OBS=`, `NODATE`/`NONUMBER`/`NOCENTER`, `MISSING=` (numeric missing char, PROC PRINT), `YEARCUTOFF=` (2-digit year window for date functions), `MPRINT`/`MLOGIC`/`SYMBOLGEN`, `FMTSEARCH=` (ordered multi-catalog format resolution); stored only: `PAGESIZE`/`PS=` (no pagination yet); other options still parsed with a "not yet supported" warning |
-| `TITLE` | ✅ | `TITLE1`–`TITLE9` rendered (centered, in level order; SAS clearing semantics: `TITLEn 'x'` clears levels above, `TITLEn;` clears `n` and above) across all destinations |
-| `FOOTNOTE` | ✅ | `FOOTNOTE1`–`FOOTNOTE9` rendered (same multi-level clearing semantics as `TITLE`) |
-| `ODS` | ✅ | see Output section |
-| `%INCLUDE` | ✅ | quoted paths, **filerefs** (via `FILENAME`), **non-quoted paths**, autocall (`SASAUTOS`); `*`/stdin (interactive-only) recognized & cleanly NOTE-deferred (`NOTE: %INCLUDE * (keyboard/terminal input) is not supported in this build; statement ignored.`) |
-| `FILENAME` | ✅ | `FILENAME ref 'path';` / `ref path;` → fileref registry for `%INCLUDE` (resolved like LIBNAME/SASAUTOS); device forms (`PIPE`/`URL`/`TEMP`/`DUMMY`…) recognized & registered, cleanly NOTE-deferred at the statement and again at `%INCLUDE` use (last FILENAME wins between path and device) |
-| `X` | 🔴 | not supported |
-
-> The coverage above reflects the current state of the code, not a promise: a
-> procedure is only claimed *validated* where a concrete conformance case with
-> an external reference backs it — see
-> [`conformance/STATUS.md`](conformance/STATUS.md) (generated from the corpus)
-> and `CONTRIBUTING.md`. What comes next — hardening, storage integrity,
-> independent
-> validation, high-value SAS compatibility — is planned in
-> [`docs/plans/consolidation/`](docs/plans/consolidation/).
-
-## Encoding
-
-`sasrs` follows the encoding contract [docs/encoding.md](docs/encoding.md) (D-001): it behaves like a SAS 9.4 session in `ENCODING=LATIN1`/`WLATIN1` but with Unicode as its internal representation. Character lengths (`LENGTH`, literals) and truncations count **characters**, not bytes (`LENGTH('é')` = 1 — a deliberate divergence from SAS UTF-8 sessions, which count UTF-8 bytes). Source files, `%INCLUDE` and `INFILE` input are **strict UTF-8** (a non-UTF-8 file is an ERROR naming the file; a leading BOM is ignored) and outputs are UTF-8 (RTF escapes non-ASCII as `\uN?`; embedded PDF text falls back to `?`). No value is ever an invalid byte sequence, and no lossy conversion happens silently — see the contract for the full rules and the `utf8*` non-regression tests.
-
-## Library API
-
-`sasrs` is also usable as a library. The `sasrs::api` facade (ADR 0002)
-manages a session: submit SAS code, read back the tables it produced (Polars
-`DataFrame` + SAS metadata), inspect structured diagnostics, then close the
-session (temporary WORK dropped):
+The public `sasrs::api` facade keeps a live session across submissions and lets the host read produced datasets as Polars `DataFrame` values.
 
 ```rust
 use sasrs::api::{Options, Session};
 
-let mut session = Session::new(Options::default()).expect("session init");
-let submission = session.submit("data work.t; x = 1; run;");
-assert_eq!(submission.exit_code, 0);
+fn main() {
+    let mut session =
+        Session::new(Options::default()).expect("session init");
 
-let (df, vars) = session.dataset("work", "t").unwrap();
-let report = session.close();
+    let submission = session.submit(
+        "data work.answer; value = 42; run;"
+    );
+
+    assert_eq!(submission.exit_code, 0);
+
+    let (df, vars) = session
+        .dataset("work", "answer")
+        .expect("WORK.ANSWER");
+
+    println!("{} row(s), {} column(s)", df.height(), vars.len());
+
+    let report = session.close();
+    println!("exit={}", report.exit_code);
+}
 ```
 
-A complete, executable and tested walkthrough — import a CSV, aggregate it,
-read the resulting table with `Session::dataset`, print a structured
-diagnostic — lives in [`examples/quickstart.rs`](examples/quickstart.rs):
+Expected output:
+
+```text
+1 row(s), 1 column(s)
+exit=0
+```
+
+For a complete executable walkthrough:
 
 ```sh
 cargo run --locked --example quickstart
 ```
 
+The example imports the patients CSV, creates `WORK.SUMMARY`, reads it back through the API, inspects structured diagnostics and finishes with:
+
+```text
+OK
+```
+
+See [`examples/quickstart.rs`](examples/quickstart.rs).
+
+---
+
+## What is supported?
+
+sasrs already covers a broad subset of classic SAS batch workloads.
+
+| Area | Highlights |
+| --- | --- |
+| **DATA step** | Dataset creation, `SET`, `MERGE`, `BY`, `WHERE`, `IF/THEN/ELSE`, iterative `DO`, arrays, hash objects, `RETAIN`, formats/informats, external input/output and common DATA-step functions. |
+| **PROC SQL** | `SELECT`, joins, grouping, aggregates, subqueries, set operators, `CREATE TABLE AS`, views and common DDL/DML. |
+| **Base procedures** | `PRINT`, `SORT`, `CONTENTS`, `IMPORT`, `EXPORT`, `TRANSPOSE`, `APPEND`, `COMPARE`, `RANK`, `DATASETS`, `REPORT`, `TABULATE` and others. |
+| **Statistical procedures** | `MEANS/SUMMARY`, `FREQ`, `UNIVARIATE`, `TTEST`, `NPAR1WAY`, `CORR`, `REG` and additional implemented procedures. |
+| **Macro language** | `%MACRO`, parameters, `%LET`, macro variables, `%IF`, `%DO`, quoting functions, `%SYSFUNC`, `%INCLUDE` and tracing. |
+| **ODS / output** | LISTING, HTML, RTF, PDF, Excel, selected `ODS OUTPUT` objects and optional graphics rendering. |
+| **Formats** | Built-in numeric/date/character formats, informats and user-defined `PROC FORMAT` catalogs. |
+| **Libraries** | Local Parquet-backed libraries and optional S3 library support. |
+
+The detailed matrix belongs in the generated and test-backed documentation rather than on the landing page:
+
+- [Conformance status](conformance/STATUS.md)
+- [Getting started](docs/getting-started.md)
+- [Support contract](docs/support-contract.md)
+- [Contributing / coverage-state definitions](CONTRIBUTING.md)
+
+Selected compatibility claims are backed by validated cases `compat/transpose/*`, see [`conformance/STATUS.md`](conformance/STATUS.md). The conformance report is generated from the corpus and records both validated behavior and known divergences.
+
+---
+
+## CLI reference
+
+```text
+sasrs <PROGRAM.sas> [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--log <FILE>` | Write the SAS log to a file instead of stderr. |
+| `--print <FILE>` | Write the listing to a file instead of stdout. |
+| `--work <DIR>` | Persist WORK in the given directory. |
+| `--deterministic` | Freeze non-deterministic output for reproducible tests. |
+| `--vectorize` | Enable the optional vectorized fast path for simple DATA steps. |
+
+### Exit codes
+
+| Code | Meaning |
+| :---: | --- |
+| `0` | Completed without WARNING or ERROR. |
+| `1` | Completed with at least one WARNING. |
+| `2` | At least one ERROR occurred, or an output stream/file could not be written. |
+
+The full diagnostic policy is documented in [`docs/support-contract.md`](docs/support-contract.md).
+
+---
+
+## Rust library API
+
+The CLI and library facade use the same execution engine.
+
+A `Session` can:
+
+- submit multiple SAS programs while preserving session state;
+- keep WORK, librefs, macro state, formats and SQL views alive between submissions;
+- return the log and listing for each submission;
+- expose structured NOTE / WARNING / ERROR diagnostics;
+- register a host Polars `DataFrame` as a SAS dataset;
+- read a SAS dataset back as `DataFrame + Vec<VarMeta>`;
+- report ODS files produced by the session;
+- clean up temporary WORK on close.
+
+Primary types live under:
+
+```rust
+sasrs::api::{
+    ApiError,
+    CloseReport,
+    Diagnostic,
+    Options,
+    ProducedFile,
+    ProducedFileKind,
+    Session,
+    Severity,
+    Submission,
+    VarMeta,
+    VarType,
+}
+```
+
+See [`src/api.rs`](src/api.rs) and [`examples/quickstart.rs`](examples/quickstart.rs).
+
+---
+
+## Python launcher
+
+The `python/` subdirectory contains a thin Python launcher for environments where installing Rust is undesirable.
+
+On Windows x86_64 it can download the matching precompiled sasrs release, verify its SHA-256 and execute it:
+
+```sh
+uvx --from "git+https://github.com/LePhilippeDucTai/sasrs#subdirectory=python" sasrs program.sas
+```
+
+The Python package is a launcher around the native executable; it is not a separate Python implementation of the interpreter.
+
+See [`python/README.md`](python/README.md).
+
+---
+
 ## Optional features
 
-- `graphics` — enables real image rendering for ODS GRAPHICS (PNG/SVG via
-  `plotters`): PROC SGPLOT plots, PROC UNIVARIATE `HISTOGRAM`/`QQPLOT`, PROC
-  GPLOT/GCHART. Without it, the default build stays byte-identical and the
-  procedures emit an "image deferred" NOTE instead.
+### ODS graphics
+
+Enable PNG/SVG rendering for supported graphical procedures:
 
 ```sh
 cargo build --features graphics
 ```
 
-- `s3` — enables an S3 storage backend for libraries
-  (`libname x 's3://bucket/prefix';`), pulling in the Polars `cloud` + `aws`
-  features. Off by default; the default build is unaffected.
+### S3 libraries
+
+Enable the S3 storage backend:
+
+```sh
+cargo build --features s3
+```
+
+Then SAS programs can assign an S3-backed library:
+
+```sas
+libname lake 's3://bucket/prefix';
+```
+
+Both features are off by default.
+
+---
 
 ## Storage and recovery
 
-sasrs tables live on disk as a Parquet file plus a sidecar: `<table>.parquet`
-holds the data, `<table>.parquet.sasmeta.json` holds the SAS-only metadata
-(format, label, declared character length). The design is specified in
-[ADR 0001](docs/adr/0001-stockage-parquet-sidecar.md).
+sasrs datasets are stored as two files:
 
-**Atomic write protocol.** Every write publishes the Parquet file first
-(temporary file in the same directory, fsync, atomic rename), then writes the
-metadata sidecar the same way. A crash can therefore leave only two coherent
-states: either the old table is intact, or the new data is published without
-(new) metadata. New data can never silently inherit stale metadata.
+```text
+<table>.parquet
+<table>.parquet.sasmeta.json
+```
 
-**Expected diagnostics.** On read, the sidecar fingerprint (file size, row
-count, column count) is compared against the Parquet file actually present.
-A sidecar that is unreadable, malformed, or whose fingerprint no longer
-matches is IGNORED, and the log carries a `WARNING` naming the sidecar file
-and the cause. Data is always read from the Parquet file itself; metadata is
-never applied when it cannot be proven to match.
+The Parquet file contains the data. The sidecar contains SAS-specific metadata such as formats, labels and declared character lengths.
 
-**After an interruption.** Recovery needs no special tooling:
+Writes use an atomic publication protocol: data is published first through a temporary file and atomic rename, then metadata is published the same way. A stale or inconsistent sidecar is ignored with a diagnostic rather than silently applied to different data.
 
-1. Re-run the step that was interrupted. Temp files (`<target>.sasrs-tmp.<pid>`)
-   left behind are purged automatically at the next write to the same target.
-2. If a table was renamed mid-way (`proc datasets ... change`), the data may
-   exist under the new name without metadata, with the old sidecar left
-   orphaned at the old name — this is safe and diagnosed if applicable;
-   re-creating the old name replaces the orphan.
-3. If a `WARNING` about a sidecar persists, simply re-write the affected
-   table: the fresh sidecar replaces the stale one and the warning disappears.
+This makes the underlying data directly accessible from the wider Arrow/Parquet ecosystem while keeping SAS metadata available to sasrs.
 
-Simulated interruptions are exercised by the `fault-injection` feature
-(`SASRS_FAULT_INJECT` environment variable, exit code 86), covered by the
-`tests/storage_integrity.rs` suite — see the `test-fault-injection` CI job.
+Design details:
+
+- [ADR 0001 — Parquet + sidecar storage](docs/adr/0001-stockage-parquet-sidecar.md)
+- [Encoding contract](docs/encoding.md)
+
+---
+
+## Reliability model
+
+The project treats compatibility as an evidence problem, not as a checkbox.
+
+The repository contains:
+
+- ordinary Rust unit/integration tests;
+- snapshot tests;
+- property tests;
+- differential tests;
+- example-level end-to-end tests;
+- storage fault-injection tests;
+- a dedicated SAS compatibility/conformance corpus.
+
+The guiding rule is simple:
+
+> **Anything that could change a result should not become a silent fallback.**
+
+Unsupported result-affecting behavior is expected to surface as an ERROR. Display-only limitations may surface as a WARNING or NOTE according to the [support contract](docs/support-contract.md).
+
+---
+
+## Documentation map
+
+| Document | Purpose |
+| --- | --- |
+| [`docs/getting-started.md`](docs/getting-started.md) | Installation and first execution from a blank environment. |
+| [`examples/`](examples/) | Tested CLI and Rust API examples. |
+| [`conformance/STATUS.md`](conformance/STATUS.md) | Generated inventory of validated behavior and known divergences. |
+| [`docs/support-contract.md`](docs/support-contract.md) | Diagnostic and unsupported-feature policy. |
+| [`docs/encoding.md`](docs/encoding.md) | Character and file encoding contract. |
+| [`docs/release.md`](docs/release.md) | Release artifacts and release process. |
+| [`docs/adr/`](docs/adr/) | Architecture decisions. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Development, validation and contribution rules. |
+
+---
+
+## Project status
+
+sasrs is under active development.
+
+The priority is not to claim every corner of SAS 9.4 syntax as supported. The priority is to make supported workloads **predictable, inspectable and testable**, and to record known divergences explicitly.
+
+For production evaluation, start with the [live conformance report](conformance/STATUS.md) and the [support contract](docs/support-contract.md), then test your own representative SAS workload.
+
+---
+
+## Contributing
+
+Contributions are welcome, particularly when they include:
+
+1. a minimal SAS program demonstrating the behavior;
+2. a reference or independent oracle for the expected result;
+3. a regression/conformance test;
+4. the implementation and documentation update.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+---
 
 ## License
 
-Licensed under either of
+Licensed under either of:
 
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- [MIT](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
 
 at your option.
+
+---
+
+<div align="center">
+
+**SAS syntax in. Open data out. Rust underneath.**
+
+</div>
