@@ -24,8 +24,8 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "null — divergence à ouvrir par le coordinateur : sasrs exige KEY= pour UPDATE là où la doc SAS n'exige que BY (ERROR: An UPDATE statement requires a KEY= option)",
+  "status": "validated",
+  "issue": "sasrs #13 — UPDATE sans KEY= : accepté avec seulement un statement BY (les variables BY servent de clés de correspondance, cf. UPDATE Statement)",
   "data_types": {
     "master.csv": {
       "id": "num",

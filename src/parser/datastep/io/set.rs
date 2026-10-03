@@ -92,7 +92,10 @@ pub(crate) fn parse_merge(ts: &mut StatementStream) -> Result<DsStmt> {
 /// parenthésée sur la transaction, ou option nue en fin de statement (forme
 /// des exemples « Update Data » du chapitre 21 du SAS Language Reference by
 /// Example : https://go.documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/lepg/content/lepg.pdf).
-/// `key=` est OBLIGATOIRE et porte une liste (≥1) de noms de variables clé.
+/// `key=` est OPTIONNELLE et porte une liste (≥1) de noms de variables clé
+/// (issue #13 : UPDATE sans KEY= est accepté — la doc SAS n'exige qu'un BY,
+/// cf. UPDATE Statement, lestmtsref/n0zi0al7gygfzmn12ga0djr39d77 ; c'est la
+/// compilation qui exige KEY= OU un statement BY).
 pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     let upd_tok = ts.peek().clone();
     ts.next(); // `update`
@@ -136,8 +139,10 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
     }
     let transaction = trans_spec.dref;
     let mut nomissingcheck = matches!(topts.updatemode.as_deref(), Some("nomissingcheck"));
-    // `key=` obligatoire ; `updatemode=` nue (fin de statement) optionnelle,
-    // au plus une fois. Les options apparaissent dans n'importe quel ordre.
+    // `key=` optionnelle (issue #13) ; `updatemode=` nue (fin de statement)
+    // optionnelle, au plus une fois. Les options apparaissent dans n'importe
+    // quel ordre. L'exigence « KEY= OU BY » est tranchée à la compilation
+    // (le parser ne voit pas le statement BY).
     let mut key_vars: Vec<String> = Vec::new();
     while let Some(kw) = ts.peek().ident() {
         if ts.peek2().kind != TokenKind::Eq {
@@ -187,12 +192,6 @@ pub(crate) fn parse_update(ts: &mut StatementStream) -> Result<DsStmt> {
                 ));
             }
         }
-    }
-    if key_vars.is_empty() {
-        return Err(SasError::parse(
-            "An UPDATE statement requires a KEY= option with at least one variable.",
-            upd_tok.span,
-        ));
     }
     ts.expect_semi()?;
     Ok(DsStmt::Update {
