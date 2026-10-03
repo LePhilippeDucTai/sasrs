@@ -28,5 +28,5 @@
       "response": "num"
     }
   },
-  "issue": "19"
+  "issue": "sasrs #19 — PROC NPAR1WAY WILCOXON : test de Wilcoxon à 2 échantillons via OUTPUT OUT= (_WIL_, Z_WIL, P2_WIL) — Z calculé sans correction de continuité conformément à la doc SAS/STAT NPAR1WAY (WILCOXON, OUTPUT Statement)"
 }
