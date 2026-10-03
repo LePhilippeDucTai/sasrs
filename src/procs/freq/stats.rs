@@ -1,5 +1,53 @@
 use super::*;
 
+/// J02-P2 (issue #17) — 2x2 exact Fisher computation shared by the listing
+/// block and the OUTPUT OUT= FISHER dataset path (identical arithmetic, so
+/// the dataset reproduces the listing p bit for bit).
+///
+/// Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
+/// count a = freq[0][0] determines the whole table. a ranges over
+/// [max(0, r1+c1-n), min(r1, c1)]; the hypergeometric probability of a is
+/// C(r1,a)·C(r2,c1-a)/C(n,c1). Returns (p_left, p_right, p_obs, p_two, a_obs).
+fn fisher_2x2_compute(
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+) -> (f64, f64, f64, f64, i64) {
+    let r1 = row_tot[0] as i64;
+    let r2 = row_tot[1] as i64;
+    let c1 = col_tot[0] as i64;
+    let n = r1 + r2;
+    let a_obs = freq[0][0] as i64;
+
+    let ln_p = |a: i64| -> f64 {
+        let b = c1 - a; // freq[1][0]
+        ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, b as u64)
+            - ln_choose(n as u64, c1 as u64)
+    };
+
+    let lo = 0.max(r1 + c1 - n);
+    let hi = r1.min(c1);
+    let p_obs = ln_p(a_obs).exp();
+
+    let mut p_left = 0.0_f64; // P(A <= a_obs)
+    let mut p_right = 0.0_f64; // P(A >= a_obs)
+    let mut p_two = 0.0_f64; // sum of probs <= p_obs (with tolerance)
+    let tol = 1e-7;
+    for a in lo..=hi {
+        let p = ln_p(a).exp();
+        if a <= a_obs {
+            p_left += p;
+        }
+        if a >= a_obs {
+            p_right += p;
+        }
+        if p <= p_obs * (1.0 + tol) {
+            p_two += p;
+        }
+    }
+    (p_left, p_right, p_obs, p_two, a_obs)
+}
+
 /// Fisher's exact test. Full exact two-sided p-value for 2x2 tables (sum of
 /// hypergeometric probabilities ≤ that of the observed table), plus the
 /// left/right one-sided tails and the observed table probability. General
@@ -33,42 +81,7 @@ pub(super) fn fisher_block(
         return Ok(());
     }
 
-    // Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
-    // count a = freq[0][0] determines the whole table. a ranges over
-    // [max(0, r1+c1-n), min(r1, c1)]. The hypergeometric probability of a is
-    // C(r1,a)·C(r2,c1-a)/C(n,c1).
-    let r1 = row_tot[0] as i64;
-    let r2 = row_tot[1] as i64;
-    let c1 = col_tot[0] as i64;
-    let n = grand as i64;
-    let a_obs = freq[0][0] as i64;
-
-    let ln_p = |a: i64| -> f64 {
-        let b = c1 - a; // freq[1][0]
-        ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, b as u64)
-            - ln_choose(n as u64, c1 as u64)
-    };
-
-    let lo = 0.max(r1 + c1 - n);
-    let hi = r1.min(c1);
-    let p_obs = ln_p(a_obs).exp();
-
-    let mut p_left = 0.0_f64; // P(A <= a_obs)
-    let mut p_right = 0.0_f64; // P(A >= a_obs)
-    let mut p_two = 0.0_f64; // sum of probs <= p_obs (with tolerance)
-    let tol = 1e-7;
-    for a in lo..=hi {
-        let p = ln_p(a).exp();
-        if a <= a_obs {
-            p_left += p;
-        }
-        if a >= a_obs {
-            p_right += p;
-        }
-        if p <= p_obs * (1.0 + tol) {
-            p_two += p;
-        }
-    }
+    let (p_left, p_right, p_obs, p_two, a_obs) = fisher_2x2_compute(freq, row_tot, col_tot);
     let clamp = |p: f64| p.clamp(0.0, 1.0);
 
     let headers = vec!["Statistic".to_string(), "Value".to_string()];
@@ -424,6 +437,34 @@ pub(super) fn fisher_rxc_compute(
         count: mc_samples,
         monte_carlo: true,
     }
+}
+
+/// J02-P2 (issue #17) — p exacte bilatérale de Fisher pour le statement
+/// OUTPUT OUT= FISHER (dataset). 2x2 : même calcul dédié que le listing
+/// (`fisher_2x2_compute`, bit à bit identique) ; table r×c : moteur
+/// Freeman-Halton avec les constantes de production (énumération exacte
+/// sous garde, sinon Monte-Carlo déterministe à graine fixe). Retourne la
+/// p bornée [0,1].
+pub(super) fn fisher_exact_p_two(
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) -> f64 {
+    if row_tot.len() == 2 && col_tot.len() == 2 {
+        return fisher_2x2_compute(freq, row_tot, col_tot).3.clamp(0.0, 1.0);
+    }
+    fisher_rxc_compute(
+        freq,
+        row_tot,
+        col_tot,
+        grand,
+        FISHER_MAX_TABLES,
+        FISHER_MC_SAMPLES,
+        FISHER_MC_SEED,
+    )
+    .p_two
+    .clamp(0.0, 1.0)
 }
 
 /// Render the Freeman-Halton block for a general r×c table. SAS's r×c Fisher

@@ -229,6 +229,12 @@ pub(super) fn is_output_stat(s: &str) -> bool {
             | "range"
             | "qrange"
             | "var"
+            // J02-P2 (issue #17) — moments d'ordre 3/4 (mêmes formules g1/g2
+            // que le bloc Moments du listing).
+            | "skewness"
+            | "skew"
+            | "kurtosis"
+            | "kurt"
     )
 }
 

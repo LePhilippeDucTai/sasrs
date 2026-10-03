@@ -21,12 +21,12 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "drug.csv": {
       "drug": "char",
       "absorb": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC GLM (ERROR: The OUTPUT statement is not supported in PROC GLM; it can affect results and cannot be ignored. — code retour 2, dataset WORK.PRED non produit) ; l'ANOVA elle-même est correcte (Model MS=72.33333, Error MS=1.0)"
+  "issue": "sasrs #17 — PROC GLM : statement OUTPUT OUT= (P=/R=) expose valeurs ajustées (moyennes de groupe) et résidus en dataset conformément à la doc SAS/STAT GLM (OUTPUT Statement)"
 }

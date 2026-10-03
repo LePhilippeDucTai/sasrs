@@ -21,7 +21,7 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "twoway.csv": {
       "treatment": "char",
@@ -29,5 +29,5 @@
       "n": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC FREQ (ERROR: The OUTPUT statement is not supported in PROC FREQ; it can affect results and cannot be ignored. — code retour 2, dataset WORK.FS non produit) ; la p-value exacte de Fisher reste calculable côté listing mais pas en dataset"
+  "issue": "sasrs #17 — PROC FREQ : statement OUTPUT OUT= FISHER expose la p exacte bilatérale de Fisher en dataset (XP2_FISH, LXP2_FISH = ln p) conformément à la doc FREQ (OUTPUT Statement)"
 }

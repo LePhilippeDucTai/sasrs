@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 19 validés, 7 divergences connues.
+Corpus : **26 cas** — 22 validés, 4 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -23,8 +23,8 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
 | PROC CORR | 2 | 0 | 2 |
-| PROC FREQ | 3 | 2 | 1 |
-| PROC GLM | 1 | 0 | 1 |
+| PROC FREQ | 3 | 3 | 0 |
+| PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
 | PROC MEANS | 1 | 1 | 0 |
 | PROC NPAR1WAY | 1 | 0 | 1 |
@@ -33,7 +33,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC SQL | 2 | 2 | 0 |
 | PROC TRANSPOSE | 1 | 1 | 0 |
 | PROC TTEST | 1 | 1 | 0 |
-| PROC UNIVARIATE | 2 | 1 | 1 |
+| PROC UNIVARIATE | 2 | 2 | 0 |
 
 ## Détail par zone
 
@@ -107,20 +107,14 @@ Divergences connues :
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
 | `base` | `freq-chisq-output` | validé | documentation SAS publiée |
-| `stat` | `freq-fisher-2x2` | divergence connue | documentation SAS publiée |
+| `stat` | `freq-fisher-2x2` | validé | documentation SAS publiée |
 | `base` | `freq-tables-out` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `freq-fisher-2x2` — null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC FREQ (ERROR: The OUTPUT statement is not supported in PROC FREQ; it can affect results and cannot be ignored. — code retour 2, dataset WORK.FS non produit) ; la p-value exacte de Fisher reste calculable côté listing mais pas en dataset
 
 ### PROC GLM
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `glm-oneway-predicted` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `glm-oneway-predicted` — null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC GLM (ERROR: The OUTPUT statement is not supported in PROC GLM; it can affect results and cannot be ignored. — code retour 2, dataset WORK.PRED non produit) ; l'ANOVA elle-même est correcte (Model MS=72.33333, Error MS=1.0)
+| `stat` | `glm-oneway-predicted` | validé | documentation SAS publiée |
 
 ### PROC LOGISTIC
 
@@ -181,11 +175,8 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `univariate-moments-output` | divergence connue | documentation SAS publiée |
+| `stat` | `univariate-moments-output` | validé | documentation SAS publiée |
 | `stat` | `univariate-weighted-output` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `univariate-moments-output` — null — divergence à ouvrir par le coordinateur : statistiques SKEWNESS et KURTOSIS non supportées dans l'instruction OUTPUT de PROC UNIVARIATE (ERROR: Unsupported statistic 'SKEWNESS' in OUTPUT statement. — code retour 2, dataset WORK.MOM non produit) ; n/mean/std/min/max sont acceptés
 
 ## Provenance des attendus
 

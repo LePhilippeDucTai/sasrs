@@ -140,6 +140,7 @@ fn test_type1_vs_type3_unbalanced() {
         estimates: vec![],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();

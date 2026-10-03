@@ -49,11 +49,13 @@ fn output_chisq_one_way(cats: &[Category]) -> OutputChisq {
     }
 }
 
-/// J02-P1 (issue #16) — build and write the dataset named by
-/// `output out=<ds> chisq;` for the LAST TABLES request, following the SAS
-/// FREQ naming convention sanctioned by decision a43c8c14:
-/// `_PCHI_` (Pearson chi-square), `_PCHI_DF_` (DF), `P_PCHI` (p-value),
-/// one observation. Log NOTE mirroring the OUT= one-way path.
+/// J02-P1 (issue #16) / J02-P2 (issue #17) — build and write the dataset
+/// named by `output out=<ds> chisq;` and/or `... fisher;` for the LAST
+/// TABLES request, following the SAS FREQ naming convention sanctioned by
+/// decision a43c8c14: `_PCHI_` (Pearson chi-square), `_PCHI_DF_` (DF),
+/// `P_PCHI` (p-value), puis `XP2_FISH` (p exacte bilatérale de Fisher) et
+/// `LXP2_FISH` (logarithme népérien de XP2_FISH), one observation. Log
+/// NOTE mirroring the OUT= one-way path.
 ///
 /// Documented divergence: with BY processing SAS writes one observation per
 /// BY group (with the BY columns); sasrs writes the statistics of the LAST
@@ -66,16 +68,34 @@ pub(super) fn write_stats_output(
     weights: Option<&[Value]>,
     oreq: &FreqOutput,
 ) -> Result<()> {
-    let stats = match req.vars.len() {
+    // Column names per decision a43c8c14 (SAS/corpus convention); order is
+    // fixed (CHISQ block then FISHER block) whatever the keyword order.
+    let mut columns: Vec<Column> = Vec::new();
+    let mut vars: Vec<VarMeta> = Vec::new();
+    let push_num =
+        |name: &str, v: Option<f64>, columns: &mut Vec<Column>, vars: &mut Vec<VarMeta>| {
+            columns.push(Series::new(name.into(), vec![v]).into());
+            vars.push(num_var_meta(name));
+        };
+
+    match req.vars.len() {
         1 => {
+            if oreq.fisher {
+                return Err(SasError::runtime(
+                    "The FISHER statistic of the PROC FREQ OUTPUT statement requires a two-way table request in sasrs.",
+                ));
+            }
             let col_idx = find_var(ds, &req.vars[0])?;
             let col = decode_column(ds, col_idx)?;
             let (cats, _) = tally(&col, rows, req.missing, weights);
-            output_chisq_one_way(&cats)
+            let stats = output_chisq_one_way(&cats);
+            push_num("_PCHI_", stats.pchi, &mut columns, &mut vars);
+            push_num("_PCHI_DF_", stats.pchi_df, &mut columns, &mut vars);
+            push_num("P_PCHI", stats.p_pchi, &mut columns, &mut vars);
         }
         2 => {
             // Same frequency-matrix construction as two_way (weighted cells,
-            // sas_cmp axis ordering), then the shared CHISQ computation.
+            // sas_cmp axis ordering), then the shared computations.
             let row_idx = find_var(ds, &req.vars[0])?;
             let col_idx = find_var(ds, &req.vars[1])?;
             let row_col = decode_column(ds, row_idx)?;
@@ -106,11 +126,48 @@ pub(super) fn write_stats_output(
             let row_tot: Vec<f64> = (0..nr).map(|r| freq[r].iter().sum()).collect();
             let col_tot: Vec<f64> = (0..nc).map(|c| (0..nr).map(|r| freq[r][c]).sum()).collect();
             let grand: f64 = row_tot.iter().sum();
-            let res = two_way_chisq_compute(&freq, &row_tot, &col_tot, grand);
-            OutputChisq {
-                pchi: res.computable.then_some(res.pearson),
-                pchi_df: res.computable.then_some(res.df),
-                p_pchi: res.computable.then_some(res.p_pearson),
+
+            if oreq.chisq {
+                let res = two_way_chisq_compute(&freq, &row_tot, &col_tot, grand);
+                push_num(
+                    "_PCHI_",
+                    res.computable.then_some(res.pearson),
+                    &mut columns,
+                    &mut vars,
+                );
+                push_num(
+                    "_PCHI_DF_",
+                    res.computable.then_some(res.df),
+                    &mut columns,
+                    &mut vars,
+                );
+                push_num(
+                    "P_PCHI",
+                    res.computable.then_some(res.p_pearson),
+                    &mut columns,
+                    &mut vars,
+                );
+            }
+
+            // J02-P2 (issue #17) — OUTPUT FISHER : test exact sur comptages
+            // entiers (les poids éventuels sont arrondis comme pour le
+            // listing), p exacte bilatérale + ln(p).
+            if oreq.fisher {
+                let ifreq = round_matrix(&freq);
+                let irow: Vec<usize> = ifreq.iter().map(|r| r.iter().sum()).collect();
+                let icol: Vec<usize> = (0..nc)
+                    .map(|c| (0..nr).map(|r| ifreq[r][c]).sum())
+                    .collect();
+                let igrand: usize = irow.iter().sum();
+                let computable = igrand > 0 && nr >= 2 && nc >= 2;
+                let (xp2, lxp2) = if computable {
+                    let p = fisher_exact_p_two(&ifreq, &irow, &icol, igrand);
+                    (Some(p), Some(p.ln()))
+                } else {
+                    (None, None)
+                };
+                push_num("XP2_FISH", xp2, &mut columns, &mut vars);
+                push_num("LXP2_FISH", lxp2, &mut columns, &mut vars);
             }
         }
         _ => {
@@ -118,19 +175,8 @@ pub(super) fn write_stats_output(
                 "The OUTPUT statement of PROC FREQ is not supported for n-way table requests in sasrs.",
             ));
         }
-    };
+    }
 
-    // Column names per decision a43c8c14 (SAS/corpus convention).
-    let columns: Vec<Column> = vec![
-        Series::new("_PCHI_".into(), vec![stats.pchi]).into(),
-        Series::new("_PCHI_DF_".into(), vec![stats.pchi_df]).into(),
-        Series::new("P_PCHI".into(), vec![stats.p_pchi]).into(),
-    ];
-    let vars = vec![
-        num_var_meta("_PCHI_"),
-        num_var_meta("_PCHI_DF_"),
-        num_var_meta("P_PCHI"),
-    ];
     let out_ds = SasDataset {
         df: DataFrame::new(columns)?,
         vars,

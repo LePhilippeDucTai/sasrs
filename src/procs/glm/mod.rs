@@ -14,6 +14,7 @@ use crate::listing::Align;
 use crate::missing::value_to_num;
 use crate::parser::StatementStream;
 use crate::procs::common;
+use crate::procs::common::num_var_meta;
 use crate::procs::common::{decode_column, sample_std};
 use crate::procs::common::{fmt2, fmt5, fmt6};
 use crate::session::Session;
@@ -27,6 +28,7 @@ mod multiway_report;
 mod oneway;
 mod oneway_means;
 mod oneway_report;
+mod output;
 mod parse;
 use design::*;
 use multiway::*;
@@ -34,6 +36,8 @@ use multiway_report::*;
 use oneway::*;
 use oneway_means::*;
 use oneway_report::*;
+pub use output::GlmOutput;
+use output::*;
 pub use parse::parse;
 
 // ───────────────────────── AST ─────────────────────────
@@ -47,6 +51,8 @@ pub struct GlmAst {
     pub estimates: Vec<GlmEstimate>,
     pub contrasts: Vec<GlmContrast>,
     pub means_vars: Vec<String>,
+    /// J02-P2 (issue #17) — OUTPUT statement (`output out=<ds> p= r=;`).
+    pub output: Option<GlmOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +121,13 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
     let has_interaction = model.effect_terms.iter().any(|t| t.len() > 1);
     let is_multiway = has_interaction || model.effect_terms.len() > 1 || ast.class_vars.len() > 1;
     if is_multiway {
+        // J02-P2 (issue #17) — OUTPUT OUT= est implémenté pour le dessin une
+        // voie uniquement ; refus explicite plutôt qu'honneur silencieux.
+        if ast.output.is_some() {
+            return Err(SasError::runtime(
+                "The OUTPUT statement of PROC GLM is only supported for one-way models in sasrs.",
+            ));
+        }
         return execute_multiway(ast, model, session);
     }
 
@@ -145,6 +158,12 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
     print_class_level_info_oneway(session, ast, &ds, n_obs)?;
 
     // --- 5. Per-dependent variable loop ---
+    // J02-P2 (issue #17) — OUTPUT OUT= : une seule variable dépendante.
+    if ast.output.is_some() && model.dependents.len() > 1 {
+        return Err(SasError::runtime(
+            "The OUTPUT statement of PROC GLM supports a single dependent variable in sasrs.",
+        ));
+    }
     for dep_var in &model.dependents {
         // For one-way GLM, use the first effect as the CLASS grouping variable
         let eff = &model.effects[0];
@@ -179,6 +198,12 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
 
         if show_means {
             print_oneway_means(session, eff, &stats);
+        }
+
+        // J02-P2 (issue #17) — statement OUTPUT OUT= : valeurs ajustées
+        // (moyennes de groupe) et résidus en dataset, après le rendu.
+        if let Some(oreq) = &ast.output {
+            write_output(session, &ds, dep_var, eff, &stats, oreq)?;
         }
     }
 

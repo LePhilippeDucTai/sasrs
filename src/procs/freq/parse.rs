@@ -90,14 +90,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<FreqAst> {
     })
 }
 
-/// J02-P1 — parse one OUTPUT statement body (after `output` consumed),
-/// through its terminating `;`. Only OUT= and the CHISQ statistic keyword
-/// are honored; FISHER/EXACT raise an explicit error instead of being
-/// silently ignored (a requested-but-missing statistic must not look
-/// honored).
+/// J02-P1/J02-P2 — parse one OUTPUT statement body (after `output`
+/// consumed), through its terminating `;`. Only OUT= and the CHISQ/FISHER
+/// statistic keywords are honored (J02-P2, issue #17 : FISHER →
+/// XP2_FISH/LXP2_FISH) ; EXACT et les autres mots-clés statistiques
+/// lèvent une erreur explicite au lieu d'être ignorés silencieusement (une
+/// statistique demandée mais absente ne doit jamais paraître honorée).
 pub(super) fn parse_output_statement(ts: &mut StatementStream) -> Result<FreqOutput> {
     let mut out: Option<DatasetRef> = None;
     let mut chisq = false;
+    let mut fisher = false;
     loop {
         match &ts.peek().kind {
             TokenKind::Semi => {
@@ -113,9 +115,15 @@ pub(super) fn parse_output_statement(ts: &mut StatementStream) -> Result<FreqOut
         } else if ts.peek().is_kw("chisq") {
             ts.next();
             chisq = true;
-        } else if ts.peek().is_kw("fisher") || ts.peek().is_kw("exact") {
+        } else if ts.peek().is_kw("fisher") {
+            // J02-P2 (issue #17) — OUTPUT FISHER : p exacte bilatérale
+            // (XP2_FISH) et son logarithme népérien (LXP2_FISH), doc FREQ
+            // « OUTPUT Statement » citée par le corpus.
+            ts.next();
+            fisher = true;
+        } else if ts.peek().is_kw("exact") {
             return Err(SasError::parse(
-                "FISHER/EXACT statistics are not available in the PROC FREQ OUTPUT statement in sasrs.",
+                "EXACT is not an OUTPUT statement statistic keyword in sasrs; use FISHER.",
                 ts.peek().span,
             ));
         } else if ts.peek().is_kw("agree")
@@ -151,13 +159,13 @@ pub(super) fn parse_output_statement(ts: &mut StatementStream) -> Result<FreqOut
             ts.peek().span,
         ));
     };
-    if !chisq {
+    if !chisq && !fisher {
         return Err(SasError::parse(
-            "The OUTPUT statement of PROC FREQ requires at least one statistic keyword (CHISQ is the only one supported in sasrs).",
+            "The OUTPUT statement of PROC FREQ requires at least one statistic keyword (CHISQ and FISHER are the ones supported in sasrs).",
             ts.peek().span,
         ));
     }
-    Ok(FreqOutput { out, chisq })
+    Ok(FreqOutput { out, chisq, fisher })
 }
 
 /// Parse one TABLES statement body (after "tables" consumed), through its

@@ -21,11 +21,11 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "scores.csv": {
       "score": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : statistiques SKEWNESS et KURTOSIS non supportées dans l'instruction OUTPUT de PROC UNIVARIATE (ERROR: Unsupported statistic 'SKEWNESS' in OUTPUT statement. — code retour 2, dataset WORK.MOM non produit) ; n/mean/std/min/max sont acceptés"
+  "issue": "sasrs #17 — PROC UNIVARIATE : statistiques SKEWNESS/KURTOSIS acceptées dans l'instruction OUTPUT (mêmes g1/g2 que le bloc Moments) conformément à la doc UNIVARIATE (OUTPUT Statement)"
 }
