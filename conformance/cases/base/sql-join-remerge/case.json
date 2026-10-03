@@ -21,8 +21,8 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "null — divergences à ouvrir par le coordinateur : prédicat WHERE ignoré dans la jointure « from a, b where c.id=o.id » (produit un produit cartésien) et remerge « amount/sum(amount) group by region » en erreur (not found: amount)",
+  "status": "validated",
+  "issue": "sasrs #15 — SQL : prédicat WHERE equi appliqué comme condition de jointure interne dans « from a, b where a.k = b.k » (anti-produit cartésien) et remerge GROUP BY : une colonne source non agrégée du SELECT (amount/sum(amount) group by region) est résolue contre la source (agrégat par groupe rejoint à chaque ligne, NOTE « remerging summary statistics »)",
   "data_types": {
     "customers.csv": {
       "id": "num",

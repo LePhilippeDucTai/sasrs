@@ -145,11 +145,13 @@ pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFra
     let resolved = resolve_subqueries(query, session)?;
     let query = &resolved;
 
-    // 1. FROM + joins.
-    let mut lf = build_from(query, session)?;
+    // 1. FROM + joins. Issue #15 : un prédicat WHERE equi entre tables
+    // comma-joined est consommé comme condition de jointure (anti-produit
+    // cartésien) ; `build_from` rend le WHERE résiduel à filtrer.
+    let (mut lf, residual_where) = build_from(query, session)?;
 
-    // 2. WHERE.
-    if let Some(w) = &query.where_ {
+    // 2. WHERE (conjoints non consommés par une jointure).
+    if let Some(w) = &residual_where {
         let pred = sql_expr_to_polars(w, &Ctx::empty())?;
         lf = lf.filter(pred);
     }
@@ -174,7 +176,7 @@ pub fn lower_select(query: &SelectStmt, session: &mut Session) -> Result<LazyFra
         // fait ensemble : après agrégation, les colonnes agrégées et clés
         // existent par leur nom de sortie ; on ne peut plus ré-évaluer les
         // agrégats sur la frame réduite.
-        lf = apply_group_by_project(query, lf, &ctx)?;
+        lf = apply_group_by_project(query, lf, &ctx, session)?;
 
         // 7. DISTINCT puis 8. ORDER BY (sur les colonnes de sortie).
         if query.distinct {

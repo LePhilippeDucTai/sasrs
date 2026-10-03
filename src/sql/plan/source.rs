@@ -55,23 +55,53 @@ pub(super) fn scan_source(
     scan_normalized(session, &lib, &name)
 }
 
-pub(super) fn build_from(query: &SelectStmt, session: &mut Session) -> Result<LazyFrame> {
+/// Issue #15 : construit FROM (+ joins) en appliquant le prédicat WHERE
+/// comme condition de jointure quand c'est possible. Pour `from a, b
+/// where a.k = b.k`, SAS fait une jointure interne sur les clés — PAS un
+/// produit cartésien filtré. On décompose donc le WHERE en conjonctions
+/// et, pour chaque table FROM additionnelle, un conjoint equi
+/// `gauche.col = droite.col` (colonnes résolues de part et d'autre) est
+/// consommé comme clé de jointure ; les conjoints restants sont rendus
+/// comme WHERE résiduel à appliquer en filtre.
+pub(super) fn build_from(
+    query: &SelectStmt,
+    session: &mut Session,
+) -> Result<(LazyFrame, Option<SqlExpr>)> {
     let Some(first) = query.from.first() else {
         return Err(SasError::runtime(
             "PROC SQL: a SELECT must have a FROM clause.",
         ));
     };
     let mut lf = scan_source(session, first)?;
+    let mut left_cols = frame_columns(lf.clone())?;
+    let mut conjuncts: Vec<SqlExpr> = Vec::new();
+    if let Some(w) = &query.where_ {
+        split_conjuncts(w, &mut conjuncts);
+    }
 
-    // Tables FROM additionnelles (séparées par des virgules) = cross join.
+    // Tables FROM additionnelles (séparées par des virgules) : jointure
+    // interne si un conjoint du WHERE relie les deux côtés (sémantique
+    // SAS), sinon cross join (le WHERE résiduel filtrera).
     for extra in query.from.iter().skip(1) {
         let rhs = scan_source(session, extra)?;
-        lf = lf.join(
-            rhs,
-            [] as [Expr; 0],
-            [] as [Expr; 0],
-            JoinArgs::new(JoinType::Cross),
-        );
+        let right_cols = frame_columns(rhs.clone())?;
+        if let Some((i, lkey, rkey)) = equi_conjunct_between(&conjuncts, &left_cols, &right_cols) {
+            let mut args = JoinArgs::new(JoinType::Inner);
+            args.join_nulls = true; // SAS apparie les missings entre eux.
+            // Ordre SAS : celui de la table de gauche (et des lignes
+            // appariées de droite dans leur ordre d'origine).
+            args.maintain_order = MaintainOrderJoin::LeftRight;
+            lf = lf.join(rhs, [col(lkey)], [col(rkey)], args);
+            conjuncts.remove(i);
+        } else {
+            lf = lf.join(
+                rhs,
+                [] as [Expr; 0],
+                [] as [Expr; 0],
+                JoinArgs::new(JoinType::Cross),
+            );
+        }
+        left_cols.extend(right_cols);
     }
 
     // Joins explicites.
@@ -80,7 +110,70 @@ pub(super) fn build_from(query: &SelectStmt, session: &mut Session) -> Result<La
         lf = apply_join(lf, rhs, join)?;
     }
 
-    Ok(lf)
+    // WHERE résiduel : conjoints non consommés, ré-AND-és.
+    let residual = conjuncts.into_iter().reduce(|a, b| SqlExpr::Binary {
+        op: BinaryOp::And,
+        left: Box::new(a),
+        right: Box::new(b),
+    });
+    Ok((lf, residual))
+}
+
+/// Colonnes du schéma d'une frame (noms réels, pour la résolution
+/// insensible à la casse des clés de jointure).
+fn frame_columns(mut lf: LazyFrame) -> Result<Vec<String>> {
+    Ok(lf
+        .collect_schema()?
+        .iter_names()
+        .map(|n| n.to_string())
+        .collect())
+}
+
+/// Aplatit une conjonction AND en liste de conjonctions.
+fn split_conjuncts(e: &SqlExpr, out: &mut Vec<SqlExpr>) {
+    if let SqlExpr::Binary {
+        op: BinaryOp::And,
+        left,
+        right,
+    } = e
+    {
+        split_conjuncts(left, out);
+        split_conjuncts(right, out);
+    } else {
+        out.push(e.clone());
+    }
+}
+
+/// Cherche un conjoint equi du WHERE dont un côté résout contre une
+/// colonne de l'accumulé gauche et l'autre contre une colonne du côté
+/// droit. Renvoie (index du conjoint, clé gauche, clé droite) avec les
+/// noms RÉELS des colonnes de chaque schéma. Un prédicat qualifié des
+/// deux côtés par la MÊME table (`c.id = c.id`) n'est pas une jointure.
+fn equi_conjunct_between(
+    conjuncts: &[SqlExpr],
+    left_cols: &[String],
+    right_cols: &[String],
+) -> Option<(usize, String, String)> {
+    let find =
+        |cols: &[String], name: &str| cols.iter().find(|c| c.eq_ignore_ascii_case(name)).cloned();
+    for (i, c) in conjuncts.iter().enumerate() {
+        let Some((ltable, lcol, rtable, rcol)) = as_equi_key_qualified(c) else {
+            continue;
+        };
+        // Même table qualifiée des deux côtés → comparaison intra-table.
+        if let (Some(lt), Some(rt)) = (ltable.as_deref(), rtable.as_deref())
+            && lt.eq_ignore_ascii_case(rt)
+        {
+            continue;
+        }
+        if let (Some(lk), Some(rk)) = (find(left_cols, &lcol), find(right_cols, &rcol)) {
+            return Some((i, lk, rk));
+        }
+        if let (Some(rk), Some(lk)) = (find(right_cols, &lcol), find(left_cols, &rcol)) {
+            return Some((i, lk, rk));
+        }
+    }
+    None
 }
 
 pub(super) fn apply_join(
@@ -125,6 +218,31 @@ pub(super) fn apply_join(
         Ok(lf
             .join(rhs, [] as [Expr; 0], [] as [Expr; 0], args)
             .filter(pred))
+    }
+}
+
+/// Variante qualifiée de `as_equi_key` : renvoie (table gauche, colonne
+/// gauche, table droite, colonne droite) — les tables sont `None` pour
+/// une référence nue.
+pub(super) fn as_equi_key_qualified(
+    on: &SqlExpr,
+) -> Option<(Option<String>, String, Option<String>, String)> {
+    let SqlExpr::Binary { op, left, right } = on else {
+        return None;
+    };
+    if *op != BinaryOp::Eq {
+        return None;
+    }
+    let (lt, lc) = as_qualified_column(left)?;
+    let (rt, rc) = as_qualified_column(right)?;
+    Some((lt, lc, rt, rc))
+}
+
+fn as_qualified_column(e: &SqlExpr) -> Option<(Option<String>, String)> {
+    match e {
+        SqlExpr::Qualified { table, column } => Some((Some(table.clone()), column.clone())),
+        SqlExpr::Base(SasExpr::Var(name)) => Some((None, name.clone())),
+        _ => None,
     }
 }
 
