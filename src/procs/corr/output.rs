@@ -14,14 +14,19 @@ pub(super) struct CorrOutGroup {
 }
 
 /// Build a TYPE=CORR output dataset for `method` over the square analysis ×
-/// analysis correlation matrix, once per BY group. Layout (SAS):
+/// analysis correlation matrix, once per BY group. Layout (SAS, issue #18) :
 ///   [BY vars] _TYPE_  _NAME_   <var1> <var2> ...
+///             N                n1     n2     ...
 ///             MEAN             m1     m2     ...
 ///             STD              s1     s2     ...
-///             N                n1     n2     ...
+///             SUM              t1     t2     ...
+///             MIN              l1     l2     ...
+///             MAX              u1     u2     ...
 ///             CORR    var1     r11    r12    ...
 ///             CORR    var2     r21    r22    ...
-/// MEAN/STD/N rows carry an empty `_NAME_`. The CORR block uses the same
+/// The six descriptive rows carry an empty `_NAME_` and follow the order of
+/// the listing Simple Statistics (N, Mean, Std Dev, Sum, Minimum, Maximum).
+/// The CORR block uses the same
 /// pairwise-complete r computed for the listing. WEIGHT applies to Pearson.
 /// With BY (J08-P2) the block repeats per group, the BY variables in head
 /// columns; without BY the layout is byte-identical to the pre-J08 form.
@@ -33,7 +38,7 @@ pub(super) fn build_out_dataset(
     groups: &[CorrOutGroup],
 ) -> Result<SasDataset> {
     let k = analysis_cols.len();
-    let block_rows = 3 + k;
+    let block_rows = 6 + k;
 
     let mut type_col: Vec<Option<String>> = Vec::new();
     let mut name_col: Vec<Option<String>> = Vec::new();
@@ -45,12 +50,15 @@ pub(super) fn build_out_dataset(
     for g in groups {
         let all_rows: Vec<usize> = (0..g.n_obs).collect();
 
-        // Per-variable simple stats (unweighted MEAN/STD/N, matching SAS
-        // TYPE=CORR simple-statistics rows; WEIGHT does not alter these rows
-        // in v1).
+        // Per-variable simple stats (unweighted, matching the SAS TYPE=CORR
+        // simple-statistics rows — same values as the listing Simple
+        // Statistics block; WEIGHT does not alter these rows in v1).
         let mut means = Vec::with_capacity(k);
         let mut stds = Vec::with_capacity(k);
         let mut ns = Vec::with_capacity(k);
+        let mut sums = Vec::with_capacity(k);
+        let mut mins = Vec::with_capacity(k);
+        let mut maxs = Vec::with_capacity(k);
         for &c in analysis_cols {
             let (xs, _) = partition_numeric(&g.decoded[&c], &all_rows);
             let n = xs.len();
@@ -61,6 +69,23 @@ pub(super) fn build_out_dataset(
             });
             stds.push(sample_std(&xs));
             ns.push(n as f64);
+            sums.push(if n > 0 {
+                Some(xs.iter().sum::<f64>())
+            } else {
+                None
+            });
+            mins.push(xs.iter().copied().fold(None::<f64>, |a, x| {
+                Some(match a {
+                    Some(m) if m < x => m,
+                    _ => x,
+                })
+            }));
+            maxs.push(xs.iter().copied().fold(None::<f64>, |a, x| {
+                Some(match a {
+                    Some(m) if m > x => m,
+                    _ => x,
+                })
+            }));
         }
 
         // CORR block: square matrix over analysis_cols.
@@ -73,7 +98,13 @@ pub(super) fn build_out_dataset(
         );
 
         // Assemble row-major then transpose into columns.
-        // Row order: MEAN, STD, N, then one CORR row per analysis variable.
+        // Row order (SAS): N, MEAN, STD, SUM, MIN, MAX, then one CORR row
+        // per analysis variable.
+        type_col.push(Some("N".into()));
+        name_col.push(None);
+        for j in 0..k {
+            value_cols[j].push(Some(ns[j]));
+        }
         type_col.push(Some("MEAN".into()));
         name_col.push(None);
         for j in 0..k {
@@ -84,10 +115,20 @@ pub(super) fn build_out_dataset(
         for j in 0..k {
             value_cols[j].push(stds[j]);
         }
-        type_col.push(Some("N".into()));
+        type_col.push(Some("SUM".into()));
         name_col.push(None);
         for j in 0..k {
-            value_cols[j].push(Some(ns[j]));
+            value_cols[j].push(sums[j]);
+        }
+        type_col.push(Some("MIN".into()));
+        name_col.push(None);
+        for j in 0..k {
+            value_cols[j].push(mins[j]);
+        }
+        type_col.push(Some("MAX".into()));
+        name_col.push(None);
+        for j in 0..k {
+            value_cols[j].push(maxs[j]);
         }
         for i in 0..k {
             type_col.push(Some(CORR_TYPE.into()));

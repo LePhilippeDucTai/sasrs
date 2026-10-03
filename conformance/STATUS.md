@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 22 validés, 4 divergences connues.
+Corpus : **26 cas** — 24 validés, 2 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -22,7 +22,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — missing spéciaux | 1 | 1 | 0 |
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
-| PROC CORR | 2 | 0 | 2 |
+| PROC CORR | 2 | 2 | 0 |
 | PROC FREQ | 3 | 3 | 0 |
 | PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
@@ -95,12 +95,8 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `corr-pearson-outp` | divergence connue | documentation SAS publiée |
-| `stat` | `corr-spearman-outs` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `corr-pearson-outp` — null — divergence à ouvrir par le coordinateur : OUTP= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) là où la doc SAS décrit une observation par statistique descriptive (N, MEAN, STD, SUM, MIN, MAX — soit 6 lignes, N en premier) plus les 2 lignes CORR ; l'ordre des lignes et leur nombre divergent (les valeurs de corrélation elles-mêmes, 0.9600051599448531, sont conformes)
-- `corr-spearman-outs` — null — divergence à ouvrir par le coordinateur : mêmes écarts de layout qu'en Pearson — OUTS= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) au lieu des statistiques descriptives N/MEAN/STD/SUM/MIN/MAX + 2 lignes CORR de la doc ; rho de Spearman lui-même conforme (0.9428571428571428)
+| `stat` | `corr-pearson-outp` | validé | documentation SAS publiée |
+| `stat` | `corr-spearman-outs` | validé | documentation SAS publiée |
 
 ### PROC FREQ
 

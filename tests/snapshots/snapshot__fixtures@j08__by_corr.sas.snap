@@ -21,14 +21,14 @@ NOTE: PROCEDURE SORT used (Total process time):
 6       by sex;
 7       var height weight;
 8     run;
-NOTE: The data set WORK.CORROUT has 10 observations and 5 variables.
+NOTE: The data set WORK.CORROUT has 16 observations and 5 variables.
 NOTE: PROCEDURE CORR used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
 
 9     proc print data=work.corrout noobs;
 10    run;
-NOTE: There were 10 observations read from the data set WORK.CORROUT.
+NOTE: There were 16 observations read from the data set WORK.CORROUT.
 NOTE: PROCEDURE PRINT used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
@@ -85,14 +85,20 @@ sex=M
 
                     sex    _TYPE_    _NAME_          height          weight
 
+                    F      N                              9               9
                     F      MEAN                60.588888889    90.111111111
                     F      STD                 5.0183275213     19.38391372
-                    F      N                              9               9
+                    F      SUM                        545.3             811
+                    F      MIN                         51.3            50.5
+                    F      MAX                         66.5           112.5
                     F      CORR      height               1    0.8865488733
                     F      CORR      weight    0.8865488733               1
+                    M      N                             10              10
                     M      MEAN                       63.91          108.95
                     M      STD                 4.9379370411    22.727186363
-                    M      N                             10              10
+                    M      SUM                        639.1          1089.5
+                    M      MIN                         57.3              83
+                    M      MAX                           72             150
                     M      CORR      height               1    0.8500797723
                     M      CORR      weight    0.8500797723               1
 

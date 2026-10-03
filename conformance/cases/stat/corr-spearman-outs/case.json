@@ -21,12 +21,12 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "htwt.csv": {
       "height": "num",
       "weight": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : mêmes écarts de layout qu'en Pearson — OUTS= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) au lieu des statistiques descriptives N/MEAN/STD/SUM/MIN/MAX + 2 lignes CORR de la doc ; rho de Spearman lui-même conforme (0.9428571428571428)"
+  "issue": "sasrs #18 — PROC CORR SPEARMAN : dataset OUTS= conforme à la doc CORR (option SPEARMAN, OUTS= Data Set) — six observations descriptives _TYPE_= N/MEAN/STD/SUM/MIN/MAX (N en premier) suivies des lignes CORR ; rho de Spearman 0.9428571428571428 conservé"
 }
