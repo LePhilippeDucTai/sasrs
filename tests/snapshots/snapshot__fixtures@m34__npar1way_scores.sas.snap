@@ -45,13 +45,13 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               73.0000          90.0000             12.2367    -1.3484      0.1775
+               73.0000          90.0000             12.2367    -1.3893      0.1648
 
                                      Median Two-Sample Test
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-                3.0000           4.2632              1.1165    -0.6835      0.4943
+                3.0000           4.2632              1.1165    -1.1314      0.2579
 
                                     Median One-Way Analysis
 
@@ -63,7 +63,7 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               -3.1269          -0.0000              2.0142    -1.3042      0.1922
+               -3.1269          -0.0000              2.0142    -1.5524      0.1206
 
                                     Savage One-Way Analysis
 
@@ -75,7 +75,7 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               -3.0019          -0.0000              1.9301    -1.2963      0.1949
+               -3.0019          -0.0000              1.9301    -1.5553      0.1199
 
                                 Van der Waerden One-Way Analysis
 
@@ -94,7 +94,7 @@ NOTE: PROCEDURE NPAR1WAY used (Total process time):
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               73.0000          90.0000             12.2367    -1.3484      0.1775
+               73.0000          90.0000             12.2367    -1.3893      0.1648
 
                                            Exact Test
 
