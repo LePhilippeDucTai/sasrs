@@ -2,7 +2,7 @@
 
 Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).
 
-Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 4
+Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 5
 
 Base: `milestone/conformance-fixes`
 
@@ -58,12 +58,17 @@ Tier: T3 · Depends: J02-P3, J02-P6 · Checks: fmt, clippy, test-conformance, co
 ### J02-P5 — Revue J02
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus la vérification des tolérances numériques des attendus (valeurs bit-à-bit citées dans les issues #18/#19).
 
-Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P6 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P6, J02-P7 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
 
 ### J02-P6 — Correction d'oracle J02 : freq-chisq-output (décision 8be00f84)
 Correction de l'oracle du cas conformance/cases/base/freq-chisq-output, arithmétiquement faux (finding worker J02-P1 attempt f1b5cdc6, décision 8be00f84) : expected/stats.csv doit porter chi²=_PCHI_=3.3333333333333335 et p=P_PCHI=0.06788915486182903 pour la table [[8,2],[4,6]] (N=20 ; E=(6,4,6,4) ; Σ(O−E)²/E=3.3333333333333335 ; dénominateur N(AD−BC)²/((A+B)(C+D)(A+C)(B+D)) = 10·10·12·8 = 9600, et non 9212/9216). Corrige la chaîne de provenance du case.json (arithmétique 9216→9600, formule doc SAS déjà citée). Le statut reste known-divergence (la promotion est faite par J02-P1, PAS par cette unité — gel conformance/README : l'implémenteur de la correction ne modifie pas son propre oracle ; cette unité est indépendante du correctif). Régénère conformance/STATUS.md (python3 scripts/conformance_report.py) et vérifie --check.
 
 Tier: T5 · Depends: J01-P1, J01-P2, J01-P3 · Checks: conformance-status
+
+### J02-P7 — Correction revue J02 : entrée de contrat obsolète (glm, output out=bad)
+Finding should-fix du worker J02-P2 (attempt 5bd3c1e7, décision dbe58c3f) : depuis que PROC GLM supporte l'instruction OUTPUT (issue #17), l'entrée obsolète ("glm", "output out=bad") du test de contrat dans src/procs/common/tests.rs échoue (le statement n'est plus une erreur attendue). Mets à jour ce test de contrat : retire ou remplace l'entrée pour refléter le comportement actuel (OUTPUT accepté dans GLM ; garder si pertinent une entrée d'erreur réellement toujours valide). Le check test (cargo test --locked -p sasrs) doit repasser. Ne change rien d'autre.
+
+Tier: T5 · Depends: J02-P2 · Checks: test
 
 ## J03 — Déterminisme + clôture (issue #20, méta #10/#11)
 

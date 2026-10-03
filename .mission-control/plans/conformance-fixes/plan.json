@@ -2,7 +2,7 @@
  "protocol_version": 3,
  "project_id": "lephilippeductai/sasrs",
  "plan_id": "9602840f-21fb-4d37-a463-b782085bdfba",
- "revision": 4,
+ "revision": 5,
  "stub": "conformance-fixes",
  "base_branch": "milestone/conformance-fixes",
  "goal": "Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).",
@@ -383,7 +383,8 @@
     "J02-P2",
     "J02-P3",
     "J02-P4",
-    "J02-P6"
+    "J02-P6",
+    "J02-P7"
    ],
    "files": [],
    "check_ids": [
@@ -512,6 +513,24 @@
    ],
    "check_ids": [
     "conformance-status"
+   ]
+  },
+  {
+   "id": "J02-P7",
+   "milestone_id": "J02",
+   "title": "Correction revue J02 : entrée de contrat obsolète (glm, output out=bad)",
+   "kind": "implement",
+   "tier": "T5",
+   "size": "S",
+   "scope": "Finding should-fix du worker J02-P2 (attempt 5bd3c1e7, décision dbe58c3f) : depuis que PROC GLM supporte l'instruction OUTPUT (issue #17), l'entrée obsolète (\"glm\", \"output out=bad\") du test de contrat dans src/procs/common/tests.rs échoue (le statement n'est plus une erreur attendue). Mets à jour ce test de contrat : retire ou remplace l'entrée pour refléter le comportement actuel (OUTPUT accepté dans GLM ; garder si pertinent une entrée d'erreur réellement toujours valide). Le check test (cargo test --locked -p sasrs) doit repasser. Ne change rien d'autre.",
+   "depends_on": [
+    "J02-P2"
+   ],
+   "files": [
+    "src/procs/common/tests.rs"
+   ],
+   "check_ids": [
+    "test"
    ]
   }
  ]
