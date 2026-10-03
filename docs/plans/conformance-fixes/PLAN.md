@@ -2,7 +2,7 @@
 
 Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).
 
-Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 1
+Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 2
 
 Base: `milestone/conformance-fixes`
 
@@ -26,7 +26,12 @@ Tier: T3 · Depends: J01-P2 · Checks: fmt, clippy, test-conformance, conformanc
 ### J01-P4 — Revue J01
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus la tolérance sur les promotions J01 : chaque cas promu (update-master, means-class-output, sql-join-remerge) doit rester justifié par sa provenance doc SAS.
 
-Tier: T2 · Depends: J01-P1, J01-P2, J01-P3 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+Tier: T2 · Depends: J01-P1, J01-P2, J01-P3, J01-P5 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+
+### J01-P5 — Correction revue J01 : registre rétroactif de provenance des snapshots
+Finding bloquant de la revue J01-P4 (attempt 75e50b0d-ef04-4810-bc7a-b9e28c585dbb) : le commit b9924dd a ajouté tests/snapshots/snapshot__fixtures@j01__update_by_only.sas.snap sans la ligne canonique « Snapshot: <fixture> — <raison> » dans le message de commit (CONTRIBUTING §4). L'historique poussé ne doit être ni réécrit ni amendé. Correction durable : créer docs/snapshots-provenance.md, registre des justifications rétroactives : une section par snapshot concerné au format « Snapshot: <fixture> — <raison> », avec commit d'origine, référence de la revue et de la décision. Y documenter tests/snapshots/snapshot__fixtures@j01__update_by_only.sas.snap (commit b9924dd, non-régression UPDATE BY-only, issue #13, revue J01-P4, décision 680238b2). Préciser en en-tête que ce registre est une mesure exceptionnelle : tout nouveau commit modifiant un .snap doit porter sa ligne Snapshot: dans son message.
+
+Tier: T5 · Depends: none · Checks: fmt
 
 ## J02 — Procédures statistiques : OUTPUT et layout (issues #16–#19)
 
