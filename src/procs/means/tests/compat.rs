@@ -583,3 +583,111 @@ fn means_compat_ods_summary_with_class_and_by() {
     let ds = &tables["cap"];
     assert_eq!(ds.n_obs(), 3);
 }
+
+// ── J01-P2 (issue #14) : liste de stats stat=<var> et OUT= par défaut ──
+
+/// Le jeu `sales` du cas base means-class-output (issue #14).
+fn issue14_sales(dir: &Path) {
+    let df = df![
+        "region" => ["North", "North", "South", "South", "East", "East"],
+        "amount" => [10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
+    ]
+    .unwrap();
+    write_input(dir, "sales", df);
+}
+
+#[test]
+fn means_compat_output_stat_list() {
+    // `sum=total_amount mean=avg_amount` : une liste de specs stat=<nom>,
+    // chacune appliquée à toutes les variables VAR (doc MEANS, OUTPUT).
+    let (code, log, tables) = run_in_sandbox(
+        issue14_sales,
+        "libname ind 'data';\n\
+         proc means data=ind.sales noprint;\n\
+         class region; var amount;\n\
+         output out=summary sum=total_amount mean=avg_amount;\n\
+         run;\n",
+    );
+    assert_eq!(code, 0, "log: {log}");
+    assert_eq!(
+        columns_of(&tables, "summary"),
+        vec!["REGION", "_TYPE_", "_FREQ_", "TOTAL_AMOUNT", "AVG_AMOUNT"]
+    );
+    // Ligne globale _TYPE_=0 puis une ligne par niveau, tri alpha interne.
+    assert_eq!(
+        num_col(&tables, "summary", "_TYPE_"),
+        vec![
+            Value::Num(0.0),
+            Value::Num(1.0),
+            Value::Num(1.0),
+            Value::Num(1.0)
+        ]
+    );
+    assert_eq!(
+        char_col(&tables, "summary", "region"),
+        vec!["", "East", "North", "South"]
+    );
+    let sums = num_col(&tables, "summary", "total_amount");
+    assert_eq!(
+        sums,
+        vec![
+            Value::Num(210.0),
+            Value::Num(110.0),
+            Value::Num(30.0),
+            Value::Num(70.0)
+        ]
+    );
+    let means = num_col(&tables, "summary", "avg_amount");
+    assert_eq!(
+        means,
+        vec![
+            Value::Num(35.0),
+            Value::Num(55.0),
+            Value::Num(15.0),
+            Value::Num(35.0)
+        ]
+    );
+}
+
+#[test]
+fn means_compat_output_default_stats() {
+    // `output out=summary;` sans mot-clé statistique : CLASS + _TYPE_ +
+    // _FREQ_ + les statistiques par défaut (N MEAN STD MIN MAX) de chaque
+    // variable d'analyse, nommées par la convention AUTONAME.
+    let (code, log, tables) = run_in_sandbox(
+        issue14_sales,
+        "libname ind 'data';\n\
+         proc means data=ind.sales noprint;\n\
+         class region; var amount;\n\
+         output out=summary;\n\
+         run;\n",
+    );
+    assert_eq!(code, 0, "log: {log}");
+    assert_eq!(
+        columns_of(&tables, "summary"),
+        vec![
+            "REGION",
+            "_TYPE_",
+            "_FREQ_",
+            "AMOUNT_N",
+            "AMOUNT_MEAN",
+            "AMOUNT_STD",
+            "AMOUNT_MIN",
+            "AMOUNT_MAX",
+        ]
+    );
+    assert_eq!(num_at(&tables, "summary", "amount_n", 0), 6.0);
+    assert_eq!(num_at(&tables, "summary", "amount_mean", 0), 35.0);
+    // std global : sqrt(350) — écarts ±25,±15,±5 (n−1 = 5).
+    assert!((num_at(&tables, "summary", "amount_std", 0) - 350.0_f64.sqrt()).abs() < 1e-9);
+    assert_eq!(num_at(&tables, "summary", "amount_min", 0), 10.0);
+    assert_eq!(num_at(&tables, "summary", "amount_max", 0), 60.0);
+    // Groupe East (50, 60) : n=2, mean=55, std=sqrt(50), min=50, max=60.
+    assert_eq!(num_at(&tables, "summary", "amount_n", 1), 2.0);
+    assert_eq!(num_at(&tables, "summary", "amount_mean", 1), 55.0);
+    assert!((num_at(&tables, "summary", "amount_std", 1) - 50.0_f64.sqrt()).abs() < 1e-9);
+    assert_eq!(num_at(&tables, "summary", "amount_min", 1), 50.0);
+    assert_eq!(num_at(&tables, "summary", "amount_max", 1), 60.0);
+    // Quatre lignes : la globale (_TYPE_=0) + les trois niveaux (_TYPE_=1).
+    assert_eq!(tables["summary"].n_obs(), 4);
+}

@@ -75,7 +75,7 @@ agegrp=Old
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               12.5000          20.0000              4.0654    -1.7218      0.0851
+               12.5000          20.0000              4.0654    -1.8448      0.0651
 
 agegrp=Yng
 
@@ -85,7 +85,7 @@ agegrp=Yng
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               23.0000          27.5000              4.7871    -0.8356      0.4034
+               23.0000          27.5000              4.7871    -0.9400      0.3472
 
 
                NPAR1WAY OUT= (default Wilcoxon + Kruskal-Wallis), height & weight
@@ -98,7 +98,7 @@ agegrp=Yng
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               73.0000          90.0000             12.2367    -1.3484      0.1775
+               73.0000          90.0000             12.2367    -1.3893      0.1648
 
                                       Kruskal-Wallis Test
 
@@ -113,7 +113,7 @@ Average scores were used for ties (tie correction factor = 0.9982).
 
              Statistic    Mean Under H0    Std Dev Under H0          Z    Pr > |Z|
 
-               71.0000          90.0000             12.2259    -1.5132      0.1302
+               71.0000          90.0000             12.2259    -1.5541      0.1202
 
                                       Kruskal-Wallis Test
 
@@ -127,7 +127,7 @@ Average scores were used for ties (tie correction factor = 0.9965).
 
 _VAR_     _WIL_           Z_WIL          P2_WIL          P1_WIL            _KW_    DF_KW            P_KW
 
-height       73    -1.348402687    0.1775289002    0.0887644501    1.9300527241        1    0.1647526767
-weight       71    -1.513175702    0.1302350345    0.0651175173    2.4151408451        1    0.1201671616
+height       73    -1.389263375    0.1647526767    0.0823763384    1.9300527241        1    0.1647526767
+weight       71    -1.554072342    0.1201671616    0.0600835808    2.4151408451        1    0.1201671616
 
 ==== EXIT 0 ====

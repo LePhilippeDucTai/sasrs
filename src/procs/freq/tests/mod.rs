@@ -40,6 +40,7 @@ fn fast(data: DatasetRef, tables: Vec<TableRequest>) -> FreqAst {
         tables,
         weight: None,
         by: Vec::new(),
+        output: None,
     }
 }
 
@@ -69,6 +70,7 @@ fn one_way_listing(opts: impl Fn(&mut TableRequest)) -> String {
         tables: vec![req],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     session.listing.take_string()
@@ -96,6 +98,7 @@ fn crosstab_listing(opts: impl Fn(&mut TableRequest)) -> String {
         tables: vec![req],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     session.listing.take_string()
@@ -124,4 +127,5 @@ mod list_n_way;
 mod ods_output;
 mod ods_output_objects;
 mod ods_select;
+mod output_statement;
 mod parse;

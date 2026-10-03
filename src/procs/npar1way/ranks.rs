@@ -156,9 +156,10 @@ pub(super) fn analyze(groups: &[Vec<f64>]) -> NparResult {
         // Var(W) = n_A n_B (n+1) / 12, tie-corrected.
         let var_w = na * nb * (nf + 1.0) / 12.0 * tie_factor;
         let (z, p) = if var_w > 0.0 {
-            // SAS applies a 0.5 continuity correction by default (CORRECT=YES).
+            // No continuity correction: the documented OUT= example computes
+            // Z = (W - E(W)) / sqrt(Var(W)) directly (issue #19).
             let diff = w - ew;
-            let z = (diff.abs() - 0.5) / var_w.sqrt() * diff.signum();
+            let z = diff / var_w.sqrt();
             let cdf = probnorm(z);
             let p = (2.0 * cdf.min(1.0 - cdf)).clamp(0.0, 1.0);
             (z, p)

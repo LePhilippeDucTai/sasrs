@@ -4,6 +4,19 @@ use super::*;
 // 3. GROUP BY + agrégats
 // ----------------------------------------------------------------------------
 
+/// Tri stable croissant par les clés de groupe (colonnes + options) —
+/// GROUP BY SAS restitue les groupes en ordre de leurs clés, l'ordre
+/// relatif des lignes d'un même groupe étant conservé.
+fn stable_key_sort(key_names: &[String]) -> (Vec<Expr>, SortMultipleOptions) {
+    (
+        key_names.iter().map(|n| col(n.clone())).collect(),
+        SortMultipleOptions::default()
+            .with_order_descending_multi(vec![false; key_names.len()])
+            .with_nulls_last(false)
+            .with_maintain_order(true),
+    )
+}
+
 /// Résout un GROUP BY / ORDER BY positionnel : entier N → expression du
 /// N-ième item du select-list (1-indexé).
 pub(super) fn resolve_positional<'a>(
@@ -30,12 +43,17 @@ pub(super) fn apply_group_by_project(
     query: &SelectStmt,
     lf: LazyFrame,
     ctx: &Ctx,
+    session: &mut Session,
 ) -> Result<LazyFrame> {
     let mut keys: Vec<Expr> = Vec::new();
+    let mut key_names: Vec<String> = Vec::new();
+    let mut key_src: Vec<Expr> = Vec::new();
     for g in &query.group_by {
         let resolved = resolve_positional(g, &query.items)?;
         let name = group_key_output_name(resolved, query)?;
-        keys.push(sql_expr_to_polars(resolved, ctx)?.alias(name));
+        key_src.push(sql_expr_to_polars(resolved, ctx)?);
+        keys.push(key_src.last().cloned().unwrap().alias(name.clone()));
+        key_names.push(name);
     }
 
     // Inventaire des agrégats : chaque agrégat (du select-list ET du HAVING)
@@ -75,10 +93,39 @@ pub(super) fn apply_group_by_project(
     // Sans clé de GROUP BY (agrégation sur toute la table → une seule ligne),
     // `group_by([])` est invalide pour Polars : on projette directement les
     // agrégats. C'est le cas d'une sous-requête scalaire `(select avg(x) ...)`.
-    let mut out = if keys.is_empty() {
+    //
+    // Issue #15 : remerge GROUP BY — une colonne SOURCE non agrégée hors
+    // clés dans le select-list est résolue contre la source : la frame
+    // agrégée (clés + agrégats) est rejointe aux lignes d'origine sur les
+    // clés, et les groupes sont restitués triés par clés (tri stable).
+    let remerge = query
+        .items
+        .iter()
+        .any(|it| item_needs_remerge(&it.expr, &key_names));
+
+    let mut out = if remerge {
+        session
+            .log
+            .note("The query requires remerging summary statistics back with the original data.");
+        let mut src = lf.clone();
+        for (e, n) in key_src.iter().zip(&key_names) {
+            src = src.with_column(e.clone().alias(n.clone()));
+        }
+        let grouped = lf.group_by(keys).agg(agg_exprs);
+        let (key_cols, opts) = stable_key_sort(&key_names);
+        let mut args = JoinArgs::new(JoinType::Inner);
+        args.join_nulls = true; // SAS apparie les missings entre eux.
+        args.maintain_order = MaintainOrderJoin::Left;
+        let merged = src.join(grouped, key_cols.clone(), key_cols.clone(), args);
+        merged.sort_by_exprs(key_cols, opts)
+    } else if keys.is_empty() {
         lf.select(agg_exprs)
     } else {
-        lf.group_by(keys).agg(agg_exprs)
+        // GROUP BY SAS : sortie en ordre des clés de groupe, tri stable.
+        let (key_cols, opts) = stable_key_sort(&key_names);
+        lf.group_by(keys)
+            .agg(agg_exprs)
+            .sort_by_exprs(key_cols, opts)
     };
 
     // HAVING : référence les agrégats par leur colonne.
@@ -267,6 +314,43 @@ pub(super) fn item_has_aggregate(e: &SqlExpr) -> bool {
         | SqlExpr::Qualified { .. } => false,
         // Résolues en littéraux avant l'abaissement.
         SqlExpr::Subquery(_) | SqlExpr::InSubquery { .. } | SqlExpr::Exists { .. } => false,
+    }
+}
+
+/// Issue #15 : un item du select-list « a besoin de remerge » s'il
+/// référence une colonne SOURCE non agrégée (Var/Qualified hors de tout
+/// agrégat) qui n'est pas une clé du GROUP BY.
+fn item_needs_remerge(e: &SqlExpr, key_names: &[String]) -> bool {
+    let mut cols = Vec::new();
+    bare_columns_outside_aggs(e, &mut cols);
+    cols.iter()
+        .any(|c| !key_names.iter().any(|k| k.eq_ignore_ascii_case(c)))
+}
+
+/// Collecte les colonnes nues (Var / Qualified) d'une expression en
+/// s'arrêtant aux agrégats (leur argument appartient au contexte agrégé).
+fn bare_columns_outside_aggs(e: &SqlExpr, out: &mut Vec<String>) {
+    match e {
+        SqlExpr::Aggregate { .. } => {}
+        SqlExpr::Base(SasExpr::Var(name)) => out.push(name.clone()),
+        SqlExpr::Qualified { column, .. } => out.push(column.clone()),
+        SqlExpr::Binary { left, right, .. } => {
+            bare_columns_outside_aggs(left, out);
+            bare_columns_outside_aggs(right, out);
+        }
+        SqlExpr::Unary { expr, .. } => bare_columns_outside_aggs(expr, out),
+        SqlExpr::Between {
+            expr, low, high, ..
+        } => {
+            bare_columns_outside_aggs(expr, out);
+            bare_columns_outside_aggs(low, out);
+            bare_columns_outside_aggs(high, out);
+        }
+        SqlExpr::IsNull { expr, .. }
+        | SqlExpr::Like { expr, .. }
+        | SqlExpr::Contains { expr, .. }
+        | SqlExpr::SoundsLike { expr, .. } => bare_columns_outside_aggs(expr, out),
+        _ => {}
     }
 }
 

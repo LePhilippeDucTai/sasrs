@@ -129,7 +129,7 @@ pub(super) struct ScoreTwoSample {
     pub(super) mean: f64,
     /// Standard deviation under H0.
     pub(super) sd: f64,
-    /// Standardized statistic (with continuity correction).
+    /// Standardized statistic (no continuity correction).
     pub(super) z: f64,
     /// Two-sided normal-approximation p-value.
     pub(super) p2: f64,
@@ -159,9 +159,10 @@ pub(super) fn score_two_sample(a: &ScoreAnalysis) -> Option<ScoreTwoSample> {
         return None;
     }
     let sd = var.sqrt();
-    // SAS default continuity correction: shift |diff| by 0.5 toward the mean.
+    // No continuity correction: the documented OUT= example computes
+    // Z = (S_0 - E(S_0)) / sd directly (issue #19).
     let diff = stat - mean;
-    let z = (diff.abs() - 0.5) / sd * diff.signum();
+    let z = diff / sd;
     let cdf = probnorm(z);
     let p2 = (2.0 * cdf.min(1.0 - cdf)).clamp(0.0, 1.0);
     Some(ScoreTwoSample {

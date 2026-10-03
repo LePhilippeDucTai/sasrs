@@ -52,6 +52,7 @@ fn singular_session() -> (crate::session::Session, GlmAst) {
         estimates: vec![],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
     (session, ast)
 }
@@ -108,6 +109,7 @@ fn convergence_glm_full_rank_fit_still_computes() {
         estimates: vec![],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();

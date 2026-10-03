@@ -266,15 +266,39 @@ struct ExpandedSpec {
     col: Vec<Value>,
 }
 
+/// Statistiques par défaut sauvées par un OUTPUT OUT= sans mot-clé
+/// statistique (doc PROC MEANS, statement OUTPUT : « If you do not specify
+/// a statistic keyword, PROC MEANS saves all of the default statistics »).
+/// Même liste que les statistiques par défaut du rapport (mod.rs).
+pub(super) const DEFAULT_OUTPUT_STATS: &[&str] = &["n", "mean", "std", "min", "max"];
+
 /// Expand the parsed OUTPUT specs against the VAR list in scope (J07-P2):
 /// `mean=` → toutes les variables VAR ; `mean(x y)=` → x et y ; AUTONAME →
 /// `<var>_<STAT>` ; sans AUTONAME ni nom, une seule variable d'analyse
 /// prend le mot-clé statistique comme nom.
+///
+/// J01-P2 — sans AUCUNE spécification statistique (`output out=b;`), la
+/// convention AUTONAME nomme les statistiques par défaut de chaque variable
+/// d'analyse (`<var>_<STAT>`) : les cinq mots-clé exigeraient sinon des
+/// noms uniques que le programmeur n'a pas donnés.
 fn expand_specs(
     ds: &SasDataset,
     var_cols: &[usize],
     out: &MeansOutput,
 ) -> Result<Vec<ExpandedSpec>> {
+    if out.specs.is_empty() {
+        let mut expanded: Vec<ExpandedSpec> = Vec::new();
+        for stat in DEFAULT_OUTPUT_STATS {
+            for &ci in var_cols {
+                expanded.push(ExpandedSpec {
+                    stat: (*stat).to_string(),
+                    outname: format!("{}_{}", ds.vars[ci].name, stat.to_uppercase()),
+                    col: decode_column(ds, ci)?,
+                });
+            }
+        }
+        return Ok(expanded);
+    }
     let mut expanded: Vec<ExpandedSpec> = Vec::new();
     for sp in &out.specs {
         // Resolve the source variables: explicit list, else every VAR.

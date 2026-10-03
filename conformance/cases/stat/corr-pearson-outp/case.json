@@ -21,12 +21,12 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "htwt.csv": {
       "height": "num",
       "weight": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : OUTP= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) là où la doc SAS décrit une observation par statistique descriptive (N, MEAN, STD, SUM, MIN, MAX — soit 6 lignes, N en premier) plus les 2 lignes CORR ; l'ordre des lignes et leur nombre divergent (les valeurs de corrélation elles-mêmes, 0.9600051599448531, sont conformes)"
+  "issue": "sasrs #18 — PROC CORR : dataset OUTP= conforme à la doc CORR (OUTP= Data Set) — six observations descriptives _TYPE_= N/MEAN/STD/SUM/MIN/MAX (N en premier, ordre du listing Simple Statistics) suivies des lignes CORR ; corrélation de Pearson 0.9600051599448531 conservée"
 }

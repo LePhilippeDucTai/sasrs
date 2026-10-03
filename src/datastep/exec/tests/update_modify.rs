@@ -284,15 +284,78 @@ fn update_key_not_on_transaction_errors() {
     assert!(e.contains("KEY variable id"), "got: {e}");
 }
 
-/// UPDATE : KEY= obligatoire (erreur de parsing si absente).
+/// UPDATE sans KEY= (issue #13) : la doc SAS n'exige qu'un statement BY
+/// (UPDATE Statement, lestmtsref/n0zi0al7gygfzmn12ga0djr39d77). Sans KEY=
+/// ET sans BY, erreur à la compilation ; avec un BY seul, les variables BY
+/// servent de clés de correspondance.
 #[test]
-fn update_requires_key_option() {
-    // Parsing seul : KEY= absente → erreur de parsing (pas d'exécution).
-    let file = SourceFile::new("data mas; update mas tra; run;");
+fn update_without_key_or_by_is_error() {
+    let mut s = session();
+    write_num_ds(&s, "mas", &[("id", some(&[1.0])), ("x", some(&[10.0]))]);
+    write_num_ds(&s, "tra", &[("id", some(&[1.0])), ("x", some(&[20.0]))]);
+    let e = run_err("data mas; update mas tra; run;", &mut s);
+    assert!(
+        e.contains("requires a KEY= option or a BY statement"),
+        "got: {e}"
+    );
+}
+
+/// UPDATE sans KEY= mais avec BY (issue #13) : le parsing ACCEPTÉ, les
+/// variables BY pilotent la correspondance maître/transaction. Forme de la
+/// doc SAS (cas conformance base/update-master).
+#[test]
+fn update_by_only_matches_on_by_vars() {
+    let mut s = session();
+    write_num_ds(
+        &s,
+        "mas",
+        &[
+            ("id", some(&[1.0, 2.0, 3.0])),
+            ("x", some(&[10.0, 20.0, 30.0])),
+        ],
+    );
+    write_num_ds(
+        &s,
+        "tra",
+        &[("id", some(&[1.0, 3.0])), ("x", some(&[11.0, 33.0]))],
+    );
+    // Parsing OK (plus d'erreur « requires a KEY= option »)...
+    let file = SourceFile::new("data out; update mas tra; by id; run;");
     let mut ts = StatementStream::new(&file).unwrap();
     assert!(ts.next().is_kw("data"));
-    let err = crate::parser::datastep::parse_data_step(&mut ts).unwrap_err();
-    assert!(err.to_string().to_uppercase().contains("KEY"), "got: {err}");
+    crate::parser::datastep::parse_data_step(&mut ts).unwrap();
+    // ...et exécution : id=1→11, id=2 inchangé, id=3→33.
+    run("data out; update mas tra; by id; run;", &mut s).unwrap();
+    assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0, 3.0]));
+    assert_eq!(col(&s, "out", "x"), some(&[11.0, 20.0, 33.0]));
+}
+
+/// UPDATE sans KEY= avec BY : une transaction SANS maître est AJOUTÉE
+/// (LEPG ch. 21), FIRST./LAST. restent exposés sur les variables BY.
+#[test]
+fn update_by_only_adds_unmatched_and_first_last() {
+    let mut s = session();
+    write_num_ds(
+        &s,
+        "mas",
+        &[("id", some(&[1.0, 2.0])), ("x", some(&[10.0, 20.0]))],
+    );
+    // id=9 : absent du maître → nouvelle observation.
+    write_num_ds(
+        &s,
+        "tra",
+        &[("id", some(&[2.0, 9.0])), ("x", some(&[99.0, 90.0]))],
+    );
+    run(
+        "data out; update mas tra; by id; f = first.id; l = last.id; run;",
+        &mut s,
+    )
+    .unwrap();
+    assert_eq!(col(&s, "out", "id"), some(&[1.0, 2.0, 9.0]));
+    assert_eq!(col(&s, "out", "x"), some(&[10.0, 99.0, 90.0]));
+    // Chaque id est unique : FIRST.=LAST.=1 partout.
+    assert_eq!(col(&s, "out", "f"), some(&[1.0, 1.0, 1.0]));
+    assert_eq!(col(&s, "out", "l"), some(&[1.0, 1.0, 1.0]));
 }
 
 /// UPDATE avec BY : FIRST./LAST. exposés sur les groupes BY du maître.

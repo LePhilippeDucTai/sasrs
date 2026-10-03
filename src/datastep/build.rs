@@ -206,11 +206,30 @@ impl Compiler<'_> {
             return Ok(None);
         };
         let by_items = self.by.take();
-        // Clés : doivent exister dans le PDV (donc dans le maître OU la
-        // transaction). On résout par nom ; une clé absente du maître ET de la
-        // transaction → erreur.
-        let mut key_slots = Vec::with_capacity(pending.key_names.len());
-        for name in &pending.key_names {
+        // Clés : par défaut celles du KEY= ; si KEY= est absent (issue #13,
+        // la doc SAS n'exige qu'un BY — UPDATE Statement,
+        // lestmtsref/n0zi0al7gygfzmn12ga0djr39d77), les variables BY servent
+        // de clés de correspondance maître/transaction. Ni KEY= ni BY →
+        // erreur.
+        let key_names: Vec<String> = if pending.key_names.is_empty() {
+            match by_items.as_ref() {
+                Some(items) if !items.is_empty() => {
+                    items.iter().map(|(name, _desc)| name.clone()).collect()
+                }
+                _ => {
+                    return Err(SasError::runtime(
+                        "The UPDATE statement requires a KEY= option or a BY statement.",
+                    ));
+                }
+            }
+        } else {
+            pending.key_names.clone()
+        };
+        // Les clés doivent exister dans le PDV (donc dans le maître OU la
+        // transaction). On résout par nom ; une clé absente du maître ET de
+        // la transaction → erreur.
+        let mut key_slots = Vec::with_capacity(key_names.len());
+        for name in &key_names {
             let Some(slot) = self.pdv.slot(name) else {
                 return Err(SasError::runtime(format!(
                     "KEY variable {name} is not on the UPDATE data sets."

@@ -16,7 +16,14 @@ pub(super) fn apply_set_op(
             if all {
                 Ok(out)
             } else {
-                Ok(out.unique(None, UniqueKeepStrategy::Any))
+                // Issue #20 (déterminisme) : `unique(Any)` seul laisse un ordre
+                // de lignes NON déterministe (choix de la copie conservée +
+                // parallélisme Polars). On impose ensuite un tri TOTAL : clé =
+                // toutes les colonnes, dans l'ordre du schéma, croissant.
+                // Total car après unique() les lignes sont deux à deux
+                // distinctes, donc le tuple complet les discrimine toujours.
+                let names = lhs_columns(&out)?;
+                deterministic_total_sort(out.unique(None, UniqueKeepStrategy::Any), &names)
             }
         }
         SetOp::Except => {
@@ -109,6 +116,19 @@ pub(super) fn set_op_all(
     let out = lhs_r.join(rhs_r, &on_cols, &on_cols, args);
     // La colonne de rang ne doit pas apparaître dans le résultat.
     Ok(out.drop([col(OCC_RANK_COL)]))
+}
+
+/// Tri TOTAL et déterministe par toutes les colonnes (ordre du schéma,
+/// croissant, nulls en premier comme SAS restitue `.` avant les valeurs) —
+/// issue #20 : garantit un ordre d'octets reproductible d'une exécution à
+/// l'autre pour UNION (non-ALL), EXCEPT et INTERSECT non-ALL.
+pub(super) fn deterministic_total_sort(lf: LazyFrame, names: &[String]) -> Result<LazyFrame> {
+    let by: Vec<Expr> = names.iter().map(|c| col(c.clone())).collect();
+    let opts = SortMultipleOptions::default()
+        .with_order_descending_multi(vec![false; names.len()])
+        .with_nulls_last(false)
+        .with_maintain_order(true);
+    Ok(lf.sort_by_exprs(by, opts))
 }
 
 pub(super) fn lhs_columns(lf: &LazyFrame) -> Result<Vec<String>> {

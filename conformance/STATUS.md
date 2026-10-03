@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 15 validés, 11 divergences connues.
+Corpus : **26 cas** — 25 validés, 1 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -16,24 +16,24 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — FIRST./LAST. | 1 | 1 | 0 |
 | DATA step — MERGE | 1 | 1 | 0 |
 | DATA step — RETAIN | 1 | 1 | 0 |
-| DATA step — UPDATE | 1 | 0 | 1 |
+| DATA step — UPDATE | 1 | 1 | 0 |
 | DATA step — arithmétique | 1 | 1 | 0 |
 | DATA step — fonctions caractère | 1 | 1 | 0 |
 | DATA step — missing spéciaux | 1 | 1 | 0 |
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
-| PROC CORR | 2 | 0 | 2 |
-| PROC FREQ | 3 | 1 | 2 |
-| PROC GLM | 1 | 0 | 1 |
+| PROC CORR | 2 | 2 | 0 |
+| PROC FREQ | 3 | 3 | 0 |
+| PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
-| PROC MEANS | 1 | 0 | 1 |
-| PROC NPAR1WAY | 1 | 0 | 1 |
+| PROC MEANS | 1 | 1 | 0 |
+| PROC NPAR1WAY | 1 | 1 | 0 |
 | PROC REG | 1 | 0 | 1 |
 | PROC SORT | 1 | 1 | 0 |
-| PROC SQL | 2 | 1 | 1 |
+| PROC SQL | 2 | 2 | 0 |
 | PROC TRANSPOSE | 1 | 1 | 0 |
 | PROC TTEST | 1 | 1 | 0 |
-| PROC UNIVARIATE | 2 | 1 | 1 |
+| PROC UNIVARIATE | 2 | 2 | 0 |
 
 ## Détail par zone
 
@@ -59,10 +59,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `update-master` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `update-master` — null — divergence à ouvrir par le coordinateur : sasrs exige KEY= pour UPDATE là où la doc SAS n'exige que BY (ERROR: An UPDATE statement requires a KEY= option)
+| `base` | `update-master` | validé | documentation SAS publiée |
 
 ### DATA step — arithmétique
 
@@ -98,33 +95,22 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `corr-pearson-outp` | divergence connue | documentation SAS publiée |
-| `stat` | `corr-spearman-outs` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `corr-pearson-outp` — null — divergence à ouvrir par le coordinateur : OUTP= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) là où la doc SAS décrit une observation par statistique descriptive (N, MEAN, STD, SUM, MIN, MAX — soit 6 lignes, N en premier) plus les 2 lignes CORR ; l'ordre des lignes et leur nombre divergent (les valeurs de corrélation elles-mêmes, 0.9600051599448531, sont conformes)
-- `corr-spearman-outs` — null — divergence à ouvrir par le coordinateur : mêmes écarts de layout qu'en Pearson — OUTS= ne contient que 5 observations (_TYPE_=MEAN, STD, N puis CORR×2) au lieu des statistiques descriptives N/MEAN/STD/SUM/MIN/MAX + 2 lignes CORR de la doc ; rho de Spearman lui-même conforme (0.9428571428571428)
+| `stat` | `corr-pearson-outp` | validé | documentation SAS publiée |
+| `stat` | `corr-spearman-outs` | validé | documentation SAS publiée |
 
 ### PROC FREQ
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `freq-chisq-output` | divergence connue | documentation SAS publiée |
-| `stat` | `freq-fisher-2x2` | divergence connue | documentation SAS publiée |
+| `base` | `freq-chisq-output` | validé | documentation SAS publiée |
+| `stat` | `freq-fisher-2x2` | validé | documentation SAS publiée |
 | `base` | `freq-tables-out` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `freq-chisq-output` — null — divergence à ouvrir par le coordinateur : statistiques CHISQ non exposées en dataset OUTPUT
-- `freq-fisher-2x2` — null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC FREQ (ERROR: The OUTPUT statement is not supported in PROC FREQ; it can affect results and cannot be ignored. — code retour 2, dataset WORK.FS non produit) ; la p-value exacte de Fisher reste calculable côté listing mais pas en dataset
 
 ### PROC GLM
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `glm-oneway-predicted` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `glm-oneway-predicted` — null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC GLM (ERROR: The OUTPUT statement is not supported in PROC GLM; it can affect results and cannot be ignored. — code retour 2, dataset WORK.PRED non produit) ; l'ANOVA elle-même est correcte (Model MS=72.33333, Error MS=1.0)
+| `stat` | `glm-oneway-predicted` | validé | documentation SAS publiée |
 
 ### PROC LOGISTIC
 
@@ -136,19 +122,13 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `means-class-output` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `means-class-output` — null — divergences à ouvrir par le coordinateur : liste de statistiques « sum=total_amount » non acceptée dans OUTPUT (ERROR: expected '(' after statistic 'sum') et OUT= par défaut sans variables d'analyse
+| `base` | `means-class-output` | validé | documentation SAS publiée |
 
 ### PROC NPAR1WAY
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `npar1way-wilcoxon-out` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `npar1way-wilcoxon-out` — null — divergence à ouvrir par le coordinateur : la Z de Wilcoxon applique une correction de continuité (0.5) absente de la formule de la doc SAS — _WIL_=89 conforme, mais Z_WIL=2.8353240556 produit vs 2.893187811789223 attendu (sans correction) et P2_WIL=0.0045779224 produit vs 0.00381353188258207 attendu ; P1_WIL supplémentaire géré
+| `stat` | `npar1way-wilcoxon-out` | validé | documentation SAS publiée |
 
 ### PROC REG
 
@@ -169,11 +149,8 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `sql-join-remerge` | divergence connue | documentation SAS publiée |
+| `base` | `sql-join-remerge` | validé | documentation SAS publiée |
 | `base` | `sql-select-computed` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `sql-join-remerge` — null — divergences à ouvrir par le coordinateur : prédicat WHERE ignoré dans la jointure « from a, b where c.id=o.id » (produit un produit cartésien) et remerge « amount/sum(amount) group by region » en erreur (not found: amount)
 
 ### PROC TRANSPOSE
 
@@ -191,11 +168,8 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `univariate-moments-output` | divergence connue | documentation SAS publiée |
+| `stat` | `univariate-moments-output` | validé | documentation SAS publiée |
 | `stat` | `univariate-weighted-output` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `univariate-moments-output` — null — divergence à ouvrir par le coordinateur : statistiques SKEWNESS et KURTOSIS non supportées dans l'instruction OUTPUT de PROC UNIVARIATE (ERROR: Unsupported statistic 'SKEWNESS' in OUTPUT statement. — code retour 2, dataset WORK.MOM non produit) ; n/mean/std/min/max sont acceptés
 
 ## Provenance des attendus
 

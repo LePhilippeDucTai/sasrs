@@ -35,6 +35,11 @@ pub(super) fn output_stat(stat: &str, xs: &[f64], sorted: &[f64], n_missing: usi
         "mean" => mean,
         "std" | "stddev" => sample_std(xs),
         "var" => sample_std(xs).map(|s| s * s),
+        // J02-P2 (issue #17) — SKEWNESS/KURTOSIS acceptés dans OUTPUT :
+        // mêmes g1/g2 que le bloc Moments du listing (n≥3 / n≥4 et s>0,
+        // sinon missing SAS).
+        "skewness" | "skew" => skewness(xs),
+        "kurtosis" | "kurt" => kurtosis(xs),
         "min" | "p0" => sorted.first().copied(),
         "max" | "p100" => sorted.last().copied(),
         "median" | "p50" => quantile_def5(sorted, 0.50),
@@ -92,6 +97,10 @@ pub(super) fn output_stat_weighted(
         "mean" => mean,
         "std" | "stddev" => weighted_variance(pairs, vardef).map(|v| v.sqrt()),
         "var" => weighted_variance(pairs, vardef),
+        // J02-P2 (issue #17) — moments pondérés (VARDEF=DF), mêmes
+        // conventions que le bloc Moments pondéré du listing.
+        "skewness" | "skew" => weighted_moment(pairs, vardef, 3),
+        "kurtosis" | "kurt" => weighted_moment(pairs, vardef, 4),
         "min" | "p0" => sorted_vals.first().copied(),
         "max" | "p100" => sorted_vals.last().copied(),
         "median" | "p50" => wq(0.50),
@@ -115,6 +124,18 @@ pub(super) fn output_stat_weighted(
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// J02-P2 (issue #17) — SKEWNESS/KURTOSIS pondérés de l'OUTPUT OUT= :
+/// délègue aux mêmes formules g1/g2 (VARDEF=DF) que le bloc Moments
+/// pondéré du listing, `order` = 3 (asymétrie) ou 4 (kurtosis).
+fn weighted_moment(pairs: &[(f64, f64)], vardef: VarDef, order: u32) -> Option<f64> {
+    let (m, _) = weighted_mean_css(pairs)?;
+    let s = weighted_variance(pairs, vardef)?.sqrt();
+    match order {
+        3 => weighted_skewness(pairs, m, s),
+        _ => weighted_kurtosis(pairs, m, s),
     }
 }
 

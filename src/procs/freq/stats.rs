@@ -1,5 +1,53 @@
 use super::*;
 
+/// J02-P2 (issue #17) — 2x2 exact Fisher computation shared by the listing
+/// block and the OUTPUT OUT= FISHER dataset path (identical arithmetic, so
+/// the dataset reproduces the listing p bit for bit).
+///
+/// Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
+/// count a = freq[0][0] determines the whole table. a ranges over
+/// [max(0, r1+c1-n), min(r1, c1)]; the hypergeometric probability of a is
+/// C(r1,a)·C(r2,c1-a)/C(n,c1). Returns (p_left, p_right, p_obs, p_two, a_obs).
+fn fisher_2x2_compute(
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+) -> (f64, f64, f64, f64, i64) {
+    let r1 = row_tot[0] as i64;
+    let r2 = row_tot[1] as i64;
+    let c1 = col_tot[0] as i64;
+    let n = r1 + r2;
+    let a_obs = freq[0][0] as i64;
+
+    let ln_p = |a: i64| -> f64 {
+        let b = c1 - a; // freq[1][0]
+        ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, b as u64)
+            - ln_choose(n as u64, c1 as u64)
+    };
+
+    let lo = 0.max(r1 + c1 - n);
+    let hi = r1.min(c1);
+    let p_obs = ln_p(a_obs).exp();
+
+    let mut p_left = 0.0_f64; // P(A <= a_obs)
+    let mut p_right = 0.0_f64; // P(A >= a_obs)
+    let mut p_two = 0.0_f64; // sum of probs <= p_obs (with tolerance)
+    let tol = 1e-7;
+    for a in lo..=hi {
+        let p = ln_p(a).exp();
+        if a <= a_obs {
+            p_left += p;
+        }
+        if a >= a_obs {
+            p_right += p;
+        }
+        if p <= p_obs * (1.0 + tol) {
+            p_two += p;
+        }
+    }
+    (p_left, p_right, p_obs, p_two, a_obs)
+}
+
 /// Fisher's exact test. Full exact two-sided p-value for 2x2 tables (sum of
 /// hypergeometric probabilities ≤ that of the observed table), plus the
 /// left/right one-sided tails and the observed table probability. General
@@ -33,42 +81,7 @@ pub(super) fn fisher_block(
         return Ok(());
     }
 
-    // Margins are fixed. With r1 = row_tot[0], c1 = col_tot[0], n = grand, the
-    // count a = freq[0][0] determines the whole table. a ranges over
-    // [max(0, r1+c1-n), min(r1, c1)]. The hypergeometric probability of a is
-    // C(r1,a)·C(r2,c1-a)/C(n,c1).
-    let r1 = row_tot[0] as i64;
-    let r2 = row_tot[1] as i64;
-    let c1 = col_tot[0] as i64;
-    let n = grand as i64;
-    let a_obs = freq[0][0] as i64;
-
-    let ln_p = |a: i64| -> f64 {
-        let b = c1 - a; // freq[1][0]
-        ln_choose(r1 as u64, a as u64) + ln_choose(r2 as u64, b as u64)
-            - ln_choose(n as u64, c1 as u64)
-    };
-
-    let lo = 0.max(r1 + c1 - n);
-    let hi = r1.min(c1);
-    let p_obs = ln_p(a_obs).exp();
-
-    let mut p_left = 0.0_f64; // P(A <= a_obs)
-    let mut p_right = 0.0_f64; // P(A >= a_obs)
-    let mut p_two = 0.0_f64; // sum of probs <= p_obs (with tolerance)
-    let tol = 1e-7;
-    for a in lo..=hi {
-        let p = ln_p(a).exp();
-        if a <= a_obs {
-            p_left += p;
-        }
-        if a >= a_obs {
-            p_right += p;
-        }
-        if p <= p_obs * (1.0 + tol) {
-            p_two += p;
-        }
-    }
+    let (p_left, p_right, p_obs, p_two, a_obs) = fisher_2x2_compute(freq, row_tot, col_tot);
     let clamp = |p: f64| p.clamp(0.0, 1.0);
 
     let headers = vec!["Statistic".to_string(), "Value".to_string()];
@@ -426,6 +439,34 @@ pub(super) fn fisher_rxc_compute(
     }
 }
 
+/// J02-P2 (issue #17) — p exacte bilatérale de Fisher pour le statement
+/// OUTPUT OUT= FISHER (dataset). 2x2 : même calcul dédié que le listing
+/// (`fisher_2x2_compute`, bit à bit identique) ; table r×c : moteur
+/// Freeman-Halton avec les constantes de production (énumération exacte
+/// sous garde, sinon Monte-Carlo déterministe à graine fixe). Retourne la
+/// p bornée [0,1].
+pub(super) fn fisher_exact_p_two(
+    freq: &[Vec<usize>],
+    row_tot: &[usize],
+    col_tot: &[usize],
+    grand: usize,
+) -> f64 {
+    if row_tot.len() == 2 && col_tot.len() == 2 {
+        return fisher_2x2_compute(freq, row_tot, col_tot).3.clamp(0.0, 1.0);
+    }
+    fisher_rxc_compute(
+        freq,
+        row_tot,
+        col_tot,
+        grand,
+        FISHER_MAX_TABLES,
+        FISHER_MC_SAMPLES,
+        FISHER_MC_SEED,
+    )
+    .p_two
+    .clamp(0.0, 1.0)
+}
+
 /// Render the Freeman-Halton block for a general r×c table. SAS's r×c Fisher
 /// output reports the observed table probability and the single `Pr <= P`
 /// statistic (the two-sided left/right split of the 2x2 layout does not
@@ -767,39 +808,48 @@ pub(super) fn fmt_chisq_p(p: f64) -> String {
     }
 }
 
-/// Print the "Statistics for Table of <row> by <col>" CHISQ block for a
-/// two-way table: Pearson chi-square and the likelihood-ratio chi-square,
-/// each with DF and an upper-tail p-value. Degenerate tables (grand total 0,
-/// any zero margin, or DF <= 0) are skipped gracefully with a note.
-pub(super) fn chisq_block(
-    session: &mut Session,
-    row_name: &str,
-    col_name: &str,
+/// J02-P1 — résultat du calcul CHISQ deux voies, séparé du rendu pour que le
+/// statement OUTPUT OUT= puisse exposer les mêmes valeurs (_PCHI_, _PCHI_DF_,
+/// P_PCHI) sans dépendre du listing.
+pub(super) struct TwoWayChisq {
+    /// Pearson chi-square (_PCHI_).
+    pub pearson: f64,
+    /// Likelihood-ratio chi-square.
+    pub lratio: f64,
+    /// Degrees of freedom (_PCHI_DF_).
+    pub df: f64,
+    /// Upper-tail p-value of the Pearson statistic (P_PCHI).
+    pub p_pearson: f64,
+    /// False when the table is degenerate (grand 0, zero margin, DF <= 0).
+    pub computable: bool,
+}
+
+/// Compute the two-way CHISQ statistics (Pearson + likelihood ratio) from a
+/// possibly-weighted frequency matrix. Pure computation shared by the listing
+/// block (`chisq_block`) and the OUTPUT OUT= dataset (J02-P1).
+pub(super) fn two_way_chisq_compute(
     freq: &[Vec<f64>],
     row_tot: &[f64],
     col_tot: &[f64],
     grand: f64,
-) -> Result<()> {
-    session.listing.blank();
-    session
-        .listing
-        .write_line(&format!("Statistics for Table of {row_name} by {col_name}"));
-    session.listing.blank();
-
+) -> TwoWayChisq {
     let nr = row_tot.len();
     let nc = col_tot.len();
     let df = (nr.saturating_sub(1)) * (nc.saturating_sub(1));
 
-    // Guard against degenerate tables: no expected counts are defined.
+    // Degenerate table: no expected counts are defined.
     if grand <= 0.0
         || df == 0
         || row_tot.iter().any(|&t| t <= 0.0)
         || col_tot.iter().any(|&t| t <= 0.0)
     {
-        session
-            .listing
-            .write_line("Chi-Square statistics are not computable for this table.");
-        return Ok(());
+        return TwoWayChisq {
+            pearson: 0.0,
+            lratio: 0.0,
+            df: df as f64,
+            p_pearson: 0.0,
+            computable: false,
+        };
     }
 
     let g = grand;
@@ -821,8 +871,49 @@ pub(super) fn chisq_block(
     lratio *= 2.0;
 
     let df_f = df as f64;
-    let p_pearson = chisq_sf(pearson, df_f);
-    let p_lratio = chisq_sf(lratio, df_f);
+    TwoWayChisq {
+        pearson,
+        lratio,
+        df: df_f,
+        p_pearson: chisq_sf(pearson, df_f),
+        computable: true,
+    }
+}
+
+/// Print the "Statistics for Table of <row> by <col>" CHISQ block for a
+/// two-way table: Pearson chi-square and the likelihood-ratio chi-square,
+/// each with DF and an upper-tail p-value. Degenerate tables (grand total 0,
+/// any zero margin, or DF <= 0) are skipped gracefully with a note.
+pub(super) fn chisq_block(
+    session: &mut Session,
+    row_name: &str,
+    col_name: &str,
+    freq: &[Vec<f64>],
+    row_tot: &[f64],
+    col_tot: &[f64],
+    grand: f64,
+) -> Result<()> {
+    session.listing.blank();
+    session
+        .listing
+        .write_line(&format!("Statistics for Table of {row_name} by {col_name}"));
+    session.listing.blank();
+
+    let res = two_way_chisq_compute(freq, row_tot, col_tot, grand);
+    if !res.computable {
+        session
+            .listing
+            .write_line("Chi-Square statistics are not computable for this table.");
+        return Ok(());
+    }
+    let (df_f, pearson, lratio, p_pearson, p_lratio) = (
+        res.df,
+        res.pearson,
+        res.lratio,
+        res.p_pearson,
+        chisq_sf(res.lratio, res.df),
+    );
+    let df = df_f as usize;
 
     let headers = vec![
         "Statistic".to_string(),

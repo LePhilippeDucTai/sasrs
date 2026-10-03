@@ -67,7 +67,8 @@
 //!   d'Imhof), documentée comme approchée pour petit n (SAS tabule la loi
 //!   exacte pour n modéré). Voir `hoeffding_d` / `hoeffding_pvalue`.
 //! - `out=`/`outp=`/`outs=`/`outk=` : dataset TYPE=CORR. Variables `_TYPE_`
-//!   (MEAN/STD/N/CORR), `_NAME_` (nom de variable des lignes CORR), puis une
+//!   (N/MEAN/STD/SUM/MIN/MAX/CORR), `_NAME_` (nom de variable des lignes
+//!   CORR), puis une
 //!   colonne par variable analysée. OUTP=/OUT= = Pearson, OUTS= = Spearman,
 //!   OUTK= = Kendall. NOTE de création, types SAS, `last_dataset` mis à jour.
 //!   Le bloc CORR du dataset est carré (analysis × analysis), indépendamment
@@ -424,8 +425,8 @@ pub fn execute(ast: &CorrAst, session: &mut Session) -> Result<()> {
 
     // --- OUT= / OUTP= / OUTS= / OUTK= : TYPE=CORR datasets ---
     // The CORR block of the output dataset is square (analysis × analysis),
-    // independent of WITH. With BY (J08-P2), one MEAN/STD/N/CORR block per
-    // BY group, the BY variables in head columns.
+    // independent of WITH. With BY (J08-P2), one N/MEAN/STD/SUM/MIN/MAX/CORR
+    // block per BY group, the BY variables in head columns.
     let out_targets: [(Method, &Option<DatasetRef>); 3] = [
         (Method::Pearson, &ast.outp),
         (Method::Spearman, &ast.outs),
