@@ -117,5 +117,6 @@ mod execute;
 mod fitted_normal;
 mod ods_output_objects;
 mod ods_select;
+mod output_moments;
 mod phi;
 mod skewness;

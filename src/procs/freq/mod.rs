@@ -97,14 +97,17 @@ pub struct FreqAst {
     pub output: Option<FreqOutput>,
 }
 
-/// J02-P1 — parsed OUTPUT statement. Only OUT= + CHISQ are supported; other
-/// statistic keywords are rejected at parse time.
+/// J02-P1 — parsed OUTPUT statement. Only OUT= + CHISQ/FISHER are supported;
+/// other statistic keywords are rejected at parse time.
 pub struct FreqOutput {
     /// OUT= dataset reference (required).
     pub out: DatasetRef,
     /// CHISQ statistic request (Pearson chi-square → _PCHI_, _PCHI_DF_,
     /// P_PCHI — décision a43c8c14).
     pub chisq: bool,
+    /// J02-P2 (issue #17) — FISHER statistic request (exact two-sided p →
+    /// XP2_FISH, LXP2_FISH = ln p).
+    pub fisher: bool,
 }
 
 pub struct TableRequest {

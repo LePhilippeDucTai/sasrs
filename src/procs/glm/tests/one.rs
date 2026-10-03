@@ -125,6 +125,7 @@ fn test_execute_lsmeans() {
         estimates: vec![],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
 
     execute(&ast, &mut session).unwrap();
@@ -179,6 +180,7 @@ fn test_execute_estimate_correct() {
         }],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
 
     execute(&ast, &mut session).unwrap();
@@ -243,6 +245,7 @@ fn test_execute_contrast_f_eq_t_squared() {
             coefficients: vec![1.0, -1.0],
         }],
         means_vars: vec![],
+        output: None,
     };
 
     execute(&ast, &mut session).unwrap();
@@ -345,6 +348,7 @@ fn test_reference_cell_betas_2x2() {
         estimates: vec![],
         contrasts: vec![],
         means_vars: vec![],
+        output: None,
     };
 
     execute(&ast, &mut session).unwrap();
