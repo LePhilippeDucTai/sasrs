@@ -2,7 +2,7 @@
 
 Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).
 
-Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 2
+Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 3
 
 Base: `milestone/conformance-fixes`
 
