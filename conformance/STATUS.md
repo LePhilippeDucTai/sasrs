@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 16 validés, 10 divergences connues.
+Corpus : **26 cas** — 17 validés, 9 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -26,7 +26,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC FREQ | 3 | 1 | 2 |
 | PROC GLM | 1 | 0 | 1 |
 | PROC LOGISTIC | 1 | 1 | 0 |
-| PROC MEANS | 1 | 0 | 1 |
+| PROC MEANS | 1 | 1 | 0 |
 | PROC NPAR1WAY | 1 | 0 | 1 |
 | PROC REG | 1 | 0 | 1 |
 | PROC SORT | 1 | 1 | 0 |
@@ -133,10 +133,7 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `means-class-output` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `means-class-output` — null — divergences à ouvrir par le coordinateur : liste de statistiques « sum=total_amount » non acceptée dans OUTPUT (ERROR: expected '(' after statistic 'sum') et OUT= par défaut sans variables d'analyse
+| `base` | `means-class-output` | validé | documentation SAS publiée |
 
 ### PROC NPAR1WAY
 
