@@ -100,10 +100,10 @@ fn by_generalized_corr_groups_listing_and_out() {
     let b = listing.find("\ng=B\n").expect("heading g=B");
     assert!(a < b, "group headings out of order:\n{listing}");
 
-    // OUT= : variables BY en tête, un bloc MEAN/STD/N/CORR (5 lignes) par
-    // groupe → 10 observations.
+    // OUT= : variables BY en tête, un bloc N/MEAN/STD/SUM/MIN/MAX/CORR
+    // (8 lignes) par groupe → 16 observations.
     let (out, _) = session.libs.get("WORK").unwrap().read("O").unwrap();
-    assert_eq!(out.n_obs(), 10);
+    assert_eq!(out.n_obs(), 16);
     let names: Vec<&str> = out.vars.iter().map(|v| v.name.as_str()).collect();
     assert_eq!(names[0], "g", "BY column must come first: {names:?}");
     assert_eq!(
@@ -113,8 +113,8 @@ fn by_generalized_corr_groups_listing_and_out() {
     );
 
     let gcol = read_col(&session, "O", "g");
-    assert!(gcol.iter().take(5).all(|v| *v == Value::Char("A".into())));
-    assert!(gcol.iter().skip(5).all(|v| *v == Value::Char("B".into())));
+    assert!(gcol.iter().take(8).all(|v| *v == Value::Char("A".into())));
+    assert!(gcol.iter().skip(8).all(|v| *v == Value::Char("B".into())));
 
     // Groupe A : x=(1,2), y=(2,4) → r=1 ; N=2.
     // Groupe B : une seule observation → r=1 (diagonale), N=1.
@@ -123,25 +123,28 @@ fn by_generalized_corr_groups_listing_and_out() {
     let xcol = read_col(&session, "O", "x");
     let ycol = read_col(&session, "O", "y");
 
-    // Block layout per group: MEAN, STD, N, CORR x, CORR y.
-    // Group A (rows 0..5): N row is index 2; CORR x row index 3.
-    assert_eq!(type_col[2], Value::Char("N".into()));
-    assert_eq!(xcol[2], Value::Num(2.0), "N for x in group A");
-    assert_eq!(type_col[3], Value::Char("CORR".into()));
-    assert_eq!(name_col[3], Value::Char("x".into()));
-    assert_eq!(xcol[3], Value::Num(1.0), "r(x,x)=1 in group A");
-    match &ycol[3] {
+    // Block layout per group: N, MEAN, STD, SUM, MIN, MAX, CORR x, CORR y.
+    // Group A (rows 0..8): N row is index 0; CORR x row index 6.
+    assert_eq!(type_col[0], Value::Char("N".into()));
+    assert_eq!(xcol[0], Value::Num(2.0), "N for x in group A");
+    assert_eq!(xcol[3], Value::Num(3.0), "SUM of x=(1,2) in group A");
+    assert_eq!(xcol[4], Value::Num(1.0), "MIN of x in group A");
+    assert_eq!(xcol[5], Value::Num(2.0), "MAX of x in group A");
+    assert_eq!(type_col[6], Value::Char("CORR".into()));
+    assert_eq!(name_col[6], Value::Char("x".into()));
+    assert_eq!(xcol[6], Value::Num(1.0), "r(x,x)=1 in group A");
+    match &ycol[6] {
         Value::Num(r) => assert!(
             (r - 1.0).abs() < 1e-12,
             "r(x,y) must be 1 in group A (collinear), got {r}"
         ),
         other => panic!("r(x,y) missing in group A: {other:?}"),
     }
-    assert_eq!(xcol[2 + 5], Value::Num(1.0), "N for x in group B");
+    assert_eq!(xcol[8], Value::Num(1.0), "N for x in group B");
     assert!(
-        matches!(ycol[3 + 5], Value::Missing(_)),
+        matches!(ycol[6 + 8], Value::Missing(_)),
         "r(x,y) undefined with n=1 in group B: {:?}",
-        ycol[8]
+        ycol[14]
     );
 }
 
