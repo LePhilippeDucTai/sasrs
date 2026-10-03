@@ -326,7 +326,6 @@ fn contract_unimplemented_semantic_statements_reject_proc() {
         ("glm", "by g"),
         ("logistic", "weight w"),
         ("glm", "freq n"),
-        ("glm", "output out=bad"),
         ("glm", "id x"),
         ("glm", "where x=1"),
         ("reg", "class g"),
