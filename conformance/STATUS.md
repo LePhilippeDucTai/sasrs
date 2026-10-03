@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 18 validés, 8 divergences connues.
+Corpus : **26 cas** — 19 validés, 7 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -23,7 +23,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
 | PROC CORR | 2 | 0 | 2 |
-| PROC FREQ | 3 | 1 | 2 |
+| PROC FREQ | 3 | 2 | 1 |
 | PROC GLM | 1 | 0 | 1 |
 | PROC LOGISTIC | 1 | 1 | 0 |
 | PROC MEANS | 1 | 1 | 0 |
@@ -106,12 +106,11 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `freq-chisq-output` | divergence connue | documentation SAS publiée |
+| `base` | `freq-chisq-output` | validé | documentation SAS publiée |
 | `stat` | `freq-fisher-2x2` | divergence connue | documentation SAS publiée |
 | `base` | `freq-tables-out` | validé | documentation SAS publiée |
 
 Divergences connues :
-- `freq-chisq-output` — null — divergence à ouvrir par le coordinateur : statistiques CHISQ non exposées en dataset OUTPUT
 - `freq-fisher-2x2` — null — divergence à ouvrir par le coordinateur : l'instruction OUTPUT n'est pas supportée dans PROC FREQ (ERROR: The OUTPUT statement is not supported in PROC FREQ; it can affect results and cannot be ignored. — code retour 2, dataset WORK.FS non produit) ; la p-value exacte de Fisher reste calculable côté listing mais pas en dataset
 
 ### PROC GLM

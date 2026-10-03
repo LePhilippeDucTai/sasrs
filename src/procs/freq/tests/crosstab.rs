@@ -78,6 +78,7 @@ fn crosstab_chisq_2x2_hand_computed() {
         tables: vec![req],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
 
