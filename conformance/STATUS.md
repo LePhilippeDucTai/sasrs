@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 15 validés, 11 divergences connues.
+Corpus : **26 cas** — 16 validés, 10 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -16,7 +16,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — FIRST./LAST. | 1 | 1 | 0 |
 | DATA step — MERGE | 1 | 1 | 0 |
 | DATA step — RETAIN | 1 | 1 | 0 |
-| DATA step — UPDATE | 1 | 0 | 1 |
+| DATA step — UPDATE | 1 | 1 | 0 |
 | DATA step — arithmétique | 1 | 1 | 0 |
 | DATA step — fonctions caractère | 1 | 1 | 0 |
 | DATA step — missing spéciaux | 1 | 1 | 0 |
@@ -59,10 +59,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `update-master` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `update-master` — null — divergence à ouvrir par le coordinateur : sasrs exige KEY= pour UPDATE là où la doc SAS n'exige que BY (ERROR: An UPDATE statement requires a KEY= option)
+| `base` | `update-master` | validé | documentation SAS publiée |
 
 ### DATA step — arithmétique
 
