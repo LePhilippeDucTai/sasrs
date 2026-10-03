@@ -21,7 +21,7 @@
 use crate::error::{Result, SasError};
 use crate::value::VarType;
 use polars::prelude::*;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -186,7 +186,7 @@ struct SidecarFingerprint {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SidecarFile {
     fingerprint: SidecarFingerprint,
-    vars: HashMap<String, SavedMeta>,
+    vars: BTreeMap<String, SavedMeta>,
 }
 
 /// Métadonnée SAS persistée par variable (format/libellé/longueur déclarée).
@@ -302,7 +302,7 @@ fn write_sidecar(path: &Path, vars: &[VarMeta], fingerprint: SidecarFingerprint)
         let _ = std::fs::remove_file(&sc);
         return Ok(());
     }
-    let map: HashMap<String, SavedMeta> = vars
+    let map: BTreeMap<String, SavedMeta> = vars
         .iter()
         .map(|v| {
             (
@@ -346,7 +346,7 @@ enum SidecarState {
     /// appliquées aux données.
     Invalid(String),
     /// Présent, lisible, et dont l'empreinte correspond au parquet lu.
-    Valid(HashMap<String, SavedMeta>),
+    Valid(BTreeMap<String, SavedMeta>),
 }
 
 /// Lit le sidecar de métadonnées et le compare à l'empreinte du parquet
@@ -418,7 +418,7 @@ fn read_sidecar(path: &Path, fingerprint: &SidecarFingerprint) -> SidecarState {
 /// donne une NOTE (informatif, pas une corruption).
 fn apply_sidecar_meta(
     vars: &mut [VarMeta],
-    meta_map: &HashMap<String, SavedMeta>,
+    meta_map: &BTreeMap<String, SavedMeta>,
     path: &Path,
     notes: &mut Vec<String>,
 ) {

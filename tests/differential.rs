@@ -520,3 +520,80 @@ fn invalid_set_option_both_paths_error_identically() {
         "firstobs>obs invalide",
     );
 }
+
+// ── Issue #20 — déterminisme UNION (non-ALL) et sidecar ─────────────────
+//
+// Depuis la correction (tri total par toutes les colonnes après `unique`,
+// sidecar sérialisé en `BTreeMap`), ces artefacts sont désormais STABLES
+// byte-à-byte entre deux sessions INDÉPENDANTES : plus besoin de la
+// comparaison canonique (ordre des clés / des lignes ignoré) ni du repli
+// « le chemin boucle diverge de lui-même ».
+
+/// Programme de l'issue #20 : UNION (non-ALL) avec ex æquo multi-colonnes,
+/// résultat publié en Parquet AVEC sidecar (formats + libellés ⇒ has_meta).
+const UNION_DETERMINISM_SRC: &str = r#"
+libname out 'out';
+
+data work.a;
+    length name $8;
+    format wt 8.1;
+    label name = 'Nom' wt = 'Poids (kg)';
+    input name $ age wt;
+    datalines;
+Alfred 14 112.5
+Alice 13 84.0
+Carol 14 62.8
+David 15 99.0
+;
+
+data work.b;
+    length name $8;
+    format wt 8.1;
+    label name = 'Nom' wt = 'Poids (kg)';
+    input name $ age wt;
+    datalines;
+Carol 14 62.8
+Jane 12 74.2
+Alfred 14 112.5
+Bob 13 90.5
+;
+
+proc sql;
+    create table out.unioned as
+        select name, age, wt from work.a
+        union
+        select name, age, wt from work.b;
+quit;
+
+proc print data=out.unioned;
+run;
+"#;
+
+/// Deux sessions entièrement séparées (répertoires racine distincts) doivent
+/// produire la même log, le même listing, le même Parquet et le MÊME sidecar
+/// JSON byte-à-byte (clés triées, ordre de lignes déterministe).
+#[test]
+fn union_and_sidecar_byte_identical_across_sessions() {
+    let mut snaps: Vec<(String, String, Vec<u8>, Vec<u8>)> = Vec::new();
+    for i in 0..2 {
+        let root = tempfile::tempdir_in(std::env::temp_dir()).unwrap();
+        std::fs::create_dir_all(root.path().join("out")).unwrap();
+        let outcome = run(
+            UNION_DETERMINISM_SRC,
+            RunOptions {
+                work_dir: Some(root.path().join("work")),
+                base_dir: Some(root.path().to_path_buf()),
+                deterministic: true,
+                vectorize: i == 1,
+            },
+        );
+        assert_eq!(outcome.exit_code, 0, "run {i}: {}", outcome.log);
+        let parquet = std::fs::read(root.path().join("out/unioned.parquet")).unwrap();
+        let sidecar = std::fs::read(root.path().join("out/unioned.parquet.sasmeta.json")).unwrap();
+        snaps.push((outcome.log, outcome.listing, parquet, sidecar));
+    }
+    assert_eq!(
+        snaps[0], snaps[1],
+        "issue #20 : artefacts non déterministes"
+    );
+}
