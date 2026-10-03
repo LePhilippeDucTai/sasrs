@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 17 validés, 9 divergences connues.
+Corpus : **26 cas** — 18 validés, 8 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -30,7 +30,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC NPAR1WAY | 1 | 0 | 1 |
 | PROC REG | 1 | 0 | 1 |
 | PROC SORT | 1 | 1 | 0 |
-| PROC SQL | 2 | 1 | 1 |
+| PROC SQL | 2 | 2 | 0 |
 | PROC TRANSPOSE | 1 | 1 | 0 |
 | PROC TTEST | 1 | 1 | 0 |
 | PROC UNIVARIATE | 2 | 1 | 1 |
@@ -163,11 +163,8 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `base` | `sql-join-remerge` | divergence connue | documentation SAS publiée |
+| `base` | `sql-join-remerge` | validé | documentation SAS publiée |
 | `base` | `sql-select-computed` | validé | documentation SAS publiée |
-
-Divergences connues :
-- `sql-join-remerge` — null — divergences à ouvrir par le coordinateur : prédicat WHERE ignoré dans la jointure « from a, b where c.id=o.id » (produit un produit cartésien) et remerge « amount/sum(amount) group by region » en erreur (not found: amount)
 
 ### PROC TRANSPOSE
 

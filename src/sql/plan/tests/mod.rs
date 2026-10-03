@@ -141,5 +141,6 @@ fn strs(df: &DataFrame, col: &str) -> Vec<String> {
         .collect()
 }
 
+mod join_remerge;
 mod scalar;
 mod where_filter;
