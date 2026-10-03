@@ -92,6 +92,19 @@ pub struct FreqAst {
     pub weight: Option<String>,
     /// BY statement variables (one independent analysis per BY group).
     pub by: Vec<(String, bool)>,
+    /// J02-P1 — OUTPUT statement (`output out=<ds> chisq;`): statistics of
+    /// the LAST TABLES request written to a dataset (issue #16).
+    pub output: Option<FreqOutput>,
+}
+
+/// J02-P1 — parsed OUTPUT statement. Only OUT= + CHISQ are supported; other
+/// statistic keywords are rejected at parse time.
+pub struct FreqOutput {
+    /// OUT= dataset reference (required).
+    pub out: DatasetRef,
+    /// CHISQ statistic request (Pearson chi-square → _PCHI_, _PCHI_DF_,
+    /// P_PCHI — décision a43c8c14).
+    pub chisq: bool,
 }
 
 pub struct TableRequest {
@@ -197,6 +210,20 @@ pub fn execute(ast: &FreqAst, session: &mut Session) -> Result<()> {
                 _ => n_way(session, &ds, req, grp_rows, weight_values.as_deref())?,
             }
         }
+    }
+
+    // J02-P1 (issue #16) — statement OUTPUT OUT= : les statistiques CHISQ de
+    // la DERNIÈRE requête TABLES sont écrites en dataset après le rendu
+    // (indépendamment du filtrage ODS du listing). Avec BY, SAS produit une
+    // observation par groupe ; sasrs écrit le dernier groupe (divergence
+    // documentée, cf. write_stats_output).
+    if let Some(oreq) = &ast.output {
+        let req = ast
+            .tables
+            .last()
+            .expect("parse guarantees a TABLES request");
+        let grp_rows = &by_groups_list.last().expect("at least one BY group").1;
+        write_stats_output(session, &ds, req, grp_rows, weight_values.as_deref(), oreq)?;
     }
 
     Ok(())

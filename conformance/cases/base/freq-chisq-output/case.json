@@ -21,8 +21,8 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "null — divergence à ouvrir par le coordinateur : statistiques CHISQ non exposées en dataset OUTPUT",
+  "status": "validated",
+  "issue": "sasrs #16 — PROC FREQ : statement OUTPUT OUT= CHISQ expose les statistiques du khi-deux Pearson en dataset (_PCHI_, _PCHI_DF_, P_PCHI) conformément à la doc FREQ (OUTPUT Statement)",
   "data_types": {
     "twoway.csv": {
       "treatment": "char",

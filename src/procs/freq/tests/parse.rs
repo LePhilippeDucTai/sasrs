@@ -153,6 +153,7 @@ fn execute_one_way_default_excludes_missing() {
         tables: vec![tr(&["x"], false, None)],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -185,6 +186,7 @@ fn execute_one_way_missing_option_includes_it() {
         tables: vec![tr(&["x"], true, None)],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -222,6 +224,7 @@ fn execute_out_dataset() {
         )],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -271,6 +274,7 @@ fn execute_crosstab_counts_and_total() {
         tables: vec![tr(&["r", "c"], false, None)],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -327,6 +331,7 @@ fn execute_fisher_measures_agree_end_to_end() {
         tables: vec![req],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -364,6 +369,7 @@ fn execute_one_way_chisq_end_to_end() {
         tables: vec![req],
         weight: None,
         by: Vec::new(),
+        output: None,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();

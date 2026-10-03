@@ -767,39 +767,48 @@ pub(super) fn fmt_chisq_p(p: f64) -> String {
     }
 }
 
-/// Print the "Statistics for Table of <row> by <col>" CHISQ block for a
-/// two-way table: Pearson chi-square and the likelihood-ratio chi-square,
-/// each with DF and an upper-tail p-value. Degenerate tables (grand total 0,
-/// any zero margin, or DF <= 0) are skipped gracefully with a note.
-pub(super) fn chisq_block(
-    session: &mut Session,
-    row_name: &str,
-    col_name: &str,
+/// J02-P1 — résultat du calcul CHISQ deux voies, séparé du rendu pour que le
+/// statement OUTPUT OUT= puisse exposer les mêmes valeurs (_PCHI_, _PCHI_DF_,
+/// P_PCHI) sans dépendre du listing.
+pub(super) struct TwoWayChisq {
+    /// Pearson chi-square (_PCHI_).
+    pub pearson: f64,
+    /// Likelihood-ratio chi-square.
+    pub lratio: f64,
+    /// Degrees of freedom (_PCHI_DF_).
+    pub df: f64,
+    /// Upper-tail p-value of the Pearson statistic (P_PCHI).
+    pub p_pearson: f64,
+    /// False when the table is degenerate (grand 0, zero margin, DF <= 0).
+    pub computable: bool,
+}
+
+/// Compute the two-way CHISQ statistics (Pearson + likelihood ratio) from a
+/// possibly-weighted frequency matrix. Pure computation shared by the listing
+/// block (`chisq_block`) and the OUTPUT OUT= dataset (J02-P1).
+pub(super) fn two_way_chisq_compute(
     freq: &[Vec<f64>],
     row_tot: &[f64],
     col_tot: &[f64],
     grand: f64,
-) -> Result<()> {
-    session.listing.blank();
-    session
-        .listing
-        .write_line(&format!("Statistics for Table of {row_name} by {col_name}"));
-    session.listing.blank();
-
+) -> TwoWayChisq {
     let nr = row_tot.len();
     let nc = col_tot.len();
     let df = (nr.saturating_sub(1)) * (nc.saturating_sub(1));
 
-    // Guard against degenerate tables: no expected counts are defined.
+    // Degenerate table: no expected counts are defined.
     if grand <= 0.0
         || df == 0
         || row_tot.iter().any(|&t| t <= 0.0)
         || col_tot.iter().any(|&t| t <= 0.0)
     {
-        session
-            .listing
-            .write_line("Chi-Square statistics are not computable for this table.");
-        return Ok(());
+        return TwoWayChisq {
+            pearson: 0.0,
+            lratio: 0.0,
+            df: df as f64,
+            p_pearson: 0.0,
+            computable: false,
+        };
     }
 
     let g = grand;
@@ -821,8 +830,49 @@ pub(super) fn chisq_block(
     lratio *= 2.0;
 
     let df_f = df as f64;
-    let p_pearson = chisq_sf(pearson, df_f);
-    let p_lratio = chisq_sf(lratio, df_f);
+    TwoWayChisq {
+        pearson,
+        lratio,
+        df: df_f,
+        p_pearson: chisq_sf(pearson, df_f),
+        computable: true,
+    }
+}
+
+/// Print the "Statistics for Table of <row> by <col>" CHISQ block for a
+/// two-way table: Pearson chi-square and the likelihood-ratio chi-square,
+/// each with DF and an upper-tail p-value. Degenerate tables (grand total 0,
+/// any zero margin, or DF <= 0) are skipped gracefully with a note.
+pub(super) fn chisq_block(
+    session: &mut Session,
+    row_name: &str,
+    col_name: &str,
+    freq: &[Vec<f64>],
+    row_tot: &[f64],
+    col_tot: &[f64],
+    grand: f64,
+) -> Result<()> {
+    session.listing.blank();
+    session
+        .listing
+        .write_line(&format!("Statistics for Table of {row_name} by {col_name}"));
+    session.listing.blank();
+
+    let res = two_way_chisq_compute(freq, row_tot, col_tot, grand);
+    if !res.computable {
+        session
+            .listing
+            .write_line("Chi-Square statistics are not computable for this table.");
+        return Ok(());
+    }
+    let (df_f, pearson, lratio, p_pearson, p_lratio) = (
+        res.df,
+        res.pearson,
+        res.lratio,
+        res.p_pearson,
+        chisq_sf(res.lratio, res.df),
+    );
+    let df = df_f as usize;
 
     let headers = vec![
         "Statistic".to_string(),
