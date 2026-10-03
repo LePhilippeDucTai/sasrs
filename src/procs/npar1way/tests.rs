@@ -4,7 +4,7 @@ use super::*;
 fn test_wilcoxon_basic() {
     // Group A = [1,2,3], Group B = [4,5,6]; no ties.
     // W=6, E(W)=10.5, Var(W)=5.25.
-    // With SAS continuity correction: Z = -(|6-10.5|-0.5)/sqrt(5.25) = -4.0/2.2913 ≈ -1.7458.
+    // No continuity correction (issue #19): Z = (6-10.5)/sqrt(5.25) = -4.5/2.2913 ≈ -1.9640.
     let res = analyze(&[vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
     assert_eq!(res.n, 6);
     assert!(
@@ -16,8 +16,8 @@ fn test_wilcoxon_basic() {
     assert!((w.w - 6.0).abs() < 1e-12, "W={}", w.w);
     assert!((w.ew - 10.5).abs() < 1e-12, "E(W)={}", w.ew);
     assert!((w.var_w - 5.25).abs() < 1e-12, "Var(W)={}", w.var_w);
-    assert!((w.z - (-1.7458)).abs() < 1e-3, "Z={}", w.z);
-    assert!(w.p > 0.07 && w.p < 0.10, "p={}", w.p);
+    assert!((w.z - (-1.9640)).abs() < 1e-3, "Z={}", w.z);
+    assert!(w.p > 0.04 && w.p < 0.06, "p={}", w.p);
 }
 
 #[test]
@@ -123,8 +123,8 @@ fn test_two_sample_z_reproduces_wilcoxon() {
 #[test]
 fn test_two_sample_z_snapshot_shape() {
     // Self-check on the m24-style table shape: n0=9, n1=10, n=19, group-0
-    // rank sum 73 reproduces Stat 73, Mean 90, Std 12.2367, Z -1.3484,
-    // p 0.1775 (the exact m24 `height` row). We build the same pooled rank
+    // rank sum 73 reproduces Stat 73, Mean 90, Std 12.2367, Z -1.3894,
+    // p 0.1647 (the m24 `height` row without continuity correction, issue #19). We build the same pooled rank
     // configuration directly: ranks 1..=19 with group-0 rank sum = 73 and no
     // ties (so the generic routine equals the closed-form Wilcoxon).
     // Construct values so the first 9 take ranks summing to 73.

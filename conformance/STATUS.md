@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 24 validés, 2 divergences connues.
+Corpus : **26 cas** — 25 validés, 1 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -27,7 +27,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
 | PROC MEANS | 1 | 1 | 0 |
-| PROC NPAR1WAY | 1 | 0 | 1 |
+| PROC NPAR1WAY | 1 | 1 | 0 |
 | PROC REG | 1 | 0 | 1 |
 | PROC SORT | 1 | 1 | 0 |
 | PROC SQL | 2 | 2 | 0 |
@@ -128,10 +128,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `npar1way-wilcoxon-out` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `npar1way-wilcoxon-out` — null — divergence à ouvrir par le coordinateur : la Z de Wilcoxon applique une correction de continuité (0.5) absente de la formule de la doc SAS — _WIL_=89 conforme, mais Z_WIL=2.8353240556 produit vs 2.893187811789223 attendu (sans correction) et P2_WIL=0.0045779224 produit vs 0.00381353188258207 attendu ; P1_WIL supplémentaire géré
+| `stat` | `npar1way-wilcoxon-out` | validé | documentation SAS publiée |
 
 ### PROC REG
 

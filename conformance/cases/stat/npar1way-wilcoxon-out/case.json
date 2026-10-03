@@ -21,12 +21,12 @@
     ]
   },
   "exit_code": 0,
-  "status": "known-divergence",
+  "status": "validated",
   "data_types": {
     "wilks.csv": {
       "group": "char",
       "response": "num"
     }
   },
-  "issue": "null — divergence à ouvrir par le coordinateur : la Z de Wilcoxon applique une correction de continuité (0.5) absente de la formule de la doc SAS — _WIL_=89 conforme, mais Z_WIL=2.8353240556 produit vs 2.893187811789223 attendu (sans correction) et P2_WIL=0.0045779224 produit vs 0.00381353188258207 attendu ; P1_WIL supplémentaire géré"
+  "issue": "19"
 }
