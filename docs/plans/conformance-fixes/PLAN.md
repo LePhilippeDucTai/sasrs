@@ -2,7 +2,7 @@
 
 Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).
 
-Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 3
+Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 4
 
 Base: `milestone/conformance-fixes`
 
@@ -38,27 +38,32 @@ Tier: T5 · Depends: none · Checks: fmt
 ### J02-P1 — FREQ CHISQ via OUTPUT OUT= (issue #16)
 Mécanique d'acceptation commune : (1) corriger le comportement dans src/ (borné aux préfixes de l'unité) ; (2) passer le(s) cas conformance concerné(s) à "status": "validated", remplir leur champ "issue" avec le numéro GitHub correspondant, ajuster expected/ et les attentes de log si la sortie change (uniquement de façon justifiée par la provenance doc SAS déjà citée dans le corpus) ; (3) régénérer conformance/STATUS.md via python3 scripts/conformance_report.py et vérifier --check ; (4) la promotion n'est jamais un simple retournement de statut sans correctif — le harnais détecte les cas « à promouvoir ». Cargo uniquement via distrobox enter ombre-mingw ; INSTA_UPDATE=no ; arbre propre requis. Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. CHISQ via OUTPUT OUT= expose _PCHI_, _PCHI_DF_, _PCH_P (p-value) conformément à la doc FREQ. Cas base/freq-chisq-output → validated.
 
-Tier: T3 · Depends: J01-P3 · Checks: fmt, clippy, test-conformance, conformance-status
+Tier: T3 · Depends: J01-P3, J02-P6 · Checks: fmt, clippy, test-conformance, conformance-status
 
 ### J02-P2 — OUTPUT dans FREQ/GLM, SKEWNESS/KURTOSIS UNIVARIATE (issue #17)
 Mécanique d'acceptation commune : (1) corriger le comportement dans src/ (borné aux préfixes de l'unité) ; (2) passer le(s) cas conformance concerné(s) à "status": "validated", remplir leur champ "issue" avec le numéro GitHub correspondant, ajuster expected/ et les attentes de log si la sortie change (uniquement de façon justifiée par la provenance doc SAS déjà citée dans le corpus) ; (3) régénérer conformance/STATUS.md via python3 scripts/conformance_report.py et vérifier --check ; (4) la promotion n'est jamais un simple retournement de statut sans correctif — le harnais détecte les cas « à promouvoir ». Cargo uniquement via distrobox enter ombre-mingw ; INSTA_UPDATE=no ; arbre propre requis. Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Instruction OUTPUT supportée dans PROC FREQ et PROC GLM ; UNIVARIATE accepte SKEWNESS/KURTOSIS dans OUTPUT. Cas stat/freq-fisher-2x2, stat/glm-oneway-predicted, stat/univariate-moments-output → validated.
 
-Tier: T3 · Depends: J02-P1 · Checks: fmt, clippy, test-conformance, conformance-status
+Tier: T3 · Depends: J02-P1, J02-P6 · Checks: fmt, clippy, test-conformance, conformance-status
 
 ### J02-P3 — CORR OUTP=/OUTS= layout (issue #18)
 Mécanique d'acceptation commune : (1) corriger le comportement dans src/ (borné aux préfixes de l'unité) ; (2) passer le(s) cas conformance concerné(s) à "status": "validated", remplir leur champ "issue" avec le numéro GitHub correspondant, ajuster expected/ et les attentes de log si la sortie change (uniquement de façon justifiée par la provenance doc SAS déjà citée dans le corpus) ; (3) régénérer conformance/STATUS.md via python3 scripts/conformance_report.py et vérifier --check ; (4) la promotion n'est jamais un simple retournement de statut sans correctif — le harnais détecte les cas « à promouvoir ». Cargo uniquement via distrobox enter ombre-mingw ; INSTA_UPDATE=no ; arbre propre requis. Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Layout OUTP=/OUTS= conforme à la doc CORR : observations TYPE= N/MEAN/STD/SUM/MIN/MAX + CORR. Les valeurs de corrélation déjà conformes (0.9600051599448531 Pearson, 0.9428571428571428 Spearman) doivent être conservées bit-à-bit. Cas stat/corr-pearson-outp, stat/corr-spearman-outs → validated.
 
-Tier: T3 · Depends: J02-P2 · Checks: fmt, clippy, test-conformance, conformance-status
+Tier: T3 · Depends: J02-P2, J02-P6 · Checks: fmt, clippy, test-conformance, conformance-status
 
 ### J02-P4 — NPAR1WAY Z de Wilcoxon sans correction (issue #19)
 Mécanique d'acceptation commune : (1) corriger le comportement dans src/ (borné aux préfixes de l'unité) ; (2) passer le(s) cas conformance concerné(s) à "status": "validated", remplir leur champ "issue" avec le numéro GitHub correspondant, ajuster expected/ et les attentes de log si la sortie change (uniquement de façon justifiée par la provenance doc SAS déjà citée dans le corpus) ; (3) régénérer conformance/STATUS.md via python3 scripts/conformance_report.py et vérifier --check ; (4) la promotion n'est jamais un simple retournement de statut sans correctif — le harnais détecte les cas « à promouvoir ». Cargo uniquement via distrobox enter ombre-mingw ; INSTA_UPDATE=no ; arbre propre requis. Besoin d'un fichier hors périmètre → s'arrêter en blocked avec une décision. Z de Wilcoxon sans correction de continuité 0.5 pour coller à l'exemple doc (Z=2.893187811789223, p=0.0038135318825) ; si une option SAS active la correction, l'honorer explicitement, sinon la retirer. Tout snapshot touché doit être justifié ; si la doc documente aussi une variante corrigée, l'exposer sous un nom distinct plutôt que de changer silencieusement l'existant. Cas stat/npar1way-wilcoxon-out → validated.
 
-Tier: T3 · Depends: J02-P3 · Checks: fmt, clippy, test-conformance, conformance-status
+Tier: T3 · Depends: J02-P3, J02-P6 · Checks: fmt, clippy, test-conformance, conformance-status
 
 ### J02-P5 — Revue J02
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus la vérification des tolérances numériques des attendus (valeurs bit-à-bit citées dans les issues #18/#19).
 
-Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P6 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+
+### J02-P6 — Correction d'oracle J02 : freq-chisq-output (décision 8be00f84)
+Correction de l'oracle du cas conformance/cases/base/freq-chisq-output, arithmétiquement faux (finding worker J02-P1 attempt f1b5cdc6, décision 8be00f84) : expected/stats.csv doit porter chi²=_PCHI_=3.3333333333333335 et p=P_PCHI=0.06788915486182903 pour la table [[8,2],[4,6]] (N=20 ; E=(6,4,6,4) ; Σ(O−E)²/E=3.3333333333333335 ; dénominateur N(AD−BC)²/((A+B)(C+D)(A+C)(B+D)) = 10·10·12·8 = 9600, et non 9212/9216). Corrige la chaîne de provenance du case.json (arithmétique 9216→9600, formule doc SAS déjà citée). Le statut reste known-divergence (la promotion est faite par J02-P1, PAS par cette unité — gel conformance/README : l'implémenteur de la correction ne modifie pas son propre oracle ; cette unité est indépendante du correctif). Régénère conformance/STATUS.md (python3 scripts/conformance_report.py) et vérifie --check.
+
+Tier: T5 · Depends: J01-P1, J01-P2, J01-P3 · Checks: conformance-status
 
 ## J03 — Déterminisme + clôture (issue #20, méta #10/#11)
 
@@ -70,7 +75,7 @@ Tier: T4 · Depends: J02-P4 · Checks: fmt, clippy, test, test-conformance, conf
 ### J03-P2 — Clôture documentaire #10/#11 (méta)
 Documentation seulement : s'assurer que tous les case.json des cas promus référencent leur numéro d'issue GitHub dans le champ "issue" (les unités J01/J02 le font déjà ; compléter si besoin), régénérer conformance/STATUS.md (python3 scripts/conformance_report.py) et vérifier --check. Ne touche ni .mission-control/ ni docs/plans/. La clôture GitHub elle-même est une action du coordinateur, pas de cette unité. Le cas stat/reg-simple-lineart reste known-divergence (hors mandat, sans issue ouverte) : ne pas le modifier.
 
-Tier: T5 · Depends: J01-P1, J01-P2, J01-P3, J02-P1, J02-P2, J02-P3, J02-P4, J03-P1 · Checks: conformance-status
+Tier: T5 · Depends: J01-P1, J01-P2, J01-P3, J02-P1, J02-P2, J02-P3, J02-P4, J03-P1, J02-P6 · Checks: conformance-status
 
 ### J03-P3 — Revue finale
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Vérifie le Goal complet : 11 divergences initiales → 0 restante pour #13–#20 (le cas stat/reg-simple-lineart restant known-divergence sans issue ouverte doit être signalé dans le rapport de revue, non corrigé hors mandat) ; STATUS.md cohérent ; aucune promesse de couverture au-delà du validé.
