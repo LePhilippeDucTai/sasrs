@@ -2,7 +2,7 @@
 
 Traiter les 8 issues techniques ouvertes #13–#20 (conformance SAS 9.4 et déterminisme) en faisant passer les cas known-divergence correspondants du corpus conformance/cases au statut validated (le test --test conformance impose alors leur succès), plus la clôture justifiée des méta-issues #10 et #11 (décisions du coordinateur, pas des unités de code). Chaque unité est vérifiée par des checks locaux exécutables (cargo dans le conteneur distrobox ombre-mingw, python3 de l'hôte), chaque jalon par une revue indépendante. Exécution au plus un exécutant simultané (directive Philippe 28/09 : GLM 5.3 max via dsh).
 
-Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 5
+Protocol: 3 · Plan: `9602840f-21fb-4d37-a463-b782085bdfba` · Revision: 6
 
 Base: `milestone/conformance-fixes`
 
@@ -58,7 +58,7 @@ Tier: T3 · Depends: J02-P3, J02-P6 · Checks: fmt, clippy, test-conformance, co
 ### J02-P5 — Revue J02
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus la vérification des tolérances numériques des attendus (valeurs bit-à-bit citées dans les issues #18/#19).
 
-Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P6, J02-P7 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
+Tier: T2 · Depends: J02-P1, J02-P2, J02-P3, J02-P4, J02-P6, J02-P7, J02-P8 · Checks: fmt, clippy, clippy-s3, test, test-conformance, conformance-status, coverage-claims, ci-structure
 
 ### J02-P6 — Correction d'oracle J02 : freq-chisq-output (décision 8be00f84)
 Correction de l'oracle du cas conformance/cases/base/freq-chisq-output, arithmétiquement faux (finding worker J02-P1 attempt f1b5cdc6, décision 8be00f84) : expected/stats.csv doit porter chi²=_PCHI_=3.3333333333333335 et p=P_PCHI=0.06788915486182903 pour la table [[8,2],[4,6]] (N=20 ; E=(6,4,6,4) ; Σ(O−E)²/E=3.3333333333333335 ; dénominateur N(AD−BC)²/((A+B)(C+D)(A+C)(B+D)) = 10·10·12·8 = 9600, et non 9212/9216). Corrige la chaîne de provenance du case.json (arithmétique 9216→9600, formule doc SAS déjà citée). Le statut reste known-divergence (la promotion est faite par J02-P1, PAS par cette unité — gel conformance/README : l'implémenteur de la correction ne modifie pas son propre oracle ; cette unité est indépendante du correctif). Régénère conformance/STATUS.md (python3 scripts/conformance_report.py) et vérifie --check.
@@ -70,6 +70,11 @@ Finding should-fix du worker J02-P2 (attempt 5bd3c1e7, décision dbe58c3f) : dep
 
 Tier: T5 · Depends: J02-P2 · Checks: test
 
+### J02-P8 — Correction revue J02 : registre rétroactif snapshots + champ issue npar1way (décisions 3865498b/829bd238)
+Findings de la revue J02-P5 (attempt 7b4deaa6, décisions 3865498b/829bd238) : (a) BLOCKING — les commits 79b3c31 (tests/snapshots/snapshot__fixtures@j08__by_corr.sas.snap) et f9d3543 (snapshots npar1way) ont modifié des .snap sans ligne canonique « Snapshot: <fixture> — <raison> » (CONTRIBUTING §4). L'historique poussé n'est pas réinscriptible : étends le registre rétroactif docs/snapshots-provenance.md (créé par J01-P5) avec une entrée « Snapshot: » par fixture concernée, commit d'origine, référence revue et décisions. (b) SHOULD-FIX — conformance/cases/stat/npar1way-wilcoxon-out/case.json : normalise le champ « issue » de la promotion (« 19 » → « sasrs #19 », cohérent avec les autres promotions J02). Régénère conformance/STATUS.md et vérifie --check. Ne change rien d'autre.
+
+Tier: T5 · Depends: J02-P4, J02-P7, J01-P5 · Checks: conformance-status
+
 ## J03 — Déterminisme + clôture (issue #20, méta #10/#11)
 
 ### J03-P1 — Déterminisme UNION et sidecar (issue #20)
@@ -80,7 +85,7 @@ Tier: T4 · Depends: J02-P4 · Checks: fmt, clippy, test, test-conformance, conf
 ### J03-P2 — Clôture documentaire #10/#11 (méta)
 Documentation seulement : s'assurer que tous les case.json des cas promus référencent leur numéro d'issue GitHub dans le champ "issue" (les unités J01/J02 le font déjà ; compléter si besoin), régénérer conformance/STATUS.md (python3 scripts/conformance_report.py) et vérifier --check. Ne touche ni .mission-control/ ni docs/plans/. La clôture GitHub elle-même est une action du coordinateur, pas de cette unité. Le cas stat/reg-simple-lineart reste known-divergence (hors mandat, sans issue ouverte) : ne pas le modifier.
 
-Tier: T5 · Depends: J01-P1, J01-P2, J01-P3, J02-P1, J02-P2, J02-P3, J02-P4, J03-P1, J02-P6 · Checks: conformance-status
+Tier: T5 · Depends: J01-P1, J01-P2, J01-P3, J02-P1, J02-P2, J02-P3, J02-P4, J03-P1, J02-P6, J02-P8 · Checks: conformance-status
 
 ### J03-P3 — Revue finale
 Revue indépendante du diff intégré du jalon (verify-before-done, code-design, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque promotion de cas est justifiée par la provenance doc SAS, que chaque snapshot modifié est justifié (ligne Snapshot: dans le commit), qu'aucun silent-behavior n'est introduit et qu'aucune documentation ne promet plus que le code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Vérifie le Goal complet : 11 divergences initiales → 0 restante pour #13–#20 (le cas stat/reg-simple-lineart restant known-divergence sans issue ouverte doit être signalé dans le rapport de revue, non corrigé hors mandat) ; STATUS.md cohérent ; aucune promesse de couverture au-delà du validé.

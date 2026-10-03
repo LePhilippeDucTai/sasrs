@@ -545,7 +545,8 @@
    "scope": "Findings de la revue J02-P5 (attempt 7b4deaa6, décisions 3865498b/829bd238) : (a) BLOCKING — les commits 79b3c31 (tests/snapshots/snapshot__fixtures@j08__by_corr.sas.snap) et f9d3543 (snapshots npar1way) ont modifié des .snap sans ligne canonique « Snapshot: <fixture> — <raison> » (CONTRIBUTING §4). L'historique poussé n'est pas réinscriptible : étends le registre rétroactif docs/snapshots-provenance.md (créé par J01-P5) avec une entrée « Snapshot: » par fixture concernée, commit d'origine, référence revue et décisions. (b) SHOULD-FIX — conformance/cases/stat/npar1way-wilcoxon-out/case.json : normalise le champ « issue » de la promotion (« 19 » → « sasrs #19 », cohérent avec les autres promotions J02). Régénère conformance/STATUS.md et vérifie --check. Ne change rien d'autre.",
    "depends_on": [
     "J02-P4",
-    "J02-P7"
+    "J02-P7",
+    "J01-P5"
    ],
    "files": [
     "docs/snapshots-provenance.md",

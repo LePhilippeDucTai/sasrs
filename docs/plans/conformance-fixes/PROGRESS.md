@@ -19,3 +19,4 @@ Generated from Mission Control; do not edit.
 | J01-P5 | NOT_REGISTERED | 0 |
 | J02-P6 | NOT_REGISTERED | 0 |
 | J02-P7 | NOT_REGISTERED | 0 |
+| J02-P8 | NOT_REGISTERED | 0 |
