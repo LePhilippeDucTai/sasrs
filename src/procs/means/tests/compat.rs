@@ -616,7 +616,12 @@ fn means_compat_output_stat_list() {
     // Ligne globale _TYPE_=0 puis une ligne par niveau, tri alpha interne.
     assert_eq!(
         num_col(&tables, "summary", "_TYPE_"),
-        vec![Value::Num(0.0), Value::Num(1.0), Value::Num(1.0), Value::Num(1.0)]
+        vec![
+            Value::Num(0.0),
+            Value::Num(1.0),
+            Value::Num(1.0),
+            Value::Num(1.0)
+        ]
     );
     assert_eq!(
         char_col(&tables, "summary", "region"),
