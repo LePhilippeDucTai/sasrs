@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 25 validés, 1 divergences connues.
+Corpus : **26 cas** — 26 validés, 0 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -28,7 +28,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC LOGISTIC | 1 | 1 | 0 |
 | PROC MEANS | 1 | 1 | 0 |
 | PROC NPAR1WAY | 1 | 1 | 0 |
-| PROC REG | 1 | 0 | 1 |
+| PROC REG | 1 | 1 | 0 |
 | PROC SORT | 1 | 1 | 0 |
 | PROC SQL | 2 | 2 | 0 |
 | PROC TRANSPOSE | 1 | 1 | 0 |
@@ -134,10 +134,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `stat` | `reg-simple-lineart` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `reg-simple-lineart` — null — divergence à ouvrir par le coordinateur : colonne de la variable dépendante dans OUTEST= — sasrs produit -1 là où la doc SAS donne la SSE de l'observation _TYPE_=PARMS (0.07276190476190475 attendu) ; _RMSE_, Intercept et fert sont conformes (0.13487207342691884, 0.053333333333334565, 1.9942857142857142), de même que OUTPUT p=/r=
+| `stat` | `reg-simple-lineart` | validé | documentation SAS publiée |
 
 ### PROC SORT
 
