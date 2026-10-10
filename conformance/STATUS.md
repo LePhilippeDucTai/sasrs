@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **36 cas** — 32 validés, 4 divergences connues.
+Corpus : **36 cas** — 33 validés, 3 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -28,7 +28,7 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | PROC FREQ | 3 | 3 | 0 |
 | PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
-| PROC MEANS | 3 | 1 | 2 |
+| PROC MEANS | 3 | 2 | 1 |
 | PROC NPAR1WAY | 1 | 1 | 0 |
 | PROC PRINTTO | 2 | 2 | 0 |
 | PROC REG | 1 | 1 | 0 |
@@ -143,13 +143,12 @@ Divergences connues :
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `compat/means` | `means-class-missing-nway` | divergence connue | documentation SAS publiée |
+| `compat/means` | `means-class-missing-nway` | validé | documentation SAS publiée |
 | `base` | `means-class-output` | validé | documentation SAS publiée |
 | `compat/means` | `means-order-freq-autoname` | divergence connue | documentation SAS publiée |
 
 Divergences connues :
-- `compat/means/means-class-missing-nway` — roadmap-avancee J01-P2 — ordre des colonnes arbitré (CLASS → _TYPE_ → _FREQ_ → statistiques, doc SAS 9.4 Example 10) ; divergence restante = valeur de l'oracle, hors périmètre J01-P2 (« valeurs inchangées ») : WORK.excl obs 1 (_TYPE_=0), m attendu 25 alors que la même ligne attend n=3 et _FREQ_=4 (observations à CLASS manquante exclues, CLASS Statement MISSING : « If you omit MISSING, then PROC MEANS excludes the observations with a missing class variable value from the analysis ») — moyenne de 10, 20, 30 = 20 ; correction de la valeur soumise à décision
-- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= : CLASS avant _TYPE_/_FREQ_ établi (doc SAS 9.4 MEANS Example 10, base/means-class-output) mais position des variables ID non établie par la documentation SAS 9.4 publiée (liste « Output Data Set » : BY, ID, CLASS, _TYPE_, _FREQ_… sans exemple publié CLASS + ID + OUT=) — attendu inchangé, décision requise ; produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats]
+- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P3 — PROC MEANS OUT= : position des variables ID. Ordre établi (arbitrage J01-P2 rév. 3, SUGI 31 paper 043-31 + doc SAS 9.4 MEANS Example 10) : BY → CLASS → _TYPE_ → _FREQ_ → ID → statistiques ; attendu [group, _TYPE_, _FREQ_, price, value_MEAN, value_STD], sasrs produit [group, price, _TYPE_, _FREQ_, …] (ID avant _TYPE_/_FREQ_)
 
 ### PROC NPAR1WAY
 
