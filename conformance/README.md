@@ -19,6 +19,12 @@ oracle indépendant — jamais la sortie courante de `sasrs` elle-même).
   vide, une `issue` s'il est `known-divergence`, et au moins un
   `expected/*.csv` (exit 0 = OK, 1 = exigence violée, 2 = usage).
   `--self-test` rejoue ces règles sur des copies temporaires.
+- Oracles rejouables (J01-P5) : un cas `independent-oracle` peut porter
+  `oracle/oracle.py`, un script reproduisant indépendamment ses
+  `expected/*.csv` — voir « Oracle rejouable » ci-dessous et
+  `schema.md`. `python3 scripts/replay_oracles.py` les découvre et les
+  rejoue tous ; `--self-test` vérifie l'outil lui-même (cas conforme,
+  valeur divergente, import interdit).
 
 ## Ajouter un cas
 
@@ -37,6 +43,32 @@ oracle indépendant — jamais la sortie courante de `sasrs` elle-même).
    sans provenance exploitable est refusé par l'exécuteur.
 4. `cargo test --locked -p sasrs --test conformance` doit passer ;
    régénérer `STATUS.md` (`python3 scripts/conformance_report.py`).
+
+## Oracle rejouable
+
+Un cas `independent-oracle` peut porter `oracle/oracle.py`, en plus de
+`program.sas` : un script Python **bibliothèque standard seulement**,
+déterministe, sans réseau ni sous-processus, qui n'exécute jamais `sasrs`.
+Lancé comme `python3 -I -B oracle/oracle.py <dir>` (le répertoire du cas
+comme répertoire courant), il doit écrire `<dir>/<dataset>.csv` pour
+chaque `expected/<dataset>.csv` du cas — la preuve que l'attendu est
+reproductible par un calcul indépendant, pas relevé une fois puis figé.
+
+`python3 scripts/replay_oracles.py` découvre tous les
+`conformance/cases/**/oracle/oracle.py` du corpus, refuse statiquement
+(sans l'exécuter) tout script qui importe un module hors
+`sys.stdlib_module_names`, ou `subprocess`/`socket`/`ctypes`/
+`multiprocessing`, ou qui utilise `os.system`/`os.popen`, puis exécute
+chaque script accepté dans un répertoire temporaire et compare sa sortie
+à `expected/*.csv` avec les mêmes règles que l'exécuteur (missings SAS
+exacts, colonnes dans l'ordre, tolérance `abs`/`rel` par défaut et par
+colonne de `case.json`). Sans aucun oracle dans le corpus, l'outil
+rapporte « 0 oracle(s) rejoué(s) » et sort en 0. `--self-test` vérifie
+l'outil lui-même (cas conforme, valeur divergente, import interdit) sur
+des cas fabriqués, sans toucher au corpus.
+
+Exécuté par `scripts/check.sh test` et par le job CI `conformance`, à la
+suite de `cargo test --test conformance` et `conformance_report.py --check`.
 
 ## Statuts
 

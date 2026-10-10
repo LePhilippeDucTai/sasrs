@@ -39,6 +39,7 @@ usage: scripts/check.sh lint|test|build|all
          --features fault-injection --test storage_integrity ;
          --features fault-injection --lib ;
          --test conformance + conformance_report.py --check ;
+         replay_oracles.py --self-test + replay_oracles.py (J01-P5) ;
          --test properties ; --test differential ;
          --test e2e (J08-P6) ; coverage-claims (check_coverage_claims.py) ;
          tests unittest du wrapper Python (python/tests)
@@ -97,6 +98,11 @@ run_test() {
     assert_tree_unchanged "$before"
     echo '==> python3 scripts/conformance_report.py --check'
     python3 scripts/conformance_report.py --check
+    # J01-P5 : oracles indépendants committés avec les cas (oracle/oracle.py).
+    echo '==> python3 -B scripts/replay_oracles.py --self-test'
+    python3 -B scripts/replay_oracles.py --self-test
+    echo '==> python3 -B scripts/replay_oracles.py'
+    python3 -B scripts/replay_oracles.py
     echo '==> cargo test -p sasrs --test properties'
     cargo test --locked -p sasrs --test properties
     assert_tree_unchanged "$before"
