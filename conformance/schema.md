@@ -12,8 +12,10 @@ conformance/cases/<groupe>/[<sous-groupe>/…]<id>/
 ├── program.sas          programme SAS exécuté (obligatoire)
 ├── data/                entrées CSV (optionnel)
 │   └── <table>.csv      converties en parquet par l'exécuteur
-└── expected/            datasets attendus (au moins un)
-    └── <dataset>.csv    comparé à WORK.<dataset>
+├── expected/            datasets attendus (au moins un)
+│   └── <dataset>.csv    comparé à WORK.<dataset>
+└── oracle/              oracle rejouable (optionnel, `independent-oracle`)
+    └── oracle.py         rejoué par scripts/replay_oracles.py
 ```
 
 Groupes actuels : `example` (cas de démonstration du corpus), `base`
@@ -86,6 +88,29 @@ valide (CONTRIBUTING.md §2) : la provenance est obligatoire et auditée.
   SAS) ; chaque ligne = une observation, mêmes conventions de missing.
   Le dataset produit est relu depuis le répertoire `--work` via l'API
   publique `sasrs::dataset::SasDataset::read_parquet`.
+
+## `oracle/oracle.py` (oracle rejouable)
+
+Un cas dont `provenance.kind` vaut `independent-oracle` peut porter
+`oracle/oracle.py`, rejoué par `scripts/replay_oracles.py` (cf.
+`README.md` §« Oracle rejouable ») :
+
+- bibliothèque standard Python uniquement (aucun import hors
+  `sys.stdlib_module_names`), sans `subprocess`/`socket`/`ctypes`/
+  `multiprocessing`, sans `os.system`/`os.popen` — `replay_oracles.py`
+  refuse statiquement (`ast`, sans exécuter) tout script qui y manque ;
+- déterministe, sans réseau, sans sous-processus, et n'exécute jamais
+  `sasrs` (il ne prouve rien s'il relit la sortie qu'il est censé
+  valider) ;
+- invoqué comme `python3 -I -B oracle/oracle.py <dir>`, répertoire du cas
+  comme répertoire courant, `<dir>` un répertoire temporaire fourni par
+  `replay_oracles.py` ;
+- doit écrire `<dir>/<dataset>.csv` pour chaque `expected/<dataset>.csv`
+  du cas, même format que `expected/` (en-tête en MAJUSCULES dans l'ordre
+  des variables, mêmes conventions de missing) ;
+- comparé à `expected/<dataset>.csv` avec les tolérances de `tolerance`
+  (mêmes règles que l'exécuteur : missings exacts, colonnes dans l'ordre,
+  `abs`/`rel` par défaut et par colonne).
 
 ## Exécution par l'exécuteur
 
