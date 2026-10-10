@@ -149,9 +149,26 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    /// Crée la variable `name` si elle est absente du PDV (FORMAT/ATTRIB sur
-    /// une variable inconnue — J03-P6 : SAS crée la variable). Type : Char(8)
-    /// si le format commence par `$`, Num(8) sinon.
+    /// Compile un `INFORMAT` (bras `DsStmt::Informat` de `walk_stmt`). Le
+    /// token a déjà été collecté (et validé) par la pré-passe
+    /// `collect_informats`, dans `self.informats` (appliqué en fin de
+    /// compilation — `VarMeta.informat` + longueur char déclarée, cf.
+    /// `program.rs`). Ici, comme FORMAT/ATTRIB (J01-P3, doc SAS 9.4 INFORMAT
+    /// statement) : une variable INCONNUE est CRÉÉE à sa position textuelle.
+    pub(super) fn compile_informat(&mut self, groups: &[(Vec<String>, String)]) -> Result<()> {
+        for (names, token) in groups {
+            for name in names {
+                self.declare_format_var(name, token)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Crée la variable `name` si elle est absente du PDV (FORMAT/ATTRIB/
+    /// INFORMAT sur une variable inconnue — J03-P6, J01-P3 : SAS crée la
+    /// variable). Type : Char(8) si le token commence par `$`, Num(8) sinon.
+    /// Pour un informat `$w.`, la longueur char est corrigée à `w` en fin de
+    /// compilation (cf. `apply_declared_informats` / `program.rs`).
     fn declare_format_var(&mut self, name: &str, token: &str) -> Result<()> {
         if self.pdv.slot(name).is_none() {
             let (ty, length) = if token.trim_start().starts_with('$') {

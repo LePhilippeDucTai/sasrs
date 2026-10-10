@@ -104,4 +104,5 @@ fn define_format(session: &mut Session, src: &str) {
 
 mod array;
 mod datastep_divergence;
+mod informat;
 mod set;

@@ -100,6 +100,11 @@ implémentés et validés par le corpus (cas `compat/*`, cf.
   persistés dans les métadonnées du dataset et restitués par
   `PROC CONTENTS OUT=` (`INFORMAT`, `INFORML`, `INFORMD`). L'ancienne
   limitation « informats are not persisted in dataset metadata » n'existe plus.
+  Une variable encore inconnue référencée par l'instruction `INFORMAT` entre
+  au PDV à sa position textuelle (J01-P3, doc SAS 9.4 INFORMAT statement) —
+  caractère si l'informat commence par `$` (longueur déclarée = largeur de
+  l'informat), numérique (8) sinon — comme le font déjà `LENGTH`/`FORMAT`/
+  `ATTRIB`.
 - **CONTENTS** : `NOPRINT` est honoré (J01-P3) — supprime tout le listing
   (en-tête et table des variables) ; `OUT=` reste toujours écrit. L'ancien
   ERROR « Unexpected option 'NOPRINT' on PROC CONTENTS statement » n'est plus

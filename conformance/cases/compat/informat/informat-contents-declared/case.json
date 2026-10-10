@@ -12,7 +12,6 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "roadmap-avancee J01-P3 — NOPRINT est désormais supporté (le programme atteint OUT=) mais la variable `name`, déclarée uniquement par `informat name $10.;` (sans LENGTH/ATTRIB ni autre référence avant son affectation), n'entre au PDV qu'à sa première affectation (`name = 'Ann';`), pas à la ligne INFORMAT — contrairement à LENGTH/FORMAT/ATTRIB qui créent déjà la variable inconnue (cf. `compile_length`/`declare_format_var` dans src/datastep/compile_decl.rs ; `DsStmt::Informat(_) => Ok(())` reste un no-op dans src/datastep/mod.rs::walk_stmt, la pré-passe `collect_informats` ne fait qu'enregistrer le token). Résultat : l'ordre produit des variables de OUT= est [note, name, amount] (note, créée par `length note $3;` à la ligne 3, passe avant) au lieu de [name, amount, note] attendu (doc SAS : l'INFORMAT statement crée la variable, typée caractère si l'informat commence par `$`, sinon numérique, comme le fait déjà FORMAT). Fix hors périmètre de J01-P3 (fichiers src/datastep/mod.rs et src/datastep/compile_decl.rs, non couverts par la liste de fichiers de l'unité) : à traiter par une unité dédiée au DATA step.",
+  "status": "validated",
   "data_types": {}
 }
