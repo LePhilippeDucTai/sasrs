@@ -5,7 +5,7 @@
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **36 cas** — 33 validés, 3 divergences connues.
+Corpus : **36 cas** — 35 validés, 1 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -23,12 +23,12 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
 | PROC COMPARE | 2 | 2 | 0 |
-| PROC CONTENTS — informats persistés | 2 | 0 | 2 |
+| PROC CONTENTS — informats persistés | 2 | 1 | 1 |
 | PROC CORR | 2 | 2 | 0 |
 | PROC FREQ | 3 | 3 | 0 |
 | PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
-| PROC MEANS | 3 | 2 | 1 |
+| PROC MEANS | 3 | 3 | 0 |
 | PROC NPAR1WAY | 1 | 1 | 0 |
 | PROC PRINTTO | 2 | 2 | 0 |
 | PROC REG | 1 | 1 | 0 |
@@ -105,12 +105,11 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
-| `compat/informat` | `informat-contents-date` | divergence connue | documentation SAS publiée |
+| `compat/informat` | `informat-contents-date` | validé | documentation SAS publiée |
 | `compat/informat` | `informat-contents-declared` | divergence connue | documentation SAS publiée |
 
 Divergences connues :
-- `compat/informat/informat-contents-date` — roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=
-- `compat/informat/informat-contents-declared` — roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=
+- `compat/informat/informat-contents-declared` — roadmap-avancee J01-P3 — NOPRINT est désormais supporté (le programme atteint OUT=) mais la variable `name`, déclarée uniquement par `informat name $10.;` (sans LENGTH/ATTRIB ni autre référence avant son affectation), n'entre au PDV qu'à sa première affectation (`name = 'Ann';`), pas à la ligne INFORMAT — contrairement à LENGTH/FORMAT/ATTRIB qui créent déjà la variable inconnue (cf. `compile_length`/`declare_format_var` dans src/datastep/compile_decl.rs ; `DsStmt::Informat(_) => Ok(())` reste un no-op dans src/datastep/mod.rs::walk_stmt, la pré-passe `collect_informats` ne fait qu'enregistrer le token). Résultat : l'ordre produit des variables de OUT= est [note, name, amount] (note, créée par `length note $3;` à la ligne 3, passe avant) au lieu de [name, amount, note] attendu (doc SAS : l'INFORMAT statement crée la variable, typée caractère si l'informat commence par `$`, sinon numérique, comme le fait déjà FORMAT). Fix hors périmètre de J01-P3 (fichiers src/datastep/mod.rs et src/datastep/compile_decl.rs, non couverts par la liste de fichiers de l'unité) : à traiter par une unité dédiée au DATA step.
 
 ### PROC CORR
 
@@ -145,10 +144,7 @@ Divergences connues :
 |---|---|---|---|
 | `compat/means` | `means-class-missing-nway` | validé | documentation SAS publiée |
 | `base` | `means-class-output` | validé | documentation SAS publiée |
-| `compat/means` | `means-order-freq-autoname` | divergence connue | documentation SAS publiée |
-
-Divergences connues :
-- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P3 — PROC MEANS OUT= : position des variables ID. Ordre établi (arbitrage J01-P2 rév. 3, SUGI 31 paper 043-31 + doc SAS 9.4 MEANS Example 10) : BY → CLASS → _TYPE_ → _FREQ_ → ID → statistiques ; attendu [group, _TYPE_, _FREQ_, price, value_MEAN, value_STD], sasrs produit [group, price, _TYPE_, _FREQ_, …] (ID avant _TYPE_/_FREQ_)
+| `compat/means` | `means-order-freq-autoname` | validé | documentation SAS publiée |
 
 ### PROC NPAR1WAY
 

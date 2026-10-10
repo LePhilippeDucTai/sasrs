@@ -12,7 +12,6 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=",
+  "status": "validated",
   "data_types": {}
 }

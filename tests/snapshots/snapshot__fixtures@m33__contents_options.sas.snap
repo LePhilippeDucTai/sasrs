@@ -1,6 +1,5 @@
 ---
 source: tests/snapshot.rs
-assertion_line: 63
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
 input_file: tests/fixtures/m33/contents_options.sas
 ---
@@ -71,11 +70,11 @@ Engine:         PARQUET
 
  Obs    NAME      TYPE    LENGTH    VARNUM    LABEL    FORMAT    INFORMAT    INFORMD    INFORML
 
-   1    name         2         7         1                                         0          0
-   2    sex          2         1         2                                         0          0
-   3    age          1         8         3                                         0          0
-   4    height       1         8         4                                         0          0
-   5    weight       1         8         5                                         0          0
+   1    NAME         2         7         1                                         0          0
+   2    SEX          2         1         2                                         0          0
+   3    AGE          1         8         3                                         0          0
+   4    HEIGHT       1         8         4                                         0          0
+   5    WEIGHT       1         8         5                                         0          0
 
                CONTENTS DETAILS : extra observation/variable lines in the header
 

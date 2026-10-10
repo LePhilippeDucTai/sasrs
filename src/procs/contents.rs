@@ -53,10 +53,14 @@ pub struct ContentsAst {
     /// DETAILS : ajoute des infos d'observations/taille au bloc d'en-tête
     /// (M33.7).
     pub details: bool,
+    /// NOPRINT (J01-P3) : supprime l'impression du listing (en-tête, table
+    /// des variables) ; OUT= reste toujours écrit (doc SAS 9.4, chap. 14
+    /// CONTENTS Procedure).
+    pub noprint: bool,
 }
 
 /// Parse `proc contents [data=lib.x] [varnum] [out=ds] [short] [details]
-///        [nodetails] ; run ;`
+///        [nodetails] [noprint] ; run ;`
 /// Called AFTER "proc contents" has been consumed. Consumes through `run;`.
 pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
     let mut data: Option<DatasetRef> = None;
@@ -67,6 +71,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
     let mut out_drop: Option<Vec<String>> = None;
     let mut short = false;
     let mut details = false;
+    let mut noprint = false;
 
     // Parse PROC CONTENTS header options until `;` (combinateur partagé M31).
     common::parse_proc_options(ts, "CONTENTS", |ts, kw| {
@@ -121,6 +126,11 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
                 details = false;
                 true
             }
+            "noprint" => {
+                ts.next();
+                noprint = true;
+                true
+            }
             _ => false,
         })
     })?;
@@ -137,12 +147,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<ContentsAst> {
         out_drop,
         short,
         details,
+        noprint,
     })
 }
 
 /// Execute PROC CONTENTS. Called by `procs::execute_proc`.
 pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
-    session.listing.page_header();
+    if !ast.noprint {
+        session.listing.page_header();
+    }
 
     if ast.all {
         // data=lib._all_  — list all tables in the library
@@ -154,10 +167,13 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
         let mut tables = provider.list()?;
         tables.sort();
 
-        let headers = vec!["Member Name".to_string()];
-        let aligns = vec![Align::Left];
-        let rows: Vec<Vec<String>> = tables.into_iter().map(|t| vec![t.to_uppercase()]).collect();
-        session.listing.write_table(&headers, &aligns, &rows);
+        if !ast.noprint {
+            let headers = vec!["Member Name".to_string()];
+            let aligns = vec![Align::Left];
+            let rows: Vec<Vec<String>> =
+                tables.into_iter().map(|t| vec![t.to_uppercase()]).collect();
+            session.listing.write_table(&headers, &aligns, &rows);
+        }
         return Ok(());
     }
 
@@ -178,57 +194,62 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
     //
     // Label column width = 16 chars (enough for "Data Set Name: ").
     // We use simple string formatting; no table renderer needed.
+    //
+    // NOPRINT (J01-P3) suppresses this whole listing (doc SAS 9.4, chap. 14
+    // CONTENTS Procedure) ; OUT= below is always written regardless.
+    if !ast.noprint {
+        let left_label_width = 16usize;
+        let left_value_width = 20usize; // pad left value to this width for alignment
 
-    let left_label_width = 16usize;
-    let left_value_width = 20usize; // pad left value to this width for alignment
-
-    // Line 1: Data Set Name / Observations
-    session.listing.write_line(&format!(
-        "{:<lw$}{:<vw$}  {:<lw$}{}",
-        "Data Set Name:",
-        display_name,
-        "Observations:",
-        n_obs,
-        lw = left_label_width,
-        vw = left_value_width,
-    ));
-    // Line 2: Member Type / Variables
-    session.listing.write_line(&format!(
-        "{:<lw$}{:<vw$}  {:<lw$}{}",
-        "Member Type:",
-        "DATA",
-        "Variables:",
-        n_vars,
-        lw = left_label_width,
-        vw = left_value_width,
-    ));
-    // Line 3: Engine (no right-hand item)
-    session.listing.write_line(&format!(
-        "{:<lw$}{}",
-        "Engine:",
-        "PARQUET",
-        lw = left_label_width,
-    ));
-    // DETAILS (M33.7) : extra observation/size info. We report the observation
-    // count again as "# Observations" plus a derived "Obs in Buffer" proxy
-    // (number of observations, the only size figure available without reading
-    // the parquet page layout). Documented simplification: SAS reports physical
-    // file size / page size, which the parquet engine does not surface here.
-    if ast.details {
+        // Line 1: Data Set Name / Observations
         session.listing.write_line(&format!(
-            "{:<lw$}{}",
-            "# Observations:",
+            "{:<lw$}{:<vw$}  {:<lw$}{}",
+            "Data Set Name:",
+            display_name,
+            "Observations:",
             n_obs,
             lw = left_label_width,
+            vw = left_value_width,
         ));
+        // Line 2: Member Type / Variables
         session.listing.write_line(&format!(
-            "{:<lw$}{}",
-            "# Variables:",
+            "{:<lw$}{:<vw$}  {:<lw$}{}",
+            "Member Type:",
+            "DATA",
+            "Variables:",
             n_vars,
             lw = left_label_width,
+            vw = left_value_width,
         ));
+        // Line 3: Engine (no right-hand item)
+        session.listing.write_line(&format!(
+            "{:<lw$}{}",
+            "Engine:",
+            "PARQUET",
+            lw = left_label_width,
+        ));
+        // DETAILS (M33.7) : extra observation/size info. We report the
+        // observation count again as "# Observations" plus a derived "Obs in
+        // Buffer" proxy (number of observations, the only size figure
+        // available without reading the parquet page layout). Documented
+        // simplification: SAS reports physical file size / page size, which
+        // the parquet engine does not surface here.
+        if ast.details {
+            session.listing.write_line(&format!(
+                "{:<lw$}{}",
+                "# Observations:",
+                n_obs,
+                lw = left_label_width,
+            ));
+            session.listing.write_line(&format!(
+                "{:<lw$}{}",
+                "# Variables:",
+                n_vars,
+                lw = left_label_width,
+            ));
+        }
+        session.listing.blank();
     }
-    session.listing.blank();
 
     // ── OUT= dataset (M33.7) ──────────────────────────────────────────────────
     //
@@ -254,19 +275,25 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
 
     // SHORT (M33.7) : just a space-separated list of variable names (in display
     // order: alphabetical by default, creation order under VARNUM). No header
-    // table, no per-variable detail.
+    // table, no per-variable detail. Suppressed entirely by NOPRINT.
     if ast.short {
-        let mut idxs: Vec<usize> = (0..n_vars).collect();
-        if !ast.varnum {
-            idxs.sort_by(|&a, &b| {
-                ds.vars[a]
-                    .name
-                    .to_ascii_lowercase()
-                    .cmp(&ds.vars[b].name.to_ascii_lowercase())
-            });
+        if !ast.noprint {
+            let mut idxs: Vec<usize> = (0..n_vars).collect();
+            if !ast.varnum {
+                idxs.sort_by(|&a, &b| {
+                    ds.vars[a]
+                        .name
+                        .to_ascii_lowercase()
+                        .cmp(&ds.vars[b].name.to_ascii_lowercase())
+                });
+            }
+            let names: Vec<String> = idxs.iter().map(|&i| ds.vars[i].name.clone()).collect();
+            session.listing.write_line(&names.join(" "));
         }
-        let names: Vec<String> = idxs.iter().map(|&i| ds.vars[i].name.clone()).collect();
-        session.listing.write_line(&names.join(" "));
+        return Ok(());
+    }
+
+    if ast.noprint {
         return Ok(());
     }
 
@@ -349,7 +376,14 @@ fn write_out_dataset(
     drop: Option<&[String]>,
     session: &mut Session,
 ) -> Result<()> {
-    let names: Vec<Option<String>> = ds.vars.iter().map(|v| Some(v.name.clone())).collect();
+    // J01-P3 — NAME de l'OUT= en MAJUSCULES (doc SAS 9.4, chap. 14, « OUT=
+    // Data Set » ; le listing (table des variables) conserve lui la casse
+    // déclarée via `v.name.clone()`, seul OUT= normalise).
+    let names: Vec<Option<String>> = ds
+        .vars
+        .iter()
+        .map(|v| Some(v.name.to_uppercase()))
+        .collect();
     let types: Vec<Option<f64>> = ds
         .vars
         .iter()

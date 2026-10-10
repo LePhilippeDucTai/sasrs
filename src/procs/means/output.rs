@@ -626,33 +626,6 @@ pub(super) fn write_output(
         );
     }
 
-    // ID columns (J07-P2), right after the CLASS columns.
-    for (ci, (col_idx, _)) in id_cols.iter().enumerate() {
-        let meta = &ds.vars[*col_idx];
-        let series = match meta.ty {
-            VarType::Num => {
-                let vals: Vec<Option<f64>> = out_rows
-                    .iter()
-                    .map(|r| value_to_num(&r.id_values[ci]))
-                    .collect();
-                Series::new(meta.name.as_str().into(), vals)
-            }
-            VarType::Char => {
-                let vals: Vec<Option<String>> = out_rows
-                    .iter()
-                    .map(|r| match &r.id_values[ci] {
-                        Value::Char(s) if s.is_empty() => None,
-                        Value::Char(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                Series::new(meta.name.as_str().into(), vals)
-            }
-        };
-        columns.push(series.into());
-        vars.push(meta.clone());
-    }
-
     // _TYPE_ : numérique, ou masque caractère '101' sous CHARTYPE (J07-P2).
     if chartype && k > 0 {
         let vals: Vec<Option<String>> = out_rows
@@ -682,6 +655,35 @@ pub(super) fn write_output(
     let freq_vals: Vec<Option<f64>> = out_rows.iter().map(|r| Some(r.freq)).collect();
     columns.push(Series::new("_FREQ_".into(), freq_vals).into());
     vars.push(num_var_meta("_FREQ_"));
+
+    // ID columns (J07-P2) : après _TYPE_/_FREQ_, avant les statistiques
+    // (arbitrage J01-P2 rév. 3, décision c96c6088 : BY → CLASS → _TYPE_ →
+    // _FREQ_ → ID → statistiques ; SUGI 31 paper 043-31).
+    for (ci, (col_idx, _)) in id_cols.iter().enumerate() {
+        let meta = &ds.vars[*col_idx];
+        let series = match meta.ty {
+            VarType::Num => {
+                let vals: Vec<Option<f64>> = out_rows
+                    .iter()
+                    .map(|r| value_to_num(&r.id_values[ci]))
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+            VarType::Char => {
+                let vals: Vec<Option<String>> = out_rows
+                    .iter()
+                    .map(|r| match &r.id_values[ci] {
+                        Value::Char(s) if s.is_empty() => None,
+                        Value::Char(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Series::new(meta.name.as_str().into(), vals)
+            }
+        };
+        columns.push(series.into());
+        vars.push(meta.clone());
+    }
 
     // One column per output spec.
     for (si, sp) in specs.iter().enumerate() {
