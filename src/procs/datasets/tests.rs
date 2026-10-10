@@ -306,6 +306,38 @@ fn parse_exchange_save_modify() {
     );
 }
 
+/// J02-P8 — DELETE/CHANGE keep their source position among the other
+/// statements, and the MODIFY sub-statements (FORMAT included) stay in the
+/// group, in source order.
+#[test]
+fn parse_statements_and_modify_group_in_source_order() {
+    let src = "proc datasets lib=work nolist; \
+               change a=b; delete b; \
+               modify m; format x y 8.2 z; label x='X'; rename y=yy; informat x date9.; \
+               delete c; quit;";
+    let ast = parse_datasets_src(src).unwrap();
+    assert_eq!(
+        ast.ops,
+        vec![
+            DsOp::Change(vec![("A".into(), "B".into())]),
+            DsOp::Delete(vec!["B".into()]),
+            DsOp::Modify {
+                member: "M".into(),
+                stmts: vec![
+                    ModifyStmt::Format(vec![
+                        (vec!["x".into(), "y".into()], Some("8.2".into())),
+                        (vec!["z".into()], None),
+                    ]),
+                    ModifyStmt::Label(vec![("x".into(), "X".into())]),
+                    ModifyStmt::Rename(vec![("y".into(), "yy".into())]),
+                    ModifyStmt::Informat(vec![("x".into(), "date9.".into())]),
+                ],
+            },
+            DsOp::Delete(vec!["C".into()]),
+        ]
+    );
+}
+
 #[test]
 fn execute_copy_moves_member_to_other_lib() {
     let mut session = make_session();

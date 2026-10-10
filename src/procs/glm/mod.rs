@@ -7,6 +7,9 @@
 //! - CONTRAST statement: F-tests for linear combinations (same as ESTIMATE but gives F)
 //!
 //! For now, only one-way CLASS designs (single effect in MODEL) are supported.
+//! ESTIMATE and CONTRAST are computed on the one-way path only, for its MODEL
+//! effect; elsewhere, and for their options other than E, they are an ERROR
+//! (J02-P8, see `lincomb_unsupported` and `parse::parse_lincomb_options`).
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
