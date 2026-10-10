@@ -4,15 +4,15 @@ use super::*;
 
 // ───────────────────────── Execute helpers ─────────────────────────
 
-/// METHOD / DIST / LINK / RANDOM guards plus NOTEs for parse-accepted but
-/// deferred features.
-pub(super) fn check_guards(
-    ast: &GlimmixAst,
-    model: &ModelSpec,
-    session: &mut Session,
-) -> Result<()> {
+/// METHOD / DIST / LINK / RANDOM guards.
+///
+/// J02-P3 — the NOTEs « … is parse-accepted but not implemented » are gone:
+/// ESTIMATE/CONTRAST/LSMEANS are rejected by the parser (they could never be
+/// reached) and WEIGHT is a parse-time ERROR instead of a NOTE followed by
+/// an unweighted fit.
+pub(super) fn check_guards(ast: &GlimmixAst, model: &ModelSpec) -> Result<()> {
     // METHOD guards. LAPLACE is supported for a single VC random intercept;
-    // QUAD remains deferred (documented NOTE).
+    // QUAD is an ERROR until roadmap-avancee J08-P3.
     match ast.method {
         Method::Rspl => {}
         Method::Quad => {
@@ -69,12 +69,11 @@ pub(super) fn check_guards(
         }
     }
 
-    // RANDOM guards.
+    // RANDOM guards: a G-side random intercept or the R-side _RESIDUAL_
+    // structure (AR(1)/UN), both ordered within SUBJECT=.
     if let Some(r) = &ast.random {
-        // AR(1)/UN are accepted as within-subject (repeated) covariance
-        // structures and require SUBJECT= to order observations.
         let is_intercept = r.effects.len() == 1 && r.effects[0].eq_ignore_ascii_case("intercept");
-        if !is_intercept {
+        if !is_intercept && !r.residual {
             return Err(SasError::runtime(
                 "Only RANDOM INTERCEPT is implemented in PROC GLIMMIX.",
             ));
@@ -84,30 +83,6 @@ pub(super) fn check_guards(
                 "RANDOM statement requires SUBJECT= in PROC GLIMMIX.",
             ));
         }
-    }
-
-    // NOTEs for parse-accepted / deferred features.
-    for lbl in &ast.estimate_labels {
-        session.log.note(&format!(
-            "ESTIMATE '{}' is parse-accepted but not implemented in PROC GLIMMIX.",
-            lbl
-        ));
-    }
-    for lbl in &ast.contrast_labels {
-        session.log.note(&format!(
-            "CONTRAST '{}' is parse-accepted but not implemented in PROC GLIMMIX.",
-            lbl
-        ));
-    }
-    if !ast.lsmeans.is_empty() {
-        session
-            .log
-            .note("LSMEANS is parse-accepted but not implemented in PROC GLIMMIX.");
-    }
-    if ast.weight_var.is_some() {
-        session
-            .log
-            .note("WEIGHT statement is parse-accepted but not implemented in PROC GLIMMIX.");
     }
 
     Ok(())
@@ -352,6 +327,9 @@ pub(super) fn compute_fit(
             iterations: g.iterations,
             // fit_glm errors out on non-convergence before returning here.
             converged: true,
+            criterion: Criterion::Irls,
+            g_not_pd: false,
+            lambda_capped: false,
             cov_parms: None,
         }
     } else if use_laplace {
@@ -366,29 +344,41 @@ pub(super) fn compute_fit(
             neg2: lf.neg2,
             iterations: lf.iterations,
             converged: lf.converged,
+            criterion: Criterion::NelderMead,
+            g_not_pd: false,
+            lambda_capped: false,
             cov_parms: None,
         }
     } else if let Some(rep) = rep_cov {
-        // RANDOM with TYPE=AR(1)/UN: the within-subject repeated covariance R
-        // is fit as a weighted LMM at each RSPL step. For Normal/Identity this
-        // is the exact REML (no PQL iteration); for non-normal links we run the
-        // RSPL working-variate loop with R as the working covariance.
+        // RANDOM _RESIDUAL_ with TYPE=AR(1)/UN: the within-subject covariance
+        // R is fit as a weighted LMM at each RSPL step. For Normal/Identity
+        // this is the exact REML (no PQL iteration); for non-normal links we
+        // run the RSPL working-variate loop with R as the working covariance.
         fit_rspl_rep(y, x, freq, subj_of, within_idx, rep, model.dist, model.link)?
     } else if model.dist == Distribution::Normal {
-        // Normal + random → PQL == REML, closed-form / profile.
-        let (s2u, s2e, beta, cov, neg2) = fit_vc(y, x, subj_of, n_subjects, None)?;
-        let mu = (0..n_used).map(|i| dot(&x[i], &beta)).collect();
+        // Normal + random → PQL == REML, closed-form / profile. A link other
+        // than IDENTITY is rejected by the parser (J02-P3): fit_vc ignores it.
+        let vc = fit_vc(y, x, subj_of, n_subjects, None)?;
+        let mu = (0..n_used).map(|i| dot(&x[i], &vc.beta)).collect();
         GlimmixFit {
-            beta,
-            cov_beta: cov,
+            beta: vc.beta,
+            cov_beta: vc.cov_beta,
             mu,
-            sigma2_u: Some(s2u),
-            sigma2_e: s2e,
-            neg2,
+            sigma2_u: Some(vc.sigma2_u),
+            sigma2_e: vc.sigma2_e,
+            neg2: vc.neg2,
             iterations: 1,
-            // Deterministic closed-form / profiled REML search — no iteration
-            // criterion can fail here.
-            converged: true,
+            // J02-P3 — used to be hard-coded `true`: the closed form is exact,
+            // the profile search reports whether its interval criterion was
+            // met.
+            converged: vc.converged,
+            criterion: if vc.closed_form {
+                Criterion::ClosedForm
+            } else {
+                Criterion::GoldenSection
+            },
+            g_not_pd: vc.g_not_pd,
+            lambda_capped: vc.lambda_capped,
             cov_parms: None,
         }
     } else {

@@ -73,13 +73,13 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
 
 
-                            Data Set                     WORK.COUNTS
-                            Response Variable            y
-                            Response Distribution        Binary
-                            Link Function                Probit
-                            Variance Function            Default
-                            Estimation Technique         Residual PL
-                            Degrees of Freedom Method    Contain
+                        Data Set                     WORK.COUNTS
+                        Response Variable            y
+                        Response Distribution        Binary
+                        Link Function                Probit
+                        Variance Function            Default
+                        Estimation Technique         Maximum Likelihood
+                        Degrees of Freedom Method    Contain
 
                                      Number of Observations
 
@@ -89,14 +89,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                              Number of Observations Used        60
                              Number of Observations Not Used     0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1      60.0000
-                        1           0              2      60.0000    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+                         Convergence criterion (XCONV=1E-10) satisfied.
 
                                          Fit Statistics
 
@@ -107,10 +100,9 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
                                 Type III Tests of Fixed Effects
 
-                       Effect       Num DF    Den DF    F Value    Pr > F
+                        Effect    Num DF    Den DF    F Value    Pr > F
 
-                       Intercept         1        58       6.35    0.0145
-                       x                 1        58      15.00    0.0003
+                        x              1        58      15.00    0.0003
 
                                   Solutions for Fixed Effects
 
@@ -133,7 +125,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                        Response Distribution        Binary
                        Link Function                Complementary log-log
                        Variance Function            Default
-                       Estimation Technique         Residual PL
+                       Estimation Technique         Maximum Likelihood
                        Degrees of Freedom Method    Contain
 
                                      Number of Observations
@@ -144,14 +136,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                              Number of Observations Used        60
                              Number of Observations Not Used     0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1      60.0000
-                        1           0              2      60.0000    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+                         Convergence criterion (XCONV=1E-10) satisfied.
 
                                          Fit Statistics
 
@@ -162,10 +147,9 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
                                 Type III Tests of Fixed Effects
 
-                       Effect       Num DF    Den DF    F Value    Pr > F
+                        Effect    Num DF    Den DF    F Value    Pr > F
 
-                       Intercept         1        58      11.75    0.0011
-                       x                 1        58      15.05    0.0003
+                        x              1        58      15.05    0.0003
 
                                   Solutions for Fixed Effects
 
@@ -216,14 +200,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                               Number of Observations Used        4
                               Number of Observations Not Used    0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1      16.8967
-                        1           0              2      16.8967    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+         Convergence criterion (Nelder-Mead simplex: FTOL=1E-12, XTOL=1E-10) satisfied.
 
                                  Covariance Parameter Estimates
 
@@ -240,12 +217,6 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                               AIC  (smaller is better)    22.8967
                               AICC (smaller is better)    22.8967
                               BIC  (smaller is better)    18.9761
-
-                                Type III Tests of Fixed Effects
-
-                       Effect       Num DF    Den DF    F Value    Pr > F
-
-                       Intercept         1         1       8.00    0.2163
 
                                   Solutions for Fixed Effects
 

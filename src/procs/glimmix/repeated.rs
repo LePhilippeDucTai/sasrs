@@ -215,7 +215,7 @@ pub(super) fn fit_rep(
     let mut step = 0.5_f64;
     let mut converged = false;
     for restart in 0..6 {
-        let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
+        let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 2000, NM_FTOL, NM_XTOL);
         if f_r <= f_best {
             f_best = f_r;
             u_best = u_r;
@@ -308,6 +308,9 @@ pub(super) fn fit_rspl_rep(
             neg2: rep.neg2,
             iterations: 1,
             converged: rep.converged,
+            criterion: Criterion::NelderMead,
+            g_not_pd: false,
+            lambda_capped: false,
             cov_parms: Some(cov_parms_from_rep(cov, &rep.theta)),
         });
     }
@@ -381,7 +384,7 @@ pub(super) fn fit_rspl_rep(
         let norm_old: f64 = beta.iter().map(|b| b * b).sum::<f64>().sqrt();
         beta = rep.beta.clone();
         last = rep;
-        if diff / (1.0 + norm_old) < 1e-6 {
+        if diff / (1.0 + norm_old) < PL_PCONV {
             loop_converged = true;
             break;
         }
@@ -401,6 +404,9 @@ pub(super) fn fit_rspl_rep(
         neg2: last.neg2,
         iterations,
         converged: loop_converged && last.converged,
+        criterion: Criterion::PseudoLikelihood,
+        g_not_pd: false,
+        lambda_capped: false,
         cov_parms: Some(cov_parms_from_rep(cov, &last.theta)),
     })
 }

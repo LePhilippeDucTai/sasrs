@@ -24,6 +24,7 @@ pub(super) fn print_model_information(
     model: &ModelSpec,
     in_libref: &str,
     in_table: &str,
+    has_random: bool,
     laplace: bool,
 ) {
     let dist_name = match model.dist {
@@ -61,8 +62,21 @@ pub(super) fn print_model_information(
                 "Maximum Likelihood".into(),
             ]);
             rows.push(vec!["Likelihood Approximation".into(), "Laplace".into()]);
-        } else {
+        } else if has_random {
             rows.push(vec!["Estimation Technique".into(), "Residual PL".into()]);
+        } else {
+            // J02-P3 — GLM mode (no RANDOM statement) used to be labelled
+            // « Residual PL », METHOD=LAPLACE included. SAS/STAT 9.4, The
+            // GLIMMIX Procedure, « GLM Mode or GLMM Mode » / « Default
+            // Estimation Techniques »: METHOD= has no effect in GLM mode, the
+            // model is fit by restricted maximum likelihood for normal data
+            // and by maximum likelihood otherwise (here the IRLS fit).
+            let technique = if model.dist == Distribution::Normal {
+                "Restricted Maximum Likelihood"
+            } else {
+                "Maximum Likelihood"
+            };
+            rows.push(vec!["Estimation Technique".into(), technique.into()]);
         }
         rows.push(vec!["Degrees of Freedom Method".into(), "Contain".into()]);
         session
@@ -155,53 +169,26 @@ pub(super) fn print_number_of_observations(
     }
 }
 
-/// Print the Iteration History table (compact, stable: starting + converged
-/// objective).
-pub(super) fn print_iteration_history(
-    session: &mut Session,
-    fit: &GlimmixFit,
-    has_random: bool,
-    gen_chisq: f64,
-) {
-    centered(session, "Iteration History");
-    session.listing.blank();
-    {
-        let headers = vec![
-            "Iteration".into(),
-            "Restarts".into(),
-            "Evaluations".into(),
-            "Objective".into(),
-            "Change".into(),
-        ];
-        let aligns = vec![
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ];
-        // Objective: -2 Res Log Pseudo-Likelihood (random) else the
-        // Generalized Chi-Square of the converged fit.
-        let objective = if has_random { fit.neg2 } else { gen_chisq };
-        let rows: Vec<Vec<String>> = vec![
-            vec![
-                "0".into(),
-                "0".into(),
-                "1".into(),
-                fmt4(objective),
-                String::new(),
-            ],
-            vec![
-                "1".into(),
-                "0".into(),
-                "2".into(),
-                fmt4(objective),
-                "0.00000000".into(),
-            ],
-        ];
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
+/// Print the convergence status (J02-P3): the line names the criterion the
+/// solver actually tested (it used to read « GCONV=1E-8 » for every fit, a
+/// gradient criterion never tested) and is asserted only when that criterion
+/// was met (J02-P6); on failure SAS GLIMMIX reports « Did not converge. » in
+/// the log (SAS/STAT User's Guide, The GLIMMIX Procedure, Convergence Status).
+///
+/// The former « Iteration History » table was synthetic (two rows repeating
+/// the final objective, an invented 0.00000000 change and invented evaluation
+/// counts): it is removed until a real iteration history (roadmap-avancee
+/// J08-P2/J08-P3); no value is invented.
+pub(super) fn print_convergence_status(session: &mut Session, fit: &GlimmixFit) {
+    if fit.converged {
+        centered(session, &fit.criterion.satisfied_text());
+    } else {
+        centered(session, "Convergence criterion was not satisfied.");
+        session
+            .log
+            .warning("Did not converge. The estimates from PROC GLIMMIX may not be reliable.");
     }
+    session.listing.blank();
 }
 
 /// Print the Covariance Parameter Estimates table (random only).
@@ -300,13 +287,79 @@ pub(super) fn print_fit_statistics(
     }
 }
 
-/// Print the Type III Tests of Fixed Effects table.
+/// Columns of the fixed-effects design that belong to one MODEL effect.
+pub(super) struct EffectColumns {
+    pub(super) name: String,
+    pub(super) cols: Vec<usize>,
+}
+
+/// Design columns of each MODEL effect, in the order of `build_design`: the
+/// intercept first (unless NOINT), then one column per continuous effect and
+/// L−1 reference-coded columns per CLASS effect with L levels among the
+/// observations used. `kept_fixed` holds the MODEL effects in MODEL order.
+pub(super) fn effect_columns(
+    model: &ModelSpec,
+    class_vars: &[String],
+    kept_fixed: &[(String, Vec<Value>)],
+    p: usize,
+) -> Result<Vec<EffectColumns>> {
+    let mut next = usize::from(!model.noint);
+    let mut effects = Vec::with_capacity(model.fixed.len());
+    for (name, (_, col)) in model.fixed.iter().zip(kept_fixed) {
+        let n_cols = if class_vars.iter().any(|c| c.eq_ignore_ascii_case(name)) {
+            crate::procs::lincom::class_levels(col)
+                .len()
+                .saturating_sub(1)
+        } else {
+            1
+        };
+        effects.push(EffectColumns {
+            name: name.clone(),
+            cols: (next..next + n_cols).collect(),
+        });
+        next += n_cols;
+    }
+    if next != p {
+        return Err(SasError::runtime(format!(
+            "PROC GLIMMIX: internal error, {next} design columns attributed to the MODEL \
+             effects instead of {p}."
+        )));
+    }
+    Ok(effects)
+}
+
+/// Print the Type III Tests of Fixed Effects table: one row per MODEL effect,
+/// without an Intercept row (SAS default; the MODEL INTERCEPT option adds it).
+///
+/// J02-P3 — the table used to list every parameter (Intercept and each
+/// reference-coded CLASS column included) with F = t². A single-parameter
+/// effect is tested by the Wald F = t² on 1 numerator DF; an effect with
+/// several parameters needs the multi-DF Wald test of roadmap-avancee J08-P2,
+/// so the table is withheld with a NOTE rather than misreported. An
+/// intercept-only model has no effect to test and no table.
 pub(super) fn print_type3_tests(
     session: &mut Session,
-    param_labels: &[String],
+    effects: &[EffectColumns],
     fit: &GlimmixFit,
     den_df: f64,
 ) {
+    if effects.is_empty() {
+        return;
+    }
+    let multi: Vec<&str> = effects
+        .iter()
+        .filter(|e| e.cols.len() > 1)
+        .map(|e| e.name.as_str())
+        .collect();
+    if !multi.is_empty() {
+        session.log.note(&format!(
+            "Type III tests of effects with more than one parameter ({}) are not \
+             implemented in PROC GLIMMIX; the Type III Tests of Fixed Effects table is \
+             not displayed (planned: roadmap-avancee J08-P2).",
+            multi.join(", ")
+        ));
+        return;
+    }
     centered(session, "Type III Tests of Fixed Effects");
     session.listing.blank();
     {
@@ -324,24 +377,34 @@ pub(super) fn print_type3_tests(
             Align::Right,
             Align::Right,
         ];
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        // One row per fixed-effects parameter (Intercept, continuous, or a
-        // CLASS reference-cell column).
         let cov = &fit.cov_beta;
-        for (idx, nm) in param_labels.iter().enumerate() {
-            let est = fit.beta[idx];
-            let se = cov[idx][idx].max(0.0).sqrt();
-            let t = if se > 0.0 { est / se } else { 0.0 };
-            let f = t * t;
-            let p_val = 1.0 - f_cdf(f, 1.0, den_df);
-            rows.push(vec![
-                nm.clone(),
-                "1".into(),
-                fmt_df(den_df),
-                fmt2(f),
-                fmt_p(p_val),
-            ]);
-        }
+        let rows: Vec<Vec<String>> = effects
+            .iter()
+            .map(|eff| match eff.cols.first() {
+                Some(&idx) => {
+                    let est = fit.beta[idx];
+                    let se = cov[idx][idx].max(0.0).sqrt();
+                    let t = if se > 0.0 { est / se } else { 0.0 };
+                    let f = t * t;
+                    let p_val = 1.0 - f_cdf(f, 1.0, den_df);
+                    vec![
+                        eff.name.clone(),
+                        "1".into(),
+                        fmt_df(den_df),
+                        fmt2(f),
+                        fmt_p(p_val),
+                    ]
+                }
+                // A CLASS effect with a single level has no parameter.
+                None => vec![
+                    eff.name.clone(),
+                    "0".into(),
+                    fmt_df(den_df),
+                    ".".into(),
+                    ".".into(),
+                ],
+            })
+            .collect();
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }

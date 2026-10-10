@@ -6,22 +6,36 @@
 //! - LINK= IDENTITY / LOG / LOGIT / PROBIT / CLOGLOG (PROBIT/CLOGLOG without
 //!   random reproduce PROC LOGISTIC); an unknown DIST=/LINK= value is an
 //!   ERROR, no silent fallback to NORMAL/IDENTITY.
-//! - RANDOM INTERCEPT / SUBJECT=<var> TYPE=VC (single random intercept).
+//! - one RANDOM statement: RANDOM INTERCEPT / SUBJECT=<var> [TYPE=VC] (single
+//!   G-side random intercept) or RANDOM _RESIDUAL_ / SUBJECT=<var>
+//!   TYPE=AR(1)|UN (R-side structure over the observations of a subject, in
+//!   order of appearance).
 //! - FREQ statement (grouped data).
 //! - MODEL response = <fixed> / SOLUTION [NOINT].
 //! - METHOD=RSPL (default) or LAPLACE (single random intercept, true ML);
 //!   METHOD=QUAD and unknown METHOD= values are ERRORs (no deferral NOTE).
 //!
-//! Estimation strategy (a 3-way dispatch, all routed to proven solvers):
-//!  1. NORMAL/IDENTITY: PQL == REML, so the variance-components model is fit
-//!     with the closed-form / profile estimator (reproduces PROC MIXED).
-//!  2. Non-normal WITHOUT random: ordinary IRLS with FREQ weighting
-//!     (reproduces PROC GENMOD / LOGISTIC).
-//!  3. Non-normal WITH random: the residual-pseudo-likelihood (PQL) loop of
-//!     Breslow-Clayton, linearising to a weighted mixed model at each step.
+//! Estimation strategy (all routed to proven solvers):
+//!  1. No RANDOM statement (GLM mode, METHOD= has no effect): ordinary IRLS
+//!     with FREQ weighting (reproduces PROC GENMOD / LOGISTIC).
+//!  2. NORMAL/IDENTITY + random intercept: PQL == REML, so the
+//!     variance-components model is fit with the closed-form / profile
+//!     estimator (reproduces PROC MIXED).
+//!  3. Non-normal + random intercept: the residual-pseudo-likelihood (PQL)
+//!     loop of Breslow-Clayton, linearising to a weighted mixed model at each
+//!     step.
+//!  4. RANDOM _RESIDUAL_ TYPE=AR(1)|UN: weighted LMM with the R structure
+//!     (exact REML for NORMAL/IDENTITY, RSPL loop otherwise).
 //!
-//! Parse-accepted but deferred (NOTE emitted): ESTIMATE, CONTRAST, LSMEANS,
-//! WEIGHT, PLOTS=, NOITPRINT, HTYPE=, DDFM= (always Contain).
+//! Contract (CONTRIBUTING §5, docs/support-contract.md): every other option
+//! or statement that can change a result is an ERROR at parse time (PROC,
+//! MODEL, RANDOM and CLASS options, WEIGHT, several RANDOM statements, a
+//! G-side TYPE=AR(1)|UN, NOINT with a CLASS effect, DIST/LINK pairs the
+//! solvers do not handle, FREQ with a NORMAL random-effect REML fit…);
+//! display-only options are WARNINGs. The listing
+//! names the convergence criterion actually tested, a variance component
+//! truncated to 0 emits "NOTE: Estimated G matrix is not positive definite."
+//! and the Type III table has one row per single-parameter effect.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -112,7 +126,8 @@ pub struct RandomSpec {
     pub effects: Vec<String>,
     pub subject: Option<String>,
     pub cov_type: CovType,
-    pub solution: bool,
+    /// `RANDOM _RESIDUAL_`: R-side structure instead of a G-side effect.
+    pub residual: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -123,10 +138,6 @@ pub struct GlimmixAst {
     pub model: Option<ModelSpec>,
     pub random: Option<RandomSpec>,
     pub freq_var: Option<String>,
-    pub weight_var: Option<String>,
-    pub estimate_labels: Vec<String>,
-    pub contrast_labels: Vec<String>,
-    pub lsmeans: Vec<String>,
 }
 
 use crate::procs::common::fmt_p_num as fmt_p;
@@ -144,7 +155,7 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         .as_ref()
         .ok_or_else(|| SasError::runtime("MODEL statement required in PROC GLIMMIX."))?;
 
-    check_guards(ast, model, session)?;
+    check_guards(ast, model)?;
 
     // ── 2. Read dataset ──────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
@@ -247,14 +258,22 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         }
         wi
     };
-    // The (selected) covariance type, when a RANDOM statement is present.
-    let cov_type = random.map(|r| r.cov_type).unwrap_or(CovType::Vc);
-    let rep_cov: Option<RepCov> = match cov_type {
-        CovType::Ar1 => Some(RepCov::Ar1),
-        CovType::Un => {
-            let t = within_idx.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-            Some(RepCov::Un { t })
-        }
+    // R-side structure of RANDOM _RESIDUAL_ (AR(1)/UN). J02-P3 — a G-side
+    // RANDOM INTERCEPT with TYPE=AR(1)|UN used to be reinterpreted as this R
+    // structure without any random effect; the parser now rejects it.
+    let rep_cov: Option<RepCov> = match random {
+        Some(r) if r.residual => match r.cov_type {
+            CovType::Ar1 => Some(RepCov::Ar1),
+            CovType::Un => {
+                let t = within_idx.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+                Some(RepCov::Un { t })
+            }
+            CovType::Vc | CovType::Cs => {
+                return Err(SasError::runtime(
+                    "RANDOM _RESIDUAL_ requires TYPE=AR(1) or TYPE=UN in PROC GLIMMIX.",
+                ));
+            }
+        },
         _ => None,
     };
 
@@ -276,6 +295,23 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         use_laplace,
         has_random,
     )?;
+
+    // Boundary diagnostics (J02-P3): σ²_u truncated to 0 and the variance
+    // ratio search stopped at its upper bound used to stay silent. Same
+    // NOTEs as PROC MIXED ("NOTE: Estimated G matrix is not positive
+    // definite.", SAS Usage Note 22614; Kiernan, Tao & Gibbs 2012, SGF
+    // 332-2012).
+    if fit.g_not_pd {
+        session
+            .log
+            .note("Estimated G matrix is not positive definite.");
+    }
+    if fit.lambda_capped {
+        session.log.note(
+            "The variance component ratio search reached its boundary (lambda=1000) \
+             in PROC GLIMMIX; the estimate may be unreliable.",
+        );
+    }
 
     // Generalized Chi-Square: Σ freq * (y - μ)² / V(μ).
     let gen_chisq: f64 = (0..n_used)
@@ -304,31 +340,19 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         0
     };
 
+    // Design columns of each MODEL effect, for the Type III table.
+    let effects = effect_columns(model, &ast.class_vars, &kept_fixed, p)?;
+
     // ── 6. Listing ───────────────────────────────────────────────────────────
     let laplace = ast.method == Method::Laplace && has_random;
 
-    print_model_information(session, model, &in_libref, &in_table, laplace);
+    print_model_information(session, model, &in_libref, &in_table, has_random, laplace);
     if has_random {
         print_class_level_information(session, &subject, &levels, n_subjects);
         print_dimensions(session, &fit, p, n_subjects, max_obs);
     }
     print_number_of_observations(session, ast, n_read, n_used, n_total, n_not_used);
-    print_iteration_history(session, &fit, has_random, gen_chisq);
-
-    // Convergence note — asserted only when the estimation criterion was
-    // actually met (J02-P6). On non-convergence SAS GLIMMIX reports a
-    // warning in the log ("Did not converge.", SAS/STAT User's Guide, The
-    // GLIMMIX Procedure, Details: Convergence Status) and the listing states
-    // the failure instead of claiming success.
-    if fit.converged {
-        centered(session, "Convergence criterion (GCONV=1E-8) satisfied.");
-    } else {
-        centered(session, "Convergence criterion was not satisfied.");
-        session
-            .log
-            .warning("Did not converge. The estimates from PROC GLIMMIX may not be reliable.");
-    }
-    session.listing.blank();
+    print_convergence_status(session, &fit);
 
     if has_random {
         print_covariance_parameter_estimates(session, &fit, &subject);
@@ -344,7 +368,7 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
         laplace,
         has_random,
     );
-    print_type3_tests(session, &param_labels, &fit, den_df);
+    print_type3_tests(session, &effects, &fit, den_df);
     if model.solution {
         print_fixed_solutions(session, &param_labels, &fit, den_df);
     }
@@ -355,5 +379,7 @@ pub fn execute(ast: &GlimmixAst, session: &mut Session) -> Result<()> {
 
 // ───────────────────────── Tests ─────────────────────────
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

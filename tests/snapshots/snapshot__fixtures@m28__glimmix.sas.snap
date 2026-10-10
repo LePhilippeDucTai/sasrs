@@ -83,13 +83,13 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
 
 
-                            Data Set                     WORK.POIS
-                            Response Variable            y
-                            Response Distribution        Poisson
-                            Link Function                Log
-                            Variance Function            Default
-                            Estimation Technique         Residual PL
-                            Degrees of Freedom Method    Contain
+                        Data Set                     WORK.POIS
+                        Response Variable            y
+                        Response Distribution        Poisson
+                        Link Function                Log
+                        Variance Function            Default
+                        Estimation Technique         Maximum Likelihood
+                        Degrees of Freedom Method    Contain
 
                                      Number of Observations
 
@@ -99,14 +99,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                               Number of Observations Used        6
                               Number of Observations Not Used    0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1       1.4000
-                        1           0              2       1.4000    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+                         Convergence criterion (XCONV=1E-10) satisfied.
 
                                          Fit Statistics
 
@@ -117,10 +110,9 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
                                 Type III Tests of Fixed Effects
 
-                       Effect       Num DF    Den DF    F Value    Pr > F
+                        Effect    Num DF    Den DF    F Value    Pr > F
 
-                       Intercept         1         4       2.88    0.1648
-                       x                 1         4       3.60    0.1307
+                        x              1         4       3.60    0.1307
 
                                   Solutions for Fixed Effects
 
@@ -138,13 +130,13 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
 
 
-                            Data Set                     WORK.COUNTS
-                            Response Variable            y
-                            Response Distribution        Binary
-                            Link Function                Logit
-                            Variance Function            Default
-                            Estimation Technique         Residual PL
-                            Degrees of Freedom Method    Contain
+                        Data Set                     WORK.COUNTS
+                        Response Variable            y
+                        Response Distribution        Binary
+                        Link Function                Logit
+                        Variance Function            Default
+                        Estimation Technique         Maximum Likelihood
+                        Degrees of Freedom Method    Contain
 
                                      Number of Observations
 
@@ -154,14 +146,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                              Number of Observations Used        60
                              Number of Observations Not Used     0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1      60.0000
-                        1           0              2      60.0000    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+                         Convergence criterion (XCONV=1E-10) satisfied.
 
                                          Fit Statistics
 
@@ -172,10 +157,9 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
 
                                 Type III Tests of Fixed Effects
 
-                       Effect       Num DF    Den DF    F Value    Pr > F
+                        Effect    Num DF    Den DF    F Value    Pr > F
 
-                       Intercept         1        58       6.00    0.0174
-                       x                 1        58      13.59    0.0005
+                        x              1        58      13.59    0.0005
 
                                   Solutions for Fixed Effects
 
@@ -225,14 +209,7 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                               Number of Observations Used        4
                               Number of Observations Not Used    0
 
-                                       Iteration History
-
-                Iteration    Restarts    Evaluations    Objective        Change
-
-                        0           0              1      14.0588
-                        1           0              2      14.0588    0.00000000
-
-                         Convergence criterion (GCONV=1E-8) satisfied.
+               Closed-form REML solution (balanced data): no iteration required.
 
                                  Covariance Parameter Estimates
 
@@ -248,12 +225,6 @@ NOTE: PROCEDURE GLIMMIX used (Total process time):
                             -2 Res Log Pseudo-Likelihood    14.0588
                             Generalized Chi-Square          20.0000
                             Gener. Chi-Square / DF           6.6667
-
-                                Type III Tests of Fixed Effects
-
-                       Effect       Num DF    Den DF    F Value    Pr > F
-
-                       Intercept         1         1       4.00    0.2952
 
                                   Solutions for Fixed Effects
 

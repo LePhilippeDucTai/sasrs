@@ -65,7 +65,7 @@ pub(super) fn fit_glm(
         }
         let max_delta = delta.iter().map(|d| d.abs()).fold(0.0_f64, f64::max);
         let max_beta = beta.iter().map(|b| b.abs()).fold(0.0_f64, f64::max);
-        if max_delta / (1.0 + max_beta) < 1e-10 {
+        if max_delta / (1.0 + max_beta) < IRLS_XCONV {
             converged = true;
             break;
         }
@@ -115,12 +115,34 @@ pub(super) fn fit_glm(
 
 // ───────────────────────── Variance-components mixed fit ─────────────────────
 
-/// Ajustement à composantes de variance : `(σ²_u, σ²_e, β, Var(β), −2 Res LogLik)`.
-type VcFit = (f64, f64, Vec<f64>, Vec<Vec<f64>>, f64);
+/// Variance-components fit of a single random intercept.
+pub(super) struct VcFit {
+    pub(super) sigma2_u: f64,
+    pub(super) sigma2_e: f64,
+    pub(super) beta: Vec<f64>,
+    /// Var(β̂).
+    pub(super) cov_beta: Vec<Vec<f64>>,
+    /// −2 Res Log (Pseudo-)Likelihood.
+    pub(super) neg2: f64,
+    /// Balanced, intercept-only, unweighted data: closed form, no iteration.
+    pub(super) closed_form: bool,
+    /// The golden-section search met its interval criterion ([`GOLDEN_XTOL`];
+    /// always true for the closed form).
+    pub(super) converged: bool,
+    /// σ²_u ≤ 0, truncated to the 0 boundary: the estimated G matrix is not
+    /// positive definite.
+    pub(super) g_not_pd: bool,
+    /// λ = σ²_u/σ²_e stopped at the upper bound of its search interval.
+    pub(super) lambda_capped: bool,
+}
 
 /// Fit y = Xβ + Zu + ε with V = σ²_u ZZ' + σ²_e I (single random intercept).
-/// Returns (σ²_u, σ²_e, β, Var(β), -2 Res LogLik). Used for NORMAL/IDENTITY
-/// (closed-form REML) and as the WMME solver inside the PQL loop (working data).
+/// Used for NORMAL/IDENTITY (closed-form REML) and as the WMME solver inside
+/// the PQL loop (working data).
+///
+/// J02-P3 — the search convergence, the truncation of σ²_u to 0 and the
+/// λ ≤ 1000 bound used to be dropped here (the caller hard-coded
+/// `converged = true`); they are now reported to the listing and the log.
 pub(super) fn fit_vc(
     y: &[f64],
     x: &[Vec<f64>],
@@ -140,17 +162,33 @@ pub(super) fn fit_vc(
     let intercept_only = p == 1 && x.iter().all(|row| row[0] == 1.0);
     let unweighted = weights.is_none();
 
-    let (mut sigma2_u, sigma2_e) = if unweighted && balanced && intercept_only && n_subjects >= 2 {
-        closed_form_vc(y, subj_of, n_subjects, n_i)
+    let closed_form = unweighted && balanced && intercept_only && n_subjects >= 2;
+    let (mut sigma2_u, sigma2_e, converged, lambda_capped) = if closed_form {
+        // Closed-form moment estimator: exact, no iteration to fail.
+        let (s2u, s2e) = closed_form_vc(y, subj_of, n_subjects, n_i);
+        (s2u, s2e, true, false)
     } else {
         profile_search(y, x, subj_of, weights)?
     };
+    // σ²_u < 0 (closed form) or on the λ = 0 boundary (search): the variance
+    // is bounded at 0 and the estimated G matrix is not positive definite.
+    let g_not_pd = !sigma2_u.is_finite() || sigma2_u <= 0.0;
     if sigma2_u < 0.0 {
         sigma2_u = 0.0;
     }
 
-    let (neg2, beta, cov) = neg2_reml(y, x, subj_of, sigma2_u, sigma2_e, weights)?;
-    Ok((sigma2_u, sigma2_e, beta, cov, neg2))
+    let (neg2, beta, cov_beta) = neg2_reml(y, x, subj_of, sigma2_u, sigma2_e, weights)?;
+    Ok(VcFit {
+        sigma2_u,
+        sigma2_e,
+        beta,
+        cov_beta,
+        neg2,
+        closed_form,
+        converged,
+        g_not_pd,
+        lambda_capped,
+    })
 }
 
 /// Closed-form REML variance components, balanced one-way random intercept.
@@ -261,13 +299,14 @@ pub(super) fn neg2_reml(
     Ok((neg2, beta, xtvix_inv))
 }
 
-/// Golden-section profile over λ = σ²_u/σ²_e for the general / weighted case.
+/// Golden-section profile over λ = σ²_u/σ²_e ∈ [0, 1000] for the general /
+/// weighted case. Returns (σ²_u, σ²_e, search-converged, λ-capped).
 pub(super) fn profile_search(
     y: &[f64],
     x: &[Vec<f64>],
     subj_of: &[usize],
     weights: Option<&[f64]>,
-) -> Result<(f64, f64)> {
+) -> Result<(f64, f64, bool, bool)> {
     let eval = |lambda: f64| -> Result<f64> {
         let n = y.len();
         let p = x[0].len();
@@ -384,8 +423,10 @@ pub(super) fn profile_search(
     let mut d = lo + gr * (hi - lo);
     let mut fc = eval(c)?;
     let mut fd = eval(d)?;
+    let mut converged = false;
     for _ in 0..200 {
-        if (hi - lo).abs() < 1e-10 {
+        if (hi - lo).abs() < GOLDEN_XTOL {
+            converged = true;
             break;
         }
         if fc < fd {
@@ -406,8 +447,11 @@ pub(super) fn profile_search(
     let f_opt = eval(lambda)?;
     let f0 = eval(0.0)?;
     if f0 <= f_opt {
-        return Ok((0.0, sigma2_e_of(0.0)?));
+        // σ²_u on the 0 boundary.
+        return Ok((0.0, sigma2_e_of(0.0)?, converged, false));
     }
+    // The search interval, not the data, bounded λ.
+    let lambda_capped = lambda >= lambda_max * (1.0 - 1e-8);
     let sigma2_e = sigma2_e_of(lambda)?;
-    Ok((lambda * sigma2_e, sigma2_e))
+    Ok((lambda * sigma2_e, sigma2_e, converged, lambda_capped))
 }
