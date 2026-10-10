@@ -410,8 +410,8 @@ fn execute_out_dataset_shape_and_values() {
 
     // Decode rows. Row 0 = name (Char → TYPE 2, LENGTH 5, VARNUM 1).
     let name = out.df.column("NAME").unwrap().str().unwrap();
-    assert_eq!(name.get(0), Some("NAME"));
-    assert_eq!(name.get(1), Some("AGE"));
+    assert_eq!(name.get(0), Some("name"));
+    assert_eq!(name.get(1), Some("age"));
     let ty = out.df.column("TYPE").unwrap().f64().unwrap();
     assert_eq!(ty.get(0), Some(2.0)); // char
     assert_eq!(ty.get(1), Some(1.0)); // num
@@ -540,8 +540,8 @@ fn execute_noprint_suppresses_listing_but_writes_out() {
     let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
     assert_eq!(out.n_obs(), 2, "one row per variable");
     let name = out.df.column("NAME").unwrap().str().unwrap();
-    assert_eq!(name.get(0), Some("NAME"));
-    assert_eq!(name.get(1), Some("AGE"));
+    assert_eq!(name.get(0), Some("name"));
+    assert_eq!(name.get(1), Some("age"));
 
     // The log NOTE about OUT= is unaffected by NOPRINT.
     let log = session.log.into_string();
@@ -652,9 +652,9 @@ fn informat_meta_contents_out_columns() {
     let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
     assert_eq!(out.n_obs(), 3, "one row per variable");
     let name = out.df.column("NAME").unwrap().str().unwrap();
-    assert_eq!(name.get(0), Some("DT"));
-    assert_eq!(name.get(1), Some("CODE"));
-    assert_eq!(name.get(2), Some("PLAIN"));
+    assert_eq!(name.get(0), Some("dt"));
+    assert_eq!(name.get(1), Some("code"));
+    assert_eq!(name.get(2), Some("plain"));
     let inf = out.df.column("INFORMAT").unwrap().str().unwrap();
     assert_eq!(inf.get(0), Some("DATE"));
     assert_eq!(inf.get(1), Some("$"));
@@ -744,4 +744,44 @@ fn informat_meta_contents_out_keep_selects_and_orders() {
     assert_eq!(len.get(0), Some(8.0));
     let ty = out.df.column("TYPE").unwrap().f64().unwrap();
     assert_eq!(ty.get(0), Some(1.0));
+}
+
+// ── J01-P7 : NAME de l'OUT= conserve la casse déclarée ────────────────────
+
+/// Exécute `src` de bout en bout (étape DATA + PROC CONTENTS) et rend les
+/// valeurs de la colonne NAME du dataset WORK.`out`.
+fn run_and_read_out_names(src: &str, out: &str) -> Vec<String> {
+    let mut session = make_session();
+    crate::executor::run_program(&SourceFile::new(src), &mut session);
+    let log = session.log.current_text();
+    assert!(!log.contains("ERROR"), "log: {log}");
+    let (ds, _) = session.libs.get("WORK").unwrap().read(out).unwrap();
+    let name = ds.df.column("NAME").unwrap().str().unwrap();
+    name.into_iter().map(|v| v.unwrap().to_string()).collect()
+}
+
+/// Reproducer J01-P7 (revue J01-P6) : NAME était mis en MAJUSCULES. SAS
+/// conserve la casse déclarée (exemple SAS 9.4 Procedures Guide, CONTENTS
+/// statement : `length aa 7 bb 6 ...` → NAME = aa, bb, …).
+#[test]
+fn ra_j01_p7_out_name_keeps_mixed_case() {
+    let names = run_and_read_out_names(
+        "data mixed; length MyVar 8 CamelCase $4; MyVar = 1; CamelCase = 'ab'; run;
+         proc contents data=mixed out=meta noprint; run;",
+        "META",
+    );
+    assert_eq!(names, ["MyVar", "CamelCase"]);
+}
+
+/// Noms déclarés en minuscules (programme du cas compat/informat/
+/// informat-contents-date) : NAME = dt, code — pas DT, CODE.
+#[test]
+fn ra_j01_p7_out_name_keeps_lowercase() {
+    let names = run_and_read_out_names(
+        "data dated; informat dt date9.; informat code $8.;
+           dt = '02JAN2020'd; code = 'XY'; output; run;
+         proc contents data=dated out=meta2(keep=name type varnum) noprint; run;",
+        "META2",
+    );
+    assert_eq!(names, ["dt", "code"]);
 }
