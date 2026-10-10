@@ -29,6 +29,14 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
                 .get(..5)
                 .is_some_and(|p| p.eq_ignore_ascii_case("s3://"))
             {
+                // J02-P8 — le moteur nommé devant un chemin s3:// était
+                // ignoré (toujours le scan parquet) : seul le moteur par
+                // défaut (PARQUET, ou BASE/V9 comme pour un répertoire local)
+                // est honoré, tout autre moteur est une ERROR.
+                if let Some(msg) = s3_engine_error(libref, engine.as_deref(), path) {
+                    session.log.error(&msg);
+                    return;
+                }
                 let result = session.libs.assign_uri(libref, path);
                 let ok = result.is_ok();
                 log_libref_assignment(session, libref, "PARQUET", path, result);

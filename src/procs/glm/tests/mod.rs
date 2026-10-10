@@ -9,6 +9,7 @@ fn parse_glm(src: &str) -> Result<GlmAst> {
     parse(&mut ts)
 }
 
+mod contract;
 mod convergence;
 mod one;
 mod output_statement;

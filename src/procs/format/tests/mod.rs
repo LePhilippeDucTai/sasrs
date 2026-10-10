@@ -36,6 +36,7 @@ fn run_det(src: &str) -> crate::RunOutcome {
 }
 
 mod cntl;
+mod contract;
 mod execute;
 mod fmtlib;
 mod parse;

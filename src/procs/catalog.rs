@@ -20,6 +20,21 @@
 //! - `DELETE` / `COPY` : ERROR (mutations non implémentées).
 //! - Émettre une NOTE "Procedure CATALOG used."
 //!
+//! # Contrat (J02-P8)
+//!
+//! Base SAS 9.4 Procedures Guide, CATALOG Procedure, PROC CATALOG statement :
+//! `PROC CATALOG CATALOG=<libref.>catalog <ENTRYTYPE=etype> <FORCE> <KILL>;`
+//! - `CATALOG=` (alias `CAT=`, `C=`) est requis ; l'alias `CAT=` était sauté
+//!   (« Processing catalog: (none) ») : il est honoré.
+//! - `ENTRYTYPE=` (alias `ET=`) et `KILL` étaient sautés : ERROR (J11-P6 et
+//!   J03-P5) ; option inconnue : ERROR « Unexpected option ».
+//! - `FORCE` (« forces statements to execute on a catalog that is opened by
+//!   another resource environment ») est accepté : aucun autre environnement
+//!   ne tient de catalogue ouvert dans une session sasrs.
+//! - Les instructions SAS valides non implémentées (CHANGE, EXCHANGE,
+//!   EXCLUDE, MODIFY, SAVE, SELECT ; options OUT= et FILE= de CONTENTS)
+//!   donnent le message « not supported … cannot be ignored » du contrat.
+//!
 //! Ce comportement est documenté comme déviation v1 ; la vraie gestion des
 //! .sas7bcat est reportée.
 //!
@@ -31,11 +46,11 @@
 //!   n'est pas implémentée : CONTENTS liste toujours tous les formats
 //!   utilisateur en mémoire.
 
-use crate::error::Result;
+use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
 use crate::session::Session;
-use crate::token::TokenKind;
+use crate::token::{Span, TokenKind};
 
 /// Type of catalog sub-statement.
 #[derive(Debug, Clone)]
@@ -56,47 +71,8 @@ pub struct CatalogAst {
 /// Parse `proc catalog catalog=lib.cat; ... quit;`
 /// Called AFTER "proc catalog" has been consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<CatalogAst> {
-    let mut catalog = String::new();
-
-    // Parse header options until `;`
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-
-        if ts.peek().is_kw("catalog") {
-            ts.next();
-            if ts.peek().kind != TokenKind::Eq {
-                ts.next(); // skip garbage
-                continue;
-            }
-            ts.next(); // consume `=`
-            // Parse libref.cat — could be ident.ident or just ident
-            let tok = ts.peek().clone();
-            if let Some(first) = tok.ident() {
-                let first = first.to_uppercase();
-                ts.next();
-                if ts.peek().kind == TokenKind::Dot {
-                    ts.next(); // consume `.`
-                    let tok2 = ts.peek().clone();
-                    if let Some(second) = tok2.ident() {
-                        catalog = format!("{}.{}", first, second.to_uppercase());
-                        ts.next();
-                    } else {
-                        catalog = first;
-                    }
-                } else {
-                    catalog = first;
-                }
-            }
-        } else {
-            ts.next();
-        }
-    }
+    let header = ts.peek().span;
+    let catalog = parse_header_options(ts)?;
 
     // Parse sub-statements until `quit;`
     let mut stmts: Vec<CatalogStmt> = Vec::new();
@@ -133,25 +109,160 @@ pub fn parse(ts: &mut StatementStream) -> Result<CatalogAst> {
 
         if ts.peek().is_kw("contents") {
             ts.next();
-            // consume optional `;`
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
+            parse_contents_options(ts)?;
             stmts.push(CatalogStmt::Contents);
             continue;
         }
 
-        if ts.peek().is_kw("delete") || ts.peek().is_kw("copy") {
-            return Err(crate::procs::common::unsupported_statement(
-                "CATALOG",
-                ts.peek().ident().unwrap(),
+        let kw = ts.peek().ident().unwrap_or("").to_ascii_lowercase();
+        if let Some((_, unit)) = UNSUPPORTED_STATEMENTS.iter().find(|(s, _)| *s == kw) {
+            return Err(unsupported(
+                &format!("The {} statement", kw.to_ascii_uppercase()),
+                *unit,
+                ts.peek().span,
             ));
         }
 
         crate::procs::common::unhandled_proc_statement(ts, "CATALOG")?;
     }
 
+    // SAS 9.4 : CATALOG= is a required argument. Checked once the body is
+    // read, so that an invalid statement keeps its own diagnostic.
+    let Some(catalog) = catalog else {
+        return Err(SasError::parse(
+            "The CATALOG= option is required on the PROC CATALOG statement.",
+            header,
+        ));
+    };
     Ok(CatalogAst { catalog, stmts })
+}
+
+// ─────────────────────── Contract diagnostics (J02-P8) ───────────────────────
+
+/// Valid SAS 9.4 PROC CATALOG statements that sasrs does not implement, with
+/// the roadmap-avancee unit that will lift the ERROR (None: not planned).
+/// They used to be reported « 180-322 … not valid » (DELETE and COPY were
+/// already rejected with the shared message).
+const UNSUPPORTED_STATEMENTS: &[(&str, Option<&str>)] = &[
+    ("change", None),
+    ("copy", Some("J03-P5")),
+    ("delete", Some("J03-P5")),
+    ("exchange", None),
+    ("exclude", None),
+    ("modify", None),
+    ("save", None),
+    ("select", None),
+];
+
+/// Suffix naming the roadmap-avancee unit that will lift a provisional ERROR.
+fn planned(unit: Option<&str>) -> String {
+    match unit {
+        Some(u) => format!(" (planned: roadmap-avancee {u})"),
+        None => String::new(),
+    }
+}
+
+/// Contract ERROR for a request that sasrs cannot honor.
+fn unsupported(what: &str, unit: Option<&str>, span: Span) -> SasError {
+    SasError::parse(
+        format!(
+            "{what} is not supported in PROC CATALOG; it can affect results and cannot be \
+             ignored{}.",
+            planned(unit)
+        ),
+        span,
+    )
+}
+
+/// PROC CATALOG statement options until `;` (consumed). Returns the
+/// `CATALOG=` value (`LIB.CAT` or `CAT`, uppercased), if any.
+fn parse_header_options(ts: &mut StatementStream) -> Result<Option<String>> {
+    let mut catalog: Option<String> = None;
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            break;
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            break;
+        }
+        let span = ts.peek().span;
+        let kw = ts.peek().ident().unwrap_or("").to_ascii_lowercase();
+        match kw.as_str() {
+            // SAS 9.4 : « CATALOG=<libref.>catalog … Alias: CAT=, C= ».
+            "catalog" | "cat" | "c" => {
+                crate::procs::common::consume_option_eq(ts, "CATALOG")?;
+                catalog = Some(parse_catalog_name(ts)?);
+            }
+            "entrytype" | "et" => {
+                return Err(unsupported("The ENTRYTYPE= option", Some("J11-P6"), span));
+            }
+            "kill" => return Err(unsupported("The KILL option", Some("J03-P5"), span)),
+            // No other resource environment holds a catalog open in a sasrs
+            // session: FORCE has nothing to force.
+            "force" => {
+                ts.next();
+            }
+            _ => {
+                return Err(crate::procs::common::unknown_option_error(ts, "CATALOG"));
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+/// `<libref.>catalog` after `CATALOG=` : `LIB.CAT` or `CAT` (uppercased).
+fn parse_catalog_name(ts: &mut StatementStream) -> Result<String> {
+    let tok = ts.peek().clone();
+    let Some(first) = tok.ident().map(str::to_uppercase) else {
+        return Err(SasError::parse(
+            "expected a catalog name after CATALOG=",
+            tok.span,
+        ));
+    };
+    ts.next();
+    if ts.peek().kind != TokenKind::Dot {
+        return Ok(first);
+    }
+    ts.next(); // consume `.`
+    let tok2 = ts.peek().clone();
+    let Some(second) = tok2.ident().map(str::to_uppercase) else {
+        return Err(SasError::parse(
+            "expected a catalog name after the libref in CATALOG=",
+            tok2.span,
+        ));
+    };
+    ts.next();
+    Ok(format!("{first}.{second}"))
+}
+
+/// Options of the CONTENTS statement until `;` (consumed). SAS 9.4 :
+/// `CONTENTS <OUT=SAS-data-set> <FILE=fileref>;` — OUT= used to make the
+/// rest of the statement read as a new statement (« 180-322: Statement
+/// 'OUT' is not valid »).
+fn parse_contents_options(ts: &mut StatementStream) -> Result<()> {
+    match ts.peek().kind {
+        TokenKind::Semi => {
+            ts.next();
+            return Ok(());
+        }
+        TokenKind::Eof => return Ok(()),
+        _ => {}
+    }
+    let span = ts.peek().span;
+    let kw = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+    Err(match kw.as_str() {
+        "OUT" => unsupported(
+            "The OUT= option of the CONTENTS statement",
+            Some("J11-P6"),
+            span,
+        ),
+        "FILE" => unsupported("The FILE= option of the CONTENTS statement", None, span),
+        _ => SasError::parse(
+            format!("Unexpected option '{kw}' on the CONTENTS statement of PROC CATALOG."),
+            span,
+        ),
+    })
 }
 
 /// Execute PROC CATALOG.
@@ -224,3 +335,6 @@ pub fn execute(ast: &CatalogAst, session: &mut Session) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;

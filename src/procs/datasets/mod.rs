@@ -5,18 +5,27 @@
 //! `proc datasets lib=work [nolist] ; delete a b ; change old=new ;
 //! [run ;] quit ;`
 //!
-//! - Run-group : les statements s'exécutent à chaque `run;` ET à
-//!   `quit;` — M7 : exécution à quit; suffit, documenter l'écart.
-//!   DEVIATION : sub-statements are accumulated and executed all at once at
-//!   `quit;`. SAS would execute them at each `run;` too; we only execute at
-//!   `quit;` for simplicity. A `run;` sub-statement is treated as a no-op
-//!   separator.
-//! - Sans NOLIST : afficher le répertoire de la librairie APRÈS modifications
-//!   (table Name / Member Type DATA / nb obs).
+//! - Ordre d'exécution (J02-P8) : Base SAS 9.4 Procedures Guide, DATASETS
+//!   Procedure, Concepts, « Execution of Statements » : « Statements execute
+//!   in the order in which they are written. » Chaque statement devient un
+//!   [`DsOp`] dans l'ordre du source (DELETE et CHANGE étaient auparavant
+//!   regroupés et exécutés avant tout le reste). « RUN-Group Processing » :
+//!   « The PROC DATASETS statement always executes immediately » — le
+//!   répertoire (sans NOLIST) est donc imprimé AVANT les autres statements,
+//!   tel qu'il est à l'ouverture de la procédure.
+//! - DEVIATION : les statements d'une étape sont accumulés puis exécutés en
+//!   une fois, dans l'ordre du source, à `quit;` (SAS exécute chaque groupe
+//!   RUN dès son `run;` ou RUN implicite). Une erreur de parsing rejette
+//!   toute l'étape (SAS exécute les groupes RUN précédents) et une erreur
+//!   d'exécution arrête les statements suivants. Un `run;` intérieur termine
+//!   l'étape : le découpage du programme en segments coupe à chaque `run;`
+//!   de niveau supérieur (`src/macros/segmenter.rs`), si bien que les
+//!   statements qui le suivent ne sont plus lus comme des statements de
+//!   PROC DATASETS (ERROR « … used out of proper order »).
 //! - `delete` → `LibraryProvider::delete` (inexistant → WARNING comme
 //!   SAS, pas ERROR) ; `change old=new` → rename.
-//! - Order of operations: `delete`s first, then `change`s (all in declaration
-//!   order within each group). Tables deleted first cannot be renamed.
+//! - MODIFY : ses sous-statements RENAME, LABEL, FORMAT (J02-P8) et INFORMAT
+//!   (J07-P6) s'appliquent eux aussi dans l'ordre du source.
 
 use crate::error::{Result, SasError};
 use crate::listing::Align;
@@ -31,16 +40,18 @@ pub use parse::parse;
 pub struct DatasetsAst {
     pub lib: String,
     pub nolist: bool,
-    pub deletes: Vec<String>,
-    pub changes: Vec<(String, String)>,
-    /// Ordered M33.8 operations (COPY / EXCHANGE / SAVE / MODIFY), executed in
-    /// declaration order AFTER the legacy `deletes` then `changes` groups.
+    /// Statements in source order (J02-P8, SAS 9.4 « Statements execute in
+    /// the order in which they are written »).
     pub ops: Vec<DsOp>,
 }
 
-/// One member/variable-level operation added in M33.8.
+/// One PROC DATASETS statement, executed in source order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DsOp {
+    /// `delete m1 m2 ;` — uppercased member names.
+    Delete(Vec<String>),
+    /// `change old=new ... ;` — uppercased (old, new) pairs.
+    Change(Vec<(String, String)>),
     /// `copy out=<dst> [in=<src>]; [select m1 m2;]` — copy members from the
     /// source library (defaults to the PROC's LIB=) to the destination library.
     /// Empty `select` means "all members of the source library".
@@ -53,16 +64,29 @@ pub enum DsOp {
     Exchange(String, String),
     /// `save m1 m2;` — delete every member of LIB= except the listed ones.
     Save(Vec<String>),
-    /// `modify m; [rename old=new ...;] [label v='..' ...;]
-    /// [informat v token ...;]` — variable-level edits on member `m`.
+    /// `modify m; <sub-statements>` — variable-level edits on member `m`,
+    /// applied in source order.
     Modify {
         member: String,
-        renames: Vec<(String, String)>,
-        labels: Vec<(String, String)>,
-        /// J07-P6 — `informat v <token>;` : associe (ou remplace) l'informat
-        /// déclaré d'une variable ; persisté via le sidecar.
-        informats: Vec<(String, String)>,
+        stmts: Vec<ModifyStmt>,
     },
+}
+
+/// One sub-statement of a MODIFY group, applied in source order.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModifyStmt {
+    /// `rename old=new ... ;`
+    Rename(Vec<(String, String)>),
+    /// `label v='text' ... ;`
+    Label(Vec<(String, String)>),
+    /// J02-P8 — `format v1 v2 fmt. v3 ;` : each list of variables takes the
+    /// format that follows it ; a list without a format has its format
+    /// removed (SAS 9.4 DATASETS FORMAT statement). The format is stored in
+    /// the data set metadata (sidecar).
+    Format(Vec<(Vec<String>, Option<String>)>),
+    /// J07-P6 — `informat v <token> ... ;` : associe (ou remplace)
+    /// l'informat déclaré d'une variable ; persisté via le sidecar.
+    Informat(Vec<(String, String)>),
 }
 
 /// Helper for COPY's `out=`/`in=` options: consume the option keyword, require
@@ -106,6 +130,10 @@ fn unique_temp_name(provider: &dyn crate::library::LibraryProvider) -> String {
 }
 
 /// Execute PROC DATASETS.
+///
+/// J02-P8 — the PROC DATASETS statement is the first RUN group and executes
+/// immediately (SAS 9.4 « RUN-Group Processing ») : the directory is listed
+/// first, then every statement runs in source order.
 pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
     let lib = ast.lib.to_uppercase();
     let provider = session
@@ -113,36 +141,40 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
         .get(&lib)
         .map_err(|_| SasError::runtime(format!("Libref {} is not assigned.", lib)))?;
 
-    // ── Apply deletes ─────────────────────────────────────────────────────────
-    for name in &ast.deletes {
-        let name_upper = name.to_uppercase();
-        if provider.exists(&name_upper) {
-            provider.delete(&name_upper)?;
-            session
-                .log
-                .note(&format!("Deleting {}.{} (memtype=DATA).", lib, name_upper));
-        } else {
-            session.log.warning(&format!(
-                "Table {}.{} does not exist and was not deleted.",
-                lib, name_upper
-            ));
-        }
+    // ── RUN group 1: the PROC DATASETS statement (directory, unless NOLIST) ──
+    if !ast.nolist {
+        print_directory(session, provider.as_ref())?;
     }
 
-    // ── Apply renames (CHANGE old=new) ────────────────────────────────────────
-    for (old, new) in &ast.changes {
-        let old_upper = old.to_uppercase();
-        let new_upper = new.to_uppercase();
-        provider.rename(&old_upper, &new_upper)?;
-        session.log.note(&format!(
-            "Changing the name {}.{} to {}.{} (memtype=DATA).",
-            lib, old_upper, lib, new_upper
-        ));
-    }
-
-    // ── M33.8 operations (COPY / EXCHANGE / SAVE / MODIFY) ────────────────────
     for op in &ast.ops {
         match op {
+            DsOp::Delete(names) => {
+                for name in names {
+                    let name_upper = name.to_uppercase();
+                    if provider.exists(&name_upper) {
+                        provider.delete(&name_upper)?;
+                        session
+                            .log
+                            .note(&format!("Deleting {}.{} (memtype=DATA).", lib, name_upper));
+                    } else {
+                        session.log.warning(&format!(
+                            "Table {}.{} does not exist and was not deleted.",
+                            lib, name_upper
+                        ));
+                    }
+                }
+            }
+            DsOp::Change(pairs) => {
+                for (old, new) in pairs {
+                    let old_upper = old.to_uppercase();
+                    let new_upper = new.to_uppercase();
+                    provider.rename(&old_upper, &new_upper)?;
+                    session.log.note(&format!(
+                        "Changing the name {}.{} to {}.{} (memtype=DATA).",
+                        lib, old_upper, lib, new_upper
+                    ));
+                }
+            }
             DsOp::Copy { out, r#in, select } => {
                 let src_lib = r#in.clone().unwrap_or_else(|| lib.clone());
                 let src = session.libs.get(&src_lib).map_err(|_| {
@@ -224,30 +256,74 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                     }
                 }
             }
-            DsOp::Modify {
-                member,
-                renames,
-                labels,
-                informats,
-            } => {
-                let mu = member.to_uppercase();
-                if !provider.exists(&mu) {
-                    session
-                        .log
-                        .warning(&format!("Member {lib}.{mu} not found; MODIFY skipped."));
-                    continue;
-                }
-                let (mut ds, notes) = provider.read(&mu)?;
-                for note in notes {
-                    session.log.forward(&note);
-                }
-                // RENAME variables (rename both VarMeta and the DataFrame column).
+            DsOp::Modify { member, stmts } => {
+                modify_member(session, provider.as_ref(), &lib, member, stmts)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Directory listing of the PROC DATASETS statement (table Name / Member
+/// Type), printed when the procedure starts.
+fn print_directory(
+    session: &mut Session,
+    provider: &dyn crate::library::LibraryProvider,
+) -> Result<()> {
+    let mut tables = provider.list()?;
+    tables.sort();
+
+    session.listing.page_header();
+
+    let headers = vec![
+        "#".to_string(),
+        "Name".to_string(),
+        "Member Type".to_string(),
+    ];
+    let aligns = vec![Align::Right, Align::Left, Align::Left];
+
+    let rows: Vec<Vec<String>> = tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| vec![(i + 1).to_string(), t.to_uppercase(), "DATA".to_string()])
+        .collect();
+
+    session.listing.write_table(&headers, &aligns, &rows);
+    Ok(())
+}
+
+/// MODIFY group: read the member once, apply its sub-statements in source
+/// order, write it back (data and metadata sidecar).
+fn modify_member(
+    session: &mut Session,
+    provider: &dyn crate::library::LibraryProvider,
+    lib: &str,
+    member: &str,
+    stmts: &[ModifyStmt],
+) -> Result<()> {
+    let mu = member.to_uppercase();
+    if !provider.exists(&mu) {
+        session
+            .log
+            .warning(&format!("Member {lib}.{mu} not found; MODIFY skipped."));
+        return Ok(());
+    }
+    let (mut ds, notes) = provider.read(&mu)?;
+    for note in notes {
+        session.log.forward(&note);
+    }
+    let position = |ds: &crate::dataset::SasDataset, var: &str| {
+        ds.vars
+            .iter()
+            .position(|v| v.name.eq_ignore_ascii_case(var))
+    };
+    for stmt in stmts {
+        match stmt {
+            // RENAME variables (rename both VarMeta and the DataFrame column).
+            ModifyStmt::Rename(renames) => {
                 for (old, new) in renames {
-                    match ds
-                        .vars
-                        .iter()
-                        .position(|v| v.name.eq_ignore_ascii_case(old))
-                    {
+                    match position(&ds, old) {
                         Some(idx) => {
                             let phys_old = ds.vars[idx].name.clone();
                             ds.df.rename(&phys_old, new.as_str().into())?;
@@ -266,13 +342,11 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                         }
                     }
                 }
-                // LABEL variables.
+            }
+            // LABEL variables.
+            ModifyStmt::Label(labels) => {
                 for (var, text) in labels {
-                    match ds
-                        .vars
-                        .iter()
-                        .position(|v| v.name.eq_ignore_ascii_case(var))
-                    {
+                    match position(&ds, var) {
                         Some(idx) => {
                             ds.vars[idx].label = Some(text.clone());
                         }
@@ -284,20 +358,43 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                         }
                     }
                 }
-                // INFORMAT variables (J07-P6) : le token doit être un
-                // informat valide (même validation que l'étape DATA) ; la
-                // variable doit exister (WARNING sinon, comme RENAME/LABEL).
+            }
+            // FORMAT variables (J02-P8) : the token was validated at parse
+            // time ; `None` removes the format. Unknown variable → WARNING,
+            // like RENAME/LABEL.
+            ModifyStmt::Format(groups) => {
+                for (vars, format) in groups {
+                    for var in vars {
+                        match position(&ds, var) {
+                            Some(idx) => {
+                                ds.vars[idx].format = format.clone();
+                            }
+                            None => {
+                                let what = if format.is_some() {
+                                    "format not assigned"
+                                } else {
+                                    "format not removed"
+                                };
+                                session.log.warning(&format!(
+                                    "Variable {} not found in {lib}.{mu}; {what}.",
+                                    var.to_uppercase()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            // INFORMAT variables (J07-P6) : le token doit être un
+            // informat valide (même validation que l'étape DATA) ; la
+            // variable doit exister (WARNING sinon, comme RENAME/LABEL).
+            ModifyStmt::Informat(informats) => {
                 for (var, token) in informats {
                     if crate::formats::FormatSpec::parse(token).is_none() {
                         return Err(SasError::runtime(format!(
                             "The informat {token} is not valid."
                         )));
                     }
-                    match ds
-                        .vars
-                        .iter()
-                        .position(|v| v.name.eq_ignore_ascii_case(var))
-                    {
+                    match position(&ds, var) {
                         Some(idx) => {
                             ds.vars[idx].informat = Some(token.clone());
                             session.log.note(&format!(
@@ -314,36 +411,14 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                         }
                     }
                 }
-                provider.write(&mu, &ds)?;
             }
         }
     }
-
-    // ── Directory listing (unless NOLIST) ─────────────────────────────────────
-    if !ast.nolist {
-        let mut tables = provider.list()?;
-        tables.sort();
-
-        session.listing.page_header();
-
-        let headers = vec![
-            "#".to_string(),
-            "Name".to_string(),
-            "Member Type".to_string(),
-        ];
-        let aligns = vec![Align::Right, Align::Left, Align::Left];
-
-        let rows: Vec<Vec<String>> = tables
-            .iter()
-            .enumerate()
-            .map(|(i, t)| vec![(i + 1).to_string(), t.to_uppercase(), "DATA".to_string()])
-            .collect();
-
-        session.listing.write_table(&headers, &aligns, &rows);
-    }
-
-    Ok(())
+    provider.write(&mu, &ds)
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;

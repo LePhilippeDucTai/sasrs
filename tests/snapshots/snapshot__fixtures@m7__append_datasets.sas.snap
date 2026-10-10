@@ -1,7 +1,7 @@
 ---
-source: sas_interpreter/tests/snapshot.rs
+source: tests/snapshot.rs
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
-input_file: sas_interpreter/tests/fixtures/m7/append_datasets.sas
+input_file: tests/fixtures/m7/append_datasets.sas
 ---
 ==== LOG ====
 
@@ -31,8 +31,8 @@ NOTE: PROCEDURE APPEND used (Total process time):
 6       change a=combined;
 7       delete b;
 8     quit;
-NOTE: Deleting WORK.B (memtype=DATA).
 NOTE: Changing the name WORK.A to WORK.COMBINED (memtype=DATA).
+NOTE: Deleting WORK.B (memtype=DATA).
 NOTE: PROCEDURE DATASETS used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds

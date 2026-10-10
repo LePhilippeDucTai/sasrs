@@ -74,25 +74,69 @@ pub(crate) fn build_dictionary(session: &mut Session, kind: DictKind) -> Result<
 
 /// Énumère (libname MAJUSCULE, memname MAJUSCULE) des datasets de chaque
 /// bibliothèque assignée, triés (libname, memname) pour un ordre déterministe.
-fn enumerate_members(session: &Session) -> Vec<(String, String)> {
+///
+/// J02-P8 — une bibliothèque qui ne peut pas être listée (libref S3 : `list`
+/// non supporté) était sautée en silence : WARNING nommant la libref et la
+/// dictionary table `what` incomplète.
+fn enumerate_members(session: &mut Session, what: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for lib in session.libs.librefs() {
         let Ok(provider) = session.libs.get(&lib) else {
             continue;
         };
-        let Ok(members) = provider.list() else {
-            continue;
-        };
-        for m in members {
-            out.push((lib.clone(), m.to_uppercase()));
+        match provider.list() {
+            Ok(members) => {
+                for m in members {
+                    out.push((lib.clone(), m.to_uppercase()));
+                }
+            }
+            Err(e) => {
+                let cause = if provider.is_cloud() {
+                    "listing the tables of an S3 library is not supported in this build \
+                     (planned: roadmap-avancee J12-P1)."
+                        .to_string()
+                } else {
+                    e.to_string()
+                };
+                session.log.warning(&format!(
+                    "The members of library {lib} are not included in {what}: {cause}"
+                ));
+            }
         }
     }
     out.sort();
     out
 }
 
+/// Lecture d'un membre énuméré. J02-P8 — une table illisible était sautée en
+/// silence : WARNING nommant la table et la cause, la table reste absente de
+/// la dictionary table `what`.
+fn read_member(
+    session: &mut Session,
+    lib: &str,
+    mem: &str,
+    what: &str,
+) -> Option<crate::dataset::SasDataset> {
+    let provider = session.libs.get(lib).ok()?;
+    match provider.read(mem) {
+        Ok((ds, notes)) => {
+            // J04-P4 : les notes de lecture (coercition, sidecar) vont au log.
+            for note in notes {
+                session.log.forward(&note);
+            }
+            Some(ds)
+        }
+        Err(e) => {
+            session.log.warning(&format!(
+                "Table {lib}.{mem} could not be read and is not included in {what}: {e}"
+            ));
+            None
+        }
+    }
+}
+
 fn build_tables(session: &mut Session) -> Result<DataFrame> {
-    let members = enumerate_members(session);
+    let members = enumerate_members(session, "DICTIONARY.TABLES");
     let mut libname = Vec::with_capacity(members.len());
     let mut memname = Vec::with_capacity(members.len());
     let mut memtype = Vec::with_capacity(members.len());
@@ -100,19 +144,12 @@ fn build_tables(session: &mut Session) -> Result<DataFrame> {
     let mut nvar = Vec::with_capacity(members.len());
 
     for (lib, mem) in &members {
-        let Ok(provider) = session.libs.get(lib) else {
-            continue;
-        };
         // `read` charge le dataset eager : nécessaire pour `nobs` exact et le
-        // décompte de variables. Si la lecture échoue (table corrompue), on
-        // ignore la table plutôt que de faire échouer toute la requête.
-        let Ok((ds, notes)) = provider.read(mem) else {
+        // décompte de variables. Si la lecture échoue (table corrompue), la
+        // table est omise (WARNING) plutôt que de faire échouer la requête.
+        let Some(ds) = read_member(session, lib, mem, "DICTIONARY.TABLES") else {
             continue;
         };
-        // J04-P4 : les notes de lecture (coercition, sidecar) vont au log.
-        for note in notes {
-            session.log.forward(&note);
-        }
         libname.push(lib.clone());
         memname.push(mem.clone());
         memtype.push("DATA".to_string());
@@ -131,7 +168,7 @@ fn build_tables(session: &mut Session) -> Result<DataFrame> {
 }
 
 fn build_columns(session: &mut Session) -> Result<DataFrame> {
-    let members = enumerate_members(session);
+    let members = enumerate_members(session, "DICTIONARY.COLUMNS");
     let mut libname = Vec::new();
     let mut memname = Vec::new();
     let mut name = Vec::new();
@@ -144,16 +181,9 @@ fn build_columns(session: &mut Session) -> Result<DataFrame> {
     let mut informat: Vec<String> = Vec::new();
 
     for (lib, mem) in &members {
-        let Ok(provider) = session.libs.get(lib) else {
+        let Some(ds) = read_member(session, lib, mem, "DICTIONARY.COLUMNS") else {
             continue;
         };
-        let Ok((ds, notes)) = provider.read(mem) else {
-            continue;
-        };
-        // J04-P4 : les notes de lecture (coercition, sidecar) vont au log.
-        for note in notes {
-            session.log.forward(&note);
-        }
         let mut pos: i64 = 0;
         for (i, v) in ds.vars.iter().enumerate() {
             libname.push(lib.clone());
