@@ -1,6 +1,7 @@
 {
   "id": "informat-contents-declared",
   "title": "Informat persistees : INFORMAT $w. et comma w.d visibles dans PROC CONTENTS OUT= (INFORMAT, INFORMD, INFORML, LENGTH, TYPE, VARNUM)",
+  "zone": "PROC CONTENTS — informats persistés",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 14 CONTENTS Procedure, « OUT= Data Set » : « Each variable in each DATA= data set has one observation in the OUT= data set » ; INFORMAT « the value is a blank if you do not associate an informat with the variable » ; INFORMD « number of decimals ... 0 if you do not specify decimals » ; INFORML informat length ; LENGTH variable length ; TYPE 1=numerique, 2=caractere",
@@ -11,7 +12,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "validated",
-  "issue": "sasrs #11 (sous-issue compat) — les informat declares par l'instruction INFORMAT ne sont pas persistes dans les metadonnees du dataset et donc pas restitues par PROC CONTENTS OUT= (INFORMAT/INFORML/INFORMD)",
+  "status": "known-divergence",
+  "issue": "roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=",
   "data_types": {}
 }

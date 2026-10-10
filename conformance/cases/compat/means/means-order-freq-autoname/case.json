@@ -1,6 +1,7 @@
 {
   "id": "means-order-freq-autoname",
   "title": "PROC MEANS : ORDER=FREQ (effectifs décroissants), FREQ (pondération de N et STD), ID copiée, OUTPUT / AUTONAME, MAXDEC=",
+  "zone": "PROC MEANS",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0zn9ag9s3c8cnn1v6k9f5fixg7f.htm — SAS 9.4 Procedures — PROC MEANS (ORDER=FREQ : « orders values by descending frequency count » ; FREQ : N et la variance pondérés par la variable FREQ, divisor Σw−1 ; ID : variables ID copiées dans OUT= ; AUTONAME : « the combination of the analysis variable name and the statistic-keyword » ; MAXDEC= : « no effect » sur l'OUT=)",
@@ -11,8 +12,8 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "validated",
-  "issue": "sasrs #11 (sous-issue compat) — PROC MEANS : ORDER=FREQ, instruction FREQ (pondération) et OUTPUT / AUTONAME non implémentés",
+  "status": "known-divergence",
+  "issue": "roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3",
   "data_types": {
     "weights.csv": {"group": "char", "value": "num", "w": "num", "price": "num"}
   }

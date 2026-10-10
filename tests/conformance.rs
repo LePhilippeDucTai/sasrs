@@ -1,7 +1,8 @@
 //! Exécuteur du corpus de conformité (J05-P1).
 //!
-//! Chaque cas vit dans `conformance/cases/<groupe>/<id>/` (schéma complet
-//! dans `conformance/schema.md`) :
+//! Chaque cas vit dans un répertoire `conformance/cases/**/<id>/` contenant
+//! un `case.json`, à n'importe quelle profondeur (`<groupe>/<id>/`,
+//! `compat/<proc>/<id>/`… ; schéma complet dans `conformance/schema.md`) :
 //!
 //! - `program.sas` — le programme exécuté ;
 //! - `data/*.csv` — entrées, converties en parquet par l'exécuteur avec
@@ -10,7 +11,7 @@
 //! - `expected/<ds>.csv` — datasets attendus, comparés aux tables WORK
 //!   produites par le programme (relues via l'API publique
 //!   `sasrs::dataset`, pas par un lecteur parquet ad hoc) ;
-//! - `case.json` — métadonnées, tolérances, attentes de log.
+//! - `case.json` — métadonnées, tolérances, attentes de log et de listing.
 //!
 //! Un cas `validated` doit passer TOUTES les vérifications. Un cas
 //! `known-divergence` doit en ÉCHOUER au moins une : s'il passe, le test
@@ -42,6 +43,13 @@ struct CaseSpec {
     tolerance: TolSpec,
     #[serde(default)]
     log: LogSpec,
+    /// Attentes sur le listing (`run.lst`), même forme que `log`.
+    #[serde(default)]
+    listing: LogSpec,
+    /// Zone (PROC / zone du langage) du rapport STATUS.md ; facultative
+    /// (repli sur la table de scripts/conformance_report.py).
+    #[serde(default)]
+    zone: Option<String>,
     #[serde(default)]
     exit_code: Option<i32>,
     status: String,
@@ -90,7 +98,7 @@ fn default_tol() -> f64 {
 struct LogSpec {
     #[serde(default)]
     required: Vec<String>,
-    /// Motifs (regex fancy-regex) qui ne doivent PAS apparaître dans la log.
+    /// Motifs (regex fancy-regex) qui ne doivent PAS apparaître dans le texte.
     #[serde(default)]
     forbidden: Vec<String>,
 }
@@ -154,34 +162,63 @@ fn close_enough(got: f64, want: f64, abs: f64, rel: f64) -> bool {
 
 // ── Découverte du corpus ───────────────────────────────────────────────
 
+/// Parcourt récursivement `root` : tout répertoire contenant un
+/// `case.json` est un cas (on ne descend pas sous un cas : `data/` et
+/// `expected/` lui appartiennent). Ordre stable par chemin.
 fn collect_cases(root: &Path) -> Vec<Case> {
     let mut cases = Vec::new();
-    let Ok(groups) = fs::read_dir(root) else {
-        return cases;
-    };
-    for group in groups {
-        let group = group.expect("lecture du groupe").path();
-        if !group.is_dir() {
-            continue;
-        }
-        for case_dir in fs::read_dir(&group).expect("lecture des cas") {
-            let case_dir = case_dir.expect("lecture du cas").path();
-            let case_json = case_dir.join("case.json");
-            if !case_json.is_file() {
-                continue;
-            }
-            let text = fs::read_to_string(&case_json)
-                .unwrap_or_else(|e| panic!("lecture de {} : {e}", case_json.display()));
-            let spec: CaseSpec = serde_json::from_str(&text)
-                .unwrap_or_else(|e| panic!("case.json invalide ({}) : {e}", case_json.display()));
-            cases.push(Case {
-                dir: case_dir,
-                spec,
-            });
-        }
-    }
+    collect_cases_into(root, &mut cases);
     cases.sort_by(|a, b| a.dir.cmp(&b.dir));
     cases
+}
+
+fn collect_cases_into(dir: &Path, cases: &mut Vec<Case>) {
+    let case_json = dir.join("case.json");
+    if case_json.is_file() {
+        let text = fs::read_to_string(&case_json)
+            .unwrap_or_else(|e| panic!("lecture de {} : {e}", case_json.display()));
+        let spec: CaseSpec = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("case.json invalide ({}) : {e}", case_json.display()));
+        cases.push(Case {
+            dir: dir.to_path_buf(),
+            spec,
+        });
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|e| panic!("lecture de {} : {e}", dir.display()))
+            .path();
+        if path.is_dir() {
+            collect_cases_into(&path, cases);
+        }
+    }
+}
+
+/// Vérifie un texte produit (log ou listing) : `required` = sous-chaînes
+/// qui DOIVENT apparaître, `forbidden` = regex fancy-regex qui ne doivent
+/// PAS apparaître. `what` préfixe les problèmes (`log`, `listing`).
+fn check_text(what: &str, text: &str, spec: &LogSpec, problems: &mut Vec<String>) {
+    for req in &spec.required {
+        if !text.contains(req.as_str()) {
+            problems.push(format!("{what} : ligne requise absente « {req} »"));
+        }
+    }
+    for pattern in &spec.forbidden {
+        match fancy_regex::Regex::new(pattern) {
+            Ok(re) => {
+                if re.is_match(text).unwrap_or(false) {
+                    problems.push(format!("{what} : motif interdit présent « {pattern} »"));
+                }
+            }
+            Err(e) => problems.push(format!(
+                "{what}.forbidden : regex invalide « {pattern} » ({e})"
+            )),
+        }
+    }
 }
 
 // ── Exécution d'un cas ─────────────────────────────────────────────────
@@ -310,6 +347,14 @@ fn run_case(case: &Case) -> Vec<String> {
             case.spec.provenance.kind
         ));
     }
+    if case
+        .spec
+        .zone
+        .as_deref()
+        .is_some_and(|z| z.trim().is_empty())
+    {
+        problems.push("zone vide (omettre le champ ou nommer la zone)".to_string());
+    }
     if case.spec.provenance.source.trim().is_empty() {
         problems.push("provenance.source absent".to_string());
     }
@@ -376,23 +421,11 @@ fn run_case(case: &Case) -> Vec<String> {
     // Log : requise = sous-chaînes ; interdites = regex fancy-regex.
     let log = fs::read_to_string(&log_file)
         .unwrap_or_else(|_| String::from_utf8_lossy(&output.stderr).into_owned());
-    for req in &case.spec.log.required {
-        if !log.contains(req.as_str()) {
-            problems.push(format!("log : ligne requise absente « {req} »"));
-        }
-    }
-    for pattern in &case.spec.log.forbidden {
-        match fancy_regex::Regex::new(pattern) {
-            Ok(re) => {
-                if re.is_match(&log).unwrap_or(false) {
-                    problems.push(format!("log : motif interdit présent « {pattern} »"));
-                }
-            }
-            Err(e) => problems.push(format!(
-                "log.forbidden : regex invalide « {pattern} » ({e})"
-            )),
-        }
-    }
+    check_text("log", &log, &case.spec.log, &mut problems);
+
+    // Listing (--print) : mêmes règles ; absent = listing vide.
+    let listing = fs::read_to_string(&print_file).unwrap_or_default();
+    check_text("listing", &listing, &case.spec.listing, &mut problems);
 
     // Datasets attendus vs tables WORK (relecture via l'API publique).
     let expected_dir = case.dir.join("expected");
@@ -540,6 +573,75 @@ fn compare_dataset(expected_csv: &str, ds: &SasDataset, tol: &TolSpec) -> Vec<St
         }
     }
     diffs
+}
+
+// ── Tests de l'exécuteur lui-même ──────────────────────────────────────
+
+fn write_probe_case(dir: &Path, id: &str) {
+    fs::create_dir_all(dir).expect("création du cas sonde");
+    let json = format!(r#"{{"id": "{id}", "validates": "sas-behaviour", "status": "validated"}}"#);
+    fs::write(dir.join("case.json"), json).expect("écriture du case.json sonde");
+}
+
+/// Reproducer J01-P1 : la découverte s'arrêtait à la profondeur 2
+/// (`<groupe>/<id>/`) et ignorait `compat/<proc>/<id>/`.
+#[test]
+fn collect_cases_is_recursive() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    write_probe_case(&root.join("base").join("depth-two"), "depth-two");
+    write_probe_case(
+        &root.join("compat").join("means").join("depth-three"),
+        "depth-three",
+    );
+    // Un case.json sous un cas appartient au cas : il n'est pas un cas.
+    write_probe_case(
+        &root.join("base").join("depth-two").join("expected"),
+        "inner",
+    );
+    let found: Vec<String> = collect_cases(root)
+        .iter()
+        .map(|c| {
+            c.dir
+                .strip_prefix(root)
+                .expect("cas sous la racine")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(found, vec!["base/depth-two", "compat/means/depth-three"]);
+}
+
+#[test]
+fn check_text_applies_required_and_forbidden() {
+    let spec = LogSpec {
+        required: vec!["The MEANS Procedure".to_string()],
+        forbidden: vec![r"^ERROR".to_string(), "(".to_string()],
+    };
+    let mut problems = Vec::new();
+    check_text(
+        "listing",
+        "The MEANS Procedure\nN Mean\n",
+        &spec,
+        &mut problems,
+    );
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("listing.forbidden : regex invalide"));
+
+    let mut problems = Vec::new();
+    check_text("listing", "ERROR here", &spec, &mut problems);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p == "listing : ligne requise absente « The MEANS Procedure »"),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p == "listing : motif interdit présent « ^ERROR »"),
+        "{problems:?}"
+    );
 }
 
 // ── Test agrégé : TOUT le corpus, rapport par cas ──────────────────────
