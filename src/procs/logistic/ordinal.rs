@@ -117,7 +117,7 @@ pub(super) fn fit_ordinal(
     n_int: usize,
     nb_cols: usize,
     k: usize,
-) -> OrdinalFit {
+) -> Result<OrdinalFit> {
     let n_obs = cat_vec.len();
     let n_par = n_int + nb_cols;
 
@@ -263,25 +263,27 @@ pub(super) fn fit_ordinal(
     }
 
     // Variance-covariance for standard errors (final information).
-    let var = ordinal_varcov(x_mat, cat_vec, freq_vec, &theta, n_int, nb_cols, k);
-    let se: Vec<f64> = (0..n_par)
-        .map(|j| var.get(j).map(|r| r[j]).unwrap_or(f64::NAN).max(0.0).sqrt())
-        .collect();
+    let var = ordinal_varcov(x_mat, cat_vec, freq_vec, &theta, n_int, nb_cols, k)?;
+    let se: Vec<f64> = (0..n_par).map(|j| var[j][j].max(0.0).sqrt()).collect();
     let wald: Vec<f64> = (0..n_par).map(|j| (theta[j] / se[j]).powi(2)).collect();
     let wald_p: Vec<f64> = wald.iter().map(|&w| chisq_sf(w, 1.0)).collect();
 
-    OrdinalFit {
+    Ok(OrdinalFit {
         theta,
         converged,
         se,
         wald,
         wald_p,
-    }
+    })
 }
 
 /// Final-iterate variance-covariance for the ordinal model (inverse of the
-/// observed information). Returns an `n_par × n_par` matrix; on inversion
-/// failure returns NaNs so SEs degrade gracefully rather than panicking.
+/// observed information), an `n_par × n_par` matrix.
+///
+/// J02-P1 — an inversion failure used to return a NaN matrix: the listing
+/// printed « . » standard errors, Wald χ² and p-values without any
+/// diagnostic. It is now an explicit ERROR (the exact Hessian of
+/// roadmap-avancee J05-P7 will revisit this path).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn ordinal_varcov(
     x_mat: &[Vec<f64>],
@@ -291,7 +293,7 @@ pub(super) fn ordinal_varcov(
     n_int: usize,
     nb_cols: usize,
     k: usize,
-) -> Vec<Vec<f64>> {
+) -> Result<Vec<Vec<f64>>> {
     let n_par = n_int + nb_cols;
     let sigma = |z: f64| 1.0 / (1.0 + (-z).exp());
     let mut hess = vec![vec![0.0_f64; n_par]; n_par];
@@ -345,5 +347,11 @@ pub(super) fn ordinal_varcov(
             }
         }
     }
-    invert_matrix(&hess).unwrap_or_else(|_| vec![vec![f64::NAN; n_par]; n_par])
+    invert_matrix(&hess).map_err(|_| {
+        SasError::runtime(
+            "The information matrix of the ordinal logistic model is singular in PROC \
+             LOGISTIC; standard errors, Wald chi-squares and p-values cannot be computed. \
+             Check the MODEL for redundant or constant effects.",
+        )
+    })
 }

@@ -27,6 +27,7 @@ NOTE: DATA statement used (Total process time):
 14      output out=pred predicted=phat;
 15    run;
 NOTE: There were 4 observations read from the data set WORK.COUNTS.
+WARNING: CLASS variable X is coded with PARAM=REF; the SAS default PARAM=EFFECT is not supported in PROC LOGISTIC. The CLASS parameter estimates differ from SAS, the odds ratios are identical (planned: roadmap-avancee J05-P2). Specify PARAM=REF to request this coding.
 NOTE: There were 60 observations used.
 NOTE: The data set WORK.PRED has 4 observations and 4 variables.
 NOTE: PROCEDURE LOGISTIC used (Total process time):
@@ -74,7 +75,7 @@ PROC LOGISTIC is modeling the probability that y=1.
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                                       Model Fit Statistics
 
@@ -114,4 +115,4 @@ PROC LOGISTIC is modeling the probability that y=1.
                                 0    1        5             0.8
                                 0    0       25    0.2857142857
 
-==== EXIT 0 ====
+==== EXIT 1 ====

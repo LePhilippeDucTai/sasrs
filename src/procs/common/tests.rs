@@ -286,6 +286,64 @@ fn response_options_absent_consumes_nothing() {
     assert_eq!(ts.peek().kind, TokenKind::Eq);
 }
 
+/// J02-P1 — base : `parse_response_options` ignorait `DESC`,
+/// `EVENT=FIRST|LAST`, `ORDER=` et `REF=`. SAS/STAT 9.4 (LOGISTIC/GENMOD,
+/// MODEL statement, « Response Variable Options ») : DESCENDING (alias DESC)
+/// inverse l'ordre des niveaux, EVENT='v'|FIRST|LAST désigne l'événement.
+#[test]
+fn ra_j02_p1_response_options_desc_and_event_keywords() {
+    for (text, event, descending) in [
+        ("(desc)", None, true),
+        ("(descending)", None, true),
+        ("(event=first)", Some(ResponseEvent::First), false),
+        ("(EVENT=LAST desc)", Some(ResponseEvent::Last), true),
+        ("(event='1')", Some(ResponseEvent::Value("1".into())), false),
+    ] {
+        let src = SourceFile::new(format!("proc foo {text} = x; run;"));
+        let mut ts = proc_stream(&src);
+        let opts = parse_response_options_checked(&mut ts, "LOGISTIC").unwrap();
+        assert_eq!(opts, ResponseOptions { event, descending }, "{text}");
+        assert_eq!(ts.peek().kind, TokenKind::Eq, "{text}");
+    }
+    // Shared legacy form (GLIMMIX): DESC is honored like DESCENDING.
+    let src = SourceFile::new("proc foo (desc) = x; run;");
+    let mut ts = proc_stream(&src);
+    assert_eq!(parse_response_options(&mut ts), (None, true));
+}
+
+/// J02-P1 — ORDER=, REF= (ordre ou référence des niveaux), une valeur
+/// EVENT= non citée et tout jeton inconnu sont des ERROR au parsing.
+#[test]
+fn ra_j02_p1_response_options_order_ref_unknown_are_errors() {
+    for (text, msg) in [
+        (
+            "(order=freq)",
+            "The ORDER= response variable option is not supported in PROC GENMOD; the order \
+             or reference of the response levels would silently differ from the request.",
+        ),
+        (
+            "(ref='1')",
+            "The REF= response variable option is not supported in PROC GENMOD",
+        ),
+        (
+            "(reference=first)",
+            "The REF= response variable option is not supported in PROC GENMOD",
+        ),
+        ("(event=1)", "EVENT= expects a quoted value, FIRST or LAST."),
+        (
+            "(bogus)",
+            "Unknown or unsupported response variable option 'BOGUS' in PROC GENMOD.",
+        ),
+    ] {
+        let src = SourceFile::new(format!("proc foo {text} = x; run;"));
+        let mut ts = proc_stream(&src);
+        let err = parse_response_options_checked(&mut ts, "GENMOD")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(msg), "{text}: {err}");
+    }
+}
+
 #[test]
 fn effect_list_stops_at_slash_without_consuming() {
     let src = SourceFile::new("proc foo a b c / noprint; run;");

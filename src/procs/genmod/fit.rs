@@ -129,7 +129,8 @@ pub(super) fn fit_irls(
         }
         beta = trial;
 
-        // GCONV convergence check (scaled by the realized step length)
+        // Relative parameter-change check (XCONV-type, scaled by the realized
+        // step length) — the criterion the listing reports since J02-P1.
         let max_delta = delta
             .iter()
             .map(|d| (step * d).abs())

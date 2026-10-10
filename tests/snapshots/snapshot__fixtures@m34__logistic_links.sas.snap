@@ -70,7 +70,7 @@ PROC LOGISTIC is modeling the probability that y=1.
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                                       Model Fit Statistics
 
@@ -121,7 +121,7 @@ PROC LOGISTIC is modeling the probability that y=1.
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                                       Model Fit Statistics
 

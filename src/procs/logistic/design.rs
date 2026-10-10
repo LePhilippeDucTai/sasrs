@@ -53,7 +53,7 @@ pub(super) fn build_design(
     class_vars: &[ClassVar],
     predictors: &[String],
     pred_cols: &[Vec<Value>],
-    n_read: usize,
+    used: &[bool],
 ) -> Result<Design> {
     let nb_preds = predictors.len();
     let class_set: Vec<String> = class_vars.iter().map(|c| c.name.clone()).collect();
@@ -74,7 +74,9 @@ pub(super) fn build_design(
         if is_class_var(nm) {
             // Collect distinct non-missing levels of this CLASS column.
             let col = &pred_cols[pi];
-            let levs = crate::procs::lincom::class_levels(col.iter().take(n_read));
+            let levs = crate::procs::lincom::class_levels(
+                col.iter().zip(used).filter(|(_, u)| **u).map(|(v, _)| v),
+            );
             if levs.len() < 2 {
                 return Err(SasError::runtime(format!(
                     "CLASS variable {} must have at least 2 levels.",
@@ -118,28 +120,92 @@ pub(super) fn build_design(
     })
 }
 
+/// Rows usable by the fit: non-missing response, valid FREQ (> 0) and every
+/// MODEL predictor non-missing — the same rule as the listwise deletion of
+/// [`build_model_matrices`] / `build_ordinal_matrices`.
+pub(super) fn used_rows(
+    class_vars: &[ClassVar],
+    predictors: &[String],
+    pred_cols: &[Vec<Value>],
+    resp_col: &[Value],
+    freq_col: &Option<Vec<Value>>,
+    n_read: usize,
+) -> Vec<bool> {
+    let is_class: Vec<bool> = predictors
+        .iter()
+        .map(|nm| class_vars.iter().any(|c| c.name.eq_ignore_ascii_case(nm)))
+        .collect();
+    (0..n_read)
+        .map(|i| {
+            !resp_col[i].is_missing()
+                && freq_col.as_ref().is_none_or(
+                    |fc| matches!(value_to_num(&fc[i]), Some(f) if !f.is_nan() && f > 0.0),
+                )
+                && pred_cols.iter().zip(&is_class).all(|(c, &cls)| {
+                    if cls {
+                        !c[i].is_missing()
+                    } else {
+                        matches!(value_to_num(&c[i]), Some(v) if !v.is_nan())
+                    }
+                })
+        })
+        .collect()
+}
+
+/// J02-P1 — provisional WARNING until roadmap-avancee J05-P2: a CLASS effect
+/// without an explicit `PARAM=REF` is reference-coded here while the SAS
+/// default is `PARAM=EFFECT` (SAS/STAT 9.4, The LOGISTIC Procedure, CLASS
+/// statement). The CLASS parameter estimates therefore differ from SAS; the
+/// odds ratios (contrasts against the reference level) are identical.
+pub(super) fn warn_default_param(session: &mut Session, class_vars: &[ClassVar], design: &Design) {
+    for eff in design.effects.iter().filter(|e| e.is_class) {
+        let explicit = class_vars
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&eff.name))
+            .is_some_and(|c| c.param_explicit);
+        if !explicit {
+            session.log.warning(&format!(
+                "CLASS variable {} is coded with PARAM=REF; the SAS default PARAM=EFFECT is \
+                 not supported in PROC LOGISTIC. The CLASS parameter estimates differ from \
+                 SAS, the odds ratios are identical (planned: roadmap-avancee J05-P2). Specify \
+                 PARAM=REF to request this coding.",
+                eff.name.to_uppercase()
+            ));
+        }
+    }
+}
+
 /// Determine the binary event level (EVENT= / DESCENDING / default).
 /// Returns `(event_level, event_label, nonevent_label)`.
+///
+/// SAS/STAT 9.4, The LOGISTIC Procedure, MODEL statement « Response Variable
+/// Options »: the response levels are ordered (ascending, reversed by
+/// DESCENDING); by default the FIRST ordered level is the event;
+/// `EVENT=FIRST|LAST` designates the first/last ordered level and
+/// `EVENT='v'` a given value.
 pub(super) fn determine_event_level(
     model: &LogisticModel,
     levels: &[Value],
     resp_name: &str,
 ) -> Result<(Value, String, String)> {
-    let event_level: &Value = if let Some(ev_str) = &model.event {
-        levels
-            .iter()
-            .find(|lv| value_matches_event(lv, ev_str))
-            .ok_or_else(|| {
-                SasError::runtime(format!(
-                    "Event value '{}' not found in response variable {}.",
-                    ev_str,
-                    resp_name.to_uppercase()
-                ))
-            })?
-    } else if model.descending {
-        &levels[1]
+    let ordered: Vec<&Value> = if model.descending {
+        levels.iter().rev().collect()
     } else {
-        &levels[0]
+        levels.iter().collect()
+    };
+    let event_level: &Value = match &model.event {
+        Some(ev) => ev.pick(&ordered, value_matches_event).ok_or_else(|| {
+            let shown = match ev {
+                common::ResponseEvent::Value(v) => v.clone(),
+                _ => String::new(),
+            };
+            SasError::runtime(format!(
+                "Event value '{}' not found in response variable {}.",
+                shown,
+                resp_name.to_uppercase()
+            ))
+        })?,
+        None => ordered[0],
     };
 
     let event_label = value_label(event_level);

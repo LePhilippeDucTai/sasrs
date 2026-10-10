@@ -83,7 +83,7 @@ NOTE: PROCEDURE GENMOD used (Total process time):
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                              Criteria For Assessing Goodness Of Fit
 
@@ -133,7 +133,7 @@ PROC GENMOD is modeling the probability that y=1.
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                              Criteria For Assessing Goodness Of Fit
 
@@ -174,7 +174,7 @@ Scale         0      1.0000            0.0000                              1.000
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                              Criteria For Assessing Goodness Of Fit
 

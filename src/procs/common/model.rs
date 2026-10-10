@@ -35,10 +35,135 @@ pub(crate) fn expect_model_eq(ts: &mut StatementStream, err_msg: &str) -> Result
     Ok(())
 }
 
-/// Options de réponse optionnelles `(event='val' descending …)` entre la
-/// réponse et le `=` (GLIMMIX/GENMOD/LOGISTIC). Sans parenthèse ouvrante, ne
-/// consomme rien. Les tokens inconnus dans la parenthèse sont ignorés.
-/// Renvoie `(event, descending)`. Extrait verbatim de `glimmix::parse_model`.
+/// Événement demandé par l'option de réponse `EVENT=` (SAS/STAT 9.4, MODEL
+/// statement, « Response Variable Options ») : une valeur citée, ou le
+/// premier / dernier niveau dans l'ordre des niveaux de réponse (après
+/// `DESCENDING`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResponseEvent {
+    /// `EVENT='valeur'` (valeur formatée de la réponse).
+    Value(String),
+    /// `EVENT=FIRST` : premier niveau ordonné.
+    First,
+    /// `EVENT=LAST` : dernier niveau ordonné.
+    Last,
+}
+
+impl ResponseEvent {
+    /// Niveau désigné parmi `ordered` (niveaux de réponse déjà ordonnés,
+    /// `DESCENDING` appliqué). `matches` compare une valeur à la chaîne de
+    /// `EVENT='v'`. `None` si la valeur citée n'existe pas.
+    pub(crate) fn pick<'a>(
+        &self,
+        ordered: &[&'a Value],
+        matches: impl Fn(&Value, &str) -> bool,
+    ) -> Option<&'a Value> {
+        match self {
+            ResponseEvent::Value(v) => ordered.iter().copied().find(|lv| matches(lv, v)),
+            ResponseEvent::First => ordered.first().copied(),
+            ResponseEvent::Last => ordered.last().copied(),
+        }
+    }
+}
+
+/// Options de réponse lues par [`parse_response_options_checked`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ResponseOptions {
+    pub(crate) event: Option<ResponseEvent>,
+    /// `DESCENDING` / `DESC` : inverse l'ordre des niveaux de réponse.
+    pub(crate) descending: bool,
+}
+
+/// Options de réponse `(event='val' descending …)` entre la réponse et le
+/// `=` (LOGISTIC/GENMOD). Sans parenthèse ouvrante, ne consomme rien.
+///
+/// J02-P1 — fin du repli silencieux (SAS/STAT 9.4 User's Guide, MODEL
+/// statement de LOGISTIC et GENMOD, « Response Variable Options ») :
+/// `DESCENDING`/`DESC` inversent l'ordre des niveaux, `EVENT='v'|FIRST|LAST`
+/// désigne l'événement dans cet ordre. `ORDER=` et `REF=` (qui changent
+/// l'ordre ou la référence des niveaux) et tout autre jeton sont des ERROR
+/// au parsing — ils étaient avalés sans diagnostic.
+pub(crate) fn parse_response_options_checked(
+    ts: &mut StatementStream,
+    proc_name: &str,
+) -> Result<ResponseOptions> {
+    let mut opts = ResponseOptions::default();
+    if ts.peek().kind != TokenKind::LParen {
+        return Ok(opts);
+    }
+    ts.next();
+    loop {
+        match ts.peek().kind {
+            TokenKind::RParen => {
+                ts.next();
+                break;
+            }
+            TokenKind::Semi | TokenKind::Eof => {
+                return Err(SasError::parse(
+                    "expected ')' after the response variable options",
+                    ts.peek().span,
+                ));
+            }
+            _ => {}
+        }
+        let span = ts.peek().span;
+        let kw = ts.peek().ident().map(str::to_ascii_lowercase);
+        match kw.as_deref() {
+            Some("descending") | Some("desc") => {
+                opts.descending = true;
+                ts.next();
+            }
+            Some("event") => {
+                ts.next();
+                if ts.peek().kind != TokenKind::Eq {
+                    return Err(SasError::parse("expected '=' after EVENT", ts.peek().span));
+                }
+                ts.next();
+                let vspan = ts.peek().span;
+                let event = match &ts.peek().kind {
+                    TokenKind::Str { value, .. } => ResponseEvent::Value(value.clone()),
+                    _ if ts.peek().is_kw("first") => ResponseEvent::First,
+                    _ if ts.peek().is_kw("last") => ResponseEvent::Last,
+                    _ => {
+                        return Err(SasError::parse(
+                            "EVENT= expects a quoted value, FIRST or LAST.",
+                            vspan,
+                        ));
+                    }
+                };
+                ts.next();
+                opts.event = Some(event);
+            }
+            Some(k @ ("order" | "ref" | "reference")) => {
+                let name = if k == "order" { "ORDER" } else { "REF" };
+                return Err(SasError::parse(
+                    format!(
+                        "The {name}= response variable option is not supported in PROC \
+                         {proc_name}; the order or reference of the response levels would \
+                         silently differ from the request."
+                    ),
+                    span,
+                ));
+            }
+            _ => {
+                let bad = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+                return Err(SasError::parse(
+                    format!(
+                        "Unknown or unsupported response variable option '{bad}' in PROC {proc_name}."
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+    Ok(opts)
+}
+
+/// Forme historique (GLIMMIX) : `(event='val' descending …)`, renvoie
+/// `(event, descending)`. Les jetons inconnus de la parenthèse restent
+/// ignorés — GLIMMIX (hors périmètre J02-P1) n'a pas encore migré vers
+/// [`parse_response_options_checked`]. `DESC` est honoré comme
+/// `DESCENDING` (même option SAS).
 pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String>, bool) {
     let mut event: Option<String> = None;
     let mut descending = false;
@@ -60,7 +185,7 @@ pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String
                         ts.next();
                     }
                 }
-            } else if ts.peek().is_kw("descending") {
+            } else if ts.peek().is_kw("descending") || ts.peek().is_kw("desc") {
                 descending = true;
                 ts.next();
             } else {

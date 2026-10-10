@@ -165,5 +165,6 @@ fn gamma_intercept_estimate(link: LinkFunction) -> f64 {
 }
 
 mod class;
+mod contract;
 mod convergence;
 mod parse;

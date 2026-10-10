@@ -37,7 +37,10 @@ fn test_parse_descending() {
 #[test]
 fn test_parse_event() {
     let ast = parse_genmod("proc genmod; model y(event='1') = x / dist=binomial; run;").unwrap();
-    assert_eq!(ast.model.unwrap().event, Some("1".to_string()));
+    assert_eq!(
+        ast.model.unwrap().event,
+        Some(common::ResponseEvent::Value("1".to_string()))
+    );
 }
 
 #[test]

@@ -10,6 +10,11 @@ use super::*;
 /// inconnu et toute option inconnue sont des ERROR ; le statement CLASS
 /// analyse `(PARAM= REF=)` — `PARAM=REF` avec `REF=FIRST|LAST` est honoré,
 /// tout autre PARAM= est une ERROR (plus de jetons pris pour des variables).
+///
+/// J02-P1 — `CLASS … / PARAM= REF=` (options globales), options de réponse
+/// `DESC`/`EVENT=FIRST|LAST`, mots-clés OUTPUT non implémentés, OUTPUT sans
+/// OUT= et instructions LOGISTIC valides non implémentées : voir
+/// `docs/support-contract.md`, « Replis silencieux supprimés ».
 pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     let mut input: Option<DatasetRef> = None;
     let mut proc_descending = false;
@@ -56,98 +61,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
     common::parse_proc_body(ts, "LOGISTIC", |ts, kw| {
         if kw == "class" {
             ts.next(); // consume "class"
-            // `var [(options)] var [(options)] … ;` — SAS/STAT 9.4, CLASS
-            // statement. Only PARAM=REF with REF=FIRST|LAST is supported.
-            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                let name = match ts.peek().ident().map(str::to_string) {
-                    Some(n) => {
-                        ts.next();
-                        n
-                    }
-                    None => {
-                        ts.next();
-                        continue;
-                    }
-                };
-                let mut ref_first = false;
-                if ts.peek().kind == TokenKind::LParen {
-                    ts.next();
-                    loop {
-                        if ts.peek().kind == TokenKind::RParen {
-                            ts.next();
-                            break;
-                        }
-                        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                            break;
-                        }
-                        if ts.peek().is_kw("param") {
-                            ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            let span = ts.peek().span;
-                            if let Some(v) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                if !v.eq_ignore_ascii_case("ref") {
-                                    return Err(SasError::parse(
-                                        format!(
-                                            "CLASS PARAM={} is not supported in PROC LOGISTIC; \
-                                             only PARAM=REF is implemented.",
-                                            v.to_uppercase()
-                                        ),
-                                        span,
-                                    ));
-                                }
-                            } else {
-                                return Err(SasError::parse("expected a value after PARAM=", span));
-                            }
-                        } else if ts.peek().is_kw("ref") {
-                            ts.next();
-                            if ts.peek().kind == TokenKind::Eq {
-                                ts.next();
-                            }
-                            let span = ts.peek().span;
-                            if let Some(v) = ts.peek().ident().map(str::to_string) {
-                                ts.next();
-                                match v.to_ascii_lowercase().as_str() {
-                                    "first" => ref_first = true,
-                                    "last" => ref_first = false,
-                                    other => {
-                                        return Err(SasError::parse(
-                                            format!(
-                                                "CLASS REF={} is invalid; use REF=FIRST or REF=LAST.",
-                                                other.to_uppercase()
-                                            ),
-                                            span,
-                                        ));
-                                    }
-                                }
-                            } else {
-                                return Err(SasError::parse("expected a value after REF=", span));
-                            }
-                        } else {
-                            let span = ts.peek().span;
-                            let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
-                            return Err(SasError::parse(
-                                format!(
-                                    "Unknown or unsupported CLASS option '{bad}' in PROC LOGISTIC."
-                                ),
-                                span,
-                            ));
-                        }
-                    }
-                }
-                class_vars.push(ClassVar { name, ref_first });
-            }
-            ts.expect_semi()?;
+            parse_class(ts, &mut class_vars)?;
             Ok(true)
         } else if kw == "model" {
             ts.next(); // consume "model"
             // Parse response variable name
             let response = common::parse_model_response(ts, "expected response variable")?;
 
-            // Parse optional response options: (event='val' descending ...)
-            let (event, descending) = common::parse_response_options(ts);
+            // Response options: (DESCENDING|DESC EVENT='v'|FIRST|LAST) are
+            // honored; ORDER=/REF= and unknown tokens are ERRORs (J02-P1).
+            let common::ResponseOptions { event, descending } =
+                common::parse_response_options_checked(ts, "LOGISTIC")?;
 
             // Expect '='
             common::expect_model_eq(ts, "expected '=' after response variable in MODEL")?;
@@ -230,6 +154,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
             ts.expect_semi()?;
             Ok(true)
         } else if kw == "output" {
+            let out_span = ts.peek().span;
             ts.next(); // consume "output"
             let mut out: Option<DatasetRef> = None;
             let mut predicted: Option<String> = None;
@@ -243,28 +168,51 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
                     || ts.peek().is_kw("p")
                 {
                     common::consume_option_eq(ts, "PREDICTED")?;
-                    predicted = ts.peek().ident().map(str::to_string);
-                    if predicted.is_some() {
-                        ts.next();
-                    }
+                    predicted = Some(common::expect_ident(ts, "after PREDICTED=")?);
                 } else if ts.peek().is_kw("xbeta") {
                     common::consume_option_eq(ts, "XBETA")?;
-                    xbeta = ts.peek().ident().map(str::to_string);
-                    if xbeta.is_some() {
-                        ts.next();
-                    }
+                    xbeta = Some(common::expect_ident(ts, "after XBETA=")?);
                 } else {
-                    ts.next();
+                    // J02-P1 — LOWER=, UPPER=, STDXBETA=, RESCHI=, RESDEV=,
+                    // H=, PREDPROBS=, … were skipped token by token: the
+                    // OUT= dataset silently lacked the requested columns.
+                    let span = ts.peek().span;
+                    let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+                    return Err(SasError::parse(
+                        format!(
+                            "The OUTPUT option '{bad}' is not supported in PROC LOGISTIC; \
+                             it can affect results and cannot be ignored (planned: \
+                             roadmap-avancee J05-P4)."
+                        ),
+                        span,
+                    ));
                 }
             }
             ts.expect_semi()?;
-            if let Some(out_ref) = out {
-                outputs.push(LogisticOutput {
+            match out {
+                Some(out_ref) => outputs.push(LogisticOutput {
                     out: out_ref,
                     predicted,
                     xbeta,
-                });
+                }),
+                // J02-P1 — the statement used to be dropped without a dataset.
+                None => {
+                    return Err(SasError::parse(
+                        "OUTPUT without OUT= is not supported in PROC LOGISTIC; \
+                         no output data set would be created.",
+                        out_span,
+                    ));
+                }
             }
+            Ok(true)
+        } else if UNSUPPORTED_STATEMENTS.contains(&kw) {
+            // J02-P1 — valid PROC LOGISTIC statements that are not
+            // implemented: contract message instead of « 180-322 not valid ».
+            Err(common::unsupported_statement("LOGISTIC", kw))
+        } else if kw == "effectplot" {
+            // Graphics only: display customization (WARNING, CONTRIBUTING §5).
+            ts.warn_ignored_display(common::ignored_display_statement("LOGISTIC", kw));
+            ts.skip_to_semi();
             Ok(true)
         } else {
             Ok(false)
@@ -281,4 +229,153 @@ pub fn parse(ts: &mut StatementStream) -> Result<LogisticAst> {
         freq_var,
         outputs,
     })
+}
+
+/// Instructions valides de PROC LOGISTIC (SAS/STAT 9.4 User's Guide, The
+/// LOGISTIC Procedure, Syntax) non implémentées par sasrs, hors de la liste
+/// partagée de `common::unhandled_proc_statement` (BY, WEIGHT, ID, ESTIMATE,
+/// CONTRAST, LSMEANS…). Toutes peuvent changer les résultats ; EFFECTPLOT
+/// (graphique seul) est traité à part avec un WARNING.
+const UNSUPPORTED_STATEMENTS: &[&str] = &[
+    "code",
+    "effect",
+    "exact",
+    "exactoptions",
+    "lsmestimate",
+    "nloptions",
+    "oddsratio",
+    "roc",
+    "roccontrast",
+    "score",
+    "slice",
+    "store",
+    "strata",
+    "test",
+    "units",
+];
+
+/// Codage CLASS lu en forme parenthésée ou après `/`.
+#[derive(Default, Clone, Copy)]
+struct ClassCoding {
+    /// `PARAM=REF|REFERENCE` écrit explicitement.
+    param_ref: bool,
+    /// `REF=FIRST` (`Some(true)`) / `REF=LAST` (`Some(false)`).
+    ref_first: Option<bool>,
+}
+
+/// Lit une option CLASS (`PARAM=`, `REF=`) au token courant.
+fn parse_class_option(ts: &mut StatementStream, coding: &mut ClassCoding) -> Result<()> {
+    if ts.peek().is_kw("param") {
+        ts.next();
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+        }
+        let span = ts.peek().span;
+        let Some(v) = ts.peek().ident().map(str::to_string) else {
+            return Err(SasError::parse("expected a value after PARAM=", span));
+        };
+        ts.next();
+        if !(v.eq_ignore_ascii_case("ref") || v.eq_ignore_ascii_case("reference")) {
+            return Err(SasError::parse(
+                format!(
+                    "CLASS PARAM={} is not supported in PROC LOGISTIC; \
+                     only PARAM=REF is implemented (planned: roadmap-avancee J05-P2).",
+                    v.to_uppercase()
+                ),
+                span,
+            ));
+        }
+        coding.param_ref = true;
+    } else if ts.peek().is_kw("ref") {
+        ts.next();
+        if ts.peek().kind == TokenKind::Eq {
+            ts.next();
+        }
+        let span = ts.peek().span;
+        if let TokenKind::Str { value, .. } = &ts.peek().kind {
+            return Err(SasError::parse(
+                format!(
+                    "CLASS REF='{value}' is not supported in PROC LOGISTIC; use REF=FIRST \
+                     or REF=LAST (planned: roadmap-avancee J05-P2)."
+                ),
+                span,
+            ));
+        }
+        let Some(v) = ts.peek().ident().map(str::to_string) else {
+            return Err(SasError::parse("expected a value after REF=", span));
+        };
+        ts.next();
+        coding.ref_first = match v.to_ascii_lowercase().as_str() {
+            "first" => Some(true),
+            "last" => Some(false),
+            other => {
+                return Err(SasError::parse(
+                    format!(
+                        "CLASS REF={} is invalid; use REF=FIRST or REF=LAST.",
+                        other.to_uppercase()
+                    ),
+                    span,
+                ));
+            }
+        };
+    } else {
+        let span = ts.peek().span;
+        let bad = ts.peek().ident().unwrap_or("?").to_uppercase();
+        return Err(SasError::parse(
+            format!("Unknown or unsupported CLASS option '{bad}' in PROC LOGISTIC."),
+            span,
+        ));
+    }
+    Ok(())
+}
+
+/// `CLASS var [(options)] … [/ options];` — SAS/STAT 9.4, The LOGISTIC
+/// Procedure, CLASS statement : les options globales après `/` s'appliquent
+/// à toutes les variables ; une option parenthésée d'une variable prime.
+///
+/// J02-P1 — les options après `/` étaient lues comme des noms de variables
+/// (`param`, `ref`, `first`…) et le codage demandé était perdu en silence.
+fn parse_class(ts: &mut StatementStream, class_vars: &mut Vec<ClassVar>) -> Result<()> {
+    let mut parsed: Vec<(String, ClassCoding)> = Vec::new();
+    let mut global = ClassCoding::default();
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        if ts.peek().kind == TokenKind::Slash {
+            ts.next();
+            while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+                parse_class_option(ts, &mut global)?;
+            }
+            break;
+        }
+        let Some(name) = ts.peek().ident().map(str::to_string) else {
+            return Err(SasError::parse(
+                "expected a variable name in the CLASS statement",
+                ts.peek().span,
+            ));
+        };
+        ts.next();
+        let mut coding = ClassCoding::default();
+        if ts.peek().kind == TokenKind::LParen {
+            ts.next();
+            loop {
+                match ts.peek().kind {
+                    TokenKind::RParen => {
+                        ts.next();
+                        break;
+                    }
+                    TokenKind::Semi | TokenKind::Eof => break,
+                    _ => parse_class_option(ts, &mut coding)?,
+                }
+            }
+        }
+        parsed.push((name, coding));
+    }
+    ts.expect_semi()?;
+    for (name, coding) in parsed {
+        class_vars.push(ClassVar {
+            name,
+            ref_first: coding.ref_first.or(global.ref_first).unwrap_or(false),
+            param_explicit: coding.param_ref || global.param_ref,
+        });
+    }
+    Ok(())
 }
