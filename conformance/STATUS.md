@@ -148,8 +148,8 @@ Divergences connues :
 | `compat/means` | `means-order-freq-autoname` | divergence connue | documentation SAS publiée |
 
 Divergences connues :
-- `compat/means/means-class-missing-nway` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3
-- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3
+- `compat/means/means-class-missing-nway` — roadmap-avancee J01-P2 — ordre des colonnes arbitré (CLASS → _TYPE_ → _FREQ_ → statistiques, doc SAS 9.4 Example 10) ; divergence restante = valeur de l'oracle, hors périmètre J01-P2 (« valeurs inchangées ») : WORK.excl obs 1 (_TYPE_=0), m attendu 25 alors que la même ligne attend n=3 et _FREQ_=4 (observations à CLASS manquante exclues, CLASS Statement MISSING : « If you omit MISSING, then PROC MEANS excludes the observations with a missing class variable value from the analysis ») — moyenne de 10, 20, 30 = 20 ; correction de la valeur soumise à décision
+- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= : CLASS avant _TYPE_/_FREQ_ établi (doc SAS 9.4 MEANS Example 10, base/means-class-output) mais position des variables ID non établie par la documentation SAS 9.4 publiée (liste « Output Data Set » : BY, ID, CLASS, _TYPE_, _FREQ_… sans exemple publié CLASS + ID + OUT=) — attendu inchangé, décision requise ; produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats]
 
 ### PROC NPAR1WAY
 

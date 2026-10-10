@@ -13,7 +13,7 @@
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
   "status": "known-divergence",
-  "issue": "roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3",
+  "issue": "roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= : CLASS avant _TYPE_/_FREQ_ établi (doc SAS 9.4 MEANS Example 10, base/means-class-output) mais position des variables ID non établie par la documentation SAS 9.4 publiée (liste « Output Data Set » : BY, ID, CLASS, _TYPE_, _FREQ_… sans exemple publié CLASS + ID + OUT=) — attendu inchangé, décision requise ; produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats]",
   "data_types": {
     "weights.csv": {"group": "char", "value": "num", "w": "num", "price": "num"}
   }
