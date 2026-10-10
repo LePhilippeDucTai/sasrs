@@ -13,8 +13,24 @@
 //! fichiers. PROC SGPLOT (M29.2) consultera cet état ; tant qu'aucun PROC
 //! graphique n'existe, activer/désactiver ODS GRAPHICS est inerte sur la
 //! sortie (juste des NOTE).
+//!
+//! Le sous-module [`contract`] (J02-P6) regroupe les diagnostics de contrat
+//! communs aux procédures graphiques (WARNING d'affichage, ERROR de contrat,
+//! validation de `DATA=`) : compilés dans les deux builds, ils ne dépendent
+//! pas du moteur de rendu.
 
 use std::path::PathBuf;
+
+pub(crate) mod contract;
+
+/// Largeur d'image par défaut de sasrs, en pixels (valeur de
+/// `ODS GRAPHICS / RESET=WIDTH`). La doc SAS 9.4 annonce typiquement 640 ;
+/// l'alignement des défauts revient à J14-P4.
+pub const DEFAULT_WIDTH: u32 = 800;
+
+/// Hauteur d'image par défaut de sasrs, en pixels (valeur de
+/// `ODS GRAPHICS / RESET=HEIGHT`). Doc SAS 9.4 : typiquement 480 (J14-P4).
+pub const DEFAULT_HEIGHT: u32 = 600;
 
 /// Format d'image de sortie pour ODS GRAPHICS.
 ///
@@ -49,9 +65,9 @@ impl ImageFmt {
 pub struct OdsGraphics {
     /// `ODS GRAPHICS ON` → true ; `ODS GRAPHICS OFF` → false. Défaut : false.
     pub enabled: bool,
-    /// Largeur de l'image en pixels. Défaut SAS : 800.
+    /// Largeur de l'image en pixels. Défaut : [`DEFAULT_WIDTH`].
     pub width: u32,
-    /// Hauteur de l'image en pixels. Défaut SAS : 600.
+    /// Hauteur de l'image en pixels. Défaut : [`DEFAULT_HEIGHT`].
     pub height: u32,
     /// Format d'image. Défaut : PNG.
     pub image_format: ImageFmt,
@@ -67,8 +83,8 @@ impl OdsGraphics {
     pub fn new(output_dir: PathBuf) -> Self {
         OdsGraphics {
             enabled: false,
-            width: 800,
-            height: 600,
+            width: DEFAULT_WIDTH,
+            height: DEFAULT_HEIGHT,
             image_format: ImageFmt::default(),
             output_dir,
             file_stem: None,
@@ -84,3 +100,6 @@ impl Default for OdsGraphics {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;

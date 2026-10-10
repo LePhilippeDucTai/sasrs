@@ -10,6 +10,20 @@ fn parse_sgplot(src: &str) -> Result<SgplotAst> {
     parse(&mut ts)
 }
 
+/// WORK.A with the numeric variables AGE and H. J02-P6: the step opens DATA=
+/// and checks its variables in both builds.
+fn write_a(session: &mut Session) {
+    use crate::dataset::SasDataset;
+    use polars::df;
+    let df = df![
+        "age" => [10.0_f64, 12.0, 14.0],
+        "h" => [140.0_f64, 150.0, 158.0]
+    ]
+    .unwrap();
+    let vars = vec![num_meta("age"), num_meta("h")];
+    write_dataset(session, "A", SasDataset { df, vars });
+}
+
 #[allow(dead_code)]
 // ── Parse tests ──────────────────────────────────────────────────────
 #[test]
@@ -180,8 +194,14 @@ fn parse_vbox() {
 
 #[test]
 fn parse_by() {
-    let ast = parse_sgplot("proc sgplot data=a; by sex; scatter x=age y=h; run;").unwrap();
-    assert_eq!(ast.by_var.as_deref(), Some("sex"));
+    // J02-P6 — BY is rejected at parse time until J13-P4 (one image per BY
+    // group); it used to be stored then deferred with a NOTE.
+    let err = parse_sgplot("proc sgplot data=a; by sex; scatter x=age y=h; run;").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("The BY statement is not supported in PROC SGPLOT"),
+        "{err}"
+    );
 }
 
 // ── Execute tests (default build) ────────────────────────────────────
@@ -189,6 +209,7 @@ fn parse_by() {
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
     let mut session = make_session_in_temp();
+    write_a(&mut session);
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -200,6 +221,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 fn execute_with_ods_on_no_feature_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_sgplot("proc sgplot data=a; scatter x=age y=h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -211,6 +233,7 @@ fn execute_with_ods_on_no_feature_defers() {
 fn execute_loess_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_sgplot("proc sgplot data=a; loess x=age y=h / smooth=0.5; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -222,6 +245,7 @@ fn execute_loess_defers() {
 fn execute_density_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_sgplot("proc sgplot data=a; density h; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -230,12 +254,33 @@ fn execute_density_defers() {
 
 #[test]
 fn execute_by_defers() {
-    let mut session = make_session_in_temp();
-    session.ods_graphics.enabled = true;
-    let ast = parse_sgplot("proc sgplot data=a; by sex; scatter x=age y=h; run;").unwrap();
-    execute(&ast, &mut session).unwrap();
-    let log = session.log.into_string();
-    assert!(log.contains("BY-group processing deferred"), "log: {log}");
+    // J02-P6 — BY used to be deferred with a NOTE (no image, exit code 0). It
+    // is now the contract ERROR, aligned on GPLOT/GCHART/PLOT, until J13-P4:
+    // the step is rejected before execution.
+    let tmp = tempfile::tempdir().unwrap();
+    let out = crate::run(
+        "data a; age=10; h=140; sex='M'; run; ods graphics on;
+         proc sgplot data=a; by sex; scatter x=age y=h; run;",
+        crate::RunOptions {
+            deterministic: true,
+            base_dir: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.exit_code, 2, "{}", out.log);
+    assert!(
+        out.log.contains(
+            "ERROR: The BY statement is not supported in PROC SGPLOT; it can affect results \
+             and cannot be ignored (planned: roadmap-avancee J13-P4)."
+        ),
+        "{}",
+        out.log
+    );
+    assert!(
+        !out.log.contains("BY-group processing deferred"),
+        "{}",
+        out.log
+    );
 }
 
 // ── Execute tests (feature graphics) ─────────────────────────────────

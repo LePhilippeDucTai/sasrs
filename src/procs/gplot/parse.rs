@@ -1,12 +1,53 @@
 use super::*;
 
+// ───────────────────────── Contract (J02-P6) ─────────────────────────
+//
+// SAS/GRAPH 9.4 Reference, The GPLOT Procedure, and the SYMBOL / AXIS / LEGEND
+// global statements. The options after the `/` of PLOT were skipped up to the
+// `;`, the SYMBOL and AXIS sub-options that the engine does not draw were
+// dropped, the PROC options skipped token by token (audit d0b4d90).
+// CONTRIBUTING §5: a display option that is not rendered is a WARNING; an
+// option that creates an output (catalog, image-map data set), BY and the
+// plot statements that are not implemented are ERRORs (step rejected).
+
+/// PROC GPLOT statement options limited to the drawn image.
+const DISPLAY_PROC_OPTIONS: &[&str] = &["annotate", "anno", "uniform"];
+
+/// PROC GPLOT statement options that create an output: GOUT= (graphics
+/// catalog) and IMAGEMAP= (data set).
+const OUTPUT_PROC_OPTIONS: &[&str] = &["gout", "imagemap"];
+
+/// Valid PROC GPLOT plot statements that are not implemented.
+const UNSUPPORTED_STATEMENTS: &[&str] = &["bubble", "bubble2"];
+
+/// SYMBOL colors the engine draws (mirror of `graphics_impl::color_from_name`);
+/// any other COLOR= falls back to the default palette.
+const ENGINE_COLORS: &[&str] = &["black", "blue", "green", "orange", "red"];
+
+/// True for `prefix` or `prefixN` (`legend`, `legend2`, `pattern12`…).
+fn is_numbered(kw: &str, prefix: &str) -> bool {
+    kw.strip_prefix(prefix)
+        .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// SAS/GRAPH global statements valid in the step that only decorate the
+/// graph (LEGENDn, PATTERNn, GOPTIONS, NOTE): display WARNING. They used to
+/// be rejected as « 180-322 … not valid ».
+fn is_display_statement(kw: &str) -> bool {
+    kw == "goptions" || kw == "note" || is_numbered(kw, "legend") || is_numbered(kw, "pattern")
+}
+
 // ───────────────────────── Parser ─────────────────────────
 
 /// Parse un statement PLOT : `y*x`, `y*x=group`, ou `(y1 y2)*x`.
 ///
-/// Le mot-clé `plot` a déjà été consommé. Consomme jusqu'au `;` exclu (mais
-/// pas le `;`). Les options après un éventuel `/` sont ignorées en v1.
-pub(super) fn parse_plot_stmt(ts: &mut StatementStream) -> Result<GplotStmt> {
+/// Le mot-clé `plot` a déjà été consommé (`stmt` : PLOT ou PLOT2, pour les
+/// diagnostics). Consomme jusqu'au `;` exclu. J02-P6 : les options après `/`
+/// (OVERLAY, HAXIS=, VAXIS=, LEGEND=, HREF=, VREF=…) étaient sautées jusqu'au
+/// `;` ; aucune n'est rendue : un WARNING par option. Une deuxième requête de
+/// tracé dans le même statement (`plot y1*x y2*x;`) était rejetée comme
+/// instruction « 180-322 » : ERROR du contrat.
+pub(super) fn parse_plot_stmt(ts: &mut StatementStream, stmt: &str) -> Result<GplotStmt> {
     // Membre gauche : un identifiant, ou une liste parenthésée `(y1 y2 ...)`.
     let mut y_vars: Vec<String> = Vec::new();
     if ts.peek().kind == TokenKind::LParen {
@@ -54,17 +95,39 @@ pub(super) fn parse_plot_stmt(ts: &mut StatementStream) -> Result<GplotStmt> {
         group_var = Some(expect_ident(ts, "for GROUP variable in PLOT (y*x=group)")?);
     }
 
-    // Options après `/` : ignorées en v1, on saute jusqu'au `;`.
+    // Une deuxième requête de tracé avant `/` ou `;`.
+    if matches!(ts.peek().kind, TokenKind::Ident(_) | TokenKind::LParen) {
+        return Err(SasError::parse(
+            format!(
+                "A {stmt} statement with more than one plot request is not supported in PROC \
+                 GPLOT; it can affect results and cannot be ignored{}.",
+                contract::planned("J14-P3")
+            ),
+            ts.peek().span,
+        ));
+    }
+
+    // Options après `/` : aucune n'est rendue (WARNING par option). Le moteur
+    // applique le premier AXIS du step à l'axe horizontal et le deuxième à
+    // l'axe vertical, quels que soient HAXIS=/VAXIS= : le WARNING le dit.
     if ts.peek().kind == TokenKind::Slash {
-        ts.skip_to_semi();
-        // skip_to_semi a consommé le `;` : on renvoie tel quel et l'appelant
-        // n'attend PAS de `;` supplémentaire. Pour rester homogène avec le
-        // chemin sans `/`, on signale le `;` déjà consommé via un drapeau.
-        return Ok(GplotStmt::Plot {
-            y_vars,
-            x_var,
-            group_var,
-        });
+        ts.next(); // /
+        while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+            let Some(name) = ts.peek().ident().map(|s| s.to_ascii_uppercase()) else {
+                return Err(contract::expected_option(ts, "GPLOT", stmt));
+            };
+            if (name == "HAXIS" || name == "VAXIS") && ts.peek2().kind == TokenKind::Eq {
+                ts.warn_ignored_display(format!(
+                    "The {name}= option of the {stmt} statement is ignored in PROC GPLOT: the \
+                     first AXIS statement of the step is applied to the horizontal axis and the \
+                     second to the vertical axis."
+                ));
+                ts.next();
+                contract::skip_option_args(ts);
+            } else {
+                contract::warn_option(ts, "GPLOT", Some(stmt));
+            }
+        }
     }
 
     Ok(GplotStmt::Plot {
@@ -78,52 +141,58 @@ pub(super) fn parse_plot_stmt(ts: &mut StatementStream) -> Result<GplotStmt> {
 pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
     let mut data_ref: Option<DatasetRef> = None;
 
-    // Options du statement PROC GPLOT, jusqu'au `;`.
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            ts.next();
-            if ts.peek().kind == TokenKind::Eq {
-                ts.next();
-            }
-            data_ref = Some(ts.parse_dataset_ref()?);
+    // Options du statement PROC GPLOT, jusqu'au `;` (J02-P6 : plus de saut
+    // silencieux ; option inconnue → « Unexpected option »).
+    common::parse_proc_options(ts, "GPLOT", |ts, kw| {
+        if kw == "data" {
+            data_ref = Some(common::parse_dataset_opt(ts, "DATA")?);
+        } else if DISPLAY_PROC_OPTIONS.contains(&kw) {
+            contract::warn_option(ts, "GPLOT", None);
+        } else if OUTPUT_PROC_OPTIONS.contains(&kw) {
+            return Err(contract::unsupported_option(
+                "GPLOT",
+                &contract::option_label(ts),
+                ts.peek().span,
+            ));
         } else {
-            ts.next(); // ignorer les options PROC inconnues
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     let mut plots: Vec<GplotStmt> = Vec::new();
     let mut symbols: Vec<SymbolDef> = Vec::new();
     let mut axes: Vec<AxisDef> = Vec::new();
 
-    crate::procs::common::parse_proc_body(ts, "GPLOT", |ts, _kw| {
-        if ts.peek().is_kw("plot") || ts.peek().is_kw("plot2") {
+    common::parse_proc_body(ts, "GPLOT", |ts, kw| {
+        if kw == "plot" || kw == "plot2" {
+            let stmt = kw.to_ascii_uppercase();
             ts.next();
-            // parse_plot_stmt peut avoir consommé le `;` (chemin avec `/`).
-            // On note la position pour savoir s'il reste un `;`.
-            let stmt = parse_plot_stmt(ts)?;
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-            plots.push(stmt);
-        } else if ts.peek().is_kw("symbol") || starts_with_kw(ts, "symbol") {
+            plots.push(parse_plot_stmt(ts, &stmt)?);
+            ts.expect_semi()?;
+        } else if is_numbered(kw, "symbol") {
+            let stmt = kw.to_ascii_uppercase();
             ts.next();
-            symbols.push(parse_symbol_stmt(ts));
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
-        } else if ts.peek().is_kw("axis") || starts_with_kw(ts, "axis") {
+            symbols.push(parse_symbol_stmt(ts, &stmt)?);
+            ts.expect_semi()?;
+        } else if is_numbered(kw, "axis") {
+            let stmt = kw.to_ascii_uppercase();
             ts.next();
-            axes.push(parse_axis_stmt(ts));
-            if ts.peek().kind == TokenKind::Semi {
-                ts.next();
-            }
+            axes.push(parse_axis_stmt(ts, &stmt)?);
+            ts.expect_semi()?;
+        } else if kw == "by" {
+            // Same contract ERROR as SGPLOT/GCHART/PLOT until J13-P4.
+            return Err(contract::by_not_supported("GPLOT", ts.peek().span));
+        } else if UNSUPPORTED_STATEMENTS.contains(&kw) {
+            return Err(contract::unsupported_statement(
+                "GPLOT",
+                kw,
+                None,
+                ts.peek().span,
+            ));
+        } else if is_display_statement(kw) {
+            ts.warn_ignored_display(common::ignored_display_statement("GPLOT", kw));
+            ts.skip_to_semi();
         } else {
             return Ok(false);
         }
@@ -138,117 +207,166 @@ pub fn parse(ts: &mut StatementStream) -> Result<GplotAst> {
     })
 }
 
-/// Parse un SYMBOLn : suite d'options `name=value` jusqu'au `;` (non consommé).
-pub(super) fn parse_symbol_stmt(ts: &mut StatementStream) -> SymbolDef {
+/// Parse un SYMBOLn (`stmt` : SYMBOL1…) : suite d'options `name=value`
+/// jusqu'au `;` (non consommé).
+///
+/// Le moteur dessine INTERPOL=JOIN (ligne) ou NONE (marqueurs), la présence
+/// d'un VALUE= et cinq couleurs (BLACK, BLUE, GREEN, ORANGE, RED). J02-P6 :
+/// une autre interpolation (SPLINE, RL, SM…), un symbole VALUE= (toujours
+/// dessiné avec le marqueur par défaut), une autre couleur (remplacée par la
+/// palette) et les autres options (HEIGHT=, WIDTH=, LINE=, REPEAT=, FONT=…)
+/// étaient abandonnés en silence : WARNING.
+pub(super) fn parse_symbol_stmt(ts: &mut StatementStream, stmt: &str) -> Result<SymbolDef> {
     let mut def = SymbolDef::default();
-    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
-            Some(n) => n,
-            None => {
-                ts.next();
-                continue;
-            }
+    while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+        let Some(name) = ts.peek().ident().map(str::to_string) else {
+            return Err(contract::expected_option(ts, "GPLOT", stmt));
         };
-        ts.next();
         // `i`/`v`/`c` sont les abréviations SAS de interpol/value/color.
-        let canon = match name.as_str() {
-            "i" => "interpol",
-            "v" => "value",
-            "c" => "color",
-            other => other,
+        let canon = match name.to_ascii_lowercase().as_str() {
+            "i" | "interpol" => "interpol",
+            "v" | "value" => "value",
+            "c" | "color" => "color",
+            _ => "",
         };
-        if ts.peek().kind == TokenKind::Eq {
-            ts.next();
-            let val = read_value(ts);
-            match canon {
-                "interpol" => def.interpol = val,
-                "value" => def.value = val,
-                "color" => def.color = val,
-                _ => {}
+        let value = match &ts.peek_nth(2).kind {
+            TokenKind::Ident(s) | TokenKind::Str { value: s, .. }
+                if !canon.is_empty() && ts.peek2().kind == TokenKind::Eq =>
+            {
+                Some(s.clone())
+            }
+            _ => None,
+        };
+        let Some(value) = value else {
+            contract::warn_option(ts, "GPLOT", Some(stmt));
+            continue;
+        };
+        let label = format!(
+            "{}={}",
+            name.to_ascii_uppercase(),
+            value.to_ascii_uppercase()
+        );
+        ts.next(); // name
+        ts.next(); // =
+        ts.next(); // value
+        match canon {
+            "interpol" => {
+                if !(value.eq_ignore_ascii_case("join") || value.eq_ignore_ascii_case("none")) {
+                    ts.warn_ignored_display(contract::ignored_option("GPLOT", Some(stmt), &label));
+                }
+                def.interpol = Some(value);
+            }
+            "value" => {
+                ts.warn_ignored_display(format!(
+                    "The {label} option of the {stmt} statement is not honored in PROC GPLOT: \
+                     markers use the default symbol."
+                ));
+                def.value = Some(value);
+            }
+            _ => {
+                if !ENGINE_COLORS.contains(&value.to_ascii_lowercase().as_str()) {
+                    ts.warn_ignored_display(contract::ignored_option("GPLOT", Some(stmt), &label));
+                }
+                def.color = Some(value);
             }
         }
     }
-    def
+    Ok(def)
 }
 
-/// Parse un AXISn : `order=(min to max [by step])`, `label=('..')`. Le reste est
-/// ignoré (sauté proprement, y compris les blocs parenthésés).
-pub(super) fn parse_axis_stmt(ts: &mut StatementStream) -> AxisDef {
+/// Parse un AXISn (`stmt` : AXIS1…) : `order=(min to max [by step])`,
+/// `label=('..')` ; consomme jusqu'au `;` exclu.
+///
+/// J02-P6 : ORDER= n'est rendu que par ses deux premiers nombres, pris comme
+/// bornes de l'axe (graduations et valeurs suivantes perdues, signe d'un
+/// nombre négatif perdu) ; LABEL= ne garde que son premier texte (attributs
+/// ANGLE=, HEIGHT=, FONT=… et lignes suivantes perdus ; LABEL=NONE dessinait
+/// le texte « none ») ; les autres options (MAJOR=, MINOR=, VALUE=, STYLE=…)
+/// étaient sautées : WARNING.
+pub(super) fn parse_axis_stmt(ts: &mut StatementStream, stmt: &str) -> Result<AxisDef> {
     let mut def = AxisDef::default();
-    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-        let name = match ts.peek().ident().map(|s| s.to_ascii_lowercase()) {
-            Some(n) => n,
-            None => {
-                ts.next();
-                continue;
-            }
+    while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+        let Some(name) = ts.peek().ident().map(|s| s.to_ascii_lowercase()) else {
+            return Err(contract::expected_option(ts, "GPLOT", stmt));
         };
-        ts.next();
+        let has_eq = ts.peek2().kind == TokenKind::Eq;
+        let value_kind = ts.peek_nth(2).kind.clone();
         match name.as_str() {
-            "order" => {
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
+            "order" if has_eq && value_kind == TokenKind::LParen => {
+                ts.next(); // order
+                ts.next(); // =
+                let nums = contract::value_list_numbers(ts);
+                if let Some(&mn) = nums.first() {
+                    def.order_min = Some(mn);
                 }
-                if ts.peek().kind == TokenKind::LParen {
-                    ts.next();
-                    let mut nums: Vec<f64> = Vec::new();
-                    while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Eof {
-                        if let TokenKind::Num(f) = ts.peek().kind {
-                            nums.push(f);
-                        }
-                        ts.next();
-                    }
-                    if ts.peek().kind == TokenKind::RParen {
-                        ts.next();
-                    }
-                    // `order=(min to max [by step])` : 1er nombre = min, 2e = max
-                    // (le 3e éventuel est le pas, ignoré).
-                    if let Some(&mn) = nums.first() {
-                        def.order_min = Some(mn);
-                    }
-                    if nums.len() >= 2 {
-                        def.order_max = Some(nums[1]);
-                    }
+                if nums.len() >= 2 {
+                    // `order=(min to max [by step])` : 1er nombre = min, 2e = max.
+                    def.order_max = Some(nums[1]);
                 }
+                ts.warn_ignored_display(contract::partial_value_list(
+                    "GPLOT", stmt, "ORDER=", &nums,
+                ));
             }
-            "label" => {
-                if ts.peek().kind == TokenKind::Eq {
-                    ts.next();
-                }
-                if ts.peek().kind == TokenKind::LParen {
-                    // label=('text') : prendre la première chaîne.
-                    ts.next();
-                    let mut lab: Option<String> = None;
-                    while ts.peek().kind != TokenKind::RParen && ts.peek().kind != TokenKind::Eof {
-                        if lab.is_none()
-                            && let TokenKind::Str { value, .. } = &ts.peek().kind
-                        {
-                            lab = Some(value.clone());
+            "label" if has_eq && value_kind == TokenKind::LParen => {
+                ts.next(); // label
+                ts.next(); // =
+                // label=('text' …) : prendre le premier texte ; tout autre
+                // élément (attribut, texte suivant) est perdu.
+                ts.next(); // (
+                let mut lab: Option<String> = None;
+                let mut dropped = false;
+                let mut depth = 1usize;
+                loop {
+                    match ts.peek().kind.clone() {
+                        TokenKind::Semi | TokenKind::Eof => break,
+                        TokenKind::RParen => {
+                            depth -= 1;
+                            ts.next();
+                            if depth == 0 {
+                                break;
+                            }
                         }
-                        ts.next();
+                        TokenKind::Str { value, .. } if lab.is_none() && depth == 1 => {
+                            lab = Some(value);
+                            ts.next();
+                        }
+                        kind => {
+                            if kind == TokenKind::LParen {
+                                depth += 1;
+                            }
+                            dropped = true;
+                            ts.next();
+                        }
                     }
-                    if ts.peek().kind == TokenKind::RParen {
-                        ts.next();
-                    }
-                    def.label = lab;
-                } else {
-                    def.label = read_value(ts);
                 }
+                if dropped {
+                    ts.warn_ignored_display(format!(
+                        "The LABEL= attributes of the {stmt} statement are ignored in PROC \
+                         GPLOT; only the first label text is drawn."
+                    ));
+                }
+                def.label = lab;
             }
-            _ => common::skip_option_value(ts),
+            "label"
+                if has_eq && matches!(value_kind, TokenKind::Ident(_) | TokenKind::Str { .. }) =>
+            {
+                ts.next(); // label
+                ts.next(); // =
+                let text = read_value(ts);
+                if text
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("none"))
+                    && matches!(value_kind, TokenKind::Ident(_))
+                {
+                    ts.warn_ignored_display(format!(
+                        "The LABEL=NONE option of the {stmt} statement is not honored in PROC \
+                         GPLOT: the text NONE is drawn as the axis label."
+                    ));
+                }
+                def.label = text;
+            }
+            _ => contract::warn_option(ts, "GPLOT", Some(stmt)),
         }
     }
-    def
-}
-
-/// Vrai si le token courant est un identifiant dont le préfixe (sans suffixe
-/// numérique éventuel) correspond à `kw` — pour `symbol1`, `axis2`, etc.
-pub(super) fn starts_with_kw(ts: &StatementStream, kw: &str) -> bool {
-    ts.peek()
-        .ident()
-        .map(|s| {
-            let lower = s.to_ascii_lowercase();
-            lower.starts_with(kw) && lower[kw.len()..].chars().all(|c| c.is_ascii_digit())
-        })
-        .unwrap_or(false)
+    Ok(def)
 }

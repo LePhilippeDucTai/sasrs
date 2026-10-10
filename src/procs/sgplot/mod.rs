@@ -11,9 +11,16 @@
 //! - `enabled == true` + `--features graphics` → l'image est matérialisée et la
 //!   NOTE « Output '...' (WxH) written. » est émise.
 //!
-//! Les fonctions complexes (LOESS, DENSITY) et le traitement BY-group sont
-//! PARSÉS sans erreur mais DIFFÉRÉS à l'exécution (NOTE seulement), de sorte que
-//! la grammaire reste tolérante sans bloquer le programme.
+//! LOESS et DENSITY sont PARSÉS sans erreur ; le build par défaut les DIFFÈRE
+//! (NOTE), le build graphics les rend.
+//!
+//! # Contrat de support (J02-P6)
+//!
+//! Aucune demande n'est plus ignorée en silence : une option que le moteur ne
+//! rend pas donne un WARNING d'affichage (parsing), un tracé que le moteur
+//! n'assemble pas un WARNING de la couche execute, BY et les instructions de
+//! tracé non implémentées une ERROR ; `DATA=` et les variables sont validés
+//! dans les deux builds (`crate::ods_graphics::contract`).
 //!
 //! # Invariant build par défaut
 //!
@@ -24,6 +31,7 @@
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
+use crate::ods_graphics::contract;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::expect_eq;
@@ -48,16 +56,15 @@ use parse_util::*;
 pub struct SgplotAst {
     /// `DATA=` ; `None` → `_LAST_`.
     pub data_ref: Option<DatasetRef>,
-    /// Statements de tracé (SCATTER, SERIES, …). v1 n'en honore que le premier.
+    /// Statements de tracé (SCATTER, SERIES, …) dans l'ordre du source ; le
+    /// moteur en compose une image (tracé principal + superpositions).
     pub plot_stmts: Vec<SgplotStmt>,
-    /// Options XAXIS (parsées ; appliquées partiellement en v1).
+    /// Options XAXIS (LABEL= et les bornes de VALUES= sont rendus).
     #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
     pub xaxis: Option<AxisOpts>,
     /// Options YAXIS.
     #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
     pub yaxis: Option<AxisOpts>,
-    /// `BY var` — traitement par groupe (différé en v1).
-    pub by_var: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,7 +164,7 @@ pub enum AxisType {
     Discrete,
 }
 
-/// MARKERATTRS=(SYMBOL= COLOR= SIZE=) — parsé puis ignoré en v1.
+/// MARKERATTRS=(SYMBOL= COLOR= SIZE=) — parsé, non rendu (WARNING, J02-P6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerAttrs {
     #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
@@ -177,3 +184,6 @@ pub(crate) mod graphics_impl;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;
