@@ -14,8 +14,16 @@
 //!
 //! v1 ne rend que le PREMIER statement PLOT (NOTE pour les suivants). Les
 //! statements SYMBOLn et AXISn présents dans le bloc PROC sont honorés sous
-//! `--features graphics` (INTERPOL=JOIN, VALUE=, COLOR=, ORDER=, LABEL=) ;
-//! leurs sous-options non implémentées restent l'objet d'une NOTE de différé.
+//! `--features graphics` (INTERPOL=JOIN, présence de VALUE=, cinq couleurs
+//! COLOR=, bornes de ORDER=, premier texte de LABEL=).
+//!
+//! # Contrat de support (J02-P6)
+//!
+//! Les options après `/`, les sous-options SYMBOL/AXIS non dessinées et les
+//! options d'affichage du statement PROC donnent un WARNING (elles étaient
+//! sautées en silence) ; BY, GOUT=, IMAGEMAP= et les tracés non implémentés
+//! une ERROR ; `DATA=` et les variables sont validés dans les deux builds ;
+//! l'ordre texte des niveaux numériques de `=z` est signalé (WARNING).
 //!
 //! # Invariant build par défaut
 //!
@@ -25,12 +33,16 @@
 //! l'invariant « 0 warning » du build par défaut.
 
 use crate::ast::DatasetRef;
+use crate::dataset::SasDataset;
 use crate::error::{Result, SasError};
+use crate::missing::value_to_num;
+use crate::ods_graphics::contract;
 use crate::parser::StatementStream;
 use crate::procs::common;
 use crate::procs::common::{expect_ident, read_value};
 use crate::session::Session;
 use crate::token::TokenKind;
+use crate::value::VarType;
 
 mod parse;
 
@@ -64,7 +76,8 @@ pub enum GplotStmt {
 }
 
 /// Définition d'un SYMBOLn : `interpol=` (JOIN→ligne), `value=` (marqueur),
-/// `color=`. Attributs non interprétés (HEIGHT, WIDTH, LINE, REPEAT…) ignorés.
+/// `color=`. Les attributs non dessinés (HEIGHT, WIDTH, LINE, REPEAT…) donnent
+/// un WARNING au parsing (J02-P6).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SymbolDef {
     #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
@@ -75,7 +88,8 @@ pub struct SymbolDef {
     pub color: Option<String>,
 }
 
-/// Définition d'un AXISn : `order=(min to max)` et `label=`. Le reste est ignoré.
+/// Définition d'un AXISn : `order=(min to max)` et `label=`. Le reste donne un
+/// WARNING au parsing (J02-P6).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AxisDef {
     #[cfg_attr(not(feature = "graphics"), allow(dead_code))]
@@ -88,7 +102,99 @@ pub struct AxisDef {
 
 // ───────────────────────── Execute ─────────────────────────
 
+/// Variables named by the PLOT statements, for the `DATA=` check.
+fn referenced_vars(ast: &GplotAst) -> Vec<&str> {
+    let mut vars: Vec<&str> = Vec::new();
+    for GplotStmt::Plot {
+        y_vars,
+        x_var,
+        group_var,
+    } in &ast.plots
+    {
+        vars.extend(y_vars.iter().map(String::as_str));
+        vars.push(x_var);
+        vars.extend(group_var.as_deref());
+    }
+    vars
+}
+
+/// Finite values of a numeric column (`None` for a missing value); `None`
+/// when the variable is absent or character.
+fn numeric_values(ds: &SasDataset, name: &str) -> Result<Option<Vec<Option<f64>>>> {
+    let Some(idx) = ds
+        .vars
+        .iter()
+        .position(|m| m.name.eq_ignore_ascii_case(name))
+    else {
+        return Ok(None);
+    };
+    if ds.vars[idx].ty != VarType::Num {
+        return Ok(None);
+    }
+    let col = common::decode_column(ds, idx)?;
+    Ok(Some(
+        col.iter()
+            .map(|v| value_to_num(v).filter(|f| f.is_finite()))
+            .collect(),
+    ))
+}
+
+/// J02-P6 — `plot y*x=z` : the engine orders the series of the `z` levels by
+/// their TEXT (`format!("{n}")` keys of a `BTreeMap` in
+/// `graphics_impl::build_series`), so a numeric `z` with the levels 2 and 10
+/// draws 10 first and gives it SYMBOL1. SAS orders the levels by value. The
+/// fix belongs to the rendering code (`cfg(feature = "graphics")`, J13-P2);
+/// until then this layer, common to both builds, warns when the two orders
+/// differ (levels of the observations the engine plots: x and y present).
+fn warn_text_ordered_levels(
+    ds: &SasDataset,
+    stmt: &GplotStmt,
+    session: &mut Session,
+) -> Result<()> {
+    let GplotStmt::Plot {
+        y_vars,
+        x_var,
+        group_var,
+    } = stmt;
+    let (Some(group), Some(y)) = (group_var, y_vars.first()) else {
+        return Ok(());
+    };
+    let (Some(zs), Some(xs), Some(ys)) = (
+        numeric_values(ds, group)?,
+        numeric_values(ds, x_var)?,
+        numeric_values(ds, y)?,
+    ) else {
+        return Ok(());
+    };
+    let mut levels: Vec<f64> = Vec::new();
+    for ((z, x), y) in zs.iter().zip(&xs).zip(&ys) {
+        if let (Some(z), Some(_), Some(_)) = (z, x, y)
+            && !levels.contains(z)
+        {
+            levels.push(*z);
+        }
+    }
+    levels.sort_by(|a, b| format!("{a}").cmp(&format!("{b}")));
+    if let Some(pair) = levels.windows(2).find(|w| w[0] > w[1]) {
+        session.log.warning(&format!(
+            "The levels of the numeric group variable {} are ordered as text, not by value, in \
+             PROC GPLOT ({} is drawn before {}); SYMBOL definitions and colors follow that \
+             order{}.",
+            group.to_ascii_uppercase(),
+            pair[0],
+            pair[1],
+            contract::planned("J13-P2")
+        ));
+    }
+    Ok(())
+}
+
 pub fn execute(ast: &GplotAst, session: &mut Session) -> Result<()> {
+    // 0) J02-P6 — DATA= et variables validées dans les deux builds : le build
+    //    par défaut n'ouvrait jamais la table (« image deferred », code 0,
+    //    même pour une table ou une variable absente).
+    let ds = contract::open_checked(&ast.data_ref, session, &referenced_vars(ast))?;
+
     // 1) ODS GRAPHICS non activé → NOTE de non-activation, EXIT 0.
     if !session.ods_graphics.enabled {
         session.log.note(
@@ -116,7 +222,10 @@ pub fn execute(ast: &GplotAst, session: &mut Session) -> Result<()> {
         ));
     }
 
-    // 4) Génération de l'image.
+    // 4) J02-P6 — ordre des niveaux numériques de `=z` (rendu : texte).
+    warn_text_ordered_levels(&ds, first, session)?;
+
+    // 5) Génération de l'image.
     #[cfg(not(feature = "graphics"))]
     {
         let _ = first;
@@ -375,3 +484,6 @@ pub(crate) mod graphics_impl {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;

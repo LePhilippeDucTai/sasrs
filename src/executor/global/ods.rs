@@ -9,7 +9,9 @@ use super::*;
 /// CE statement a porté : les dimensions ne sont affichées que si WIDTH=/HEIGHT=
 /// ont été fournis dans ce statement précis (même si la session conserve des
 /// valeurs antérieures). C'est pourquoi on construit la NOTE AVANT/à partir du
-/// statement, pas en relisant `session.ods_graphics`.
+/// statement, pas en relisant `session.ods_graphics`. `RESET` arrive déjà
+/// traduit par le parseur en valeurs par défaut de WIDTH=/HEIGHT=/OUTPUTFMT=
+/// (J02-P6).
 pub(crate) fn exec_ods_graphics(session: &mut Session, stmt: &crate::ast::OdsGraphicsStmt) {
     use crate::ast::OdsGraphicsToggle;
 
@@ -61,7 +63,9 @@ pub(crate) fn exec_ods_graphics(session: &mut Session, stmt: &crate::ast::OdsGra
 /// réinstalle le listing texte par défaut ; `ODS HTML` ouvre la destination
 /// HTML (M22.4 : avec fichier si FILE= est fourni) ; RTF/PDF/EXCEL sont des
 /// stubs (note « différé M23 »). `CLOSE` ferme la destination nommée (M22.4 :
-/// déclenche l'écriture du fichier HTML si applicable).
+/// déclenche l'écriture du fichier HTML si applicable). `STYLE=` n'est
+/// appliqué par aucune destination : le parseur émet le WARNING d'affichage
+/// (J02-P6, levé par J14-P4).
 pub(crate) fn exec_ods(
     session: &mut Session,
     destination: &str,

@@ -10,6 +10,15 @@ fn parse_gplot(src: &str) -> Result<GplotAst> {
     parse(&mut ts)
 }
 
+/// WORK.A with the numeric variables X and Y. J02-P6: the step opens DATA=
+/// and checks its variables in both builds.
+fn write_a(session: &mut Session) {
+    use polars::df;
+    let df = df!["x" => [1.0_f64, 2.0], "y" => [2.0_f64, 4.0]].unwrap();
+    let vars = vec![num_meta("x"), num_meta("y")];
+    write_dataset(session, "A", crate::dataset::SasDataset { df, vars });
+}
+
 #[allow(dead_code)]
 // ── Parse tests ──────────────────────────────────────────────────────
 #[test]
@@ -58,7 +67,8 @@ fn parse_plot_multiple_y() {
 
 #[test]
 fn parse_symbol_axis_ignored() {
-    // SYMBOL/AXIS dans le bloc sont parsés sans erreur et ignorés.
+    // SYMBOL/AXIS dans le bloc sont parsés sans erreur (J02-P6 : VALUE=DOT,
+    // non rendu, est signalé par un WARNING d'affichage).
     let ast = parse_gplot(
         "proc gplot data=a; symbol1 color=blue value=dot; axis1 label=('T'); plot y*x; run;",
     )
@@ -71,6 +81,7 @@ fn parse_symbol_axis_ignored() {
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
     let mut session = make_session_in_temp();
+    write_a(&mut session);
     let ast = parse_gplot("proc gplot data=a; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -85,6 +96,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 fn execute_with_ods_on_no_feature_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_gplot("proc gplot data=a; plot y*x; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();

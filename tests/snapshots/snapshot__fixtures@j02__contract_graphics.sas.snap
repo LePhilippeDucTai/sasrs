@@ -1,0 +1,132 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j02/contract_graphics.sas
+---
+==== LOG ====
+
+1     data xy;
+2       input x y z g $;
+3       datalines;
+4     1 2 2 a
+5     2 4 10 b
+6     3 3 2 a
+7     ;
+8     run;
+NOTE: The data set WORK.XY has 3 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+9     proc sgplot data=xy noautolegend;
+10      scatter x=x y=y / group=g markerattrs=(symbol=circle);
+11      vbar g / response=y stat=sum;
+12      xaxis label='X' values=(0 to 10 by 2) grid;
+13    run;
+WARNING: The NOAUTOLEGEND option is ignored in PROC SGPLOT; display customization is not supported.
+WARNING: The GROUP= option of the SCATTER statement is ignored in PROC SGPLOT; display customization is not supported.
+WARNING: The MARKERATTRS= option of the SCATTER statement is ignored in PROC SGPLOT; display customization is not supported.
+WARNING: The RESPONSE= option of the VBAR statement is ignored in PROC SGPLOT; display customization is not supported.
+WARNING: The STAT=SUM option of the VBAR statement is ignored in PROC SGPLOT; display customization is not supported.
+WARNING: The VALUES= option of the XAXIS statement is only partly honored in PROC SGPLOT: its first two numbers (0 and 10) set the axis range; the other values and the tick marks are ignored.
+WARNING: The GRID option of the XAXIS statement is ignored in PROC SGPLOT; display customization is not supported.
+NOTE: ODS GRAPHICS is not enabled. Use "ods graphics on;" before PROC SGPLOT to generate images.
+NOTE: PROCEDURE SGPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    proc sgplot data=xy;
+15      by g;
+16      scatter x=x y=y;
+17    run;
+ERROR: The BY statement is not supported in PROC SGPLOT; it can affect results and cannot be ignored (planned: roadmap-avancee J13-P4).
+
+18    proc sgplot data=xy;
+19      scatter x=x y=nope;
+20    run;
+ERROR: Variable NOPE not found.
+NOTE: The SAS System stopped processing this step because of errors.
+
+21    proc sgplot data=xy;
+22      hbox y;
+23    run;
+ERROR: The HBOX statement is not supported in PROC SGPLOT; it can affect results and cannot be ignored (planned: roadmap-avancee J13-P3).
+
+24    proc gplot data=xy;
+25      symbol1 i=join h=2;
+26      axis1 order=(0 to 10 by 2) label=(a=90 'X');
+27      plot y*x / haxis=axis1 overlay;
+28    run;
+WARNING: The H= option of the SYMBOL1 statement is ignored in PROC GPLOT; display customization is not supported.
+WARNING: The ORDER= option of the AXIS1 statement is only partly honored in PROC GPLOT: its first two numbers (0 and 10) set the axis range; the other values and the tick marks are ignored.
+WARNING: The LABEL= attributes of the AXIS1 statement are ignored in PROC GPLOT; only the first label text is drawn.
+WARNING: The HAXIS= option of the PLOT statement is ignored in PROC GPLOT: the first AXIS statement of the step is applied to the horizontal axis and the second to the vertical axis.
+WARNING: The OVERLAY option of the PLOT statement is ignored in PROC GPLOT; display customization is not supported.
+NOTE: ODS GRAPHICS is not enabled. Use "ods graphics on;" before PROC GPLOT to generate images.
+NOTE: PROCEDURE GPLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+29    proc gchart data=xy;
+30      vbar g / type=percent subgroup=g;
+31      hbar g;
+32    run;
+WARNING: The TYPE=PERCENT option of the VBAR statement is ignored in PROC GCHART; display customization is not supported.
+WARNING: The SUBGROUP= option of the VBAR statement is ignored in PROC GCHART; display customization is not supported.
+WARNING: The HBAR statement is drawn as a vertical bar chart in PROC GCHART; horizontal bars are not supported (planned: roadmap-avancee J13-P5).
+NOTE: ODS GRAPHICS is not enabled. Use "ods graphics on;" before PROC GCHART to generate images.
+NOTE: PROCEDURE GCHART used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+33    proc plot data=xy;
+34      plot y*x='*' / box;
+35    run;
+WARNING: The plotting symbol '*' is ignored in PROC PLOT; display customization is not supported.
+WARNING: The BOX option is ignored in PROC PLOT; display customization is not supported.
+NOTE: PROCEDURE PLOT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+36    ods graphics / width=1000;
+NOTE: ODS GRAPHICS (width=1000).
+
+37    ods graphics / reset=width;
+NOTE: ODS GRAPHICS (width=800).
+
+38    ods graphics / reset=index;
+WARNING: RESET=INDEX is not supported in this build; the image index is not reset.
+NOTE: ODS GRAPHICS.
+
+==== LISTING ====
+                                         The SAS System
+
+
+                        Plot of Y*X.  Legend: A = 1 obs, B = 2 obs, etc.
+
+       Y |
+       4 +                              A
+         |
+         |
+    3.68 +
+         |
+         |
+    3.37 +
+         |
+         |
+    3.05 +                                                           A
+         |
+         |
+    2.74 +
+         |
+         |
+    2.42 +
+         |
+         |
+    2.11 +
+       2 +A
+         +----+----+----+----+----+----+----+----+----+----+----+----
+         1    1.17 1.34 1.51 1.68 1.85 2.02 2.19 2.36 2.53 2.69 2.86  X
+
+
+==== EXIT 2 ====

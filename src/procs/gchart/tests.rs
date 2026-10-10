@@ -10,6 +10,15 @@ fn parse_gchart(src: &str) -> Result<GchartAst> {
     parse(&mut ts)
 }
 
+/// WORK.A with the character variable CATEGORY. J02-P6: the step opens DATA=
+/// and checks its variables in both builds.
+fn write_a(session: &mut Session) {
+    use polars::df;
+    let df = df!["category" => ["A", "B"]].unwrap();
+    let vars = vec![char_meta("category", 1)];
+    write_dataset(session, "A", crate::dataset::SasDataset { df, vars });
+}
+
 #[allow(dead_code)]
 // ── Parse tests ──────────────────────────────────────────────────────
 #[test]
@@ -90,6 +99,7 @@ fn parse_pie_sumvar_implies_sum() {
 #[test]
 fn execute_without_ods_on_notes_not_enabled() {
     let mut session = make_session_in_temp();
+    write_a(&mut session);
     let ast = parse_gchart("proc gchart data=a; vbar category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -104,6 +114,7 @@ fn execute_without_ods_on_notes_not_enabled() {
 fn execute_pie_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_gchart("proc gchart data=a; pie category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();
@@ -118,6 +129,7 @@ fn execute_pie_defers() {
 fn execute_vbar_with_ods_on_no_feature_defers() {
     let mut session = make_session_in_temp();
     session.ods_graphics.enabled = true;
+    write_a(&mut session);
     let ast = parse_gchart("proc gchart data=a; vbar category; run;").unwrap();
     execute(&ast, &mut session).unwrap();
     let log = session.log.into_string();

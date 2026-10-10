@@ -24,10 +24,18 @@
 //!
 //! v1 only RENDERS the simple `y*x` form (ASCII or image). The other syntactic
 //! forms PARSE without error; multi-y / group rendering is deferred (a NOTE).
+//!
+//! # Support contract (J02-P6)
+//!
+//! Every PLOT option after `/` (`BOX`, `OVERLAY`, `HREF=`…), the plotting
+//! symbol of `y*x='c'` and the display options of the PROC statement give a
+//! display WARNING (the bare options and the symbol used to be dropped
+//! silently); BY is the contract ERROR until J13-P4.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::missing::value_to_num;
+use crate::ods_graphics::contract;
 use crate::parser::StatementStream;
 use crate::procs::common::expect_ident;
 use crate::procs::common::{self, decode_column};
@@ -112,6 +120,13 @@ fn parse_plot_request(ts: &mut StatementStream) -> Result<PlotStmt> {
         ts.next(); // =
         match &ts.peek().kind {
             TokenKind::Str { value, .. } => {
+                let value = value.clone();
+                // J02-P6 — the listing plots the A, B, C… counts and the image
+                // its default marker: the symbol used to be dropped silently.
+                ts.warn_ignored_display(format!(
+                    "The plotting symbol '{value}' is ignored in PROC PLOT; display \
+                     customization is not supported."
+                ));
                 symbol = value.chars().next();
                 ts.next();
             }
@@ -127,21 +142,20 @@ fn parse_plot_request(ts: &mut StatementStream) -> Result<PlotStmt> {
         }
     }
 
-    // Trailing `/ options` (HREF=, VREF=, HAXIS=, BOX, …) — display-only
-    // customizations, not rendered in v1. J02-P4: each `name=` option warns
-    // honestly (WARNING, exit code 1) instead of being dropped silently. The
-    // scan stays SYNCHRONIZED: it stops ON the terminating `;` (left for the
-    // caller's expect_semi), so the statements after the PLOT still run.
+    // Trailing `/ options` (HREF=, VREF=, HAXIS=, BOX, OVERLAY, …) —
+    // display-only customizations, not rendered in v1. Each option warns
+    // honestly (WARNING, exit code 1): J02-P4 covered the `name=` options,
+    // J02-P6 the bare ones (BOX, OVERLAY, HZERO…), which were still dropped
+    // silently. The scan stays SYNCHRONIZED: it stops ON the terminating `;`
+    // (left for the caller's expect_semi), so the statements after the PLOT
+    // still run.
     if ts.peek().kind == TokenKind::Slash {
         ts.next(); // /
         while !matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
-            if matches!(ts.peek().kind, TokenKind::Ident(_)) && ts.peek2().kind == TokenKind::Eq {
-                let name = ts.peek().ident().unwrap_or("?").to_uppercase();
-                ts.warn_ignored_display(format!(
-                    "The {name}= option is ignored in PROC PLOT; display customization is not supported."
-                ));
+            if ts.peek().ident().is_none() {
+                return Err(contract::expected_option(ts, "PLOT", "PLOT"));
             }
-            ts.next();
+            contract::warn_option(ts, "PLOT", None);
         }
     }
 
@@ -155,35 +169,41 @@ fn parse_plot_request(ts: &mut StatementStream) -> Result<PlotStmt> {
 
 // ───────────────────────── Parser ─────────────────────────
 
+/// PROC PLOT statement options (SAS 9.4 Base Procedures, PROC PLOT
+/// statement), all limited to the listing layout.
+const DISPLAY_PROC_OPTIONS: &[&str] = &[
+    "formchar", "hpercent", "nolegend", "nomiss", "uniform", "vpercent", "vtoh",
+];
+
 /// Parse PROC PLOT. Called AFTER `proc plot` has been consumed.
 pub fn parse(ts: &mut StatementStream) -> Result<PlotAst> {
     let mut data_ref: Option<DatasetRef> = None;
 
-    // PROC PLOT statement options, until `;`.
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
+    // PROC PLOT statement options, until `;`. J02-P6: they used to be skipped
+    // token by token, unknown ones included.
+    common::parse_proc_options(ts, "PLOT", |ts, kw| {
+        if kw == "data" {
             common::consume_option_eq(ts, "DATA")?;
             data_ref = Some(ts.parse_dataset_ref()?);
+        } else if DISPLAY_PROC_OPTIONS.contains(&kw) {
+            contract::warn_option(ts, "PLOT", None);
         } else {
-            ts.next(); // ignore unknown PROC-level options
+            return Ok(false);
         }
-    }
+        Ok(true)
+    })?;
 
     let mut plots: Vec<PlotStmt> = Vec::new();
 
-    crate::procs::common::parse_proc_body(ts, "PLOT", |ts, _kw| {
-        if ts.peek().is_kw("plot") {
+    crate::procs::common::parse_proc_body(ts, "PLOT", |ts, kw| {
+        if kw == "plot" {
             ts.next(); // plot
             let stmt = parse_plot_request(ts)?;
             ts.expect_semi()?;
             plots.push(stmt);
+        } else if kw == "by" {
+            // J02-P6: same message as SGPLOT/GPLOT/GCHART, naming J13-P4.
+            return Err(contract::by_not_supported("PLOT", ts.peek().span));
         } else {
             return Ok(false);
         }
@@ -469,3 +489,6 @@ fn render_image(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod contract_tests;

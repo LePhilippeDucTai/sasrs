@@ -35,6 +35,7 @@ NOTE: ODS GRAPHICS ON.
 16    proc plot data=work.xy;
 17      plot y*x='*';
 18    run;
+WARNING: The plotting symbol '*' is ignored in PROC PLOT; display customization is not supported.
 NOTE: ODS GRAPHICS: image deferred (compile with --features graphics).
 NOTE: PROCEDURE PLOT used (Total process time):
             real time           0.00 seconds
@@ -76,4 +77,4 @@ NOTE: ODS GRAPHICS OFF.
          1    1.42 1.85 2.27 2.69 3.12 3.54 3.97 4.39 4.81 5.24 5.66  X
 
 
-==== EXIT 0 ====
+==== EXIT 1 ====
