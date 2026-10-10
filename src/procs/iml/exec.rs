@@ -352,10 +352,26 @@ pub(super) fn exec_close(ds: &str, env: &mut Env, session: &mut Session) -> Resu
 /// Une table créée par CREATE/APPEND sans CLOSE n'était jamais écrite ; elle
 /// l'est maintenant, dans l'ordre des CREATE.
 pub(super) fn close_open_writes(env: &mut Env, session: &mut Session) -> Result<()> {
-    for (key, buf) in std::mem::take(&mut env.open_writes) {
-        write_dataset(&key, buf, session)?;
+    let mut open = std::mem::take(&mut env.open_writes);
+    while !open.is_empty() {
+        let (key, buf) = open.remove(0);
+        if let Err(e) = write_dataset(&key, buf, session) {
+            discard_open_writes(open, session);
+            return Err(e);
+        }
     }
     Ok(())
+}
+
+/// Tables encore ouvertes quand PROC IML s'arrête sur une erreur : pas de
+/// table partielle, mais un WARNING par table (jamais de perte silencieuse).
+pub(super) fn discard_open_writes(open: Vec<(String, OpenWrite)>, session: &mut Session) {
+    for (name, _) in open {
+        session.log.warning(&format!(
+            "The data set {name} was not written because PROC IML stopped at an execution \
+             error."
+        ));
+    }
 }
 
 /// Écrit le tampon d'un dataset de sortie (une colonne numérique par nom).

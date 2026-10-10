@@ -467,3 +467,34 @@ fn read_next_deferred_error() {
     assert!(e.is_err());
     assert!(e.err().unwrap().to_string().contains("READ NEXT"));
 }
+
+#[test]
+fn quit_write_failure_reports_the_remaining_tables() {
+    // J02-P5: a table that cannot be written at QUIT is an ERROR, and the
+    // tables still open after it are reported, never dropped in silence.
+    let mut session = test_session();
+    let mut env = Env::new();
+    for key in ["NOLIB.A", "WORK.B"] {
+        env.open_writes.push((
+            key.to_string(),
+            OpenWrite {
+                colnames: vec!["COL1".into()],
+                rows: vec![vec![1.0]],
+            },
+        ));
+    }
+    let err = close_open_writes(&mut env, &mut session).unwrap_err();
+    assert!(
+        err.to_string().contains("Libref NOLIB is not assigned."),
+        "{err}"
+    );
+    let log = session.log.current_text();
+    assert!(
+        log.contains(
+            "WARNING: The data set WORK.B was not written because PROC IML stopped at an \
+             execution error."
+        ),
+        "{log}"
+    );
+    assert!(env.open_writes.is_empty());
+}

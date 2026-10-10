@@ -101,12 +101,7 @@ pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
     match result {
         Ok(()) => close_open_writes(&mut env, session),
         Err(e) => {
-            for (name, _) in std::mem::take(&mut env.open_writes) {
-                session.log.warning(&format!(
-                    "The data set {name} was not written because PROC IML stopped at an \
-                     execution error."
-                ));
-            }
+            discard_open_writes(std::mem::take(&mut env.open_writes), session);
             Err(e)
         }
     }
