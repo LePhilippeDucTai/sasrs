@@ -3,20 +3,27 @@
 //! # Plan du fichier — voir PLAN.md
 //!
 //! `proc fastclus data=<ref> maxclusters=k [out=<ref>] [maxiter=<n>]
-//!  [converge=<f>] [seed=<n>]; var <list>; [id <var>;] run;`
+//!  [converge=<f>]; var <list>; run;`
 //!
 //! ## Périmètre
-//! - `maxclusters=` (obligatoire), `out=`, `maxiter=` (défaut 10),
-//!   `converge=` (défaut 0.02), `seed=` (parse-accepté ; non utilisé : la
-//!   sélection des graines est déterministe "farthest-first").
-//! - `var` : variables numériques (coordonnées). `id` : étiquette (parse).
+//! - `maxclusters=` (obligatoire), `out=` (colonnes d'entrée + `_CLUSTER_`),
+//!   `maxiter=` (défaut 10), `converge=` (défaut 0.02).
+//! - `var` : variables numériques (coordonnées).
+//! - Non supporté, ERROR (J02-P4) : `SEED=` (table de graines SAS ; un nombre
+//!   n'est pas valide), valeur manquante d'une variable VAR (J09-P7),
+//!   instructions `ID`, `BY`, `FREQ`, `WEIGHT`.
 //!
-//! ## Algorithme
+//! ## Algorithme (approximation documentée, NOTE à chaque exécution)
 //! 1. Graines : sélection "farthest-first" — graine 1 = première obs, graine
 //!    suivante = obs la plus éloignée des graines déjà choisies.
 //! 2. Affecter chaque obs au centroïde le plus proche (euclidien).
 //! 3. Recalculer les centroïdes.
 //! 4. Répéter jusqu'à maxiter ou convergence (déplacement max < converge×RMS).
+//!
+//! SAS 9.4 choisit les graines par les règles RADIUS=/REPLACE=, ne fait
+//! qu'une itération par défaut (MAXITER=1) et suppose MAXCLUSTERS=100 :
+//! les partitions peuvent différer (docs/support-contract.md, « Approximations
+//! documentées », roadmap-avancee J09-P7).
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -45,9 +52,7 @@ pub struct FastclusAst {
     pub maxclusters: usize,
     pub maxiter: usize,
     pub converge: f64,
-    pub seed: Option<i64>,
     pub var: Vec<String>,
-    pub id: Option<String>,
 }
 
 // ───────────────────────── Parser ─────────────────────────
@@ -73,7 +78,6 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
     let mut maxclusters: Option<usize> = None;
     let mut maxiter: usize = 10;
     let mut converge: f64 = 0.02;
-    let mut seed: Option<i64> = None;
 
     loop {
         if ts.peek().kind == TokenKind::Semi {
@@ -97,8 +101,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
             common::consume_option_eq(ts, "CONVERGE")?;
             converge = parse_num(ts, "CONVERGE")?;
         } else if ts.peek().is_kw("seed") {
+            // J02-P4 — SEED=<number> used to be accepted and ignored (the
+            // seeds stayed farthest-first). SAS/STAT 9.4, PROC FASTCLUS
+            // statement: SEED= names a data set of initial cluster seeds.
             common::consume_option_eq(ts, "SEED")?;
-            seed = Some(parse_num(ts, "SEED")? as i64);
+            let span = ts.peek().span;
+            if matches!(ts.peek().kind, TokenKind::Num(_)) {
+                return Err(SasError::parse(
+                    "SEED= names a SAS data set of initial cluster seeds in PROC FASTCLUS, \
+                     not a number.",
+                    span,
+                ));
+            }
+            return Err(SasError::parse(
+                "The SEED= option (data set of initial cluster seeds) is not supported in \
+                 PROC FASTCLUS; it can affect results and cannot be ignored (planned: \
+                 roadmap-avancee J09-P7).",
+                span,
+            ));
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -122,8 +142,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
     })?;
 
     let mut var: Vec<String> = Vec::new();
-    let id: Option<String> = None;
-    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31). BY,
+    // FREQ and WEIGHT fall back to the shared contract ERROR, like ID.
     common::parse_proc_body(ts, "FASTCLUS", |ts, kw| {
         Ok(match kw {
             "var" => {
@@ -143,9 +163,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<FastclusAst> {
         maxclusters,
         maxiter,
         converge,
-        seed,
         var,
-        id,
     })
 }
 
@@ -189,18 +207,35 @@ pub fn execute(ast: &FastclusAst, session: &mut Session) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // J02-P4 — a missing VAR value used to enter seeds, distances and
+    // centroids as NaN silently. ERROR until roadmap-avancee J09-P7 applies
+    // the SAS rules for missing values.
+    for (col, name) in decoded.iter().zip(&names) {
+        if let Some(row) = col.iter().position(|x| x.is_nan()) {
+            return Err(SasError::runtime(format!(
+                "A missing value in a VAR variable ({}, observation {}) is not supported in \
+                 PROC FASTCLUS; it can affect results and cannot be ignored (planned: \
+                 roadmap-avancee J09-P7).",
+                name.to_uppercase(),
+                row + 1
+            )));
+        }
+    }
+
     let coords: Vec<Vec<f64>> = (0..n_read)
         .map(|r| decoded.iter().map(|col| col[r]).collect())
         .collect();
     let n = coords.len();
     let k = ast.maxclusters.min(n).max(1);
 
-    if let Some(s) = ast.seed {
-        session.log.note(&format!(
-            "PROC FASTCLUS SEED={} is accepted; seeds are selected by the deterministic farthest-first rule.",
-            s
-        ));
-    }
+    // J02-P4 — the k-means below diverges from the SAS 9.4 algorithm without
+    // saying so: documented approximation, NOTE at each execution.
+    session.log.note(
+        "PROC FASTCLUS approximates the SAS algorithm: seeds are selected farthest-first, \
+         MAXITER= defaults to 10 and MAXCLUSTERS= is required (SAS: RADIUS=/REPLACE= seed \
+         rules, MAXITER=1, MAXCLUSTERS=100); cluster assignments can differ from SAS \
+         (planned: roadmap-avancee J09-P7).",
+    );
 
     let res = kmeans(&coords, k, ast.maxiter, ast.converge);
 
@@ -366,8 +401,6 @@ pub fn execute(ast: &FastclusAst, session: &mut Session) -> Result<()> {
         ));
     }
 
-    let _ = ast.id; // ID statement parse-accepted; not used in the listing v1.
-
     Ok(())
 }
 
@@ -375,5 +408,7 @@ use crate::dataset::SasDataset;
 
 use crate::procs::common::centered;
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

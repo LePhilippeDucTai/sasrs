@@ -86,6 +86,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
     }
 
     // --- sub-statements until run;/quit; (combinateur partagé M31) ---
+    // BY, FREQ and WEIGHT fall back to the shared contract ERROR. PARTIAL and
+    // PRIORS (valid SAS 9.4 statements) used to be 180-322 ERRORs; the
+    // PATHDIAGRAM graph is a display-only request.
     let mut var: Vec<String> = Vec::new();
     common::parse_proc_body(ts, "FACTOR", |ts, kw| {
         Ok(match kw {
@@ -93,6 +96,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<FactorAst> {
                 ts.next();
                 var = ts.parse_name_list()?;
                 ts.expect_semi()?;
+                true
+            }
+            "partial" | "priors" => return Err(common::unsupported_statement("FACTOR", kw)),
+            "pathdiagram" => {
+                ts.warn_ignored_display(common::ignored_display_statement("FACTOR", kw));
+                ts.skip_to_semi();
                 true
             }
             _ => false,

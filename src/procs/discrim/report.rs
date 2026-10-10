@@ -158,18 +158,30 @@ pub(super) fn print_discrim_coefficients(
     session.listing.blank();
 }
 
-/// "Classification Results for Training Data": classify each kept observation,
-/// print posteriors, and return per-class error counts.
+/// Resubstitution classification of each kept observation: per-class counts
+/// of misclassified observations (feed the Error Count Estimates).
+pub(super) fn training_error_counts(model: &LdaModel, kept: &[Obs]) -> Vec<usize> {
+    let mut error_count: Vec<usize> = vec![0; model.n_groups];
+    for obs in kept {
+        let from = class_index_of(&model.classes, &obs.class);
+        if model.classify(&obs.x) != from {
+            error_count[from] += 1;
+        }
+    }
+    error_count
+}
+
+/// "Classification Results for Training Data" (LIST): classification and
+/// posterior probabilities of each kept observation.
 pub(super) fn print_classification_results(
     session: &mut Session,
     ast: &DiscrimAst,
     model: &LdaModel,
     kept: &[Obs],
     id_col: &Option<Vec<Value>>,
-) -> Vec<usize> {
+) {
     let g = model.n_groups;
     let n_used = kept.len();
-    let mut error_count: Vec<usize> = vec![0; g];
 
     centered(session, "Classification Results for Training Data");
     session.listing.blank();
@@ -191,9 +203,6 @@ pub(super) fn print_classification_results(
     for (n_obs_idx, obs) in kept.iter().enumerate() {
         let from = class_index_of(&model.classes, &obs.class);
         let into = model.classify(&obs.x);
-        if from != into {
-            error_count[from] += 1;
-        }
         let post = model.posteriors(&obs.x);
         let label = if let Some(ic) = &id_col {
             value_label(&ic[obs.orig_row])
@@ -212,8 +221,6 @@ pub(super) fn print_classification_results(
     }
     session.listing.write_table(&headers, &aligns, &rows);
     session.listing.blank();
-
-    error_count
 }
 
 /// "Error Count Estimates for Training Data" (Rate/Priors rows).

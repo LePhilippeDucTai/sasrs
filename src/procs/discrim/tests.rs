@@ -49,13 +49,10 @@ fn make_oracle_session() -> (Session, DiscrimAst) {
             name: "LDA".into(),
         }),
         out: None,
-        outstat: None,
         method: None,
         pool: Pool::Yes,
         priors: Priors::Equal,
-        noclassify: false,
-        crossvalidate: false,
-        short: false,
+        list: false,
         class_var: Some("class".into()),
         var_vars: vec!["x".into()],
         id_var: None,
@@ -85,9 +82,11 @@ fn test_parse_basic() {
 
 #[test]
 fn test_parse_options() {
-    // J02-P5 — POOL=NO is now a parse ERROR; POOL=YES parses.
+    // J02-P5 — POOL=NO is now a parse ERROR; POOL=YES parses. J02-P4 —
+    // NOCLASSIFY/SHORT are display WARNINGs (see contract_tests), LIST is
+    // honored.
     let ast = parse_discrim(
-        "proc discrim data=a out=b method=normal pool=yes noclassify short; class g; var x; id name; priors proportional; run;",
+        "proc discrim data=a out=b method=normal pool=yes list noclassify short; class g; var x; id name; priors proportional; run;",
     )
     .unwrap();
     assert_eq!(ast.data.as_ref().unwrap().name, "a");
@@ -95,8 +94,7 @@ fn test_parse_options() {
     assert_eq!(ast.method.as_deref(), Some("NORMAL"));
     assert_eq!(ast.pool, Pool::Yes);
     assert_eq!(ast.priors, Priors::Proportional);
-    assert!(ast.noclassify);
-    assert!(ast.short);
+    assert!(ast.list);
     assert_eq!(ast.id_var, Some("name".to_string()));
 }
 

@@ -180,7 +180,7 @@ fn varimax_communality_invariant() {
         .map(|row| row.iter().map(|&x| x * x).sum())
         .collect();
 
-    let (l_rot, _) = varimax(&l);
+    let l_rot = varimax(&l).pattern;
     let h2_after: Vec<f64> = l_rot
         .iter()
         .map(|row| row.iter().map(|&x| x * x).sum())
@@ -206,7 +206,12 @@ fn varimax_communality_invariant() {
 #[test]
 fn varimax_k1_noop() {
     let l = vec![vec![0.8], vec![0.7], vec![0.9]];
-    let (l_rot, rot) = varimax(&l);
+    let VarimaxResult {
+        pattern: l_rot,
+        rotation: rot,
+        converged,
+    } = varimax(&l);
+    assert!(converged);
     // l_rot should equal l (no rotation possible with 1 factor).
     for (i, (orig, rotated)) in l.iter().zip(&l_rot).enumerate() {
         for (j, (&o, &r)) in orig.iter().zip(rotated).enumerate() {
@@ -231,7 +236,7 @@ fn varimax_rotation_matrix_orthogonal() {
         vec![0.3, 0.9],
         vec![0.6, 0.1],
     ];
-    let (_, rot) = varimax(&l);
+    let rot = varimax(&l).rotation;
     let k = rot.len();
 
     // R · R^T should be identity (k×k).
@@ -300,7 +305,7 @@ fn promax_correlates_factors_and_sharpens() {
         vec![0.40, 0.80],
         vec![0.35, 0.75],
     ];
-    let (l_var, _) = varimax(&l);
+    let l_var = varimax(&l).pattern;
     let pm = promax(&l_var, 4).unwrap();
 
     // (a) Inter-factor correlation is not the identity.

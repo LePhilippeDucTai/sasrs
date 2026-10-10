@@ -9,12 +9,19 @@
 //! - `data=`, `out=` (matrice stockée), `method=` (défaut EUCLID).
 //! - `var` : variables numériques formant les coordonnées de chaque obs.
 //! - `out=` absent : NOTE "No output dataset specified ..." + listing affiché.
-//! - Différé : `SHAPE=`, `FREQ`, normalisation, `id=`.
+//! - COSINE et CORR sont des SIMILARITÉS (doc SAS 9.4 PROC DISTANCE,
+//!   « Proximity Measures » : coefficient cosinus s20, corrélation s8) ;
+//!   EUCLID, CITYBLOCK et CHEBYCHEV des distances.
+//! - Non supporté, ERROR (J02-P4) : valeur manquante d'une variable VAR et
+//!   similarité indéfinie (dénominateur nul) (J09-P7), instructions `COPY`,
+//!   `BY`, `FREQ`, `ID`, `WEIGHT`.
+//! - Différé : `SHAPE=`, normalisation, niveaux de mesure de VAR.
 //!
 //! ## Sortie
 //! - Listing : matrice n×n (n = nombre d'observations), 4 décimales, lignes/
-//!   colonnes Row<i>/Col<j>.
-//! - `out=` : dataset avec `_TYPE_`="DISTANCE", `_NAME_`=Row<i>, puis Col1..Coln.
+//!   colonnes Row<i>/Col<j> ; titre « Similarity Matrix » pour COSINE/CORR.
+//! - `out=` : dataset avec `_TYPE_`="DISTANCE" (« SIMILAR » pour COSINE/CORR,
+//!   valeurs TYPE= de la doc), `_NAME_`=Row<i>, puis Col1..Coln.
 
 // MQ7.2c — `needless_range_loop` assumé dans ce module : l'indice EST le
 // langage du domaine (`a[i][j] * b[j][k]`, parcours colonne-major, triangle
@@ -55,6 +62,12 @@ impl DistMethod {
             DistMethod::Cosine => "Cosine",
             DistMethod::Corr => "Correlation",
         }
+    }
+
+    /// TYPE= of the proximity measure (SAS 9.4 PROC DISTANCE, « Proximity
+    /// Measures »): SIMILAR for the cosine and correlation coefficients.
+    fn is_similarity(self) -> bool {
+        matches!(self, DistMethod::Cosine | DistMethod::Corr)
     }
 }
 
@@ -131,6 +144,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
         }
     }
 
+    // BY, FREQ, ID and WEIGHT fall back to the shared contract ERROR; COPY
+    // (valid SAS 9.4 statement) used to be a 180-322 ERROR.
     let mut var: Vec<String> = Vec::new();
     common::parse_proc_body(ts, "DISTANCE", |ts, kw| {
         Ok(match kw {
@@ -140,6 +155,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
                 ts.expect_semi()?;
                 true
             }
+            "copy" => return Err(common::unsupported_statement("DISTANCE", kw)),
             _ => false,
         })
     })?;
@@ -152,7 +168,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<DistanceAst> {
     })
 }
 
-/// Distance between two coordinate vectors under the given method.
+/// Proximity between two coordinate vectors under the given method, with unit
+/// weights (SAS 9.4 PROC DISTANCE, « Proximity Measures »).
+///
+/// J02-P4 — COSINE and CORR used to return the dissimilarities 1 − cos and
+/// 1 − r (0 when undefined). SAS defines them as similarities:
+/// s20(x,y) = Σ xⱼyⱼ / √(Σ xⱼ² · Σ yⱼ²) and
+/// s8(x,y) = Σ (xⱼ−x̄)(yⱼ−ȳ) / √(Σ (xⱼ−x̄)² · Σ (yⱼ−ȳ)²), x̄ the mean of the
+/// coordinates of x. A zero denominator leaves them undefined: NaN.
 pub fn distance(method: DistMethod, a: &[f64], b: &[f64]) -> f64 {
     match method {
         DistMethod::Euclid => a
@@ -169,19 +192,16 @@ pub fn distance(method: DistMethod, a: &[f64], b: &[f64]) -> f64 {
             .fold(0.0_f64, f64::max),
         DistMethod::Cosine => {
             let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-            let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-            let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
-            if na == 0.0 || nb == 0.0 {
-                0.0
+            let saa: f64 = a.iter().map(|x| x * x).sum();
+            let sbb: f64 = b.iter().map(|x| x * x).sum();
+            if saa == 0.0 || sbb == 0.0 {
+                f64::NAN
             } else {
-                1.0 - dot / (na * nb)
+                dot / (saa * sbb).sqrt()
             }
         }
         DistMethod::Corr => {
             let p = a.len() as f64;
-            if p < 2.0 {
-                return 0.0;
-            }
             let ma = a.iter().sum::<f64>() / p;
             let mb = b.iter().sum::<f64>() / p;
             let mut sab = 0.0;
@@ -195,9 +215,9 @@ pub fn distance(method: DistMethod, a: &[f64], b: &[f64]) -> f64 {
                 sbb += dy * dy;
             }
             if saa == 0.0 || sbb == 0.0 {
-                0.0
+                f64::NAN
             } else {
-                1.0 - sab / (saa.sqrt() * sbb.sqrt())
+                sab / (saa * sbb).sqrt()
             }
         }
     }
@@ -243,21 +263,59 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // J02-P4 — a missing VAR value used to propagate as NaN into the matrix
+    // and the OUT= data set silently. ERROR until roadmap-avancee J09-P7
+    // applies the documented missing-value weights.
+    for (col, name) in decoded.iter().zip(&ast.var) {
+        if let Some(row) = col.iter().position(|x| x.is_nan()) {
+            return Err(SasError::runtime(format!(
+                "A missing value in a VAR variable ({}, observation {}) is not supported in \
+                 PROC DISTANCE; it can affect results and cannot be ignored (planned: \
+                 roadmap-avancee J09-P7).",
+                name.to_uppercase(),
+                row + 1
+            )));
+        }
+    }
+
     // One coordinate vector per observation.
     let coords: Vec<Vec<f64>> = (0..n_read)
         .map(|r| decoded.iter().map(|col| col[r]).collect())
         .collect();
     let n = coords.len();
 
-    // Symmetric n×n distance matrix.
+    // Symmetric n×n proximity matrix. The diagonal of a distance is 0; that
+    // of a similarity is the self-similarity s(x,x) (1 when defined).
+    let similarity = ast.method.is_similarity();
     let mut dist = vec![vec![0.0_f64; n]; n];
     for i in 0..n {
-        for j in (i + 1)..n {
+        let first = if similarity { i } else { i + 1 };
+        for j in first..n {
             let d = distance(ast.method, &coords[i], &coords[j]);
+            if similarity && d.is_nan() {
+                let keyword = if ast.method == DistMethod::Cosine {
+                    "COSINE"
+                } else {
+                    "CORR"
+                };
+                return Err(SasError::runtime(format!(
+                    "The METHOD={keyword} similarity of observations {} and {} is undefined \
+                     (zero denominator), which is not supported in PROC DISTANCE; it can \
+                     affect results and cannot be ignored (planned: roadmap-avancee J09-P7).",
+                    i + 1,
+                    j + 1
+                )));
+            }
             dist[i][j] = d;
             dist[j][i] = d;
         }
     }
+    let matrix_title = if similarity {
+        "Similarity Matrix"
+    } else {
+        "Distance Matrix"
+    };
+    let type_value = if similarity { "SIMILAR" } else { "DISTANCE" };
 
     // ───────────────────────── listing ─────────────────────────
     session.listing.page_header();
@@ -267,7 +325,7 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
     session.listing.blank();
     centered(session, &format!("N = {}    Variables = {}", n, p));
     session.listing.blank();
-    centered(session, "Distance Matrix");
+    centered(session, matrix_title);
     session.listing.blank();
     {
         let mut headers: Vec<String> = vec![String::new()];
@@ -299,10 +357,10 @@ pub fn execute(ast: &DistanceAst, session: &mut Session) -> Result<()> {
             let mut columns: Vec<Column> = Vec::with_capacity(n + 2);
             let mut vars: Vec<crate::dataset::VarMeta> = Vec::with_capacity(n + 2);
 
-            // _TYPE_ : "DISTANCE" for every row.
-            let type_vals: Vec<&str> = vec!["DISTANCE"; n];
+            // _TYPE_ : "DISTANCE" (or "SIMILAR") for every row.
+            let type_vals: Vec<&str> = vec![type_value; n];
             columns.push(Series::new("_TYPE_".into(), type_vals).into());
-            vars.push(char_var_meta("_TYPE_", "DISTANCE".len()));
+            vars.push(char_var_meta("_TYPE_", type_value.len()));
 
             // _NAME_ : Row<i>.
             let name_vals: Vec<String> = (0..n).map(|i| format!("Row{}", i + 1)).collect();
@@ -356,5 +414,7 @@ use crate::dataset::SasDataset;
 
 use crate::procs::common::centered;
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

@@ -51,6 +51,9 @@
 //!   Algoriithme : méthode Jacobi (rotations planes), convergence quadratique.
 //!   Retour : vecteur valeurs propres en ordre DÉCROISSANT.
 //!   Convergence : ~O(n³) multiplications, tol. ~1e-14.
+//!   Entrée non finie (missing, ±inf) ou non-convergence après 100 balayages
+//!   (résidu hors diagonale > 1e-15 et > 1e-12·‖A‖) → `SasError::Numerical`
+//!   (J02-P4 : la dernière itérée n'est plus rendue en silence).
 //!   Utilisé par : PCA (M27.1), analyse factorielle.
 //!   Tests : matrices diagonales (triviales), 3×3 sym. matrices,
 //!   Hilbert (ill-conditioned), validation trace(A) = Σλ, det(A) = Πλ.
@@ -71,6 +74,8 @@
 //!
 //! Gestion des erreurs :
 //! - Matrice singulière / rank-déficiente → `SasError::Numerical(...)`
+//! - Jacobi : entrée non finie ou itération non convergente →
+//!   `SasError::Numerical(...)`
 //! - Matrice non-symétrique (pour Jacobi) → erreur ou auto-symmétrisation
 //! - Dimensions incompatibles → `SasError::InvalidInput(...)`
 //!
@@ -252,11 +257,48 @@ pub fn invert_matrix(a: &[Vec<f64>]) -> Result<Vec<Vec<f64>>> {
     Ok(inv)
 }
 
+/// Maximum number of Jacobi sweeps before the iteration is declared
+/// non-convergent.
+const JACOBI_MAX_SWEEPS: usize = 100;
+
+/// Off-diagonal residual accepted, relative to the Frobenius norm of the
+/// input, when the absolute 1e-15 target is out of reach. With large entries
+/// and (nearly) repeated eigenvalues, rounding keeps the residual near
+/// ε·‖A‖; every |λᵢ − mᵢᵢ| stays bounded by the residual norm.
+const JACOBI_RELATIVE_TOLERANCE: f64 = 1e-12;
+
+/// Frobenius norm of the strictly upper triangle.
+fn off_diagonal_norm(m: &[Vec<f64>]) -> f64 {
+    let n = m.len();
+    let mut off = 0.0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            off += m[i][j] * m[i][j];
+        }
+    }
+    off.sqrt()
+}
+
 /// Run the Jacobi eigenvalue iteration on a symmetric matrix, returning the
 /// (eigenvalue, eigenvector-matrix) pair before sorting. V columns are the
 /// eigenvectors; the diagonal of the rotated matrix holds the eigenvalues.
 fn jacobi(a: &[Vec<f64>]) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
+    jacobi_with_sweeps(a, JACOBI_MAX_SWEEPS)
+}
+
+/// [`jacobi`] with an explicit sweep budget.
+///
+/// J02-P4 — the iteration used to return its last iterate even when it had
+/// not converged (a missing or infinite entry made every sweep a no-op and
+/// produced NaN eigenvalues): non-finite input and non-convergence are now
+/// typed `SasError::Numerical` errors.
+fn jacobi_with_sweeps(a: &[Vec<f64>], max_sweeps: usize) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
     let n = require_square(a)?;
+    if a.iter().flatten().any(|x| !x.is_finite()) {
+        return Err(SasError::Numerical(
+            "matrix has missing or infinite entries (Jacobi)".into(),
+        ));
+    }
     // Verify (approximate) symmetry.
     for i in 0..n {
         for j in (i + 1)..n {
@@ -268,6 +310,26 @@ fn jacobi(a: &[Vec<f64>]) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
         }
     }
 
+    let (m, v) = jacobi_sweeps(a, max_sweeps);
+
+    let residual = off_diagonal_norm(&m);
+    let scale = a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt();
+    if !(residual < 1e-15 || residual <= JACOBI_RELATIVE_TOLERANCE * scale) {
+        return Err(SasError::Numerical(format!(
+            "Jacobi eigenvalue iteration did not converge after {max_sweeps} sweeps \
+             (off-diagonal residual {residual:e})"
+        )));
+    }
+
+    let eigvals: Vec<f64> = (0..n).map(|i| m[i][i]).collect();
+    Ok((eigvals, v))
+}
+
+/// Cyclic Jacobi sweeps until the off-diagonal norm drops below 1e-15 or the
+/// budget runs out. Returns the rotated matrix (eigenvalues on the diagonal)
+/// and the accumulated rotations (eigenvectors in columns).
+fn jacobi_sweeps(a: &[Vec<f64>], max_sweeps: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let n = a.len();
     let mut m = a.to_vec();
     // V accumulates the rotations; starts as identity.
     let mut v = vec![vec![0.0; n]; n];
@@ -275,16 +337,8 @@ fn jacobi(a: &[Vec<f64>]) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
         row[i] = 1.0;
     }
 
-    const MAX_SWEEPS: usize = 100;
-    for _ in 0..MAX_SWEEPS {
-        // Off-diagonal Frobenius magnitude.
-        let mut off = 0.0;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                off += m[i][j] * m[i][j];
-            }
-        }
-        if off.sqrt() < 1e-15 {
+    for _ in 0..max_sweeps {
+        if off_diagonal_norm(&m) < 1e-15 {
             break;
         }
         for p in 0..n {
@@ -322,9 +376,7 @@ fn jacobi(a: &[Vec<f64>]) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
             }
         }
     }
-
-    let eigvals: Vec<f64> = (0..n).map(|i| m[i][i]).collect();
-    Ok((eigvals, v))
+    (m, v)
 }
 
 /// Eigenvalues of symmetric matrix via Jacobi method.

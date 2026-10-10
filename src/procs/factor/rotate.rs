@@ -8,10 +8,28 @@ use super::*;
 
 // ───────────────────────── VARIMAX rotation ─────────────────────────
 
+/// Maximum number of VARIMAX sweeps over the factor pairs.
+pub(super) const VARIMAX_MAX_ITER: usize = 1000;
+
+/// Result of a VARIMAX rotation.
+pub struct VarimaxResult {
+    /// Rotated loading matrix L (n_vars × k).
+    pub pattern: Vec<Vec<f64>>,
+    /// Orthogonal rotation matrix (k × k).
+    pub rotation: Vec<Vec<f64>>,
+    /// `false` when the change of the varimax criterion was still ≥ 1e-6
+    /// after the last allowed sweep (J02-P4: no longer silent).
+    pub converged: bool,
+}
+
 /// Apply VARIMAX rotation (Kaiser 1958) to loading matrix L (n_vars × k_factors).
-/// Returns (L_rotated, R_rotation_matrix).
 /// Precondition: k >= 2, all h²[i] > 0.
-pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+pub fn varimax(l: &[Vec<f64>]) -> VarimaxResult {
+    varimax_with_limit(l, VARIMAX_MAX_ITER)
+}
+
+/// [`varimax`] with an explicit sweep budget.
+pub(super) fn varimax_with_limit(l: &[Vec<f64>], max_iter: usize) -> VarimaxResult {
     let n_vars = l.len();
     let k = if n_vars > 0 { l[0].len() } else { 0 };
 
@@ -20,7 +38,11 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
         let r: Vec<Vec<f64>> = (0..k)
             .map(|i| (0..k).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
             .collect();
-        return (l.to_vec(), r);
+        return VarimaxResult {
+            pattern: l.to_vec(),
+            rotation: r,
+            converged: true,
+        };
     }
 
     // Initial communalities h²[i] = Σⱼ L[i][j]²
@@ -58,8 +80,9 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     }
 
     let mut prev_var = varimax_criterion(&l_norm, k);
+    let mut converged = false;
 
-    for _iter in 0..1000 {
+    for _iter in 0..max_iter {
         for p in 0..k {
             for q in (p + 1)..k {
                 // u[i] = A[i]² - B[i]²,  v[i] = 2*A[i]*B[i]
@@ -103,6 +126,7 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
         }
         let new_var = varimax_criterion(&l_norm, k);
         if (new_var - prev_var).abs() < 1e-6 {
+            converged = true;
             break;
         }
         prev_var = new_var;
@@ -115,7 +139,11 @@ pub fn varimax(l: &[Vec<f64>]) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
         .map(|(i, row)| row.iter().map(|&x| x * h_sqrt[i]).collect())
         .collect();
 
-    (l_rot, rot)
+    VarimaxResult {
+        pattern: l_rot,
+        rotation: rot,
+        converged,
+    }
 }
 
 // ───────────────────────── PROMAX rotation ─────────────────────────
@@ -242,4 +270,60 @@ pub fn promax(l_varimax: &[Vec<f64>], power: i32) -> Result<PromaxResult> {
     }
 
     Ok(PromaxResult { pattern, phi })
+}
+
+// ───────────────────────── ROTATE= dispatch ─────────────────────────
+
+/// A rotated solution, computed before any output.
+pub(super) enum Rotation {
+    Varimax(VarimaxResult),
+    Promax(PromaxResult),
+}
+
+impl Rotation {
+    /// Pattern used for OUT= scoring (rotated, oblique for PROMAX).
+    pub(super) fn pattern(&self) -> &[Vec<f64>] {
+        match self {
+            Rotation::Varimax(r) => &r.pattern,
+            Rotation::Promax(r) => &r.pattern,
+        }
+    }
+}
+
+/// Apply ROTATE= (already validated: NONE, VARIMAX or PROMAX) to the `k`
+/// retained factors, before any output.
+///
+/// J02-P4 — with a single factor the rotation used to be skipped in silence:
+/// NOTE. A VARIMAX iteration (also the PROMAX pre-rotation) stopped by the
+/// sweep budget used to pass as converged: WARNING.
+pub(super) fn rotate_loadings(
+    session: &mut Session,
+    rotate: &str,
+    loadings: &[Vec<f64>],
+    k: usize,
+    max_iter: usize,
+) -> Result<Option<Rotation>> {
+    if rotate == "none" {
+        return Ok(None);
+    }
+    if k < 2 {
+        session.log.note(&format!(
+            "Only one factor is retained in PROC FACTOR; the ROTATE={} rotation, which needs \
+             at least two factors, is not performed.",
+            rotate.to_ascii_uppercase()
+        ));
+        return Ok(None);
+    }
+    let vm = varimax_with_limit(loadings, max_iter);
+    if !vm.converged {
+        session.log.warning(&format!(
+            "The VARIMAX rotation did not converge after {max_iter} iterations in PROC \
+             FACTOR; the rotated factor pattern may be inaccurate."
+        ));
+    }
+    Ok(Some(if rotate == "promax" {
+        Rotation::Promax(promax(&vm.pattern, 4)?)
+    } else {
+        Rotation::Varimax(vm)
+    }))
 }
