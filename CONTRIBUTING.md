@@ -5,14 +5,15 @@ Les règles ci-dessous transcrivent les « Exigences spécifiques pour des déve
 100 % agents IA » de l'[issue #11](https://github.com/LePhilippeDucTai/sasrs/issues/11) ;
 elles s'appliquent à toute contribution, agent ou humain.
 
-La feuille de route active est le manifeste `.mission-control/plans/consolidation/plan.json`
+La feuille de route active est le manifeste `.mission-control/plans/roadmap-avancee/plan.json`
 (source de vérité : révision, découpage en unités, checks exécutables) ; les vues
-lisibles sont générées dans `docs/plans/consolidation/` et l'état d'avancement
+lisibles sont générées dans `docs/plans/roadmap-avancee/` et l'état d'avancement
 (unités DONE/NEEDS_DECISION, décisions, candidats de vérification) vit dans
-Mission Control — ne pas l'éditer à la main depuis ces vues. L'ancienne roadmap
-M1–M66 de `PLAN.md`/`PROGRESS.md` racine et les contrats `jalons/` du plan V2 sont
-gelés ; le remapping de l'ancienne roadmap est décrit dans `PLAN.md` §
-« Correspondance M46–M66 → consolidation ».
+Mission Control — ne pas l'éditer à la main depuis ces vues. Les plans précédents
+(`consolidation`, et l'ancienne roadmap M1–M66 de `PLAN.md`/`PROGRESS.md` racine, les
+contrats `jalons/` du plan V2) sont terminés et gelés ; le remapping de l'ancienne
+roadmap est décrit dans `PLAN.md` § « Correspondance M46–M66 → consolidation ».
+Reprendre avec `/milestone-continue roadmap-avancee`.
 
 ## 1. La CI arbitre, jamais la parole d'un agent
 
@@ -114,9 +115,9 @@ scripts/check.sh build  # cargo build --features graphics && cargo build --featu
 scripts/check.sh all    # lint + test + build
 ```
 
-`scripts/ci-status.sh [branche]` (défaut `consolidation`) vérifie que le dernier run CI
-poussé sur la branche est vert et porte bien le HEAD attendu — c'est lui qui fait foi
-pour l'état de la CI, pas le souvenir d'un agent.
+`scripts/ci-status.sh [branche]` vérifie que le dernier run CI poussé sur la branche
+est vert et porte bien le HEAD attendu — c'est lui qui fait foi pour l'état de la CI,
+pas le souvenir d'un agent.
 
 ## 8. Workflow Git
 

@@ -1,19 +1,21 @@
 ---
 name: sasrs-impl
-description: REMPLACÉE (2026-09-23) — ne plus invoquer. La roadmap M1–M66 est gelée ; le projet sasrs est piloté par le plan de consolidation dans docs/plans/consolidation/. Utiliser /milestone-continue consolidation à la place.
+description: REMPLACÉE (2026-09-23) — ne plus invoquer. La roadmap M1–M66 et le plan de consolidation sont gelés/terminés ; le projet sasrs est piloté par le plan roadmap-avancee dans docs/plans/roadmap-avancee/. Utiliser /milestone-continue roadmap-avancee à la place.
 ---
 
 # sasrs-impl — skill remplacée
 
-Cette skill est **remplacée par `/milestone-continue consolidation`** depuis le
-2026-09-23. La feuille de route M1–M66 qu'elle pilotait (`PLAN.md`/`PROGRESS.md` racine)
-est **gelée** ; le projet suit désormais le plan de consolidation :
+Cette skill est **remplacée par `/milestone-continue roadmap-avancee`**. La feuille de
+route M1–M66 qu'elle pilotait (`PLAN.md`/`PROGRESS.md` racine) est **gelée** ; le plan de
+consolidation qui lui a succédé est **terminé**. Le projet suit désormais le plan
+roadmap-avancee :
 
-1. `.mission-control/plans/consolidation/plan.json` — définition Milestone V3 (depuis le
-   2026-09-24), seule autorité avec l’état du contrôleur mission-control ;
-2. `docs/plans/consolidation/PLAN.md`, `PROGRESS.md`, `DECISIONS.md` — vues générées par
+1. `.mission-control/plans/roadmap-avancee/plan.json` — définition Milestone V3,
+   seule autorité avec l'état du contrôleur mission-control ;
+2. `docs/plans/roadmap-avancee/PLAN.md`, `PROGRESS.md`, `DECISIONS.md` — vues générées par
    `mc render`, jamais éditées ;
-3. `docs/plans/consolidation/v2/` — plan V2 archivé (jalons J01–J08, décisions D-001–D-003,
+3. `docs/plans/consolidation/` — plan de consolidation terminé, archivé, lecture seule ;
+4. `docs/plans/consolidation/v2/` — plan V2 archivé (jalons J01–J08, décisions D-001–D-003,
    recommandations R-001–R-003), lecture seule.
 
 Ne pas reprendre le protocole historique de cette skill : il lisait `PROGRESS.md`

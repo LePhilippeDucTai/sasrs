@@ -16,9 +16,18 @@ ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
 CARGO_ENV='export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache'
+DEV_CONTAINER="${SASRS_DEV_CONTAINER:-dev}"
+
+# Si on tourne déjà dans un conteneur, exécute les commandes directement ;
+# sinon, passe par distrobox pour atteindre le conteneur de dev.
+if [ -f /run/.containerenv ] || [ -n "${CONTAINER_ID:-}" ]; then
+    run_in_container() { bash -lc "$1"; }
+else
+    run_in_container() { distrobox enter "$DEV_CONTAINER" -- bash -lc "$1"; }
+fi
 
 # Pré-compile une fois (les 5 runs doivent tester le MÊME binaire).
-distrobox enter ombre-mingw -- bash -lc "$CARGO_ENV; cd '$REPO' && cargo build --locked -p sasrs" \
+run_in_container "$CARGO_ENV; cd '$REPO' && cargo build --locked -p sasrs" \
     || { echo "FAIL: cargo build sasrs"; exit 1; }
 BIN="$REPO/target/debug/sasrs"
 
@@ -28,7 +37,7 @@ for i in $(seq 1 "$RUNS"); do
     mkdir -p "$d/out"
     DIRS+=("$d")
     cp "$SCRIPT" "$d/reproducer.sas"
-    distrobox enter ombre-mingw -- bash -lc "cd '$d' && '$BIN' ./reproducer.sas \
+    run_in_container "cd '$d' && '$BIN' ./reproducer.sas \
         --work work --log run.log --print run.lst --deterministic" \
         > /dev/null 2>&1 \
         || { echo "FAIL: run $i a échoué (code retour $? )"; exit 1; }

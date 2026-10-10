@@ -37,6 +37,7 @@ usage: scripts/check.sh lint|test|build|all
          (défaut, --features graphics, --features s3)
   test   cargo test -p sasrs ; --features graphics ; --features s3 --lib ;
          --features fault-injection --test storage_integrity ;
+         --features fault-injection --lib ;
          --test conformance + conformance_report.py --check ;
          --test properties ; --test differential ;
          --test e2e (J08-P6) ; coverage-claims (check_coverage_claims.py) ;
@@ -86,6 +87,9 @@ run_test() {
     assert_tree_unchanged "$before"
     echo '==> cargo test -p sasrs --features fault-injection --test storage_integrity'
     cargo test --locked -p sasrs --features fault-injection --test storage_integrity
+    assert_tree_unchanged "$before"
+    echo '==> cargo test -p sasrs --features fault-injection --lib'
+    cargo test --locked -p sasrs --features fault-injection --lib
     assert_tree_unchanged "$before"
     # J05-P6 : suites de validation indépendante — mêmes cibles que la CI.
     echo '==> cargo test -p sasrs --test conformance'
