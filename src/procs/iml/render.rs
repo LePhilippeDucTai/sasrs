@@ -13,7 +13,12 @@ pub(super) fn matrix_truthy(m: &Matrix) -> bool {
 
 /// Formate une valeur numérique pour le listing IML (logique BEST. : entiers
 /// sans décimale, flottants tronqués à 4 décimales, trailing zeros enlevés).
+/// J02-P5 — une valeur manquante s'imprime `.` (« a numeric missing value is
+/// specified as a single period », SAS/IML 9.4, Missing Values), et non `NaN`.
 pub(super) fn fmt_val(v: f64) -> String {
+    if v.is_nan() {
+        return ".".to_string();
+    }
     if v == v.trunc() && v.abs() < 1e15 {
         return format!("{}", v as i64);
     }

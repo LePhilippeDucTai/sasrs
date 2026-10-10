@@ -33,6 +33,43 @@ pub(super) enum Tok {
     Eof,
 }
 
+impl Tok {
+    /// Texte source du token pour les diagnostics (J02-P5) : jamais la forme
+    /// `Debug` Rust (`Ident("x")`, `Semi`…) dans le log.
+    pub(super) fn describe(&self) -> String {
+        let punct = match self {
+            Tok::Num(v) => return format!("'{v}'"),
+            Tok::Ident(s) => return format!("'{}'", s.to_ascii_uppercase()),
+            Tok::Str(s) => return format!("the string \"{s}\""),
+            Tok::Eof => return "the end of the PROC IML block".to_string(),
+            Tok::Quote => return "the transpose operator (')".to_string(),
+            Tok::LBrace => "{",
+            Tok::RBrace => "}",
+            Tok::LBracket => "[",
+            Tok::RBracket => "]",
+            Tok::LParen => "(",
+            Tok::RParen => ")",
+            Tok::Comma => ",",
+            Tok::Semi => ";",
+            Tok::Star => "*",
+            Tok::Slash => "/",
+            Tok::Plus => "+",
+            Tok::Minus => "-",
+            Tok::Hash => "#",
+            Tok::At => "@",
+            Tok::Colon => ":",
+            Tok::Dot => ".",
+            Tok::Eq => "=",
+            Tok::Ne => "^=",
+            Tok::Lt => "<",
+            Tok::Le => "<=",
+            Tok::Gt => ">",
+            Tok::Ge => ">=",
+        };
+        format!("'{punct}'")
+    }
+}
+
 /// Lexe le corps IML brut. L'apostrophe `'` est **toujours** un token Quote
 /// (transposée) sauf en position de chaîne PRINT — mais dans cette grammaire
 /// les chaînes utilisent les guillemets doubles `"..."` (cf. fixtures). On

@@ -99,11 +99,15 @@ S
 
 M
 
-     6
+  COL1  COL2  COL3  COL4  COL5
+
+     2     4     6     8    10
 
 ST
 
-  3.1623
+  COL1  COL2  COL3  COL4  COL5
+
+     .     .     .     .     .
 
 TOTAL
 

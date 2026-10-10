@@ -75,6 +75,54 @@ pub(super) fn map_elems(m: &Matrix, f: impl Fn(f64) -> f64) -> Matrix {
         .collect()
 }
 
+/// Statistique par colonne (MEAN, STD) : 1×p, chaque colonne réduite par
+/// `stat` sur ses valeurs non manquantes.
+pub(super) fn column_stat(m: &Matrix, stat: impl Fn(&[f64]) -> f64) -> Matrix {
+    let (nr, nc) = dims(m);
+    let row = (0..nc)
+        .map(|j| {
+            let xs: Vec<f64> = (0..nr).map(|i| m[i][j]).filter(|v| !v.is_nan()).collect();
+            stat(&xs)
+        })
+        .collect();
+    vec![row]
+}
+
+/// Fonction élémentaire à domaine restreint (SQRT, LOG). Un élément hors du
+/// domaine est l'ERROR d'exécution SAS/IML « Invalid argument to function »
+/// (SAS/IML blog, « How to interpret SAS/IML error messages » : LOG(0)) ;
+/// une valeur manquante reste manquante.
+pub(super) fn checked_map(
+    m: &Matrix,
+    fname: &str,
+    in_domain: impl Fn(f64) -> bool,
+    f: impl Fn(f64) -> f64,
+) -> Result<Matrix> {
+    if all_elems(m)
+        .into_iter()
+        .any(|v| !v.is_nan() && !in_domain(v))
+    {
+        return Err(SasError::runtime(format!(
+            "(execution) Invalid argument to function.\noperation : {fname}"
+        )));
+    }
+    Ok(map_elems(m, f))
+}
+
+/// « SAS/IML software does not support missing values in most matrix
+/// operations and functions » (SAS/IML 9.4, Missing Values : produit
+/// matriciel, inverse…). Une valeur manquante (NaN) en entrée d'une telle
+/// opération est l'ERROR SAS/IML au lieu de résultats NaN silencieux.
+pub(super) fn require_nonmissing(m: &Matrix, operation: &str) -> Result<()> {
+    if all_elems(m).into_iter().any(f64::is_nan) {
+        return Err(SasError::runtime(format!(
+            "(execution) Invalid argument or operand; contains missing values.\n\
+             operation : {operation}"
+        )));
+    }
+    Ok(())
+}
+
 // ───────────────────────── M28a.3 : algèbre linéaire ─────────────────────────
 
 /// Vérifie qu'une matrice est carrée ; renvoie sa dimension.
@@ -91,11 +139,20 @@ pub(super) fn require_square(m: &Matrix, fname: &str) -> Result<usize> {
 /// `INV(A)` → A⁻¹ via `invert_matrix`.
 pub(super) fn iml_inv(a: &Matrix) -> Result<Matrix> {
     require_square(a, "INV")?;
+    require_nonmissing(a, "INV")?;
     crate::stat::linalg::invert_matrix(a)
 }
 
-/// `SOLVE(A, b)` → x tel que A*x = b, colonne par colonne via `least_squares`.
+/// `SOLVE(A, b)` → x tel que A*x = b, colonne par colonne via `least_squares`
+/// (résolution QR, même critère de singularité que INV).
+///
+/// J02-P5 — « The matrix A must be square and nonsingular » (SAS/IML 9.4,
+/// SOLVE Function) : une matrice non carrée était résolue en silence au
+/// sens des moindres carrés, système incohérent compris.
 pub(super) fn iml_solve(a: &Matrix, b: &Matrix) -> Result<Matrix> {
+    require_square(a, "SOLVE")?;
+    require_nonmissing(a, "SOLVE")?;
+    require_nonmissing(b, "SOLVE")?;
     let (an, _) = dims(a);
     let (bn, bc) = dims(b);
     if an != bn {
@@ -126,8 +183,10 @@ pub(super) fn iml_eigval(a: &Matrix) -> Result<Matrix> {
     for i in 0..n {
         for j in (i + 1)..n {
             if (a[i][j] - a[j][i]).abs() > 1e-10 {
+                // J02-P5 — sans préfixe : le log ajoute « ERROR: » (il était
+                // doublé, « ERROR: ERROR: … »).
                 return Err(SasError::runtime(
-                    "ERROR: The argument to the EIGVAL function must be a symmetric matrix.",
+                    "The argument to the EIGVAL function must be a symmetric matrix.",
                 ));
             }
         }
@@ -140,6 +199,7 @@ pub(super) fn iml_eigval(a: &Matrix) -> Result<Matrix> {
 /// `cholesky` renvoie L (lower) avec L*L'=A ; on transpose.
 pub(super) fn iml_chol(a: &Matrix) -> Result<Matrix> {
     require_square(a, "CHOL")?;
+    require_nonmissing(a, "CHOL")?;
     let l = crate::stat::linalg::cholesky(a)?;
     Ok(transpose(&l))
 }
@@ -198,6 +258,7 @@ pub(super) fn iml_shape(src: &Matrix, nrow: i64, ncol: i64) -> Result<Matrix> {
 /// `DET(A)` → determinant via LU decomposition with partial pivoting.
 pub(super) fn iml_det(a: &Matrix) -> Result<f64> {
     let n = require_square(a, "DET")?;
+    require_nonmissing(a, "DET")?;
     // Work on a mutable copy.
     let mut m: Vec<Vec<f64>> = a.to_vec();
     let mut det = 1.0_f64;
@@ -248,7 +309,7 @@ pub(super) fn symmetric_eigen(a: &Matrix, fname: &str) -> Result<(Matrix, Vec<f6
         for j in (i + 1)..n {
             if (a[i][j] - a[j][i]).abs() > 1e-10 {
                 return Err(SasError::runtime(format!(
-                    "ERROR: The argument to the {fname} function must be a symmetric matrix."
+                    "The argument to the {fname} function must be a symmetric matrix."
                 )));
             }
         }
@@ -263,6 +324,7 @@ pub(super) fn iml_svdcd(a: &Matrix) -> Result<(Matrix, Matrix, Matrix)> {
     if m == 0 || n == 0 {
         return Err(SasError::runtime("IML: SVDCD requires a non-empty matrix."));
     }
+    require_nonmissing(a, "SVDCD")?;
     if m < n {
         return Err(SasError::runtime(
             "IML: SVDCD currently requires rows >= columns (m >= n).",
