@@ -4,16 +4,22 @@
 //!
 //! ## Syntaxe v1
 //! ```text
-//! proc report data=<ref> [nowd|nowindow] [noheader] [headline] [headskip];
+//! proc report data=<ref> [nowd|nowindows] [noheader] [out=<ref>];
 //!     column <name list>;          /* a.k.a. `columns` */
 //!     define <var> / <usage> [order=asc|desc] ['label'] ;
 //!     run; | quit;
 //! ```
 //!
 //! Usages (sur DEFINE) :
-//!   - `DISPLAY`  : affiche la valeur brute par observation.
-//!   - `ORDER`    : variable de tri ; chaque valeur distincte → une ligne.
-//!   - `GROUP`    : comme ORDER mais regroupe (collapse) les doublons.
+//!   - `DISPLAY`  : affiche la valeur par observation.
+//!   - `ORDER`    : variable de tri des lignes de détail ; ne consolide JAMAIS
+//!     les observations (J02-P7, doc SAS 9.4 « Usage of Variables in a
+//!     Report » : « A report that contains one or more order variables has a
+//!     row for every observation in the input data set »).
+//!   - `GROUP`    : regroupe (collapse) les observations de même combinaison
+//!     de valeurs FORMATÉES, si aucune variable ORDER ou DISPLAY n'est
+//!     présente ; sinon NOTE SAS « Groups are not created because the usage
+//!     of … » et la variable se comporte comme ORDER.
 //!   - `ANALYSIS` : variable d'agrégat ; statistique optionnelle parmi
 //!     SUM MEAN MIN MAX N STD (défaut SUM).
 //!
@@ -26,44 +32,55 @@
 //!   observation, colonnes dans l'ordre COLUMN, valeur brute par cellule
 //!   (les variables ANALYSIS impriment aussi leur valeur brute par ligne,
 //!   comme SAS dans un rapport détaillé).
-//! - AU MOINS UN GROUP/ORDER → **rapport résumé** : on trie/regroupe par
-//!   le tuple des colonnes GROUP+ORDER (ordre/égalité via `Value::sas_cmp`,
-//!   réutilise `common::group_by_keys`). ORDER conserve chaque valeur
-//!   distincte ; GROUP réduit les doublons (la clé étant un tuple, GROUP et
-//!   ORDER produisent les mêmes groupes : la distinction GROUP vs ORDER
-//!   n'affecte v1 que l'affichage — voir DISPLAY ci-dessous). Pour chaque
-//!   groupe, les colonnes ANALYSIS sont calculées via `means::compute` sur
-//!   les valeurs non-missing du groupe (`common::partition_numeric`).
-//! - Variables DISPLAY dans un rapport résumé : on imprime la valeur si elle
-//!   est constante dans le groupe, sinon une cellule vide (simplification
-//!   documentée).
+//! - GROUP sans ORDER ni DISPLAY → **rapport résumé** : une ligne par
+//!   combinaison des valeurs formatées des colonnes GROUP (égalité via
+//!   `Value::sas_cmp`, réutilise `common::group_by_keys`), rangée par la plus
+//!   petite valeur non formatée de chaque clé. Les colonnes ANALYSIS sont
+//!   calculées via `means::compute` sur les valeurs non manquantes du groupe
+//!   (`common::partition_numeric`).
+//! - ORDER, ou GROUP avec ORDER/DISPLAY → **rapport détaillé trié** : une ligne
+//!   par observation, rangée par les colonnes GROUP/ORDER (ordre COLUMN, ex
+//!   aequo dans l'ordre des données) ; BREAK/RBREAK s'y appliquent.
+//! - Formats (J02-P7) : `FORMAT=` du DEFINE, sinon le format stocké de la
+//!   variable (doc SAS 9.4 DEFINE, FORMAT=).
 //!
 //! ## En-têtes
 //! Label du DEFINE s'il est donné, sinon le NOM de la variable tel que
 //! stocké (SAS met le nom en majuscules ; on garde la casse stockée —
 //! simplification documentée). Ligne d'en-tête supprimée sous `noheader`.
 //! Numériques formatés comme PRINT/means (`format_best`) ; missing → `.`.
+//! `HEADLINE`/`HEADSKIP` : WARNING d'affichage (J11-P3).
 //!
 //! ## FONCTIONNALITÉS AVANCÉES (M21.4) — désormais supportées :
 //!   - usage `ACROSS` : les valeurs distinctes de la variable across deviennent
 //!     des COLONNES ; cellule = stat de l'ANALYSIS var au croisement
-//!     GROUP×ACROSS. v1 : exactement 1 across + 1 analysis ; en-tête à deux
-//!     niveaux APLATI en une ligne "valeur STAT" (le listing n'a pas de
-//!     spanner). OUT= sur un rapport ACROSS est différé proprement (note).
+//!     GROUP×ACROSS. v1 : exactement 1 across + 1 analysis + des GROUP ;
+//!     en-tête à deux niveaux APLATI en une ligne "valeur STAT" (le listing
+//!     n'a pas de spanner). Tout le reste (BREAK, RBREAK, COMPUTE, OUT=,
+//!     FORMAT=/WIDTH=, format stocké, colonnes DISPLAY/ORDER/COMPUTED) →
+//!     ERROR jusqu'à J11-P3 (`contract::check_plan`).
 //!   - `WHERE <cond>;` : filtre les observations AVANT le rapport. Évaluateur
 //!     d'expression local (ce fichier) fidèle SAS : comparaisons via
 //!     `Value::sas_cmp` (`. = .` vrai, char insensible aux blancs finaux),
-//!     logique sur la véracité SAS, `in (...)`. Appels de fonctions/arrays non
-//!     gérés → missing de garde (pas de panic).
+//!     logique sur la véracité SAS, `in (...)`. Appels de fonctions, tableaux
+//!     et méthodes → ERROR au parsing jusqu'à J03-P3 ; variable absente →
+//!     ERROR « Variable … is not on file ».
 //!   - `BREAK AFTER <var> / summarize;` : ligne de sous-total recalculée
-//!     (ANALYSIS via `means::compute`) après chaque changement du groupe.
-//!   - `RBREAK AFTER / summarize;` : ligne de total général en bas. OL/DOL/
-//!     SKIP/PAGE acceptés mais cosmétiques (no-op v1).
+//!     (ANALYSIS via `means::compute`) après chaque changement de la variable
+//!     GROUP/ORDER `<var>` (toute autre variable : ERROR SAS « You can only
+//!     BREAK on GROUPing and ORDERing variables. »).
+//!   - `RBREAK AFTER / summarize;` : ligne de total général en bas (rapport
+//!     avec GROUP/ORDER). OL/DOL/UL/DUL/SKIP/PAGE/SUPPRESS : WARNING
+//!     d'affichage ; BEFORE, RBREAK multiples ou sans GROUP/ORDER : ERROR
+//!     jusqu'à J11-P2.
 //!   - `COMPUTE <col>; <col> = <expr>; endcomp;` : affectation simple par ligne.
 //!     `COMPUTE AFTER; line <items>; endcomp;` : ligne de texte libre. Les
-//!     affectations et LINE peuvent référencer une colonne par son nom OU par
-//!     l'alias positionnel `_Cn_` (M33.5). `line` accepte un pointeur `@<col>`
-//!     et un format de fin (`line @5 total best8.;`).
+//!     affectations et LINE référencent un élément du rapport par son NOM
+//!     (jamais son libellé) ou par l'alias positionnel `_Cn_` (M33.5, J02-P7).
+//!     `line` accepte un pointeur `@<col>` et un format de fin
+//!     (`line @5 total best8.;`). COMPUTE BEFORE, COMPUTE AFTER <var>, LINE
+//!     dans le bloc d'une colonne, affectation dans COMPUTE AFTER : ERROR
+//!     jusqu'à J11-P2.
 //!   - `OUT=<ref>` : écrit les lignes du corps du rapport (détail/groupe +
 //!     sous-totaux BREAK ; le total RBREAK est exclu) comme dataset, en
 //!     respectant le type SAS de chaque colonne, et émet la NOTE de création.
@@ -86,11 +103,10 @@
 //!   - `FLOW` (retour à la ligne des valeurs char longues) — interaction avec la
 //!     hauteur de ligne ; différé PROPREMENT → "PROC REPORT v1 does not support
 //!     the DEFINE option 'FLOW'." De même pour multi-label, etc.
-//!   - COMPUTE non trivial AU-DELÀ de `_Cn_`/nom + LINE-avec-format : affectation
-//!     back dans des colonnes calculées avec un riche jeu de fonctions n'est que
-//!     partiellement couvert (l'évaluateur d'expression local gère les fonctions
-//!     déjà disponibles ; le reste est différé).
-//!   - options PROC autres que nowd/nowindow/noheader/headline/headskip/out=
+//!   - COMPUTE non trivial AU-DELÀ de `_Cn_`/nom + LINE-avec-format : fonctions
+//!     (J03-P3), noms composés `var.stat`, `_BREAK_` (J11-P2), variables
+//!     temporaires, options `/ CHARACTER LENGTH=` → ERROR (`contract`).
+//!   - options PROC autres que nowd/nowindow(s)/noheader/headline/headskip/out=
 //!     → "Unexpected option 'XXX' on PROC REPORT statement."
 
 use crate::ast::{DatasetRef, Expr};
@@ -107,6 +123,7 @@ use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
 
 mod compute;
+mod contract;
 mod output;
 mod parse;
 mod plan;
@@ -231,6 +248,9 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     // --- Build the per-column plan, applying DEFINEs and type defaults. ---
     let plan = build_col_plan(ast, &ds)?;
 
+    // J02-P7 — rules that need the data set, checked before any output.
+    contract::check_plan(ast, &plan, &ds, &display_name)?;
+
     // --- Decode, apply WHERE, and project onto surviving rows. ---
     let (decoded, n_obs) = decode_and_filter(ast, &ds, &plan, n_obs_total)?;
 
@@ -238,6 +258,14 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     let has_across = plan.iter().any(|c| matches!(c.usage, Usage::Across));
     if has_across {
         return execute_across(ast, session, &ds, &plan, &decoded, n_obs, &display_name);
+    }
+
+    // A COMPUTE reference to a name that is no report item reads a missing
+    // value, as an unassigned variable of the block does in SAS.
+    for name in uninitialized_names(ast, &plan) {
+        session
+            .log
+            .note(&format!("Variable {name} is uninitialized."));
     }
 
     // Determine whether this is a summary report.
@@ -249,8 +277,32 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
         .collect();
     let is_summary = !group_positions.is_empty();
 
+    // J02-P7 — only GROUP variables consolidate the observations, and only
+    // when no ORDER or DISPLAY item is present (SAS 9.4 REPORT, « Usage of
+    // Variables in a Report »); the first such item is named by the SAS NOTE.
+    let blocker = plan
+        .iter()
+        .find(|c| matches!(c.usage, Usage::Display | Usage::Order));
+    let has_group = plan.iter().any(|c| c.usage == Usage::Group);
+    if has_group && let Some(b) = blocker {
+        let usage = if b.usage == Usage::Order {
+            "ORDER"
+        } else {
+            "DISPLAY"
+        };
+        session
+            .log
+            .note(&contract::groups_not_created_note(&b.name, usage));
+    }
+    let consolidate = has_group && blocker.is_none();
+
     // --- Headers & alignments ---
     let (headers, aligns) = build_headers(&plan, &ds);
+
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
 
     // Output value rows (typed) — used both for the listing and for OUT=.
     // Each entry is (kind, values), where `kind` distinguishes detail/group
@@ -258,17 +310,21 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     let mut value_rows: Vec<RowOut> = if !is_summary {
         build_detail_rows(&plan, &decoded, n_obs)
     } else {
-        build_summary_rows(ast, &ds, &plan, &decoded, &group_positions, n_obs)
+        build_summary_rows(
+            ast,
+            &plan,
+            &decoded,
+            &group_positions,
+            n_obs,
+            consolidate,
+            &catalog,
+        )
     };
 
     // --- COMPUTE: apply simple `<col> = <expr>;` assignments per row. ---
     apply_row_computes(ast, &plan, &mut value_rows);
 
     // --- Render the listing. ---
-    // Clone the user-format catalog once so cell formatting (which borrows it)
-    // does not clash with the mutable `session.listing` borrow below. Empty on
-    // the default path → no behaviour change.
-    let catalog = session.format_catalog.clone();
     let rows: Vec<Vec<String>> = value_rows
         .iter()
         .map(|ro| {
@@ -313,5 +369,7 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

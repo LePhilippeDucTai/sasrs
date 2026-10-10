@@ -14,35 +14,111 @@ pub(super) fn build_detail_rows(
 ) -> Vec<RowOut> {
     let mut value_rows: Vec<RowOut> = Vec::new();
     for r in 0..n_obs {
-        let vals: Vec<Value> = (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect();
         value_rows.push(RowOut {
             kind: RowKind::Detail,
-            vals,
+            vals: detail_row_values(plan, decoded, r),
         });
     }
     value_rows
 }
 
-/// Summary report: group by GROUP+ORDER key columns and emit one row per
-/// group, plus BREAK sub-totals and the RBREAK grand total.
+/// Values of the detail row of observation `r` (every column as read).
+fn detail_row_values(plan: &[ColPlan], decoded: &[Vec<Value>], r: usize) -> Vec<Value> {
+    (0..plan.len()).map(|ci| decoded[ci][r].clone()).collect()
+}
+
+/// Key column of a GROUP/ORDER item: its formatted values when the item has a
+/// format (rows are formed on the formatted values, J02-P7), else the values
+/// as read.
+fn group_key_column(
+    col: &ColPlan,
+    values: &[Value],
+    catalog: &crate::formats::FormatCatalog,
+) -> Vec<Value> {
+    match col
+        .format
+        .as_deref()
+        .and_then(crate::formats::FormatSpec::parse)
+    {
+        Some(spec) => values
+            .iter()
+            .map(|v| Value::Char(catalog.format(v, &spec).trim().to_string()))
+            .collect(),
+        None => values.to_vec(),
+    }
+}
+
+/// Report with GROUP or ORDER variables: rows ordered by these variables
+/// (COLUMN order, each in its direction), plus BREAK sub-totals and the RBREAK
+/// grand total.
+///
+/// J02-P7 — with `consolidate` (GROUP variables and no ORDER or DISPLAY item)
+/// one row per combination of the FORMATTED values of the GROUP variables;
+/// otherwise one detail row per observation. SAS 9.4 REPORT, « Usage of
+/// Variables in a Report »: « A report that contains one or more order
+/// variables has a row for every observation in the input data set », and
+/// GROUP variables that cannot consolidate are displayed as ORDER variables.
+/// ORDER used to consolidate the rows like GROUP. A formatted key is ordered by
+/// the smallest unformatted value it covers; ties keep the data order.
 pub(super) fn build_summary_rows(
     ast: &ReportAst,
-    ds: &crate::dataset::SasDataset,
     plan: &[ColPlan],
     decoded: &[Vec<Value>],
     group_positions: &[usize],
     n_obs: usize,
+    consolidate: bool,
+    catalog: &crate::formats::FormatCatalog,
 ) -> Vec<RowOut> {
     let mut value_rows: Vec<RowOut> = Vec::new();
 
-    let key_refs: Vec<&Vec<Value>> = group_positions.iter().map(|&p| &decoded[p]).collect();
-    let mut groups = group_by_keys(&key_refs, n_obs);
+    let keys: Vec<Vec<Value>> = group_positions
+        .iter()
+        .map(|&p| group_key_column(&plan[p], &decoded[p][..n_obs], catalog))
+        .collect();
+    // Sort value of every formatted key: the smallest unformatted value of
+    // the rows that share it (unformatted columns sort on the key itself).
+    let reps: Vec<Option<std::collections::HashMap<String, Value>>> = group_positions
+        .iter()
+        .zip(&keys)
+        .map(|(&p, key_col)| {
+            plan[p].format.as_ref()?;
+            let mut reps: std::collections::HashMap<String, Value> =
+                std::collections::HashMap::new();
+            for (k, v) in key_col.iter().zip(&decoded[p]) {
+                let Value::Char(k) = k else { continue };
+                match reps.get_mut(k) {
+                    Some(rep) if v.sas_cmp(rep) == Ordering::Less => *rep = v.clone(),
+                    Some(_) => {}
+                    None => {
+                        reps.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Some(reps)
+        })
+        .collect();
+    let sort_value = |pos: usize, key: &Value| -> Value {
+        match (&reps[pos], key) {
+            (Some(m), Value::Char(k)) => m.get(k).cloned().unwrap_or_else(|| key.clone()),
+            _ => key.clone(),
+        }
+    };
 
-    // Apply DESCENDING direction lexicographically over the key tuple.
+    let mut groups: Vec<(Vec<Value>, Vec<usize>)> = if consolidate {
+        let key_refs: Vec<&Vec<Value>> = keys.iter().collect();
+        group_by_keys(&key_refs, n_obs)
+    } else {
+        (0..n_obs)
+            .map(|r| (keys.iter().map(|k| k[r].clone()).collect(), vec![r]))
+            .collect()
+    };
+
+    // Apply DESCENDING direction lexicographically over the key tuple (stable
+    // sort: equal keys keep the data order).
     let dirs: Vec<OrderDir> = group_positions.iter().map(|&p| plan[p].dir).collect();
     groups.sort_by(|(a, _), (b, _)| {
-        for ((x, y), dir) in a.iter().zip(b).zip(&dirs) {
-            let mut c = x.sas_cmp(y);
+        for (pos, ((x, y), dir)) in a.iter().zip(b).zip(&dirs).enumerate() {
+            let mut c = sort_value(pos, x).sas_cmp(&sort_value(pos, y));
             if *dir == OrderDir::Descending {
                 c = c.reverse();
             }
@@ -62,17 +138,23 @@ pub(super) fn build_summary_rows(
             let vn = b.var.as_ref()?;
             group_positions
                 .iter()
-                .position(|&p| {
-                    plan[p].idx != usize::MAX && ds.vars[plan[p].idx].name.eq_ignore_ascii_case(vn)
-                })
+                .position(|&p| plan[p].name.eq_ignore_ascii_case(vn))
                 .map(|pos| (pos, b))
         })
         .collect();
 
     for (gi, (key, grp_rows)) in groups.iter().enumerate() {
-        let vals = summary_row_values(plan, decoded, grp_rows);
+        let vals = if consolidate {
+            summary_row_values(plan, decoded, grp_rows)
+        } else {
+            detail_row_values(plan, decoded, grp_rows[0])
+        };
         value_rows.push(RowOut {
-            kind: RowKind::Group,
+            kind: if consolidate {
+                RowKind::Group
+            } else {
+                RowKind::Detail
+            },
             vals,
         });
 

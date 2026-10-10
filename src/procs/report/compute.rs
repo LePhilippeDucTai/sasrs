@@ -31,7 +31,9 @@ pub(super) fn lookup_var<'a>(
 /// single row, over decoded columns. Comparisons go through `Value::sas_cmp`
 /// (so `. = .` is true and char compares ignore trailing blanks); logical ops
 /// use SAS truthiness (missing/0 = false). Unsupported constructs (function
-/// calls, arrays, hash methods) evaluate to a guard missing rather than panic.
+/// calls, arrays, hash methods) are rejected at parse time (J02-P7,
+/// `contract::check_expr`); the guard missing below only keeps a hand-built
+/// AST from panicking.
 pub(super) fn eval_row_expr(expr: &Expr, cols: &[(String, Vec<Value>)], r: usize) -> Value {
     use crate::ast::UnaryOp;
     match expr {
@@ -130,30 +132,26 @@ pub(super) fn value_to_disp(v: &Value) -> String {
 // ───────────────────────── COMPUTE / LINE ─────────────────────────
 
 /// Apply simple `compute <col>; <col> = <expr>; endcomp;` assignments to each
-/// produced row. The expression may reference any report column by name (its
-/// per-row value). Computes targeting `after`/`before` are handled separately
-/// (LINE rendering); non-column targets are skipped here.
+/// produced row. The expression may reference any report item by its name or
+/// its absolute column reference `_Cn_` (J02-P7: never by its DEFINE label —
+/// label references used to resolve while name references read a missing
+/// value and lost the assignment). `COMPUTE AFTER` blocks only hold LINE
+/// statements (checked at parse time) and are rendered separately. Every
+/// target and assignment destination was resolved by `contract::check_plan`
+/// before any output.
 pub(super) fn apply_row_computes(ast: &ReportAst, plan: &[ColPlan], rows: &mut [RowOut]) {
     for comp in &ast.computes {
-        // Only column-targeted computes assign into a cell.
-        let target_ci = plan
-            .iter()
-            .position(|c| c.header.eq_ignore_ascii_case(&comp.target));
-        // Build the per-row column context lazily inside the loop.
+        if comp.target.eq_ignore_ascii_case("after") {
+            continue;
+        }
         for ro in rows.iter_mut() {
-            // Context: each plan column referenced by its header AND by the
-            // positional alias `_Cn_` (1-based COLUMN index, M33.5).
-            let cols = compute_row_context(plan, &ro.vals);
             for st in &comp.stmts {
                 if let ComputeStmt::Assign { col, expr } = st {
+                    // Context rebuilt for every statement: a statement reads
+                    // the values assigned by the previous ones of the block.
+                    let cols = compute_row_context(plan, &ro.vals);
                     let v = eval_row_expr(expr, &cols, 0);
-                    // Assign into the named column if it matches a plan column,
-                    // else into the compute target column.
-                    let dest = plan
-                        .iter()
-                        .position(|c| c.header.eq_ignore_ascii_case(col))
-                        .or(target_ci);
-                    if let Some(d) = dest {
+                    if let Some(d) = contract::resolve_item(plan, col) {
                         ro.vals[d] = v;
                     }
                 }
@@ -163,14 +161,68 @@ pub(super) fn apply_row_computes(ast: &ReportAst, plan: &[ColPlan], rows: &mut [
 }
 
 /// Build the per-row COMPUTE/LINE evaluation context: each plan column is
-/// addressable by its (lowercased) header AND by the positional alias `_Cn_`
-/// (1-based COLUMN index), matching SAS's `_C1_`/`_C2_` report-column refs
-/// (M33.5). Each column holds a single value (the current report row).
+/// addressable by its (lowercased) report item name AND by the positional
+/// alias `_Cn_` (1-based COLUMN index), matching the SAS `_C1_`/`_C2_`
+/// report-column refs (M33.5). Each column holds a single value (the current
+/// report row).
 pub(super) fn compute_row_context(plan: &[ColPlan], vals: &[Value]) -> Vec<(String, Vec<Value>)> {
     let mut cols: Vec<(String, Vec<Value>)> = Vec::with_capacity(plan.len() * 2);
     for (ci, c) in plan.iter().enumerate() {
-        cols.push((c.header.to_ascii_lowercase(), vec![vals[ci].clone()]));
+        cols.push((c.name.to_ascii_lowercase(), vec![vals[ci].clone()]));
         cols.push((format!("_c{}_", ci + 1), vec![vals[ci].clone()]));
     }
     cols
+}
+
+/// Names referenced by the COMPUTE expressions that are no report item: in
+/// SAS they are variables of the COMPUTE block that nothing assigns (« NOTE:
+/// Variable x is uninitialized. »), so they read a missing value. Distinct
+/// names, in order of appearance.
+pub(super) fn uninitialized_names(ast: &ReportAst, plan: &[ColPlan]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut visit = |e: &Expr| {
+        let mut refs = Vec::new();
+        expr_refs(e, &mut refs);
+        for name in refs {
+            if contract::resolve_item(plan, &name).is_none()
+                && !names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+            {
+                names.push(name);
+            }
+        }
+    };
+    for comp in &ast.computes {
+        for st in &comp.stmts {
+            match st {
+                ComputeStmt::Assign { expr, .. } => visit(expr),
+                ComputeStmt::Line(items) => {
+                    for item in items {
+                        if let LineItem::Expr(e, _) = item {
+                            visit(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Every variable referenced by an expression.
+pub(super) fn expr_refs(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Var(name) => out.push(name.clone()),
+        Expr::Unary { expr, .. } => expr_refs(expr, out),
+        Expr::Binary { left, right, .. } => {
+            expr_refs(left, out);
+            expr_refs(right, out);
+        }
+        Expr::In { expr, list } => {
+            expr_refs(expr, out);
+            for item in list {
+                expr_refs(item, out);
+            }
+        }
+        _ => {}
+    }
 }

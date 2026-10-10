@@ -1,0 +1,175 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j02/contract_tabulate_report.sas
+---
+==== LOG ====
+
+1     libname d 'data';
+NOTE: Libref D was successfully assigned as follows:
+            Engine:        PARQUET
+            Physical Name: data
+
+2     proc format;
+3       value agegrp low-12 = 'Pre-teen' 13-high = 'Teen';
+4     run;
+NOTE: Format AGEGRP has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     data class;
+6       set d.class;
+7       format age agegrp.;
+8       if name = 'Alfred' then sex = ' ';
+9     run;
+NOTE: There were 19 observations read from the data set D.CLASS.
+NOTE: The data set WORK.CLASS has 19 observations and 5 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+10    title 'TABULATE: formatted CLASS levels, Alfred (blank sex) excluded';
+
+11    proc tabulate data=class;
+12      class sex age;
+13      var height;
+14      table age all, height*(n mean) pctn;
+15    run;
+NOTE: PROCEDURE TABULATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    title 'TABULATE MISSING: the blank sex is a level';
+
+17    proc tabulate data=class missing;
+18      class sex;
+19      keylabel n='Count';
+20      table sex all, n;
+21    run;
+WARNING: The KEYLABEL statement is ignored in PROC TABULATE; display customization is not supported.
+NOTE: PROCEDURE TABULATE used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+22    title 'TABULATE: a second TABLE statement is rejected';
+
+23    proc tabulate data=class;
+24      class sex;
+25      table sex;
+26      table sex, n;
+27    run;
+ERROR: More than one TABLE statement is not supported in PROC TABULATE; it can affect results and cannot be ignored (planned: roadmap-avancee J03-P2).
+
+28    title 'REPORT: ORDER keeps one row per observation';
+
+29    proc report data=d.class nowd headline;
+30      column sex name height;
+31      where age > 14;
+32      define sex / order;
+33      define height / analysis sum format=6.1;
+34      break after sex / summarize ol;
+35    run;
+WARNING: The HEADLINE option is ignored in PROC REPORT; display customization is not supported (planned: roadmap-avancee J11-P3).
+WARNING: The OL option of the BREAK statement is ignored in PROC REPORT; display customization is not supported (planned: roadmap-avancee J11-P2).
+NOTE: There were 5 observations read from the data set D.CLASS.
+NOTE: PROCEDURE REPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+36    title 'REPORT: GROUP on the stored format of age';
+
+37    proc report data=class nowd;
+38      column age height;
+39      define age / group;
+40      define height / analysis mean format=6.2;
+41    run;
+NOTE: There were 19 observations read from the data set WORK.CLASS.
+NOTE: PROCEDURE REPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+42    title 'REPORT: COMPUTE refers to a labelled item by its name';
+
+43    proc report data=d.class nowd;
+44      column name height hcm;
+45      where age = 11;
+46      define height / display 'Height (in)';
+47      define hcm / computed format=6.1 'Height (cm)';
+48      compute hcm;
+49        hcm = height * 2.54;
+50      endcomp;
+51    run;
+NOTE: There were 2 observations read from the data set D.CLASS.
+NOTE: PROCEDURE REPORT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+52    title 'REPORT: rejected before any output';
+
+53    proc report data=d.class nowd;
+54      column name sex;
+55      where upcase(sex) = 'F';
+56    run;
+ERROR: A function call (UPCASE) in the WHERE statement is not supported in PROC REPORT; it can affect results and cannot be ignored (planned: roadmap-avancee J03-P3).
+
+57    proc report data=d.class nowd;
+58      column sex height;
+59      define sex / group;
+60      compute before;
+61        line 'Heights by sex';
+62      endcomp;
+63    run;
+ERROR: COMPUTE BEFORE is not supported in PROC REPORT; it can affect results and cannot be ignored (planned: roadmap-avancee J11-P2).
+
+64    title;
+
+==== LISTING ====
+                 TABULATE: formatted CLASS levels, Alfred (blank sex) excluded
+
+                                     The TABULATE Procedure
+
+                                  height*N     height*Mean            PctN
+
+                      Pre-teen           7              58    38.888888889
+                      Teen              11    64.490909091    61.111111111
+                      All               18    61.966666667             100
+
+                           TABULATE MISSING: the blank sex is a level
+
+                                     The TABULATE Procedure
+
+                                                   N
+
+                                                   1
+                                           F       9
+                                           M       9
+                                           All    19
+
+                          REPORT: ORDER keeps one row per observation
+
+                                    sex    name       height
+
+                                    F      Janet        62.5
+                                    F      Mary         66.5
+                                    F                  129.0
+                                    M      Philip       72.0
+                                    M      Ronald       67.0
+                                    M      William      66.5
+                                    M                  205.5
+
+                           REPORT: GROUP on the stored format of age
+
+                                            age    height
+
+                                       Pre-teen     58.00
+                                           Teen     64.87
+
+                     REPORT: COMPUTE refers to a labelled item by its name
+
+                              name      Height (in)    Height (cm)
+
+                              Joyce            51.3          130.3
+                              Thomas           57.5          146.1
+
+==== EXIT 2 ====

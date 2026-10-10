@@ -88,9 +88,15 @@ fn parse_compute_assignment() {
     }
 }
 
+// J02-P7 — the break variable must be a GROUP or ORDER variable (SAS 9.4
+// BREAK statement; any other variable is a SAS ERROR), and an RBREAK needs a
+// GROUP/ORDER variable until J11-P2: both programs define one.
 #[test]
 fn parse_break_now_parses() {
-    let ast = parse_report("proc report data=a; break after region / summarize; run;").unwrap();
+    let ast = parse_report(
+        "proc report data=a; define region / group; break after region / summarize; run;",
+    )
+    .unwrap();
     assert_eq!(ast.breaks.len(), 1);
     assert_eq!(ast.breaks[0].var.as_deref(), Some("region"));
     assert!(ast.breaks[0].summarize);
@@ -98,7 +104,8 @@ fn parse_break_now_parses() {
 
 #[test]
 fn parse_rbreak_now_parses() {
-    let ast = parse_report("proc report data=a; rbreak after / summarize; run;").unwrap();
+    let ast = parse_report("proc report data=a; define g / group; rbreak after / summarize; run;")
+        .unwrap();
     assert!(ast.rbreak.is_some());
     assert!(ast.rbreak.as_ref().unwrap().var.is_none());
     assert!(ast.rbreak.as_ref().unwrap().summarize);
@@ -317,8 +324,11 @@ fn summary_report_mean_stat() {
 
 #[test]
 fn order_keeps_distinct_rows_group_collapses() {
-    // ORDER variable with one analysis column: each distinct value of the
-    // order var produces one row, identical to GROUP for a key tuple.
+    // J02-P7 — an ORDER variable orders the detail rows and never
+    // consolidates them (SAS 9.4 REPORT, « Usage of Variables in a Report »:
+    // « A report that contains one or more order variables has a row for
+    // every observation »); only GROUP collapses. The former assertions pinned
+    // the consolidated rows (k=1 → 12).
     let mut session = make_session();
     let df = df![
         "k" => [1.0_f64, 1.0, 2.0],
@@ -331,7 +341,7 @@ fn order_keeps_distinct_rows_group_collapses() {
     };
     write_dataset(&mut session, "T", ds);
 
-    let ast = ReportAst {
+    let report = |usage: Usage| ReportAst {
         data: Some(DatasetRef {
             libref: Some("WORK".into()),
             name: "T".into(),
@@ -341,7 +351,7 @@ fn order_keeps_distinct_rows_group_collapses() {
         defines: vec![
             Define {
                 var: "k".into(),
-                usage: Usage::Order,
+                usage,
                 order: OrderDir::Ascending,
                 label: None,
                 format: None,
@@ -360,12 +370,28 @@ fn order_keeps_distinct_rows_group_collapses() {
         ],
         ..report_defaults()
     };
-    execute(&ast, &mut session).unwrap();
+    // Numeric (k, v) data lines of the listing.
+    let data_rows = |listing: &str| -> Vec<Vec<String>> {
+        listing
+            .lines()
+            .map(|l| l.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .filter(|t| t.len() == 2 && t.iter().all(|x| x.parse::<f64>().is_ok()))
+            .collect()
+    };
 
+    execute(&report(Usage::Order), &mut session).unwrap();
     let listing = session.listing.take_string();
-    // k=1 → sum 12, k=2 → sum 11. Two rows.
-    assert!(listing.contains("12"), "k=1 sum 12: {listing}");
-    assert!(listing.contains("11"), "k=2 sum 11: {listing}");
+    // ORDER: one row per observation, ordered by k.
+    assert_eq!(
+        data_rows(&listing),
+        [["1", "5"], ["1", "7"], ["2", "11"]],
+        "{listing}"
+    );
+
+    execute(&report(Usage::Group), &mut session).unwrap();
+    let listing = session.listing.take_string();
+    // GROUP: k=1 → sum 12, k=2 → sum 11. Two rows.
+    assert_eq!(data_rows(&listing), [["1", "12"], ["2", "11"]], "{listing}");
 }
 
 #[test]

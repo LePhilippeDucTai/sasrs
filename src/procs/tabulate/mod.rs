@@ -9,17 +9,22 @@
 //! un no-op silencieux).
 //!
 //! ### Statements
-//! - `proc tabulate data=<ref>;` — seule l'option `data=` est reconnue.
+//! - `proc tabulate data=<ref> [out=<ref>] [format=<fmt>] [missing];`.
 //! - `class <var list>;` — variables catégorielles. Décodées une fois via
-//!   `common::decode_column`, niveaux ordonnés par `Value::sas_cmp`. Les
-//!   valeurs MANQUANTES d'une variable CLASS sont EXCLUES en v1 (toute ligne
-//!   dont une variable CLASS impliquée est manquante est ignorée pour la
-//!   cellule). Documenté : SAS sans l'option MISSING fait de même.
+//!   `common::decode_column` ; les niveaux sont les valeurs FORMATÉES par le
+//!   format stocké de la variable (BEST12. / valeur brute sans format), rangés
+//!   par leur plus petite valeur non formatée (J02-P7 : SAS regroupe sur la
+//!   valeur formatée, ORDER=UNFORMATTED par défaut). Une observation dont UNE
+//!   variable CLASS est manquante est exclue de toute la table (cellules, ALL,
+//!   dénominateurs) ; avec l'option PROC `MISSING`, la valeur manquante est un
+//!   niveau à part entière (doc SAS 9.4, CLASS statement, MISSING).
 //! - `var <var list>;` — variables d'analyse numériques.
 //! - `table <dimexpr> [, <dimexpr> [, <dimexpr>]];` — UNE dimension (colonnes
 //!   seules), DEUX dimensions (`lignes , colonnes`) ou TROIS dimensions
 //!   (`page , lignes , colonnes`). La dimension page produit un sous-tableau
-//!   row×col répété par catégorie de page, précédé d'un libellé de page.
+//!   row×col répété par catégorie de page, précédé d'un libellé de page. UNE
+//!   seule instruction TABLE par étape : une deuxième est une ERROR (J03-P2).
+//! - `classlev`, `keylabel`, `keyword` : WARNING d'affichage (en-têtes).
 //! - `run;` / `quit;`.
 //!
 //! ### Grammaire d'expression de table (v1 — petite et précise)
@@ -54,8 +59,12 @@
 //!   `PCTSUM` = 100·sum_cellule / SUM_dénominateur. En v1 le dénominateur est
 //!   le TOTAL GÉNÉRAL (grand total : toutes les observations, resp. la somme de
 //!   la VAR sur toutes les observations). Les dénominateurs de groupe
-//!   (`PCTN<row>`) sont DIFFÉRÉS — atome de dénominateur parenthésé → erreur
-//!   propre. Dénominateur nul → cellule « . ».
+//!   (`PCTN<row>`) sont DIFFÉRÉS — `<` après un mot-clé → ERROR au parsing
+//!   (J03-P2). `pctn(x)` n'est PAS un dénominateur : SAS lit la concaténation
+//!   de PCTN et du groupe `(x)` (doc TABLE statement : opérateurs blanc,
+//!   `*`, `()` et `<>`), comme sasrs. Dénominateur nul → cellule « . ».
+//! - Les autres mots-clés de la doc (COLPCTN, MEDIAN, STDDEV…) → ERROR au
+//!   parsing, avant toute sortie (`contract::UNSUPPORTED_STATS`).
 //!
 //! ### ALL — classe universelle (totaux marginaux)
 //! Le mot-clé `ALL` dans une dimension ajoute une catégorie « total marginal » :
@@ -72,7 +81,9 @@
 //!   - zéro ou plusieurs variables CLASS (croisées = catégories imbriquées).
 //!
 //! Une cellule qui viole ces règles (p. ex. deux VAR croisées, ou deux
-//! stats) → erreur « PROC TABULATE: <construct> not yet supported ».
+//! stats) → erreur « PROC TABULATE: <construct> not yet supported ». Toutes
+//! les cellules sont calculées AVANT d'écrire la moindre ligne du listing :
+//! une erreur ne laisse ni titre ni en-tête de procédure orphelins (J02-P7).
 //!
 //! ### COUVERT en M33.4
 //! - Libellés d'en-tête `='texte'` + LABEL stocké des variables (défaut).
@@ -81,8 +92,8 @@
 //! - `out=lib.ds` : dataset de cellules style SAS (voir plus bas).
 //!
 //! ### DÉFÉRÉ (documenté + erreur propre, jamais silencieux)
-//! - `KEYLABEL`, `BOX=`, `RTS=`, dénominateurs de groupe `PCTN<...>`,
-//!   option `MISSING`. Tout
+//! - `KEYLABEL` (WARNING), `BOX=`, `RTS=`, dénominateurs de groupe
+//!   `PCTN<...>` (ERROR, J03-P2), plusieurs TABLE (ERROR, J03-P2). Tout
 //!   mot-clé/atome non reconnu dans `table` → erreur
 //!   « PROC TABULATE: <construct> not yet supported ». Toute option de
 //!   statement inconnue (sur `proc tabulate` ou un sous-statement non géré)
@@ -119,10 +130,11 @@
 //!     pour les cellules de pure fréquence (p. ex. `N`, `PctN`). `<STAT>` est
 //!     le libellé renvoyé par `tab_stat_header` (Mean, Sum, N, …).
 //!
-//! Simplification documentée vs SAS : SAS génère un dataset très large avec
-//! des colonnes `_TYPE_`/`_PAGE_`/`_TABLE_` et un nommage de stat parfois
-//! différent ; ici on fixe une forme faithful et hand-verifiable — une ligne
-//! par cellule rendue, les clés CLASS, et une colonne par stat de la table.
+//! Approximation documentée vs SAS (docs/support-contract.md, « Approximations
+//! documentées », NOTE à chaque exécution avec OUT=, jusqu'à J03-P2) : SAS
+//! écrit UNE observation par combinaison de valeurs CLASS avec TOUTES ses
+//! statistiques (noms `PctN_xx`/`PctSum_xx`) ; sasrs écrit une ligne par
+//! cellule rendue et par statistique, les autres colonnes de stat manquantes.
 
 #![allow(dead_code)]
 
@@ -142,6 +154,7 @@ use polars::prelude::*;
 use std::cmp::Ordering;
 
 mod cell;
+mod contract;
 mod model;
 mod output;
 mod parse;
@@ -155,6 +168,10 @@ use parse::*;
 
 pub struct TabulateAst {
     pub data: Option<DatasetRef>,
+    /// J02-P7 — PROC option MISSING: missing CLASS values are valid levels.
+    /// Without it, an observation with a missing value of any CLASS variable
+    /// is excluded from the table (cells, ALL and denominators).
+    missing: bool,
     class: Vec<String>,
     var: Vec<String>,
     /// J08-P2 — BY v1 [DESCENDING v2] ; : table par groupe (données triées
@@ -258,11 +275,17 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         }
     }
 
-    // Decode every CLASS and VAR column once.
-    let mut class_values: Vec<(usize, Vec<Value>)> = Vec::with_capacity(class_cols.len());
-    for (_, ci) in &class_cols {
-        class_values.push((*ci, decode_column(&ds, *ci)?));
-    }
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
+
+    // Decode every CLASS column (with its formatted levels, J02-P7) and every
+    // VAR column once.
+    let class_data: Vec<ClassData> = class_cols
+        .iter()
+        .map(|(_, ci)| ClassData::decode(&ds, *ci, &catalog))
+        .collect::<Result<_>>()?;
     let mut var_values: Vec<(usize, Vec<Value>)> = Vec::with_capacity(var_cols.len());
     for (_, ci) in &var_cols {
         var_values.push((*ci, decode_column(&ds, *ci)?));
@@ -285,26 +308,23 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
     };
     let by_names: Vec<String> = by_cols.iter().map(|c| c.name.clone()).collect();
 
-    // Clone the user-format catalog once so cell formatting (which borrows it)
-    // does not clash with the mutable `session.listing` borrow below. Empty on
-    // the default path → no behaviour change.
-    let catalog = session.format_catalog.clone();
     let table_format = ast.format.as_deref();
 
-    // --- listing ---
-    session.listing.page_header();
-    let title = "The TABULATE Procedure";
-    let ls = session.listing.ls();
-    let pad = ls.saturating_sub(title.len()) / 2;
-    session
-        .listing
-        .write_line(&format!("{}{}", " ".repeat(pad), title));
-    session.listing.blank();
+    // J02-P7 — the OUT= library is checked before any output: an unassigned
+    // libref used to fail after the whole listing had been written.
+    if let Some(out) = &ast.out {
+        session.libs.get(&out.libref_or_work())?;
+    }
 
     // --- OUT= cell dataset (M33.4, BY en J08-P2) : cellules calculées par
     // groupe, assemblées après la boucle de rendu. ---
     let want_out = ast.out.is_some();
     let mut out_groups: Vec<(Vec<Value>, Vec<OutCell>)> = Vec::new();
+
+    // J02-P7 — every cell is computed before the first listing line: an
+    // unsupported crossing used to stop the step after the titles and the
+    // procedure heading had been written.
+    let mut ops: Vec<ListingOp> = Vec::new();
 
     for (by_key, rows) in &by_groups_list {
         // BY group heading, SAS style (J08-P2) — skipped when no BY.
@@ -314,18 +334,27 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                 .zip(by_key)
                 .map(|(name, v)| format!("{}={}", name, by_heading_cell(v)))
                 .collect();
-            session.listing.write_line(&parts.join(" "));
-            session.listing.blank();
+            ops.push(ListingOp::Line(parts.join(" ")));
+            ops.push(ListingOp::Blank);
         }
+
+        // J02-P7 — an observation with a missing value of ANY CLASS variable
+        // is excluded from the whole table — cells, ALL and the PCTN/PCTSUM
+        // denominators — unless MISSING (SAS 9.4, CLASS statement, MISSING:
+        // « If you omit the MISSING option, then PROC TABULATE excludes the
+        // observations with any missing CLASS variable values »). It used to
+        // be left out only of the cells that constrain that variable.
+        let rows: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|&r| ast.missing || class_data.iter().all(|cd| !cd.values[r].is_missing()))
+            .collect();
 
         // Per-group data: CLASS/VAR columns filtered to the group's rows (row
         // indices become 0..n_g within the group) so the dimension expansion
         // and cell computation apply unchanged.
         let n_g = rows.len();
-        let class_values_g: Vec<(usize, Vec<Value>)> = class_values
-            .iter()
-            .map(|(c, v)| (*c, rows.iter().map(|&r| v[r].clone()).collect()))
-            .collect();
+        let class_data_g: Vec<ClassData> = class_data.iter().map(|cd| cd.select(&rows)).collect();
         let var_values_g: Vec<(usize, Vec<Value>)> = var_values
             .iter()
             .map(|(c, v)| (*c, rows.iter().map(|&r| v[r].clone()).collect()))
@@ -333,16 +362,16 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
 
         // Expand column and (optional) row dimensions into cell lists. With
         // BY, only the levels OBSERVED in the group appear (comportement SAS).
-        let col_cells = expand_dim(&ast.col, &class_cols, &var_cols, &class_values_g, n_g)?;
+        let col_cells = expand_dim(&ast.col, &class_cols, &var_cols, &class_data_g, n_g)?;
         let row_cells: Vec<Cell> = match &ast.row {
-            Some(r) => expand_dim(r, &class_cols, &var_cols, &class_values_g, n_g)?,
+            Some(r) => expand_dim(r, &class_cols, &var_cols, &class_data_g, n_g)?,
             None => vec![Cell { atoms: Vec::new() }], // single anonymous row
         };
 
         // Expand the (optional) page dimension. Without a page dimension we render
         // a single, page-less section (byte-identical to the pre-page behaviour).
         let page_cells: Vec<Option<Cell>> = match &ast.page {
-            Some(p) => expand_dim(p, &class_cols, &var_cols, &class_values_g, n_g)?
+            Some(p) => expand_dim(p, &class_cols, &var_cols, &class_data_g, n_g)?
                 .into_iter()
                 .map(Some)
                 .collect(),
@@ -352,12 +381,12 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         for page in &page_cells {
             // Page label line (only when a page dimension is present).
             if let Some(pc) = page {
-                session.listing.write_line(&format!(
+                ops.push(ListingOp::Line(format!(
                     "{}={}",
                     page_dim_name(ast, &ds),
                     cell_label(pc, &ds)
-                ));
-                session.listing.blank();
+                )));
+                ops.push(ListingOp::Blank);
             }
             let page_atoms: &[Atom] = match page {
                 Some(pc) => &pc.atoms,
@@ -396,7 +425,7 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                     let value = compute_cell(
                         &merged,
                         &var_values_g,
-                        &class_values_g,
+                        &class_data_g,
                         n_g,
                         table_format,
                         &catalog,
@@ -406,9 +435,13 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                 rows_out.push(out_row);
             }
 
-            session.listing.write_table(&headers, &aligns, &rows_out);
+            ops.push(ListingOp::Table {
+                headers,
+                aligns,
+                rows: rows_out,
+            });
             if page.is_some() {
-                session.listing.blank();
+                ops.push(ListingOp::Blank);
             }
         }
 
@@ -417,7 +450,7 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
                 &ds,
                 &class_cols,
                 &var_values_g,
-                &class_values_g,
+                &class_data_g,
                 &page_cells,
                 &row_cells,
                 &col_cells,
@@ -427,13 +460,49 @@ pub fn execute(ast: &TabulateAst, session: &mut Session) -> Result<()> {
         }
     }
 
+    // --- listing: written once every cell is known ---
+    session.listing.page_header();
+    let title = "The TABULATE Procedure";
+    let ls = session.listing.ls();
+    let pad = ls.saturating_sub(title.len()) / 2;
+    session
+        .listing
+        .write_line(&format!("{}{}", " ".repeat(pad), title));
+    session.listing.blank();
+    for op in &ops {
+        match op {
+            ListingOp::Line(line) => session.listing.write_line(line),
+            ListingOp::Blank => session.listing.blank(),
+            ListingOp::Table {
+                headers,
+                aligns,
+                rows,
+            } => session.listing.write_table(headers, aligns, rows),
+        }
+    }
+
     // --- OUT= cell dataset (M33.4) ---
     if let Some(out) = &ast.out {
+        // J02-P7 — documented approximation of the SAS OUT= layout, signalled
+        // at every execution until J03-P2 (docs/support-contract.md).
+        session.log.note(contract::OUT_APPROXIMATION_NOTE);
         write_out_dataset(session, &ds, &class_cols, &by_cols, &out_groups, out)?;
     } else {
         // No OUT= → do NOT touch session.last_dataset (byte-identical default).
     }
     Ok(())
+}
+
+/// One listing operation of the table, replayed once the whole table has been
+/// computed (J02-P7: no partial output before an error).
+enum ListingOp {
+    Line(String),
+    Blank,
+    Table {
+        headers: Vec<String>,
+        aligns: Vec<Align>,
+        rows: Vec<Vec<String>>,
+    },
 }
 
 /// BY-key cell rendering for the group heading line (J08-P2) — same
@@ -446,5 +515,7 @@ fn by_heading_cell(v: &Value) -> String {
     }
 }
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;
