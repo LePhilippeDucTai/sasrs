@@ -107,6 +107,7 @@ use polars::prelude::{Column, DataFrame, NamedFrom, Series};
 use std::cmp::Ordering;
 
 mod compute;
+mod contract;
 mod output;
 mod parse;
 mod plan;
@@ -231,6 +232,9 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     // --- Build the per-column plan, applying DEFINEs and type defaults. ---
     let plan = build_col_plan(ast, &ds)?;
 
+    // J02-P7 — rules that need the data set, checked before any output.
+    contract::check_plan(ast, &plan, &ds, &display_name)?;
+
     // --- Decode, apply WHERE, and project onto surviving rows. ---
     let (decoded, n_obs) = decode_and_filter(ast, &ds, &plan, n_obs_total)?;
 
@@ -238,6 +242,14 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     let has_across = plan.iter().any(|c| matches!(c.usage, Usage::Across));
     if has_across {
         return execute_across(ast, session, &ds, &plan, &decoded, n_obs, &display_name);
+    }
+
+    // A COMPUTE reference to a name that is no report item reads a missing
+    // value, as an unassigned variable of the block does in SAS.
+    for name in uninitialized_names(ast, &plan) {
+        session
+            .log
+            .note(&format!("Variable {name} is uninitialized."));
     }
 
     // Determine whether this is a summary report.
@@ -249,8 +261,32 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
         .collect();
     let is_summary = !group_positions.is_empty();
 
+    // J02-P7 — only GROUP variables consolidate the observations, and only
+    // when no ORDER or DISPLAY item is present (SAS 9.4 REPORT, « Usage of
+    // Variables in a Report »); the first such item is named by the SAS NOTE.
+    let blocker = plan
+        .iter()
+        .find(|c| matches!(c.usage, Usage::Display | Usage::Order));
+    let has_group = plan.iter().any(|c| c.usage == Usage::Group);
+    if has_group && let Some(b) = blocker {
+        let usage = if b.usage == Usage::Order {
+            "ORDER"
+        } else {
+            "DISPLAY"
+        };
+        session
+            .log
+            .note(&contract::groups_not_created_note(&b.name, usage));
+    }
+    let consolidate = has_group && blocker.is_none();
+
     // --- Headers & alignments ---
     let (headers, aligns) = build_headers(&plan, &ds);
+
+    // Clone the user-format catalog once so cell formatting (which borrows it)
+    // does not clash with the mutable `session.listing` borrow below. Empty on
+    // the default path → no behaviour change.
+    let catalog = session.format_catalog.clone();
 
     // Output value rows (typed) — used both for the listing and for OUT=.
     // Each entry is (kind, values), where `kind` distinguishes detail/group
@@ -258,17 +294,21 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     let mut value_rows: Vec<RowOut> = if !is_summary {
         build_detail_rows(&plan, &decoded, n_obs)
     } else {
-        build_summary_rows(ast, &ds, &plan, &decoded, &group_positions, n_obs)
+        build_summary_rows(
+            ast,
+            &plan,
+            &decoded,
+            &group_positions,
+            n_obs,
+            consolidate,
+            &catalog,
+        )
     };
 
     // --- COMPUTE: apply simple `<col> = <expr>;` assignments per row. ---
     apply_row_computes(ast, &plan, &mut value_rows);
 
     // --- Render the listing. ---
-    // Clone the user-format catalog once so cell formatting (which borrows it)
-    // does not clash with the mutable `session.listing` borrow below. Empty on
-    // the default path → no behaviour change.
-    let catalog = session.format_catalog.clone();
     let rows: Vec<Vec<String>> = value_rows
         .iter()
         .map(|ro| {
@@ -313,5 +353,7 @@ pub fn execute(ast: &ReportAst, session: &mut Session) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

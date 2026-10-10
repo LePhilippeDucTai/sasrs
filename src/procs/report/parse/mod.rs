@@ -38,8 +38,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
                 out = Some(common::parse_out_opt(ts)?);
                 true
             }
-            "nowd" | "nowindow" => {
-                // No-op: we never open an interactive window.
+            // NOWINDOWS (SAS spelling, alias NOWD; `nowindow` kept for the
+            // existing programs): no-op, we never open an interactive window.
+            "nowd" | "nowindow" | "nowindows" => {
                 ts.next();
                 true
             }
@@ -48,8 +49,14 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
                 noheader = true;
                 true
             }
+            // J02-P7 — rule line / blank line under the headings: not rendered
+            // (they used to be accepted without a word).
             "headline" | "headskip" => {
-                // No-op cosmetic options (rule line / skip line under headers).
+                ts.warn_ignored_display(contract::ignored_display_option(
+                    "PROC",
+                    &kw.to_ascii_uppercase(),
+                    Some("J11-P3"),
+                ));
                 ts.next();
                 true
             }
@@ -73,11 +80,22 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
             ts.next();
             breaks.push(parse_break(ts, false)?);
         } else if ts.peek().is_kw("rbreak") {
+            // J02-P7 — a second RBREAK used to replace the first one.
+            if rbreak.is_some() {
+                return Err(contract::unsupported_construct(
+                    "More than one RBREAK statement",
+                    Some("J11-P2"),
+                    ts.peek().span,
+                ));
+            }
             ts.next();
             rbreak = Some(parse_break(ts, true)?);
         } else if ts.peek().is_kw("where") {
             ts.next();
-            where_ = Some(crate::parser::expr::parse_expr(ts)?);
+            let span = ts.peek().span;
+            let cond = crate::parser::expr::parse_expr(ts)?;
+            contract::check_expr(&cond, "in the WHERE statement", span)?;
+            where_ = Some(cond);
             ts.expect_semi()?;
         } else {
             return Ok(false);
@@ -85,7 +103,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
         Ok(true)
     })?;
 
-    Ok(ReportAst {
+    let ast = ReportAst {
         data,
         noheader,
         columns,
@@ -95,5 +113,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<ReportAst> {
         breaks,
         rbreak,
         computes,
-    })
+    };
+    contract::check_parsed(&ast, ts)?;
+    Ok(ast)
 }

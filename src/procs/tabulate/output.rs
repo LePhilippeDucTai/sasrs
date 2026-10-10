@@ -20,7 +20,7 @@ pub(super) fn compute_out_cells(
     ds: &SasDataset,
     class_cols: &[(String, usize)],
     var_values: &[(usize, Vec<Value>)],
-    class_values: &[(usize, Vec<Value>)],
+    class_data: &[ClassData],
     page_cells: &[Option<Cell>],
     row_cells: &[Cell],
     col_cells: &[Cell],
@@ -41,10 +41,12 @@ pub(super) fn compute_out_cells(
                     .chain(cc.atoms.iter())
                     .cloned()
                     .collect();
-                let res = compute_cell_value(&merged, var_values, class_values, n_obs)?;
+                let res = compute_cell_value(&merged, var_values, class_data, n_obs)?;
 
                 // CLASS cell values + _TYPE_ pattern: a CLASS var is "active"
-                // when a ClassLevel atom binds it in this cell.
+                // when a ClassLevel atom binds it in this cell. The value is
+                // the smallest unformatted value of the formatted level; the
+                // variable keeps its stored format (copied VarMeta).
                 let mut class_cells: Vec<Value> = Vec::with_capacity(class_cols.len());
                 let mut pattern = String::with_capacity(class_cols.len());
                 for (_, ci) in class_cols {

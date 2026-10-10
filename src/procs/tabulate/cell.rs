@@ -5,10 +5,11 @@ use super::*;
 /// Header-text precedence per component (M33.4): explicit `='label'` overrides
 /// everything; otherwise a VAR atom falls back to its stored VarMeta LABEL,
 /// then to the raw name. A STAT atom falls back to its stat header. A CLASS
-/// level always renders the level value (the flat model has no variable-name
-/// slot for class levels), so its label/stored-label are accepted but do not
-/// change the level text — documented simplification. Default (no label, no
-/// stored label) stays byte-identical.
+/// level always renders its formatted level text (J02-P7: the stored format of
+/// the variable, BEST12. by default — the flat model has no variable-name slot
+/// for class levels), so its label/stored-label are accepted but do not change
+/// the level text — documented simplification. Default (no label, no stored
+/// label, no stored format) stays byte-identical.
 pub(super) fn cell_label(cell: &Cell, ds: &SasDataset) -> String {
     if cell.atoms.is_empty() {
         return String::new();
@@ -17,7 +18,7 @@ pub(super) fn cell_label(cell: &Cell, ds: &SasDataset) -> String {
         .atoms
         .iter()
         .map(|a| match a {
-            Atom::ClassLevel { level, .. } => level_label(level),
+            Atom::ClassLevel { key, .. } => key.clone(),
             Atom::Var { col, label, .. } => match label {
                 Some(l) => l.clone(),
                 None => match &ds.vars[*col].label {
@@ -72,13 +73,13 @@ pub(super) struct CellResult {
 pub(super) fn compute_cell_value(
     atoms: &[Atom],
     var_values: &[(usize, Vec<Value>)],
-    class_values: &[(usize, Vec<Value>)],
+    class_data: &[ClassData],
     n_obs: usize,
 ) -> Result<CellResult> {
     let mut var_col: Option<usize> = None;
     let mut stat: Option<String> = None;
-    // (class col, required level) constraints.
-    let mut class_constraints: Vec<(usize, &Value)> = Vec::new();
+    // (class column data, required formatted level) constraints.
+    let mut class_constraints: Vec<(&ClassData, &str)> = Vec::new();
     // Per-cell format: the first `*f=` carried by any atom of the cell.
     let mut cell_format: Option<String> = None;
 
@@ -105,27 +106,23 @@ pub(super) fn compute_cell_value(
                 }
                 stat = Some(s.clone());
             }
-            Atom::ClassLevel { col, level, .. } => {
-                class_constraints.push((*col, level));
+            Atom::ClassLevel { col, key, .. } => {
+                let cd = class_data
+                    .iter()
+                    .find(|c| c.col == *col)
+                    .expect("class col decoded");
+                class_constraints.push((cd, key.as_str()));
             }
             // Universal class: aggregate over every category — no constraint.
             Atom::All { .. } => {}
         }
     }
 
-    // Select rows matching ALL class constraints (and excluding missing
-    // class values — they are never equal to a non-missing required level).
+    // Select rows matching ALL class constraints: same formatted level (J02-P7).
+    // Observations with a missing CLASS value were excluded beforehand unless
+    // MISSING makes the missing value a level of its own.
     let rows: Vec<usize> = (0..n_obs)
-        .filter(|&r| {
-            class_constraints.iter().all(|(col, level)| {
-                let vals = &class_values
-                    .iter()
-                    .find(|(c, _)| c == col)
-                    .expect("class col decoded")
-                    .1;
-                vals[r].sas_cmp(level) == Ordering::Equal
-            })
-        })
+        .filter(|&r| class_constraints.iter().all(|(cd, key)| cd.keys[r] == *key))
         .collect();
 
     // Default statistic: SUM when a VAR is present, N otherwise (frequency).
@@ -144,8 +141,9 @@ pub(super) fn compute_cell_value(
     };
 
     // Percentage statistics: numerator over the selected rows, denominator
-    // over the grand total (all observations). v1 supports only the grand
-    // total denominator (group denominators PCTN<...> are deferred).
+    // over the grand total (all observations used by the table). v1 supports
+    // only the grand total denominator (group denominators PCTN<...> are an
+    // ERROR at parse time until J03-P2).
     if stat == "pctn" {
         let denom = n_obs as f64;
         let value = if denom == 0.0 {
@@ -216,12 +214,12 @@ pub(super) fn compute_cell_value(
 pub(super) fn compute_cell(
     atoms: &[Atom],
     var_values: &[(usize, Vec<Value>)],
-    class_values: &[(usize, Vec<Value>)],
+    class_data: &[ClassData],
     n_obs: usize,
     table_format: Option<&str>,
     catalog: &crate::formats::FormatCatalog,
 ) -> Result<String> {
-    let res = compute_cell_value(atoms, var_values, class_values, n_obs)?;
+    let res = compute_cell_value(atoms, var_values, class_data, n_obs)?;
     let fmt = res.format.as_deref().or(table_format);
     Ok(fmt_cell(&res.stat, &res.value, fmt, catalog))
 }

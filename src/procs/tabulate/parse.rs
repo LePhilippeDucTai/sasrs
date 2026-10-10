@@ -19,6 +19,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
     let mut data: Option<DatasetRef> = None;
     let mut format: Option<String> = None;
     let mut out: Option<DatasetRef> = None;
+    let mut missing = false;
 
     // --- PROC TABULATE statement options, until `;` ---
     loop {
@@ -37,6 +38,12 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
             // `format=<fmt>` — table-level default cell format (M33.4).
             common::consume_option_eq(ts, "FORMAT")?;
             format = Some(crate::parser::expr::read_format_token(ts)?);
+        } else if ts.peek().is_kw("missing") {
+            // J02-P7 — MISSING: missing CLASS values are valid levels (SAS
+            // 9.4, PROC TABULATE statement); without it their observations
+            // are excluded from the tables.
+            ts.next();
+            missing = true;
         } else if let Some(name) = ts.peek().ident().map(str::to_string) {
             let span = ts.peek().span;
             return Err(SasError::parse(
@@ -85,6 +92,16 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
                 by.extend(common::parse_by(ts)?);
                 true
             }
+            // J02-P7 — every TABLE statement makes a table in SAS (« To create
+            // several tables use multiple TABLE statements »); only the last
+            // one used to be produced.
+            "table" | "tables" if col.is_some() => {
+                return Err(contract::unsupported_construct(
+                    "More than one TABLE statement",
+                    Some("J03-P2"),
+                    ts.peek().span,
+                ));
+            }
             "table" | "tables" => {
                 ts.next();
                 let (p, r, c) = parse_table_statement(ts)?;
@@ -94,11 +111,20 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
                 ts.expect_semi()?;
                 true
             }
+            // J02-P7 — valid statements that only label or style the
+            // headings (« 180-322 … not valid » before): display WARNING.
+            _ if contract::DISPLAY_STATEMENTS.contains(&kw) => {
+                ts.warn_ignored_display(common::ignored_display_statement("TABULATE", kw));
+                ts.skip_to_semi();
+                true
+            }
             _ => false,
         })
     })?;
 
     let col = col.ok_or_else(|| SasError::runtime("PROC TABULATE requires a TABLE statement."))?;
+    let dims: Vec<&DimExpr> = page.iter().chain(row.iter()).chain([&col]).collect();
+    contract::check_table_names(&dims, &class, &var)?;
 
     Ok(TabulateAst {
         data,
@@ -110,6 +136,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<TabulateAst> {
         col,
         format,
         out,
+        missing,
     })
 }
 
@@ -171,7 +198,22 @@ pub(super) fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
         return Ok(Factor::Group(inner));
     }
     if let Some(name) = ts.peek().ident().map(str::to_string) {
+        let span = ts.peek().span;
         ts.next();
+        // J02-P7 — a denominator definition `PCTN<…>` / `PCTSUM<…>` used to
+        // be a bare syntax error. SAS 9.4 TABLE statement: angle brackets
+        // « specify denominator definitions ». Parentheses are not part of
+        // it: `pctn(x)` is the concatenation of PCTN and the group (x).
+        if ts.peek().kind == TokenKind::Lt {
+            return Err(contract::unsupported_construct(
+                &format!(
+                    "A denominator definition ({}<...>)",
+                    name.to_ascii_uppercase()
+                ),
+                Some("J03-P2"),
+                ts.peek().span,
+            ));
+        }
         // Optional `='label'` header override (M33.4).
         let mut label: Option<String> = None;
         if ts.peek().kind == TokenKind::Eq {
@@ -208,6 +250,7 @@ pub(super) fn parse_factor(ts: &mut StatementStream) -> Result<Factor> {
             name,
             label,
             format,
+            span,
         });
     }
     Err(SasError::parse(

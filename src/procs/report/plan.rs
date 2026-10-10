@@ -4,10 +4,18 @@ use super::*;
 /// order direction, and the header text to display.
 pub(super) struct ColPlan {
     pub(super) idx: usize,
+    /// Name of the report item: the data set variable as stored, or the
+    /// COLUMN name of a COMPUTED item. COMPUTE blocks refer to the item by this
+    /// name (or `_Cn_`), never by its label (J02-P7).
+    pub(super) name: String,
     pub(super) usage: Usage,
     pub(super) dir: OrderDir,
     pub(super) header: String,
-    /// `format=<fmt>` for displayed values (M33.5); `None` → default rendering.
+    /// Format of the displayed values: DEFINE `format=` (M33.5), else the
+    /// format stored with the data set variable (J02-P7, SAS 9.4 DEFINE
+    /// FORMAT=: « PROC REPORT honors the first of these formats that it
+    /// finds »); `None` → default rendering. GROUP/ORDER rows are formed on
+    /// the formatted values.
     pub(super) format: Option<String>,
     /// `width=<n>` display width (M33.5); `None` → aligner-derived width.
     pub(super) width: Option<usize>,
@@ -37,6 +45,7 @@ pub(super) fn build_col_plan(
         if matches!(def.map(|d| &d.usage), Some(Usage::Computed)) {
             plan.push(ColPlan {
                 idx: usize::MAX,
+                name: cname.clone(),
                 usage: Usage::Computed,
                 dir: def.map(|d| d.order).unwrap_or(OrderDir::Ascending),
                 header: def
@@ -72,10 +81,13 @@ pub(super) fn build_col_plan(
 
         plan.push(ColPlan {
             idx,
+            name: ds.vars[idx].name.clone(),
             usage,
             dir,
             header,
-            format: def.and_then(|d| d.format.clone()),
+            format: def
+                .and_then(|d| d.format.clone())
+                .or_else(|| ds.vars[idx].format.clone()),
             width: def.and_then(|d| d.width),
             spacing: def.and_then(|d| d.spacing),
         });

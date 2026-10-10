@@ -151,12 +151,9 @@ pub(super) fn execute_across(
         "There were {} observations read from the data set {}.",
         n_obs, display_name
     ));
-    // OUT= for ACROSS is deferred CLEANLY (no panic): note and skip.
-    if ast.out.is_some() {
-        session.log.note(
-            "PROC REPORT v1 does not write an OUT= data set for ACROSS reports; OUT= ignored.",
-        );
-    }
+    // J02-P7 — OUT=, BREAK/RBREAK, COMPUTE, FORMAT=/WIDTH= and stored formats
+    // are rejected before execution (`contract::check_plan`): OUT= used to be
+    // dropped with a NOTE, the others without a word.
     Ok(())
 }
 
