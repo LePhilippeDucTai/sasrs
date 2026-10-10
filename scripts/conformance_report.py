@@ -148,6 +148,15 @@ def load_cases(cases_dir=CASES_DIR):
         status = data.get("status")
         if status not in STATUS_LABEL:
             raise ValueError(f"{case_path} : statut inconnu « {status} »")
+        issue = data.get("issue", "")
+        if status == "known-divergence" and (
+            not isinstance(issue, str) or not issue.strip()
+        ):
+            # Le rapport liste chaque divergence avec son issue : une
+            # divergence sans référence n'est pas documentée (J01-P8).
+            raise ValueError(
+                f"{case_path} : known-divergence sans « issue » (absente ou vide)"
+            )
         provenance = data.get("provenance") or {}
         kind = provenance.get("kind")
         if kind not in PROVENANCE_LABEL:
@@ -170,7 +179,7 @@ def load_cases(cases_dir=CASES_DIR):
                 "status": status,
                 "provenance_kind": kind,
                 "provenance_source": provenance.get("source", ""),
-                "issue": data.get("issue", ""),
+                "issue": issue,
                 "zone": zone,
             }
         )
@@ -390,6 +399,49 @@ def self_test():
             )
             return 1
         print("conformance_report.py: self-test OK — zone inconnue → exit 2.")
+
+        # J01-P8 : un known-divergence sans issue (absente ou vide) est un
+        # corpus invalide (exit 1) ; le même avec issue est accepté.
+        probe["zone"] = "Zone sonde"
+        probe["status"] = "known-divergence"
+        probe["issue"] = "sasrs #0 — sonde"
+        probe_json.write_text(json.dumps(probe), encoding="utf-8")
+        statuses = {case["id"]: case["status"] for case in load_cases(copy)}
+        if statuses.get("probe-unknown-zone") != "known-divergence":
+            print(
+                "conformance_report.py: self-test ÉCHEC — known-divergence avec "
+                "issue non chargé.",
+                file=sys.stderr,
+            )
+            return 1
+        print("conformance_report.py: self-test OK — known-divergence avec issue accepté.")
+        for label, issue in (("absente", None), ("vide", "  ")):
+            if issue is None:
+                probe.pop("issue", None)
+            else:
+                probe["issue"] = issue
+            probe_json.write_text(json.dumps(probe), encoding="utf-8")
+            try:
+                load_cases(copy)
+            except ValueError as error:
+                if "issue" not in str(error) or corpus_error_code(error) != 1:
+                    print(
+                        "conformance_report.py: self-test ÉCHEC — known-divergence "
+                        f"sans issue ({label}) : erreur inattendue {error}",
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                print(
+                    "conformance_report.py: self-test ÉCHEC — known-divergence "
+                    f"sans issue ({label}) accepté.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                "conformance_report.py: self-test OK — known-divergence sans "
+                f"issue ({label}) → exit 1."
+            )
     return 0
 
 

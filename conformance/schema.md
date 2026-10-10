@@ -32,6 +32,12 @@ affiché par l'exécuteur et, sans le préfixe, par `STATUS.md`.
 
 ## `case.json`
 
+Schéma strict (J01-P8) : toute clé absente des tableaux ci-dessous, à
+n'importe quel niveau (`case.json`, `provenance`, `tolerance`,
+`tolerance.columns.<COL>`, `log`, `listing`), est une erreur de lecture —
+une clé mal orthographiée (`"listing": {"require": […]}`) ne peut plus être
+ignorée en silence.
+
 | Champ | Type | Obligatoire | Description |
 |---|---|---|---|
 | `id` | string | oui | Identifiant du cas, = nom du répertoire. |
@@ -44,7 +50,7 @@ affiché par l'exécuteur et, sans le préfixe, par `STATUS.md`.
 | `listing` | objet | non | Attentes sur le listing (`run.lst`, sortie `--print`) : même forme et mêmes règles que `log`. Un listing absent est traité comme vide. |
 | `exit_code` | entier | non | Code retour attendu du CLI (défaut `0`). |
 | `status` | string | oui | `validated` ou `known-divergence`. |
-| `issue` | string | si `known-divergence` | Référence du problème documentant la divergence. |
+| `issue` | string | si `known-divergence` | Référence du problème documentant la divergence (non vide). |
 | `data_types` | objet | si `data/` existe | Types des colonnes d'entrée : `{ "<fichier>.csv": { "<colonne>": "num"\|"char" } }`. |
 
 ### `provenance`
@@ -96,15 +102,22 @@ Un cas dont `provenance.kind` vaut `independent-oracle` peut porter
 `README.md` §« Oracle rejouable ») :
 
 - bibliothèque standard Python uniquement (aucun import hors
-  `sys.stdlib_module_names`), sans `subprocess`/`socket`/`ctypes`/
-  `multiprocessing`, sans `os.system`/`os.popen` — `replay_oracles.py`
-  refuse statiquement (`ast`, sans exécuter) tout script qui y manque ;
+  `sys.stdlib_module_names`), sans module de réseau, de sous-processus, de
+  code natif ou d'import dynamique (`subprocess`, `socket`, `ssl`,
+  `urllib`, `http`, `ftplib`, `smtplib`, `importlib`, `ctypes`,
+  `multiprocessing`…), sans attribut de lancement de processus sur aucun
+  objet (`system`, `popen`, `spawn*`, `exec*`, `fork`…, donc aussi via un
+  alias de `os`), sans `__import__`/`eval`/`exec`/`compile`, `getattr` à
+  nom non littéral ni attribut dunder hors liste blanche, sans chaîne
+  littérale citant `expected/` — `replay_oracles.py` refuse statiquement
+  (`ast`, sans exécuter) tout script qui y manque ;
 - déterministe, sans réseau, sans sous-processus, et n'exécute jamais
   `sasrs` (il ne prouve rien s'il relit la sortie qu'il est censé
   valider) ;
-- invoqué comme `python3 -I -B oracle/oracle.py <dir>`, répertoire du cas
-  comme répertoire courant, `<dir>` un répertoire temporaire fourni par
-  `replay_oracles.py` ;
+- invoqué comme `python3 -I -B oracle/oracle.py <dir>`, avec pour
+  répertoire courant un bac à sable temporaire qui ne contient que des
+  copies de `data/` et `oracle/` du cas (jamais `expected/`), `<dir>` un
+  autre répertoire temporaire fourni par `replay_oracles.py` ;
 - doit écrire `<dir>/<dataset>.csv` pour chaque `expected/<dataset>.csv`
   du cas, même format que `expected/` (en-tête en MAJUSCULES dans l'ordre
   des variables, mêmes conventions de missing) ;
@@ -114,7 +127,16 @@ Un cas dont `provenance.kind` vaut `independent-oracle` peut porter
 
 ## Exécution par l'exécuteur
 
-Pour chaque cas : tempdir frais, `data/*.csv` → `<tmp>/data/*.parquet`
+Pour chaque cas, les métadonnées sont d'abord validées, quel que soit le
+statut : `id` = nom du répertoire, `status`/`validates`/`provenance.kind`
+dans leur vocabulaire, `issue` non vide si `known-divergence`,
+`provenance.source`/`sas_version` non vides, `provenance.options` gérées,
+`zone` non vide si présente, regex `log.forbidden`/`listing.forbidden`
+valides, types `data_types` dans `num|char`. Un échec → `BAD-STATUS`
+(corpus en échec), le cas n'est pas exécuté — un `known-divergence` mal
+décrit n'est jamais classé `DIVERGENT`.
+
+Puis : tempdir frais, `data/*.csv` → `<tmp>/data/*.parquet`
 (types de `data_types`), puis
 
 ```

@@ -13,6 +13,5 @@
   "log": {"forbidden": ["ERROR:", "WARNING:"]},
   "exit_code": 0,
   "status": "validated",
-  "issue": "sasrs #11 (sous-issue compat) — PROC PRINTTO : le routage physique du log vers LOG= n'est pas implemente (WARNING « routing not supported until J07-P5 », exit code 1)",
   "data_types": {}
 }

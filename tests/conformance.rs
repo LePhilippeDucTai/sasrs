@@ -30,8 +30,14 @@ use std::process::Command;
 
 // ── Schéma case.json (sous-ensemble exécuté ; conformance/schema.md fait
 //    autorité pour la description complète) ─────────────────────────────
+//
+// Schéma strict (J01-P8) : toute clé inconnue, à tout niveau, est une
+// erreur — une clé mal orthographiée (`"listing": {"require": …}`) serait
+// sinon ignorée en silence et le cas vérifierait moins que ce qu'il
+// déclare.
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CaseSpec {
     id: String,
     #[serde(default)]
@@ -61,6 +67,7 @@ struct CaseSpec {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Provenance {
     #[serde(default)]
     kind: String,
@@ -73,6 +80,7 @@ struct Provenance {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct TolSpec {
     #[serde(default = "default_tol")]
     abs: f64,
@@ -83,6 +91,7 @@ struct TolSpec {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct ColumnTol {
     #[serde(default = "default_tol")]
     abs: f64,
@@ -95,6 +104,7 @@ fn default_tol() -> f64 {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct LogSpec {
     #[serde(default)]
     required: Vec<String>,
@@ -162,6 +172,11 @@ fn close_enough(got: f64, want: f64, abs: f64, rel: f64) -> bool {
 
 // ── Découverte du corpus ───────────────────────────────────────────────
 
+/// Analyse un `case.json` (schéma strict : clé inconnue = erreur).
+fn parse_case_spec(text: &str) -> Result<CaseSpec, String> {
+    serde_json::from_str(text).map_err(|e| e.to_string())
+}
+
 /// Parcourt récursivement `root` : tout répertoire contenant un
 /// `case.json` est un cas (on ne descend pas sous un cas : `data/` et
 /// `expected/` lui appartiennent). Ordre stable par chemin.
@@ -177,7 +192,7 @@ fn collect_cases_into(dir: &Path, cases: &mut Vec<Case>) {
     if case_json.is_file() {
         let text = fs::read_to_string(&case_json)
             .unwrap_or_else(|e| panic!("lecture de {} : {e}", case_json.display()));
-        let spec: CaseSpec = serde_json::from_str(&text)
+        let spec = parse_case_spec(&text)
             .unwrap_or_else(|e| panic!("case.json invalide ({}) : {e}", case_json.display()));
         cases.push(Case {
             dir: dir.to_path_buf(),
@@ -313,9 +328,12 @@ fn write_parquet_from_csv(
     Ok(())
 }
 
-/// Toutes les vérifications d'un cas ; rend la liste des problèmes
-/// (vide = cas passé).
-fn run_case(case: &Case) -> Vec<String> {
+/// Métadonnées d'un cas (vide = valides), vérifiées AVANT toute exécution
+/// et pour TOUS les statuts : un cas `known-divergence` mal décrit (issue
+/// absente ou vide, id ≠ répertoire, `validates` hors vocabulaire, regex
+/// invalide…) est un BAD-STATUS, jamais une « divergence attendue » (revue
+/// J01-P6 : il atterrissait dans DIVERGENT et n'échouait jamais).
+fn metadata_problems(case: &Case) -> Vec<String> {
     let mut problems = Vec::new();
 
     // L'id doit correspondre au nom du répertoire du cas.
@@ -335,8 +353,14 @@ fn run_case(case: &Case) -> Vec<String> {
     if !matches!(case.spec.validates.as_str(), "math" | "sas-behaviour") {
         problems.push(format!("validates invalide : {}", case.spec.validates));
     }
-    if case.spec.status == "known-divergence" && case.spec.issue.is_none() {
-        problems.push("known-divergence sans « issue »".to_string());
+    if case.spec.status == "known-divergence"
+        && case
+            .spec
+            .issue
+            .as_deref()
+            .is_none_or(|issue| issue.trim().is_empty())
+    {
+        problems.push("known-divergence sans « issue » (absente ou vide)".to_string());
     }
     if !matches!(
         case.spec.provenance.kind.as_str(),
@@ -371,6 +395,33 @@ fn run_case(case: &Case) -> Vec<String> {
             ));
         }
     }
+    // Les motifs interdits doivent être des regex valides : une regex
+    // invalide ne détecte rien, un cas qui en porte est mal décrit.
+    for (what, spec) in [("log", &case.spec.log), ("listing", &case.spec.listing)] {
+        for pattern in &spec.forbidden {
+            if let Err(e) = fancy_regex::Regex::new(pattern) {
+                problems.push(format!(
+                    "{what}.forbidden : regex invalide « {pattern} » ({e})"
+                ));
+            }
+        }
+    }
+    for (file, columns) in &case.spec.data_types {
+        for (column, ty) in columns {
+            if !matches!(ty.as_str(), "num" | "char") {
+                problems.push(format!(
+                    "data_types.{file}.{column} : type inconnu « {ty} » (num|char)"
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Exécute un cas aux métadonnées valides ; rend la liste des problèmes
+/// d'exécution (vide = cas passé).
+fn run_case(case: &Case) -> Vec<String> {
+    let mut problems = Vec::new();
 
     // Préparation du bac à sable : program.sas + data/*.csv → parquet.
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -575,6 +626,42 @@ fn compare_dataset(expected_csv: &str, ds: &SasDataset, tol: &TolSpec) -> Vec<St
     diffs
 }
 
+// ── Verdict d'un cas ───────────────────────────────────────────────────
+
+/// Verdict d'un cas ; seuls `Pass` et `Divergent` sont des succès.
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    /// `validated`, toutes les vérifications passent.
+    Pass,
+    /// `validated`, au moins une vérification échoue : régression.
+    Fail,
+    /// `known-divergence` qui passe tout : à promouvoir (décision humaine).
+    Promote,
+    /// `known-divergence` bien décrit qui échoue : divergence attendue.
+    Divergent,
+    /// Métadonnées invalides, quel que soit le statut : le cas n'est pas
+    /// exécuté.
+    BadStatus,
+}
+
+/// Métadonnées d'abord (un cas mal décrit n'est jamais exécuté ni classé
+/// DIVERGENT), puis exécution et classement selon le statut.
+fn judge(case: &Case) -> (Verdict, Vec<String>) {
+    let meta = metadata_problems(case);
+    if !meta.is_empty() {
+        return (Verdict::BadStatus, meta);
+    }
+    let problems = run_case(case);
+    let verdict = match (case.spec.status.as_str(), problems.is_empty()) {
+        ("validated", true) => Verdict::Pass,
+        ("validated", false) => Verdict::Fail,
+        ("known-divergence", true) => Verdict::Promote,
+        ("known-divergence", false) => Verdict::Divergent,
+        _ => Verdict::BadStatus,
+    };
+    (verdict, problems)
+}
+
 // ── Tests de l'exécuteur lui-même ──────────────────────────────────────
 
 fn write_probe_case(dir: &Path, id: &str) {
@@ -666,12 +753,12 @@ fn conformance_corpus() {
             .strip_prefix(root.parent().unwrap().parent().unwrap())
             .unwrap_or(&case.dir)
             .display();
-        let problems = run_case(case);
-        match (case.spec.status.as_str(), problems.is_empty()) {
-            ("validated", true) => {
+        let (verdict, problems) = judge(case);
+        match verdict {
+            Verdict::Pass => {
                 report.push_str(&format!("  PASS  {rel} — {}\n", case.spec.title));
             }
-            ("validated", false) => {
+            Verdict::Fail => {
                 report.push_str(&format!("  FAIL  {rel} — {}\n", case.spec.title));
                 failures.extend(
                     problems
@@ -679,7 +766,7 @@ fn conformance_corpus() {
                         .map(|p| format!("{rel} (validated) : {p}")),
                 );
             }
-            ("known-divergence", true) => {
+            Verdict::Promote => {
                 // Toutes les vérifications passent alors que le cas documente
                 // une divergence : à promouvoir en validated (décision humaine).
                 report.push_str(&format!(
@@ -692,7 +779,7 @@ fn conformance_corpus() {
                     case.spec.issue.as_deref().unwrap_or("?")
                 ));
             }
-            ("known-divergence", false) => {
+            Verdict::Divergent => {
                 report.push_str(&format!(
                     "  DIVERGENT {rel} — {} (issue {}) : {} divergence(s) attendue(s)\n",
                     case.spec.title,
@@ -700,12 +787,12 @@ fn conformance_corpus() {
                     problems.len()
                 ));
             }
-            _ => {
+            Verdict::BadStatus => {
                 report.push_str(&format!("  BAD-STATUS {rel} — {}\n", case.spec.title));
                 failures.extend(
                     problems
                         .into_iter()
-                        .map(|p| format!("{rel} (statut invalide) : {p}")),
+                        .map(|p| format!("{rel} (métadonnées invalides) : {p}")),
                 );
             }
         }
@@ -716,4 +803,191 @@ fn conformance_corpus() {
         "corpus de conformité en échec :\n{}",
         failures.join("\n")
     );
+}
+
+// ── Acceptation J01-P8 : schéma strict et métadonnées des divergences ──
+
+/// `case.json` complet et valide (les tests le dégradent un champ à la fois).
+fn full_spec(id: &str, status: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "title": "sonde J01-P8",
+        "zone": "Sonde",
+        "provenance": {
+            "kind": "sas-doc",
+            "source": "sonde",
+            "sas_version": "9.4M5",
+            "options": ["--deterministic"]
+        },
+        "validates": "sas-behaviour",
+        "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {"X": {"abs": 0.5}}},
+        "log": {"required": [], "forbidden": ["ERROR:"]},
+        "listing": {"required": [], "forbidden": []},
+        "exit_code": 0,
+        "status": status,
+        "issue": "sasrs #0 — sonde",
+        "data_types": {}
+    })
+}
+
+/// Cas exécutable sous `root/<group>/<id>` : `x = 1` alors que l'attendu
+/// dit 2 — il échoue donc à l'exécution (divergence réelle).
+fn write_full_case(root: &Path, dir_name: &str, spec: &serde_json::Value) -> Case {
+    let dir = root.join("probe").join(dir_name);
+    fs::create_dir_all(dir.join("expected")).expect("création du cas sonde");
+    fs::write(dir.join("program.sas"), "data probe;\n  x = 1;\nrun;\n").expect("program.sas");
+    fs::write(dir.join("expected").join("probe.csv"), "X\n2\n").expect("expected/probe.csv");
+    fs::write(dir.join("case.json"), spec.to_string()).expect("case.json");
+    let mut cases = collect_cases(root);
+    assert_eq!(cases.len(), 1, "un seul cas sonde attendu");
+    cases.remove(0)
+}
+
+/// Reproducer revue J01-P6 : une clé inconnue (mal orthographiée) à
+/// n'importe quel niveau était ignorée en silence. Elle est désormais une
+/// erreur de lecture du case.json, et la découverte du corpus échoue.
+#[test]
+fn ra_j01_p8_unknown_key_is_rejected() {
+    let valid = full_spec("probe", "validated");
+    assert!(parse_case_spec(&valid.to_string()).is_ok());
+
+    let mutate = |change: &dyn Fn(&mut serde_json::Value)| {
+        let mut spec = valid.clone();
+        change(&mut spec);
+        spec
+    };
+    let misspelled = [
+        (
+            "tolerence",
+            mutate(&|s| s["tolerence"] = serde_json::json!({"abs": 1.0})),
+        ),
+        (
+            "require",
+            mutate(&|s| s["listing"] = serde_json::json!({"require": ["The MEANS Procedure"]})),
+        ),
+        (
+            "forbiden",
+            mutate(&|s| s["log"]["forbiden"] = serde_json::json!(["WARNING:"])),
+        ),
+        (
+            "sorce",
+            mutate(&|s| s["provenance"]["sorce"] = serde_json::json!("x")),
+        ),
+        (
+            "absolute",
+            mutate(&|s| s["tolerance"]["columns"]["X"]["absolute"] = serde_json::json!(0.5)),
+        ),
+    ];
+
+    for (key, spec) in &misspelled {
+        let err = match parse_case_spec(&spec.to_string()) {
+            Ok(_) => panic!("clé inconnue « {key} » acceptée"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("unknown field") && err.contains(key),
+            "clé « {key} » : erreur inattendue {err}"
+        );
+    }
+
+    // La découverte du corpus refuse un case.json porteur d'une clé inconnue.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("probe").join("probe");
+    fs::create_dir_all(&dir).expect("création du cas sonde");
+    fs::write(dir.join("case.json"), misspelled[1].1.to_string()).expect("case.json");
+    let root = tmp.path().to_path_buf();
+    let outcome = std::panic::catch_unwind(move || collect_cases(&root).len());
+    assert!(outcome.is_err(), "corpus à clé inconnue accepté");
+}
+
+/// Reproducer revue J01-P6 : un `known-divergence` sans `issue` (absente
+/// ou vide) était classé DIVERGENT et n'échouait jamais. Il est désormais
+/// BAD-STATUS ; le témoin bien décrit reste DIVERGENT.
+#[test]
+fn ra_j01_p8_known_divergence_without_issue_is_bad_status() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    // Témoin : mêmes cas, issue renseignée → divergence attendue.
+    let witness = write_full_case(tmp.path(), "probe", &full_spec("probe", "known-divergence"));
+    let (verdict, problems) = judge(&witness);
+    assert_eq!(verdict, Verdict::Divergent, "{problems:?}");
+
+    let mut missing = full_spec("probe", "known-divergence");
+    missing.as_object_mut().expect("objet").remove("issue");
+    let mut blank = full_spec("probe", "known-divergence");
+    blank["issue"] = serde_json::json!("   ");
+    for (label, spec) in [("absente", missing), ("vide", blank)] {
+        fs::write(witness.dir.join("case.json"), spec.to_string()).expect("case.json");
+        let case = collect_cases(tmp.path()).remove(0);
+        let (verdict, problems) = judge(&case);
+        assert_eq!(verdict, Verdict::BadStatus, "issue {label} : {problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains("sans « issue »")),
+            "issue {label} : {problems:?}"
+        );
+    }
+}
+
+/// Reproducer revue J01-P6 : les métadonnées d'un `known-divergence`
+/// (id = répertoire, `validates`, regex des motifs interdits, provenance)
+/// sont validées comme celles d'un cas validé → BAD-STATUS, pas DIVERGENT.
+#[test]
+fn ra_j01_p8_known_divergence_bad_metadata_is_bad_status() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let witness = write_full_case(tmp.path(), "probe", &full_spec("probe", "known-divergence"));
+    assert_eq!(judge(&witness).0, Verdict::Divergent);
+
+    let mutate = |change: &dyn Fn(&mut serde_json::Value)| {
+        let mut spec = full_spec("probe", "known-divergence");
+        change(&mut spec);
+        spec
+    };
+    let variants = [
+        (
+            "≠ nom du répertoire",
+            full_spec("autre-id", "known-divergence"),
+        ),
+        (
+            "validates invalide",
+            mutate(&|s| s["validates"] = serde_json::json!("maths")),
+        ),
+        (
+            "log.forbidden : regex invalide",
+            mutate(&|s| s["log"]["forbidden"] = serde_json::json!(["("])),
+        ),
+        (
+            "listing.forbidden : regex invalide",
+            mutate(&|s| s["listing"]["forbidden"] = serde_json::json!(["[a-"])),
+        ),
+        (
+            "provenance.kind invalide",
+            mutate(&|s| s["provenance"]["kind"] = serde_json::json!("sasrs-run")),
+        ),
+    ];
+
+    for (expected, spec) in variants {
+        fs::write(witness.dir.join("case.json"), spec.to_string()).expect("case.json");
+        let case = collect_cases(tmp.path()).remove(0);
+        let (verdict, problems) = judge(&case);
+        assert_eq!(verdict, Verdict::BadStatus, "{expected} : {problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains(expected)),
+            "{expected} : {problems:?}"
+        );
+    }
+}
+
+/// Les métadonnées sont vérifiées AVANT l'exécution, quel que soit le
+/// statut : un cas `validated` mal décrit est BAD-STATUS sans être lancé.
+#[test]
+fn ra_j01_p8_metadata_checked_before_execution() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut spec = full_spec("probe", "validated");
+    spec["status"] = serde_json::json!("validé");
+    let case = write_full_case(tmp.path(), "probe", &spec);
+    // Sans program.sas, une exécution rapporterait « copie de program.sas ».
+    fs::remove_file(case.dir.join("program.sas")).expect("suppression de program.sas");
+    let (verdict, problems) = judge(&case);
+    assert_eq!(verdict, Verdict::BadStatus, "{problems:?}");
+    assert_eq!(problems, vec!["status invalide : validé".to_string()]);
 }
