@@ -264,14 +264,16 @@ fn means_compat_order_freq_and_weights_and_id_and_autoname() {
          run;\n",
     );
     assert_eq!(code, 0, "log: {log}");
-    // Colonnes : CLASS (group), ID (price), _TYPE_, _FREQ_, stats AUTONAME.
+    // Colonnes : CLASS (group), _TYPE_, _FREQ_, ID (price), stats AUTONAME
+    // (arbitrage J01-P2 rév. 3, décision c96c6088 : BY → CLASS → _TYPE_ →
+    // _FREQ_ → ID → statistiques).
     assert_eq!(
         columns_of(&tables, "out"),
         vec![
             "GROUP",
-            "PRICE",
             "_TYPE_",
             "_FREQ_",
+            "PRICE",
             "VALUE_MEAN",
             "VALUE_STD"
         ]

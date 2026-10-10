@@ -452,9 +452,13 @@ impl Compiler<'_> {
             // inconnue est ignorée (SIMPLIFICATION M4 documentée : en vrai
             // SAS la variable serait créée sur le PDV).
             DsStmt::Format(groups) => self.compile_format(groups),
-            // INFORMAT (M40.3) : déjà collecté (et validé) par la pré-passe
-            // `collect_informats` — marqueur no-op pendant le walk.
-            DsStmt::Informat(_) => Ok(()),
+            // INFORMAT (M40.3, J01-P3) : le token est déjà collecté (et
+            // validé) par la pré-passe `collect_informats` ; ici, comme
+            // LENGTH/FORMAT/ATTRIB, une variable INCONNUE référencée par le
+            // statement entre au PDV à sa position textuelle (doc SAS 9.4
+            // INFORMAT statement) — caractère si l'informat commence par
+            // `$`, numérique sinon.
+            DsStmt::Informat(groups) => self.compile_informat(groups),
             DsStmt::Label(pairs) => {
                 for (name, label) in pairs {
                     self.labels.insert(name.to_uppercase(), label.clone());

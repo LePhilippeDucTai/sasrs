@@ -130,6 +130,7 @@ fn execute_basic_contents() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -171,6 +172,7 @@ fn execute_shows_format_and_label() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -206,6 +208,7 @@ fn execute_varnum_ordering() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast_alpha, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -241,6 +244,7 @@ fn execute_varnum_ordering() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast_varnum, &mut session2).unwrap();
     let listing2 = session2.listing.take_string();
@@ -297,6 +301,7 @@ fn execute_all_lists_tables() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -320,6 +325,7 @@ fn execute_uses_last_dataset_when_no_data() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -339,6 +345,7 @@ fn execute_no_last_dataset_errors() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     let result = execute(&ast, &mut session);
     assert!(result.is_err());
@@ -386,6 +393,7 @@ fn execute_out_dataset_shape_and_values() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
@@ -402,8 +410,8 @@ fn execute_out_dataset_shape_and_values() {
 
     // Decode rows. Row 0 = name (Char → TYPE 2, LENGTH 5, VARNUM 1).
     let name = out.df.column("NAME").unwrap().str().unwrap();
-    assert_eq!(name.get(0), Some("name"));
-    assert_eq!(name.get(1), Some("age"));
+    assert_eq!(name.get(0), Some("NAME"));
+    assert_eq!(name.get(1), Some("AGE"));
     let ty = out.df.column("TYPE").unwrap().f64().unwrap();
     assert_eq!(ty.get(0), Some(2.0)); // char
     assert_eq!(ty.get(1), Some(1.0)); // num
@@ -442,6 +450,7 @@ fn execute_short_lists_variable_names_only() {
         out_drop: None,
         short: true,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -475,6 +484,7 @@ fn execute_details_adds_header_lines() {
         out_drop: None,
         short: false,
         details: true,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
@@ -486,6 +496,84 @@ fn execute_details_adds_header_lines() {
         listing.contains("# Variables:"),
         "details var line: {listing}"
     );
+}
+
+// ── J01-P3 : NOPRINT ──────────────────────────────────────────────────────
+
+#[test]
+fn parse_noprint_option() {
+    let ast = parse_contents_src("data=work.x noprint").unwrap();
+    assert!(ast.noprint);
+}
+
+/// NOPRINT (doc SAS 9.4, chap. 14, CONTENTS Procedure) : supprime tout le
+/// listing (en-tête + table des variables) mais OUT= est toujours écrit.
+#[test]
+fn execute_noprint_suppresses_listing_but_writes_out() {
+    let mut session = make_session();
+    write_test_dataset(&mut session);
+
+    let ast = ContentsAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLASS".into(),
+        }),
+        varnum: false,
+        all: false,
+        out: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "META".into(),
+        }),
+        out_keep: None,
+        out_drop: None,
+        short: false,
+        details: false,
+        noprint: true,
+    };
+    execute(&ast, &mut session).unwrap();
+
+    // Nothing printed to the listing.
+    let listing = session.listing.take_string();
+    assert_eq!(listing.trim(), "", "listing should be empty: {listing}");
+
+    // OUT= is still written with the usual shape.
+    let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
+    assert_eq!(out.n_obs(), 2, "one row per variable");
+    let name = out.df.column("NAME").unwrap().str().unwrap();
+    assert_eq!(name.get(0), Some("NAME"));
+    assert_eq!(name.get(1), Some("AGE"));
+
+    // The log NOTE about OUT= is unaffected by NOPRINT.
+    let log = session.log.into_string();
+    assert!(
+        log.contains("The data set WORK.META has 2 observations and 9 variables."),
+        "log: {log}"
+    );
+}
+
+/// NOPRINT + SHORT : SHORT's flat name list is also suppressed.
+#[test]
+fn execute_noprint_with_short_prints_nothing() {
+    let mut session = make_session();
+    write_test_dataset(&mut session);
+
+    let ast = ContentsAst {
+        data: Some(DatasetRef {
+            libref: Some("WORK".into()),
+            name: "CLASS".into(),
+        }),
+        varnum: false,
+        all: false,
+        out: None,
+        out_keep: None,
+        out_drop: None,
+        short: true,
+        details: false,
+        noprint: true,
+    };
+    execute(&ast, &mut session).unwrap();
+    let listing = session.listing.take_string();
+    assert_eq!(listing.trim(), "", "listing should be empty: {listing}");
 }
 
 // ── J07-P6 : INFORMAT / INFORML / INFORMD dans OUT= ──────────────────────
@@ -557,15 +645,16 @@ fn informat_meta_contents_out_columns() {
         out_drop: None,
         short: false,
         details: false,
+        noprint: false,
     };
     execute(&ast, &mut session).unwrap();
 
     let (out, _) = session.libs.get("WORK").unwrap().read("META").unwrap();
     assert_eq!(out.n_obs(), 3, "one row per variable");
     let name = out.df.column("NAME").unwrap().str().unwrap();
-    assert_eq!(name.get(0), Some("dt"));
-    assert_eq!(name.get(1), Some("code"));
-    assert_eq!(name.get(2), Some("plain"));
+    assert_eq!(name.get(0), Some("DT"));
+    assert_eq!(name.get(1), Some("CODE"));
+    assert_eq!(name.get(2), Some("PLAIN"));
     let inf = out.df.column("INFORMAT").unwrap().str().unwrap();
     assert_eq!(inf.get(0), Some("DATE"));
     assert_eq!(inf.get(1), Some("$"));

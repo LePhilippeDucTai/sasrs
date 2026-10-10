@@ -100,9 +100,20 @@ implémentés et validés par le corpus (cas `compat/*`, cf.
   persistés dans les métadonnées du dataset et restitués par
   `PROC CONTENTS OUT=` (`INFORMAT`, `INFORML`, `INFORMD`). L'ancienne
   limitation « informats are not persisted in dataset metadata » n'existe plus.
+  Une variable encore inconnue référencée par l'instruction `INFORMAT` entre
+  au PDV à sa position textuelle (J01-P3, doc SAS 9.4 INFORMAT statement) —
+  caractère si l'informat commence par `$` (longueur déclarée = largeur de
+  l'informat), numérique (8) sinon — comme le font déjà `LENGTH`/`FORMAT`/
+  `ATTRIB`.
+- **CONTENTS** : `NOPRINT` est honoré (J01-P3) — supprime tout le listing
+  (en-tête et table des variables) ; `OUT=` reste toujours écrit. L'ancien
+  ERROR « Unexpected option 'NOPRINT' on PROC CONTENTS statement » n'est plus
+  émis. La colonne `NAME` de `OUT=` restitue le nom de variable en MAJUSCULES
+  (doc SAS 9.4, chap. 14, « OUT= Data Set »).
 - **MEANS/SUMMARY** : `CLASS / MISSING`, `NWAY`, `ORDER=FREQ`, `FREQ` (pondère
   N et STD), `ID` copiée dans `OUT=` et `OUTPUT OUT=` avec `AUTONAME` /
-  `MAXDEC=` sont honorés et validés.
+  `MAXDEC=` sont honorés et validés. Ordre des colonnes de `OUT=` (J01-P2/
+  J01-P3) : `BY` → `CLASS` → `_TYPE_` → `_FREQ_` → `ID` → statistiques.
 
 ## Catalogue et exemples
 

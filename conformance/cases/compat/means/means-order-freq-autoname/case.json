@@ -12,8 +12,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "roadmap-avancee J01-P3 — PROC MEANS OUT= : position des variables ID. Ordre établi (arbitrage J01-P2 rév. 3, SUGI 31 paper 043-31 + doc SAS 9.4 MEANS Example 10) : BY → CLASS → _TYPE_ → _FREQ_ → ID → statistiques ; attendu [group, _TYPE_, _FREQ_, price, value_MEAN, value_STD], sasrs produit [group, price, _TYPE_, _FREQ_, …] (ID avant _TYPE_/_FREQ_)",
+  "status": "validated",
   "data_types": {
     "weights.csv": {"group": "char", "value": "num", "w": "num", "price": "num"}
   }
