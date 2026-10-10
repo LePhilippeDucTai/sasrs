@@ -9,7 +9,13 @@ pub(super) fn exec_stmts(
     session: &mut Session,
 ) -> Result<()> {
     for s in stmts {
-        exec_stmt(s, env, out, session)?;
+        let result = exec_stmt(s, env, out, session);
+        // J02-P5 — WARNINGs de l'instruction (division par zéro) : au log,
+        // avant une éventuelle ERROR de la même instruction.
+        for warning in env.warnings.take() {
+            session.log.warning(&warning);
+        }
+        result?;
     }
     Ok(())
 }
@@ -41,9 +47,12 @@ pub(super) fn exec_stmt(
             Ok(())
         }
         ImlStmt::Print { items } => {
+            // Une instruction PRINT en erreur n'imprime rien (pas de sortie
+            // partielle) ; les PRINT précédents restent rendus (J02-P5).
+            let mut printed = Vec::with_capacity(items.len());
             for it in items {
                 match it {
-                    ImlPrintItem::StringLiteral(s) => out.push(PrintOp::Text(s.clone())),
+                    ImlPrintItem::StringLiteral(s) => printed.push(PrintOp::Text(s.clone())),
                     ImlPrintItem::Var(name) => {
                         let m = env
                             .vars
@@ -55,13 +64,14 @@ pub(super) fn exec_stmt(
                                     name.to_uppercase()
                                 ))
                             })?;
-                        out.push(PrintOp::Matrix {
+                        printed.push(PrintOp::Matrix {
                             name: name.to_ascii_uppercase(),
                             m,
                         });
                     }
                 }
             }
+            out.extend(printed);
             Ok(())
         }
         ImlStmt::If {
@@ -143,12 +153,13 @@ pub(super) fn exec_stmt(
             Ok(())
         }
         ImlStmt::Call { func, args } => exec_call(func, args, env),
-        ImlStmt::Create { ds, from, colname } => exec_create(ds, from, colname.as_ref(), env),
+        ImlStmt::Create { ds, from, colname } => {
+            exec_create(ds, from, colname.as_ref(), env, session)
+        }
         ImlStmt::Append { from } => exec_append(from, env),
         ImlStmt::Close { ds } => exec_close(ds, env, session),
         ImlStmt::Use { ds } => exec_use(ds, env, session),
         ImlStmt::ReadAll { vars, into } => exec_read_all(vars, into, env, session),
-        ImlStmt::UnsupportedIo { msg } => Err(SasError::runtime(msg.clone())),
     }
 }
 
@@ -176,6 +187,7 @@ pub(super) fn exec_call(func: &str, args: &[ImlExpr], env: &mut Env) -> Result<(
             let q_name = out_name(&args[0])?;
             let r_name = out_name(&args[1])?;
             let a = eval_expr(&args[2], env)?;
+            require_nonmissing(&a, "QR")?;
             let (q, r) = crate::stat::linalg::qr_decomposition(&a)?;
             env.vars.insert(q_name, q);
             env.vars.insert(r_name, r);
@@ -231,12 +243,15 @@ pub(super) fn split_ds_name(name: &str) -> (String, String) {
 }
 
 /// `CREATE ds FROM mat [COLNAME=cn];` — prépare le tampon (colonnes seulement).
+/// Le libref est vérifié ici : l'écriture peut n'avoir lieu qu'à QUIT.
 pub(super) fn exec_create(
     ds: &str,
     from: &str,
     colname: Option<&ImlExpr>,
     env: &mut Env,
+    session: &mut Session,
 ) -> Result<()> {
+    session.libs.get(&split_ds_name(ds).0)?;
     let mat = env
         .vars
         .get(&from.to_ascii_uppercase())
@@ -274,13 +289,16 @@ pub(super) fn exec_create(
             ncol
         )));
     }
-    env.open_writes.insert(
-        ds.to_uppercase(),
-        OpenWrite {
-            colnames,
-            rows: Vec::new(),
-        },
-    );
+    let buf = OpenWrite {
+        colnames,
+        rows: Vec::new(),
+    };
+    // Un second CREATE du même nom remplace le tampon (comportement
+    // historique, inchangé) en gardant sa place dans l'ordre de fermeture.
+    match env.open_writes.iter_mut().find(|(k, _)| k == ds) {
+        Some((_, open)) => *open = buf,
+        None => env.open_writes.push((ds.to_string(), buf)),
+    }
     Ok(())
 }
 
@@ -303,8 +321,7 @@ pub(super) fn exec_append(from: &str, env: &mut Env) -> Result<()> {
             "IML: APPEND requires exactly one open output data set (use CREATE first).",
         ));
     }
-    let key = env.open_writes.keys().next().cloned().unwrap();
-    let buf = env.open_writes.get_mut(&key).unwrap();
+    let buf = &mut env.open_writes[0].1;
     let ncol = buf.colnames.len();
     for row in &mat {
         if row.len() != ncol {
@@ -321,41 +338,76 @@ pub(super) fn exec_append(from: &str, env: &mut Env) -> Result<()> {
 
 /// `CLOSE ds;` — écrit le dataset accumulé dans la bibliothèque cible.
 pub(super) fn exec_close(ds: &str, env: &mut Env, session: &mut Session) -> Result<()> {
-    let key = ds.to_uppercase();
-    if let Some(buf) = env.open_writes.remove(&key) {
-        use crate::dataset::{SasDataset, VarMeta};
-        use crate::value::VarType;
-        use polars::prelude::*;
-        let (libref, table) = split_ds_name(&key);
-        let ncol = buf.colnames.len();
-        let nrow = buf.rows.len();
-        // Construire une colonne f64 par variable.
-        let mut columns: Vec<Column> = Vec::with_capacity(ncol);
-        let mut vars: Vec<VarMeta> = Vec::with_capacity(ncol);
-        for j in 0..ncol {
-            let col: Vec<f64> = (0..nrow).map(|i| buf.rows[i][j]).collect();
-            columns.push(Series::new(buf.colnames[j].as_str().into(), col).into());
-            vars.push(VarMeta {
-                name: buf.colnames[j].clone(),
-                ty: VarType::Num,
-                length: 8,
-                format: None,
-                label: None,
-                informat: None,
-            });
-        }
-        let df = DataFrame::new(columns)?;
-        let out_ds = SasDataset { df, vars };
-        let display = format!("{libref}.{table}");
-        session.libs.get(&libref)?.write(&table, &out_ds)?;
-        session.last_dataset = Some(display.clone());
-        session.log.note(&format!(
-            "The data set {display} has {nrow} observations and {ncol} variables."
-        ));
-        return Ok(());
+    if let Some(pos) = env.open_writes.iter().position(|(k, _)| k == ds) {
+        let (key, buf) = env.open_writes.remove(pos);
+        return write_dataset(&key, buf, session);
     }
     // Fermeture d'un dataset ouvert en lecture : best-effort.
-    env.open_reads.remove(&key);
+    env.open_reads.remove(ds);
+    Ok(())
+}
+
+/// J02-P5 — QUIT : « SAS/IML software automatically closes all open data
+/// sets when a QUIT statement is executed » (SAS/IML 9.4, CLOSE statement).
+/// Une table créée par CREATE/APPEND sans CLOSE n'était jamais écrite ; elle
+/// l'est maintenant, dans l'ordre des CREATE.
+pub(super) fn close_open_writes(env: &mut Env, session: &mut Session) -> Result<()> {
+    let mut open = std::mem::take(&mut env.open_writes);
+    while !open.is_empty() {
+        let (key, buf) = open.remove(0);
+        if let Err(e) = write_dataset(&key, buf, session) {
+            discard_open_writes(open, session);
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Tables encore ouvertes quand PROC IML s'arrête sur une erreur : pas de
+/// table partielle, mais un WARNING par table (jamais de perte silencieuse).
+pub(super) fn discard_open_writes(open: Vec<(String, OpenWrite)>, session: &mut Session) {
+    for (name, _) in open {
+        session.log.warning(&format!(
+            "The data set {name} was not written because PROC IML stopped at an execution \
+             error."
+        ));
+    }
+}
+
+/// Écrit le tampon d'un dataset de sortie (une colonne numérique par nom).
+/// Une valeur manquante IML (NaN) devient le manquant SAS `.` (null Polars).
+fn write_dataset(key: &str, buf: OpenWrite, session: &mut Session) -> Result<()> {
+    use crate::dataset::{SasDataset, VarMeta};
+    use crate::value::VarType;
+    use polars::prelude::*;
+    let (libref, table) = split_ds_name(key);
+    let ncol = buf.colnames.len();
+    let nrow = buf.rows.len();
+    // Construire une colonne f64 par variable.
+    let mut columns: Vec<Column> = Vec::with_capacity(ncol);
+    let mut vars: Vec<VarMeta> = Vec::with_capacity(ncol);
+    for j in 0..ncol {
+        let col: Vec<Option<f64>> = (0..nrow)
+            .map(|i| Some(buf.rows[i][j]).filter(|v| !v.is_nan()))
+            .collect();
+        columns.push(Series::new(buf.colnames[j].as_str().into(), col).into());
+        vars.push(VarMeta {
+            name: buf.colnames[j].clone(),
+            ty: VarType::Num,
+            length: 8,
+            format: None,
+            label: None,
+            informat: None,
+        });
+    }
+    let df = DataFrame::new(columns)?;
+    let out_ds = SasDataset { df, vars };
+    let display = format!("{libref}.{table}");
+    session.libs.get(&libref)?.write(&table, &out_ds)?;
+    session.last_dataset = Some(display.clone());
+    session.log.note(&format!(
+        "The data set {display} has {nrow} observations and {ncol} variables."
+    ));
     Ok(())
 }
 

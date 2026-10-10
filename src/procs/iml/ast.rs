@@ -63,10 +63,6 @@ pub enum ImlStmt {
         vars: Vec<String>,
         into: String,
     },
-    /// Statements I/O non encore implémentés (erreur propre à l'exécution).
-    UnsupportedIo {
-        msg: String,
-    },
 }
 
 #[derive(Debug, Clone)]

@@ -35,7 +35,7 @@ impl Parser {
             self.eat(&Tok::Semi);
             Ok(body)
         } else {
-            Ok(vec![self.parse_stmt()?])
+            Ok(self.parse_stmt()?.into_iter().collect())
         }
     }
 
@@ -48,6 +48,13 @@ impl Parser {
 
     pub(super) fn parse_do(&mut self) -> Result<ImlStmt> {
         self.next(); // do
+        // DO DATA (boucle jusqu'à la fin de fichier) : instruction SAS/IML
+        // valide, non implémentée (J02-P5 : « expected '=' in a DO loop »).
+        if matches!(self.peek(), Tok::Ident(s) if s.eq_ignore_ascii_case("data"))
+            && self.toks.get(self.pos + 1) != Some(&Tok::Eq)
+        {
+            return Err(unsupported("The DO DATA statement", None));
+        }
         // DO; (bloc nu) — non attendu au niveau statement, mais tolérons-le.
         if self.eat(&Tok::Semi) {
             let body = self.parse_block_until_end()?;
@@ -118,7 +125,7 @@ impl Parser {
             if self.peek() == &Tok::Eof {
                 return Err(SasError::runtime("IML: missing END for a DO block"));
             }
-            body.push(self.parse_stmt()?);
+            body.extend(self.parse_stmt()?);
         }
     }
 

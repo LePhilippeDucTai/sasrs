@@ -82,7 +82,8 @@ fn sum_fn() {
 
 #[test]
 fn std_fn() {
-    let s = as_scalar(&eval_one("std({2 4 6 8 10})")).unwrap();
+    // STD is a column statistic (J02-P5): the five values form one column.
+    let s = as_scalar(&eval_one("std({2, 4, 6, 8, 10})")).unwrap();
     assert!((s - 3.1622776601).abs() < 0.001, "std = {s}");
 }
 
@@ -230,7 +231,7 @@ fn call_qr_dimensions() {
     assert_eq!(dims(q), (3, 2), "Q dims");
     assert_eq!(dims(r), (2, 2), "R dims");
     // Q*R ≈ original.
-    let qr = eval_binop(ImlOp::Mul, q, r).unwrap();
+    let qr = eval_binop(ImlOp::Mul, q, r, &env).unwrap();
     assert!(
         approx(qr[0][0], 1.0, 1e-6) && approx(qr[2][1], 6.0, 1e-6),
         "qr={qr:?}"
@@ -255,7 +256,7 @@ fn call_svdcd_singular_values() {
         .iter()
         .map(|row| row.iter().enumerate().map(|(j, &x)| x * d[j][0]).collect())
         .collect();
-    let recon = eval_binop(ImlOp::Mul, &ud, &transpose(&vmat)).unwrap();
+    let recon = eval_binop(ImlOp::Mul, &ud, &transpose(&vmat), &env).unwrap();
     assert!(
         approx(recon[0][0], 1.0, 1e-4) && approx(recon[1][1], 4.0, 1e-4),
         "recon={recon:?}"
@@ -331,7 +332,7 @@ fn det_singular_is_zero() {
 fn eigvec_orthonormal() {
     // V'V = I for a symmetric matrix.
     let v = eval_one("eigvec({2 0, 0 3})");
-    let vtv = eval_binop(ImlOp::Mul, &transpose(&v), &v).unwrap();
+    let vtv = eval_binop(ImlOp::Mul, &transpose(&v), &v, &Env::new()).unwrap();
     assert!(approx(vtv[0][0], 1.0, 1e-9), "vtv={vtv:?}");
     assert!(approx(vtv[1][1], 1.0, 1e-9), "vtv={vtv:?}");
     assert!(approx(vtv[0][1], 0.0, 1e-9), "vtv={vtv:?}");
@@ -352,7 +353,7 @@ fn call_eigen_values_and_vectors() {
     assert!(approx(val[1][0], 2.0, 1e-9), "val={val:?}");
     // Vectors orthonormal: Vᵀ V = I.
     let vec = env.vars.get("VEC").unwrap().clone();
-    let vtv = eval_binop(ImlOp::Mul, &transpose(&vec), &vec).unwrap();
+    let vtv = eval_binop(ImlOp::Mul, &transpose(&vec), &vec, &env).unwrap();
     assert!(
         approx(vtv[0][0], 1.0, 1e-9) && approx(vtv[1][1], 1.0, 1e-9),
         "vtv={vtv:?}"
@@ -371,7 +372,7 @@ fn call_eigen_values_and_vectors() {
                 .collect()
         })
         .collect();
-    let recon = eval_binop(ImlOp::Mul, &vd, &transpose(&vec)).unwrap();
+    let recon = eval_binop(ImlOp::Mul, &vd, &transpose(&vec), &env).unwrap();
     assert!(
         approx(recon[0][0], 2.0, 1e-9) && approx(recon[1][1], 3.0, 1e-9),
         "recon={recon:?}"
@@ -461,11 +462,39 @@ fn use_read_all_close_reads_dataset() {
 
 #[test]
 fn read_next_deferred_error() {
-    let prog = parse_body("read next into m;").unwrap();
-    let mut env = Env::new();
-    let mut ops = Vec::new();
-    let mut session = test_session();
-    let e = exec_stmts(&prog.stmts, &mut env, &mut ops, &mut session);
+    // Rejected at parse time since J02-P5 (it used to fail at run time).
+    let e = parse_body("read next into m;");
     assert!(e.is_err());
     assert!(e.err().unwrap().to_string().contains("READ NEXT"));
+}
+
+#[test]
+fn quit_write_failure_reports_the_remaining_tables() {
+    // J02-P5: a table that cannot be written at QUIT is an ERROR, and the
+    // tables still open after it are reported, never dropped in silence.
+    let mut session = test_session();
+    let mut env = Env::new();
+    for key in ["NOLIB.A", "WORK.B"] {
+        env.open_writes.push((
+            key.to_string(),
+            OpenWrite {
+                colnames: vec!["COL1".into()],
+                rows: vec![vec![1.0]],
+            },
+        ));
+    }
+    let err = close_open_writes(&mut env, &mut session).unwrap_err();
+    assert!(
+        err.to_string().contains("Libref NOLIB is not assigned."),
+        "{err}"
+    );
+    let log = session.log.current_text();
+    assert!(
+        log.contains(
+            "WARNING: The data set WORK.B was not written because PROC IML stopped at an \
+             execution error."
+        ),
+        "{log}"
+    );
+    assert!(env.open_writes.is_empty());
 }

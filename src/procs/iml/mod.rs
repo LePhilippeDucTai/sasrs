@@ -33,6 +33,17 @@
 //! - M34.10 : `SHAPE(x, nrow [, ncol])` (reshape row-major avec recyclage),
 //!   sous-matrices à intervalle `a[1:2, 1:3]`, `a[2:3, *]`, `DET(A)`,
 //!   `EIGVEC(A)` et `CALL EIGEN(values, vectors, A)` (symétrique).
+//!
+//! ## Contrat (J02-P5, CONTRIBUTING §5)
+//! Rien n'est ignoré en silence : option du statement PROC IML autre que
+//! SYMSIZE=/WORKSIZE= → ERROR ; options PRINT `[…]` → WARNING d'affichage ;
+//! instruction SAS/IML valide non implémentée (START, STORE, READ NEXT…) →
+//! ERROR « not supported … cannot be ignored » au parsing ; instruction
+//! inconnue → ERROR 180-322 (repli partagé `common::unhandled_proc_statement`).
+//! MEAN/STD sont des statistiques par colonne, SUM/MIN/MAX portent sur tous
+//! leurs arguments ; division par zéro → WARNING et valeur manquante ;
+//! LOG/SQRT hors domaine → ERROR ; une valeur manquante s'imprime `.`.
+//! Détail : `docs/support-contract.md`.
 
 use crate::error::{Result, SasError};
 use crate::session::Session;
@@ -75,11 +86,32 @@ struct OpenWrite {
 }
 
 /// Exécute un programme IML.
+///
+/// J02-P5 — la sortie PRINT des instructions exécutées avant une erreur
+/// d'exécution est rendue (SAS l'imprime au fil de l'exécution ; elle était
+/// perdue). L'étape s'arrête à la première erreur (SAS reprendrait à
+/// l'instruction suivante) : les tables encore ouvertes ne sont alors pas
+/// écrites (WARNING). Sans erreur, QUIT ferme et écrit toutes les tables
+/// ouvertes (SAS/IML 9.4, CLOSE statement).
 pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
     let mut env = Env::new();
     let mut ops: Vec<PrintOp> = Vec::new();
-    exec_stmts(&prog.stmts, &mut env, &mut ops, session)?;
+    let result = exec_stmts(&prog.stmts, &mut env, &mut ops, session);
+    render_output(&ops, session);
+    match result {
+        Ok(()) => close_open_writes(&mut env, session),
+        Err(e) => {
+            discard_open_writes(std::mem::take(&mut env.open_writes), session);
+            Err(e)
+        }
+    }
+}
 
+/// Rend la sortie PRINT capturée ; aucune page quand rien n'a été imprimé.
+fn render_output(ops: &[PrintOp], session: &mut Session) {
+    if ops.is_empty() {
+        return;
+    }
     session.listing.page_header();
     let ls = session.listing.ls();
     let pad = ls.saturating_sub("The IML Procedure".len()) / 2;
@@ -88,7 +120,7 @@ pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
         .write_line(&format!("{}{}", " ".repeat(pad), "The IML Procedure"));
     session.listing.blank();
 
-    for op in &ops {
+    for op in ops {
         match op {
             PrintOp::Text(t) => {
                 session.listing.write_line(t);
@@ -97,9 +129,9 @@ pub fn execute(prog: &ImlProgram, session: &mut Session) -> Result<()> {
             PrintOp::Matrix { name, m } => render_matrix(name, m, session),
         }
     }
-
-    Ok(())
 }
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

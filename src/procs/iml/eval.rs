@@ -30,7 +30,7 @@ pub(super) fn eval_expr(e: &ImlExpr, env: &Env) -> Result<Matrix> {
         ImlExpr::BinOp { op, left, right } => {
             let l = eval_expr(left, env)?;
             let r = eval_expr(right, env)?;
-            eval_binop(*op, &l, &r)
+            eval_binop(*op, &l, &r, env)
         }
         ImlExpr::FnCall { name, args } => eval_fn(name, args, env),
         ImlExpr::Subscript { mat, row, col } => {
@@ -40,7 +40,11 @@ pub(super) fn eval_expr(e: &ImlExpr, env: &Env) -> Result<Matrix> {
     }
 }
 
-pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
+/// WARNING of the SAS/IML division operator for a zero divisor.
+pub(super) const DIVISION_BY_ZERO: &str =
+    "Division by zero, result set to missing value.\noperation : /";
+
+pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix, env: &Env) -> Result<Matrix> {
     let (lr, lc) = dims(l);
     let (rr, rc) = dims(r);
     match op {
@@ -51,15 +55,27 @@ pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
         }
         ImlOp::Hadamard => elementwise(l, r, |a, b| a * b),
         ImlOp::Div => {
-            // Division par scalaire (ou élément par élément si même dim).
-            if rr == 1 && rc == 1 {
-                let d = r[0][0];
-                Ok(l.iter()
-                    .map(|row| row.iter().map(|v| v / d).collect())
-                    .collect())
-            } else {
-                elementwise(l, r, |a, b| a / b)
+            // Élément par élément, scalaire diffusé. J02-P5 — SAS/IML 9.4,
+            // Division Operator : un opérande manquant donne un quotient
+            // manquant ; « If a divisor is zero, the operation displays a
+            // warning and assigns a missing value for the corresponding
+            // element in the result » (inf/NaN silencieux auparavant).
+            let zero_divisor = std::cell::Cell::new(false);
+            let quotient = |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else if b == 0.0 {
+                    zero_divisor.set(true);
+                    f64::NAN
+                } else {
+                    a / b
+                }
+            };
+            let out = elementwise(l, r, quotient)?;
+            if zero_divisor.get() {
+                env.warn(DIVISION_BY_ZERO);
             }
+            Ok(out)
         }
         ImlOp::Mul => {
             // Produit matriciel ; si l'un est scalaire, multiplication scalaire.
@@ -82,6 +98,10 @@ pub(super) fn eval_binop(op: ImlOp, l: &Matrix, r: &Matrix) -> Result<Matrix> {
                     "IML: matrices do not conform for multiplication ({lr}x{lc} * {rr}x{rc})."
                 )));
             }
+            // « Matrix multiplication with missing values is not supported »
+            // (SAS/IML 9.4, Missing Values) : ERROR plutôt que des NaN.
+            require_nonmissing(l, "*")?;
+            require_nonmissing(r, "*")?;
             let mut out = vec![vec![0.0; rc]; lr];
             for i in 0..lr {
                 for j in 0..rc {
@@ -195,45 +215,71 @@ pub(super) fn eval_fn(name: &str, args: &[ImlExpr], env: &Env) -> Result<Matrix>
             };
             iml_shape(&src, nrow, ncol)
         }
-        "sum" => Ok(scalar(all_elems(&arg(0)?).iter().sum())),
-        "mean" => {
-            let v = all_elems(&arg(0)?);
-            if v.is_empty() {
-                return Err(SasError::runtime("IML: MEAN of an empty matrix."));
+        // J02-P5 — SUM, MIN et MAX portent sur TOUS leurs arguments (seul le
+        // premier était lu) et excluent les valeurs manquantes (SAS/IML 9.4 :
+        // « The operators SUM, SSQ, MAX, and MIN check for and exclude missing
+        // values » ; SUM rend 0 si tout est manquant, MIN « the machine's
+        // largest representable number », MAX la plus négative).
+        "sum" => {
+            let mut total = 0.0;
+            for e in args {
+                total += all_elems(&eval_expr(e, env)?)
+                    .into_iter()
+                    .filter(|v| !v.is_nan())
+                    .sum::<f64>();
             }
-            Ok(scalar(v.iter().sum::<f64>() / v.len() as f64))
+            Ok(scalar(total))
         }
-        "std" => {
-            let v = all_elems(&arg(0)?);
-            if v.len() < 2 {
-                return Err(SasError::runtime(
-                    "IML: STD requires at least two elements.",
-                ));
+        "min" | "max" => {
+            let is_min = lname == "min";
+            let mut best: Option<f64> = None;
+            for e in args {
+                for v in all_elems(&eval_expr(e, env)?)
+                    .into_iter()
+                    .filter(|v| !v.is_nan())
+                {
+                    best = Some(match best {
+                        Some(b) if is_min => b.min(v),
+                        Some(b) => b.max(v),
+                        None => v,
+                    });
+                }
             }
-            let m = v.iter().sum::<f64>() / v.len() as f64;
-            let ss: f64 = v.iter().map(|x| (x - m) * (x - m)).sum();
-            Ok(scalar((ss / (v.len() as f64 - 1.0)).sqrt()))
+            Ok(scalar(best.unwrap_or(if is_min {
+                f64::MAX
+            } else {
+                -f64::MAX
+            })))
         }
-        "min" => {
-            let v = all_elems(&arg(0)?);
-            v.iter()
-                .cloned()
-                .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.min(x))))
-                .map(scalar)
-                .ok_or_else(|| SasError::runtime("IML: MIN of an empty matrix."))
-        }
-        "max" => {
-            let v = all_elems(&arg(0)?);
-            v.iter()
-                .cloned()
-                .fold(None, |acc, x| Some(acc.map_or(x, |a: f64| a.max(x))))
-                .map(scalar)
-                .ok_or_else(|| SasError::runtime("IML: MAX of an empty matrix."))
-        }
+        // J02-P5 — MEAN et STD sont des statistiques PAR COLONNE : une matrice
+        // n×p donne un vecteur ligne 1×p (SAS/IML 9.4, MEAN et STD Functions),
+        // et non plus un scalaire sur tous les éléments. Les valeurs
+        // manquantes d'une colonne sont exclues ; une colonne sans valeur
+        // (MEAN) ou avec moins de deux valeurs non manquantes (STD) donne une
+        // valeur manquante.
+        "mean" => Ok(column_stat(&arg(0)?, |xs| {
+            if xs.is_empty() {
+                f64::NAN
+            } else {
+                xs.iter().sum::<f64>() / xs.len() as f64
+            }
+        })),
+        "std" => Ok(column_stat(&arg(0)?, |xs| {
+            let n = xs.len();
+            if n < 2 {
+                return f64::NAN;
+            }
+            let m = xs.iter().sum::<f64>() / n as f64;
+            let ss: f64 = xs.iter().map(|x| (x - m) * (x - m)).sum();
+            (ss / (n as f64 - 1.0)).sqrt()
+        })),
         "abs" => Ok(map_elems(&arg(0)?, f64::abs)),
-        "sqrt" => Ok(map_elems(&arg(0)?, f64::sqrt)),
+        // J02-P5 — SQRT d'un négatif et LOG d'un argument ≤ 0 rendaient NaN /
+        // -inf en silence : ERROR d'exécution SAS/IML « Invalid argument to
+        // function » (une valeur manquante reste manquante).
+        "sqrt" => checked_map(&arg(0)?, "SQRT", |v| v >= 0.0, f64::sqrt),
         "exp" => Ok(map_elems(&arg(0)?, f64::exp)),
-        "log" => Ok(map_elems(&arg(0)?, f64::ln)),
+        "log" => checked_map(&arg(0)?, "LOG", |v| v > 0.0, f64::ln),
         // ── M28a.3 : algèbre linéaire ──
         "inv" => iml_inv(&arg(0)?),
         "solve" => iml_solve(&arg(0)?, &arg(1)?),

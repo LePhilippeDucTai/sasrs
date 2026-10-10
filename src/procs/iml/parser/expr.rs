@@ -173,13 +173,21 @@ impl Parser {
                 if self.eat(&Tok::LParen) {
                     let args = self.parse_arg_list()?;
                     self.expect(&Tok::RParen, "')'")?;
+                    check_function_arity(&name, args.len())?;
                     Ok(ImlExpr::FnCall { name, args })
                 } else {
                     Ok(ImlExpr::Var(name))
                 }
             }
+            // Matrice de caractères hors `{…}` : SAS valide, non implémenté
+            // (p. ex. MEAN(x, "trimmed", 0.2)).
+            Tok::Str(s) => Err(unsupported(
+                &format!("A character literal (\"{s}\") in an expression"),
+                None,
+            )),
             other => Err(SasError::runtime(format!(
-                "IML: unexpected token in an expression: {other:?}"
+                "IML: unexpected {} in an expression.",
+                other.describe()
             ))),
         }
     }
@@ -203,7 +211,8 @@ impl Parser {
                     }
                     other => {
                         return Err(SasError::runtime(format!(
-                            "IML: a string literal list may only contain strings, found {other:?}"
+                            "IML: a string literal list may only contain strings, found {}.",
+                            other.describe()
                         )));
                     }
                 }
@@ -232,9 +241,13 @@ impl Parser {
                     self.next();
                     cur.push(v);
                 }
+                Tok::Dot => {
+                    return Err(unsupported("A missing value (.) in a matrix literal", None));
+                }
                 other => {
                     return Err(SasError::runtime(format!(
-                        "IML: matrix literals support only numeric constants, found {other:?}"
+                        "IML: matrix literals support only numeric constants, found {}.",
+                        other.describe()
                     )));
                 }
             }
@@ -251,4 +264,48 @@ impl Parser {
         }
         Ok(ImlExpr::Literal(rows))
     }
+}
+
+/// J02-P5 — arity of the implemented functions (SAS/IML 9.4 Language
+/// Reference). Extra arguments used to be dropped in silence (SUM, MIN and
+/// MAX kept only their first matrix, MEAN ignored its method, SHAPE its
+/// pad value): a wrong count is an ERROR at parse time. Unknown functions
+/// keep their run-time ERROR (« not yet implemented »).
+fn check_function_arity(name: &str, n: usize) -> Result<()> {
+    let fname = name.to_ascii_uppercase();
+    let (min, max) = match fname.as_str() {
+        // « There can be as many as 15 argument matrices » (SUM, MIN, MAX).
+        "SUM" | "MIN" | "MAX" => (1, 15),
+        "MEAN" if n == 2 || n == 3 => {
+            return Err(unsupported(
+                "The method argument of the MEAN function (trimmed or Winsorized mean)",
+                None,
+            ));
+        }
+        "SHAPE" if n == 1 || n == 4 => {
+            let what = if n == 1 {
+                "The SHAPE function without a number of rows"
+            } else {
+                "The pad-value argument of the SHAPE function"
+            };
+            return Err(unsupported(what, None));
+        }
+        "SHAPE" => (2, 3),
+        "SOLVE" => (2, 2),
+        "NROW" | "NCOL" | "DIM" | "T" | "MEAN" | "STD" | "ABS" | "SQRT" | "EXP" | "LOG" | "INV"
+        | "EIGVAL" | "CHOL" | "EIGVEC" | "DET" => (1, 1),
+        _ => return Ok(()),
+    };
+    if (min..=max).contains(&n) {
+        return Ok(());
+    }
+    let expected = if min == max {
+        format!("{min} argument{}", if min == 1 { "" } else { "s" })
+    } else {
+        format!("from {min} to {max} arguments")
+    };
+    Err(SasError::runtime(format!(
+        "IML: the {fname} function takes {expected}; {n} {} specified.",
+        if n == 1 { "was" } else { "were" }
+    )))
 }
