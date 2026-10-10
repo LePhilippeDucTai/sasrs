@@ -94,11 +94,27 @@ fn is_list_keyword(ts: &StatementStream) -> bool {
         .is_some_and(|s| s.eq_ignore_ascii_case("to") || s.eq_ignore_ascii_case("by"))
 }
 
-/// Consume one item of an option value: a number (signed), a string, a
-/// parenthesized group, or a name with its optional `.suffix` (`lib.table`,
-/// format `best12.`) and `(sub-options)`. Returns false, consuming nothing, on
-/// any other token.
+/// Consume the unit glued to the number just consumed (`10px`, `0.5in`,
+/// `8pt`: the lexer splits them, and `in` is a keyword token).
+fn skip_unit_suffix(ts: &mut StatementStream, number_end: usize) {
+    if ts.peek().span.start == number_end
+        && (ts.peek().ident().is_some() || ts.peek().kind == TokenKind::In)
+    {
+        ts.next();
+    }
+}
+
+/// Consume one item of an option value: a number (signed, with its unit), a
+/// string, a parenthesized group, or a name with its optional `$` prefix
+/// (character format), `.suffix` (`lib.table`, format `best12.`) and
+/// `(sub-options)`. Returns false, consuming nothing, on any other token.
 fn skip_value_item(ts: &mut StatementStream) -> bool {
+    if ts.peek().kind == TokenKind::Dollar
+        && ts.peek2().ident().is_some()
+        && ts.peek2().span.start == ts.peek().span.end
+    {
+        ts.next(); // `$` of `$char10.`
+    }
     match ts.peek().kind {
         TokenKind::LParen => {
             ts.skip_balanced_parens();
@@ -106,10 +122,16 @@ fn skip_value_item(ts: &mut StatementStream) -> bool {
         }
         TokenKind::Minus | TokenKind::Plus if matches!(ts.peek2().kind, TokenKind::Num(_)) => {
             ts.next();
-            ts.next();
+            let number = ts.next();
+            skip_unit_suffix(ts, number.span.end);
             true
         }
-        TokenKind::Num(_) | TokenKind::Str { .. } => {
+        TokenKind::Num(_) => {
+            let number = ts.next();
+            skip_unit_suffix(ts, number.span.end);
+            true
+        }
+        TokenKind::Str { .. } => {
             ts.next();
             true
         }

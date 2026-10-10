@@ -124,7 +124,7 @@ fn ra_j02_p6_sgplot_axis_options_warn() {
         "{HEIGHTS}proc sgplot data=h;
            scatter x=age y=height;
            xaxis label='Age' values=(10 20 30 40) grid;
-           yaxis type=log min=100 values=(-10 to 200 by 10);
+           yaxis type=log min=100 values=(-10 to 200 by 10) tickvalueformat=$char10.;
          run;"
     ));
     assert_eq!(out.exit_code, 1, "{}", out.log);
@@ -143,7 +143,8 @@ fn ra_j02_p6_sgplot_axis_options_warn() {
     ] {
         assert_has(&out, &needle);
     }
-    assert_eq!(out.log.matches("WARNING:").count(), 5, "{}", out.log);
+    assert_has(&out, &ignored("YAXIS", "TICKVALUEFORMAT="));
+    assert_eq!(out.log.matches("WARNING:").count(), 6, "{}", out.log);
     assert!(!out.log.contains("The LABEL= option"), "{}", out.log);
 
     // The sign of a negative bound is kept in the AST (it was dropped).
@@ -302,11 +303,19 @@ fn ra_j02_p6_sgplot_unsupported_statements() {
 #[test]
 fn ra_j02_p6_sgplot_proc_options() {
     let out = run_sas(&format!(
-        "{HEIGHTS}proc sgplot data=h noautolegend description='Heights';
-           scatter x=age y=height;
+        "{HEIGHTS}proc sgplot data=h noautolegend description='Heights' pad=0.5in;
+           scatter x=age y=height / markersize=10px;
          run;"
     ));
     assert_eq!(out.exit_code, 1, "{}", out.log);
+    // A dimension keeps its unit (`0.5in`, `10px`): one WARNING per option.
+    assert_eq!(out.log.matches("WARNING:").count(), 4, "{}", out.log);
+    assert_has(
+        &out,
+        "WARNING: The PAD= option is ignored in PROC SGPLOT; display customization is not \
+         supported.",
+    );
+    assert_has(&out, &ignored("SCATTER", "MARKERSIZE="));
     assert_has(
         &out,
         "WARNING: The NOAUTOLEGEND option is ignored in PROC SGPLOT; display customization is \
