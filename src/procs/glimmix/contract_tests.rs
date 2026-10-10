@@ -353,7 +353,9 @@ fn ra_j02_p3_proc_options_affecting_results() {
 /// (code 1), estimations inchangées. Honorées sans diagnostic : INITGLM
 /// (valeurs initiales issues du GLM sans effet aléatoire, ce que font tous
 /// les ajustements), NOITPRINT et PLOTS=NONE (aucune Iteration History ni
-/// aucun graphique n'est produit).
+/// aucun graphique n'est produit), IC=NONE hors LAPLACE (SAS/STAT 9.4, PROC
+/// GLIMMIX statement, INFOCRIT= : défaut des méthodes de pseudo-vraisemblance,
+/// aucun critère d'information n'y est imprimé).
 #[test]
 fn ra_j02_p3_proc_display_options() {
     let program = |opt: &str| {
@@ -370,7 +372,6 @@ fn ra_j02_p3_proc_display_options() {
         ("plots(only)=(residualpanel)", "PLOTS"),
         ("plots=all", "PLOTS"),
         ("oddsratio(diff=first)", "ODDSRATIO"),
-        ("ic=none", "IC=NONE"),
     ] {
         assert_display_warning(
             &program(opt),
@@ -385,12 +386,25 @@ fn ra_j02_p3_proc_display_options() {
         "initglm",
         "noitprint",
         "plots=none",
+        "ic=none",
         "noitprint plots=none initglm",
     ] {
         let out = program(opt);
         assert_eq!(out.exit_code, 0, "{opt}: {}", out.log);
         assert_eq!(out.listing, plain.listing, "{opt}");
     }
+    // The LAPLACE fit prints AIC/AICC/BIC: IC=NONE is not honored there.
+    let laplace = |opt: &str| {
+        run_sas(&format!(
+            "{CNT}proc glimmix data=cnt method=laplace {opt}; class subj;
+             model y = x / dist=poisson; random intercept / subject=subj; run;"
+        ))
+    };
+    assert_display_warning(
+        &laplace("ic=none"),
+        &laplace(""),
+        "The IC=NONE option is ignored in PROC GLIMMIX; display customization is not supported.",
+    );
 }
 
 /// Base : « Convergence criterion (GCONV=1E-8) satisfied. » était imprimé

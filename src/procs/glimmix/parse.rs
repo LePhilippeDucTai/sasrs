@@ -351,6 +351,7 @@ fn parse_subject(ts: &mut StatementStream) -> Result<String> {
 pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
     let mut data: Option<DatasetRef> = None;
     let mut method = Method::Rspl;
+    let mut ic_none: Option<String> = None;
 
     // PROC GLIMMIX statement options until `;`.
     loop {
@@ -413,12 +414,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
             ts.next();
             skip_display_value(ts);
         } else if matches!(kw.as_str(), "ic" | "infocrit") {
-            // IC=NONE only suppresses the information criteria (display);
-            // IC=PQ|Q change their definition.
+            // IC=NONE only suppresses the information criteria (display,
+            // checked once the model is known); IC=PQ|Q change their
+            // definition.
             let name = option_name(ts);
             common::consume_option_eq(ts, &name)?;
             if ts.peek().is_kw("none") {
-                ts.warn_ignored_display(ignored_display_option("PROC", &format!("{name}=NONE")));
+                ic_none = Some(format!("{name}=NONE"));
                 ts.next();
             } else {
                 return Err(unsupported_option("PROC", &format!("{name}="), None, span));
@@ -578,6 +580,15 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlimmixAst> {
             None,
             span,
         ));
+    }
+
+    // IC=NONE is the default display of the pseudo-likelihood and GLM-mode
+    // fits (no information criteria); only the LAPLACE fit prints them.
+    if let Some(name) = ic_none
+        && method == Method::Laplace
+        && random.is_some()
+    {
+        ts.warn_ignored_display(ignored_display_option("PROC", &name));
     }
 
     Ok(GlimmixAst {
