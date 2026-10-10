@@ -113,12 +113,17 @@ pub struct ClassVar {
     pub name: String,
     /// `true` = REF=FIRST (premier niveau = référence), `false` = REF=LAST.
     pub ref_first: bool,
+    /// `PARAM=REF|REFERENCE` écrit (forme parenthésée ou après `/`). Sans
+    /// lui, SAS code la variable en EFFECT (défaut) : WARNING J02-P1.
+    pub param_explicit: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct LogisticModel {
     pub response: String,
-    pub event: Option<String>,
+    /// `EVENT='v'|FIRST|LAST` (option de réponse) ; FIRST/LAST se lisent dans
+    /// l'ordre des niveaux après `DESCENDING`.
+    pub event: Option<common::ResponseEvent>,
     pub descending: bool,
     pub predictors: Vec<String>,
     pub noprint: bool,
@@ -216,7 +221,21 @@ pub fn execute(ast: &LogisticAst, session: &mut Session) -> Result<()> {
     };
 
     // ── Build design (CLASS expansion via reference-cell coding) ───────────
-    let design = build_design(&ast.class_vars, predictors, &pred_cols, n_read)?;
+    // J02-P1 — CLASS levels come from the observations actually used (SAS/STAT
+    // 9.4, The LOGISTIC Procedure, « Missing Values »: observations with a
+    // missing response, explanatory or FREQ value are not used), not from
+    // every row read: a level present only in deleted rows used to create an
+    // all-zero design column and a misleading singularity ERROR.
+    let used = used_rows(
+        &ast.class_vars,
+        predictors,
+        &pred_cols,
+        &resp_col,
+        &freq_col,
+        n_read,
+    );
+    let design = build_design(&ast.class_vars, predictors, &pred_cols, &used)?;
+    warn_default_param(session, &ast.class_vars, &design);
 
     // ── 3. Determine response levels (sorted by sas_cmp) ───────────────────
     let levels = crate::procs::lincom::class_levels(resp_col.iter().take(n_read));

@@ -75,7 +75,9 @@ pub struct GenmodDataOptions {
 #[derive(Debug, Clone)]
 pub struct GenmodModel {
     pub response: String,
-    pub event: Option<String>,
+    /// `EVENT='v'|FIRST|LAST` (option de réponse) ; FIRST/LAST se lisent dans
+    /// l'ordre des niveaux après `DESCENDING` (PROC ou réponse).
+    pub event: Option<common::ResponseEvent>,
     pub descending: bool,
     pub predictors: Vec<String>,
     pub dist: Distribution,
@@ -171,7 +173,10 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
     };
 
     // ── Build design terms (CLASS reference-cell coding, ref = last level) ──
-    let design_terms = build_design_terms(ast, &ds, predictors, &pred_idxs, &pred_cols)?;
+    // J02-P1 — CLASS levels come from the observations actually used (SAS/STAT
+    // 9.4, The GENMOD Procedure, « Missing Values »), not from every row read.
+    let used = used_rows(ast, predictors, &pred_cols, &resp_col, &freq_col, n_read);
+    let design_terms = build_design_terms(ast, &ds, predictors, &pred_idxs, &pred_cols, &used)?;
     let n_design: usize = design_terms.iter().map(|t| t.n_cols()).sum();
 
     // ── 3. Prepare response for Binomial (determine event level) ──────────
@@ -193,6 +198,21 @@ pub fn execute(ast: &GenmodAst, session: &mut Session) -> Result<()> {
         &binomial_event_level,
         n_read,
     );
+
+    // J02-P1 — DIST=GAMMA: a response ≤ 0 is outside the support of the
+    // distribution; the log-likelihood and deviance used to clamp it to 1e-300
+    // in silence.
+    if *dist == Distribution::Gamma {
+        let bad = y_vec.iter().filter(|y| **y <= 0.0).count();
+        if bad > 0 {
+            return Err(SasError::runtime(format!(
+                "DIST=GAMMA requires a positive response in PROC GENMOD; variable {} has {} \
+                 used observation(s) with a value <= 0.",
+                resp_name.to_uppercase(),
+                bad
+            )));
+        }
+    }
 
     let n_total: f64 = freq_vec.iter().sum();
     let n_obs = y_vec.len();

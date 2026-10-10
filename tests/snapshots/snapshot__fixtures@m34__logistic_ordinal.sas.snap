@@ -68,7 +68,7 @@ NOTE: PROCEDURE LOGISTIC used (Total process time):
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                             Analysis of Maximum Likelihood Estimates
 

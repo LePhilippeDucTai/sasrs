@@ -237,7 +237,7 @@ pub(super) fn execute_ordinal(
         wald_p,
     } = fit_ordinal(
         session, &cat_vec, &x_mat, &freq_vec, n_total, n_int, nb_cols, k,
-    );
+    )?;
     let sigma = |z: f64| 1.0 / (1.0 + (-z).exp());
 
     // ── Listing ───────────────────────────────────────────────────────────
@@ -253,9 +253,7 @@ pub(super) fn execute_ordinal(
         centered(session, "Model Convergence Status");
         session.listing.blank();
         if converged {
-            session
-                .listing
-                .write_line("     Convergence criterion (GCONV=1E-8) satisfied.");
+            session.listing.write_line(CONVERGENCE_SATISFIED);
         } else {
             session
                 .listing

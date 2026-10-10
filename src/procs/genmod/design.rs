@@ -41,6 +41,38 @@ pub(super) fn class_level_label(v: &Value) -> String {
 
 // ───────────────────────── Execute helpers ─────────────────────────
 
+/// Rows usable by the fit: non-missing response, valid FREQ (> 0) and every
+/// MODEL predictor non-missing — the same rule as the listwise deletion of
+/// [`build_model_matrices`].
+pub(super) fn used_rows(
+    ast: &GenmodAst,
+    predictors: &[String],
+    pred_cols: &[Vec<Value>],
+    resp_col: &[Value],
+    freq_col: &Option<Vec<Value>>,
+    n_read: usize,
+) -> Vec<bool> {
+    let is_class: Vec<bool> = predictors
+        .iter()
+        .map(|nm| ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm)))
+        .collect();
+    (0..n_read)
+        .map(|i| {
+            !resp_col[i].is_missing()
+                && freq_col.as_ref().is_none_or(
+                    |fc| matches!(value_to_num(&fc[i]), Some(f) if !f.is_nan() && f > 0.0),
+                )
+                && pred_cols.iter().zip(&is_class).all(|(c, &cls)| {
+                    if cls {
+                        !c[i].is_missing()
+                    } else {
+                        matches!(value_to_num(&c[i]), Some(v) if !v.is_nan())
+                    }
+                })
+        })
+        .collect()
+}
+
 /// Build the design terms for the MODEL right-hand side.
 ///
 /// Each predictor is either continuous (1 column) or a CLASS factor (L−1
@@ -52,6 +84,7 @@ pub(super) fn build_design_terms(
     predictors: &[String],
     pred_idxs: &[usize],
     pred_cols: &[Vec<Value>],
+    used: &[bool],
 ) -> Result<Vec<DesignTerm>> {
     let nb_preds = predictors.len();
     let mut design_terms: Vec<DesignTerm> = Vec::with_capacity(nb_preds);
@@ -59,7 +92,9 @@ pub(super) fn build_design_terms(
         let is_class = ast.class_vars.iter().any(|c| c.eq_ignore_ascii_case(nm));
         if is_class {
             let col = &pred_cols[pi];
-            let levels = crate::procs::lincom::class_levels(col.iter());
+            let levels = crate::procs::lincom::class_levels(
+                col.iter().zip(used).filter(|(_, u)| **u).map(|(v, _)| v),
+            );
             if levels.len() < 2 {
                 return Err(SasError::runtime(format!(
                     "CLASS variable {} must have at least 2 levels.",
@@ -122,22 +157,28 @@ pub(super) fn prepare_binomial_response(
             )));
         }
 
-        // Determine event level
-        let event_level_ref: &Value = if let Some(ev_str) = &model.event {
-            levels
-                .iter()
-                .find(|lv| value_matches_event(lv, ev_str))
-                .ok_or_else(|| {
-                    SasError::runtime(format!(
-                        "Event value '{}' not found in response variable {}.",
-                        ev_str,
-                        resp_name.to_uppercase()
-                    ))
-                })?
-        } else if model.descending {
-            &levels[1] // max level
+        // Determine event level. SAS/STAT 9.4, The GENMOD Procedure, MODEL
+        // statement « Response Variable Options »: levels in ascending order,
+        // reversed by DESCENDING; the first ordered level is the default
+        // event, EVENT=FIRST|LAST designate the first/last ordered level.
+        let ordered: Vec<&Value> = if model.descending {
+            levels.iter().rev().collect()
         } else {
-            &levels[0] // min level (default)
+            levels.iter().collect()
+        };
+        let event_level_ref: &Value = match &model.event {
+            Some(ev) => ev.pick(&ordered, value_matches_event).ok_or_else(|| {
+                let shown = match ev {
+                    common::ResponseEvent::Value(v) => v.clone(),
+                    _ => String::new(),
+                };
+                SasError::runtime(format!(
+                    "Event value '{}' not found in response variable {}.",
+                    shown,
+                    resp_name.to_uppercase()
+                ))
+            })?,
+            None => ordered[0],
         };
 
         let el = value_label(event_level_ref);

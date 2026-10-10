@@ -9,7 +9,7 @@ use polars::df;
 // GENMOD Procedure — « Iteration History » / convergence status. Quand la
 // convergence n'est pas atteinte, SAS émet un WARNING (« Convergence was not
 // attained in 50 iterations. »), jamais une NOTE ni un silence, et le listing
-// n'affiche PAS « Convergence criterion (GCONV=1E-8) satisfied. ».
+// n'affiche PAS « Convergence criterion (XCONV=1E-8) satisfied. ».
 // https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_genmod_details_toc.htm
 
 /// Session GENMOD binomial-logit avec séparation complète de l'échantillon :
@@ -72,26 +72,26 @@ fn convergence_genmod_separation_is_warning_not_note() {
     );
     let listing = session.listing.take_string();
     assert!(
-        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        !listing.contains("Convergence criterion (XCONV=1E-8) satisfied."),
         "listing must not claim convergence on failure:\n{listing}"
     );
 }
 
 /// Non-régression : un ajustement qui converge affiche bien la ligne
-/// « Convergence criterion (GCONV=1E-8) satisfied. » après l'ajustement.
+/// « Convergence criterion (XCONV=1E-8) satisfied. » après l'ajustement.
 #[test]
 fn convergence_genmod_converged_fit_still_claims_satisfied() {
     let (mut session, ast) = make_poisson_session();
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
     assert!(
-        listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        listing.contains("Convergence criterion (XCONV=1E-8) satisfied."),
         "converged fit must still print the status:\n{listing}"
     );
     // The status line keeps its historical listing position (after the
     // Response Profile block, before the goodness-of-fit table).
     let pos_status = listing
-        .find("Convergence criterion (GCONV=1E-8) satisfied.")
+        .find("Convergence criterion (XCONV=1E-8) satisfied.")
         .unwrap();
     let pos_gof = listing
         .find("Criteria For Assessing Goodness Of Fit")

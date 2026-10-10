@@ -58,7 +58,7 @@ NOTE: PROCEDURE GENMOD used (Total process time):
 
                                     Model Convergence Status
 
-     Convergence criterion (GCONV=1E-8) satisfied.
+     Convergence criterion (XCONV=1E-8) satisfied.
 
                              Criteria For Assessing Goodness Of Fit
 

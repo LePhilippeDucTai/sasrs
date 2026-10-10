@@ -76,7 +76,10 @@ fn test_parse_descending() {
 #[test]
 fn test_parse_event() {
     let ast = parse_logistic("proc logistic; model y(event='1') = x; run;").unwrap();
-    assert_eq!(ast.model.unwrap().event, Some("1".to_string()));
+    assert_eq!(
+        ast.model.unwrap().event,
+        Some(common::ResponseEvent::Value("1".to_string()))
+    );
 }
 
 #[test]
@@ -191,6 +194,7 @@ fn test_execute_class_reproduces_binary_or() {
         class_vars: vec![ClassVar {
             name: "x".into(),
             ref_first: false,
+            param_explicit: true,
         }],
         model: Some(LogisticModel {
             response: "y".into(),
@@ -250,7 +254,7 @@ fn tiny_link_session(link: Link) -> (Session, LogisticAst) {
         class_vars: vec![],
         model: Some(LogisticModel {
             response: "y".into(),
-            event: Some("1".into()),
+            event: Some(common::ResponseEvent::Value("1".into())),
             descending: false,
             predictors: vec!["x".into()],
             noprint: false,
@@ -295,10 +299,14 @@ fn test_execute_cloglog_converges() {
 #[test]
 fn test_execute_ordinal_monotone_intercepts() {
     let session = make_session();
-    // Ordered response with 3 levels, x increasing with category.
+    // Ordered response with 3 levels. J02-P1 — the former data were perfectly
+    // separated by x (y=1 for x<2, y=2 for 2≤x<3, y=3 for x≥3): the fit
+    // diverged and the listing printed NaN standard errors in silence, which
+    // is now an explicit ERROR. The overlapping data of the m34
+    // logistic_ordinal fixture keep the intent (monotone intercepts).
     let frame = df![
-        "y" => [1.0_f64, 1.0, 2.0, 2.0, 3.0, 3.0, 1.0, 2.0, 3.0, 2.0],
-        "x" => [1.0_f64, 1.5, 2.0, 2.5, 3.0, 3.5, 1.2, 2.2, 3.2, 2.4]
+        "y" => [1.0_f64, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 2.0, 3.0, 1.0, 3.0, 2.0],
+        "x" => [1.0_f64, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 5.0, 5.0]
     ]
     .unwrap();
     let ds = SasDataset {
@@ -489,7 +497,7 @@ fn model_fallback_logistic_interaction_is_error() {
 // (quasi-)complète SAS émet « WARNING: The maximum likelihood estimate may
 // not exist. », jamais une NOTE ni un silence ; le listing affiche
 // « Iteration limit reached without convergence. » au lieu de
-// « Convergence criterion (GCONV=1E-8) satisfied. ».
+// « Convergence criterion (XCONV=1E-8) satisfied. ».
 // https://support.sas.com/documentation/cdl/en/statug/68162/HTML/default/statug_logistic_details_toc.htm
 
 #[test]
@@ -545,7 +553,7 @@ fn convergence_logistic_binary_separation_is_warning() {
         "listing must report the failure:\n{listing}"
     );
     assert!(
-        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        !listing.contains("Convergence criterion (XCONV=1E-8) satisfied."),
         "listing must not claim convergence on separation:\n{listing}"
     );
 }
@@ -557,7 +565,7 @@ fn convergence_logistic_binary_converged_fit_still_claims_satisfied() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
     assert!(
-        listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        listing.contains("Convergence criterion (XCONV=1E-8) satisfied."),
         "converged fit must keep the status line:\n{listing}"
     );
 }
@@ -604,7 +612,14 @@ fn convergence_logistic_ordinal_separation_is_warning() {
         outputs: vec![],
     };
     let mut session = session;
-    execute(&ast, &mut session).unwrap();
+    // J02-P1 — the saturated information matrix used to yield NaN standard
+    // errors printed without diagnostic; the fit is now rejected explicitly
+    // after the doc-quoted non-convergence WARNING.
+    let err = execute(&ast, &mut session).unwrap_err().to_string();
+    assert!(
+        err.contains("information matrix of the ordinal logistic model is singular"),
+        "err: {err}"
+    );
     let log = session.log.into_string();
     assert!(
         log.contains("WARNING"),
@@ -612,7 +627,297 @@ fn convergence_logistic_ordinal_separation_is_warning() {
     );
     let listing = session.listing.take_string();
     assert!(
-        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        !listing.contains("Convergence criterion (XCONV=1E-8) satisfied."),
         "ordinal listing must not claim convergence:\n{listing}"
+    );
+}
+
+// ── J02-P1 : contrat LOGISTIC (replis silencieux supprimés) ──────────────
+//
+// Chaque test reproduit l'ancien silence (commentaire « Base : … ») et fige
+// le diagnostic ou la correction (texte, code de sortie). Oracle de sévérité :
+// CONTRIBUTING §5 ; sémantique SAS citée par test.
+
+/// Exécute un programme complet (mode déterministe) : log, listing, code.
+fn run_sas(src: &str) -> crate::RunOutcome {
+    crate::run(
+        src,
+        crate::RunOptions {
+            deterministic: true,
+            ..Default::default()
+        },
+    )
+}
+
+/// 2×2 counts of the m26 fixture (y=1/0, x=1/0, FREQ count).
+const COUNTS: &str = "data counts; input y x count; datalines;
+1 1 20
+1 0 10
+0 1 5
+0 0 25
+;
+run;
+";
+
+/// Base : `y(desc)` était ignoré (seul `descending` était lu) et
+/// `EVENT=FIRST|LAST` était avalé — le modèle portait sur y=0 en silence.
+/// SAS/STAT 9.4, The LOGISTIC Procedure, MODEL statement, « Response
+/// Variable Options » : DESCENDING (alias DESC) inverse l'ordre des niveaux ;
+/// EVENT=FIRST|LAST désigne le premier/dernier niveau ordonné.
+#[test]
+fn ra_j02_p1_logistic_response_desc_and_event_first_last() {
+    for (opts, modeled) in [
+        ("(desc)", "y=1."),
+        ("(event=last)", "y=1."),
+        ("(event=first)", "y=0."),
+        ("(desc event=last)", "y=0."),
+        ("(event='1')", "y=1."),
+    ] {
+        let out = run_sas(&format!(
+            "{COUNTS}proc logistic data=counts; model y{opts} = x; freq count; run;"
+        ));
+        assert_eq!(out.exit_code, 0, "{opts}: {}", out.log);
+        assert!(
+            out.listing.contains(&format!(
+                "PROC LOGISTIC is modeling the probability that {modeled}"
+            )),
+            "{opts}: {}",
+            out.listing
+        );
+    }
+}
+
+/// Base : `CLASS x / PARAM=REF REF=FIRST;` lisait `param`, `ref`, `first`
+/// comme des variables CLASS ; x restait codée REF=LAST (référence 1).
+/// SAS/STAT 9.4, The LOGISTIC Procedure, CLASS statement : les options
+/// après `/` s'appliquent à toutes les variables (même sémantique que la
+/// forme parenthésée), une option parenthésée prime.
+#[test]
+fn ra_j02_p1_logistic_class_slash_options() {
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; class x / param=ref ref=first;
+         model y(descending) = x; freq count; run;"
+    ));
+    assert_eq!(out.exit_code, 0, "{}", out.log);
+    // REF=FIRST: the design column is level 1 (reference 0), log OR = ln 10.
+    assert!(out.listing.contains("x 1"), "{}", out.listing);
+    assert!(!out.listing.contains("x 0"), "{}", out.listing);
+    assert!(out.listing.contains("2.3026"), "{}", out.listing);
+    assert!(!out.log.contains("WARNING"), "{}", out.log);
+
+    // A parenthesized option overrides the global one.
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; class x(ref=last) / param=reference ref=first;
+         model y(descending) = x; freq count; run;"
+    ));
+    assert_eq!(out.exit_code, 0, "{}", out.log);
+    assert!(out.listing.contains("x 0"), "{}", out.listing);
+
+    // Unsupported global options are the same ERROR as in parentheses.
+    for (stmt, msg) in [
+        (
+            "class x / param=effect;",
+            "CLASS PARAM=EFFECT is not supported in PROC LOGISTIC",
+        ),
+        (
+            "class x / missing;",
+            "Unknown or unsupported CLASS option 'MISSING' in PROC LOGISTIC.",
+        ),
+        (
+            "class x / ref='1';",
+            "CLASS REF='1' is not supported in PROC LOGISTIC",
+        ),
+    ] {
+        let out = run_sas(&format!(
+            "{COUNTS}proc logistic data=counts; {stmt} model y = x; freq count; run;"
+        ));
+        assert_eq!(out.exit_code, 2, "{stmt}: {}", out.log);
+        assert!(out.log.contains(msg), "{stmt}: {}", out.log);
+    }
+}
+
+/// Base : sans PARAM=, le codage REF était appliqué sans diagnostic alors que
+/// le défaut SAS est PARAM=EFFECT (SAS/STAT 9.4, The LOGISTIC Procedure,
+/// CLASS statement). WARNING provisoire jusqu'à roadmap-avancee J05-P2.
+#[test]
+fn ra_j02_p1_logistic_default_param_warning() {
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; class x; model y(descending) = x; freq count; run;"
+    ));
+    assert_eq!(out.exit_code, 1, "{}", out.log);
+    assert!(
+        out.log.contains(
+            "WARNING: CLASS variable X is coded with PARAM=REF; the SAS default \
+             PARAM=EFFECT is not supported in PROC LOGISTIC. The CLASS parameter \
+             estimates differ from SAS, the odds ratios are identical (planned: \
+             roadmap-avancee J05-P2)."
+        ),
+        "{}",
+        out.log
+    );
+    // The fit itself still runs (odds ratio 0 vs 1 = 0.1).
+    assert!(out.listing.contains("0.100"), "{}", out.listing);
+}
+
+/// Base : LOWER=, UPPER=, STDXBETA=, RESCHI=, RESDEV=, H=, PREDPROBS= étaient
+/// sautés jeton par jeton (OUT= sans les colonnes demandées) et un OUTPUT
+/// sans OUT= était abandonné sans dataset. ERROR (J05-P4 lèvera la première).
+#[test]
+fn ra_j02_p1_logistic_output_keywords_error() {
+    for kw in [
+        "lower=lo",
+        "upper=up",
+        "stdxbeta=se",
+        "reschi=rc",
+        "resdev=rd",
+        "h=lev",
+        "predprobs=i",
+    ] {
+        let out = run_sas(&format!(
+            "{COUNTS}proc logistic data=counts; model y = x; freq count;
+             output out=o p=phat {kw}; run;"
+        ));
+        let bad = kw.split('=').next().unwrap().to_uppercase();
+        assert_eq!(out.exit_code, 2, "{kw}: {}", out.log);
+        assert!(
+            out.log.contains(&format!(
+                "The OUTPUT option '{bad}' is not supported in PROC LOGISTIC; it can \
+                 affect results and cannot be ignored (planned: roadmap-avancee J05-P4)."
+            )),
+            "{kw}: {}",
+            out.log
+        );
+        assert!(!out.log.contains("WORK.O has"), "{kw}: {}", out.log);
+    }
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; model y = x; freq count; output p=phat; run;"
+    ));
+    assert_eq!(out.exit_code, 2, "{}", out.log);
+    assert!(
+        out.log
+            .contains("OUTPUT without OUT= is not supported in PROC LOGISTIC"),
+        "{}",
+        out.log
+    );
+}
+
+/// Base : réponse ordinale parfaitement séparée → matrice d'information
+/// saturée, inversion échouée, SE/Wald/p imprimés « NaN » sans diagnostic.
+/// ERROR explicite (le Hessien exact de roadmap-avancee J05-P7 reprendra ce
+/// chemin).
+#[test]
+fn ra_j02_p1_logistic_ordinal_singular_se_error() {
+    let out = run_sas(
+        "data sep; input y x @@; datalines;
+1 1 1 2 2 9 2 10 3 17 3 18
+;
+run;
+proc logistic data=sep; model y = x; run;",
+    );
+    assert_eq!(out.exit_code, 2, "{}", out.log);
+    assert!(
+        out.log.contains(
+            "The information matrix of the ordinal logistic model is singular in PROC \
+             LOGISTIC; standard errors, Wald chi-squares and p-values cannot be computed."
+        ),
+        "{}",
+        out.log
+    );
+    assert!(!out.listing.contains("NaN"), "{}", out.listing);
+}
+
+/// Base : les niveaux CLASS étaient calculés sur toutes les lignes lues ; un
+/// niveau présent seulement dans des observations écartées (réponse ou
+/// prédicteur manquant) créait une colonne nulle et une ERROR de singularité
+/// trompeuse. SAS/STAT 9.4, The LOGISTIC Procedure, « Missing Values » : ces
+/// observations ne sont pas utilisées — les niveaux viennent des
+/// observations utilisées.
+#[test]
+fn ra_j02_p1_logistic_class_levels_from_used_obs() {
+    let out = run_sas(
+        "data cl; input y g $ z count; datalines;
+1 a 1 20
+1 a 3 5
+0 a 1 5
+0 a 3 20
+1 b 2 10
+0 b 2 25
+1 b 4 3
+0 b 4 8
+1 c . 7
+. c 2 3
+;
+run;
+proc logistic data=cl; class g(param=ref); model y(descending) = g z; freq count; run;",
+    );
+    assert_eq!(out.exit_code, 0, "{}", out.log);
+    let cli = out
+        .listing
+        .lines()
+        .find(|l| l.trim_start().starts_with("g "))
+        .expect("class level row");
+    assert_eq!(cli.split_whitespace().collect::<Vec<_>>(), ["g", "a", "b"]);
+}
+
+/// Base : « Convergence criterion (GCONV=1E-8) satisfied. » alors que le
+/// critère testé est le changement relatif des paramètres
+/// (max|Δβ|/(1+max|β|) < 1E-8) : libellé véridique XCONV, binaire et ordinal.
+#[test]
+fn ra_j02_p1_logistic_convergence_label_xconv() {
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; model y(descending) = x; freq count; run;"
+    ));
+    assert_eq!(out.exit_code, 0, "{}", out.log);
+    assert!(
+        out.listing
+            .contains("     Convergence criterion (XCONV=1E-8) satisfied."),
+        "{}",
+        out.listing
+    );
+    assert!(!out.listing.contains("GCONV"), "{}", out.listing);
+}
+
+/// Base : les instructions LOGISTIC valides non implémentées (ODDSRATIO,
+/// UNITS, TEST, STRATA, ROC, SCORE, EXACT…) recevaient « 180-322 … not
+/// valid » ; elles portent désormais le message du catalogue du contrat.
+/// EFFECTPLOT (graphique seul) → WARNING d'affichage.
+#[test]
+fn ra_j02_p1_logistic_unsupported_statements() {
+    for stmt in [
+        "oddsratio x",
+        "units x=2",
+        "test x=0",
+        "strata x",
+        "roc 'r' x",
+        "score data=counts out=s",
+        "exact x",
+        "nloptions maxiter=5",
+    ] {
+        let out = run_sas(&format!(
+            "{COUNTS}proc logistic data=counts; model y = x; freq count; {stmt}; run;"
+        ));
+        let kw = stmt.split_whitespace().next().unwrap().to_uppercase();
+        assert_eq!(out.exit_code, 2, "{stmt}: {}", out.log);
+        assert!(
+            out.log.contains(&format!(
+                "The {kw} statement is not supported in PROC LOGISTIC; it can affect \
+                 results and cannot be ignored."
+            )),
+            "{stmt}: {}",
+            out.log
+        );
+        assert!(!out.log.contains("180-322"), "{stmt}: {}", out.log);
+    }
+    let out = run_sas(&format!(
+        "{COUNTS}proc logistic data=counts; model y(descending) = x; freq count; effectplot; run;"
+    ));
+    assert_eq!(out.exit_code, 1, "{}", out.log);
+    assert!(
+        out.log.contains(
+            "The EFFECTPLOT statement is ignored in PROC LOGISTIC; display customization \
+             is not supported."
+        ),
+        "{}",
+        out.log
     );
 }

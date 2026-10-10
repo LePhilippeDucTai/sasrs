@@ -71,15 +71,21 @@ pub(super) fn print_response_profile(
     ));
 }
 
+/// Truthful convergence line shared by the binary and ordinal fits (both test
+/// max|Δθ| / (1 + max|θ|) < 1E-8).
+pub(super) const CONVERGENCE_SATISFIED: &str = "     Convergence criterion (XCONV=1E-8) satisfied.";
+
 /// Print the Model Convergence Status block.
+///
+/// J02-P1 — the criterion tested by `fit_binary` is the relative change of
+/// the parameters (max|Δβ| / (1 + max|β|) < 1E-8), i.e. an XCONV-type
+/// criterion, not the relative gradient GCONV that the label used to claim.
 pub(super) fn print_convergence_status(session: &mut Session, converged: bool) {
     session.listing.blank();
     centered(session, "Model Convergence Status");
     session.listing.blank();
     if converged {
-        session
-            .listing
-            .write_line("     Convergence criterion (GCONV=1E-8) satisfied.");
+        session.listing.write_line(CONVERGENCE_SATISFIED);
     } else {
         session
             .listing

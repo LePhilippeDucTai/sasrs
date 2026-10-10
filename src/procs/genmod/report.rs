@@ -116,12 +116,16 @@ pub(super) fn print_response_profile(
 }
 
 /// Print the Model Convergence Status block.
+///
+/// J02-P1 — `fit_irls` tests the relative change of the parameters
+/// (max|Δβ| / (1 + max|β|) < 1E-8), an XCONV-type criterion, not the relative
+/// gradient GCONV that the label used to claim.
 pub(super) fn print_convergence_status(session: &mut Session) {
     centered(session, "Model Convergence Status");
     session.listing.blank();
     session
         .listing
-        .write_line("     Convergence criterion (GCONV=1E-8) satisfied.");
+        .write_line("     Convergence criterion (XCONV=1E-8) satisfied.");
     session.listing.blank();
 }
 

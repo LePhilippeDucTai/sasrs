@@ -43,6 +43,39 @@ diagnostic honnête (réf. merges `2ad236e`, `965e578`, `d4eec6f`) :
 | DISCRIM | `METHOD=` autre que NORMAL, `POOL=NO\|TEST`, `POOL=` inconnu | repli silencieux LDA + NOTE | **ERROR** |
 | GENMOD / LOGISTIC / MIXED / GLIMMIX | non-convergence, séparation, G non définie positive | « converged » imprimé sans vérification, NOTE | **WARNING** SAS-fidèle, message de non-convergence véridique |
 
+## Replis silencieux supprimés (roadmap-avancee J02)
+
+Constructions que le parseur ou l'exécution ignoraient ou approximaient sans
+diagnostic (audit `d0b4d90`). Chaque ligne est figée par un test
+`ra_<unité>_<sujet>` ; « Levée par » nomme l'unité du plan roadmap-avancee qui
+remplacera l'ERROR/WARNING provisoire par l'implémentation (— : correction
+directe, rien à lever).
+
+| Unité | PROC / construction | Avant | Après | Levée par |
+| --- | --- | --- | --- | --- |
+| J02-P1 | LOGISTIC / GENMOD : option de réponse `y(DESC)` | ignorée (seul `DESCENDING` lu) | honorée comme `DESCENDING` (doc SAS 9.4, MODEL « Response Variable Options ») | — |
+| J02-P1 | LOGISTIC / GENMOD : `y(EVENT=FIRST\|LAST)` | avalée, événement par défaut | honorée : premier / dernier niveau ordonné (après `DESCENDING`) | — |
+| J02-P1 | LOGISTIC / GENMOD : `y(ORDER=…)`, `y(REF=…)`, valeur `EVENT=` non citée, autre option de réponse | avalées | **ERROR** au parsing | non planifiée (`REF=` LOGISTIC : J05-P5) |
+| J02-P1 | LOGISTIC : `CLASS … / PARAM= REF=` | options lues comme noms de variables, codage REF=LAST | même sémantique que la forme parenthésée (`PARAM=REF\|REFERENCE`, `REF=FIRST\|LAST`, l'option parenthésée prime) ; autres options → même **ERROR** | J05-P2 (PARAM=EFFECT/GLM, `REF='niveau'`) |
+| J02-P1 | LOGISTIC : CLASS sans `PARAM=` | codage REF appliqué en silence (défaut SAS : EFFECT) | **WARNING** « coded with PARAM=REF … estimates differ from SAS, the odds ratios are identical » (code 1) | J05-P2 |
+| J02-P1 | LOGISTIC `OUTPUT` : `LOWER=`, `UPPER=`, `STDXBETA=`, `RESCHI=`, `RESDEV=`, `H=`, `PREDPROBS=`, autres mots-clés | sautés jeton par jeton | **ERROR** | J05-P4 |
+| J02-P1 | LOGISTIC : `OUTPUT` sans `OUT=` | instruction abandonnée, aucun dataset | **ERROR** | non planifiée |
+| J02-P1 | LOGISTIC ordinal : inversion de la matrice d'information en échec | SE, Wald et p imprimés NaN | **ERROR** explicite (matrice d'information singulière) | J05-P7 (Hessien exact) |
+| J02-P1 | LOGISTIC / GENMOD : niveaux CLASS | calculés sur toutes les lignes lues (colonne nulle, ERROR de singularité trompeuse) | calculés sur les observations utilisées (doc SAS, « Missing Values ») | — |
+| J02-P1 | LOGISTIC (binaire et ordinal) / GENMOD : statut de convergence | « Convergence criterion (GCONV=1E-8) satisfied. » alors que le critère testé est le changement relatif des paramètres | « Convergence criterion (XCONV=1E-8) satisfied. » | J05-P6 (GCONV=/XCONV= SAS) |
+| J02-P1 | GENMOD sans `DIST=` | modèle de Poisson (lien log) | loi NORMAL, lien IDENTITY (défaut SAS) | — |
+| J02-P1 | GENMOD : option PROC `DESCENDING` | sautée | honorée (ordre des niveaux de réponse) | — |
+| J02-P1 | GENMOD : autre option PROC que `DATA=` / `DESCENDING` | sautée | **ERROR** « Unexpected option '…' on PROC GENMOD statement. » | non planifiée |
+| J02-P1 | GENMOD `CLASS` : options `(REF= PARAM= ORDER= DESC MISSING …)` ou `/ …` | sautées (mots pris pour des variables) | **ERROR** | J07-P2 |
+| J02-P1 | GENMOD : `SCALE=PEARSON\|P\|DEVIANCE\|D` ; `SCALE=<n>` sous POISSON/BINOMIAL | ignorés | **ERROR** (`SCALE=<n>` reste honoré sous NORMAL/GAMMA) | J07-P2 |
+| J02-P1 | GENMOD `DIST=GAMMA` : réponse ≤ 0 | tronquée à 1e-300 dans la vraisemblance et la déviance | **ERROR** | — |
+| J02-P1 | LOGISTIC : `CODE`, `EFFECT`, `EXACT`, `EXACTOPTIONS`, `LSMESTIMATE`, `NLOPTIONS`, `ODDSRATIO`, `ROC`, `ROCCONTRAST`, `SCORE`, `SLICE`, `STORE`, `STRATA`, `TEST`, `UNITS` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » ; `EFFECTPLOT` (graphique seul) → **WARNING** d'affichage | J05-P3 (`ODDSRATIO`), sinon non planifiée |
+| J02-P1 | GENMOD : `ASSESS`, `BAYES`, `CODE`, `DEVIANCE`, `EFFECT`, `EXACT`, `EXACTOPTIONS`, `FWDLINK`, `INVLINK`, `LSMESTIMATE`, `REPEATED`, `SLICE`, `STORE`, `STRATA`, `VARIANCE`, `ZEROMODEL` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » ; `EFFECTPLOT` → **WARNING** d'affichage | J07-P5 (`REPEATED`), sinon non planifiée |
+
+GLIMMIX partage encore l'ancienne forme `common::parse_response_options`
+(`DESC` y est désormais honoré) ; la migration de son appel vers la forme
+vérifiée relève de son unité de contrat (hors périmètre de J02-P1).
+
 ## Précisions J03 (statistiques pondérées, encodage, étape DATA)
 
 Le jalon J03 n'ajoute pas de nouvelle règle de sévérité ; il précise le

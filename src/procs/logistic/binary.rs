@@ -84,7 +84,7 @@ pub(super) fn fit_binary(
             beta[j] += delta[j];
         }
 
-        // Convergence check (GCONV)
+        // Convergence check: relative parameter change (XCONV-type, J02-P1).
         let max_delta = delta.iter().map(|d| d.abs()).fold(0.0_f64, f64::max);
         let max_beta = beta.iter().map(|b| b.abs()).fold(0.0_f64, f64::max);
         let gconv = max_delta / (1.0 + max_beta);
