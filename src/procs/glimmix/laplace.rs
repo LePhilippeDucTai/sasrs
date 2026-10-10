@@ -152,7 +152,7 @@ pub(super) fn fit_laplace(
     let mut step = 0.5_f64;
     let mut converged = false;
     for restart in 0..8 {
-        let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 4000, 1e-12, 1e-10);
+        let (u_r, f_r, _iters, conv) = nelder_mead(&eval, &u_best, step, 4000, NM_FTOL, NM_XTOL);
         if f_r <= f_best {
             f_best = f_r;
             u_best = u_r;

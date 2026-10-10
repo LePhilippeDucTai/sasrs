@@ -81,7 +81,8 @@ fn test_normal_random_eq_mixed() {
     let y = vec![1.0, 3.0, 5.0, 7.0];
     let x = vec![vec![1.0]; 4];
     let subj_of = vec![0, 0, 1, 1];
-    let (s2u, s2e, beta, cov, _) = fit_vc(&y, &x, &subj_of, 2, None).unwrap();
+    let vc = fit_vc(&y, &x, &subj_of, 2, None).unwrap();
+    let (s2u, s2e, beta, cov) = (vc.sigma2_u, vc.sigma2_e, vc.beta, vc.cov_beta);
     assert!((s2u - 7.0).abs() < 1e-4, "s2u={s2u}");
     assert!((s2e - 2.0).abs() < 1e-4, "s2e={s2e}");
     assert!((beta[0] - 4.0).abs() < 1e-4, "mu={}", beta[0]);
@@ -90,6 +91,8 @@ fn test_normal_random_eq_mixed() {
 }
 
 // ── Test 4: TYPE=AR(1) fits and reports AR(1) + Residual cov parms ───────
+// J02-P3 — the R-side structure is requested by RANDOM _RESIDUAL_ (a G-side
+// RANDOM INTERCEPT TYPE=AR(1) is an ERROR, see contract_tests.rs).
 #[test]
 fn test_ar1_fits_and_names() {
     let mut session = make_session();
@@ -106,7 +109,7 @@ fn test_ar1_fits_and_names() {
     session.libs.get("WORK").unwrap().write("B", &ds).unwrap();
     session.last_dataset = Some("WORK.B".to_string());
     let ast = parse_glimmix(
-        "proc glimmix; class subj; model y = / dist=normal link=identity; random intercept / subject=subj type=ar(1); run;",
+        "proc glimmix; class subj; model y = / dist=normal link=identity; random _residual_ / subject=subj type=ar(1); run;",
     )
     .unwrap();
     execute(&ast, &mut session).unwrap();
@@ -378,6 +381,7 @@ fn test_execute_laplace_listing() {
 }
 
 // ── Test: AR(1) under LAPLACE → clear error ──────────────────────────────
+// J02-P3 — the R-side AR(1) is written RANDOM _RESIDUAL_ (see Test 4).
 #[test]
 fn test_laplace_ar1_rejected() {
     let mut session = make_session();
@@ -389,7 +393,7 @@ fn test_laplace_ar1_rejected() {
     session.libs.get("WORK").unwrap().write("BX", &ds).unwrap();
     session.last_dataset = Some("WORK.BX".to_string());
     let ast = parse_glimmix(
-        "proc glimmix method=laplace; class subj; model y = / dist=normal; random intercept / subject=subj type=ar(1); run;",
+        "proc glimmix method=laplace; class subj; model y = / dist=normal; random _residual_ / subject=subj type=ar(1); run;",
     )
     .unwrap();
     let err = execute(&ast, &mut session).unwrap_err();
@@ -488,7 +492,8 @@ fn model_fallback_glimmix_interaction_is_error() {
 
 #[test]
 fn convergence_glimmix_converged_fit_claims_satisfied() {
-    // Non-regression anchor: a converged fit keeps the satisfied line.
+    // Non-regression anchor: a converged fit keeps the satisfied line, which
+    // names the criterion actually tested by the IRLS fit (J02-P3).
     let mut session = make_session();
     let frame =
         df!["y" => [1.0_f64,2.0,3.0,4.0,5.0,6.0], "x" => [0.0_f64,0.0,0.0,1.0,1.0,1.0]].unwrap();
@@ -508,7 +513,7 @@ fn convergence_glimmix_converged_fit_claims_satisfied() {
     execute(&ast, &mut session).unwrap();
     let listing = session.listing.take_string();
     assert!(
-        listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        listing.contains("Convergence criterion (XCONV=1E-10) satisfied."),
         "converged fit must keep the status line:\n{listing}"
     );
 }
@@ -518,8 +523,8 @@ fn convergence_glimmix_separated_fit_never_claims_satisfied() {
     // Complete separation of the fixed effect (y=0 for small x, y=1 for
     // large x, plus a random intercept): the initial IRLS cannot converge
     // (MLE does not exist), PROC GLIMMIX stops with an ERROR, and — the
-    // property pinned here — the listing never displays
-    // « Convergence criterion (GCONV=1E-8) satisfied. ».
+    // property pinned here — the listing never claims that a convergence
+    // criterion was satisfied.
     let mut session = make_session();
     let frame = df![
         "y" => [0.0_f64, 0.0, 1.0, 1.0],
@@ -547,7 +552,7 @@ fn convergence_glimmix_separated_fit_never_claims_satisfied() {
     assert!(res.is_err(), "separated GLIMMIX fit must stop cleanly");
     let listing = session.listing.take_string();
     assert!(
-        !listing.contains("Convergence criterion (GCONV=1E-8) satisfied."),
+        !listing.contains("satisfied."),
         "listing must not claim convergence on a failed fit:\n{listing}"
     );
 }
