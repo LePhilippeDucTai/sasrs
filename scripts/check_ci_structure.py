@@ -17,7 +17,11 @@
 #      incomplet) — un job hors `needs` peut échouer sans faire échouer
 #      `ci-ok`.
 #   5. un des onze jobs obligatoires disparaît du workflow ou de `needs` ;
-#   6. une commande cargo d'un step `run` manque dans scripts/check.sh.
+#   6. une commande cargo d'un step `run` manque dans scripts/check.sh ;
+#   7. une commande `python3 …` d'un step `run` (hors `ci-ok`, qui exécute
+#      ce garde lui-même) manque dans scripts/check.sh (J01-P8) ;
+#   8. une commande obligatoire d'un job (REQUIRED_JOB_COMMANDS : auto-tests
+#      et intégrité du corpus de conformité, J01-P8) disparaît du workflow.
 #
 # Sorties : exit 0 = structure intacte ; exit 1 = structure affaiblie ;
 # exit 2 = erreur d'outil (fichier absent, YAML illisible, PyYAML manquant).
@@ -72,6 +76,22 @@ EXPECTED_JOBS = (
     "install",
     "coverage-claims",
 )
+# J01-P8 : commandes qu'un job doit porter (garde-fous du corpus de
+# conformité). Retirer l'une d'elles du workflow ET de check.sh à la fois
+# échapperait à la parité : cette liste figée l'interdit.
+REQUIRED_JOB_COMMANDS = {
+    "conformance": (
+        "cargo test --locked -p sasrs --test conformance",
+        "python3 scripts/conformance_report.py --check",
+        "python3 -B scripts/conformance_report.py --self-test",
+        "python3 -B scripts/conformance_require.py --self-test",
+        "python3 -B scripts/check_coverage_claims.py --self-test",
+        "python3 -B scripts/conformance_require.py --verify-manifest "
+        "conformance/cases/compat/ORACLE.sha256",
+        "python3 -B scripts/replay_oracles.py --self-test",
+        "python3 -B scripts/replay_oracles.py",
+    ),
+}
 
 
 def fail(messages):
@@ -107,13 +127,24 @@ def carries_continue_on_error(value):
     return bool(value)
 
 
-def cargo_commands(source):
-    """Commandes cargo autonomes ; ignorer commentaires et echo du shell."""
+def commands_with_prefix(source, prefix):
+    """Commandes autonomes commençant par `prefix` ; ignorer commentaires et
+    echo du shell."""
     return {
         line.strip()
         for line in source.splitlines()
-        if line.lstrip().startswith("cargo ")
+        if line.lstrip().startswith(prefix)
     }
+
+
+def cargo_commands(source):
+    """Commandes cargo autonomes ; ignorer commentaires et echo du shell."""
+    return commands_with_prefix(source, "cargo ")
+
+
+def python_commands(source):
+    """Commandes `python3 …` autonomes (J01-P8)."""
+    return commands_with_prefix(source, "python3 ")
 
 
 def validate(workflow_path, check_script_path):
@@ -195,19 +226,35 @@ def validate(workflow_path, check_script_path):
         )
 
     local_commands = cargo_commands(check_script)
+    local_python = python_commands(check_script)
     for job_name, job in jobs.items():
         if not isinstance(job, dict):
             problems.append(f"le job « {job_name} » n'a pas de définition valide.")
             continue
+        job_commands = set()
         for step in job.get("steps") or []:
             if not isinstance(step, dict) or not isinstance(step.get("run"), str):
                 continue
+            job_commands |= {line.strip() for line in step["run"].splitlines()}
             for command in sorted(cargo_commands(step["run"])):
                 if command not in local_commands:
                     problems.append(
                         f"commande cargo du job « {job_name} » absente de "
                         f"{check_script_path.name} : {command}"
                     )
+            if job_name == AGGREGATOR:
+                continue
+            for command in sorted(python_commands(step["run"])):
+                if command not in local_python:
+                    problems.append(
+                        f"commande python du job « {job_name} » absente de "
+                        f"{check_script_path.name} : {command}"
+                    )
+        for command in REQUIRED_JOB_COMMANDS.get(job_name, ()):
+            if command not in job_commands:
+                problems.append(
+                    f"commande obligatoire absente du job « {job_name} » : {command}"
+                )
 
     return (1 if problems else 0), problems
 
@@ -255,6 +302,38 @@ def self_test():
         passed = assert_case("commande cargo retirée de check.sh", 1, command) and passed
         check_script.write_text(original_check_script, encoding="utf-8")
 
+        # J01-P8 : parité des commandes python3 (job conformance ↔ check.sh).
+        command = "python3 -B scripts/conformance_require.py --self-test"
+        check_script.write_text(
+            original_check_script.replace(f"    {command}\n", "", 1),
+            encoding="utf-8",
+        )
+        passed = assert_case("commande python retirée de check.sh", 1, command) and passed
+        check_script.write_text(original_check_script, encoding="utf-8")
+
+        # J01-P8 : retirer un garde-fou du job conformance ET de check.sh à
+        # la fois échappe à la parité, pas à REQUIRED_JOB_COMMANDS.
+        command = (
+            "python3 -B scripts/conformance_require.py --verify-manifest "
+            "conformance/cases/compat/ORACLE.sha256"
+        )
+        document = yaml.safe_load(original_workflow)
+        steps = document["jobs"]["conformance"]["steps"]
+        document["jobs"]["conformance"]["steps"] = [
+            step for step in steps if not (isinstance(step, dict) and step.get("run") == command)
+        ]
+        workflow.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+        check_script.write_text(
+            original_check_script.replace(f"    {command}\n", "", 1),
+            encoding="utf-8",
+        )
+        passed = (
+            assert_case("garde-fou retiré du job conformance et de check.sh", 1, command)
+            and passed
+        )
+        workflow.write_text(original_workflow, encoding="utf-8")
+        check_script.write_text(original_check_script, encoding="utf-8")
+
         document = yaml.safe_load(original_workflow)
         document["jobs"][AGGREGATOR]["continue-on-error"] = True
         workflow.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
@@ -281,7 +360,8 @@ def main():
     print(
         f"check_ci_structure.py: OK — {workflow_path.name} : "
         f"« {AGGREGATOR} » agrège tous les jobs obligatoires ; "
-        "aucun continue-on-error ; commandes cargo présentes dans check.sh."
+        "aucun continue-on-error ; commandes cargo et python présentes dans check.sh ; "
+        "garde-fous du corpus de conformité présents."
     )
     return 0
 

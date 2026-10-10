@@ -39,6 +39,8 @@ usage: scripts/check.sh lint|test|build|all
          --features fault-injection --test storage_integrity ;
          --features fault-injection --lib ;
          --test conformance + conformance_report.py --check ;
+         --self-test de conformance_report.py et conformance_require.py,
+         conformance_require.py --verify-manifest compat/ORACLE.sha256 (J01-P8) ;
          replay_oracles.py --self-test + replay_oracles.py (J01-P5) ;
          --test properties ; --test differential ;
          --test e2e (J08-P6) ; coverage-claims (check_coverage_claims.py) ;
@@ -98,6 +100,14 @@ run_test() {
     assert_tree_unchanged "$before"
     echo '==> python3 scripts/conformance_report.py --check'
     python3 scripts/conformance_report.py --check
+    # J01-P8 : auto-tests des outils de conformité + intégrité des attendus
+    # épinglés — mêmes steps que le job CI « conformance ».
+    echo '==> python3 -B scripts/conformance_report.py --self-test'
+    python3 -B scripts/conformance_report.py --self-test
+    echo '==> python3 -B scripts/conformance_require.py --self-test'
+    python3 -B scripts/conformance_require.py --self-test
+    echo '==> python3 -B scripts/conformance_require.py --verify-manifest (compat/ORACLE.sha256)'
+    python3 -B scripts/conformance_require.py --verify-manifest conformance/cases/compat/ORACLE.sha256
     # J01-P5 : oracles indépendants committés avec les cas (oracle/oracle.py).
     echo '==> python3 -B scripts/replay_oracles.py --self-test'
     python3 -B scripts/replay_oracles.py --self-test

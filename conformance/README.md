@@ -24,7 +24,15 @@ oracle indépendant — jamais la sortie courante de `sasrs` elle-même).
   `expected/*.csv` — voir « Oracle rejouable » ci-dessous et
   `schema.md`. `python3 scripts/replay_oracles.py` les découvre et les
   rejoue tous ; `--self-test` vérifie l'outil lui-même (cas conforme,
-  valeur divergente, import interdit).
+  valeur divergente, oracle relisant `expected/`, chaque contournement
+  connu du contrôle statique).
+- Intégrité (J01-P8) : `python3 scripts/conformance_require.py
+  --verify-manifest conformance/cases/compat/ORACLE.sha256` vérifie que
+  chaque fichier épinglé par le manifeste (format `sha256sum`, chemins
+  relatifs à son répertoire) a toujours son empreinte. Le job CI
+  `conformance` et `scripts/check.sh test` l'exécutent, avec les
+  `--self-test` de `conformance_report.py`, `conformance_require.py` et
+  `check_coverage_claims.py`.
 
 ## Ajouter un cas
 
@@ -49,23 +57,37 @@ oracle indépendant — jamais la sortie courante de `sasrs` elle-même).
 Un cas `independent-oracle` peut porter `oracle/oracle.py`, en plus de
 `program.sas` : un script Python **bibliothèque standard seulement**,
 déterministe, sans réseau ni sous-processus, qui n'exécute jamais `sasrs`.
-Lancé comme `python3 -I -B oracle/oracle.py <dir>` (le répertoire du cas
-comme répertoire courant), il doit écrire `<dir>/<dataset>.csv` pour
-chaque `expected/<dataset>.csv` du cas — la preuve que l'attendu est
+Lancé comme `python3 -I -B oracle/oracle.py <dir>` dans un bac à sable
+temporaire qui ne contient QUE des copies de `data/` et `oracle/` du cas
+(jamais `expected/`), il doit écrire `<dir>/<dataset>.csv` pour chaque
+`expected/<dataset>.csv` du cas — la preuve que l'attendu est
 reproductible par un calcul indépendant, pas relevé une fois puis figé.
 
 `python3 scripts/replay_oracles.py` découvre tous les
-`conformance/cases/**/oracle/oracle.py` du corpus, refuse statiquement
-(sans l'exécuter) tout script qui importe un module hors
-`sys.stdlib_module_names`, ou `subprocess`/`socket`/`ctypes`/
-`multiprocessing`, ou qui utilise `os.system`/`os.popen`, puis exécute
-chaque script accepté dans un répertoire temporaire et compare sa sortie
-à `expected/*.csv` avec les mêmes règles que l'exécuteur (missings SAS
-exacts, colonnes dans l'ordre, tolérance `abs`/`rel` par défaut et par
-colonne de `case.json`). Sans aucun oracle dans le corpus, l'outil
-rapporte « 0 oracle(s) rejoué(s) » et sort en 0. `--self-test` vérifie
-l'outil lui-même (cas conforme, valeur divergente, import interdit) sur
-des cas fabriqués, sans toucher au corpus.
+`conformance/cases/**/oracle/oracle.py` du corpus et refuse statiquement
+(`ast`, sans l'exécuter) tout script qui :
+
+- importe un module hors `sys.stdlib_module_names`, ou un module de
+  réseau, de sous-processus, de code natif ou d'import dynamique
+  (`subprocess`, `socket`, `ssl`, `urllib`, `http`, `ftplib`, `smtplib`,
+  `importlib`, `ctypes`, `multiprocessing`…), quel que soit l'alias ;
+- accède, sur n'importe quel objet, à un attribut de lancement de
+  processus (`system`, `popen`, `spawn*`, `exec*`, `fork`…) — `import os
+  as o; o.system(...)` est refusé comme `os.system(...)` ;
+- utilise `__import__`, `eval`, `exec`, `compile`, `getattr` à nom non
+  littéral ou un attribut dunder hors liste blanche (`os.__dict__`…) ;
+- cite `expected/` dans une chaîne littérale.
+
+Il exécute ensuite chaque script accepté dans le bac à sable (un oracle
+qui relirait `expected/` par un chemin construit échoue : le répertoire
+n'y existe pas) et compare sa sortie à `expected/*.csv` avec les mêmes
+règles que l'exécuteur (missings SAS exacts, colonnes dans l'ordre,
+tolérance `abs`/`rel` par défaut et par colonne de `case.json`). Sans
+aucun oracle dans le corpus, l'outil rapporte « 0 oracle(s) rejoué(s) »
+et sort en 0. `--self-test` vérifie l'outil lui-même sur des cas
+fabriqués, sans toucher au corpus : cas conforme (lisant `data/`), valeur
+divergente, oracle relisant `expected/` (échec), et un refus par
+contournement connu du contrôle statique (jamais exécuté).
 
 Exécuté par `scripts/check.sh test` et par le job CI `conformance`, à la
 suite de `cargo test --test conformance` et `conformance_report.py --check`.
@@ -79,6 +101,15 @@ suite de `cargo test --test conformance` et `conformance_report.py --check`.
   `sasrs` et SAS. Le cas DOIT échouer. S'il passe, l'exécuteur signale
   « à promouvoir » et échoue : la promotion vers `validated` est une
   décision explicite (issue référencée), pas un glissement silencieux.
+
+Les métadonnées sont validées AVANT l'exécution et pour les deux statuts
+(J01-P8) : clé inconnue du `case.json` (schéma strict), `issue` absente ou
+vide d'un `known-divergence`, `id` ≠ nom du répertoire, `validates` ou
+`provenance.kind` hors vocabulaire, regex `forbidden` invalide… → le cas
+est `BAD-STATUS` et le corpus échoue ; un `known-divergence` mal décrit
+n'est jamais compté comme « divergence attendue ».
+`scripts/conformance_report.py` refuse de même un `known-divergence` sans
+`issue`.
 
 Les valeurs attendues d'un cas `known-divergence` ne sont jamais modifiées
 par l'implémenteur de la correction — seul le statut change, avec

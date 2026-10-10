@@ -23,11 +23,23 @@
 #   - un champ issue non vide si le statut est known-divergence ;
 #   - au moins un expected/*.csv.
 #
+# Intégrité (J01-P8) :
+#   python3 scripts/conformance_require.py --verify-manifest MANIFESTE…
+# vérifie un manifeste au format `sha256sum` (p. ex.
+# conformance/cases/compat/ORACLE.sha256 : `<sha256>  <chemin>` par ligne,
+# chemins relatifs au répertoire du manifeste) : chaque fichier listé doit
+# exister sous ce répertoire et avoir exactement l'empreinte figée. Les
+# attendus (expected/, data/, program.sas) d'un cas épinglé ne peuvent donc
+# pas changer sans que le manifeste — donc la revue — le montre.
+#
 # Codes retour : 0 = toutes les exigences tenues ; 1 = au moins une exigence
-# violée ; 2 = erreur d'usage (arguments invalides, corpus introuvable).
+# violée ; 2 = erreur d'usage (arguments invalides, corpus ou manifeste
+# introuvable).
 
 import argparse
+import hashlib
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -121,6 +133,119 @@ def run(wanted, case_refs):
         file=sys.stderr,
     )
     return code
+
+
+MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64}) [ *](.+)$")
+
+
+def verify_manifest(manifest_path):
+    """(code retour, problèmes, nombre de fichiers vérifiés) d'un manifeste
+    `sha256sum` ; chemins relatifs à son répertoire, sans `..` ni absolu."""
+    if not manifest_path.is_file():
+        return 2, [f"manifeste introuvable : {manifest_path}"], 0
+    base = manifest_path.parent.resolve()
+    try:
+        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        return 2, [f"manifeste illisible : {manifest_path} ({error})"], 0
+    problems = []
+    checked = 0
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        at = f"{manifest_path.name}:{number}"
+        match = MANIFEST_LINE_RE.match(line)
+        if not match:
+            problems.append(f"{at} : ligne mal formée « {line} »")
+            continue
+        digest, rel = match.groups()
+        parts = rel.replace("\\", "/").split("/")
+        if rel.startswith("/") or ".." in parts:
+            problems.append(f"{at} : chemin hors du manifeste « {rel} »")
+            continue
+        target = base / rel
+        if not target.is_file():
+            problems.append(f"{at} : fichier épinglé absent « {rel} »")
+            continue
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        if actual != digest:
+            problems.append(
+                f"{at} : empreinte modifiée « {rel} » (sha256 {actual}, "
+                f"épinglé {digest})"
+            )
+            continue
+        checked += 1
+    if checked == 0 and not problems:
+        problems.append(f"{manifest_path} : manifeste vide")
+    return (1 if problems else 0), problems, checked
+
+
+def run_manifests(manifests):
+    code = 0
+    for manifest in manifests:
+        path = Path(manifest)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        manifest_code, problems, checked = verify_manifest(path)
+        if manifest_code == 0:
+            print(
+                f"conformance_require.py: OK — {manifest} : {checked} fichier(s) "
+                "conforme(s) à leur empreinte."
+            )
+            continue
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        print(
+            f"conformance_require.py: ÉCHEC — {manifest} : {len(problems)} "
+            "problème(s) d'intégrité.",
+            file=sys.stderr,
+        )
+        code = max(code, manifest_code)
+    return code
+
+
+def self_test_manifest():
+    """Reproducers d'intégrité sur une copie de conformance/cases/compat."""
+    failures = []
+
+    def expect(label, got, want):
+        if got != want:
+            failures.append(f"{label} : code {got}, attendu {want}")
+        else:
+            print(f"conformance_require.py: self-test OK — {label} (code {got}).")
+
+    source = CASES_DIR / "compat"
+    if not (source / "ORACLE.sha256").is_file():
+        return [f"manifeste de référence absent : {source / 'ORACLE.sha256'}"]
+    with tempfile.TemporaryDirectory(prefix="conformance-manifest-") as directory:
+        copy = Path(directory, "compat")
+        shutil.copytree(source, copy)
+        manifest = copy / "ORACLE.sha256"
+        original = manifest.read_text(encoding="utf-8")
+        first_rel = MANIFEST_LINE_RE.match(original.splitlines()[0]).group(2)
+        pinned = copy / first_rel
+        pinned_bytes = pinned.read_bytes()
+
+        expect("manifeste intact", verify_manifest(manifest)[0], 0)
+
+        pinned.write_bytes(pinned_bytes + b"\n")
+        expect("fichier épinglé modifié refusé", verify_manifest(manifest)[0], 1)
+        pinned.unlink()
+        expect("fichier épinglé absent refusé", verify_manifest(manifest)[0], 1)
+        pinned.write_bytes(pinned_bytes)
+        expect("fichier épinglé restauré", verify_manifest(manifest)[0], 0)
+
+        manifest.write_text(original + "pas une empreinte\n", encoding="utf-8")
+        expect("ligne mal formée refusée", verify_manifest(manifest)[0], 1)
+        manifest.write_text(
+            original + f"{'0' * 64}  ../outside.csv\n", encoding="utf-8"
+        )
+        expect("chemin hors du manifeste refusé", verify_manifest(manifest)[0], 1)
+        manifest.write_text("\n", encoding="utf-8")
+        expect("manifeste vide refusé", verify_manifest(manifest)[0], 1)
+        manifest.unlink()
+        expect("manifeste absent", verify_manifest(manifest)[0], 2)
+    return failures
 
 
 def self_test():
@@ -230,6 +355,7 @@ def self_test():
         (cases / divergent / "case.json").write_text("{", encoding="utf-8")
         expect("case.json illisible refusé", require(cases, "any", [divergent])[0], 1)
 
+    failures.extend(self_test_manifest())
     if failures:
         for failure in failures:
             print(f"conformance_require.py: self-test ÉCHEC — {failure}", file=sys.stderr)
@@ -243,12 +369,22 @@ def main():
     )
     parser.add_argument("--status", choices=(*STATUSES, "any"))
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--verify-manifest",
+        nargs="+",
+        metavar="MANIFESTE",
+        help="vérifier des manifestes sha256sum (p. ex. conformance/cases/compat/ORACLE.sha256)",
+    )
     parser.add_argument("cases", nargs="*", metavar="CAS")
     args = parser.parse_args()
     if args.self_test:
-        if args.status or args.cases:
-            parser.error("--self-test ne prend ni --status ni CAS")
+        if args.status or args.cases or args.verify_manifest:
+            parser.error("--self-test ne prend ni --status, ni CAS, ni --verify-manifest")
         return self_test()
+    if args.verify_manifest:
+        if args.status or args.cases:
+            parser.error("--verify-manifest ne prend ni --status ni CAS")
+        return run_manifests(args.verify_manifest)
     if not args.status or not args.cases:
         parser.error("--status et au moins un CAS sont requis")
     return run(args.status, args.cases)

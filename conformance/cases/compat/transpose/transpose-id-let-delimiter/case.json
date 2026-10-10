@@ -13,7 +13,6 @@
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
   "status": "validated",
-  "issue": "sasrs #11 (sous-issue compat) — PROC TRANSPOSE : LET (derniere occurrence des ID dupliquees), DELIMITER=, IDLABEL et LABEL= non implementes",
   "data_types": {
     "u.csv": {"grp": "char", "metric": "char", "value": "num", "lbl": "char"}
   }
