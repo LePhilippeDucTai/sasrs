@@ -148,42 +148,13 @@ pub(super) fn print_number_of_observations_gen(
     }
 }
 
-/// Print the Iteration History table and the convergence note.
-pub(super) fn print_iteration_history_gen(session: &mut Session, ast: &MixedAst, fit: &GenFit) {
-    let res_label = match ast.method {
-        Method::Reml => "-2 Res Log Like",
-        Method::Ml => "-2 Log Like",
-    };
-    centered(session, "Iteration History");
-    session.listing.blank();
-    {
-        let headers = vec![
-            "Iteration".into(),
-            "Evaluations".into(),
-            res_label.into(),
-            "Criterion".into(),
-        ];
-        let aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-        let rows: Vec<Vec<String>> = vec![
-            vec!["0".into(), "1".into(), fmt4(fit.neg2_start), String::new()],
-            vec![
-                "1".into(),
-                // The raw Nelder-Mead evaluation total is an implementation detail
-                // that drifts across builds/platforms (and bears no relation to
-                // SAS's Newton-Raphson count). Show it in normal runs, but freeze
-                // it under --deterministic so snapshots stay byte-stable.
-                if session.deterministic {
-                    "1".into()
-                } else {
-                    fit.iters.to_string()
-                },
-                fmt4(fit.neg2ll),
-                "0.00000000".into(),
-            ],
-        ];
-        session.listing.write_table(&headers, &aligns, &rows);
-        session.listing.blank();
-    }
+/// Print the convergence status line.
+///
+/// J02-P2 — the former « Iteration History » table was synthetic (two rows,
+/// an invented 0.00000000 criterion, the Nelder-Mead evaluation count shown
+/// as Newton-Raphson evaluations): it is removed until the real iteration
+/// history of roadmap-avancee J06-P2; no value is invented.
+pub(super) fn print_convergence_status_gen(session: &mut Session, fit: &GenFit) {
     // The convergence line is asserted only when the optimizer actually met
     // its criterion (J02-P6); SAS MIXED otherwise reports the failure as a
     // WARNING in the log and the ConvergenceStatus reflects it.

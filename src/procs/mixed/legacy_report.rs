@@ -118,14 +118,25 @@ pub(super) fn print_number_of_observations_legacy(
 /// Iteration History (minimal, stable) + convergence message (legacy path).
 /// The convergence line is asserted only when the search actually converged
 /// (J02-P6); SAS MIXED otherwise reports the failure in the log.
-pub(super) fn print_iteration_history_legacy(session: &mut Session, fit: &MixedFit) {
+pub(super) fn print_iteration_history_legacy(
+    session: &mut Session,
+    method: Method,
+    fit: &MixedFit,
+) {
+    // J02-P2 — the header read « -2 Res Log Like » under METHOD=ML too; the
+    // objective is then the full likelihood (SAS/STAT 9.4, The MIXED
+    // Procedure, Iteration History: « -2 Log Like » for ML).
+    let objective = match method {
+        Method::Reml => "-2 Res Log Like",
+        Method::Ml => "-2 Log Like",
+    };
     centered(session, "Iteration History");
     session.listing.blank();
     {
         let headers = vec![
             "Iteration".into(),
             "Evaluations".into(),
-            "-2 Res Log Like".into(),
+            objective.into(),
             "Criterion".into(),
         ];
         let aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
