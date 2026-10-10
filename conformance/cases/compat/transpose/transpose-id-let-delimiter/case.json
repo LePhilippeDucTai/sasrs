@@ -1,6 +1,7 @@
 {
   "id": "transpose-id-let-delimiter",
   "title": "PROC TRANSPOSE : ID multi-variables avec DELIMITER=, LET (derniere occurrence des ID dupliquees), IDLABEL et LABEL=",
+  "zone": "PROC TRANSPOSE",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0p3mp8c9djpxan1exv4k2dtbcl6.htm — SAS 9.4 Procedures — PROC TRANSPOSE (ID Statement : « the formatted values of all listed ID variables are concatenated », DELIMITER= insere un separateur ; LET : « transposing the observation containing the last occurrence of the duplicate formatted variable values » ; IDLABEL Statement : « Creates labels for the transposed variables » ; LABEL= : nom de la variable contenant les labels)",

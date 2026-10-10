@@ -7,7 +7,7 @@ Ce document fait autorité sur la structure d'un cas. Le guide d'usage
 ## Arborescence d'un cas
 
 ```
-conformance/cases/<groupe>/<id>/
+conformance/cases/<groupe>/[<sous-groupe>/…]<id>/
 ├── case.json            métadonnées et attentes (obligatoire)
 ├── program.sas          programme SAS exécuté (obligatoire)
 ├── data/                entrées CSV (optionnel)
@@ -16,9 +16,17 @@ conformance/cases/<groupe>/<id>/
     └── <dataset>.csv    comparé à WORK.<dataset>
 ```
 
-Groupes actuels : `example` (cas de démonstration du corpus),
-`base`/`stat`/`compat` (réservés aux unités suivantes). L'exécuteur parcourt
-TOUS les groupes présents.
+Groupes actuels : `example` (cas de démonstration du corpus), `base`
+(langage), `stat` (statistiques) et `compat` (compatibilité, rangé par PROC :
+`compat/<proc>/<id>/`).
+
+**Découverte récursive** : l'exécuteur (`tests/conformance.rs`) et le
+rapport (`scripts/conformance_report.py`) parcourent `conformance/cases/`
+à toute profondeur ; tout répertoire qui contient un `case.json` est un cas
+(on ne descend pas en dessous : `data/` et `expected/` lui appartiennent).
+L'`id` du cas est le nom de ce répertoire et doit être unique dans tout le
+corpus ; le chemin relatif (`conformance/cases/compat/means/<id>`) est celui
+affiché par l'exécuteur et, sans le préfixe, par `STATUS.md`.
 
 ## `case.json`
 
@@ -26,10 +34,12 @@ TOUS les groupes présents.
 |---|---|---|---|
 | `id` | string | oui | Identifiant du cas, = nom du répertoire. |
 | `title` | string | oui | Courte description lisible. |
+| `zone` | string | non | Zone (PROC / zone du langage) du cas dans `STATUS.md`, p. ex. `PROC MEANS`. À défaut, `scripts/conformance_report.py` la lit dans sa table `ZONE_BY_CASE_ID` ; un cas sans l'un ni l'autre fait échouer le rapport (exit 2). Une chaîne vide est refusée. |
 | `provenance` | objet | oui | D'où viennent les valeurs attendues (voir ci-dessous). |
 | `validates` | string | oui | `math` (numérique/flottants) ou `sas-behaviour` (sémantique documentée du langage). |
 | `tolerance` | objet | oui | Tolérances numériques (voir ci-dessous). |
 | `log` | objet | non | Attentes sur la log : `required` (sous-chaînes qui DOIVENT apparaître), `forbidden` (regex [fancy-regex] qui ne doivent PAS apparaître). |
+| `listing` | objet | non | Attentes sur le listing (`run.lst`, sortie `--print`) : même forme et mêmes règles que `log`. Un listing absent est traité comme vide. |
 | `exit_code` | entier | non | Code retour attendu du CLI (défaut `0`). |
 | `status` | string | oui | `validated` ou `known-divergence`. |
 | `issue` | string | si `known-divergence` | Référence du problème documentant la divergence. |
@@ -87,7 +97,8 @@ sasrs --work <tmp>/work --log <tmp>/run.log --print <tmp>/run.lst \
       --deterministic <tmp>/program.sas      # cwd = <tmp>
 ```
 
-Sont vérifiés : code retour, lignes de log requises, regex interdites,
-et chaque `expected/<ds>.csv` contre `WORK.<ds>`. Un cas `validated` doit
+Sont vérifiés : code retour, lignes de log requises, regex interdites
+de la log, mêmes attentes sur le listing `run.lst` (champ `listing`), et
+chaque `expected/<ds>.csv` contre `WORK.<ds>`. Un cas `validated` doit
 tout passer ; un cas `known-divergence` doit échouer au moins une
 vérification — s'il passe, l'exécuteur signale « à promouvoir » et échoue.

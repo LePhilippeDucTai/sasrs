@@ -1,6 +1,7 @@
 {
   "id": "printto-log-new",
   "title": "PROC PRINTTO : LOG=<fichier> NEW route le journal, puis PROC PRINTTO nu retablit les destinations par defaut",
+  "zone": "PROC PRINTTO",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 49 PRINTTO Procedure, PROC PRINTTO Statement : « LOG=LOG | file-specification | SAS-catalog-entry : routes the SAS log to a permanent external file » ; NEW : « replaces the existing contents of a file » ; « PROC PRINTTO ; » sans option retablit les destinations par defaut ; le programme continue de produire ses datasets",

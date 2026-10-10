@@ -2,7 +2,8 @@
 # conformance_report.py — génère conformance/STATUS.md à partir du corpus
 # de conformité (J05-P6).
 #
-# Source unique de vérité : les fichiers `conformance/cases/<groupe>/<id>/case.json`.
+# Source unique de vérité : les fichiers `conformance/cases/**/<id>/case.json`,
+# découverts récursivement (`<groupe>/<id>/`, `compat/<proc>/<id>/`…).
 # Le rapport agrège, par PROC/zone, les cas validés, les divergences connues
 # et la provenance de chaque attendu. Aucune information n'est saisie à la
 # main ici : si le contenu change, c'est le corpus qui a changé.
@@ -14,12 +15,16 @@
 #   python3 scripts/conformance_report.py --check    # exit 1 si STATUS.md est périmé
 #   python3 scripts/conformance_report.py --self-test
 #
+# Codes retour : 0 = OK ; 1 = STATUS.md périmé ou corpus invalide ;
+# 2 = zone d'un cas inconnue (ni champ `zone`, ni entrée de ZONE_BY_CASE_ID).
+#
 # `--check` régénère le rapport en mémoire et le compare au fichier commité :
 # toute différence (contenu périmé, édition à la main, cas oublié) échoue.
 # C'est le check CI `j05-conformance-status`.
 
 import argparse
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -31,9 +36,10 @@ STATUS_PATH = REPO_ROOT / "conformance" / "STATUS.md"
 STATUS_SENTINEL_BEGIN = "<!-- conformance_report:begin -->"
 STATUS_SENTINEL_END = "<!-- conformance_report:end -->"
 
-# Zone (PROC / zone du langage) couverte par chaque cas, dérivée de l'id.
-# Un nouvel id hors de cette table est une erreur outillée (exit 2) : la zone
-# doit être déclarée explicitement, pas devinée.
+# Zone (PROC / zone du langage) couverte par chaque cas : champ `zone` du
+# case.json s'il est présent, sinon cette table indexée par l'id. Un cas sans
+# l'un ni l'autre est une erreur outillée (exit 2) : la zone doit être
+# déclarée explicitement, pas devinée.
 ZONE_BY_CASE_ID = {
     # base — langage
     "char-date-functions": "DATA step — fonctions caractère",
@@ -78,19 +84,61 @@ PROVENANCE_LABEL = {
 }
 
 
-def fail(message):
+class UnknownZoneError(ValueError):
+    """Cas sans zone déclarée (ni champ `zone`, ni ZONE_BY_CASE_ID) : exit 2."""
+
+
+def fail(message, code=1):
     print(f"conformance_report.py: ÉCHEC — {message}", file=sys.stderr)
-    return 1
+    return code
 
 
-def load_cases():
-    """Lire tous les case.json, triés de façon stable (groupe, id)."""
-    if not CASES_DIR.is_dir():
-        raise FileNotFoundError(f"corpus introuvable : {CASES_DIR}")
+def corpus_error_code(error):
+    """Corpus illisible : exit 2 si une zone est inconnue, 1 sinon."""
+    return 2 if isinstance(error, UnknownZoneError) else 1
+
+
+def fail_corpus(error):
+    return fail(f"corpus illisible : {error}", corpus_error_code(error))
+
+
+def discover_case_files(cases_dir):
+    """Tous les case.json sous cases_dir, à toute profondeur (ordre stable).
+
+    Un répertoire qui contient un case.json est un cas : on ne descend pas
+    en dessous (data/, expected/ lui appartiennent).
+    """
+    found = []
+
+    def walk(directory):
+        case_path = directory / "case.json"
+        if case_path.is_file():
+            found.append(case_path)
+            return
+        for child in sorted(directory.iterdir()):
+            if child.is_dir():
+                walk(child)
+
+    walk(cases_dir)
+    return sorted(found, key=lambda path: path.relative_to(cases_dir).as_posix())
+
+
+def load_cases(cases_dir=CASES_DIR):
+    """Lire tous les case.json, triés de façon stable par chemin relatif."""
+    if not cases_dir.is_dir():
+        raise FileNotFoundError(f"corpus introuvable : {cases_dir}")
     cases = []
-    for case_path in sorted(CASES_DIR.glob("*/*/case.json")):
-        group = case_path.parent.parent.name
-        case_id = case_path.parent.name
+    seen_ids = {}
+    for case_path in discover_case_files(cases_dir):
+        case_dir = case_path.parent
+        relpath = case_dir.relative_to(cases_dir).as_posix()
+        group = case_dir.parent.relative_to(cases_dir).as_posix()
+        case_id = case_dir.name
+        if case_id in seen_ids:
+            raise ValueError(
+                f"id « {case_id} » dupliqué : {seen_ids[case_id]} et {relpath}"
+            )
+        seen_ids[case_id] = relpath
         with case_path.open(encoding="utf-8") as handle:
             data = json.load(handle)
         if data.get("id") != case_id:
@@ -104,15 +152,19 @@ def load_cases():
         kind = provenance.get("kind")
         if kind not in PROVENANCE_LABEL:
             raise ValueError(f"{case_path} : provenance.kind inconnu « {kind} »")
-        zone = ZONE_BY_CASE_ID.get(case_id)
+        zone = data.get("zone", ZONE_BY_CASE_ID.get(case_id))
+        if zone is not None and (not isinstance(zone, str) or not zone.strip()):
+            raise ValueError(f"{case_path} : champ « zone » vide ou non textuel")
         if zone is None:
-            raise ValueError(
-                f"{case_path} : cas « {case_id} » absent de ZONE_BY_CASE_ID — "
-                "déclarer sa zone (PROC) dans scripts/conformance_report.py."
+            raise UnknownZoneError(
+                f"{case_path} : cas « {case_id} » sans zone — déclarer le champ "
+                "« zone » du case.json (ou l'entrée de ZONE_BY_CASE_ID dans "
+                "scripts/conformance_report.py)."
             )
         cases.append(
             {
                 "group": group,
+                "path": relpath,
                 "id": case_id,
                 "title": data.get("title", ""),
                 "status": status,
@@ -123,7 +175,7 @@ def load_cases():
             }
         )
     if not cases:
-        raise ValueError(f"aucun cas dans {CASES_DIR}")
+        raise ValueError(f"aucun cas dans {cases_dir}")
     return cases
 
 
@@ -142,7 +194,7 @@ def render_report(cases):
     divergent = total - validated
     lines.append(STATUS_SENTINEL_BEGIN)
     lines.append("<!-- Généré par scripts/conformance_report.py à partir des")
-    lines.append("     conformance/cases/*/*/case.json — NE PAS ÉDITER À LA MAIN. -->")
+    lines.append("     conformance/cases/**/case.json — NE PAS ÉDITER À LA MAIN. -->")
     lines.append("<!-- Régénérer : python3 scripts/conformance_report.py -->")
     lines.append("")
     lines.append("# Statut de conformité sasrs ↔ SAS 9.4")
@@ -178,7 +230,7 @@ def render_report(cases):
         lines.append("")
         lines.append("| Groupe | Cas | Statut | Provenance |")
         lines.append("|---|---|---|---|")
-        for case in sorted(zone_cases, key=lambda item: item["id"]):
+        for case in sorted(zone_cases, key=lambda item: (item["id"], item["path"])):
             lines.append(
                 f"| `{case['group']}` | `{case['id']}` | "
                 f"{STATUS_LABEL[case['status']]} | "
@@ -189,7 +241,7 @@ def render_report(cases):
             lines.append("")
             lines.append("Divergences connues :")
             for case in divergences:
-                lines.append(f"- `{case['id']}` — {case['issue']}")
+                lines.append(f"- `{case['path']}` — {case['issue']}")
     lines.append("")
     lines.append("## Provenance des attendus")
     lines.append("")
@@ -210,7 +262,7 @@ def write_report():
     try:
         content = render_report(load_cases())
     except (OSError, ValueError) as error:
-        return fail(f"corpus illisible : {error}")
+        return fail_corpus(error)
     STATUS_PATH.write_text(content, encoding="utf-8")
     print(
         f"conformance_report.py: OK — {STATUS_PATH.relative_to(REPO_ROOT)} écrit "
@@ -223,7 +275,7 @@ def check_report():
     try:
         expected = render_report(load_cases())
     except (OSError, ValueError) as error:
-        return fail(f"corpus illisible : {error}")
+        return fail_corpus(error)
     if not STATUS_PATH.is_file():
         return fail(f"{STATUS_PATH.relative_to(REPO_ROOT)} absent — lancer "
                     "`python3 scripts/conformance_report.py` et committer.")
@@ -287,6 +339,57 @@ def self_test():
             f"sur {len(group_by_zone(cases))} zones."
         )
         Path(directory, "probe").write_text(first, encoding="utf-8")
+
+        # Copie du corpus : découverte récursive, champ `zone`, zone inconnue.
+        copy = Path(directory, "cases")
+        shutil.copytree(CASES_DIR, copy)
+        nested = [case for case in load_cases(copy) if case["path"].count("/") >= 2]
+        if not nested:
+            print(
+                "conformance_report.py: self-test ÉCHEC — aucun cas de profondeur "
+                "≥ 3 découvert (découverte récursive cassée).",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"conformance_report.py: self-test OK — {len(nested)} cas imbriqués "
+            "découverts récursivement."
+        )
+        probe_dir = copy / "probe-group" / "sub" / "probe-unknown-zone"
+        shutil.copytree(copy / nested[0]["path"], probe_dir)
+        probe_json = probe_dir / "case.json"
+        probe = json.loads(probe_json.read_text(encoding="utf-8"))
+        probe["id"] = "probe-unknown-zone"
+        probe["zone"] = "Zone sonde"
+        probe_json.write_text(json.dumps(probe), encoding="utf-8")
+        zones = {case["id"]: case["zone"] for case in load_cases(copy)}
+        if zones.get("probe-unknown-zone") != "Zone sonde":
+            print(
+                "conformance_report.py: self-test ÉCHEC — champ « zone » du "
+                "case.json ignoré.",
+                file=sys.stderr,
+            )
+            return 1
+        print("conformance_report.py: self-test OK — champ « zone » honoré.")
+        del probe["zone"]
+        probe_json.write_text(json.dumps(probe), encoding="utf-8")
+        try:
+            load_cases(copy)
+        except UnknownZoneError as error:
+            if corpus_error_code(error) != 2:
+                print(
+                    "conformance_report.py: self-test ÉCHEC — zone inconnue ne "
+                    "rend pas exit 2.",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            print(
+                "conformance_report.py: self-test ÉCHEC — cas sans zone accepté.",
+                file=sys.stderr,
+            )
+            return 1
+        print("conformance_report.py: self-test OK — zone inconnue → exit 2.")
     return 0
 
 

@@ -1,6 +1,7 @@
 {
   "id": "compare-outbase-outcomp-id",
   "title": "PROC COMPARE : ID, VAR/WITH, OUT= OUTBASE OUTCOMP OUTDIF OUTNOEQUAL (_TYPE_ BASE/COMP/DIF, _OBS_)",
+  "zone": "PROC COMPARE",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 13 COMPARE Procedure, « Output Data Set (OUT=) » : OUT= contient les variables ID puis les variables VAR, plus _TYPE_ (BASE | COMP | DIF) et _OBS_ ; OUTBASE/OUTCOMP « writes an observation ... for each observation in the base [comparison] data set » ; OUTDIF « the values in the observation include values for the differences » ; OUTNOEQUAL « suppresses the writing of an observation ... when all values in the observation are judged equal »",

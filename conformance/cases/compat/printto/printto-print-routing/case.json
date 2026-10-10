@@ -1,6 +1,7 @@
 {
   "id": "printto-print-routing",
   "title": "PROC PRINTTO : PRINT=<fichier> route le listing, puis PROC PRINTTO nu retablit les destinations par defaut",
+  "zone": "PROC PRINTTO",
   "provenance": {
     "kind": "sas-doc",
     "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 49 PRINTTO Procedure, PROC PRINTTO Statement : « PRINT= | file-specification : routes procedure output to a permanent external file » ; « PROC PRINTTO ; » sans option retablit les destinations par defaut ; le programme continue de produire ses datasets",

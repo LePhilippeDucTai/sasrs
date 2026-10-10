@@ -1,11 +1,11 @@
 <!-- conformance_report:begin -->
 <!-- Généré par scripts/conformance_report.py à partir des
-     conformance/cases/*/*/case.json — NE PAS ÉDITER À LA MAIN. -->
+     conformance/cases/**/case.json — NE PAS ÉDITER À LA MAIN. -->
 <!-- Régénérer : python3 scripts/conformance_report.py -->
 
 # Statut de conformité sasrs ↔ SAS 9.4
 
-Corpus : **26 cas** — 26 validés, 0 divergences connues.
+Corpus : **36 cas** — 32 validés, 4 divergences connues.
 
 Un cas `validated` **doit passer** (un échec est une régression) ; un cas `known-divergence` **doit échouer** (divergence documentée entre `sasrs` et SAS, cf. la colonne Issue). La définition des statuts et la provenance des attendus sont détaillées dans [`conformance/README.md`](README.md) ; c'est ce rapport que la marque « *validated against a reference* » du [`README.md`](../README.md) désigne.
 
@@ -22,16 +22,19 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 | DATA step — missing spéciaux | 1 | 1 | 0 |
 | DATA step — tableaux | 1 | 1 | 0 |
 | FORMAT / PUT | 1 | 1 | 0 |
+| PROC COMPARE | 2 | 2 | 0 |
+| PROC CONTENTS — informats persistés | 2 | 0 | 2 |
 | PROC CORR | 2 | 2 | 0 |
 | PROC FREQ | 3 | 3 | 0 |
 | PROC GLM | 1 | 1 | 0 |
 | PROC LOGISTIC | 1 | 1 | 0 |
-| PROC MEANS | 1 | 1 | 0 |
+| PROC MEANS | 3 | 1 | 2 |
 | PROC NPAR1WAY | 1 | 1 | 0 |
+| PROC PRINTTO | 2 | 2 | 0 |
 | PROC REG | 1 | 1 | 0 |
 | PROC SORT | 1 | 1 | 0 |
 | PROC SQL | 2 | 2 | 0 |
-| PROC TRANSPOSE | 1 | 1 | 0 |
+| PROC TRANSPOSE | 3 | 3 | 0 |
 | PROC TTEST | 1 | 1 | 0 |
 | PROC UNIVARIATE | 2 | 2 | 0 |
 
@@ -91,6 +94,24 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 |---|---|---|---|
 | `base` | `format-value-put` | validé | documentation SAS publiée |
 
+### PROC COMPARE
+
+| Groupe | Cas | Statut | Provenance |
+|---|---|---|---|
+| `compat/compare` | `compare-outbase-outcomp-id` | validé | documentation SAS publiée |
+| `compat/compare` | `compare-outdif-by-criterion` | validé | documentation SAS publiée |
+
+### PROC CONTENTS — informats persistés
+
+| Groupe | Cas | Statut | Provenance |
+|---|---|---|---|
+| `compat/informat` | `informat-contents-date` | divergence connue | documentation SAS publiée |
+| `compat/informat` | `informat-contents-declared` | divergence connue | documentation SAS publiée |
+
+Divergences connues :
+- `compat/informat/informat-contents-date` — roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=
+- `compat/informat/informat-contents-declared` — roadmap-avancee J01-P3 — PROC CONTENTS NOPRINT non supporté : « ERROR: Unexpected option 'NOPRINT' on PROC CONTENTS statement. » (exit 2) ; le programme n'atteint pas OUT=
+
 ### PROC CORR
 
 | Groupe | Cas | Statut | Provenance |
@@ -122,13 +143,26 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
+| `compat/means` | `means-class-missing-nway` | divergence connue | documentation SAS publiée |
 | `base` | `means-class-output` | validé | documentation SAS publiée |
+| `compat/means` | `means-order-freq-autoname` | divergence connue | documentation SAS publiée |
+
+Divergences connues :
+- `compat/means/means-class-missing-nway` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3
+- `compat/means/means-order-freq-autoname` — roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, ID…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, ID…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3
 
 ### PROC NPAR1WAY
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
 | `stat` | `npar1way-wilcoxon-out` | validé | documentation SAS publiée |
+
+### PROC PRINTTO
+
+| Groupe | Cas | Statut | Provenance |
+|---|---|---|---|
+| `compat/printto` | `printto-log-new` | validé | documentation SAS publiée |
+| `compat/printto` | `printto-print-routing` | validé | documentation SAS publiée |
 
 ### PROC REG
 
@@ -153,6 +187,8 @@ Un cas `validated` **doit passer** (un échec est une régression) ; un cas `kno
 
 | Groupe | Cas | Statut | Provenance |
 |---|---|---|---|
+| `compat/transpose` | `transpose-copy-suffix` | validé | documentation SAS publiée |
+| `compat/transpose` | `transpose-id-let-delimiter` | validé | documentation SAS publiée |
 | `base` | `transpose-var` | validé | documentation SAS publiée |
 
 ### PROC TTEST
