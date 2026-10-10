@@ -376,14 +376,10 @@ fn write_out_dataset(
     drop: Option<&[String]>,
     session: &mut Session,
 ) -> Result<()> {
-    // J01-P3 — NAME de l'OUT= en MAJUSCULES (doc SAS 9.4, chap. 14, « OUT=
-    // Data Set » ; le listing (table des variables) conserve lui la casse
-    // déclarée via `v.name.clone()`, seul OUT= normalise).
-    let names: Vec<Option<String>> = ds
-        .vars
-        .iter()
-        .map(|v| Some(v.name.to_uppercase()))
-        .collect();
+    // J01-P7 — NAME de l'OUT= conserve la casse déclarée (exemple SAS 9.4
+    // Procedures Guide, CONTENTS statement : `length aa 7 bb 6 ...; proc
+    // contents data=a out=a1;` → PROC PRINT montre NAME = aa, bb, cc...).
+    let names: Vec<Option<String>> = ds.vars.iter().map(|v| Some(v.name.clone())).collect();
     let types: Vec<Option<f64>> = ds
         .vars
         .iter()

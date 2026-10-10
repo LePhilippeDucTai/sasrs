@@ -4,7 +4,7 @@
   "zone": "PROC CONTENTS — informats persistés",
   "provenance": {
     "kind": "sas-doc",
-    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 14 CONTENTS Procedure, « OUT= Data Set » : « Each variable in each DATA= data set has one observation in the OUT= data set » ; INFORMAT « the value is a blank if you do not associate an informat with the variable » ; INFORMD « number of decimals ... 0 if you do not specify decimals » ; INFORML informat length ; LENGTH variable length ; TYPE 1=numerique, 2=caractere",
+    "source": "https://documentation.sas.com/api/collections/pgmsascdc/9.4_3.5/docsets/proc/content/proc.pdf?locale=en — SAS 9.4 Base Procedures Guide (7e ed.), chap. 14 CONTENTS Procedure, « OUT= Data Set » : « Each variable in each DATA= data set has one observation in the OUT= data set » ; INFORMAT « the value is a blank if you do not associate an informat with the variable » ; INFORMD « number of decimals ... 0 if you do not specify decimals » ; INFORML informat length ; LENGTH variable length ; TYPE 1=numerique, 2=caractere ; casse de NAME (J01-P7, décision f98f7ca4) : https://support.sas.com/documentation/cdl/en/proc/65145/HTML/default/p1v2467vdjbp7xn1222c7t3sejz3.htm — exemple du CONTENTS statement « data a; length aa 7 bb 6 cc $10 dd 8 ee 3; ... proc contents data=a out=a1; proc print data=a1(keep=name length varnum npos); » dont la sortie PROC PRINT montre NAME = aa, bb, cc, dd, ee, ff (casse déclarée conservée)",
     "sas_version": "9.4M5",
     "options": ["--deterministic"]
   },

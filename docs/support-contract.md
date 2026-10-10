@@ -108,8 +108,10 @@ implémentés et validés par le corpus (cas `compat/*`, cf.
 - **CONTENTS** : `NOPRINT` est honoré (J01-P3) — supprime tout le listing
   (en-tête et table des variables) ; `OUT=` reste toujours écrit. L'ancien
   ERROR « Unexpected option 'NOPRINT' on PROC CONTENTS statement » n'est plus
-  émis. La colonne `NAME` de `OUT=` restitue le nom de variable en MAJUSCULES
-  (doc SAS 9.4, chap. 14, « OUT= Data Set »).
+  émis. La colonne `NAME` de `OUT=` restitue le nom de variable avec la casse
+  déclarée (J01-P7 ; exemple du CONTENTS statement, SAS 9.4 Procedures Guide :
+  `length aa 7 bb 6 ...` → `NAME` = `aa`, `bb`, …) ; les observations de
+  `OUT=` suivent l'ordre `VARNUM` (position des variables).
 - **MEANS/SUMMARY** : `CLASS / MISSING`, `NWAY`, `ORDER=FREQ`, `FREQ` (pondère
   N et STD), `ID` copiée dans `OUT=` et `OUTPUT OUT=` avec `AUTONAME` /
   `MAXDEC=` sont honorés et validés. Ordre des colonnes de `OUT=` (J01-P2/
