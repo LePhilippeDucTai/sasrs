@@ -245,3 +245,83 @@ fn test_eigenvectors_descending() {
     assert!(lam[0] >= lam[1]);
     assert!(approx(lam[0], 5.0, 1e-12));
 }
+
+// ───────────────────────── J02-P4 : contrat Jacobi ─────────────────────────
+
+/// Base : `jacobi` rendait sa dernière itérée même sans convergence — une
+/// entrée manquante (NaN) ou infinie traversait le contrôle de symétrie,
+/// chaque balayage devenait inopérant et des valeurs propres NaN sortaient
+/// comme si l'itération avait convergé. Entrée non finie et non-convergence
+/// sont désormais des `SasError::Numerical` typées.
+#[test]
+fn ra_j02_p4_jacobi_non_convergence_is_typed_error() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let a = vec![vec![2.0, bad], vec![bad, 2.0]];
+        for err in [
+            eigenvalues_jacobi(&a).unwrap_err(),
+            eigenvectors_jacobi(&a).unwrap_err(),
+        ] {
+            assert!(matches!(err, SasError::Numerical(_)), "{bad}: {err:?}");
+            assert_eq!(
+                err.to_string(),
+                "numerical error: matrix has missing or infinite entries (Jacobi)"
+            );
+        }
+    }
+
+    // One sweep does not diagonalize this tridiagonal matrix: typed error
+    // naming the sweep budget instead of the unconverged iterate.
+    let a = vec![
+        vec![4.0, 1.0, 0.0],
+        vec![1.0, 3.0, 1.0],
+        vec![0.0, 1.0, 2.0],
+    ];
+    let err = jacobi_with_sweeps(&a, 1).unwrap_err();
+    assert!(matches!(err, SasError::Numerical(_)), "{err:?}");
+    assert!(
+        err.to_string().starts_with(
+            "numerical error: Jacobi eigenvalue iteration did not converge after 1 sweeps"
+        ),
+        "{err}"
+    );
+    // The default budget converges (trace preserved).
+    let ev = eigenvalues_jacobi(&a).unwrap();
+    assert!(approx(ev.iter().sum::<f64>(), 9.0, 1e-12), "{ev:?}");
+
+    // No false ERROR at large scale with a near-repeated eigenvalue: 100
+    // sweeps leave an off-diagonal residual ≈ 8.6e-9 on this matrix (the
+    // absolute 1e-15 is out of reach; 4.7e-18 relative to ‖A‖), which the
+    // relative criterion accepts.
+    let a = vec![
+        vec![1233179367.862725, 79005291.93517426, -56225915.11694881],
+        vec![79005291.93517426, 747597370.7376026, 354493432.6248881],
+        vec![-56225915.11694881, 354493432.6248881, 993427009.1145062],
+    ];
+    let (m, _) = jacobi_sweeps(&a, 100);
+    let residual = off_diagonal_norm(&m);
+    let norm = a.iter().flatten().map(|x| x * x).sum::<f64>().sqrt();
+    assert!(
+        residual >= 1e-15,
+        "absolute criterion reached: {residual:e}"
+    );
+    assert!(residual <= 1e-12 * norm, "{residual:e}");
+    let (v, lam) = eigenvectors_jacobi(&a).unwrap();
+    let trace: f64 = (0..3).map(|i| a[i][i]).sum();
+    assert!(approx(lam.iter().sum::<f64>(), trace, 1e-12), "{lam:?}");
+    let av = matrix_mult(&a, &v);
+    let mut vd = vec![vec![0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            vd[i][j] = v[i][j] * lam[j];
+        }
+    }
+    let tol = 1e-12 * norm;
+    for i in 0..3 {
+        for j in 0..3 {
+            assert!(
+                (av[i][j] - vd[i][j]).abs() <= tol,
+                "A·V ≠ V·Λ at [{i}][{j}]"
+            );
+        }
+    }
+}

@@ -10,7 +10,11 @@
 //!   de corrélation), `n=` (nombre de composantes à afficher), `out=` (dataset
 //!   des scores : colonnes d'entrée + `Prin1..Prink`, variance = valeur propre).
 //! - `var` : variables numériques analysées (obligatoire, >= 2).
-//! - Différé : `partial`, `weight`, `outstat=`, entrée TYPE=CORR, ODS plots.
+//! - Non supporté, ERROR (J02-P4) : instructions `PARTIAL`, `BY`, `FREQ`,
+//!   `ID`, `WEIGHT` ; entrée TYPE=CORR/COV (variables `_TYPE_`/`_NAME_`) et
+//!   variable de variance nulle avec la matrice de corrélation (J09-P5) ;
+//!   les autres options du statement PROC (`OUTSTAT=`, `STD`, `PLOTS=`…)
+//!   sont des « Unexpected option ».
 //!
 //! ## Sortie listing (titre "The PRINCOMP Procedure"), dans l'ordre SAS :
 //! 1. Observations / Variables (n et p).
@@ -26,6 +30,7 @@
 //! - Écart-type / (co)variance : dénominateur n-1.
 //! - Matrice de corrélation : diagonale forcée à 1.0, symétrisation exacte
 //!   avant Jacobi (évite l'asymétrie de l'arrondi et un affichage 0.9999999).
+//!   Une variable de variance nulle est une ERROR (corrélations indéfinies).
 //! - Convention de signe sur chaque vecteur propre : si l'élément de valeur
 //!   absolue maximale (premier indice en cas d'égalité) est négatif, on inverse
 //!   la colonne entière. Rend le snapshot stable.
@@ -40,7 +45,7 @@ use crate::procs::common::{apply_sign_convention, complete_case_rows};
 use crate::session::Session;
 use crate::stat::eigenvectors_jacobi;
 use crate::token::TokenKind;
-use crate::value::VarType;
+use crate::value::{Value, VarType};
 
 mod analysis;
 mod report;
@@ -56,7 +61,7 @@ pub struct PrincompAst {
     pub cov: bool,
     /// Number of components to display (None = all p).
     pub n: Option<usize>,
-    /// OUT= dataset (parse-accepted; scores not produced in v1).
+    /// OUT= dataset: every input column plus the `Prin1..Prink` scores.
     pub out: Option<DatasetRef>,
     /// VAR list (analysis variables, user order preserved).
     pub var: Vec<String>,
@@ -116,6 +121,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
     }
 
     // --- sub-statements until run;/quit; (combinateur partagé M31) ---
+    // BY, FREQ, ID and WEIGHT fall back to the shared contract ERROR;
+    // PARTIAL (valid SAS 9.4 statement, J09-P5) used to be a 180-322.
     let mut var: Vec<String> = Vec::new();
     common::parse_proc_body(ts, "PRINCOMP", |ts, kw| {
         Ok(match kw {
@@ -125,6 +132,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<PrincompAst> {
                 ts.expect_semi()?;
                 true
             }
+            "partial" => return Err(common::unsupported_statement("PRINCOMP", kw)),
             _ => false,
         })
     })?;
@@ -154,6 +162,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
         "There were {} observations read from the data set {}.",
         n_read, display
     ));
+    reject_type_corr_layout(&ds, &display)?;
 
     let cols = resolve_var_columns(&ds, ast, &display)?;
     let p = cols.len();
@@ -177,9 +186,11 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
         return Err(SasError::runtime("No observations with complete data."));
     }
 
-    let (means, stds, amat) = compute_analysis_matrix(&data_rows, p, ast.cov);
+    let (means, stds, amat) = compute_analysis_matrix(&data_rows, &names, ast.cov)?;
 
-    // Eigen-decomposition: V columns = eigenvectors, lambda descending.
+    // Eigen-decomposition: V columns = eigenvectors, lambda descending. A
+    // non-finite matrix or a non-convergent iteration is an ERROR raised
+    // before any output (J02-P4).
     let (mut v, lambda) = eigenvectors_jacobi(&amat)?;
     apply_sign_convention(&mut v, p);
 
@@ -235,5 +246,7 @@ pub fn execute(ast: &PrincompAst, session: &mut Session) -> Result<()> {
 
 use crate::procs::common::centered;
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

@@ -6,12 +6,16 @@
 //!  [outtree=<ref>] [print=<n>] [noeigen]; var <list>; [id <var>;] run;`
 //!
 //! ## Périmètre
-//! - `data=`, `method=` (défaut WARD), `outtree=` (parse-accepté, NOTE),
-//!   `print=` (parse-accepté), `noeigen` (parse-accepté, ignoré).
-//! - `var` : variables numériques (coordonnées). `id <var>` : étiquette (parse).
+//! - `data=`, `method=` (défaut WARD), `outtree=` (dataset dendrogramme, voir
+//!   ci-dessous), `print=` (NOTE : l'historique complet reste affiché),
+//!   `noeigen` (NOTE : la section des valeurs propres n'est pas produite).
+//! - `var` : variables numériques (coordonnées). `id <var>` : étiquette des
+//!   feuilles (Cluster History, `_NAME_` de OUTTREE=) ; une seule variable.
 //! - Sortie : "Cluster History" (NCl, Clusters Joined, Freq, SPRSQ, RSQ).
 //! - OUTTREE= : dataset dendrogramme (_NAME_/_PARENT_/_NCL_/_FREQ_/_HEIGHT_
 //!   + valeurs VAR pour les feuilles).
+//! - Non supporté, ERROR (J02-P4) : valeur manquante d'une variable VAR
+//!   (J09-P6), instructions `COPY`, `RMSSTD`, `BY`, `FREQ`.
 //! - Différé : section Eigenvalues.
 //!
 //! ## Algorithme
@@ -90,6 +94,21 @@ pub fn execute(ast: &ClusterAst, session: &mut Session) -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // J02-P4 — a missing VAR value used to enter every distance as NaN and
+    // corrupt the whole history silently. ERROR until roadmap-avancee J09-P6
+    // excludes such observations as SAS does.
+    for (col, name) in decoded.iter().zip(&ast.var) {
+        if let Some(row) = col.iter().position(|x| x.is_nan()) {
+            return Err(SasError::runtime(format!(
+                "A missing value in a VAR variable ({}, observation {}) is not supported in \
+                 PROC CLUSTER; it can affect results and cannot be ignored (planned: \
+                 roadmap-avancee J09-P6).",
+                name.to_uppercase(),
+                row + 1
+            )));
+        }
+    }
 
     let coords: Vec<Vec<f64>> = (0..n_read)
         .map(|r| decoded.iter().map(|col| col[r]).collect())
@@ -184,5 +203,7 @@ pub fn execute(ast: &ClusterAst, session: &mut Session) -> Result<()> {
 
 use crate::procs::common::centered;
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

@@ -144,16 +144,14 @@ pub(super) fn print_final_communalities(
     session.listing.blank();
 }
 
-/// VARIMAX branch: rotate, print the rotated pattern, rotated variances and
-/// communalities. Returns the rotated pattern (used for OUT= scoring).
+/// VARIMAX branch: print the rotated pattern (computed before any output),
+/// rotated variances and communalities.
 pub(super) fn print_varimax_section(
     session: &mut Session,
     names: &[String],
-    loadings: &[Vec<f64>],
+    l_rot: &[Vec<f64>],
     k: usize,
-) -> Vec<Vec<f64>> {
-    let (l_rot, _rot_matrix) = varimax(loadings);
-
+) {
     // Rotated variance by factor.
     let rot_variance: Vec<f64> = (0..k)
         .map(|j| l_rot.iter().map(|row| row[j] * row[j]).sum::<f64>())
@@ -162,7 +160,7 @@ pub(super) fn print_varimax_section(
     centered(session, "Rotation Method: Varimax");
     session.listing.blank();
 
-    print_factor_pattern(session, "Rotated Factor Pattern", names, &l_rot, k);
+    print_factor_pattern(session, "Rotated Factor Pattern", names, l_rot, k);
 
     centered(session, "Variance Explained by Each Rotated Factor");
     session.listing.blank();
@@ -187,22 +185,17 @@ pub(super) fn print_varimax_section(
         .map(|row| row.iter().map(|&x| x * x).sum())
         .collect();
     print_final_communalities(session, names, &rot_communalities);
-
-    l_rot
 }
 
-/// PROMAX branch: varimax pre-rotation, promax(4), oblique pattern and
-/// inter-factor correlations. Returns the oblique pattern for OUT= scoring.
+/// PROMAX branch: print the oblique pattern and the inter-factor correlations
+/// of the promax(4) solution (computed from the VARIMAX pre-rotation before
+/// any output).
 pub(super) fn print_promax_section(
     session: &mut Session,
     names: &[String],
-    loadings: &[Vec<f64>],
+    pm: &PromaxResult,
     k: usize,
-) -> Result<Vec<Vec<f64>>> {
-    // Promax starts from the orthogonal VARIMAX solution.
-    let (l_varimax, _rot_matrix) = varimax(loadings);
-    let pm = promax(&l_varimax, 4)?;
-
+) {
     centered(session, "Rotation Method: Promax (power = 4)");
     session.listing.blank();
 
@@ -236,5 +229,4 @@ pub(super) fn print_promax_section(
         session.listing.write_table(&headers, &aligns, &rows);
         session.listing.blank();
     }
-    Ok(pm.pattern)
 }

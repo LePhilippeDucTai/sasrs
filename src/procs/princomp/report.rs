@@ -175,17 +175,12 @@ pub(super) fn write_out_dataset(
     for r in 0..n_read {
         let row: Vec<f64> = decoded.iter().map(|col| col[r]).collect();
         if row.iter().all(|x| x.is_finite()) {
-            // Standardize (or center for COV).
+            // Standardize (or center for COV). Correlation analysis rejects a
+            // zero-variance variable upstream, so every std is > 0 here.
             let z: Vec<f64> = (0..p)
                 .map(|j| {
                     let centered = row[j] - means[j];
-                    if cov {
-                        centered
-                    } else if stds[j] > 0.0 {
-                        centered / stds[j]
-                    } else {
-                        0.0
-                    }
+                    if cov { centered } else { centered / stds[j] }
                 })
                 .collect();
             for comp in 0..k {

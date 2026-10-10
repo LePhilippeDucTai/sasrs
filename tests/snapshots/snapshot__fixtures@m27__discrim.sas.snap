@@ -88,17 +88,6 @@ DF = 4
                                 Constant    -2.6931    -18.6931
                                 x            2.0000      6.0000
 
-                            Classification Results for Training Data
-
-                 Obs    From CLASS    Classified Into CLASS         A         B
-
-                   1    A             A                        1.0000    0.0000
-                   2    A             A                        0.9997    0.0003
-                   3    A             A                        0.9820    0.0180
-                   4    B             B                        0.0180    0.9820
-                   5    B             B                        0.0003    0.9997
-                   6    B             B                        0.0000    1.0000
-
                             Error Count Estimates for Training Data
 
                                              A         B     Total

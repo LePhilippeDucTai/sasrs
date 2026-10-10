@@ -43,6 +43,7 @@ NOTE: PROCEDURE CLUSTER used (Total process time):
 19      var x;
 20    run;
 NOTE: There were 6 observations read from the data set WORK.PTS.
+NOTE: PROC FASTCLUS approximates the SAS algorithm: seeds are selected farthest-first, MAXITER= defaults to 10 and MAXCLUSTERS= is required (SAS: RADIUS=/REPLACE= seed rules, MAXITER=1, MAXCLUSTERS=100); cluster assignments can differ from SAS (planned: roadmap-avancee J09-P7).
 NOTE: The data set WORK.CLUST has 6 observations and 2 variables.
 NOTE: PROCEDURE FASTCLUS used (Total process time):
             real time           0.00 seconds

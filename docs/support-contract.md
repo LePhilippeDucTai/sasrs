@@ -104,6 +104,24 @@ directe, rien à lever).
 | J02-P3 | GLIMMIX `CLASS` : options `(REF= ORDER= DESC …)` ou `/ …`, liste `a1-a3` | sautées (mots pris pour des variables CLASS, `a2` perdu) | **ERROR** | non planifiée |
 | J02-P3 | GLIMMIX : `CODE`, `COVTEST`, `EFFECT`, `LSMESTIMATE`, `NLOPTIONS`, `PARMS`, `SLICE`, `STORE` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » | non planifiée |
 | J02-P3 | GLIMMIX : NOTE « parse-accepted » ESTIMATE/CONTRAST/LSMEANS/WEIGHT, en-tête du module | code mort (instructions déjà rejetées au parsing) et doc obsolète | retirés | — |
+| J02-P4 | DISCRIM : options PROC inconnues ou non implémentées (`TESTDATA=`, `TESTOUT=`, `OUTCROSS=`, `OUTD=`, `CROSSLIST`, `CANONICAL`, `THRESHOLD=`, `SINGULAR=`…), options de table de `DATA=`/`OUT=`, `POOL=` sans valeur | sautées jeton par jeton (`POOL=` vide : YES) | boucle d'options commune : option inconnue → **ERROR** « Unexpected option 'X' on PROC DISCRIM statement. » ; option SAS valide qui peut changer un résultat ou créer une table → **ERROR** « The X option is not supported in PROC DISCRIM; it can affect results and cannot be ignored » ; options d'affichage (`NOPRINT`, `SIMPLE`, `ALL`, `LISTERR`, `POSTERR`…, statistiques F de `DISTANCE`) → **WARNING** d'affichage (code 1) ; options de table entre parenthèses → **ERROR** ; `POOL=` vide → **ERROR** ; `DATA=`, `OUT=`, `METHOD=NORMAL`, `POOL=YES`, `LIST` honorés, `PCOV`/`WCOV` aussi (matrices toujours imprimées) | J09-P2 (`CROSSLIST`, `TESTDATA=`, `TESTOUT=`), sinon non planifiée |
+| J02-P4 | DISCRIM : `PRIORS` à probabilités explicites (`'A'=.3 'B'=.7`, `A=.3 B=.7`) et toute forme autre que `EQUAL`/`PROPORTIONAL`/`PROP` | remplacé par EQUAL | **ERROR** « PRIORS with explicit probabilities is not supported … » (forme invalide : ERROR de syntaxe) ; EQUAL et PROPORTIONAL inchangés | J09-P2 |
+| J02-P4 | DISCRIM : `CROSSVALIDATE`, `OUTSTAT=` | NOTE « parse-accepted but not implemented » puis exécution sans validation croisée, aucune table OUTSTAT= | **ERROR** | J09-P2 |
+| J02-P4 | DISCRIM : `NOCLASSIFY`, `SHORT` | NOTE « parse-accepted » puis ignorés | **WARNING** d'affichage (code 1), listing inchangé | non planifiée |
+| J02-P4 | DISCRIM : `CLASS a b`, `ID a b` ; CLUSTER : `ID a b` ; DISCRIM : `VAR x1-x3` | première variable seule ; la boucle VAR de DISCRIM sautait les jetons non-noms (`x2` perdu) | **ERROR** « The CLASS statement of PROC DISCRIM takes a single variable; found A B. » (SAS 9.4 : `CLASS variable;`, `ID variable;`) ; liste VAR stricte (plage → ERROR de syntaxe) | — |
+| J02-P4 | DISCRIM : table « Classification Results for Training Data » (une ligne par observation) | toujours imprimée | imprimée seulement avec `LIST` (doc SAS 9.4, PROC DISCRIM statement, LIST : « displays the resubstitution classification results for each observation ») ; « Error Count Estimates » inchangé | — |
+| J02-P4 | PRINCOMP / FACTOR : table au format TYPE=CORR/COV (variables caractère `_TYPE_` et `_NAME_`, lignes `CORR`/`COV`/`UCORR`/`UCOV`/`SSCP`) | analysée comme des observations brutes | **ERROR** « A TYPE=CORR/COV input data set (… has _TYPE_ and _NAME_ variables) is not supported … » | J09-P5 (FACTOR : voir le constat ci-dessous) |
+| J02-P4 | PRINCOMP / FACTOR (matrice de corrélation) : variable de variance nulle | corrélations forcées à 0, diagonale 1 (valeur propre inventée) | **ERROR** nommant la variable ; analyse `COV` inchangée | J09-P5 (comportement documenté) |
+| J02-P4 | `stat::linalg` Jacobi (PRINCOMP, FACTOR, REG `RIDGE=`/`COLLIN`, `MTEST`, IML `EIGVAL`/`EIGVEC`) : entrée manquante/infinie, non-convergence | dernière itérée rendue en silence (valeurs propres NaN) | **ERROR** typée `SasError::Numerical` (« numerical error: matrix has missing or infinite entries (Jacobi) », « … did not converge after 100 sweeps … ») ; résidu hors diagonale accepté s'il est < 1e-15 ou ≤ 1e-12·‖A‖ (spectres quasi dégénérés à grande échelle) | — |
+| J02-P4 | FACTOR : `ROTATE=VARIMAX\|PROMAX` avec un seul facteur retenu | rotation sautée en silence | **NOTE** « Only one factor is retained in PROC FACTOR; the ROTATE=VARIMAX rotation, which needs at least two factors, is not performed. » | — |
+| J02-P4 | FACTOR : VARIMAX (et pré-rotation de PROMAX) arrêtée au plafond de 1000 balayages | motif présenté comme convergé | **WARNING** « The VARIMAX rotation did not converge after 1000 iterations in PROC FACTOR; the rotated factor pattern may be inaccurate. » | — (J09-P4 : critère relatif SAS) |
+| J02-P4 | FACTOR : `OUT=` (libref non assigné, matrice de corrélation/covariance singulière), échec de PROMAX | ERROR après l'impression du listing | rotation et `OUT=` validés avant toute sortie : **ERROR** sans listing (« The correlation matrix is singular; PROC FACTOR cannot compute the OUT= factor scores. ») | — |
+| J02-P4 | CLUSTER / FASTCLUS / DISTANCE : valeur manquante d'une variable VAR | propagée en NaN (distances, graines, centroïdes, OUTTREE=/OUT=) | **ERROR** « A missing value in a VAR variable (X, observation 3) is not supported … » avant toute sortie | J09-P6 (CLUSTER), J09-P7 (FASTCLUS, DISTANCE) |
+| J02-P4 | FASTCLUS : `SEED=<nombre>` ; `SEED=<table>` | nombre accepté (NOTE) puis ignoré, graines farthest-first ; table : ERROR « expected a number » | **ERROR** « SEED= names a SAS data set of initial cluster seeds in PROC FASTCLUS, not a number. » (doc SAS 9.4) ; table → **ERROR** « not supported » | J09-P7 (`SEED=<table>`) |
+| J02-P4 | FASTCLUS : semis farthest-first, `MAXITER=10` par défaut, `MAXCLUSTERS=` requis | divergence silencieuse avec SAS | **NOTE** à chaque exécution ; section « Approximations documentées » ci-dessous | J09-P7 |
+| J02-P4 | DISTANCE : `METHOD=COSINE` / `METHOD=CORR` | dissimilarités 1 − cos / 1 − r (0 si indéfinies, diagonale 0) | similarités de la doc PROC DISTANCE (« Proximity Measures » : s20 cosinus, s8 corrélation, TYPE=SIMILAR) : diagonale s(x,x) = 1, `_TYPE_` = « SIMILAR », listing « Similarity Matrix » ; dénominateur nul → **ERROR** | — (dénominateur nul : J09-P7) |
+| J02-P4 | DISCRIM `TESTCLASS`/`TESTFREQ`/`TESTID` ; PRINCOMP `PARTIAL` ; FACTOR `PARTIAL`/`PRIORS` ; CLUSTER `COPY`/`RMSSTD` ; DISTANCE `COPY` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » (FASTCLUS `ID`/`BY`/`FREQ`/`WEIGHT` : déjà le message partagé) ; FACTOR `PATHDIAGRAM` (graphique seul) → **WARNING** d'affichage | J09-P5 (`PARTIAL` de PRINCOMP), sinon non planifiée |
+| J02-P4 | DISCRIM, CLUSTER, FASTCLUS, PRINCOMP : NOTE « parse-accepted » (OUTSTAT=, NOCLASSIFY, CROSSVALIDATE, SHORT), NOTE « SEED=… is accepted », en-têtes de module (OUTTREE= « parse-accepté », OUT= de PRINCOMP « scores not produced », `let _ = ast.id`) | doc et NOTEs contredisant le code | corrigés / retirés | — |
 
 GLIMMIX partage encore l'ancienne forme `common::parse_response_options`
 (`DESC` y est honoré ; `EVENT=FIRST|LAST`, `ORDER=` et `REF=` y restent
@@ -111,6 +129,26 @@ ignorés). Son unité de contrat (J02-P3) n'a pas migré l'appel vers la forme
 vérifiée : la forme historique de `src/procs/common/model.rs`, hors du
 périmètre de fichiers de J02-P3, perdrait son dernier appelant et doit être
 retirée dans la même modification (constat transmis au plan).
+
+Les ERROR FACTOR « TYPE=CORR/COV » et « variance nulle » nomment J09-P5,
+l'unité désignée par le manifeste pour PRINCOMP/FACTOR ; le périmètre de
+fichiers de J09-P5 ne contient toutefois que `src/procs/princomp` : la levée
+côté FACTOR doit être routée vers une unité FACTOR (constat transmis au plan
+par J02-P4).
+
+## Approximations documentées
+
+Comportements livrés volontairement divergents de SAS 9.4 (état
+« approximation documentée » de `CONTRIBUTING.md`, §6) : la divergence est
+signalée à chaque exécution et décrite ici jusqu'à l'unité qui l'alignera.
+
+| PROC | Élément | sasrs | SAS 9.4 (doc PROC FASTCLUS statement) | Diagnostic | Levée par |
+| --- | --- | --- | --- | --- | --- |
+| FASTCLUS | Graines initiales | farthest-first : première observation, puis l'observation la plus éloignée des graines déjà choisies | première observation complète, puis règles `RADIUS=` / `REPLACE=FULL` (remplacement des graines) | NOTE « PROC FASTCLUS approximates the SAS algorithm: … » à chaque exécution | J09-P7 |
+| FASTCLUS | `MAXITER=` | 10 par défaut ; `MAXITER=0` effectue une itération | 1 par défaut sans `LEAST=` ; 0 : pas de recalcul des graines | même NOTE | J09-P7 |
+| FASTCLUS | `MAXCLUSTERS=` | requis (ERROR s'il manque) ; `RADIUS=` non supporté | 100 par défaut ; `MAXCLUSTERS=` ou `RADIUS=` suffit | même NOTE | J09-P7 |
+| FASTCLUS | Convergence | déplacement maximal des centroïdes < `CONVERGE=` × écart-type RMS global | changement relatif maximal des graines (distance ancienne/nouvelle graine divisée par la distance minimale entre graines initiales) ≤ `CONVERGE=` | même NOTE | J09-P7 |
+| FASTCLUS | `OUT=` | entrée + `_CLUSTER_` | entrée + `CLUSTER` et `DISTANCE` | — | J09-P7 |
 
 ## Précisions J03 (statistiques pondérées, encodage, étape DATA)
 

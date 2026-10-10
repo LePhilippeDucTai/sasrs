@@ -11,8 +11,14 @@
 //! - Rotation PROMAX : oblique, partant de la solution VARIMAX (cible élevée à
 //!   la puissance k=4, ajustement de Procrustes). Produit le « Rotated Factor
 //!   Pattern » oblique et les « Inter-Factor Correlations ».
-//! - OUT= : colonnes d'entrée + `Factor1..Factorm` (scores par régression).
-//! - Différé : METHOD=ML/ITER, HEYWOOD, ALPHA, ROTATE=OBLIMIN.
+//! - OUT= : colonnes d'entrée + `Factor1..Factorm` (scores par régression),
+//!   validé avant toute sortie (libref, matrice inversible).
+//! - Rotation à un seul facteur retenu : NOTE, pas de rotation ; VARIMAX non
+//!   convergente (1000 balayages) : WARNING.
+//! - Non supporté, ERROR : METHOD≠PRINCIPAL, ROTATE=QUARTIMAX/OBLIMIN…,
+//!   instructions `PARTIAL`, `PRIORS`, `BY`, `FREQ`, `WEIGHT`, entrée
+//!   TYPE=CORR/COV, variable de variance nulle avec la matrice de corrélation
+//!   (J02-P4) ; `PATHDIAGRAM` (graphique) : WARNING.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -24,7 +30,7 @@ use crate::procs::common::{apply_sign_convention, complete_case_rows};
 use crate::session::Session;
 use crate::stat::{eigenvectors_jacobi, invert_matrix};
 use crate::token::TokenKind;
-use crate::value::VarType;
+use crate::value::{Value, VarType};
 
 mod analysis;
 mod output;
@@ -34,6 +40,7 @@ mod rotate;
 
 pub use parse::parse;
 pub use rotate::PromaxResult;
+pub use rotate::VarimaxResult;
 pub use rotate::promax;
 pub use rotate::varimax;
 
@@ -72,6 +79,7 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         "There were {} observations read from the data set {}.",
         n_read, display
     ));
+    reject_type_corr_layout(&ds, &display)?;
 
     let cols = resolve_var_columns(&ds, ast, &display)?;
     let p = cols.len();
@@ -95,9 +103,11 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         return Err(SasError::runtime("No observations with complete data."));
     }
 
-    let (means, stds, amat) = compute_analysis_matrix(&data_rows, p, ast.cov);
+    let (means, stds, amat) = compute_analysis_matrix(&data_rows, &names, ast.cov)?;
 
-    // Eigen-decomposition: V columns = eigenvectors, lambda descending.
+    // Eigen-decomposition: V columns = eigenvectors, lambda descending. A
+    // non-finite matrix or a non-convergent iteration is an ERROR raised
+    // before any output (J02-P4).
     let (mut v, lambda) = eigenvectors_jacobi(&amat)?;
     apply_sign_convention(&mut v, p);
 
@@ -146,6 +156,30 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
         .map(|j| loadings.iter().map(|row| row[j] * row[j]).sum::<f64>())
         .collect();
 
+    // J02-P4 — everything that can fail is computed before any output: the
+    // rotation (PROMAX inverts matrices) and the OUT= request (libref and
+    // scoring coefficients), which used to fail after the listing.
+    let rotation = rotate_loadings(session, &ast.rotate, &loadings, k, VARIMAX_MAX_ITER)?;
+    // Pattern used for OUT= factor scoring (rotated when a rotation applies).
+    let final_pattern = rotation
+        .as_ref()
+        .map_or(loadings.as_slice(), Rotation::pattern);
+    // Scoring method (standard SAS regression scoring): with Z the matrix of
+    // standardized analysis variables, R the correlation matrix and `pattern`
+    // the (possibly rotated) factor pattern, the standardized scoring
+    // coefficients are B = R⁻¹ · pattern (n_vars × k) and the factor scores are
+    // F = Z · B. For COV analysis the variables are only centered.
+    let scoring = match &ast.out {
+        Some(out_ref) => Some(prepare_out_scoring(
+            session,
+            out_ref,
+            &amat,
+            final_pattern,
+            ast.cov,
+        )?),
+        None => None,
+    };
+
     // ───────────────────────── listing ─────────────────────────
     session.listing.page_header();
     centered(session, "The FACTOR Procedure");
@@ -172,40 +206,18 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
     // Final Communality Estimates (before rotation).
     print_final_communalities(session, &names, &communalities);
 
-    // Pattern used for OUT= factor scoring (rotated when a rotation applies).
-    let mut final_pattern: Vec<Vec<f64>> = loadings.clone();
-
-    // ───── VARIMAX rotation (if requested and k >= 2) ─────
-    if ast.rotate == "varimax" && k >= 2 {
-        final_pattern = print_varimax_section(session, &names, &loadings, k);
-    }
-
-    // ───── PROMAX oblique rotation (if requested and k >= 2) ─────
-    if ast.rotate == "promax" && k >= 2 {
-        final_pattern = print_promax_section(session, &names, &loadings, k)?;
+    // ───── VARIMAX / PROMAX sections (rotation computed above) ─────
+    match &rotation {
+        Some(Rotation::Varimax(vm)) => print_varimax_section(session, &names, &vm.pattern, k),
+        Some(Rotation::Promax(pm)) => print_promax_section(session, &names, pm, k),
+        None => {}
     }
 
     // OUT= : write input columns + Factor1..Factorm regression factor scores.
-    //
-    // Scoring method (standard SAS regression scoring): with Z the matrix of
-    // standardized analysis variables, R the correlation matrix and `pattern`
-    // the (possibly rotated) factor pattern, the standardized scoring
-    // coefficients are B = R⁻¹ · pattern (n_vars × k) and the factor scores are
-    // F = Z · B. For COV analysis the variables are only centered. Observations
-    // with any missing analysis variable receive missing scores.
-    if let Some(out_ref) = &ast.out {
+    // Observations with any missing analysis variable receive missing scores.
+    if let (Some(out_ref), Some(coef)) = (&ast.out, &scoring) {
         write_out_dataset(
-            session,
-            &ds,
-            &decoded,
-            &means,
-            &stds,
-            &amat,
-            &final_pattern,
-            ast.cov,
-            p,
-            k,
-            out_ref,
+            session, &ds, &decoded, &means, &stds, coef, ast.cov, p, k, out_ref,
         )?;
     }
 
@@ -214,5 +226,7 @@ pub fn execute(ast: &FactorAst, session: &mut Session) -> Result<()> {
 
 use crate::procs::common::centered;
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

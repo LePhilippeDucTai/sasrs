@@ -82,9 +82,7 @@ fn execute_writes_out_with_cluster() {
         maxclusters: 2,
         maxiter: 20,
         converge: 0.02,
-        seed: None,
         var: vec!["x".into()],
-        id: None,
     };
     execute(&ast, &mut session).unwrap();
     let (out, _) = session.libs.get("WORK").unwrap().read("CL").unwrap();

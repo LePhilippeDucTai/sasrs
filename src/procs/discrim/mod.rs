@@ -1,19 +1,27 @@
 //! PROC DISCRIM — Fisher's linear discriminant analysis (M27).
 //!
 //! Supports (pool=yes / METHOD=NORMAL):
-//! - CLASS statement (group variable, char or numeric).
+//! - CLASS statement (one group variable, char or numeric).
 //! - VAR statement (numeric predictors).
-//! - ID statement (label for the classification listing).
+//! - ID statement (one label variable for the classification listing).
 //! - PRIORS EQUAL (default) / PRIORS PROPORTIONAL.
 //! - OUT= dataset with `_FROM_`, `_INTO_` and one `_<k>` posterior per class.
+//! - LIST: per-observation "Classification Results for Training Data".
 //!
 //! Produces: header counts, Class Level Information, Within-Class Covariance
 //! Matrix (per class), Pooled Within-Class Covariance Matrix, Pairwise Squared
 //! Distances Between Groups, Linear Discriminant Function Coefficients,
-//! Classification Results for Training Data, Error Count Estimates.
+//! Classification Results for Training Data (LIST only), Error Count
+//! Estimates.
 //!
-//! Parse-accepted but not implemented (NOTE emitted): METHOD other than NORMAL,
-//! POOL=NO/TEST (QDA deferred), OUTSTAT=, NOCLASSIFY, CROSSVALIDATE, SHORT.
+//! Rejected at parse time (ERROR, J02-P4/J02-P5): METHOD≠NORMAL, POOL=NO/TEST,
+//! CROSSVALIDATE, CROSSLIST, OUTSTAT=, TESTDATA=, TESTOUT= (J09-P2), the other
+//! valid options that can change a result or create a data set, explicit
+//! PRIORS (J09-P2), data set options on DATA=/OUT=, several CLASS or ID
+//! variables, TESTCLASS/TESTFREQ/TESTID/BY/FREQ/WEIGHT statements; unknown
+//! options are « Unexpected option ». Display-only options (NOCLASSIFY,
+//! SHORT, NOPRINT, SIMPLE, the F statistics of DISTANCE…) are ignored with a
+//! WARNING; PCOV and WCOV are honored (their matrices are always printed).
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -61,13 +69,11 @@ pub enum Pool {
 pub struct DiscrimAst {
     pub data: Option<DatasetRef>,
     pub out: Option<DatasetRef>,
-    pub outstat: Option<DatasetRef>,
     pub method: Option<String>,
     pub pool: Pool,
     pub priors: Priors,
-    pub noclassify: bool,
-    pub crossvalidate: bool,
-    pub short: bool,
+    /// LIST: display the resubstitution classification of each observation.
+    pub list: bool,
     pub class_var: Option<String>,
     pub var_vars: Vec<String>,
     pub id_var: Option<String>,
@@ -79,7 +85,7 @@ use crate::procs::common::value_label;
 
 pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
     // ── 1. Guards ──────────────────────────────────────────────────────────
-    let class_name = check_options(ast, session)?;
+    let class_name = check_options(ast)?;
 
     // ── 2. Read dataset ────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
@@ -125,7 +131,12 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
     print_discrim_coefficients(session, &ast.var_vars, &model);
 
     // ── 6. Classification ──────────────────────────────────────────────────
-    let error_count = print_classification_results(session, ast, &model, &kept, &id_col);
+    // J02-P4 — the per-observation table used to be printed unconditionally;
+    // SAS prints it only with LIST (PROC DISCRIM statement, LIST option).
+    let error_count = training_error_counts(&model, &kept);
+    if ast.list {
+        print_classification_results(session, ast, &model, &kept, &id_col);
+    }
 
     // ── 7. Error Count Estimates ───────────────────────────────────────────
     print_error_estimates(session, &model, &error_count);
@@ -142,5 +153,7 @@ pub fn execute(ast: &DiscrimAst, session: &mut Session) -> Result<()> {
 
 // ───────────────────────── Tests ─────────────────────────
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;

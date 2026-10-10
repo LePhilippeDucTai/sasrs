@@ -1,10 +1,31 @@
 use super::*;
 
+/// Validate the OUT= request before any output (J02-P4): the libref must be
+/// assigned and the scoring coefficients B = R⁻¹ · pattern (p × k) must be
+/// computable. Both failures used to surface only after the listing had been
+/// printed. Returns B.
+pub(super) fn prepare_out_scoring(
+    session: &Session,
+    out_ref: &DatasetRef,
+    amat: &[Vec<f64>],
+    pattern: &[Vec<f64>],
+    cov: bool,
+) -> Result<Vec<Vec<f64>>> {
+    session.libs.get(&out_ref.libref_or_work())?;
+    let r_inv = invert_matrix(amat).map_err(|_| {
+        SasError::runtime(format!(
+            "The {} matrix is singular; PROC FACTOR cannot compute the OUT= factor scores.",
+            if cov { "covariance" } else { "correlation" }
+        ))
+    })?;
+    Ok(matmul(&r_inv, pattern))
+}
+
 /// Build and write the FACTOR OUT= dataset: every input column plus
-/// `Factor1..Factorm` regression factor scores. Scores = Z · (R⁻¹ · pattern),
-/// where Z is the standardized (or, for COV, centered) data and R = `amat` the
-/// analysis matrix. Incomplete observations receive missing scores; rows are
-/// kept in input order (mirroring SAS).
+/// `Factor1..Factorm` regression factor scores. Scores = Z · B, where Z is the
+/// standardized (or, for COV, centered) data and B = R⁻¹ · pattern the
+/// scoring coefficients of [`prepare_out_scoring`]. Incomplete observations
+/// receive missing scores; rows are kept in input order (mirroring SAS).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn write_out_dataset(
     session: &mut Session,
@@ -12,8 +33,7 @@ pub(super) fn write_out_dataset(
     decoded: &[Vec<f64>],
     means: &[f64],
     stds: &[f64],
-    amat: &[Vec<f64>],
-    pattern: &[Vec<f64>],
+    coef: &[Vec<f64>],
     cov: bool,
     p: usize,
     k: usize,
@@ -22,25 +42,17 @@ pub(super) fn write_out_dataset(
     use crate::dataset::{SasDataset, VarMeta};
     use polars::prelude::*;
 
-    // Scoring coefficients B = R⁻¹ · pattern  (p × k).
-    let r_inv = invert_matrix(amat)?;
-    let coef = matmul(&r_inv, pattern);
-
     let n_read = ds.n_obs();
     let mut score_cols: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(n_read); k];
     for row_idx in 0..n_read {
         let row: Vec<f64> = decoded.iter().map(|col| col[row_idx]).collect();
         if row.iter().all(|x| x.is_finite()) {
+            // Correlation analysis rejects a zero-variance variable upstream,
+            // so every std is > 0 here.
             let z: Vec<f64> = (0..p)
                 .map(|j| {
                     let centered = row[j] - means[j];
-                    if cov {
-                        centered
-                    } else if stds[j] > 0.0 {
-                        centered / stds[j]
-                    } else {
-                        0.0
-                    }
+                    if cov { centered } else { centered / stds[j] }
                 })
                 .collect();
             for f in 0..k {

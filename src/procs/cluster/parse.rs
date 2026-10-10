@@ -111,7 +111,9 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
 
     let mut var: Vec<String> = Vec::new();
     let mut id: Option<String> = None;
-    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31).
+    // Sous-statements jusqu'à `run;`/`quit;` (combinateur partagé M31). BY
+    // and FREQ fall back to the shared contract ERROR; COPY and RMSSTD
+    // (valid SAS 9.4 statements) used to be 180-322 ERRORs.
     common::parse_proc_body(ts, "CLUSTER", |ts, kw| {
         Ok(match kw {
             "var" => {
@@ -122,11 +124,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<ClusterAst> {
             }
             "id" => {
                 ts.next();
+                let span = ts.peek().span;
                 let names = ts.parse_name_list()?;
+                // J02-P4 — `ID variable;` (SAS 9.4): the variables after the
+                // first used to be dropped silently.
+                if names.len() > 1 {
+                    return Err(SasError::parse(
+                        format!(
+                            "The ID statement of PROC CLUSTER takes a single variable; found {}.",
+                            names.join(" ").to_uppercase()
+                        ),
+                        span,
+                    ));
+                }
                 id = names.into_iter().next();
                 ts.expect_semi()?;
                 true
             }
+            "copy" | "rmsstd" => return Err(common::unsupported_statement("CLUSTER", kw)),
             _ => false,
         })
     })?;
