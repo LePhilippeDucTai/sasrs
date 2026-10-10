@@ -23,6 +23,7 @@ NOTE: PROCEDURE SORT used (Total process time):
 8       by sex;
 9       table sex, height*mean weight*mean;
 10    run;
+NOTE: PROC TABULATE approximates the SAS OUT= data set: it writes one observation per table cell and statistic, where SAS writes one observation per combination of class variable values with all of its statistics (planned: roadmap-avancee J03-P2).
 NOTE: The data set WORK.TABOUT has 4 observations and 6 variables.
 NOTE: PROCEDURE TABULATE used (Total process time):
             real time           0.00 seconds

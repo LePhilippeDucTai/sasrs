@@ -31,7 +31,9 @@ pub(super) fn lookup_var<'a>(
 /// single row, over decoded columns. Comparisons go through `Value::sas_cmp`
 /// (so `. = .` is true and char compares ignore trailing blanks); logical ops
 /// use SAS truthiness (missing/0 = false). Unsupported constructs (function
-/// calls, arrays, hash methods) evaluate to a guard missing rather than panic.
+/// calls, arrays, hash methods) are rejected at parse time (J02-P7,
+/// `contract::check_expr`); the guard missing below only keeps a hand-built
+/// AST from panicking.
 pub(super) fn eval_row_expr(expr: &Expr, cols: &[(String, Vec<Value>)], r: usize) -> Value {
     use crate::ast::UnaryOp;
     match expr {

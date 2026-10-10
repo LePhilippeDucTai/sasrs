@@ -60,7 +60,6 @@ fn group_key_column(
 /// GROUP variables that cannot consolidate are displayed as ORDER variables.
 /// ORDER used to consolidate the rows like GROUP. A formatted key is ordered by
 /// the smallest unformatted value it covers; ties keep the data order.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn build_summary_rows(
     ast: &ReportAst,
     plan: &[ColPlan],
