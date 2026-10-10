@@ -15,7 +15,6 @@ pub(super) struct MixedFit {
     pub(super) neg2ll: f64,
     pub(super) n: usize,
     pub(super) p: usize,
-    pub(super) balanced: bool,
     /// Whether the estimation criterion was actually met (J02-P6).
     pub(super) converged: bool,
     /// True when σ²_u was truncated to 0 (negative estimate or boundary):
@@ -136,15 +135,25 @@ pub(super) fn fit_mixed(
     // estimator (exact REML/ML). This is the configuration the oracle verifies.
     let intercept_only = p == 1 && x.iter().all(|row| row[0] == 1.0);
 
-    let (mut sigma2_u, sigma2_e, converged, lambda_capped) =
-        if balanced && intercept_only && n_subjects >= 2 {
-            // Closed-form moment estimator: exact, no iteration to fail.
-            let (s2u, s2e) = closed_form_vc(y, subj_of, n_subjects, n_i, method);
-            (s2u, s2e, true, false)
-        } else {
-            // General path: 1-D profile search over λ = σ²_u / σ²_e ≥ 0.
-            profile_search(y, x, subj_of, method)?
-        };
+    // J02-P2 — NOBOUND is honored by the closed form only: the profile search
+    // keeps λ = σ²_u/σ²_e ≥ 0, so an unbalanced NOBOUND fit used to clip the
+    // variance to 0 without any diagnostic.
+    let closed_form = balanced && intercept_only && n_subjects >= 2;
+    if nobound && !closed_form {
+        return Err(SasError::runtime(
+            "NOBOUND with unbalanced data is not supported in PROC MIXED; it can affect \
+             results and cannot be ignored (planned: roadmap-avancee J06-P2).",
+        ));
+    }
+
+    let (mut sigma2_u, sigma2_e, converged, lambda_capped) = if closed_form {
+        // Closed-form moment estimator: exact, no iteration to fail.
+        let (s2u, s2e) = closed_form_vc(y, subj_of, n_subjects, n_i, method);
+        (s2u, s2e, true, false)
+    } else {
+        // General path: 1-D profile search over λ = σ²_u / σ²_e ≥ 0.
+        profile_search(y, x, subj_of, method)?
+    };
 
     // σ²_u < 0 (or at the 0 boundary) ⇒ the estimated G matrix is not
     // positive definite; SAS MIXED truncates to 0 and emits the NOTE.
@@ -165,7 +174,6 @@ pub(super) fn fit_mixed(
         neg2ll,
         n,
         p,
-        balanced,
         converged,
         g_not_pd,
         lambda_capped,

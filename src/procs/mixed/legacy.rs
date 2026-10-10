@@ -44,9 +44,6 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
         .as_ref()
         .ok_or_else(|| SasError::runtime("RANDOM statement requires SUBJECT= in PROC MIXED."))?;
 
-    // NOTEs for parse-accepted / deferred features.
-    note_deferred_features_legacy(ast, model, session);
-
     // ── 2. Read dataset ─────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
 
@@ -111,7 +108,7 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
     print_class_level_information_legacy(session, subject, &levels);
     print_dimensions_legacy(session, &fit, n_subjects, max_obs);
     print_number_of_observations_legacy(session, n_read, n_used, n_not_used);
-    print_iteration_history_legacy(session, &fit);
+    print_iteration_history_legacy(session, ast.method, &fit);
     print_covariance_parameter_estimates_legacy(session, random, subject, &fit);
     print_fit_statistics_legacy(session, ast, &fit, n_subjects);
 
@@ -120,68 +117,7 @@ pub(super) fn execute_legacy(ast: &MixedAst, session: &mut Session) -> Result<()
         print_fixed_solution_legacy(session, &fit, n_subjects);
     }
 
-    // Final NOTE if a fall-back unbalanced fit was used.
-    let _ = fit.balanced;
-
     Ok(())
-}
-
-/// NOTEs for parse-accepted / deferred features (legacy path).
-pub(super) fn note_deferred_features_legacy(
-    ast: &MixedAst,
-    model: &ModelSpec,
-    session: &mut Session,
-) {
-    if ast.covtest {
-        session
-            .log
-            .note("COVTEST is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if ast.asycov {
-        session
-            .log
-            .note("ASYCOV is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if ast.nobound {
-        session
-            .log
-            .note("NOBOUND is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if let Some(d) = &model.ddfm
-        && d != "contain"
-    {
-        session.log.note(&format!(
-            "DDFM={} is parse-accepted but not implemented; using CONTAIN.",
-            d.to_uppercase()
-        ));
-    }
-    if model.nofit {
-        session
-            .log
-            .note("NOFIT is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if ast.repeated.is_some() {
-        session
-            .log
-            .note("REPEATED statement is parse-accepted but not implemented in PROC MIXED.");
-    }
-    for lbl in &ast.estimate_labels {
-        session.log.note(&format!(
-            "ESTIMATE '{}' is parse-accepted but not implemented in PROC MIXED.",
-            lbl
-        ));
-    }
-    for lbl in &ast.contrast_labels {
-        session.log.note(&format!(
-            "CONTRAST '{}' is parse-accepted but not implemented in PROC MIXED.",
-            lbl
-        ));
-    }
-    if !ast.lsmeans.is_empty() {
-        session
-            .log
-            .note("LSMEANS is parse-accepted but not implemented in PROC MIXED.");
-    }
 }
 
 /// Observations complètes du chemin legacy : `(y, indice de sujet par obs,

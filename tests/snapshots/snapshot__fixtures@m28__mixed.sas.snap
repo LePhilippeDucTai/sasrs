@@ -155,10 +155,10 @@ NOTE: PROCEDURE MIXED used (Total process time):
 
                                        Iteration History
 
-                   Iteration    Evaluations    -2 Res Log Like     Criterion
+                     Iteration    Evaluations    -2 Log Like     Criterion
 
-                           0              1            16.8967
-                           1              1            16.8967    0.00000000
+                             0              1        16.8967
+                             1              1        16.8967    0.00000000
 
                                    Convergence criteria met.
 

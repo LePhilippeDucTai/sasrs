@@ -71,6 +71,21 @@ directe, rien à lever).
 | J02-P1 | GENMOD `DIST=GAMMA` : réponse ≤ 0 | tronquée à 1e-300 dans la vraisemblance et la déviance | **ERROR** | — |
 | J02-P1 | LOGISTIC : `CODE`, `EFFECT`, `EXACT`, `EXACTOPTIONS`, `LSMESTIMATE`, `NLOPTIONS`, `ODDSRATIO`, `ROC`, `ROCCONTRAST`, `SCORE`, `SLICE`, `STORE`, `STRATA`, `TEST`, `UNITS` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » ; `EFFECTPLOT` (graphique seul) → **WARNING** d'affichage | J05-P3 (`ODDSRATIO`), sinon non planifiée |
 | J02-P1 | GENMOD : `ASSESS`, `BAYES`, `CODE`, `DEVIANCE`, `EFFECT`, `EXACT`, `EXACTOPTIONS`, `FWDLINK`, `INVLINK`, `LSMESTIMATE`, `REPEATED`, `SLICE`, `STORE`, `STRATA`, `VARIANCE`, `ZEROMODEL` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » ; `EFFECTPLOT` → **WARNING** d'affichage | J07-P5 (`REPEATED`), sinon non planifiée |
+| J02-P2 | MIXED : `TYPE=xx(n)` autre que `AR(1)` (ex. `UN(1)` à bande, `CS(2)`, `AR(2)`) | parenthèse avalée, structure complète ajustée | **ERROR** « TYPE=UN(1) (parameterized covariance structure) is not supported … » | non planifiée |
+| J02-P2 | MIXED : plusieurs instructions `RANDOM` | la dernière gagnait | **ERROR** | J06-P2 |
+| J02-P2 | MIXED : `RANDOM` + `REPEATED` | `RANDOM` abandonné, seule la structure R ajustée | **ERROR** | J06-P2 |
+| J02-P2 | MIXED : `SUBJECT=id(grp)` / `SUBJECT=a*b` (RANDOM, REPEATED) | premier identifiant seul (sujets fusionnés) | **ERROR** | J06-P2 |
+| J02-P2 | MIXED `RANDOM` / `REPEATED` : `GROUP=`, `LOCAL` et toute option autre que `SUBJECT=`/`SUB=`/`TYPE=` | sautées | **ERROR** ; `G`, `GC`, `GCI`, `GCORR`, `GI`, `V`, `VC`, `VCI`, `VCORR`, `VI`, `SOLUTION`, `CL`, `ALPHA=` (RANDOM) et `R`, `RC`, `RCI`, `RCORR`, `RI` (REPEATED) → **WARNING** d'affichage (code 1) | J06-P2 (`GROUP=`, `LOCAL`) |
+| J02-P2 | MIXED `REPEATED effet` : effet répété | sauté (R indexée par ordre d'apparition) | lu ; **ERROR** si ses niveaux ne sont pas strictement croissants dans un sujet, s'il manque des niveaux (TYPE=UN : niveaux 1..k ; AR(1) : niveaux consécutifs) ou s'il est manquant ; cas complet et trié inchangé ; effet composé → **ERROR** | J06-P2 |
+| J02-P2 | MIXED : options PROC `CONVG=`, `CONVH=`, `MAXITER=`, `ORDER=`, `EMPIRICAL`, `SCORING=`, `NOPROFILE`, autres options valides ou inconnues | sautées | **ERROR** (« The CONVG= option is not supported … » ; option inconnue : « Unexpected option »), `CL` → **WARNING** d'affichage | non planifiée |
+| J02-P2 | MIXED : `COVTEST`, `ASYCOV` | NOTE « parse-accepted but not implemented » puis ignorés | **ERROR** | J06-P3 |
+| J02-P2 | MIXED `MODEL` : `OUTP=`, `OUTPM=`, `NOFIT` et autres options que `SOLUTION`/`NOINT`/`DDFM=CONTAIN` | sautées (aucun dataset créé ; `NOFIT` NOTE sur legacy, ignoré sur le chemin général) | **ERROR** | non planifiée |
+| J02-P2 | MIXED (chemin général) : « Iteration History » | synthétique : 2 lignes, critère 0.00000000 inventé, compte Nelder-Mead présenté comme évaluations | retirée ; seul le statut de convergence réel reste imprimé | J06-P2 (historique réelle) |
+| J02-P2 | MIXED (chemin legacy) `METHOD=ML` : en-tête de l'Iteration History | « -2 Res Log Like » | « -2 Log Like » (doc SAS 9.4, MIXED, Iteration History) | — |
+| J02-P2 | MIXED : `NOINT` avec un effet CLASS | dernier niveau retiré malgré NOINT (colonne manquante) | **ERROR** | J06-P2 |
+| J02-P2 | MIXED : `NOBOUND` | NOTE « not implemented » fausse sur le chemin legacy (honoré par la forme close) ; ignoré en silence sur le chemin général et sur données déséquilibrées (λ ≥ 0) | legacy équilibré : honoré sans NOTE ; chemin général et legacy déséquilibré : **ERROR** | J06-P2 |
+| J02-P2 | MIXED : `CODE`, `LSMESTIMATE`, `PARMS`, `PRIOR`, `SLICE`, `STORE` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » | non planifiée |
+| J02-P2 | MIXED : NOTE « parse-accepted » LSMEANS/ESTIMATE/CONTRAST/DDFM/REPEATED/NOFIT | code mort (instructions déjà rejetées au parsing) et en-tête du module obsolète | retirés | — |
 
 GLIMMIX partage encore l'ancienne forme `common::parse_response_options`
 (`DESC` y est désormais honoré) ; la migration de son appel vers la forme

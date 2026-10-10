@@ -180,8 +180,10 @@ pub(super) struct GenFit {
     pub(super) beta: Vec<f64>,
     pub(super) cov_beta: Vec<Vec<f64>>,
     pub(super) neg2ll: f64,
+    /// −2 log(RE)L at the starting values (no Iteration History is printed
+    /// until roadmap-avancee J06-P2; read by the optimizer tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) neg2_start: f64,
-    pub(super) iters: usize,
     pub(super) converged: bool,
 }
 
@@ -222,12 +224,10 @@ pub(super) fn fit_gen(
     // refine locally.
     let mut u_best = u0.to_vec();
     let mut f_best = neg2_start;
-    let mut total_iters = 0usize;
     let mut converged = false;
     let mut step = 0.5_f64;
     for restart in 0..6 {
-        let (u_r, f_r, it, conv) = nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
-        total_iters += it;
+        let (u_r, f_r, _, conv) = nelder_mead(&eval, &u_best, step, 2000, 1e-12, 1e-10);
         if f_r <= f_best {
             f_best = f_r;
             u_best = u_r;
@@ -254,7 +254,6 @@ pub(super) fn fit_gen(
         cov_beta,
         neg2ll,
         neg2_start,
-        iters: total_iters,
         converged,
     })
 }

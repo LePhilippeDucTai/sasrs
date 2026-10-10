@@ -59,50 +59,6 @@ pub(super) fn determine_plan(ast: &MixedAst) -> Result<Plan> {
     Ok(plan)
 }
 
-/// Emit NOTEs for parse-accepted but deferred features.
-pub(super) fn note_deferred_features(ast: &MixedAst, model: &ModelSpec, session: &mut Session) {
-    if ast.covtest {
-        session
-            .log
-            .note("COVTEST is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if ast.asycov {
-        session
-            .log
-            .note("ASYCOV is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if ast.nobound {
-        session
-            .log
-            .note("NOBOUND is parse-accepted but not implemented in PROC MIXED.");
-    }
-    if let Some(d) = &model.ddfm
-        && d != "contain"
-    {
-        session.log.note(&format!(
-            "DDFM={} is parse-accepted but not implemented; using CONTAIN.",
-            d.to_uppercase()
-        ));
-    }
-    for lbl in &ast.estimate_labels {
-        session.log.note(&format!(
-            "ESTIMATE '{}' is parse-accepted but not implemented in PROC MIXED.",
-            lbl
-        ));
-    }
-    for lbl in &ast.contrast_labels {
-        session.log.note(&format!(
-            "CONTRAST '{}' is parse-accepted but not implemented in PROC MIXED.",
-            lbl
-        ));
-    }
-    if !ast.lsmeans.is_empty() {
-        session
-            .log
-            .note("LSMEANS is parse-accepted but not implemented in PROC MIXED.");
-    }
-}
-
 /// Complete observations after listwise deletion, with subject indexing.
 pub(super) struct GenObs {
     pub(super) y: Vec<f64>,
@@ -113,6 +69,8 @@ pub(super) struct GenObs {
     pub(super) within_idx: Vec<usize>,
     pub(super) max_obs: usize,
     pub(super) n_not_used: usize,
+    /// Row indices (in the input data set) of the observations used.
+    pub(super) keep: Vec<usize>,
 }
 
 /// Listwise deletion + subject-level indexing over the decoded columns.
@@ -197,7 +155,86 @@ pub(super) fn build_observations_gen(
         within_idx,
         max_obs,
         n_not_used,
+        keep,
     })
+}
+
+/// J02-P2 — check that the levels of the REPEATED effect agree with the order
+/// of appearance used to index R: within each subject they must be strictly
+/// increasing (global sorted order of the levels) and, for TYPE=UN (block
+/// position = level) or TYPE=AR(1) (lag = level distance), without gaps.
+/// The complete, sorted case is unaffected.
+pub(super) fn check_repeated_effect(
+    cov_type: CovType,
+    effect: &str,
+    values: &[Value],
+    subjects: &[Value],
+    subj_of: &[usize],
+    within_idx: &[usize],
+) -> Result<()> {
+    if values.iter().any(Value::is_missing) {
+        return Err(SasError::runtime(format!(
+            "Missing values of the REPEATED effect {} are not supported in PROC MIXED; \
+             they can affect results and cannot be ignored (planned: roadmap-avancee J06-P2).",
+            effect.to_uppercase()
+        )));
+    }
+    let mut levels: Vec<Value> = Vec::new();
+    for v in values {
+        if !levels
+            .iter()
+            .any(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+        {
+            levels.push(v.clone());
+        }
+    }
+    levels.sort_by(|a, b| a.sas_cmp(b));
+    let rank = |v: &Value| -> usize {
+        levels
+            .iter()
+            .position(|l| l.sas_cmp(v) == std::cmp::Ordering::Equal)
+            .unwrap()
+    };
+    let rank: Vec<usize> = values.iter().map(rank).collect();
+    let mut last: Vec<Option<usize>> = vec![None; subjects.len()];
+    for (i, &r) in rank.iter().enumerate() {
+        let s = subj_of[i];
+        if let Some(prev) = last[s]
+            && r <= prev
+        {
+            return Err(SasError::runtime(format!(
+                "The levels of the REPEATED effect {} are not strictly increasing within \
+                 subject {}; PROC MIXED indexes R by order of appearance, which would not \
+                 match the effect levels (planned: roadmap-avancee J06-P2).",
+                effect.to_uppercase(),
+                value_label(&subjects[s])
+            )));
+        }
+        last[s] = Some(r);
+    }
+    let mut first: Vec<Option<usize>> = vec![None; subjects.len()];
+    for (i, &r) in rank.iter().enumerate() {
+        let s = subj_of[i];
+        let base = match cov_type {
+            CovType::Un => 0,
+            _ => *first[s].get_or_insert(r),
+        };
+        if r - base != within_idx[i] {
+            return Err(SasError::runtime(format!(
+                "Subject {} lacks levels of the REPEATED effect {}; with TYPE={} PROC MIXED \
+                 indexes R by order of appearance, which would not match the effect levels \
+                 (planned: roadmap-avancee J06-P2).",
+                value_label(&subjects[s]),
+                effect.to_uppercase(),
+                if cov_type == CovType::Un {
+                    "UN"
+                } else {
+                    "AR(1)"
+                }
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<()> {
@@ -208,9 +245,6 @@ pub(super) fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<(
 
     // Determine the covariance model.
     let plan = determine_plan(ast)?;
-
-    // Common deferred-feature NOTEs.
-    note_deferred_features(ast, model, session);
 
     // ── Read dataset ────────────────────────────────────────────────────────
     let (ds, in_libref, in_table) = common::open_input(&ast.data, session)?;
@@ -249,9 +283,20 @@ pub(super) fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<(
         within_idx,
         max_obs,
         n_not_used,
+        keep,
     } = build_observations_gen(&resp_col, &subj_col, &fixed_cols, n_read)?;
     let n_used = y.len();
     let n_subjects = levels.len();
+
+    // J02-P2 — the repeated effect used to be skipped: R is indexed by order
+    // of appearance within a subject, so the given effect must agree with it.
+    if let Plan::Repeated(cov_type, _) = &plan
+        && let Some(effect) = ast.repeated.as_ref().and_then(|r| r.effect.as_ref())
+    {
+        let col = decode_column(&ds, find_col(effect)?)?;
+        let kept: Vec<Value> = keep.iter().map(|&i| col[i].clone()).collect();
+        check_repeated_effect(*cov_type, effect, &kept, &levels, &subj_of, &within_idx)?;
+    }
 
     // ── Fixed-effects design ────────────────────────────────────────────────
     let design = build_design(
@@ -293,7 +338,7 @@ pub(super) fn execute_general(ast: &MixedAst, session: &mut Session) -> Result<(
     let n_cov = n_cov_params(cov);
     print_dimensions_gen(session, cov, n_cov, p, n_subjects, max_obs);
     print_number_of_observations_gen(session, n_read, n_used, n_not_used);
-    print_iteration_history_gen(session, ast, &fit);
+    print_convergence_status_gen(session, &fit);
 
     // Covariance Parameter Estimates.
     let is_cs = matches!(&plan, Plan::RandomVc(_, CovType::Cs));

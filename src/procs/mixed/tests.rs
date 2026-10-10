@@ -67,7 +67,9 @@ fn contract_mixed_deferred_statistics_error() {
         "estimate 'a vs b' g 1 -1",
         "contrast 'c' g 1 -1",
     ] {
-        let source = format!("proc mixed covtest; class g; model y=g; {stmt}; run;");
+        // J02-P2 — COVTEST is itself an ERROR now; drop it so the statement
+        // under test is still the one rejected.
+        let source = format!("proc mixed; class g; model y=g; {stmt}; run;");
         let err = parse_mixed(&source).err().unwrap().to_string();
         assert!(err.contains("not supported in PROC MIXED"), "{err}");
     }

@@ -3,23 +3,27 @@
 //! Scope implemented:
 //! - CLASS statement (categorical variables; used to identify SUBJECT levels
 //!   and to build fixed-effects reference coding).
-//! - MODEL effects = / [NOINT] [SOLUTION] : general fixed-effects design
-//!   (intercept, continuous covariates, CLASS reference coding).
-//! - RANDOM INTERCEPT / SUBJECT=<var> TYPE=VC|CS and
-//!   REPEATED effect / SUBJECT=<var> TYPE=VC|CS|AR(1)|UN : covariance
-//!   structures over V = ZGZ' + R.
-//! - METHOD=REML (default) and METHOD=ML (unknown METHOD=/TYPE= values and
-//!   DDFM= other than CONTAIN are ERRORs, no silent fallback).
+//! - MODEL effects = / [NOINT] [SOLUTION] [DDFM=CONTAIN] : general
+//!   fixed-effects design (intercept, continuous covariates, CLASS reference
+//!   coding; NOINT with a CLASS effect is an ERROR until J06-P2).
+//! - one RANDOM INTERCEPT / SUBJECT=<var> TYPE=VC|CS, or one
+//!   REPEATED [effect] / SUBJECT=<var> TYPE=AR(1)|UN : covariance structures
+//!   over V = ZGZ' + R (R indexed by order of appearance within a subject; a
+//!   given repeated effect must agree with that order).
+//! - METHOD=REML (default) and METHOD=ML; NOBOUND on the closed-form path.
 //!
 //! Estimation: closed-form (legacy VC single random intercept) or a general
 //! (RE)ML optimisation (Nelder-Mead + restarts + coordinate polish) over the
 //! V(theta) = ZGZ' + R covariance; the estimates reproduce the balanced
 //! single-random-intercept oracle exactly.
 //!
-//! Parse-accepted but not implemented (NOTE emitted): ESTIMATE, CONTRAST,
-//! COVTEST, ASYCOV, NOBOUND, G/GCORR/R/RCORR options; a variance component
-//! truncated to 0 emits "NOTE: Estimated G matrix is not positive definite."
-//! and a non-converged search is a WARNING, not a silent success.
+//! Contract (CONTRIBUTING §5, docs/support-contract.md): every other option
+//! or statement that can change a result is an ERROR at parse time
+//! (COVTEST/ASYCOV, ESTIMATE/CONTRAST/LSMEANS, PROC/MODEL/RANDOM/REPEATED
+//! options…); display-only options (CL, G, GCORR, V, R, RCORR, RANDOM
+//! SOLUTION…) are WARNINGs. A variance component truncated to 0 emits
+//! "NOTE: Estimated G matrix is not positive definite." and a non-converged
+//! search is a WARNING, not a silent success.
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -81,6 +85,8 @@ pub struct RandomSpec {
 
 #[derive(Debug, Clone)]
 pub struct RepeatedSpec {
+    /// The repeated effect variable (`REPEATED time / …`), if given.
+    pub effect: Option<String>,
     pub subject: Option<String>,
     pub cov_type: CovType,
 }
@@ -92,34 +98,17 @@ pub struct ModelSpec {
     pub solution: bool,
     pub noint: bool,
     pub ddfm: Option<String>,
-    pub nofit: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct LsmeansSpec {
-    pub effect: String,
-    pub diff: bool,
-    pub pdiff: bool,
-    pub cl: bool,
-    pub alpha: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct MixedAst {
     pub data: Option<DatasetRef>,
     pub method: Method,
-    pub covtest: bool,
     pub nobound: bool,
-    pub asycov: bool,
     pub class_vars: Vec<String>,
     pub model: Option<ModelSpec>,
     pub random: Option<RandomSpec>,
     pub repeated: Option<RepeatedSpec>,
-    pub lsmeans: Vec<LsmeansSpec>,
-    /// Labels of ESTIMATE statements seen (for NOTE emission).
-    pub estimate_labels: Vec<String>,
-    /// Labels of CONTRAST statements seen (for NOTE emission).
-    pub contrast_labels: Vec<String>,
 }
 
 use crate::procs::common::fmt_p_num as fmt_p;
@@ -138,5 +127,7 @@ pub fn execute(ast: &MixedAst, session: &mut Session) -> Result<()> {
 
 // ───────────────────────── Tests ─────────────────────────
 
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod tests;
