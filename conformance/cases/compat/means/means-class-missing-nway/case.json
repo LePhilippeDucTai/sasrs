@@ -4,7 +4,7 @@
   "zone": "PROC MEANS",
   "provenance": {
     "kind": "sas-doc",
-    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0zn9ag9s3c8cnn1v6k9f5fixg7f.htm — SAS 9.4 Procedures — PROC MEANS (NWAY : « the output data set contain only statistics for the observations with the highest _TYPE_ value » ; CLASS / MISSING : les observations à CLASS manquante forment un niveau de classe ; sans MISSING elles sont exclues ; OUT= sans NWAY contient tous les _TYPE_)",
+    "source": "https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/n1qnc9bddfvhzqn105kqitnf29cp.htm — Base SAS 9.4 Procedures Guide, Seventh Edition, MEANS Procedure, PROC MEANS Statement (NWAY : « specifies that the output data set contain only statistics for the observations with the highest _TYPE_ and _WAY_ values. When you specify class variables, NWAY corresponds to the combination of all class variables ») ; https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p0gpxoqczfzcyln13ma53kpq38lo.htm — MEANS Procedure, CLASS Statement, option MISSING (« considers missing values as valid values to create the combinations of class variables » ; Default : « If you omit MISSING, then PROC MEANS excludes the observations with a missing class variable value from the analysis ») : dans WORK.excl, la ligne _TYPE_=0 porte _FREQ_=4 (observations sans CLASS manquante), n=3 (amount non manquant) et m = moyenne de 10, 20, 30 = 20 (arbitrage J01-P2 rév. 3, décisions 5d0a9ac1 et c96c6088 : valeur 25 de l'oracle corrigée en 20) ; ordre des colonnes de l'OUT= (arbitrage J01-P2) : https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/proc/p1qko51z4vnlhan11xvjg4e5f20f.htm — Base SAS 9.4 Procedures Guide, Seventh Edition, MEANS Procedure, Example 10 « Computing Output Statistics with Missing Class Variable Values » (proc means data=cake chartype nway noprint; class flavor /order=freq ascending; class layers /missing; var TasteScore; output out=cakestat max=HighScore;) : le PROC PRINT publié de CAKESTAT (images/means_ex10.png) affiche les colonnes « Obs Flavor Layers _TYPE_ _FREQ_ HighScore », soit CLASS → _TYPE_ → _FREQ_ → statistiques, conforme à base/means-class-output (CLASS en tête)",
     "sas_version": "9.4M5",
     "options": ["--deterministic"]
   },
@@ -12,8 +12,7 @@
   "tolerance": {"abs": 1e-9, "rel": 1e-9, "columns": {}},
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
-  "status": "known-divergence",
-  "issue": "roadmap-avancee J01-P2 — ordre des colonnes de l'OUT= de PROC MEANS : produit [CLASS…, _TYPE_, _FREQ_, stats], attendu [_TYPE_, _FREQ_, CLASS…, stats] ; contredit base/means-class-output (CLASS en tête) — arbitrage des oracles en J01-P2, correction en J01-P3",
+  "status": "validated",
   "data_types": {
     "sales.csv": {"region": "char", "amount": "num"}
   }

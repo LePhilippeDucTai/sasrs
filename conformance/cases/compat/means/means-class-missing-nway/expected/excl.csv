@@ -1,4 +1,4 @@
-_TYPE_,_FREQ_,region,m,n
-0,4,,25,3
-1,2,East,15,2
-1,2,West,30,1
+region,_TYPE_,_FREQ_,m,n
+,0,4,20,3
+East,1,2,15,2
+West,1,2,30,1
