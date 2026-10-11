@@ -56,12 +56,14 @@ step-halving = non-convergence. Rien de **validé** au corpus.
 
 État actuel : GLM ✅ (TYPE I/III, LSMEANS/SE, ESTIMATE/CONTRAST main effects,
 SOLUTION) ; ANOVA ✅ (TYPE I/III) ; plan de rang incomplet → ERROR explicite
-(J02-P6). Cas corpus : `glm-oneway-predicted` en **divergence connue**
-(`OUTPUT` non supporté).
+(J02-P6). Cas corpus : `glm-oneway-predicted` **validé** depuis la base du
+plan — `OUTPUT OUT=` `P=`/`R=` implémenté en J02-P2 (issue sasrs #17 ;
+doc SAS/STAT GLM, statement OUTPUT) : valeurs ajustées = moyennes de
+groupe, résidus.
 
 | Item | État actuel | Dépendances | Oracle indépendant prévu |
 |---|---|---|---|
-| `OUTPUT OUT=` (prédictions + résidus studentisés ; lève la divergence corpus) | ERROR | aucun | cas `stat/glm-oneway-predicted` (attendus déjà dans le corpus) |
+| `OUTPUT OUT=` `P=`/`R=` (prédictions = moyennes de groupe, résidus) | implémenté (J02-P2, issue sasrs #17) ; autres mots-clés (`STUDENT=`, `STDP=`…) → ERROR explicite | aucun | cas `stat/glm-oneway-predicted` (attendus déjà dans le corpus, cas validé) |
 | covariables continues dans le MODEL (TYPE III identique à SAS sur plan déséquilibré + covariable) | non couvert | aucun | doc SAS/STAT GLM Example A |
 | `LSMEANS / ADJUST=TUKEY` (lettres de regroupement, p ajustées) | ERROR | aucun | tables publiées Tukey |
 | Type II SS (égale TYPE III sans interaction ; diffère avec interaction sur plan déséquilibré — 3 nombres exacts) | non émis | aucun | doc SAS « The Four Types of Estimable Functions » |
