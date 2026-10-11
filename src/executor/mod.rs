@@ -131,7 +131,17 @@ fn run_program_inner(src: &SourceFile, session: &mut Session) -> bool {
                 continue;
             }
         };
-        while let Some((block, span)) = stream.next_block() {
+        // J02-P9 — la fenêtre YEARCUTOFF= est (re)synchronisée sur la session
+        // AVANT le parsing de chaque bloc : `next_block` parse lui-même le
+        // bloc, et un `OPTIONS YEARCUTOFF=` exécuté plus tôt dans le MÊME
+        // segment doit s'appliquer déjà à la constante date d'un bloc
+        // suivant (SAS exécute le statement global avant de compiler
+        // l'étape suivante).
+        loop {
+            stream.set_yearcutoff(session.options.yearcutoff);
+            let Some((block, span)) = stream.next_block() else {
+                break;
+            };
             let lines = seg_src.lines_of_span(span);
             let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
             session.log.echo_source(&line_texts);

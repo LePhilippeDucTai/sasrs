@@ -250,8 +250,11 @@ fn juldate_missing() {
 
 #[test]
 fn datejul_two_digit_year() {
-    // 07365 = day 365 of 1907 (00–99 → 1900–1999) → SAS date -18994.
-    assert_eq!(invoke("DATEJUL", &[num(7365.0)]), num(-18994.0));
+    // J02-P9 — YEARCUTOFF= défaut 1926 (doc SAS 9.4, « What's New in SAS
+    // 9.4 System Options » : changed from 1920 to 1926) : la fenêtre glissante
+    // mappe 07 → 2007 (base 1900 + 7 = 1907 < 1926 → +100). L'ancien code
+    // figait yearcutoff=1900 (07 → 1907, SAS date -18994).
+    assert_eq!(invoke("DATEJUL", &[num(7365.0)]), num(17531.0));
     // 107001 = day 1 of 2007 (100–199 → 2000–2099) → SAS date 17167.
     let r = invoke("DATEJUL", &[num(107001.0)]);
     assert_eq!(invoke("YEAR", std::slice::from_ref(&r)), num(2007.0));

@@ -1,6 +1,9 @@
-/* M22.2 — options globales ODS (NOCENTER/NODATE/NONUMBER) acceptées sans
-   warning. En v1 elles sont stockées sur la session ; le listing texte par
-   défaut reste inchangé (application au rendu différée). */
+/* M22.2/J02-P9 — options globales ODS (CENTER/NOCENTER, DATE/NODATE,
+   NUMBER/NONUMBER) acceptées et stockées sur la session. Le listing texte
+   reste toujours centré, sans date ni numéro de page : NOCENTER, DATE et
+   NUMBER émettent un WARNING « stored but not applied to the listing »
+   (application du rendu : roadmap-avancee J11-P5) ; NODATE/NONUMBER, qui
+   correspondent au listing, restent silencieux. */
 
 libname d 'data';
 

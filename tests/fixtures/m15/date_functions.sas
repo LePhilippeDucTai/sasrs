@@ -22,8 +22,8 @@ data work.test;
   jul_2 = juldate(sas_date_2);   /* Should be 365 */
 
   /* DATEJUL — inverse */
-  dj_20001 = datejul(20001);     /* year 2000, day 1 = 2000-01-01 */
-  dj_07365 = datejul(07365);     /* year 2007, day 365 */
+  dj_20001 = datejul(20001);     /* year 20, day 1 = 2020-01-01 (YEARCUTOFF=1926) */
+  dj_07365 = datejul(07365);     /* year 07, day 365 = 2007-12-31 (YEARCUTOFF=1926) */
 
   /* YRDIF/DATDIF — differences */
   date1 = 21710;                 /* 2020-01-01 */
