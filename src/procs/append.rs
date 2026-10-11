@@ -22,6 +22,16 @@
 //!   seulement la verbosité du log.
 //! - APPENDVER=Vn (ex. APPENDVER=V6) : hint de version SAS des métadonnées
 //!   d'en-tête. Aucun effet sémantique sur la sortie. Accepté et ignoré.
+//!
+//! ## Contrat J02-P14 — fenêtre OBS=/FIRSTOBS=
+//!
+//! DATA= est la table LUE observation par observation : sa lecture passe par
+//! `procs::common::open_resolved` et honore la fenêtre OBS=/FIRSTOBS= de la
+//! session (doc SAS 9.4, System Options : valables pour toute lecture d'un
+//! PROC). BASE= est ouverte en MISE À JOUR (append), pas lue en entrée :
+//! `procs::common::open_resolved_full` lit la table entière (descripteur +
+//! observations conservées) — l'y fenêtrer TRONQUERAIT BASE, ce que SAS ne
+//! fait jamais.
 
 use crate::ast::DatasetRef;
 use crate::dataset::{SasDataset, VarMeta};
@@ -140,18 +150,14 @@ fn truncate_to_length(s: &str, max_chars: usize) -> String {
 pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     let base_libref = ast.base.libref_or_work();
     let base_table = ast.base.name.to_uppercase();
-    let data_libref = ast.data.libref_or_work();
-    let data_table = ast.data.name.to_uppercase();
 
     let base_disp = ast.base.display();
     let data_disp = ast.data.display();
 
     // Read the DATA dataset.
-    let data_provider = session.libs.get(&data_libref)?;
-    let (data_ds, data_notes) = data_provider.read(&data_table)?;
-    for note in data_notes {
-        session.log.forward(&note);
-    }
+    // J02-P14 — DATA= est la table LUE : fenêtre OBS=/FIRSTOBS= via
+    // `open_resolved` (doc SAS 9.4, System Options, OBS=/FIRSTOBS=).
+    let data_ds = common::open_resolved(&ast.data, session)?;
     let n_data = data_ds.n_obs();
 
     // Check whether BASE exists.
@@ -178,10 +184,11 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     }
 
     // BASE exists: read it.
-    let (base_ds, base_notes) = base_provider.read(&base_table)?;
-    for note in base_notes {
-        session.log.forward(&note);
-    }
+    // J02-P14 — BASE= est ouverte en MISE À JOUR (append), pas lue en
+    // entrée : lecture ENTIÈRE via `open_resolved_full` (lecture de
+    // métadonnées + conservation des observations ; l'y fenêtrer tronquerait
+    // BASE — SAS n'applique pas OBS= à la table BASE d'un APPEND).
+    let base_ds = common::open_resolved_full(&ast.base, session)?;
     let n_base = base_ds.n_obs();
 
     // Build lookup: uppercase name → (index, VarMeta) for BASE and DATA.
@@ -355,6 +362,157 @@ pub fn execute(ast: &AppendAst, session: &mut Session) -> Result<()> {
     ));
 
     Ok(())
+}
+
+/// ── J02-P14 : fenêtre OBS=/FIRSTOBS= sur la lecture DATA= ────────────────
+///
+/// Oracle : doc SAS 9.4, System Options, OBS= / FIRSTOBS= — les options
+/// système valent pour TOUTE lecture d'une table par un PROC :
+/// <https://documentation.sas.com/doc/en/pgmsascdc/9.4_3.5/lesysoptsref/p0c2av6mvf2zsrn1b48go7vk6bro.htm>
+///
+/// Base (ancien silence) : PROC APPEND lisait DATA= par `provider.read`
+/// direct — la table ENTIÈRE était lue, la fenêtre en vigueur ignorée
+/// (8 observations ajoutées sous `obs=2`, 5 sous `firstobs=4`). La fenêtre
+/// ne touche pas BASE= (ouverte en mise à jour) : sous `obs=2`, BASE garde
+/// ses 3 observations d'origine puis reçoit les 2 PREMIÈRES de DATA.
+#[cfg(test)]
+mod contract_j02_p14 {
+    use crate::RunOptions;
+    use crate::dataset::SasDataset;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    /// Exécute `program` dans un WORK isolé, puis relit toutes les tables
+    /// WORK écrites (parquet) : (issue, tables par nom minuscule).
+    fn run_and_read(program: &str) -> (crate::RunOutcome, BTreeMap<String, SasDataset>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let out = crate::run(
+            program,
+            RunOptions {
+                work_dir: Some(work.clone()),
+                base_dir: Some(tmp.path().to_path_buf()),
+                deterministic: true,
+                vectorize: false,
+            },
+        );
+        let tables = read_tables(&work);
+        (out, tables)
+    }
+
+    fn read_tables(dir: &Path) -> BTreeMap<String, SasDataset> {
+        let mut tables = BTreeMap::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.extension().is_some_and(|e| e == "parquet") {
+                let stem = p.file_stem().unwrap().to_str().unwrap().to_string();
+                if let Ok((ds, _)) = SasDataset::read_parquet(&p) {
+                    tables.insert(stem.to_lowercase(), ds);
+                }
+            }
+        }
+        tables
+    }
+
+    /// Valeurs de la première colonne numérique de `ds`.
+    fn first_num_col(ds: &SasDataset) -> Vec<Option<f64>> {
+        ds.df
+            .get_columns()
+            .first()
+            .unwrap()
+            .as_materialized_series()
+            .f64()
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
+
+    /// `options obs=2;` avant l'APPEND : seules les 2 premières observations
+    /// de DATA= sont lues et ajoutées ; BASE= garde ses observations
+    /// d'origine (fenêtrer BASE tronquerait la table).
+    #[test]
+    fn ra_j02_p14_append_obs_window_data_input() {
+        let (out, tables) = run_and_read(
+            "data work.a; do i = 1 to 3; output; end; run;\n\
+             data work.b; do i = 1 to 5; output; end; run;\n\
+             options obs=2;\n\
+             proc append base=work.a data=work.b; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        assert!(!out.log.contains("ERROR:"), "log:\n{}", out.log);
+        // NOTEs SAS : 2 observations LUES (fenêtre), 2 ajoutées, 5 au total.
+        assert!(
+            out.log
+                .contains("There were 2 observations read from the data set WORK.B."),
+            "log:\n{}",
+            out.log
+        );
+        assert!(
+            out.log.contains("2 observations added."),
+            "log:\n{}",
+            out.log
+        );
+        assert!(
+            out.log
+                .contains("The data set WORK.A has 5 observations and 1 variables."),
+            "log:\n{}",
+            out.log
+        );
+        // Ancien silence : DATA= lue entière → 3 + 5 = 8 observations.
+        let a = tables.get("a").expect("WORK.A must exist");
+        assert_eq!(a.n_obs(), 5, "BASE must keep 3 obs + 2 windowed appends");
+        // BASE jamais tronquée (1,2,3), puis les 2 PREMIÈRES de DATA (1,2).
+        assert_eq!(
+            first_num_col(a),
+            vec![Some(1.0), Some(2.0), Some(3.0), Some(1.0), Some(2.0)],
+            "BASE rows must be preserved, DATA windowed"
+        );
+    }
+
+    /// `options firstobs=4;` : DATA= n'est lue qu'à partir de la 4e
+    /// observation (fenêtre [4, ∞[). Ancien silence : 5 ajoutées.
+    #[test]
+    fn ra_j02_p14_append_firstobs_window_data_input() {
+        let (out, tables) = run_and_read(
+            "data work.a; do i = 1 to 3; output; end; run;\n\
+             data work.b; do i = 1 to 5; output; end; run;\n\
+             options firstobs=4;\n\
+             proc append base=work.a data=work.b; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        let a = tables.get("a").expect("WORK.A must exist");
+        // 3 obs de BASE + les observations 4 et 5 de DATA.
+        assert_eq!(
+            first_num_col(a),
+            vec![Some(1.0), Some(2.0), Some(3.0), Some(4.0), Some(5.0)],
+            "firstobs=4 window on DATA="
+        );
+    }
+
+    /// BASE= inexistante : DATA= est copiée vers BASE — copie FENÊTRÉE
+    /// (la copie est la lecture de DATA=). Ancien silence : 5 copiées.
+    #[test]
+    fn ra_j02_p14_append_obs_window_new_base_copy() {
+        let (out, tables) = run_and_read(
+            "data work.b; do i = 1 to 5; output; end; run;\n\
+             options obs=2;\n\
+             proc append base=work.new data=work.b; run;\n",
+        );
+        assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
+        let new = tables.get("new").expect("WORK.NEW must be created");
+        assert_eq!(
+            first_num_col(new),
+            vec![Some(1.0), Some(2.0)],
+            "BASE created from windowed DATA read"
+        );
+        assert!(
+            out.log
+                .contains("The data set WORK.NEW has 2 observations and 1 variables."),
+            "log:\n{}",
+            out.log
+        );
+    }
 }
 
 #[cfg(test)]

@@ -72,15 +72,14 @@ pub(super) struct ComparisonOutcome {
 }
 
 /// Read one input dataset (BASE= or COMPARE=), forwarding provider notes.
+///
+/// J02-P14 — BASE= et COMPARE= sont des tables LUES (comparaison
+/// observation par observation) : la lecture passe par le helper commun
+/// `open_resolved`, qui applique la fenêtre OBS=/FIRSTOBS= de la session
+/// (doc SAS 9.4, System Options : valables pour toute lecture d'un PROC) ;
+/// le listing rapporte donc les comptes d'observations FENÊTRÉS.
 pub(super) fn read_input(session: &mut Session, dsref: &DatasetRef) -> Result<SasDataset> {
-    let libref = dsref.libref_or_work();
-    let name = dsref.name.to_uppercase();
-    let provider = session.libs.get(&libref)?;
-    let (ds, notes) = provider.read(&name)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
-    Ok(ds)
+    crate::procs::common::open_resolved(dsref, session)
 }
 
 /// Variable analysis: names only in BASE, only in COMPARE, and the sorted
