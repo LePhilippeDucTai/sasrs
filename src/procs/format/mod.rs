@@ -83,10 +83,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
     let mut cntlout: Option<DatasetRef> = None;
     let mut cntlin: Option<DatasetRef> = None;
     let mut fmtlib = false;
+    // J02-P8 — MAXLABLEN=/MAXSELEN= seen in the header (option name, span).
+    let mut max_len_option: Option<(&'static str, crate::token::Span)> = None;
     // Consume the trailing `;` of the `proc format` statement header,
     // recognising `LIBRARY=`/`LIB=`/`CNTLOUT=`/`CNTLIN=`/`FMTLIB` along the
-    // way; any other header option is skipped token-by-token (none else
-    // supported yet).
+    // way. J02-P8 — the other options used to be skipped token by token: the
+    // other SAS 9.4 options are diagnosed (`header_option_contract`), an
+    // unknown option is an ERROR « Unexpected option ».
     loop {
         if ts.peek().kind == TokenKind::Semi {
             ts.next();
@@ -148,17 +151,48 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         } else if ts.peek().is_kw("fmtlib") {
             ts.next(); // consume "fmtlib" — bare option, no value.
             fmtlib = true;
-        } else {
-            // Skip any other unrecognised proc-header option token.
-            ts.next();
+        } else if !header_option_contract(ts, &mut max_len_option)? {
+            return Err(crate::procs::common::unknown_option_error(ts, "FORMAT"));
         }
+    }
+    // MAXLABLEN=/MAXSELEN= set how many characters of the labels / of the
+    // start and end values appear « in the CNTLOUT= data set or in the
+    // output of the FMTLIB option » : a data set with CNTLOUT= (ERROR),
+    // display only otherwise (WARNING).
+    if let Some((opt, span)) = max_len_option {
+        if cntlout.is_some() {
+            return Err(SasError::parse(
+                format!(
+                    "The {opt} option is not supported in PROC FORMAT with CNTLOUT=; it can \
+                     affect results and cannot be ignored."
+                ),
+                span,
+            ));
+        }
+        ts.warn_ignored_display(format!(
+            "The {opt} option is ignored in PROC FORMAT; display customization is not \
+             supported."
+        ));
     }
 
     let mut values: Vec<(String, UserFormat)> = Vec::new();
     let mut invalues: Vec<(String, UserInformat)> = Vec::new();
     let mut pictures: Vec<(String, UserPicture)> = Vec::new();
 
-    crate::procs::common::parse_proc_body(ts, "FORMAT", |ts, _kw| {
+    crate::procs::common::parse_proc_body(ts, "FORMAT", |ts, kw| {
+        // J02-P8 — SELECT and EXCLUDE (SAS 9.4 PROC FORMAT statements) choose
+        // the entries written by CNTLOUT= and listed by FMTLIB; they used to
+        // be reported « 180-322 … not valid ».
+        if kw == "select" || kw == "exclude" {
+            return Err(SasError::parse(
+                format!(
+                    "The {} statement is not supported in PROC FORMAT; it can affect results \
+                     and cannot be ignored.",
+                    kw.to_ascii_uppercase()
+                ),
+                ts.peek().span,
+            ));
+        }
         if ts.peek().is_kw("value") {
             ts.next(); // consume "value"
             let (name, uf) = parse_value_stmt(ts)?;
@@ -186,6 +220,60 @@ pub fn parse(ts: &mut StatementStream) -> Result<FormatAst> {
         cntlin,
         fmtlib,
     })
+}
+
+/// J02-P8 — the SAS 9.4 PROC FORMAT options that sasrs does not implement
+/// (Base SAS 9.4 Procedures Guide, PROC FORMAT statement) ; they used to be
+/// skipped token by token. Returns `Ok(false)` without consuming anything
+/// for an option that is not one of them. NOREPLACE (« prevents a new
+/// informat or format from replacing an existing one ») and LOCALE (catalog
+/// named after the locale) change which definitions are stored → ERROR ;
+/// PAGE (FMTLIB layout) is display only → WARNING ; MAXLABLEN=/MAXSELEN= are
+/// recorded in `max_len` and diagnosed once the header is read (their
+/// diagnostic depends on CNTLOUT=).
+fn header_option_contract(
+    ts: &mut StatementStream,
+    max_len: &mut Option<(&'static str, crate::token::Span)>,
+) -> Result<bool> {
+    let span = ts.peek().span;
+    let kw = ts.peek().ident().unwrap_or("").to_ascii_lowercase();
+    match kw.as_str() {
+        "noreplace" | "locale" => Err(SasError::parse(
+            format!(
+                "The {} option is not supported in PROC FORMAT; it can affect results and \
+                 cannot be ignored.",
+                kw.to_ascii_uppercase()
+            ),
+            span,
+        )),
+        "page" => {
+            ts.next();
+            ts.warn_ignored_display(
+                "The PAGE option is ignored in PROC FORMAT; display customization is not \
+                 supported."
+                    .to_string(),
+            );
+            Ok(true)
+        }
+        "maxlablen" | "maxselen" => {
+            let opt = if kw == "maxlablen" {
+                "MAXLABLEN="
+            } else {
+                "MAXSELEN="
+            };
+            crate::procs::common::consume_option_eq(ts, &opt[..opt.len() - 1])?;
+            if !matches!(ts.peek().kind, TokenKind::Num(_)) {
+                return Err(SasError::parse(
+                    format!("expected a number of characters after {opt} in PROC FORMAT"),
+                    ts.peek().span,
+                ));
+            }
+            ts.next();
+            *max_len = Some((opt, span));
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 pub fn execute(ast: &FormatAst, session: &mut Session) -> Result<()> {

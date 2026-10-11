@@ -166,6 +166,20 @@ directe, rien à lever).
 | J02-P7 | REPORT : options PROC `HEADLINE`, `HEADSKIP` ; `NOWINDOWS` | acceptées sans effet ni diagnostic ; `NOWINDOWS` (orthographe SAS) → ERROR « Unexpected option » | **WARNING** « The HEADLINE option is ignored in PROC REPORT; display customization is not supported (planned: roadmap-avancee J11-P3). » ; `NOWINDOWS` accepté comme `NOWD` | J11-P3 |
 | J02-P7 | REPORT : format stocké d'une variable | ignoré (affichage et regroupement sur la valeur brute) | appliqué par défaut, `FORMAT=` du DEFINE prioritaire (doc SAS 9.4, DEFINE statement, FORMAT= : « PROC REPORT honors the first of these formats that it finds ») ; lignes GROUP/ORDER formées sur la valeur formatée, rangées par leur plus petite valeur non formatée | — |
 | J02-P7 | REPORT : instructions SAS valides | BY, FREQ, WEIGHT : déjà le message « not supported » du catalogue ; BREAK, COLUMN, COMPUTE, DEFINE, RBREAK implémentées | inchangé, figé par un test (180-322 réservé à une instruction inventée) | — |
+| J02-P8 | DATASETS : `FORMAT` dans un groupe `MODIFY` | terminait le groupe : WARNING d'affichage « The FORMAT statement is ignored in PROC DATASETS », puis `RENAME`/`INFORMAT` suivants en « 180-322 … not valid » (étape rejetée) et `LABEL` suivant abandonné avec le même WARNING | honoré : format stocké dans les métadonnées (sidecar), variables listées sans format → format retiré (doc SAS 9.4 DATASETS FORMAT statement : « If you do not specify a format, the FORMAT statement removes any format associated with the variables ») ; le groupe MODIFY continue (commentaires et instructions globales compris) ; variable absente → WARNING (comme RENAME et LABEL) ; format invalide, listes `_ALL_`, `_NUMERIC_`, `_CHARACTER_`, `x1-x3`, `x:` → **ERROR** ; `FORMAT`, `LABEL`, `RENAME`, `INFORMAT` hors d'un groupe MODIFY → **ERROR** « 180-322 … used out of proper order » (SAS : « Must appear in a MODIFY RUN group ») ; options du statement MODIFY (`modify m (…)`, `modify m / …`, « Statement '?' is not valid » auparavant) → **ERROR** | — |
+| J02-P8 | DATASETS : ordre d'exécution des instructions | tous les DELETE, puis tous les CHANGE, puis les autres instructions (`change a=c; delete c;` supprimait C avant de le créer) ; sous-instructions de MODIFY dans un ordre fixe ; répertoire (sans NOLIST) imprimé après les modifications | ordre du source (doc SAS 9.4 DATASETS, « Execution of Statements » : « Statements execute in the order in which they are written »), sous-instructions de MODIFY comprises ; le répertoire est celui de l'ouverture de la procédure, imprimé avant les autres instructions (« RUN-Group Processing » : « The PROC DATASETS statement always executes immediately ») | — |
+| J02-P8 | DATASETS : `AGE`, `APPEND`, `AUDIT`, `CONTENTS`, `EXCLUDE`, `REBUILD`, `REPAIR` ; `ATTRIB`, `IC`, `INDEX`, `XATTR` (sous-instructions de MODIFY) | « 180-322 … not valid » (`ATTRIB` : WARNING d'affichage, attribut perdu) | **ERROR** « The APPEND statement is not supported in PROC DATASETS; it can affect results and cannot be ignored (planned: roadmap-avancee J03-P4). », étape rejetée avant exécution | J03-P4 (`APPEND`, `CONTENTS`), J11-P6 (`REPAIR`), sinon non planifiée |
+| J02-P8 | CATALOG : alias `CAT=` et `C=` de `CATALOG=` ; `CATALOG=` absent | sautés : « NOTE: Processing catalog: (none). », listing CONTENTS « Catalog: » sans nom | honorés (doc SAS 9.4 PROC CATALOG statement : « Alias: CAT=, C= ») ; `CATALOG=` absent (argument requis) → **ERROR** | — |
+| J02-P8 | CATALOG : `ENTRYTYPE=`/`ET=`, `KILL`, option inconnue du statement PROC CATALOG | sautés jeton par jeton (CONTENTS listait toutes les entrées ; `KILL` sans effet ni diagnostic) | **ERROR** « The ENTRYTYPE= option is not supported in PROC CATALOG; … (planned: roadmap-avancee J11-P6). », « The KILL option … (planned: roadmap-avancee J03-P5). », inconnue → « Unexpected option » ; `FORCE` accepté (aucun autre environnement ne tient un catalogue ouvert dans une session sasrs) | J11-P6 (`ENTRYTYPE=`), J03-P5 (`KILL`) |
+| J02-P8 | CATALOG : `CHANGE`, `EXCHANGE`, `EXCLUDE`, `MODIFY`, `SAVE`, `SELECT` ; options `OUT=` et `FILE=` de CONTENTS | « 180-322 … not valid » (`contents out=x;` : « Statement 'OUT' is not valid ») | **ERROR** « not supported … cannot be ignored » ; `DELETE` et `COPY` (déjà rejetés) nomment désormais J03-P5 ; autre option de CONTENTS → **ERROR** « Unexpected option » | J03-P5 (`DELETE`, `COPY`), J11-P6 (`CONTENTS OUT=`), sinon non planifiée |
+| J02-P8 | FORMAT : options du statement PROC FORMAT autres que `CNTLIN=`, `CNTLOUT=`, `FMTLIB`, `LIBRARY=` | sautées jeton par jeton (`proc format foo=bar;` exécuté) | option inconnue → **ERROR** « Unexpected option 'FOO' on PROC FORMAT statement. » ; `NOREPLACE`, `LOCALE` → **ERROR** « not supported » ; `MAXLABLEN=`/`MAXSELEN=` (caractères écrits « in the CNTLOUT= data set or in the output of the FMTLIB option ») → **ERROR** avec `CNTLOUT=`, **WARNING** d'affichage sinon ; `PAGE` → **WARNING** d'affichage | non planifiée |
+| J02-P8 | FORMAT : `SELECT`, `EXCLUDE` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » | non planifiée |
+| J02-P8 | S3 (feature `s3`) : moteur nommé devant un chemin `s3://` (`libname c csv 's3://…';`) | ignoré : bibliothèque S3 lue en parquet (XLSX contournait même son ERROR de moteur non implémenté) | **ERROR** « The CSV engine is not supported for the S3 path … Libref C was not assigned. » ; `PARQUET` et `BASE`/`V9` (moteur par défaut, comme pour un répertoire local) honorés | non planifiée |
+| J02-P8 | S3 : sidecar de métadonnées `<table>.parquet.sasmeta.json` | jamais lu : formats, informats et libellés stockés perdus sans un mot | **WARNING** à chaque lecture nommant le sidecar et la table (« … is not read from an S3 library in this build: its stored formats, informats and labels are not applied (planned: roadmap-avancee J12-P1). ») | J12-P1 |
+| J02-P8 | DICTIONARY.TABLES / DICTIONARY.COLUMNS : bibliothèque non listable (libref S3) ; table illisible | sautées en silence | **WARNING** nommant la libref (« The members of library C are not included in DICTIONARY.TABLES: … ») ou la table et la cause | J12-P1 (libref S3), sinon — |
+| J02-P8 | GLM : options après `/` d'ESTIMATE et de CONTRAST | sautées jusqu'au `;` (`/ divisor=2` : estimation non divisée, code 0) | `DIVISOR=`, `SINGULAR=` (ESTIMATE), `E=`, `ETYPE=`, `SINGULAR=` (CONTRAST) → **ERROR** « The DIVISOR= option of the ESTIMATE statement is not supported in PROC GLM; … » ; `E` (affichage du vecteur L) → **WARNING** d'affichage ; autre → **ERROR** | non planifiée (GLM hors du périmètre fonctionnel du plan) |
+| J02-P8 | GLM : ESTIMATE/CONTRAST sur le chemin multiway (plusieurs effets ou plusieurs variables CLASS) ; sur le chemin une voie, effet autre que celui du MODEL (INTERCEPT compris) ou absent | ignorés sans sortie ni NOTE (multiway : NOTE « skipped » seulement pour un effet hors CLASS) | **ERROR** avant exécution (« An ESTIMATE statement in a model with several effects or CLASS variables is not supported in PROC GLM; … ») ; l'effet du MODEL une voie reste calculé | non planifiée (GLM hors du périmètre fonctionnel du plan) |
+| J02-P8 | GLM : `ABSORB`, `CODE`, `MANOVA`, `RANDOM`, `REPEATED`, `STORE`, `TEST` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » (BY, FREQ, ID, WEIGHT : déjà le message partagé) | non planifiée |
 
 GLIMMIX partage encore l'ancienne forme `common::parse_response_options`
 (`DESC` y est honoré ; `EVENT=FIRST|LAST`, `ORDER=` et `REF=` y restent
@@ -227,6 +241,30 @@ la somme d'aucune valeur non manquante vaut 0 (cellule ACROSS vide, groupe
 entièrement manquant ; SAS : manquant), et le nom nu d'une variable d'analyse
 se résout dans un COMPUTE (SAS : nom composé `var.stat`, rejeté ici, le nom nu
 étant une variable non initialisée).
+
+DATASETS, CATALOG, FORMAT, S3 et GLM (J02-P8) gardent des écarts hors de la
+liste de l'unité ou de ses fichiers (constats transmis au plan) : un `run;`
+intérieur termine l'étape PROC DATASETS ou PROC CATALOG, le découpage du
+programme en segments (`src/macros/segmenter.rs`) coupant à chaque `run;` de
+niveau supérieur (les instructions suivantes deviennent des ERROR « used out
+of proper order ») ; ce découpage ne reconnaît pas les commentaires `/* … */`
+(une apostrophe ou un « run … ; » dans un commentaire coupe le programme) ;
+dans PROC DATASETS, les jetons autres que des noms dans DELETE, SAVE, CHANGE,
+EXCHANGE et SELECT (`/ MEMTYPE=`, `( … )`) sont encore sautés jusqu'au `;`
+(`delete m / memtype=catalog;` supprime la table M), et INFORMAT de MODIFY lit
+une variable par informat (`informat a b date9.;` associe l'informat « b » à A
+puis échoue : « The informat . is not valid. ») ; PROC GLM saute encore ses options
+d'en-tête autres que `DATA=` (`ORDER=`, `OUTSTAT=`, `ALPHA=`, `NOPRINT`,
+`PLOTS=`…), les options de MODEL autres que `SOLUTION` (`NOINT` compris : le
+modèle reste ajusté avec une constante ; `NOPRINT` lu mais non appliqué) et
+celles de LSMEANS (`PDIFF`, `ADJUST=`, `OUT=`, `E=`…), et garde la dernière de
+plusieurs instructions LSMEANS ou MEANS ; un ESTIMATE une voie dont les
+coefficients ne somment pas à zéro est imprimé comme Σ cᵢ ȳᵢ, alors que la
+règle d'estimabilité de SAS/STAT (vecteur L sans INTERCEPT) le déclarerait
+non estimable — à confirmer contre une sortie SAS ;
+CONTENTS de PROC CATALOG ne liste que les formats VALUE, quel que soit le
+catalogue désigné (J03-P5) ; PROC CONTENTS affiche l'informat sans sa largeur
+(« COMMA » pour `comma12.`).
 
 ## Approximations documentées
 

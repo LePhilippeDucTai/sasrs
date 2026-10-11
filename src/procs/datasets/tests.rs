@@ -52,8 +52,13 @@ fn parse_full_example() {
     let ast = parse_datasets_src(src).unwrap();
     assert_eq!(ast.lib, "WORK");
     assert!(ast.nolist);
-    assert_eq!(ast.deletes, vec!["A".to_string(), "B".to_string()]);
-    assert_eq!(ast.changes, vec![("C".to_string(), "D".to_string())]);
+    assert_eq!(
+        ast.ops,
+        vec![
+            DsOp::Delete(vec!["A".to_string(), "B".to_string()]),
+            DsOp::Change(vec![("C".to_string(), "D".to_string())]),
+        ]
+    );
 }
 
 #[test]
@@ -62,8 +67,7 @@ fn parse_defaults_to_work() {
     let ast = parse_datasets_src(src).unwrap();
     assert_eq!(ast.lib, "WORK");
     assert!(ast.nolist);
-    assert!(ast.deletes.is_empty());
-    assert!(ast.changes.is_empty());
+    assert!(ast.ops.is_empty());
 }
 
 #[test]
@@ -86,11 +90,11 @@ fn parse_multiple_changes() {
     let src = "proc datasets lib=work nolist; change a=b c=d; quit;";
     let ast = parse_datasets_src(src).unwrap();
     assert_eq!(
-        ast.changes,
-        vec![
+        ast.ops,
+        vec![DsOp::Change(vec![
             ("A".to_string(), "B".to_string()),
             ("C".to_string(), "D".to_string()),
-        ]
+        ])]
     );
 }
 
@@ -99,8 +103,13 @@ fn parse_run_is_noop_separator() {
     // run; between statements should not stop accumulation
     let src = "proc datasets lib=work nolist; delete a; run; change b=c; quit;";
     let ast = parse_datasets_src(src).unwrap();
-    assert_eq!(ast.deletes, vec!["A".to_string()]);
-    assert_eq!(ast.changes, vec![("B".to_string(), "C".to_string())]);
+    assert_eq!(
+        ast.ops,
+        vec![
+            DsOp::Delete(vec!["A".to_string()]),
+            DsOp::Change(vec![("B".to_string(), "C".to_string())]),
+        ]
+    );
 }
 
 // ── Execute tests ─────────────────────────────────────────────────────────
@@ -115,9 +124,7 @@ fn execute_delete_removes_table() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: true,
-        deletes: vec!["ALPHA".to_string()],
-        changes: vec![],
-        ops: vec![],
+        ops: vec![DsOp::Delete(vec!["ALPHA".to_string()])],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -134,9 +141,7 @@ fn execute_delete_missing_is_warning_not_error() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: true,
-        deletes: vec!["NONEXISTENT".to_string()],
-        changes: vec![],
-        ops: vec![],
+        ops: vec![DsOp::Delete(vec!["NONEXISTENT".to_string()])],
     };
     // Must not return Err
     execute(&ast, &mut session).unwrap();
@@ -159,9 +164,10 @@ fn execute_change_renames_table() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: true,
-        deletes: vec![],
-        changes: vec![("OLDNAME".to_string(), "NEWNAME".to_string())],
-        ops: vec![],
+        ops: vec![DsOp::Change(vec![(
+            "OLDNAME".to_string(),
+            "NEWNAME".to_string(),
+        )])],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -186,8 +192,6 @@ fn execute_nolist_suppresses_listing() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: true,
-        deletes: vec![],
-        changes: vec![],
         ops: vec![],
     };
     execute(&ast, &mut session).unwrap();
@@ -208,8 +212,6 @@ fn execute_without_nolist_emits_directory() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: false,
-        deletes: vec![],
-        changes: vec![],
         ops: vec![],
     };
     execute(&ast, &mut session).unwrap();
@@ -229,9 +231,10 @@ fn execute_rename_moves_sidecar() {
     let ast = DatasetsAst {
         lib: "WORK".to_string(),
         nolist: true,
-        deletes: vec![],
-        changes: vec![("WITHFORMAT".to_string(), "RENAMED".to_string())],
-        ops: vec![],
+        ops: vec![DsOp::Change(vec![(
+            "WITHFORMAT".to_string(),
+            "RENAMED".to_string(),
+        )])],
     };
     execute(&ast, &mut session).unwrap();
 
@@ -263,8 +266,6 @@ fn base_ast(lib: &str) -> DatasetsAst {
     DatasetsAst {
         lib: lib.to_string(),
         nolist: true,
-        deletes: vec![],
-        changes: vec![],
         ops: vec![],
     }
 }
@@ -296,10 +297,43 @@ fn parse_exchange_save_modify() {
             DsOp::Save(vec!["KEEP1".into(), "KEEP2".into()]),
             DsOp::Modify {
                 member: "M".into(),
-                renames: vec![("old".into(), "new".into())],
-                labels: vec![("v".into(), "hi".into())],
-                informats: vec![],
+                stmts: vec![
+                    ModifyStmt::Rename(vec![("old".into(), "new".into())]),
+                    ModifyStmt::Label(vec![("v".into(), "hi".into())]),
+                ],
             },
+        ]
+    );
+}
+
+/// J02-P8 — DELETE/CHANGE keep their source position among the other
+/// statements, and the MODIFY sub-statements (FORMAT included) stay in the
+/// group, in source order.
+#[test]
+fn parse_statements_and_modify_group_in_source_order() {
+    let src = "proc datasets lib=work nolist; \
+               change a=b; delete b; \
+               modify m; format x y 8.2 z; label x='X'; rename y=yy; informat x date9.; \
+               delete c; quit;";
+    let ast = parse_datasets_src(src).unwrap();
+    assert_eq!(
+        ast.ops,
+        vec![
+            DsOp::Change(vec![("A".into(), "B".into())]),
+            DsOp::Delete(vec!["B".into()]),
+            DsOp::Modify {
+                member: "M".into(),
+                stmts: vec![
+                    ModifyStmt::Format(vec![
+                        (vec!["x".into(), "y".into()], Some("8.2".into())),
+                        (vec!["z".into()], None),
+                    ]),
+                    ModifyStmt::Label(vec![("x".into(), "X".into())]),
+                    ModifyStmt::Rename(vec![("y".into(), "yy".into())]),
+                    ModifyStmt::Informat(vec![("x".into(), "date9.".into())]),
+                ],
+            },
+            DsOp::Delete(vec!["C".into()]),
         ]
     );
 }
@@ -393,9 +427,10 @@ fn execute_modify_renames_variable_and_sets_label() {
     let ast = DatasetsAst {
         ops: vec![DsOp::Modify {
             member: "MTAB".into(),
-            renames: vec![("age".into(), "years".into())],
-            labels: vec![("years".into(), "Years old".into())],
-            informats: vec![],
+            stmts: vec![
+                ModifyStmt::Rename(vec![("age".into(), "years".into())]),
+                ModifyStmt::Label(vec![("years".into(), "Years old".into())]),
+            ],
         }],
         ..base_ast("WORK")
     };
@@ -572,9 +607,7 @@ fn informat_meta_modify_parses_informat_substatement() {
         ast.ops,
         vec![DsOp::Modify {
             member: "M".into(),
-            renames: vec![],
-            labels: vec![],
-            informats: vec![("v".into(), "date9.".into())],
+            stmts: vec![ModifyStmt::Informat(vec![("v".into(), "date9.".into())])],
         }]
     );
 }
@@ -589,9 +622,10 @@ fn informat_meta_modify_persists_informat() {
     let ast = DatasetsAst {
         ops: vec![DsOp::Modify {
             member: "MTAB".into(),
-            renames: vec![],
-            labels: vec![],
-            informats: vec![("age".into(), "comma12.2".into())],
+            stmts: vec![ModifyStmt::Informat(vec![(
+                "age".into(),
+                "comma12.2".into(),
+            )])],
         }],
         ..base_ast("WORK")
     };

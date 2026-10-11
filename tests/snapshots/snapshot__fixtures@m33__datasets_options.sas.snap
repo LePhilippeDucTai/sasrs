@@ -1,6 +1,5 @@
 ---
 source: tests/snapshot.rs
-assertion_line: 50
 expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
 input_file: tests/fixtures/m33/datasets_options.sas
 ---
@@ -73,12 +72,20 @@ NOTE: PROCEDURE PRINT used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
 
-23    title 'DATASETS: SAVE one two class (THREE deleted), then directory listing';
+23    title 'DATASETS: directory listed when PROC DATASETS starts, then SAVE one two class';
 
 24    proc datasets lib=work;
 25      save one two class;
 26    quit;
 NOTE: Deleting WORK.THREE (memtype=DATA).
+NOTE: PROCEDURE DATASETS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+27    title 'Directory after SAVE (THREE deleted)';
+
+28    proc datasets lib=work;
+29    quit;
 NOTE: PROCEDURE DATASETS used (Total process time):
             real time           0.00 seconds
             cpu time            0.00 seconds
@@ -103,7 +110,16 @@ NOTE: PROCEDURE DATASETS used (Total process time):
 
                                               1    9
 
-              DATASETS: SAVE one two class (THREE deleted), then directory listing
+         DATASETS: directory listed when PROC DATASETS starts, then SAVE one two class
+
+                                   #    Name     Member Type
+
+                                   1    CLASS    DATA
+                                   2    ONE      DATA
+                                   3    THREE    DATA
+                                   4    TWO      DATA
+
+                              Directory after SAVE (THREE deleted)
 
                                    #    Name     Member Type
 

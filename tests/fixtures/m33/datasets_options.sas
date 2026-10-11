@@ -9,7 +9,9 @@
       -> apres : TWO contient l'ancien THREE (7), THREE contient l'ancien TWO (9).
    3) MODIFY one; rename x=y; label y='renamed' : renomme la variable x en y.
    4) SAVE one two class : supprime toutes les tables de WORK sauf ONE/TWO/CLASS
-      (THREE est donc supprimee) ; le listing final montre le repertoire. */
+      (THREE est donc supprimee). Le repertoire est liste quand PROC DATASETS
+      demarre, donc AVANT le SAVE (J02-P8, doc SAS 9.4 DATASETS, Concepts) ;
+      une seconde PROC DATASETS liste le repertoire apres SAVE. */
 libname d 'data';
 
 data one;   x = 1; output; x = 2; output; run;
@@ -38,7 +40,11 @@ title 'WORK.THREE after EXCHANGE (now holds old TWO = 9)';
 proc print data=three;
 run;
 
-title 'DATASETS: SAVE one two class (THREE deleted), then directory listing';
+title 'DATASETS: directory listed when PROC DATASETS starts, then SAVE one two class';
 proc datasets lib=work;
   save one two class;
+quit;
+
+title 'Directory after SAVE (THREE deleted)';
+proc datasets lib=work;
 quit;

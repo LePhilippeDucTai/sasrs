@@ -1,0 +1,218 @@
+---
+source: tests/snapshot.rs
+expression: "format!(\"==== LOG ====\\n{}\\n==== LISTING ====\\n{}\\n==== EXIT {} ====\",\noutcome.log, outcome.listing, outcome.exit_code)"
+input_file: tests/fixtures/j02/contract_datasets_catalog.sas
+---
+==== LOG ====
+
+1     data m;
+2       x = 1.23456; y = 2; z = 3;
+3       format z 5.1;
+4     run;
+NOTE: The data set WORK.M has 1 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+5     title 'DATASETS: FORMAT inside MODIFY keeps the group';
+
+6     proc datasets lib=work;
+7       modify m;
+8         format x 8.2 z;
+9         rename y=yy;
+10        label x='Ex';
+11    quit;
+NOTE: Variable Y renamed to YY in WORK.M.
+NOTE: PROCEDURE DATASETS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+12    proc contents data=m;
+13    run;
+NOTE: PROCEDURE CONTENTS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+14    proc print data=m;
+15    run;
+NOTE: There were 1 observations read from the data set WORK.M.
+NOTE: PROCEDURE PRINT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+16    data a; v = 1; run;
+NOTE: The data set WORK.A has 1 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+17    title 'DATASETS: statements execute in source order';
+
+18    proc datasets lib=work;
+19      change a=c;
+20      delete c;
+21    quit;
+NOTE: Changing the name WORK.A to WORK.C (memtype=DATA).
+NOTE: Deleting WORK.C (memtype=DATA).
+NOTE: PROCEDURE DATASETS used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+22    proc datasets lib=work nolist;
+23      repair m;
+24    quit;
+ERROR: The REPAIR statement is not supported in PROC DATASETS; it can affect results and cannot be ignored (planned: roadmap-avancee J11-P6).
+
+25    proc format;
+26      value yn 1='Yes' 0='No';
+27    run;
+NOTE: Format YN has been output.
+NOTE: PROCEDURE FORMAT used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+28    title 'CATALOG: the CAT= alias names the catalog';
+
+29    proc catalog cat=work.formats;
+30      contents;
+31    quit;
+NOTE: Processing catalog: WORK.FORMATS.
+NOTE: PROCEDURE CATALOG used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+32    proc catalog catalog=work.formats et=format;
+33      contents;
+34    quit;
+ERROR: The ENTRYTYPE= option is not supported in PROC CATALOG; it can affect results and cannot be ignored (planned: roadmap-avancee J11-P6).
+
+35    proc format noreplace;
+36      value yn 1='Oui' 0='Non';
+37    run;
+ERROR: The NOREPLACE option is not supported in PROC FORMAT; it can affect results and cannot be ignored.
+
+38    data g;
+39      input grp $ blk $ y;
+40      datalines;
+41    a x 1
+42    a y 2
+43    b x 4
+44    b y 7
+45    a x 2
+46    b y 9
+47    ;
+48    run;
+NOTE: The data set WORK.G has 6 observations and 3 variables.
+NOTE: DATA statement used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+49    proc glm data=g;
+50      class grp blk;
+51      model y = grp blk;
+52      estimate 'a-b' grp 1 -1;
+53    run;
+ERROR: An ESTIMATE statement in a model with several effects or CLASS variables is not supported in PROC GLM; it can affect results and cannot be ignored.
+
+54    title 'GLM: one-way ESTIMATE, the E display option is ignored';
+
+55    proc glm data=g;
+56      class grp;
+57      model y = grp;
+58      estimate 'a-b' grp 1 -1 / e;
+59    run;
+WARNING: The E option of the ESTIMATE statement is ignored in PROC GLM; display customization is not supported.
+NOTE: There were 6 observations read from the data set WORK.G.
+NOTE: There were 6 observations used.
+NOTE: PROCEDURE GLM used (Total process time):
+            real time           0.00 seconds
+            cpu time            0.00 seconds
+
+==== LISTING ====
+                         DATASETS: FORMAT inside MODIFY keeps the group
+
+                                    #    Name    Member Type
+
+                                    1    M       DATA
+
+                         DATASETS: FORMAT inside MODIFY keeps the group
+
+Data Set Name:  WORK.M                Observations:   1
+Member Type:    DATA                  Variables:      3
+Engine:         PARQUET
+
+                  #    Variable    Type    Len    Format    Informat    Label
+
+                  1    x           Num       8    8.2                   Ex
+                  2    yy          Num       8
+                  3    z           Num       8
+
+                         DATASETS: FORMAT inside MODIFY keeps the group
+
+                                   Obs           x    yy    z
+
+                                     1        1.23     2    3
+
+                          DATASETS: statements execute in source order
+
+                                    #    Name    Member Type
+
+                                    1    A       DATA
+                                    2    M       DATA
+
+                           CATALOG: the CAT= alias names the catalog
+
+Catalog: WORK.FORMATS
+
+                             Name    Type      Description
+
+                             YN      FORMAT    User-defined format
+
+                     GLM: one-way ESTIMATE, the E display option is ignored
+
+                                       The GLM Procedure
+
+                                    Class Level Information
+
+                                   Class    Levels    Values
+
+                                   grp           2    a b
+
+               Number of Observations Read     6
+
+
+                                     Dependent Variable: y
+
+                                      Analysis of Variance
+
+          Source             DF    Sum of Squares    Mean Square    F Value    Pr > F
+
+          Model               1          37.50000       37.50000      11.25    0.0285
+          Error               4          13.33333        3.33333
+          Corrected Total     5          50.83333
+
+
+                         R-Square    Coeff Var    Root MSE      y Mean
+
+                         0.737705    43.817805    1.825742    4.166667
+
+
+                 Source    DF    Type I SS    Mean Square    F Value    Pr > F
+
+                 grp        1     37.50000       37.50000      11.25    0.0285
+
+
+                Source    DF    Type III SS    Mean Square    F Value    Pr > F
+
+                grp        1       37.50000       37.50000      11.25    0.0285
+
+
+                                           Estimates
+
+                Parameter     Estimate    Standard Error    t Value    Pr > |t|
+
+                a-b          -5.000000          1.490712      -3.35      0.0285
+
+
+
+==== EXIT 2 ====

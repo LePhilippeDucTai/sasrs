@@ -23,6 +23,10 @@ use super::*;
 ///
 /// Les opérations mutantes (write/delete/rename/list) restent non gérées par ce
 /// backend orienté lecture et renvoient une erreur runtime claire.
+///
+/// J02-P8 — le sidecar de métadonnées `<table>.parquet.sasmeta.json` n'est
+/// pas lu : chaque lecture (`read`) l'annonce par un WARNING nommant la table
+/// (formats, informats et libellés stockés non appliqués) jusqu'à J12-P1.
 #[cfg(feature = "s3")]
 pub struct S3Library {
     pub(super) bucket: String,
@@ -75,6 +79,32 @@ impl S3Library {
         }
     }
 
+    /// J02-P8 — WARNING : le sidecar de `table` n'est pas lu, ses formats,
+    /// informats et libellés ne sont pas appliqués (ils étaient perdus sans
+    /// un mot).
+    pub(super) fn sidecar_not_read_warning(&self, table: &str) -> String {
+        format!(
+            "WARNING: The metadata sidecar {}.sasmeta.json of table {} is not read from an \
+             S3 library in this build: its stored formats, informats and labels are not \
+             applied (planned: roadmap-avancee J12-P1).",
+            self.uri(table),
+            table.to_uppercase()
+        )
+    }
+
+    /// Coercition au modèle SAS du DataFrame scanné (même chemin que
+    /// `DirLibrary::read`, sans sidecar), plus le WARNING du sidecar non lu.
+    /// Seule partie de `read` testable sans réseau (le scan cloud la précède).
+    pub(super) fn dataset_from_scan(
+        &self,
+        table: &str,
+        df: DataFrame,
+    ) -> Result<(SasDataset, Vec<String>)> {
+        let (ds, mut notes) = SasDataset::from_dataframe(df)?;
+        notes.push(self.sidecar_not_read_warning(table));
+        Ok((ds, notes))
+    }
+
     /// `ScanArgsParquet` portant les `CloudOptions` dérivées de l'environnement
     /// pour cet URI. `from_untyped_config(uri, [])` choisit le backend (AWS ici)
     /// d'après le schéma et laisse object_store récupérer région/credentials
@@ -108,9 +138,10 @@ impl LibraryProvider for S3Library {
 
     fn read(&self, table: &str) -> Result<(SasDataset, Vec<String>)> {
         // Même contrat que DirLibrary::read : lecture eager puis coercition au
-        // modèle SAS (et notes de conversion) via from_dataframe.
+        // modèle SAS (et notes de conversion) via from_dataframe ; le sidecar
+        // n'est pas lu (WARNING, J02-P8).
         let df = self.scan(table)?.collect()?;
-        SasDataset::from_dataframe(df)
+        self.dataset_from_scan(table, df)
     }
 
     fn scan(&self, table: &str) -> Result<LazyFrame> {

@@ -7,6 +7,9 @@
 //! - CONTRAST statement: F-tests for linear combinations (same as ESTIMATE but gives F)
 //!
 //! For now, only one-way CLASS designs (single effect in MODEL) are supported.
+//! ESTIMATE and CONTRAST are computed on the one-way path only, for its MODEL
+//! effect; elsewhere, and for their options other than E, they are an ERROR
+//! (J02-P8, see `lincomb_unsupported` and `parse::parse_lincomb_options`).
 
 use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
@@ -114,13 +117,24 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
         ));
     }
 
+    // J02-P8 — ESTIMATE/CONTRAST that the executed path cannot produce are
+    // rejected (already at parse time; kept here for ASTs built directly).
+    let lincombs = ast
+        .estimates
+        .iter()
+        .map(|e| ("ESTIMATE", &e.effect))
+        .chain(ast.contrasts.iter().map(|c| ("CONTRAST", &c.effect)));
+    for (stmt, effect) in lincombs {
+        if let Some(msg) = lincomb_unsupported(stmt, effect, model, &ast.class_vars) {
+            return Err(SasError::runtime(msg));
+        }
+    }
+
     // Branch: the existing one-way path is taken ONLY for a single main effect
     // over a single CLASS variable with no interaction. Anything else (interaction
     // term, multiple effect terms, or multiple CLASS vars) goes to the general
     // multiway engine. This keeps the one-way path byte-identical.
-    let has_interaction = model.effect_terms.iter().any(|t| t.len() > 1);
-    let is_multiway = has_interaction || model.effect_terms.len() > 1 || ast.class_vars.len() > 1;
-    if is_multiway {
+    if uses_multiway_engine(model, &ast.class_vars) {
         // J02-P2 (issue #17) — OUTPUT OUT= est implémenté pour le dessin une
         // voie uniquement ; refus explicite plutôt qu'honneur silencieux.
         if ast.output.is_some() {
@@ -314,11 +328,51 @@ fn execute_multiway(ast: &GlmAst, model: &GlmModel, session: &mut Session) -> Re
             &beta,
             &xtx_inv,
         );
-
-        note_skipped_contrasts(session, ast, model, &fit.factors);
     }
 
     Ok(())
+}
+
+/// True when PROC GLM runs the general multi-way engine: an interaction
+/// term, several effect terms or several CLASS variables.
+pub(super) fn uses_multiway_engine(model: &GlmModel, class_vars: &[String]) -> bool {
+    let has_interaction = model.effect_terms.iter().any(|t| t.len() > 1);
+    has_interaction || model.effect_terms.len() > 1 || class_vars.len() > 1
+}
+
+/// J02-P8 — ERROR text for an ESTIMATE/CONTRAST statement (`stmt`) on
+/// `effect` that sasrs cannot produce for this MODEL, `None` when it is
+/// produced. The multi-way engine computes no ESTIMATE/CONTRAST (they used to
+/// be skipped without output nor NOTE); the one-way path only computes the
+/// coefficients of its single MODEL effect (any other effect, INTERCEPT
+/// included, used to be dropped without a word). A MODEL without effect or
+/// without CLASS variable keeps its own execution ERROR.
+pub(super) fn lincomb_unsupported(
+    stmt: &str,
+    effect: &str,
+    model: &GlmModel,
+    class_vars: &[String],
+) -> Option<String> {
+    let article = if stmt == "ESTIMATE" { "An" } else { "A" };
+    let tail = "is not supported in PROC GLM; it can affect results and cannot be ignored.";
+    let model_effect = model.effects.first()?;
+    if class_vars.is_empty() {
+        return None;
+    }
+    if uses_multiway_engine(model, class_vars) {
+        return Some(format!(
+            "{article} {stmt} statement in a model with several effects or CLASS variables \
+             {tail}"
+        ));
+    }
+    if effect.eq_ignore_ascii_case(model_effect) {
+        return None;
+    }
+    Some(format!(
+        "{article} {stmt} statement on the effect {}, which is not the MODEL effect {}, {tail}",
+        effect.to_uppercase(),
+        model_effect.to_uppercase()
+    ))
 }
 
 // NOTE (M37.1): `lsmean_coef_vector` was extracted into

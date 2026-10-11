@@ -48,6 +48,24 @@ pub(crate) fn load_format_catalog_sidecar(session: &mut Session, libref: &str) {
     }
 }
 
+/// J02-P8 — ERROR text when the engine named before an `s3://` path is not
+/// the one that reads it. An S3 library is always read by the parquet scan:
+/// no engine, PARQUET, BASE and V9 (the default engine, as for a local
+/// directory) are honored; CSV, XLSX or any other engine used to be ignored
+/// without a word.
+#[cfg(feature = "s3")]
+pub(crate) fn s3_engine_error(libref: &str, engine: Option<&str>, path: &str) -> Option<String> {
+    let engine = engine?.to_ascii_uppercase();
+    if matches!(engine.as_str(), "PARQUET" | "BASE" | "V9") {
+        return None;
+    }
+    Some(format!(
+        "The {engine} engine is not supported for the S3 path {path}: an S3 library is read \
+         with the PARQUET engine. Libref {} was not assigned.",
+        libref.to_uppercase()
+    ))
+}
+
 /// NOTE de succès (ou ERROR) commune aux trois moteurs de LIBNAME.
 pub(crate) fn log_libref_assignment(
     session: &mut Session,
