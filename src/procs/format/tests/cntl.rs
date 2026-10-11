@@ -425,8 +425,8 @@ fn cntlin_invalue_round_trip() {
     );
 
     let spec = FormatSpec::parse("GRADEI.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
-    assert_eq!(session.format_catalog.informat("Z", &spec), Value::Num(0.0));
+    assert_eq!(session.format_catalog.informat("A", &spec, 1926), Value::Num(4.0));
+    assert_eq!(session.format_catalog.informat("Z", &spec, 1926), Value::Num(0.0));
 }
 
 // ── LIB= interaction ─────────────────────────────────────────────────────

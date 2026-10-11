@@ -76,9 +76,12 @@ fn parse_retain_init(ts: &mut StatementStream) -> Result<Option<Expr>> {
             let value = value.clone();
             let suffix = *suffix;
             let span = tok.span;
+            // J02-P9 — fenêtre YEARCUTOFF= du segment pour les littéraux
+            // date/datetime à année sur 2 chiffres.
+            let yearcutoff = ts.yearcutoff();
             ts.next();
             Ok(Some(super::expr::literal_from_string(
-                &value, suffix, span,
+                &value, suffix, span, yearcutoff,
             )?))
         }
         TokenKind::Dot => {

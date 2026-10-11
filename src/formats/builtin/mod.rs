@@ -38,6 +38,7 @@ mod helpers;
 mod informat;
 mod numeric;
 
+pub use informat::expand_year_window;
 pub use informat::informat_builtin;
 
 use datetime::*;

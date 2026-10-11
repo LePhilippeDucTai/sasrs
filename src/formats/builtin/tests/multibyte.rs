@@ -105,14 +105,14 @@ fn multibyte_upcase_no_panic_on_cjk_width() {
 fn multibyte_char_informat_truncates_in_chars() {
     // L'ancien `out.truncate(w as usize)` paniquait : « Café au » a 9 octets,
     // w=4 tombait dans le « é ».
-    let v = informat_builtin("Café au lait", &spec("$CHAR", Some(4), None)).unwrap();
+    let v = informat_builtin("Café au lait", &spec("$CHAR", Some(4), None), 1926).unwrap();
     assert_eq!(v, Value::Char("Café".into()));
 }
 
 #[test]
 fn multibyte_char_informat_pads_are_trimmed_not_counted_in_bytes() {
     // Leading blanks are trimmed by the informat, then cut in characters.
-    let v = informat_builtin("  日本語です", &spec("$", Some(3), None)).unwrap();
+    let v = informat_builtin("  日本語です", &spec("$", Some(3), None), 1926).unwrap();
     assert_eq!(v, Value::Char("日本語".into()));
 }
 
@@ -120,10 +120,10 @@ fn multibyte_char_informat_pads_are_trimmed_not_counted_in_bytes() {
 fn multibyte_date_informat_non_ascii_is_missing_no_panic() {
     // « €€€€€€€€ » = 7 caractères mais 28 octets : passait la garde byte et
     // paniquait sur la découpe [..2]/[2..5]/[5..]. Doit donner missing.
-    let v = informat_builtin("€€€€€€€€", &spec("DATE", Some(9), None)).unwrap();
+    let v = informat_builtin("€€€€€€€€", &spec("DATE", Some(9), None), 1926).unwrap();
     assert!(matches!(v, Value::Missing(_)));
 
     // Sanity: a valid ASCII date still parses.
-    let ok = informat_builtin("01JAN2020", &spec("DATE", Some(9), None)).unwrap();
+    let ok = informat_builtin("01JAN2020", &spec("DATE", Some(9), None), 1926).unwrap();
     assert!(matches!(ok, Value::Num(_)));
 }

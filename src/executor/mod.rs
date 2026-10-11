@@ -118,7 +118,14 @@ fn run_program_inner(src: &SourceFile, session: &mut Session) -> bool {
         session.call_execute_queue.extend(macro_ce);
         let seg_src = SourceFile::new(expanded);
         let mut stream = match StatementStream::new(&seg_src) {
-            Ok(s) => s,
+            Ok(mut s) => {
+                // J02-P9 — la fenêtre YEARCUTOFF= de la SESSION en vigueur
+                // pour CE segment sert au parsing des constantes date à
+                // année sur 2 chiffres (SAS les fige à la compilation de
+                // l'étape, doc SAS 9.4, YEARCUTOFF=).
+                s.set_yearcutoff(session.options.yearcutoff);
+                s
+            }
             Err(e) => {
                 session.log.error(&e.to_string());
                 continue;
