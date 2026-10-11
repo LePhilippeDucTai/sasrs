@@ -36,8 +36,14 @@ use lib::*;
 use titles::*;
 
 pub(crate) fn is_global_statement(kw: &str) -> bool {
-    matches!(kw, "libname" | "filename" | "options" | "ods")
-        || title_level(kw).is_some()
+    // J02-P9 — `option` (singulier) est un alias SAS de `options` (doc SAS
+    // 9.4, SAS Statements: Reference, OPTIONS statement : « Aliases: option ») ;
+    // il était refusé (« Statement 'OPTION' is not valid ») au lieu d'être
+    // accepté comme le pluriel.
+    matches!(
+        kw,
+        "libname" | "filename" | "options" | "option" | "ods"
+    ) || title_level(kw).is_some()
         || footnote_level(kw).is_some()
 }
 
@@ -63,8 +69,9 @@ pub fn parse_global(ts: &mut StatementStream) -> Result<GlobalStmt> {
     } else if kw == "filename" {
         ts.next(); // consume `filename`
         parse_filename(ts)
-    } else if kw == "options" {
-        ts.next(); // consume `options`
+    } else if kw == "options" || kw == "option" {
+        // J02-P9 — `option` singulier : alias SAS de `options`.
+        ts.next(); // consume `options`/`option`
         parse_options(ts)
     } else if kw == "ods" {
         ts.next(); // consume `ods`

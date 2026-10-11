@@ -39,9 +39,10 @@ pub(super) fn level_after_prefix(name: &str, prefix: &str) -> Option<u8> {
 /// Mot-clé qui ouvre un bloc (frontière de step implicite). Les statements
 /// globaux sont des frontières de step en SAS, au même titre que DATA/PROC.
 pub(super) fn is_block_head_kw(lower: &str) -> bool {
+    // J02-P9 — `option` (singulier) : alias SAS de `options`, même frontière.
     matches!(
         lower,
-        "data" | "proc" | "libname" | "filename" | "options" | "ods"
+        "data" | "proc" | "libname" | "filename" | "options" | "option" | "ods"
     ) || title_level(lower).is_some()
         || footnote_level(lower).is_some()
 }
