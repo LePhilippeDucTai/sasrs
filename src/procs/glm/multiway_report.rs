@@ -328,92 +328,96 @@ pub(super) fn print_multiway_lsmeans(
     let mse = fit.mse;
     let df_error = fit.df_error;
 
-    for lsm_var in &ast.lsmeans_vars {
-        let fi = match factors
-            .iter()
-            .position(|f| f.name.eq_ignore_ascii_case(lsm_var))
-        {
-            Some(i) => i,
-            None => continue,
-        };
-        // Only meaningful for a main-effect factor.
-        centered(session, "Least Squares Means");
-        session.listing.blank();
-        let lsm_headers: Vec<String> = vec![
-            factors[fi].name.clone(),
-            format!("{} LSMEAN", dep_var),
-            "Standard Error".into(),
-            "Pr > |t|".into(),
-        ];
-        let lsm_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
-        let mut lsm_rows: Vec<Vec<String>> = Vec::new();
+    // J02-P12 — one table per effect of each LSMEANS statement, in source
+    // order (base: only the last statement was kept).
+    for stmt in &ast.lsmeans_stmts {
+        for lsm_var in stmt {
+            let fi = match factors
+                .iter()
+                .position(|f| f.name.eq_ignore_ascii_case(lsm_var))
+            {
+                Some(i) => i,
+                None => continue,
+            };
+            // Only meaningful for a main-effect factor.
+            centered(session, "Least Squares Means");
+            session.listing.blank();
+            let lsm_headers: Vec<String> = vec![
+                factors[fi].name.clone(),
+                format!("{} LSMEAN", dep_var),
+                "Standard Error".into(),
+                "Pr > |t|".into(),
+            ];
+            let lsm_aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
+            let mut lsm_rows: Vec<Vec<String>> = Vec::new();
 
-        // LS mean for level L of factor fi = average over balanced (uniform)
-        // levels of all OTHER factors of the predicted cell mean. With a
-        // reference-cell coding and fitted β, the predicted value for a cell is
-        // a linear combo of β; averaging the contrast vector over the other
-        // factors' levels yields the LS-mean estimable function L·β.
-        //
-        // M37.1: delegated to the shared LinCombEngine, which reproduces the
-        // exact estimable-function arithmetic (est = l·β, se = √(mse·l'·inv·l)
-        // with the same zero-skip and accumulation order). When the engine
-        // could not be built (singular fit), fall back to NaN rows in level
-        // order, identical to the previous behaviour.
-        match &lincom_engine {
-            Some(eng) => {
-                for r in eng.lsmeans(&factors[fi].name) {
-                    lsm_rows.push(vec![
-                        r.level_label,
-                        fmt6(r.estimate),
-                        fmt6(r.se),
-                        fmt_p(r.p),
-                    ]);
+            // LS mean for level L of factor fi = average over balanced (uniform)
+            // levels of all OTHER factors of the predicted cell mean. With a
+            // reference-cell coding and fitted β, the predicted value for a cell is
+            // a linear combo of β; averaging the contrast vector over the other
+            // factors' levels yields the LS-mean estimable function L·β.
+            //
+            // M37.1: delegated to the shared LinCombEngine, which reproduces the
+            // exact estimable-function arithmetic (est = l·β, se = √(mse·l'·inv·l)
+            // with the same zero-skip and accumulation order). When the engine
+            // could not be built (singular fit), fall back to NaN rows in level
+            // order, identical to the previous behaviour.
+            match &lincom_engine {
+                Some(eng) => {
+                    for r in eng.lsmeans(&factors[fi].name) {
+                        lsm_rows.push(vec![
+                            r.level_label,
+                            fmt6(r.estimate),
+                            fmt6(r.se),
+                            fmt_p(r.p),
+                        ]);
+                    }
                 }
-            }
-            // Degenerate fit (engine unavailable: X'X singular ⇒ no
-            // covariance). Reproduce the original Option-aware arithmetic
-            // exactly: est = l·β when β is solvable, se = NaN (no covariance).
-            None => {
-                for (li, level) in factors[fi].levels.iter().enumerate() {
-                    let lvec = crate::procs::lincom::lsmean_coef(lincom_coding, fi, li);
-                    let est = match &beta {
-                        Some(b) => lvec.iter().zip(b).map(|(c, bb)| c * bb).sum::<f64>(),
-                        None => f64::NAN,
-                    };
-                    let se = match &xtx_inv {
-                        Some(inv) if !mse.is_nan() => {
-                            let mut q = 0.0;
-                            for a in 0..ncols {
-                                if lvec[a] == 0.0 {
-                                    continue;
+                // Degenerate fit (engine unavailable: X'X singular ⇒ no
+                // covariance). Reproduce the original Option-aware arithmetic
+                // exactly: est = l·β when β is solvable, se = NaN (no covariance).
+                None => {
+                    for (li, level) in factors[fi].levels.iter().enumerate() {
+                        let lvec = crate::procs::lincom::lsmean_coef(lincom_coding, fi, li);
+                        let est = match &beta {
+                            Some(b) => lvec.iter().zip(b).map(|(c, bb)| c * bb).sum::<f64>(),
+                            None => f64::NAN,
+                        };
+                        let se = match &xtx_inv {
+                            Some(inv) if !mse.is_nan() => {
+                                let mut q = 0.0;
+                                for a in 0..ncols {
+                                    if lvec[a] == 0.0 {
+                                        continue;
+                                    }
+                                    for b2 in 0..ncols {
+                                        q += lvec[a] * inv[a][b2] * lvec[b2];
+                                    }
                                 }
-                                for b2 in 0..ncols {
-                                    q += lvec[a] * inv[a][b2] * lvec[b2];
-                                }
+                                if q >= 0.0 { (mse * q).sqrt() } else { f64::NAN }
                             }
-                            if q >= 0.0 { (mse * q).sqrt() } else { f64::NAN }
-                        }
-                        _ => f64::NAN,
-                    };
-                    let t = if se > 0.0 { est / se } else { f64::NAN };
-                    let p = if t.is_nan() {
-                        None
-                    } else {
-                        Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
-                    };
-                    lsm_rows.push(vec![
-                        level_label_value(level),
-                        fmt6(est),
-                        fmt6(se),
-                        fmt_p(p),
-                    ]);
+                            _ => f64::NAN,
+                        };
+                        let t = if se > 0.0 { est / se } else { f64::NAN };
+                        let p = if t.is_nan() {
+                            None
+                        } else {
+                            Some(2.0 * (1.0 - student_t_cdf(t.abs(), df_error)))
+                        };
+                        lsm_rows.push(vec![
+                            level_label_value(level),
+                            fmt6(est),
+                            fmt6(se),
+                            fmt_p(p),
+                        ]);
+                    }
                 }
             }
+            session
+                .listing
+                .write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
+            session.listing.blank();
+            session.listing.blank();
         }
-        session
-            .listing
-            .write_table(&lsm_headers, &lsm_aligns, &lsm_rows);
-        session.listing.blank();
-        session.listing.blank();
     }
 }

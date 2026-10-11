@@ -50,10 +50,16 @@ pub struct GlmAst {
     pub data_options: GlmDataOptions,
     pub class_vars: Vec<String>,
     pub model: Option<GlmModel>,
-    pub lsmeans_vars: Vec<String>,
+    /// J02-P12 — one entry per LSMEANS statement (its effect names), in
+    /// source order: all of them are produced (SAS/STAT 9.4, LSMEANS
+    /// statement: « multiple LSMEANS statements can be used »). Base :
+    /// only the last statement was kept.
+    pub lsmeans_stmts: Vec<Vec<String>>,
     pub estimates: Vec<GlmEstimate>,
     pub contrasts: Vec<GlmContrast>,
-    pub means_vars: Vec<String>,
+    /// J02-P12 — one entry per MEANS statement, in source order (base:
+    /// only the last statement was kept).
+    pub means_stmts: Vec<Vec<String>>,
     /// J02-P2 (issue #17) — OUTPUT statement (`output out=<ds> p= r=;`).
     pub output: Option<GlmOutput>,
 }
@@ -73,7 +79,6 @@ pub struct GlmModel {
     /// CLASS variable names it involves: main effect = 1 elt, `a*b` = `["a","b"]`.
     pub effect_terms: Vec<Vec<String>>,
     pub solution: bool,
-    pub noprint: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -119,13 +124,23 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
 
     // J02-P8 — ESTIMATE/CONTRAST that the executed path cannot produce are
     // rejected (already at parse time; kept here for ASTs built directly).
+    // J02-P12 — a non-estimable ESTIMATE is rejected the same way.
     let lincombs = ast
         .estimates
         .iter()
-        .map(|e| ("ESTIMATE", &e.effect))
-        .chain(ast.contrasts.iter().map(|c| ("CONTRAST", &c.effect)));
-    for (stmt, effect) in lincombs {
+        .map(|e| ("ESTIMATE", &e.effect, &e.coefficients))
+        .chain(
+            ast.contrasts
+                .iter()
+                .map(|c| ("CONTRAST", &c.effect, &c.coefficients)),
+        );
+    for (stmt, effect, coefficients) in lincombs {
         if let Some(msg) = lincomb_unsupported(stmt, effect, model, &ast.class_vars) {
+            return Err(SasError::runtime(msg));
+        }
+        if stmt == "ESTIMATE"
+            && let Some(msg) = estimate_nonestimable(effect, coefficients, model, &ast.class_vars)
+        {
             return Err(SasError::runtime(msg));
         }
     }
@@ -196,22 +211,27 @@ pub fn execute(ast: &GlmAst, session: &mut Session) -> Result<()> {
         }
 
         // --- LSMEANS ---
-        let show_lsmeans = !ast.lsmeans_vars.is_empty()
-            && ast.lsmeans_vars.iter().any(|v| v.eq_ignore_ascii_case(eff));
+        // J02-P12 — one table per LSMEANS statement whose effects contain the
+        // MODEL effect (base: only the last statement was kept).
+        for stmt in &ast.lsmeans_stmts {
+            let show_lsmeans = stmt.iter().any(|v| v.eq_ignore_ascii_case(eff));
 
-        if show_lsmeans {
-            print_oneway_lsmeans(session, dep_var, eff, &stats);
+            if show_lsmeans {
+                print_oneway_lsmeans(session, dep_var, eff, &stats);
+            }
         }
 
         print_oneway_contrasts(session, ast, eff, &stats)?;
         print_oneway_estimates(session, ast, eff, &stats);
 
         // --- MEANS section ---
-        let show_means = !ast.means_vars.is_empty()
-            && ast.means_vars.iter().any(|m| m.eq_ignore_ascii_case(eff));
+        // J02-P12 — one table per MEANS statement (base: only the last kept).
+        for stmt in &ast.means_stmts {
+            let show_means = stmt.iter().any(|m| m.eq_ignore_ascii_case(eff));
 
-        if show_means {
-            print_oneway_means(session, eff, &stats);
+            if show_means {
+                print_oneway_means(session, eff, &stats);
+            }
         }
 
         // J02-P2 (issue #17) — statement OUTPUT OUT= : valeurs ajustées
@@ -372,6 +392,54 @@ pub(super) fn lincomb_unsupported(
         "{article} {stmt} statement on the effect {}, which is not the MODEL effect {}, {tail}",
         effect.to_uppercase(),
         model_effect.to_uppercase()
+    ))
+}
+
+/// J02-P12 — ERROR text for an ESTIMATE statement of the one-way path,
+/// without INTERCEPT, whose coefficients do not sum to zero: that linear
+/// function is not estimable, and sasrs used to print Σ cᵢ ȳᵢ anyway (the
+/// value under one particular generalized inverse). `None` when the ESTIMATE
+/// is estimable (or out of scope of this check).
+///
+/// SAS/STAT 9.4 (GLM) references:
+/// - ESTIMATE statement: « The linear function is checked for
+///   estimability »;
+/// - « Specification of ESTIMATE Expressions » → « A Check for
+///   Estimability »: L is « declared nonestimable » when ABS(L − LH)
+///   exceeds the SINGULAR= tolerance (default 1e-4);
+/// - Chapter 15, « Estimability »: Lβ is estimable iff L lies in the row
+///   space of X. For a one-way model the rows of X span {(1, e₁) … (1, e_k)},
+///   so L = (0, c₁…c_k) — an ESTIMATE without INTERCEPT — is estimable iff
+///   Σ cᵢ = 0.
+///
+/// The published doc does not fix the SAS rendering of a non-estimable
+/// estimate (none of the pages above prints « Non-est »), so the J02-P12
+/// decision is an ERROR rather than an invented output. The tolerance is
+/// relative, like SAS's ε=1e-4 on the projected residual.
+pub(super) fn estimate_nonestimable(
+    effect: &str,
+    coefficients: &[f64],
+    model: &GlmModel,
+    class_vars: &[String],
+) -> Option<String> {
+    if class_vars.is_empty() || uses_multiway_engine(model, class_vars) {
+        // The multiway path and other effects are already rejected by
+        // `lincomb_unsupported`.
+        return None;
+    }
+    let model_effect = model.effects.first()?;
+    if !effect.eq_ignore_ascii_case(model_effect) {
+        return None;
+    }
+    let sum: f64 = coefficients.iter().sum();
+    let scale: f64 = 1.0 + coefficients.iter().map(|c| c.abs()).sum::<f64>();
+    if sum.abs() <= 1e-4 * scale {
+        return None;
+    }
+    let tail = "is not supported in PROC GLM; it can affect results and cannot be ignored.";
+    Some(format!(
+        "An ESTIMATE statement whose coefficients do not sum to zero (not estimable without \
+         INTERCEPT) {tail}"
     ))
 }
 

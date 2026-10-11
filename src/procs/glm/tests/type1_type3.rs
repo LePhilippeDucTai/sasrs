@@ -134,12 +134,11 @@ fn test_type1_vs_type3_unbalanced() {
             effects: vec!["a".into(), "b".into()],
             effect_terms: vec![vec!["a".into()], vec!["b".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec![],
+        lsmeans_stmts: vec![],
         estimates: vec![],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
     execute(&ast, &mut session).unwrap();

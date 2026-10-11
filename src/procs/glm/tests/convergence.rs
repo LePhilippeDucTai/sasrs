@@ -46,12 +46,11 @@ fn singular_session() -> (crate::session::Session, GlmAst) {
             effects: vec!["a".into(), "b".into()],
             effect_terms: vec![vec!["a".into()], vec!["b".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec![],
+        lsmeans_stmts: vec![],
         estimates: vec![],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
     (session, ast)
@@ -103,12 +102,11 @@ fn convergence_glm_full_rank_fit_still_computes() {
             effects: vec!["a".into()],
             effect_terms: vec![vec!["a".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec![],
+        lsmeans_stmts: vec![],
         estimates: vec![],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
     execute(&ast, &mut session).unwrap();

@@ -119,12 +119,11 @@ fn test_execute_lsmeans() {
             effects: vec!["sex".into()],
             effect_terms: vec![vec!["sex".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec!["sex".into()],
+        lsmeans_stmts: vec![vec!["sex".into()]],
         estimates: vec![],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
 
@@ -170,16 +169,15 @@ fn test_execute_estimate_correct() {
             effects: vec!["sex".into()],
             effect_terms: vec![vec!["sex".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec![],
+        lsmeans_stmts: vec![],
         estimates: vec![GlmEstimate {
             label: "A vs B".into(),
             effect: "sex".into(),
             coefficients: vec![1.0, -1.0],
         }],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
 
@@ -231,9 +229,8 @@ fn test_execute_contrast_f_eq_t_squared() {
             effects: vec!["sex".into()],
             effect_terms: vec![vec!["sex".into()]],
             solution: false,
-            noprint: false,
         }),
-        lsmeans_vars: vec![],
+        lsmeans_stmts: vec![],
         estimates: vec![GlmEstimate {
             label: "A vs B".into(),
             effect: "sex".into(),
@@ -244,7 +241,7 @@ fn test_execute_contrast_f_eq_t_squared() {
             effect: "sex".into(),
             coefficients: vec![1.0, -1.0],
         }],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
 
@@ -342,12 +339,11 @@ fn test_reference_cell_betas_2x2() {
                 vec!["a".into(), "b".into()],
             ],
             solution: true,
-            noprint: false,
         }),
-        lsmeans_vars: vec!["a".into()],
+        lsmeans_stmts: vec![vec!["a".into()]],
         estimates: vec![],
         contrasts: vec![],
-        means_vars: vec![],
+        means_stmts: vec![],
         output: None,
     };
 
