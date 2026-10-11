@@ -269,7 +269,7 @@ fn model_eq_consumes_or_errors() {
 fn response_options_event_and_descending() {
     let src = SourceFile::new("proc foo (event='1' descending) = x; run;");
     let mut ts = proc_stream(&src);
-    let (event, descending) = parse_response_options(&mut ts);
+    let (event, descending) = parse_response_options(&mut ts).unwrap();
     assert_eq!(event.as_deref(), Some("1"));
     assert!(descending);
     // Positioned on `=` after the closing paren.
@@ -280,7 +280,7 @@ fn response_options_event_and_descending() {
 fn response_options_absent_consumes_nothing() {
     let src = SourceFile::new("proc foo = x; run;");
     let mut ts = proc_stream(&src);
-    let (event, descending) = parse_response_options(&mut ts);
+    let (event, descending) = parse_response_options(&mut ts).unwrap();
     assert_eq!(event, None);
     assert!(!descending);
     assert_eq!(ts.peek().kind, TokenKind::Eq);
@@ -308,7 +308,7 @@ fn ra_j02_p1_response_options_desc_and_event_keywords() {
     // Shared legacy form (GLIMMIX): DESC is honored like DESCENDING.
     let src = SourceFile::new("proc foo (desc) = x; run;");
     let mut ts = proc_stream(&src);
-    assert_eq!(parse_response_options(&mut ts), (None, true));
+    assert_eq!(parse_response_options(&mut ts).unwrap(), (None, true));
 }
 
 /// J02-P1 — ORDER=, REF= (ordre ou référence des niveaux), une valeur
@@ -342,6 +342,84 @@ fn ra_j02_p1_response_options_order_ref_unknown_are_errors() {
             .to_string();
         assert!(err.contains(msg), "{text}: {err}");
     }
+}
+
+/// J02-P11 — GLIMMIX partage encore cette forme historique : les jetons
+/// qu'elle ne lisait pas (avalés en silence) sont désormais des ERROR au
+/// parsing, chacune nommant l'unité qui la lèvera (J08-P2, décision 0f6b023a ;
+/// la migration vers `parse_response_options_checked` n'est pas faite ici).
+#[test]
+fn ra_j02_p11_response_options_unread_tokens_are_errors() {
+    for (text, msg) in [
+        (
+            "(event=first)",
+            "The EVENT=FIRST response variable option is not supported in PROC GLIMMIX; it can \
+             affect results and cannot be ignored (planned: roadmap-avancee J08-P2).",
+        ),
+        (
+            "(event=last)",
+            "The EVENT=LAST response variable option is not supported in PROC GLIMMIX",
+        ),
+        (
+            "(event=1)",
+            "The EVENT=1 response variable option is not supported in PROC GLIMMIX",
+        ),
+        (
+            "(order=freq)",
+            "The ORDER= response variable option is not supported in PROC GLIMMIX",
+        ),
+        (
+            "(ref='1')",
+            "The REF= response variable option is not supported in PROC GLIMMIX",
+        ),
+        (
+            "(bogus)",
+            "The BOGUS response variable option is not supported in PROC GLIMMIX",
+        ),
+    ] {
+        let src = SourceFile::new(format!("proc foo {text} = x; run;"));
+        let mut ts = proc_stream(&src);
+        let err = parse_response_options(&mut ts).unwrap_err().to_string();
+        assert!(err.contains(msg), "{text}: {err}");
+    }
+}
+
+/// J02-P11 — l'ERROR pointe le jeton fautif : le span de l'option de
+/// réponse non lue est le nom (premier jeton de l'option), celui d'une
+/// valeur EVENT= non citée la valeur elle-même. `Span` est un intervalle
+/// d'octets dans le source.
+#[test]
+fn ra_j02_p11_response_options_error_spans_the_offending_token() {
+    // `order` occupies bytes 10..15 of "proc foo (order=freq) = x; run;".
+    let src = SourceFile::new("proc foo (order=freq) = x; run;");
+    let mut ts = proc_stream(&src);
+    let err = parse_response_options(&mut ts).unwrap_err();
+    let SasError::Parse { span, .. } = &err else {
+        panic!("a parse error was expected, got: {err}");
+    };
+    assert_eq!((span.start, span.end), (10, 15), "span of `order`");
+
+    // `first` (the EVENT= value) occupies bytes 16..21.
+    let src = SourceFile::new("proc foo (event=first) = x; run;");
+    let mut ts = proc_stream(&src);
+    let err = parse_response_options(&mut ts).unwrap_err();
+    let SasError::Parse { span, .. } = &err else {
+        panic!("a parse error was expected, got: {err}");
+    };
+    assert_eq!((span.start, span.end), (16, 21), "span of `first`");
+}
+
+/// J02-P11 — `EVENT='valeur'` et `DESCENDING`/`DESC` restent honorés par la
+/// forme historique : les valeurs lues et la position après la parenthèse
+/// sont inchangées.
+#[test]
+fn ra_j02_p11_response_options_event_value_and_desc_still_honored() {
+    let src = SourceFile::new("proc foo (event='1' desc) = x; run;");
+    let mut ts = proc_stream(&src);
+    let (event, descending) = parse_response_options(&mut ts).unwrap();
+    assert_eq!(event.as_deref(), Some("1"));
+    assert!(descending);
+    assert_eq!(ts.peek().kind, TokenKind::Eq);
 }
 
 #[test]

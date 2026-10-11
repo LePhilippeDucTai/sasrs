@@ -160,11 +160,18 @@ pub(crate) fn parse_response_options_checked(
 }
 
 /// Forme historique (GLIMMIX) : `(event='val' descending …)`, renvoie
-/// `(event, descending)`. Les jetons inconnus de la parenthèse restent
-/// ignorés — GLIMMIX (hors périmètre J02-P1) n'a pas encore migré vers
-/// [`parse_response_options_checked`]. `DESC` est honoré comme
-/// `DESCENDING` (même option SAS).
-pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String>, bool) {
+/// `(event, descending)`. `DESC` est honoré comme `DESCENDING` (même option
+/// SAS).
+///
+/// J02-P11 — fin du repli silencieux pour les jetons que cette forme ne
+/// lisait pas : `EVENT=FIRST|LAST`, `EVENT=` sans valeur citée, `ORDER=`,
+/// `REF=` et tout jeton inconnu de la parenthèse sont des ERROR au parsing
+/// (SAS/STAT 9.4 User's Guide, MODEL statement, « Response Variable
+/// Options » : désigner l'événement ou l'ordre des niveaux change le modèle
+/// ajusté) ; ils étaient avalés sans diagnostic. Leur levée (migration vers
+/// [`parse_response_options_checked`] et retrait de cette forme) est planifiée
+/// en J08-P2.
+pub(crate) fn parse_response_options(ts: &mut StatementStream) -> Result<(Option<String>, bool)> {
     let mut event: Option<String> = None;
     let mut descending = false;
     if ts.peek().kind == TokenKind::LParen {
@@ -177,26 +184,73 @@ pub(crate) fn parse_response_options(ts: &mut StatementStream) -> (Option<String
                 break;
             }
             if ts.peek().is_kw("event") {
+                let span = ts.peek().span;
                 ts.next();
                 if ts.peek().kind == TokenKind::Eq {
                     ts.next();
                     if let TokenKind::Str { value, .. } = &ts.peek().kind.clone() {
                         event = Some(value.clone());
                         ts.next();
+                    } else {
+                        // J02-P11 — EVENT=FIRST|LAST (ou une autre valeur non
+                        // citée) était avalé : événement par défaut ajusté. Le
+                        // span pointe la valeur non citée (comme la forme
+                        // vérifiée J02-P1 pour son erreur de valeur).
+                        let vspan = ts.peek().span;
+                        let bad = match &ts.peek().kind {
+                            TokenKind::Ident(name) => {
+                                format!("EVENT={}", name.to_ascii_uppercase())
+                            }
+                            TokenKind::Num(n) => {
+                                format!("EVENT={}", crate::value::format_best(*n, 12))
+                            }
+                            _ => "EVENT=".to_string(),
+                        };
+                        return Err(SasError::parse(
+                            format!(
+                                "The {bad} response variable option is not supported in PROC \
+                                 GLIMMIX; it can affect results and cannot be ignored (planned: \
+                                 roadmap-avancee J08-P2)."
+                            ),
+                            vspan,
+                        ));
                     }
+                } else {
+                    // J02-P11 — `event` sans `=` était avalé.
+                    return Err(SasError::parse(
+                        "The EVENT response variable option is not supported in PROC GLIMMIX; it \
+                         can affect results and cannot be ignored (planned: roadmap-avancee \
+                         J08-P2).",
+                        span,
+                    ));
                 }
             } else if ts.peek().is_kw("descending") || ts.peek().is_kw("desc") {
                 descending = true;
                 ts.next();
             } else {
-                ts.next();
+                // J02-P11 — tout autre jeton (ORDER=, REF=, inconnu…) était
+                // avalé en silence.
+                let bad = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+                let label = if ts.peek2().kind == TokenKind::Eq {
+                    format!("{bad}=")
+                } else {
+                    bad
+                };
+                return Err(SasError::parse(
+                    format!(
+                        "The {label} response variable option is not supported in PROC GLIMMIX; \
+                         it can affect results and cannot be ignored (planned: roadmap-avancee \
+                         J08-P2)."
+                    ),
+                    ts.peek().span,
+                ));
             }
         }
         if ts.peek().kind == TokenKind::RParen {
             ts.next();
         }
     }
-    (event, descending)
+    Ok((event, descending))
 }
 
 /// Variante stricte de [`parse_effect_list`] pour les procs qui ne rendent

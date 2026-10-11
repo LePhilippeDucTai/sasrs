@@ -204,11 +204,14 @@ fn ra_j02_p7_tabulate_missing_class_values() {
 /// (croisement), listing vide.
 #[test]
 fn ra_j02_p7_tabulate_errors_before_any_output() {
-    for (table, stat) in [
-        ("sex, colpctn", "COLPCTN"),
-        ("sex, height*median", "MEDIAN"),
-        ("sex, stddev*height", "STDDEV"),
-        ("sex*rowpctn", "ROWPCTN"),
+    // J02-P11 — the statistic ERROR names the unit that will lift it:
+    // J03-P2 for the percentage statistics with table denominators,
+    // J11-P4 for the statistics-library keywords.
+    for (table, stat, unit) in [
+        ("sex, colpctn", "COLPCTN", "J03-P2"),
+        ("sex, height*median", "MEDIAN", "J11-P4"),
+        ("sex, stddev*height", "STDDEV", "J11-P4"),
+        ("sex*rowpctn", "ROWPCTN", "J03-P2"),
     ] {
         let out = run_sas(&format!(
             "{CLS}title 'Orphan title'; proc tabulate data=cls; class sex; var height;
@@ -216,7 +219,7 @@ fn ra_j02_p7_tabulate_errors_before_any_output() {
         ));
         assert_rejected(
             &out,
-            &format!("ERROR: The {stat} statistic {CANNOT}."),
+            &format!("ERROR: The {stat} statistic {CANNOT} (planned: roadmap-avancee {unit})."),
             table,
         );
         assert!(!out.listing.contains("Orphan title"), "{}", out.listing);
@@ -351,4 +354,62 @@ fn ra_j02_p7_tabulate_valid_statements() {
          TABULATE.",
         "invented",
     );
+}
+
+// ── J02-P11 : chaque ERROR provisoire nomme l'unité qui la lèvera ────────
+
+/// Base : l'ERROR d'une statistique non calculée ne nommait AUCUNE unité du
+/// plan (« … cannot be ignored. », sans « (planned: …) ») — la relecture du
+/// contrat (révision 7, décision d7fafba0) exige que chaque ERROR provisoire
+/// dise qui la lèvera. Désormais : COLPCTN, ROWPCTN, REPPCTN, PAGEPCTN et
+/// leurs formes PCTSUM (dénominateurs dans les dimensions de la table, « Statistics
+/// That Are Available in PROC TABULATE ») → J03-P2 ; toutes les autres
+/// (MEDIAN, P1–P99, Q1, Q3, QRANGE, STDDEV, STDERR, CV, CSS, USS, VAR, RANGE,
+/// MODE, KURT/KURTOSIS, SKEW/SKEWNESS, LCLM, UCLM, SUMWGT, T, PROBT/PRT) →
+/// J11-P4 (bibliothèque de statistiques).
+#[test]
+fn ra_j02_p11_tabulate_statistic_errors_name_lifting_unit() {
+    for (table, stat, unit) in [
+        ("sex, colpctn", "COLPCTN", "J03-P2"),
+        ("sex, rowpctn", "ROWPCTN", "J03-P2"),
+        ("sex, reppctn", "REPPCTN", "J03-P2"),
+        ("sex, pagepctn", "PAGEPCTN", "J03-P2"),
+        ("sex, colpctsum", "COLPCTSUM", "J03-P2"),
+        ("sex, rowpctsum", "ROWPCTSUM", "J03-P2"),
+        ("sex, reppctsum", "REPPCTSUM", "J03-P2"),
+        ("sex, pagepctsum", "PAGEPCTSUM", "J03-P2"),
+        ("sex, height*median", "MEDIAN", "J11-P4"),
+        ("sex, height*p1", "P1", "J11-P4"),
+        ("sex, height*p99", "P99", "J11-P4"),
+        ("sex, height*q1", "Q1", "J11-P4"),
+        ("sex, height*q3", "Q3", "J11-P4"),
+        ("sex, height*qrange", "QRANGE", "J11-P4"),
+        ("sex, stddev*height", "STDDEV", "J11-P4"),
+        ("sex, stderr*height", "STDERR", "J11-P4"),
+        ("sex, height*cv", "CV", "J11-P4"),
+        ("sex, height*css", "CSS", "J11-P4"),
+        ("sex, height*uss", "USS", "J11-P4"),
+        ("sex, height*var", "VAR", "J11-P4"),
+        ("sex, height*range", "RANGE", "J11-P4"),
+        ("sex, height*mode", "MODE", "J11-P4"),
+        ("sex, height*kurt", "KURT", "J11-P4"),
+        ("sex, height*kurtosis", "KURTOSIS", "J11-P4"),
+        ("sex, height*skew", "SKEW", "J11-P4"),
+        ("sex, height*skewness", "SKEWNESS", "J11-P4"),
+        ("sex, height*lclm", "LCLM", "J11-P4"),
+        ("sex, height*uclm", "UCLM", "J11-P4"),
+        ("sex, height*sumwgt", "SUMWGT", "J11-P4"),
+        ("sex, height*t", "T", "J11-P4"),
+        ("sex, height*probt", "PROBT", "J11-P4"),
+        ("sex, height*prt", "PRT", "J11-P4"),
+    ] {
+        let out = run_sas(&format!(
+            "{CLS}proc tabulate data=cls; class sex; var height; table {table}; run;"
+        ));
+        assert_rejected(
+            &out,
+            &format!("ERROR: The {stat} statistic {CANNOT} (planned: roadmap-avancee {unit})."),
+            table,
+        );
+    }
 }

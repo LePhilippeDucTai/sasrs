@@ -268,7 +268,7 @@ fn parse_compute_options(ts: &mut StatementStream) -> Result<()> {
                 };
                 return Err(contract::unsupported_construct(
                     &format!("The {shown} option of the COMPUTE statement"),
-                    None,
+                    Some("J11-P2"),
                     ts.peek().span,
                 ));
             }
@@ -322,7 +322,7 @@ fn reject_compound_name(ts: &StatementStream, expr: &Expr) -> Result<()> {
             var.to_ascii_uppercase(),
             stat.to_ascii_uppercase()
         ),
-        None,
+        Some("J11-P3"),
         ts.peek().span,
     ))
 }
