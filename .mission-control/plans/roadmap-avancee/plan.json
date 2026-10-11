@@ -2,7 +2,7 @@
   "protocol_version": 3,
   "project_id": "lephilippeductai/sasrs",
   "plan_id": "f11909ef-4aca-4307-a2ae-f6771ddd33fd",
-  "revision": 6,
+  "revision": 7,
   "stub": "roadmap-avancee",
   "base_branch": "milestone/roadmap-avancee",
   "goal": "Feuille de route avancée sasrs (docs/roadmap/avancee.md, ex-M46–M66 hors M50, plus S3), replanifiée par comportements bornés depuis l'état constaté à d0b4d906 (audit de cinq zones et exécution réelle du corpus). Ordre par valeur : J01 corpus et checks fiables (les 10 cas compat/* n'étaient jamais exécutés, 4 échouent ; check de déterminisme cassé) ; J02 contrat : suppression des replis silencieux constatés (≈ 120 constructions ignorées ou approximées sans diagnostic) ; puis levée des ERROR du contrat : J03 reporting Base, J04 BY, J05 LOGISTIC, J06 MIXED, J07 GENMOD, J08 GLIMMIX, J09 multivarié, J10 IML ; puis extensions : J11 Base/OPTIONS, J12 S3, J13–J14 graphiques (checks clippy-graphics et test-graphics exécutés en local : D-INFRA-1 tranchée option (a) par Philippe le 2026-10-10, fontconfig, freetype2, ttf-liberation et pkgconf installés dans le conteneur dev). Conventions : (1) oracle d'abord — chaque jalon statistique ou Base commence par une unité ORACLE qui écrit les cas conformance/ au statut known-divergence depuis une source indépendante citée (doc SAS 9.4, publication R/statsmodels, ou script stdlib oracle/oracle.py rejoué) ; l'implémenteur ne peut modifier que le champ status de ses case.json (data/, expected/, program.sas, oracle/ hors de son périmètre de fichiers) ; (2) acceptation exécutable par unité : check acc-<unité> (conformance_require.py sur les cas nommés, ou tests cargo ra_<unité>_* en nombre minimal) ; (3) procs statistiques : chaque jalon traite non-convergence, matrice singulière, paramètre sur frontière, identifiabilité et tolérances (textes SAS cités en log.required, cas corpus, revue) ; tolérances : valeurs publiées abs 0,5·10^-d, oracle stdlib rel 1e-8 (estimations) et abs 1e-10 (p-values), ddl abs 0,05 ; (4) aucune promesse au-delà du code : docs/support-contract.md et docs/roadmap/avancee.md mis à jour par l'unité qui livre ; snapshots modifiés justifiés par une ligne Snapshot: ; (5) exécution : un exécutant à la fois, cargo via distrobox enter dev (toolchain 1.98.1, CI=true INSTA_UPDATE=no), python3 hôte en bibliothèque standard ; chaque jalon clos par une revue indépendante ; fusion dans main par PR avec ci-ok. Hors périmètre : ADR 0003 (sasrs-py), ADR 0004 (XPT/sas7bdat) et lecture sas7bcat, extensions GLM/ANOVA autres que BY, structures MIXED TOEP/ARH(1)/SP(POW), LOGISTIC ROC/UNITS/SCORE/LACKFIT/SELECTION=, GENMOD LRCI et distributions NEGBIN/TWEEDIE/ZIP, GLIMMIX LAPLACE à effets multiples, CLUSTER entrée TYPE=DISTANCE, styles ODS au-delà de trois styles fixes.",
@@ -1474,6 +1474,51 @@
       "cwd": ".",
       "timeout_seconds": 3600,
       "expected_exit_code": 0
+    },
+    {
+      "id": "acc-J02-P11",
+      "argv": [
+        "distrobox",
+        "enter",
+        "dev",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; out=$(cargo test --locked -p sasrs ra_j02_p11_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p11_* passes: $n (minimum 5)\"; [ \"$n\" -ge 5 ]"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "acc-J02-P12",
+      "argv": [
+        "distrobox",
+        "enter",
+        "dev",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; out=$(cargo test --locked -p sasrs ra_j02_p12_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p12_* passes: $n (minimum 6)\"; [ \"$n\" -ge 6 ]"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "acc-J03-P7",
+      "argv": [
+        "distrobox",
+        "enter",
+        "dev",
+        "--",
+        "bash",
+        "-lc",
+        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; out=$(cargo test --locked -p sasrs ra_j03_p7_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j03_p7_* passes: $n (minimum 4)\"; [ \"$n\" -ge 4 ]"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
     }
   ],
   "final_check_ids": [
@@ -2051,13 +2096,67 @@
       ]
     },
     {
+      "id": "J02-P11",
+      "milestone_id": "J02",
+      "title": "Correctif contrat J02 : ERROR provisoires sans unité (TABULATE, REPORT) et options de réponse GLIMMIX",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "S",
+      "scope": "Unité CORRECTIVE DE CONTRAT (CONTRIBUTING §5, docs/support-contract.md ; constats des unités J02 routés en révision 7, décision d7fafba0). Diagnostic : ERROR (code 2, étape rejetée avant exécution si détectable au parsing) si l'ignorer peut changer un résultat, un dataset ou le contrôle de flux ; WARNING si l'effet se limite à l'affichage ; correction directe seulement quand la doc SAS 9.4 fixe la sémantique et que le code sait déjà la produire (citation dans le test). Une ERROR provisoire nomme l'unité du plan qui la lèvera (« (planned: roadmap-avancee Jxx-Py) », helpers existants des modules contract.rs). Pour chaque construction : un test ra_<unité>_<sujet> qui reproduit l'ancien comportement et fige le diagnostic ; une ligne ajoutée ou mise à jour dans la section « Replis silencieux supprimés (roadmap-avancee J02) » de docs/support-contract.md (avant / après / unité qui lèvera), et le paragraphe de constats de l'unité d'origine mis à jour ; snapshots justifiés (ligne Snapshot:). Aucune ERROR nouvelle sur une construction déjà correctement implémentée. Aucune fonctionnalité nouvelle au-delà des corrections citées. Cargo via distrobox enter dev. (1) ERROR provisoires de J02-P7 qui ne nomment aucune unité (unit None) : statistiques de UNSUPPORTED_STATS (src/procs/tabulate/contract.rs) COLPCTN, ROWPCTN, REPPCTN, PAGEPCTN, COLPCTSUM, ROWPCTSUM, REPPCTSUM, PAGEPCTSUM → J03-P2 ; toutes les autres (MEDIAN, P1–P99, Q1, Q3, QRANGE, STDDEV, STDERR, CV, CSS, USS, VAR, RANGE, MODE, KURT/KURTOSIS, SKEW/SKEWNESS, LCLM, UCLM, SUMWGT, T, PROBT/PRT) → J11-P4 ; REPORT : option CHARACTER / LENGTH= de COMPUTE (src/procs/report/parse/compute.rs) → J11-P2, nom composé var.stat → J11-P3 ; colonne « unité qui lèvera » des lignes J02-P7 de docs/support-contract.md mise à jour ; (2) GLIMMIX : dans la parenthèse d'options de réponse de MODEL, les jetons autres que EVENT='valeur' et DESCENDING/DESC (EVENT=FIRST|LAST, ORDER=, REF=, inconnus) sont sautés en silence par common::parse_response_options (src/procs/common/model.rs, seul appelant : src/procs/glimmix/parse.rs) → ERROR (planned: roadmap-avancee J08-P2) avant exécution ; EVENT='valeur' et DESCENDING inchangés ; ne PAS migrer vers parse_response_options_checked (migration et suppression du parseur historique : J08-P2, décision 0f6b023a). Acceptance acc-J02-P11 : ≥ 5 tests ra_j02_p11_*.",
+      "depends_on": [
+        "J02-P9"
+      ],
+      "files": [
+        "src/procs/tabulate",
+        "src/procs/report",
+        "src/procs/glimmix/parse.rs",
+        "src/procs/glimmix/contract_tests.rs",
+        "src/procs/common/model.rs",
+        "src/procs/common/tests.rs",
+        "tests/fixtures",
+        "tests/snapshots",
+        "docs/support-contract.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "acc-J02-P11"
+      ]
+    },
+    {
+      "id": "J02-P12",
+      "milestone_id": "J02",
+      "title": "Correctif contrat J02 : jetons sautés de PROC DATASETS et options sautées de PROC GLM",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Unité CORRECTIVE DE CONTRAT (CONTRIBUTING §5, docs/support-contract.md ; constats des unités J02 routés en révision 7, décision d7fafba0). Diagnostic : ERROR (code 2, étape rejetée avant exécution si détectable au parsing) si l'ignorer peut changer un résultat, un dataset ou le contrôle de flux ; WARNING si l'effet se limite à l'affichage ; correction directe seulement quand la doc SAS 9.4 fixe la sémantique et que le code sait déjà la produire (citation dans le test). Une ERROR provisoire nomme l'unité du plan qui la lèvera (« (planned: roadmap-avancee Jxx-Py) », helpers existants des modules contract.rs). Pour chaque construction : un test ra_<unité>_<sujet> qui reproduit l'ancien comportement et fige le diagnostic ; une ligne ajoutée ou mise à jour dans la section « Replis silencieux supprimés (roadmap-avancee J02) » de docs/support-contract.md (avant / après / unité qui lèvera), et le paragraphe de constats de l'unité d'origine mis à jour ; snapshots justifiés (ligne Snapshot:). Aucune ERROR nouvelle sur une construction déjà correctement implémentée. Aucune fonctionnalité nouvelle au-delà des corrections citées. Cargo via distrobox enter dev. Constats du paragraphe J02-P8 de docs/support-contract.md. (1) DATASETS : dans DELETE, SAVE, CHANGE, EXCHANGE et SELECT, les jetons autres que des noms (`/ MEMTYPE=` ou `/ MT=`, listes `( … )`, autres options) sont sautés jusqu'au `;` — `delete m / memtype=catalog;` supprime la TABLE M (perte de données) → MEMTYPE=DATA honoré (doc SAS 9.4 DATASETS), toute autre valeur de MEMTYPE= ou option → ERROR avant toute exécution du groupe (aucune table supprimée ni renommée) ; INFORMAT d'un groupe MODIFY lit une variable par informat (`informat a b date9.;` associe l'informat « b » à A puis échoue) → toutes les variables listées reçoivent l'informat qui suit (doc SAS 9.4 DATASETS, INFORMAT statement), comme FORMAT ; (2) GLM (hors du périmètre fonctionnel du plan : ERROR « not planned » comme celles de J02-P8) : options du statement PROC GLM autres que DATA= (ORDER=, OUTSTAT=, ALPHA=, NOPRINT, PLOTS=…), options de MODEL autres que SOLUTION (NOINT : modèle ajusté avec constante ; NOPRINT lu mais non appliqué…) et options de LSMEANS (PDIFF, ADJUST=, OUT=, E=…) sautées → ERROR si les ignorer change un résultat ou un dataset (NOINT, ORDER=, OUTSTAT=, ALPHA=, PDIFF, ADJUST=, OUT=…), WARNING d'affichage sinon (NOPRINT non appliqué, PLOTS=…), ou honorées si le code sait déjà les produire (doc citée) ; plusieurs instructions LSMEANS ou MEANS (seule la dernière gardée) → toutes produites si le code le permet (doc SAS/STAT 9.4 GLM), sinon ERROR ; ESTIMATE sur le chemin une voie sans coefficient INTERCEPT dont les coefficients ne somment pas à zéro (imprimé Σ cᵢ ȳᵢ) → sortie « Non-est » de SAS si la doc SAS/STAT 9.4 (GLM, ESTIMATE statement et « Estimable Functions ») l'établit, sinon ERROR. Acceptance acc-J02-P12 : ≥ 6 tests ra_j02_p12_*.",
+      "depends_on": [
+        "J02-P11"
+      ],
+      "files": [
+        "src/procs/datasets",
+        "src/procs/glm",
+        "tests/fixtures",
+        "tests/snapshots",
+        "docs/support-contract.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "acc-J02-P12"
+      ]
+    },
+    {
       "id": "J02-P10",
       "milestone_id": "J02",
       "title": "Revue J02",
       "kind": "review",
       "tier": "T2",
       "size": "S",
-      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque cas promu n'a changé que son status, que chaque valeur attendue est adossée à une source indépendante citée (oracles rejoués), que chaque snapshot modifié est justifié (ligne Snapshot:), qu'aucun repli silencieux n'est introduit et que docs/support-contract.md et docs/roadmap/avancee.md ne promettent rien au-delà du code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus : chaque construction listée dans les unités J02 a son test ra_j02_* et sa ligne dans docs/support-contract.md ; chaque ERROR provisoire nomme l'unité qui la lèvera ; aucune ERROR nouvelle ne frappe une construction déjà correctement implémentée ; les corrections directes citent la doc SAS.",
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque cas promu n'a changé que son status, que chaque valeur attendue est adossée à une source indépendante citée (oracles rejoués), que chaque snapshot modifié est justifié (ligne Snapshot:), qu'aucun repli silencieux n'est introduit et que docs/support-contract.md et docs/roadmap/avancee.md ne promettent rien au-delà du code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus : chaque construction listée dans les unités J02 a son test ra_j02_* et sa ligne dans docs/support-contract.md ; chaque ERROR provisoire nomme l'unité qui la lèvera ; aucune ERROR nouvelle ne frappe une construction déjà correctement implémentée ; les corrections directes citent la doc SAS. Révision 7 : la revue couvre aussi les correctifs J02-P11 et J02-P12 (décision d7fafba0) et vérifie que les constats J02 routés en révision 7 nomment une unité existante du plan.",
       "depends_on": [
         "J02-P1",
         "J02-P2",
@@ -2067,7 +2166,9 @@
         "J02-P6",
         "J02-P7",
         "J02-P8",
-        "J02-P9"
+        "J02-P9",
+        "J02-P11",
+        "J02-P12"
       ],
       "files": [],
       "check_ids": [
@@ -2094,7 +2195,9 @@
         "acc-J02-P7",
         "acc-J02-P8",
         "acc-J02-P8-s3",
-        "acc-J02-P9"
+        "acc-J02-P9",
+        "acc-J02-P11",
+        "acc-J02-P12"
       ]
     },
     {
@@ -2133,7 +2236,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Dénominateurs PCTN<…>/PCTSUM<…> par dimension (ligne, colonne, page, ALL, croisements, dénominateurs alternatifs) selon la doc TABULATE : compute_cell_value reçoit les contraintes par dimension ; OUT= au format SAS (une observation par croisement de CLASS avec toutes les statistiques, _TYPE_/_PAGE_/_TABLE_, noms PctN_xx et PctSum_xx de la doc) ; plusieurs TABLE par étape (levée de l'ERROR J02-P7). Cas promus : tabulate-pctn-denominators, tabulate-pctsum-denominators, tabulate-out-multitable et, s'il diverge encore, tabulate-class-format-missing.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Dénominateurs PCTN<…>/PCTSUM<…> par dimension (ligne, colonne, page, ALL, croisements, dénominateurs alternatifs) selon la doc TABULATE : compute_cell_value reçoit les contraintes par dimension ; OUT= au format SAS (une observation par croisement de CLASS avec toutes les statistiques, _TYPE_/_PAGE_/_TABLE_, noms PctN_xx et PctSum_xx de la doc) ; plusieurs TABLE par étape (levée de l'ERROR J02-P7). Cas promus : tabulate-pctn-denominators, tabulate-pctsum-denominators, tabulate-out-multitable et, s'il diverge encore, tabulate-class-format-missing. Révision 7 (décision d1b0c08d, constat J02-P7) : statistiques COLPCTN, ROWPCTN, REPPCTN, PAGEPCTN, COLPCTSUM, ROWPCTSUM, REPPCTSUM et PAGEPCTSUM (ERROR provisoire de J02-P7, nommant J03-P2 depuis J02-P11) calculées selon la doc TABULATE, avec les mêmes dénominateurs que PCTN<…>/PCTSUM<…> ; tests ra_j03_p2_* (au moins un par famille).",
       "depends_on": [
         "J03-P1"
       ],
@@ -2164,7 +2267,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. DEFINE … FLOW (repli des valeurs caractère dans la largeur de colonne, coupure aux blancs, caractère SPLIT= honoré) ; SPLIT= sur PROC et DEFINE ; expressions COMPUTE et WHERE évaluées avec la bibliothèque de fonctions de l'étape DATA (levée de l'ERROR J02-P7) en réutilisant l'évaluateur existant de l'étape DATA plutôt qu'en dupliquant des fonctions. Cas promus : report-define-flow, report-compute-functions.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. DEFINE … FLOW (repli des valeurs caractère dans la largeur de colonne, coupure aux blancs, caractère SPLIT= honoré) ; SPLIT= sur PROC et DEFINE ; expressions COMPUTE et WHERE évaluées avec la bibliothèque de fonctions de l'étape DATA (levée de l'ERROR J02-P7) en réutilisant l'évaluateur existant de l'étape DATA plutôt qu'en dupliquant des fonctions. Cas promus : report-define-flow, report-compute-functions. Révision 7 (décision d1b0c08d, constat J02-P7) : instruction FORMAT de l'étape dans PROC TABULATE et PROC REPORT honorée (aujourd'hui WARNING « The FORMAT statement is ignored ») : formats appliqués à l'affichage et au regroupement CLASS (TABULATE) ou GROUP/ORDER/ACROSS (REPORT) sur la valeur formatée (doc SAS 9.4), avec un parseur de liste variables-format partagé dans src/procs/common/parse.rs (réutilise crate::parser::expr::read_format_token) ; tests ra_j03_p3_*.",
       "depends_on": [
         "J03-P2"
       ],
@@ -2178,7 +2281,10 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/procs/tabulate",
+        "src/procs/common/parse.rs",
+        "src/parser/expr"
       ],
       "check_ids": [
         "fmt",
@@ -2195,7 +2301,7 @@
       "kind": "implement",
       "tier": "T4",
       "size": "S",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. APPEND et CONTENTS dans PROC DATASETS délèguent à PROC APPEND et PROC CONTENTS : parsing d'options extrait et réutilisable (append.rs:59-106, contents) sans consommer le QUIT de DATASETS ; noms à un niveau résolus dans la LIB= de DATASETS (doc SAS) ; mêmes WARNING FORCE que l'appel direct ; REPAIR (J11-P6) et AGE restent ERROR. Cas promu : datasets-append-contents.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. APPEND et CONTENTS dans PROC DATASETS délèguent à PROC APPEND et PROC CONTENTS : parsing d'options extrait et réutilisable (append.rs:59-106, contents) sans consommer le QUIT de DATASETS ; noms à un niveau résolus dans la LIB= de DATASETS (doc SAS) ; mêmes WARNING FORCE que l'appel direct ; REPAIR (J11-P6) et AGE restent ERROR. Cas promu : datasets-append-contents. Révision 7 (constat J02-P8, décision d7fafba0) : PROC CONTENTS imprime l'informat sans sa largeur (« COMMA » pour comma12.) → nom, largeur et décimales comme la doc SAS 9.4 CONTENTS ; test ra_j03_p4_*.",
       "depends_on": [
         "J03-P3"
       ],
@@ -2227,7 +2333,7 @@
       "kind": "implement",
       "tier": "T4",
       "size": "S",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. PROC CATALOG : DELETE (entrées nommées), COPY OUT=, KILL (levée des ERROR du contrat ; entrées (catalog, delete f) et (catalog, copy out=other) retirées de contract_unimplemented_semantic_statements_reject_proc) sur le catalogue de formats de la session et le sidecar formats.sascat.json d'une libref non WORK ; CONTENTS liste aussi INVALUE et PICTURE et filtre par catalogue ; CONTENTS OUT= (colonnes de la doc). Cas promu : catalog-delete-copy-kill.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. PROC CATALOG : DELETE (entrées nommées), COPY OUT=, KILL (levée des ERROR du contrat ; entrées (catalog, delete f) et (catalog, copy out=other) retirées de contract_unimplemented_semantic_statements_reject_proc) sur le catalogue de formats de la session et le sidecar formats.sascat.json d'une libref non WORK ; CONTENTS liste aussi INVALUE et PICTURE et filtre par catalogue ; CONTENTS OUT= (colonnes de la doc). Cas promu : catalog-delete-copy-kill. Révision 7 (constat J02-P8, décision d7fafba0) : CONTENTS de PROC CATALOG ne liste que les formats VALUE quel que soit le catalogue désigné — couvert par ce périmètre (INVALUE, PICTURE, filtre par catalogue), avec un test qui le prouve.",
       "depends_on": [
         "J03-P4"
       ],
@@ -2252,19 +2358,50 @@
       ]
     },
     {
+      "id": "J03-P7",
+      "milestone_id": "J03",
+      "title": "Découpage du programme : commentaires et groupes RUN de PROC DATASETS et PROC CATALOG",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "M",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Aucun cas de conformité n'est promu par cette unité (conformance/ hors périmètre). Met à jour docs/support-contract.md et, si l'item y figure, docs/roadmap/avancee.md ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_j03_p7_*. Constats J02-P8 (décision d7fafba0). Le découpage du source en segments (src/macros/segmenter.rs, RawSegmenter, appelé par run_program dans src/executor/mod.rs : coupe après chaque `run;`/`quit;` de niveau supérieur pour que CALL SYMPUT soit visible à l'étape suivante) : (1) ignore les commentaires — une apostrophe ou un guillemet dans `/* … */` ouvre une pseudo-chaîne qui avale les frontières suivantes (segments fusionnés : une valeur CALL SYMPUT n'est plus visible à l'étape suivante, une macro-variable garde en silence son ancienne valeur), un `run;` dans un commentaire coupe l'étape → commentaires `/* … */` et instructions-commentaires `* … ;` (en début d'instruction) inertes, comme dans le lexer ; (2) coupe à chaque `run;` intérieur de PROC DATASETS et PROC CATALOG alors que ces procédures traitent des groupes RUN jusqu'à QUIT (doc SAS 9.4 « RUN-Group Processing » ; leurs parseurs gèrent déjà `run;`) : les instructions suivantes deviennent des ERROR « 180-322 … used out of proper order » → aucune coupe à un `run;` intérieur de ces procédures (fin au `quit;` ou à l'étape DATA/PROC suivante, comme SAS) ; la liste des procédures à groupes RUN est un point d'extension unique (PROC IML : J10-P2). Tests ra_j03_p7_* ≥ 4 (segmenter et programmes de bout en bout, dont CALL SYMPUT après un commentaire contenant une apostrophe) ; écart retiré du paragraphe J02-P8 de docs/support-contract.md. Acceptance acc-J03-P7.",
+      "depends_on": [
+        "J03-P5"
+      ],
+      "files": [
+        "src/macros/segmenter.rs",
+        "src/macros/tests",
+        "src/executor/mod.rs",
+        "src/procs/datasets",
+        "src/procs/catalog.rs",
+        "src/procs/catalog",
+        "tests/fixtures",
+        "tests/snapshots",
+        "docs/support-contract.md",
+        "docs/roadmap/avancee.md"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "acc-J03-P7"
+      ]
+    },
+    {
       "id": "J03-P6",
       "milestone_id": "J03",
       "title": "Revue J03",
       "kind": "review",
       "tier": "T2",
       "size": "S",
-      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque cas promu n'a changé que son status, que chaque valeur attendue est adossée à une source indépendante citée (oracles rejoués), que chaque snapshot modifié est justifié (ligne Snapshot:), qu'aucun repli silencieux n'est introduit et que docs/support-contract.md et docs/roadmap/avancee.md ne promettent rien au-delà du code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus : dénominateurs TABULATE conformes à la doc citée ; aucun appel de fonction REPORT évalué en silence ; délégations DATASETS sans divergence avec l'appel direct.",
+      "scope": "Revue indépendante du diff intégré du jalon (verify-before-done, test-design) : rejouer tous les checks sur le commit épinglé ; vérifier que chaque cas promu n'a changé que son status, que chaque valeur attendue est adossée à une source indépendante citée (oracles rejoués), que chaque snapshot modifié est justifié (ligne Snapshot:), qu'aucun repli silencieux n'est introduit et que docs/support-contract.md et docs/roadmap/avancee.md ne promettent rien au-delà du code. Ne rien modifier ; tout finding bloquant devient une unité corrective. Porte en plus : dénominateurs TABULATE conformes à la doc citée ; aucun appel de fonction REPORT évalué en silence ; délégations DATASETS sans divergence avec l'appel direct. Révision 7 : la revue couvre aussi J03-P7 (découpage : commentaires et groupes RUN).",
       "depends_on": [
         "J03-P1",
         "J03-P2",
         "J03-P3",
         "J03-P4",
-        "J03-P5"
+        "J03-P5",
+        "J03-P7"
       ],
       "files": [],
       "check_ids": [
@@ -2284,7 +2421,8 @@
         "acc-J03-P2",
         "acc-J03-P3",
         "acc-J03-P4",
-        "acc-J03-P5"
+        "acc-J03-P5",
+        "acc-J03-P7"
       ]
     },
     {
@@ -3136,7 +3274,7 @@
       "kind": "implement",
       "tier": "T2",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. RSPL/MSPL sur le moteur de covariance de J06-P2 (pseudo-données, boucle externe PCONV) au lieu du code PQL séparé ; syntaxe événements/essais r/n ; Type III par effet (F de Wald, ddl) ; ODS OUTPUT (CovParms, ParameterEstimates, Tests3, FitStatistics) ; levée de la NOTE provisoire de J02-P3. Cas promus : glimmix-binomial-blocks, glimmix-type3.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. RSPL/MSPL sur le moteur de covariance de J06-P2 (pseudo-données, boucle externe PCONV) au lieu du code PQL séparé ; syntaxe événements/essais r/n ; Type III par effet (F de Wald, ddl) ; ODS OUTPUT (CovParms, ParameterEstimates, Tests3, FitStatistics) ; levée de la NOTE provisoire de J02-P3. Cas promus : glimmix-binomial-blocks, glimmix-type3. Révision 7 (décision 0f6b023a, constat J02-P3) : migrer GLIMMIX vers common::parse_response_options_checked(ts, \"GLIMMIX\") (EVENT=FIRST|LAST, ORDER=, REF= : honorés comme LOGISTIC/GENMOD ou ERROR du contrat partagé ; levée de l'ERROR provisoire de J02-P11) et supprimer dans le même changement l'ancien common::parse_response_options (src/procs/common/model.rs) et ses tests de src/procs/common/tests.rs (sinon clippy -D warnings échoue sur du code mort). Constats J02-P3 (décision d7fafba0) : la PQL actuelle estime pour DIST=POISSON/BINARY avec intercept aléatoire une échelle résiduelle libre (ligne « Residual » utilisée dans les erreurs types) alors que RSPL fixe l'échelle à 1 sans RANDOM _RESIDUAL_ ; libellés « DF Method: Contain » en mode GLM (SAS : Residual) et « Residual PL » pour NORMAL/IDENTITY mixte (SAS : REML) ; R-side TYPE=UN : même optimum que MIXED REPEATED TYPE=UN (moteur partagé de J06-P2).",
       "depends_on": [
         "J08-P1"
       ],
@@ -3150,7 +3288,8 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/procs/common/tests.rs"
       ],
       "check_ids": [
         "fmt",
@@ -3167,7 +3306,7 @@
       "kind": "implement",
       "tier": "T2",
       "size": "L",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. METHOD=QUAD (Gauss-Hermite adaptative, QPOINTS= ou sélection automatique selon la doc) pour un intercept aléatoire par sujet ; LAPLACE réutilisant le même mode et la même courbure ; SE par Hessien complet (β et σ) ; levée de l'ERROR QUAD du contrat. Cas promus : glimmix-quad, glimmix-laplace-poisson.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. METHOD=QUAD (Gauss-Hermite adaptative, QPOINTS= ou sélection automatique selon la doc) pour un intercept aléatoire par sujet ; LAPLACE réutilisant le même mode et la même courbure ; SE par Hessien complet (β et σ) ; levée de l'ERROR QUAD du contrat. Cas promus : glimmix-quad, glimmix-laplace-poisson. Révision 7 (constats J02-P3, décision d7fafba0) : LAPLACE dont une composante de variance s'effondre à 0 sans la NOTE de la doc SAS (matrice G non définie positive) → NOTE ; ligne « Residual 1.0000 » imprimée pour LAPLACE binaire/Poisson (absente chez SAS) → retirée ; tests ra_j08_p3_*.",
       "depends_on": [
         "J08-P2"
       ],
@@ -3292,7 +3431,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. POOL=NO (QDA, log-déterminants), POOL=TEST (test d'homogénéité de la doc), CROSSVALIDATE (leave-one-out exact), PRIORS explicites, LIST/CROSSLIST, OUTSTAT=, TESTDATA=/TESTOUT=, tables « Number of Observations and Percent Classified » et estimations d'erreur ; covariance singulière → ERROR explicite nommant la classe ; levée des ERROR de J02-P4. Cas promus : discrim-qda-crossvalidate, discrim-priors-list.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. POOL=NO (QDA, log-déterminants), POOL=TEST (test d'homogénéité de la doc), CROSSVALIDATE (leave-one-out exact), PRIORS explicites, LIST/CROSSLIST, OUTSTAT=, TESTDATA=/TESTOUT=, tables « Number of Observations and Percent Classified » et estimations d'erreur ; covariance singulière → ERROR explicite nommant la classe ; levée des ERROR de J02-P4. Cas promus : discrim-qda-crossvalidate, discrim-priors-list. Révision 7 (constat J02-P4, décision d7fafba0) : OUT=, OUTSTAT= et TESTOUT= vérifiés (libref assignée) avant d'écrire le listing (SAS : ERROR avant toute sortie ; aujourd'hui échec après impression).",
       "depends_on": [
         "J09-P1"
       ],
@@ -3378,7 +3517,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Entrée TYPE=CORR/COV (attribut TYPE= de table et détection _TYPE_/_NAME_ selon la doc), OUTSTAT= (layout doc), PARTIAL (résidualisation, réutiliser CORR), STD, NOINT, VARDEF= ; levée de l'ERROR de J02-P4. Cas promus : princomp-typecorr-outstat, princomp-partial.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Entrée TYPE=CORR/COV (attribut TYPE= de table et détection _TYPE_/_NAME_ selon la doc), OUTSTAT= (layout doc), PARTIAL (résidualisation, réutiliser CORR), STD, NOINT, VARDEF= ; levée de l'ERROR de J02-P4. Cas promus : princomp-typecorr-outstat, princomp-partial. Révision 7 (constats J02-P4, décision d7fafba0) : FACTOR — entrée TYPE=CORR/COV (même détection que PRINCOMP) et variable de variance nulle : les ERROR provisoires de J02-P4 nomment déjà J09-P5, levées ici ; OUT=/OUTSTAT= de PRINCOMP et FACTOR vérifiés avant le listing ; tests ra_j09_p5_*.",
       "depends_on": [
         "J09-P4"
       ],
@@ -3393,7 +3532,8 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/procs/factor"
       ],
       "check_ids": [
         "fmt",
@@ -3410,7 +3550,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. PSEUDO, CCC (Sarle 1983, doc), RSQUARE, section des valeurs propres, STANDARD, NOSQUARE ; AVERAGE sur distances au carré pour des coordonnées (doc) ; OUTTREE avec _HEIGHT_ SAS par méthode, _RMSSTD_, _SPRSQ_, _RSQ_, _PSF_, _PST2_, _CCC_ ; observations avec manquants exclues + NOTE (levée de l'ERROR J02-P4). Cas promu : cluster-ccc-pseudo.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. PSEUDO, CCC (Sarle 1983, doc), RSQUARE, section des valeurs propres, STANDARD, NOSQUARE ; AVERAGE sur distances au carré pour des coordonnées (doc) ; OUTTREE avec _HEIGHT_ SAS par méthode, _RMSSTD_, _SPRSQ_, _RSQ_, _PSF_, _PST2_, _CCC_ ; observations avec manquants exclues + NOTE (levée de l'ERROR J02-P4). Cas promu : cluster-ccc-pseudo. Révision 7 (constats J02-P4, décision d7fafba0) : PRINT=n produit une NOTE au lieu de la sémantique de la doc SAS (historique limité aux n dernières générations) → sémantique de la doc ; METHOD= est obligatoire en SAS mais vaut WARD par défaut en silence → ERROR si absent ; OUTTREE= vérifié avant le listing ; tests ra_j09_p6_*.",
       "depends_on": [
         "J09-P5"
       ],
@@ -3438,7 +3578,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. FASTCLUS : semis SAS (première observation complète, RADIUS=, REPLACE=FULL|PART|NONE|RANDOM, doc « Background »), MAXCLUSTERS= défaut 100, MAXITER= défaut 1, CONVERGE=, DISTANCE, SEED=table, MEAN=/OUTSEED=, instruction ID (entrée (fastclus, id x) retirée du test de contrat), OUT= avec CLUSTER et DISTANCE, manquants (doc) ; NOTE d'approximation de J02-P4 retirée. DISTANCE : layout de sortie de la doc, niveaux VAR et STD= nécessaires au cas. Cas promus : fastclus-sas-seeds, distance-similarity-missing.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. FASTCLUS : semis SAS (première observation complète, RADIUS=, REPLACE=FULL|PART|NONE|RANDOM, doc « Background »), MAXCLUSTERS= défaut 100, MAXITER= défaut 1, CONVERGE=, DISTANCE, SEED=table, MEAN=/OUTSEED=, instruction ID (entrée (fastclus, id x) retirée du test de contrat), OUT= avec CLUSTER et DISTANCE, manquants (doc) ; NOTE d'approximation de J02-P4 retirée. DISTANCE : layout de sortie de la doc, niveaux VAR et STD= nécessaires au cas. Cas promus : fastclus-sas-seeds, distance-similarity-missing. Révision 7 (constats J02-P4, décision d7fafba0) : MAXCLUSTERS= supérieur au nombre d'observations réduit en silence → comportement de la doc SAS ; RSQ/(1-RSQ) imprimé « inf » quand RSQ = 1 → valeur imprimée par SAS selon la doc ; OUT= vérifié avant le listing ; tests ra_j09_p7_*.",
       "depends_on": [
         "J09-P6"
       ],
@@ -3535,7 +3675,7 @@
       "kind": "implement",
       "tier": "T2",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Modules utilisateurs : START/FINISH, RUN et CALL, arguments par référence, environnements locaux (pile), GLOBAL, RETURN, récursion ; module inconnu ou arité fausse → ERROR SAS. Cas promu : iml-modules.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Modules utilisateurs : START/FINISH, RUN et CALL, arguments par référence, environnements locaux (pile), GLOBAL, RETURN, récursion ; module inconnu ou arité fausse → ERROR SAS. Cas promu : iml-modules. Révision 7 (constat J02-P5, décision d7fafba0) : un `run;` de niveau supérieur dans le corps de PROC IML coupe l'étape (src/macros/segmenter.rs) → PROC IML ajouté au point d'extension des procédures à groupes RUN créé par J03-P7 (RUN reste une instruction IML) ; test ra_j10_p2_*.",
       "depends_on": [
         "J10-P1"
       ],
@@ -3546,7 +3686,9 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/macros/segmenter.rs",
+        "src/macros/tests"
       ],
       "check_ids": [
         "fmt",
@@ -3563,7 +3705,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Affectation indicée, opérateurs ||, //, **, &, |, ^ (non), I, J, DIAG, LOC, indice unique sur vecteur ligne ou colonne, READ … WHERE (opérateurs de la doc), READ NEXT, VAR _NUM_. Cas promus : iml-read-where, iml-operators-subscripts.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Affectation indicée, opérateurs ||, //, **, &, |, ^ (non), I, J, DIAG, LOC, indice unique sur vecteur ligne ou colonne, READ … WHERE (opérateurs de la doc), READ NEXT, VAR _NUM_. Cas promus : iml-read-where, iml-operators-subscripts. Révision 7 (constats J02-P5, décision d7fafba0) : comparaisons avec une valeur manquante évaluées avec la sémantique NaN (résultats faux en silence) → sémantique SAS/IML de la doc (valeurs manquantes dans les comparaisons et opérateurs logiques, citée) ; x[i] sur une matrice qui n'est pas un vecteur sélectionne la ligne i → i-ème élément dans l'ordre des lignes (doc SAS/IML « Subscripts ») ; tests ra_j10_p3_*.",
       "depends_on": [
         "J10-P2"
       ],
@@ -3685,7 +3827,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. _BREAK_ (COMPUTE et OUT=), BREAK BEFORE, options OL/DOL/UL/DUL/SKIP/PAGE/SUPPRESS/SUMMARIZE, RBREAK BEFORE et AFTER (rapports détaillés compris), COMPUTE BEFORE/AFTER [<var>], LINE dans les ruptures, ordre d'évaluation COMPUTE/BREAK de la doc ; levée des ERROR et WARNING de J02-P7. Cas promu : report-breaks.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. _BREAK_ (COMPUTE et OUT=), BREAK BEFORE, options OL/DOL/UL/DUL/SKIP/PAGE/SUPPRESS/SUMMARIZE, RBREAK BEFORE et AFTER (rapports détaillés compris), COMPUTE BEFORE/AFTER [<var>], LINE dans les ruptures, ordre d'évaluation COMPUTE/BREAK de la doc ; levée des ERROR et WARNING de J02-P7. Cas promu : report-breaks. Révision 7 (décision d1b0c08d, constats J02-P7) : option CHARACTER / LENGTH= de COMPUTE (ERROR provisoire nommant J11-P2 depuis J02-P11) ; valeurs manquantes des variables GROUP, ORDER et ACROSS exclues sauf option MISSING (doc) ; rapport à seules colonnes ANALYSIS réduit à une ligne de synthèse (doc) ; ORDER=FORMATTED par défaut ; valeurs GROUP/ORDER imprimées seulement quand elles changent ; SUM sur aucune valeur non manquante = manquant (src/procs/means/stats.rs ; PROC MEANS reste conforme à sa doc, tests existants verts) ; tests ra_j11_p2_*.",
       "depends_on": [
         "J11-P1"
       ],
@@ -3696,7 +3838,8 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/procs/means/stats.rs"
       ],
       "check_ids": [
         "fmt",
@@ -3713,7 +3856,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. COLUMN avec en-têtes de groupe, alias (x=alias), virgules (empilement ACROSS) ; ACROSS avec BREAK/COMPUTE/FORMAT=/WIDTH= (levée de l'ERROR J02-P7) ; HEADLINE/HEADSKIP rendus ; OUT= pour ACROSS (colonnes _Cn_ de la doc). Cas promu : report-columns-across.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. COLUMN avec en-têtes de groupe, alias (x=alias), virgules (empilement ACROSS) ; ACROSS avec BREAK/COMPUTE/FORMAT=/WIDTH= (levée de l'ERROR J02-P7) ; HEADLINE/HEADSKIP rendus ; OUT= pour ACROSS (colonnes _Cn_ de la doc). Cas promu : report-columns-across. Révision 7 (décision d1b0c08d, constat J02-P7) : noms composés var.stat dans COLUMN, DEFINE et COMPUTE (ERROR provisoire nommant J11-P3 depuis J02-P11 ; doc SAS 9.4 REPORT) ; tests ra_j11_p3_*.",
       "depends_on": [
         "J11-P2"
       ],
@@ -3740,8 +3883,8 @@
       "title": "TABULATE : BOX=, RTS=, PRINTMISS, MISSTEXT=, KEYLABEL",
       "kind": "implement",
       "tier": "T3",
-      "size": "S",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Options d'affichage BOX=, RTS=, PRINTMISS, MISSTEXT= et instruction KEYLABEL ; CLASSLEV/KEYWORD sans styles (styles ODS hors périmètre → WARNING). Cas promu : tabulate-box-rts.",
+      "size": "M",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Options d'affichage BOX=, RTS=, PRINTMISS, MISSTEXT= et instruction KEYLABEL ; CLASSLEV/KEYWORD sans styles (styles ODS hors périmètre → WARNING). Cas promu : tabulate-box-rts. Révision 7 (décision d1b0c08d, constat J02-P7) : statistiques TABULATE encore refusées (MEDIAN, P1–P99, Q1, Q3, QRANGE, STDDEV, STDERR, CV, CSS, USS, VAR, RANGE, MODE, KURT/KURTOSIS, SKEW/SKEWNESS, LCLM, UCLM, SUMWGT, T, PROBT/PRT ; ERROR provisoire nommant J11-P4 depuis J02-P11) calculées en réutilisant les statistiques de PROC MEANS (src/procs/means/stats.rs, sans duplication), définitions de la doc ; tests ra_j11_p4_*.",
       "depends_on": [
         "J11-P3"
       ],
@@ -3752,7 +3895,8 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/procs/means/stats.rs"
       ],
       "check_ids": [
         "fmt",
@@ -4051,7 +4195,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Spécification de tracé publique (bins, barres, boîtes, droites, séries) calculée hors cfg(feature = \"graphics\") et testable dans le build par défaut contre tests/oracles/graphics ; renderer plotters consommateur ; HISTOGRAM BINWIDTH= exact, plage Y couvrant les effectifs (UNIVARIATE compris), libellés de catégories VBAR. Tests ra_j13_p2_* ≥ 6 (build par défaut).",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. Spécification de tracé publique (bins, barres, boîtes, droites, séries) calculée hors cfg(feature = \"graphics\") et testable dans le build par défaut contre tests/oracles/graphics ; renderer plotters consommateur ; HISTOGRAM BINWIDTH= exact, plage Y couvrant les effectifs (UNIVARIATE compris), libellés de catégories VBAR. Tests ra_j13_p2_* ≥ 6 (build par défaut). Révision 7 (constats J02-P6, décision d7fafba0) : niveaux numériques de GPLOT plot y*x=z ordonnés comme du texte (clés format! dans un BTreeMap de build_series) → ordre par valeur, levée du WARNING de ra_j02_p6_gplot_numeric_group_text_order (src/procs/gplot) ; la construction graphique réutilise la table DATA= déjà validée au lieu de la relire.",
       "depends_on": [
         "J13-P1"
       ],
@@ -4212,7 +4356,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "M",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. GROUP= (une série/couleur par niveau, ordre des niveaux), KEYLEGEND (liste ordonnée des niveaux), LEGENDLABEL= ; RESPONSE=/STAT=SUM|MEAN pour les barres, SCALE=COUNT|PERCENT|PROPORTION pour l'histogramme ; levée des WARNING de J02-P6 ; tests ra_j14_p1_* ≥ 4 contre les oracles.",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. GROUP= (une série/couleur par niveau, ordre des niveaux), KEYLEGEND (liste ordonnée des niveaux), LEGENDLABEL= ; RESPONSE=/STAT=SUM|MEAN pour les barres, SCALE=COUNT|PERCENT|PROPORTION pour l'histogramme ; levée des WARNING de J02-P6 ; tests ra_j14_p1_* ≥ 4 contre les oracles. Révision 7 (constats J02-P6, décision d7fafba0) : les approximations graphiques listées par J02-P6 dans docs/support-contract.md (échelle par défaut de HISTOGRAM, STAT par défaut de VBAR RESPONSE=) sont levées ici et leurs lignes mises à jour.",
       "depends_on": [
         "J13-P6"
       ],
@@ -4301,7 +4445,7 @@
       "kind": "implement",
       "tier": "T3",
       "size": "S",
-      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. STYLE= déterministe (HTMLBlue, Listing, Journal : palette et polices fixées), défauts ODS GRAPHICS et noms d'images conformes à la doc SAS 9.4 (valeurs publiées vérifiées) ; levée du WARNING STYLE= de J02-P6 ; tests ra_j14_p4_* ≥ 3 (sortie SVG textuelle déterministe par style).",
+      "scope": "Unité IMPLÉMENTATION. Livre le comportement borné ci-dessous avec reproducer et test de non-régression (CONTRIBUTING §3). Promotion des cas known-divergence → validated en ne modifiant QUE le champ status de leur case.json : data/, expected/, program.sas et oracle/ sont hors du périmètre de fichiers (refus mécanique). Régénère conformance/STATUS.md ; met à jour docs/support-contract.md (ERROR/WARNING levés) et la ligne de l'item dans docs/roadmap/avancee.md (état + unité) ; snapshot modifié → ligne « Snapshot: <fixture> — <raison> » dans le commit. Cargo via distrobox enter dev (CI=true INSTA_UPDATE=no). Fichier hors périmètre nécessaire → blocked + décision. Tests d'acceptation nommés ra_<unité en minuscules>_* quand acc-<unité> les filtre. STYLE= déterministe (HTMLBlue, Listing, Journal : palette et polices fixées), défauts ODS GRAPHICS et noms d'images conformes à la doc SAS 9.4 (valeurs publiées vérifiées) ; levée du WARNING STYLE= de J02-P6 ; tests ra_j14_p4_* ≥ 3 (sortie SVG textuelle déterministe par style). Révision 7 (constat J02-P6, décision d7fafba0) : ODS GRAPHICS RESET=IMAGENAME, RESET=INDEX(n) et la remise à zéro du préfixe et de l'index par RESET / RESET=ALL (WARNING de J02-P6, src/ods_graphics) honorés (doc SAS 9.4 ODS GRAPHICS statement) ; tests ra_j14_p4_*.",
       "depends_on": [
         "J14-P3"
       ],
@@ -4314,7 +4458,8 @@
         "tests/fixtures",
         "tests/snapshots",
         "docs/support-contract.md",
-        "docs/roadmap/avancee.md"
+        "docs/roadmap/avancee.md",
+        "src/ast/global.rs"
       ],
       "check_ids": [
         "fmt",
