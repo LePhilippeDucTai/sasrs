@@ -83,6 +83,33 @@ pub(super) const UNSUPPORTED_STATS: &[&str] = &[
     "var",
 ];
 
+/// Percentage statistics whose denominators live in the table dimensions
+/// (COLPCTN … PAGEPCTSUM, SAS 9.4 « Statistics That Are Available in PROC
+/// TABULATE »): TABULATE table semantics, lifted by J03-P2. Every other
+/// unsupported statistic is a statistics-library concern (J11-P4). J02-P11 —
+/// the provisional ERROR of an unsupported statistic names the unit that
+/// will lift it.
+pub(super) const PCT_DENOM_STATS: &[&str] = &[
+    "colpctn",
+    "rowpctn",
+    "reppctn",
+    "pagepctn",
+    "colpctsum",
+    "rowpctsum",
+    "reppctsum",
+    "pagepctsum",
+];
+
+/// Owning roadmap-avancee unit of an unsupported statistic (lowercase name,
+/// already a member of [`UNSUPPORTED_STATS`]).
+pub(super) fn stat_planned_unit(stat: &str) -> Option<&'static str> {
+    if PCT_DENOM_STATS.contains(&stat) {
+        Some("J03-P2")
+    } else {
+        Some("J11-P4")
+    }
+}
+
 /// Valid PROC TABULATE statements that only label or style the headings
 /// (KEYLABEL, CLASSLEV, KEYWORD): ignoring them leaves the computed table
 /// unchanged, hence a display WARNING. FREQ and WEIGHT keep the shared
@@ -116,7 +143,7 @@ fn check_table_name(name: &str, span: Span, class: &[String], var: &[String]) ->
     if UNSUPPORTED_STATS.contains(&lower.as_str()) {
         return Err(unsupported_construct(
             &format!("The {} statistic", name.to_ascii_uppercase()),
-            None,
+            stat_planned_unit(&lower),
             span,
         ));
     }

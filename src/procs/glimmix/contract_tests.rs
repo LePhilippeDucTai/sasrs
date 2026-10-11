@@ -990,3 +990,68 @@ fn ra_j02_p3_no_misleading_notes() {
     assert!(!out.log.contains("parse-accepted"), "{}", out.log);
     assert!(!out.log.contains("not implemented"), "{}", out.log);
 }
+
+// ── J02-P11 : les options de réponse non lues sont des ERROR ─────────────
+
+/// Base : dans la parenthèse d'options de réponse du MODEL, seuls
+/// `EVENT='valeur'` et `DESCENDING`/`DESC` étaient lus ;
+/// `EVENT=FIRST|LAST` (événement par défaut ajusté en silence), `ORDER=`,
+/// `REF=` (ordre ou référence des niveaux changés en silence) et tout jeton
+/// inconnu étaient avalés sans diagnostic. Désormais : **ERROR** au parsing
+/// nommant J08-P2 (SAS/STAT 9.4 User's Guide, MODEL statement, « Response
+/// Variable Options » — désigner l'événement ou l'ordre des niveaux change le
+/// modèle ajusté) ; `EVENT='valeur'` et `DESCENDING`/`DESC` restent honorés.
+/// La migration vers `parse_response_options_checked` (et le retrait de la
+/// forme historique de `src/procs/common/model.rs`) est planifiée en J08-P2
+/// (décision 0f6b023a) et n'est PAS faite ici.
+#[test]
+fn ra_j02_p11_glimmix_unread_response_options_are_errors() {
+    for (opts, shown) in [
+        ("(event=first)", "The EVENT=FIRST response variable option"),
+        ("(event=last)", "The EVENT=LAST response variable option"),
+        ("(event=1)", "The EVENT=1 response variable option"),
+        ("(order=freq)", "The ORDER= response variable option"),
+        ("(ref='1')", "The REF= response variable option"),
+        ("(bogus)", "The BOGUS response variable option"),
+    ] {
+        let out = run_sas(&format!(
+            "{BIN}proc glimmix data=bin; class subj;
+             model y{opts} = x / dist=binary; random intercept / subject=subj; run;"
+        ));
+        assert_error(
+            &out,
+            &format!("{shown} {CANNOT} (planned: roadmap-avancee J08-P2)."),
+            opts,
+        );
+    }
+
+    // EVENT='value' and DESCENDING/DESC keep working: the fit runs.
+    for opts in ["(event='1')", "(descending)", "(desc)"] {
+        let out = run_sas(&format!(
+            "{BIN}proc glimmix data=bin; class subj;
+             model y{opts} = x / dist=binary; random intercept / subject=subj; run;"
+        ));
+        assert_eq!(out.exit_code, 0, "{opts}: {}", out.log);
+        assert!(
+            out.listing.contains("The GLIMMIX Procedure"),
+            "{opts}: the step must run\n{}",
+            out.listing
+        );
+    }
+
+    // DESCENDING changes the event level, so the estimates really differ:
+    // the honored options are not accepted-and-ignored.
+    let plain = run_sas(&format!(
+        "{BIN}proc glimmix data=bin; class subj;
+         model y = x / dist=binary; random intercept / subject=subj; run;"
+    ));
+    let desc = run_sas(&format!(
+        "{BIN}proc glimmix data=bin; class subj;
+         model y(descending) = x / dist=binary; random intercept / subject=subj; run;"
+    ));
+    assert_eq!(desc.exit_code, 0, "{}", desc.log);
+    assert_ne!(
+        plain.listing, desc.listing,
+        "DESCENDING must change the event level (default: first level)"
+    );
+}

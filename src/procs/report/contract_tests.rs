@@ -103,7 +103,7 @@ fn ra_j02_p7_report_where_function_call() {
 /// Base : un appel de fonction dans un COMPUTE valait manquant ; le nom
 /// composé `age.sum` (référence SAS d'une variable d'analyse) s'imprimait en
 /// morceaux dans LINE ; `_BREAK_` valait manquant. Désormais ERROR (fonctions
-/// : J03-P3 ; `_BREAK_` : J11-P2 ; nom composé : non planifié).
+/// : J03-P3 ; `_BREAK_` : J11-P2 ; nom composé : J11-P3).
 #[test]
 fn ra_j02_p7_report_compute_unsupported_expressions() {
     let out = report(
@@ -131,7 +131,9 @@ fn ra_j02_p7_report_compute_unsupported_expressions() {
     );
     assert_rejected(
         &out,
-        &format!("ERROR: The compound name AGE.SUM {CANNOT}."),
+        &format!(
+            "ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."
+        ),
         "age.sum",
     );
 
@@ -196,7 +198,7 @@ fn ra_j02_p7_report_compute_references_by_name() {
 /// seule fois en fin de rapport ; une LINE dans le COMPUTE d'une colonne était
 /// ignorée ; une affectation dans COMPUTE AFTER réécrivait chaque ligne ;
 /// `/ CHARACTER` était sauté (colonne restée numérique, manquante dans OUT=).
-/// Désormais ERROR (J11-P2 ; CHARACTER non planifié) ; le COMPUTE AFTER de
+/// Désormais ERROR (J11-P2, CHARACTER compris) ; le COMPUTE AFTER de
 /// niveau rapport avec LINE reste honoré.
 #[test]
 fn ra_j02_p7_report_compute_locations() {
@@ -230,7 +232,10 @@ fn ra_j02_p7_report_compute_locations() {
         ),
         (
             "compute age / character length=10; age = 1; endcomp;",
-            format!("ERROR: The CHARACTER option of the COMPUTE statement {CANNOT}."),
+            format!(
+                "ERROR: The CHARACTER option of the COMPUTE statement {CANNOT} (planned: \
+                 roadmap-avancee J11-P2)."
+            ),
         ),
     ] {
         assert_rejected(&report(&format!("{group} {block}")), &needle, block);
@@ -559,5 +564,54 @@ fn ra_j02_p7_report_valid_statements() {
         &out,
         "WARNING: The FORMAT statement is ignored in PROC REPORT; display customization is not \
          supported.",
+    );
+}
+
+// ── J02-P11 : chaque ERROR provisoire nomme l'unité qui la lèvera ────────
+
+/// Base : les ERROR de `/ CHARACTER LENGTH=` du COMPUTE et du nom composé
+/// `var.stat` (référence SAS d'une variable d'analyse) ne nommaient AUCUNE
+/// unité du plan — la relecture du contrat (révision 7, décision d7fafba0)
+/// exige que chaque ERROR provisoire dise qui la lèvera. Désormais :
+/// CHARACTER/LENGTH= (colonne caractère dans le rapport et dans OUT=) →
+/// J11-P2 ; nom composé (statistiques d'une variable d'analyse dans un
+/// COMPUTE) → J11-P3. L'option d'affichage STYLE= garde son WARNING.
+#[test]
+fn ra_j02_p11_report_compute_errors_name_lifting_unit() {
+    let group = "column sex age; define sex / group;";
+    for (block, needle) in [
+        (
+            "compute age / character; age = 1; endcomp;",
+            format!(
+                "ERROR: The CHARACTER option of the COMPUTE statement {CANNOT} (planned: \
+                 roadmap-avancee J11-P2)."
+            ),
+        ),
+        (
+            "compute age / length=10; age = 1; endcomp;",
+            format!(
+                "ERROR: The LENGTH= option of the COMPUTE statement {CANNOT} (planned: \
+                 roadmap-avancee J11-P2)."
+            ),
+        ),
+        (
+            "compute after; line 'Total ' age.sum best8.; endcomp;",
+            format!(
+                "ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."
+            ),
+        ),
+    ] {
+        assert_rejected(&report(&format!("{group} {block}")), &needle, block);
+    }
+
+    // STYLE= stays a display WARNING; the report is still produced.
+    let out = report(&format!(
+        "{group} compute age / style=[font_weight=bold]; age = 1; endcomp;"
+    ));
+    assert_eq!(out.exit_code, 1, "{}", out.log);
+    assert_has(
+        &out,
+        "WARNING: The STYLE= option of the COMPUTE statement is ignored in PROC REPORT; display \
+         customization is not supported.",
     );
 }

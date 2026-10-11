@@ -610,8 +610,11 @@ pub(super) fn parse_model(ts: &mut StatementStream) -> Result<(ModelSpec, Option
     // form of J02-P1 (EVENT=FIRST|LAST honored, ORDER=/REF= rejected) is not
     // used yet: switching to it leaves the legacy parser of
     // src/procs/common/model.rs without caller, outside the files of J02-P3
-    // (see docs/support-contract.md).
-    let (event, descending) = common::parse_response_options(ts);
+    // (see docs/support-contract.md). J02-P11 — the legacy form now rejects
+    // every token it does not read (EVENT=FIRST|LAST, ORDER=, REF=, unknown)
+    // instead of skipping it silently; the migration to the checked form
+    // (and the removal of the legacy parser) is planned in J08-P2.
+    let (event, descending) = common::parse_response_options(ts)?;
 
     common::expect_model_eq(ts, "expected '=' in MODEL statement")?;
 
