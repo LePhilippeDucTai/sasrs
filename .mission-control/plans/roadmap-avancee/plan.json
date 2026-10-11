@@ -2,7 +2,7 @@
   "protocol_version": 3,
   "project_id": "lephilippeductai/sasrs",
   "plan_id": "f11909ef-4aca-4307-a2ae-f6771ddd33fd",
-  "revision": 11,
+  "revision": 12,
   "stub": "roadmap-avancee",
   "base_branch": "milestone/roadmap-avancee",
   "goal": "Feuille de route avancée sasrs (docs/roadmap/avancee.md, ex-M46–M66 hors M50, plus S3), replanifiée par comportements bornés depuis l'état constaté à d0b4d906 (audit de cinq zones et exécution réelle du corpus). Ordre par valeur : J01 corpus et checks fiables (les 10 cas compat/* n'étaient jamais exécutés, 4 échouent ; check de déterminisme cassé) ; J02 contrat : suppression des replis silencieux constatés (≈ 120 constructions ignorées ou approximées sans diagnostic) ; puis levée des ERROR du contrat : J03 reporting Base, J04 BY, J05 LOGISTIC, J06 MIXED, J07 GENMOD, J08 GLIMMIX, J09 multivarié, J10 IML ; puis extensions : J11 Base/OPTIONS, J12 S3, J13–J14 graphiques (checks clippy-graphics et test-graphics exécutés en local : D-INFRA-1 tranchée option (a) par Philippe le 2026-10-10, fontconfig, freetype2, ttf-liberation et pkgconf installés dans le conteneur dev). Conventions : (1) oracle d'abord — chaque jalon statistique ou Base commence par une unité ORACLE qui écrit les cas conformance/ au statut known-divergence depuis une source indépendante citée (doc SAS 9.4, publication R/statsmodels, ou script stdlib oracle/oracle.py rejoué) ; l'implémenteur ne peut modifier que le champ status de ses case.json (data/, expected/, program.sas, oracle/ hors de son périmètre de fichiers) ; (2) acceptation exécutable par unité : check acc-<unité> (conformance_require.py sur les cas nommés, ou tests cargo ra_<unité>_* en nombre minimal) ; (3) procs statistiques : chaque jalon traite non-convergence, matrice singulière, paramètre sur frontière, identifiabilité et tolérances (textes SAS cités en log.required, cas corpus, revue) ; tolérances : valeurs publiées abs 0,5·10^-d, oracle stdlib rel 1e-8 (estimations) et abs 1e-10 (p-values), ddl abs 0,05 ; (4) aucune promesse au-delà du code : docs/support-contract.md et docs/roadmap/avancee.md mis à jour par l'unité qui livre ; snapshots modifiés justifiés par une ligne Snapshot: ; (5) exécution : un exécutant à la fois, cargo via distrobox enter dev (toolchain 1.98.1, CI=true INSTA_UPDATE=no), python3 hôte en bibliothèque standard ; chaque jalon clos par une revue indépendante ; fusion dans main par PR avec ci-ok. Hors périmètre : ADR 0003 (sasrs-py), ADR 0004 (XPT/sas7bdat) et lecture sas7bcat, extensions GLM/ANOVA autres que BY, structures MIXED TOEP/ARH(1)/SP(POW), LOGISTIC ROC/UNITS/SCORE/LACKFIT/SELECTION=, GENMOD LRCI et distributions NEGBIN/TWEEDIE/ZIP, GLIMMIX LAPLACE à effets multiples, CLUSTER entrée TYPE=DISTANCE, styles ODS au-delà de trois styles fixes.",
@@ -1529,8 +1529,7 @@
         "--",
         "bash",
         "-lc",
-        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; ",
-        "out=$(cargo test --locked -p sasrs ra_j02_p13_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p13_* passes: $n (minimum 3)\"; [ \"$n\" -ge 3 ]"
+        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; out=$(cargo test --locked -p sasrs ra_j02_p13_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p13_* passes: $n (minimum 3)\"; [ \"$n\" -ge 3 ]"
       ],
       "cwd": ".",
       "timeout_seconds": 3600,
@@ -1545,8 +1544,23 @@
         "--",
         "bash",
         "-lc",
+        "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; out=$(cargo test --locked -p sasrs ra_j02_p14_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p14_* passes: $n (minimum 4)\"; [ \"$n\" -ge 4 ]"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600,
+      "expected_exit_code": 0
+    },
+    {
+      "id": "acc-J14-P6",
+      "argv": [
+        "distrobox",
+        "enter",
+        "dev",
+        "--",
+        "bash",
+        "-lc",
         "export CI=true INSTA_UPDATE=no SCCACHE_SERVER_PORT=8231 SCCACHE_DIR=/home/deck/.cache/sasrs-sccache; ",
-        "out=$(cargo test --locked -p sasrs ra_j02_p14_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j02_p14_* passes: $n (minimum 4)\"; [ \"$n\" -ge 4 ]"
+        "out=$(cargo test --locked -p sasrs ra_j14_p6_ 2>&1); rc=$?; printf '%s\\n' \"$out\" | tail -n 60; [ \"$rc\" -eq 0 ] || exit 1; n=$(printf '%s\\n' \"$out\" | sed -nE 's/^test result: ok\\. ([0-9]+) passed.*/\\1/p' | awk '{s+=$1} END {print s+0}'); echo \"tests ra_j14_p6_* passes: $n (minimum 2)\"; [ \"$n\" -ge 2 ]"
       ],
       "cwd": ".",
       "timeout_seconds": 3600,
@@ -4536,7 +4550,8 @@
         "J14-P1",
         "J14-P2",
         "J14-P3",
-        "J14-P4"
+        "J14-P4",
+        "J14-P6"
       ],
       "files": [],
       "check_ids": [
@@ -4557,7 +4572,8 @@
         "acc-J14-P1",
         "acc-J14-P2",
         "acc-J14-P3",
-        "acc-J14-P4"
+        "acc-J14-P4",
+        "acc-J14-P6"
       ]
     },
     {
@@ -4620,12 +4636,48 @@
         "test",
         "acc-J02-P14"
       ]
+    },
+    {
+      "id": "J14-P6",
+      "milestone_id": "J14",
+      "title": "Correctif hygiène post-revue J02 : propagation d'erreur apply_obs_window, narratif GLM périmé, champs issue restants du corpus",
+      "kind": "implement",
+      "tier": "T3",
+      "size": "S",
+      "scope": "Unité CORRECTIVE (findings de la revue J02 e03515d6 et de la receipt J02-P13 166041f4, décision a84ba687). Trois livrables bornés : (1) src/procs/common/dataset.rs apply_obs_window : propager l'erreur de take() au lieu de l'avaler (aujourd'hui `if let Ok(sliced) = ds.df.take(&idx_ca)` rendrait la table ENTIÈRE sans diagnostic en cas d'échec de take sous fenêtre OBS=/FIRSTOBS= active — chemin latent de repli silencieux, non atteignable avec les indices contigus dans les bornes actuels) ; un test ra_j14_p6_apply_obs_window_error_propagated qui fige la propagation (ou, si le chemin est structurellement inatteignable, un test qui le prouve et un commentaire explicitant l'invariant) ; (2) docs/roadmap/avancee.md « Ordre recommandé » item 1 : retirer la narration périmée de la levée de divergence GLM OUTPUT OUT= (le cas glm-oneway-predicted est validated depuis la base du plan, phrase déjà corrigée en section GLM/ANOVA par J02-P13) ; (3) dépouiller le champ `issue` des case.json validated qui le portent encore hors compat/ (~10 cas sous conformance/cases/{base,stat}*/ ; conformance/schema.md réserve `issue` aux known-divergence ; J01-P8 et J02-P13 n'ont couvert que le sous-ensemble compat) — ne toucher QUE le champ issue, jamais data/, expected/, program.sas, oracle/ ni ORACLE.sha256 ; conformance_report.py --check doit rester vert et STATUS.md au même total. Checks : fmt, clippy, test, conformance-status, oracles-replay, acc-J14-P6 (≥ 2 tests ra_j14_p6_*). Aucune fonctionnalité nouvelle. Cargo via distrobox enter dev.",
+      "depends_on": [
+        "J14-P4"
+      ],
+      "files": [
+        "src/procs/common/dataset.rs",
+        "conformance/cases",
+        "conformance/STATUS.md",
+        "docs/roadmap/avancee.md",
+        "tests/fixtures",
+        "tests/snapshots"
+      ],
+      "check_ids": [
+        "fmt",
+        "clippy",
+        "test",
+        "conformance-status",
+        "oracles-replay",
+        "acc-J14-P6"
+      ]
     }
   ],
   "superseded_checks": [
     {
       "id": "acc-J01-P1",
       "superseded_reason": "point-in-time acceptance check — les 4 cas compat y sont exigés known-divergence mais J01-P2/P3/P7 les ont légitimement fait passer validated (décisions 54dee809 puis 90e8b45e, controller-supersede)"
+    },
+    {
+      "id": "acc-J02-P13",
+      "superseded_reason": "false-green acceptance argv (8-element split: payload as separate element after bash -lc) — J02 review e03515d6 verified the intended assertions manually at 4069d573 (ra_j02_p13_* 3>=3 exit 0; ra_j02_p14_* 10>=4 exit 0); revision 12 merges the payload into the single bash -lc script (décision a84ba687, opt-revise-plan)"
+    },
+    {
+      "id": "acc-J02-P14",
+      "superseded_reason": "false-green acceptance argv (8-element split: payload as separate element after bash -lc) — J02 review e03515d6 verified the intended assertions manually at 4069d573 (ra_j02_p13_* 3>=3 exit 0; ra_j02_p14_* 10>=4 exit 0); revision 12 merges the payload into the single bash -lc script (décision a84ba687, opt-revise-plan)"
     }
   ]
 }
