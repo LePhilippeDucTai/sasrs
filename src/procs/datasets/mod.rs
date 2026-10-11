@@ -84,9 +84,11 @@ pub enum ModifyStmt {
     /// removed (SAS 9.4 DATASETS FORMAT statement). The format is stored in
     /// the data set metadata (sidecar).
     Format(Vec<(Vec<String>, Option<String>)>),
-    /// J07-P6 — `informat v <token> ... ;` : associe (ou remplace)
-    /// l'informat déclaré d'une variable ; persisté via le sidecar.
-    Informat(Vec<(String, String)>),
+    /// J07-P6 (regroupé en J02-P12) — `informat v1 v2 fmt. v3 ;` : each list
+    /// of variables takes the informat that follows it ; a list without an
+    /// informat has its informat removed (SAS 9.4 DATASETS INFORMAT
+    /// statement). Persisted via the sidecar.
+    Informat(Vec<(Vec<String>, Option<String>)>),
 }
 
 /// Helper for COPY's `out=`/`in=` options: consume the option keyword, require
@@ -384,30 +386,39 @@ fn modify_member(
                     }
                 }
             }
-            // INFORMAT variables (J07-P6) : le token doit être un
-            // informat valide (même validation que l'étape DATA) ; la
-            // variable doit exister (WARNING sinon, comme RENAME/LABEL).
-            ModifyStmt::Informat(informats) => {
-                for (var, token) in informats {
-                    if crate::formats::FormatSpec::parse(token).is_none() {
-                        return Err(SasError::runtime(format!(
-                            "The informat {token} is not valid."
-                        )));
-                    }
-                    match position(&ds, var) {
-                        Some(idx) => {
-                            ds.vars[idx].informat = Some(token.clone());
-                            session.log.note(&format!(
-                                "Informat {} was assigned to variable {} in {lib}.{mu}.",
-                                token,
-                                var.to_uppercase()
-                            ));
-                        }
-                        None => {
-                            session.log.warning(&format!(
-                                "Variable {} not found in {lib}.{mu}; informat not assigned.",
-                                var.to_uppercase()
-                            ));
+            // INFORMAT variables (J07-P6, regroupé en J02-P12 comme le
+            // statement FORMAT) : toutes les variables listées reçoivent
+            // l'informat qui suit (doc SAS 9.4 DATASETS INFORMAT statement) ;
+            // une liste finale sans informat retire l'informat. Variable
+            // inconnue → WARNING, comme RENAME/LABEL.
+            ModifyStmt::Informat(groups) => {
+                for (vars, token) in groups {
+                    for var in vars {
+                        match position(&ds, var) {
+                            Some(idx) => match token {
+                                Some(token) => {
+                                    ds.vars[idx].informat = Some(token.clone());
+                                    session.log.note(&format!(
+                                        "Informat {} was assigned to variable {} in {lib}.{mu}.",
+                                        token,
+                                        var.to_uppercase()
+                                    ));
+                                }
+                                None => {
+                                    ds.vars[idx].informat = None;
+                                }
+                            },
+                            None => {
+                                let what = if token.is_some() {
+                                    "informat not assigned"
+                                } else {
+                                    "informat not removed"
+                                };
+                                session.log.warning(&format!(
+                                    "Variable {} not found in {lib}.{mu}; {what}.",
+                                    var.to_uppercase()
+                                ));
+                            }
                         }
                     }
                 }
@@ -422,3 +433,6 @@ mod tests;
 
 #[cfg(test)]
 mod contract_tests;
+
+#[cfg(test)]
+mod contract_j02_p12;

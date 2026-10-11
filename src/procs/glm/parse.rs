@@ -34,21 +34,238 @@ pub(super) fn parse_coefficients(ts: &mut StatementStream) -> Vec<f64> {
     coeffs
 }
 
-// ───────────────────── Contract diagnostics (J02-P8) ─────────────────────
+// ───────────────────── Contract diagnostics (J02-P8, J02-P12) ─────────────
 //
 // SAS/STAT 13.1 User's Guide (SAS 9.4), The GLM Procedure, Syntax
 // (https://support.sas.com/documentation/cdl/en/statug/66859/HTML/default/statug_glm_syntax.htm),
+// PROC GLM statement (options ALPHA=, DATA=, MANOVA, MULTIPASS, NAMELEN=,
+// NOPRINT, ORDER=, OUTSTAT=, PLOTS)
+// https://support.sas.com/documentation/cdl/en/statug/66859/HTML/default/statug_glm_syntax01.htm
+// MODEL statement (options EFFECTSIZE … ZETA=)
+// https://support.sas.com/documentation/cdl/en/statug/66859/HTML/default/statug_glm_syntax16.htm
+// LSMEANS statement (options ADJUST= … TDIFF)
+// https://support.sas.com/documentation/cdl/en/statug/66859/HTML/default/statug_glm_syntax10.htm
 // ESTIMATE statement (`ESTIMATE 'label' effect values </ options>;`, options
 // DIVISOR=, E, SINGULAR=) and CONTRAST statement (options E, E=, ETYPE=,
 // SINGULAR=). CONTRIBUTING §5: an option that can change a result is an
-// ERROR, a display-only one (E) a WARNING. GLM is outside the functional
+// ERROR, a display-only one a WARNING. GLM is outside the functional
 // scope of roadmap-avancee: no unit is named.
+
+/// Contract ERROR suffix shared by the rejected requests.
+const CANNOT: &str = "is not supported in PROC GLM; it can affect results and cannot be ignored";
 
 /// Valid SAS/STAT GLM statements that sasrs does not implement (BY, FREQ,
 /// ID, WEIGHT already get the shared message of `unhandled_proc_statement`).
 const UNSUPPORTED_STATEMENTS: &[&str] = &[
     "absorb", "code", "manova", "random", "repeated", "store", "test",
 ];
+
+/// Queue the shared display-only WARNING (J02-P11/J02-P8 wording).
+fn warn_display(ts: &mut StatementStream, what: &str) {
+    ts.warn_ignored_display(format!(
+        "The {what} is ignored in PROC GLM; display customization is not supported."
+    ));
+}
+
+/// Consume and discard the value of a bare-or-valued option keyword that was
+/// just accepted (keyword already consumed): an optional parenthesized
+/// suboption list (`plots(unpack)=…`) then `= value` or `= (… list …)`.
+/// Keeps the loop synchronised for the accepted display options.
+fn consume_display_option_value(ts: &mut StatementStream) {
+    if ts.peek().kind == TokenKind::LParen {
+        ts.skip_balanced_parens();
+    }
+    common::skip_option_value(ts);
+}
+
+/// J02-P12 — options of the PROC GLM statement. Base : every option other
+/// than DATA= was skipped token by token. SAS/STAT 9.4 classification:
+/// - DATA= is honored;
+/// - ORDER= (« specifies the order in which to sort classification
+///   variables … determines which parameters in the model correspond to each
+///   level »), OUTSTAT= (output data set), ALPHA= (confidence level) and
+///   MANOVA (mode of eliminating missing values) can change results or
+///   create a table → ERROR;
+/// - NOPRINT (« suppresses the normal display of results »), PLOTS (ODS
+///   Graphics) and NAMELEN= (length of effect names in tables) only change
+///   the display → WARNING (not applied);
+/// - MULTIPASS only trades disk space for execution time → no observable
+///   effect, accepted without a diagnostic (same policy as IML SYMSIZE=).
+fn parse_proc_options(ts: &mut StatementStream, input: &mut Option<DatasetRef>) -> Result<()> {
+    loop {
+        if ts.peek().kind == TokenKind::Semi {
+            ts.next();
+            return Ok(());
+        }
+        if ts.peek().kind == TokenKind::Eof {
+            return Ok(());
+        }
+        if ts.peek().is_kw("data") {
+            *input = Some(common::parse_dataset_opt(ts, "DATA")?);
+            continue;
+        }
+        let span = ts.peek().span;
+        let opt = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+        match opt.as_str() {
+            "NOPRINT" => {
+                ts.next();
+                warn_display(ts, "NOPRINT option of the PROC GLM statement");
+            }
+            "PLOTS" | "PLOT" => {
+                ts.next();
+                consume_display_option_value(ts);
+                warn_display(ts, "PLOTS= option of the PROC GLM statement");
+            }
+            "NAMELEN" => {
+                ts.next();
+                common::skip_option_value(ts);
+                warn_display(ts, "NAMELEN= option of the PROC GLM statement");
+            }
+            "MULTIPASS" => {
+                ts.next();
+            }
+            "ORDER" | "OUTSTAT" | "ALPHA" | "MANOVA" => {
+                let eq = if ts.peek2().kind == TokenKind::Eq {
+                    "="
+                } else {
+                    ""
+                };
+                return Err(SasError::parse(
+                    format!("The {opt}{eq} option of the PROC GLM statement {CANNOT}."),
+                    span,
+                ));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    format!("Unexpected option '{opt}' on PROC GLM statement."),
+                    span,
+                ));
+            }
+        }
+    }
+}
+
+/// J02-P12 — options of the MODEL statement after `/`. Base : every option
+/// other than SOLUTION was skipped token by token (`/ noint` kept a model
+/// fitted with an intercept, `/ noprint` was read but not applied).
+/// SAS/STAT 9.4 classification:
+/// - SOLUTION is honored; SS1 and SS3 ask for tables that PROC GLM « also
+///   displays by default » and sasrs always prints → accepted;
+/// - NOPRINT and NOUNI suppress displayed results, E, E1 and E3 display
+///   estimable functions whose sums of squares are the ones already
+///   printed → WARNING (not applied);
+/// - every other option changes the fitted model (NOINT), adds computed
+///   results (SS2/SS4, E2/E4, ALPHA=, CLI, CLM, CLPARM, P, INVERSE, XPX,
+///   EFFECTSIZE, INTERCEPT, ALIASING, TOLERANCE) or tunes the numerics
+///   (SINGULAR=, ZETA=) → ERROR.
+fn parse_model_options(ts: &mut StatementStream, solution: &mut bool) -> Result<()> {
+    ts.next(); // consume `/`
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        let span = ts.peek().span;
+        let opt = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+        match opt.as_str() {
+            "SOLUTION" => {
+                ts.next();
+                *solution = true;
+            }
+            "SS1" | "SS3" => {
+                ts.next();
+            }
+            "NOPRINT" => {
+                ts.next();
+                warn_display(ts, "NOPRINT option of the MODEL statement");
+            }
+            "NOUNI" => {
+                ts.next();
+                warn_display(ts, "NOUNI option of the MODEL statement");
+            }
+            "E" | "E1" | "E3" => {
+                ts.next();
+                warn_display(ts, &format!("{opt} option of the MODEL statement"));
+            }
+            "NOINT" | "SS2" | "SS4" | "E2" | "E4" | "EFFECTSIZE" | "INTERCEPT" | "INT"
+            | "ALIASING" | "TOLERANCE" | "ALPHA" | "CLI" | "CLM" | "CLPARM" | "P" | "INVERSE"
+            | "I" | "XPX" | "SINGULAR" | "ZETA" => {
+                let eq = if ts.peek2().kind == TokenKind::Eq {
+                    "="
+                } else {
+                    ""
+                };
+                return Err(SasError::parse(
+                    format!("The {opt}{eq} option of the MODEL statement {CANNOT}."),
+                    span,
+                ));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    format!("Unexpected option '{opt}' on the PROC GLM MODEL statement."),
+                    span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// J02-P12 — options of the LSMEANS statement after `/`. Base : they were
+/// skipped token by token. SAS/STAT 9.4 classification:
+/// - STDERR (abbreviation SE, as in `lsmeans a / se;`) « produces the
+///   standard error of the LS-mean and the probability level » — both
+///   already printed → accepted;
+/// - E (« displays the coefficients of the linear functions »), NOPRINT
+///   (« suppresses the normal display of results from the LSMEANS
+///   statement ») and PLOT= (ODS Graphics) only change the display →
+///   WARNING (not applied);
+/// - PDIFF/DIFF, ADJUST=, OUT=, CL, ALPHA=, AT, OM/OBSMARGINS, BYLEVEL,
+///   COV, E=, ETYPE=, LINES, SLICE=, SINGULAR= and TDIFF add tests,
+///   adjusted p-values, confidence limits, a different weighting or an
+///   output data set → ERROR.
+fn parse_lsmeans_options(ts: &mut StatementStream) -> Result<()> {
+    ts.next(); // consume `/`
+    while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
+        let span = ts.peek().span;
+        let opt = ts.peek().ident().unwrap_or("?").to_ascii_uppercase();
+        let has_value = ts.peek2().kind == TokenKind::Eq;
+        match (opt.as_str(), has_value) {
+            ("STDERR" | "SE" | "STD", _) => {
+                ts.next();
+            }
+            ("E", false) => {
+                ts.next();
+                warn_display(ts, "E option of the LSMEANS statement");
+            }
+            ("NOPRINT", _) => {
+                ts.next();
+                warn_display(ts, "NOPRINT option of the LSMEANS statement");
+            }
+            ("PLOT" | "PLOTS", _) => {
+                ts.next();
+                consume_display_option_value(ts);
+                warn_display(ts, "PLOT= option of the LSMEANS statement");
+            }
+            (
+                "PDIFF" | "DIFF" | "ADJUST" | "OUT" | "CL" | "ALPHA" | "AT" | "OM" | "OBSMARGINS"
+                | "BYLEVEL" | "COV" | "E" | "ETYPE" | "LINES" | "SLICE" | "SINGULAR" | "TDIFF",
+                _,
+            ) => {
+                return Err(SasError::parse(
+                    format!(
+                        "The {opt}{} option of the LSMEANS statement {CANNOT}.",
+                        if has_value { "=" } else { "" }
+                    ),
+                    span,
+                ));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    format!("Unexpected option '{opt}' on the PROC GLM LSMEANS statement."),
+                    span,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// `'label' effect values </ options> ;` of an ESTIMATE or CONTRAST statement
 /// (keyword consumed), through the `;`. `stmt` is `ESTIMATE` or `CONTRAST`.
@@ -133,33 +350,24 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
     let mut input: Option<DatasetRef> = None;
 
     // PROC GLM statement options until `;`
-    loop {
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-            break;
-        }
-        if ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        if ts.peek().is_kw("data") {
-            input = Some(common::parse_dataset_opt(ts, "DATA")?);
-        } else {
-            ts.next();
-        }
-    }
+    parse_proc_options(ts, &mut input)?;
 
     // Sub-statements until run;/quit;
     let mut class_vars: Vec<String> = Vec::new();
     let mut model: Option<GlmModel> = None;
-    let mut lsmeans_vars: Vec<String> = Vec::new();
+    // J02-P12 — one entry per LSMEANS/MEANS statement, in source order
+    // (SAS/STAT 9.4, LSMEANS statement: « Multiple effects can be specified
+    // in one LSMEANS statement, or multiple LSMEANS statements can be
+    // used »). Base : only the last statement was kept.
+    let mut lsmeans_stmts: Vec<Vec<String>> = Vec::new();
     let mut estimates: Vec<GlmEstimate> = Vec::new();
     let mut contrasts: Vec<GlmContrast> = Vec::new();
-    let mut means_vars: Vec<String> = Vec::new();
+    let mut means_stmts: Vec<Vec<String>> = Vec::new();
     // J02-P2 (issue #17) — statement OUTPUT OUT= (p=/r=).
     let mut output: Option<GlmOutput> = None;
     // J02-P8 — ESTIMATE/CONTRAST statements in source order (span, keyword,
-    // effect), checked against the MODEL once the body is read.
-    let mut lincombs: Vec<(Span, &'static str, String)> = Vec::new();
+    // effect, coefficients), checked against the MODEL once the body is read.
+    let mut lincombs: Vec<(Span, &'static str, String, Vec<f64>)> = Vec::new();
 
     common::parse_proc_body(ts, "GLM", |ts, kw| {
         if kw == "class" {
@@ -176,19 +384,8 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
             // `effect_terms` (Vec of CLASS-var-name lists) for the multiway engine.
             let (effects, effect_terms) = common::parse_effect_terms(ts);
             let mut solution = false;
-            let mut noprint = false;
             if ts.peek().kind == TokenKind::Slash {
-                ts.next();
-                // Parse options until semi
-                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                    if ts.peek().is_kw("solution") {
-                        solution = true;
-                    }
-                    if ts.peek().is_kw("noprint") {
-                        noprint = true;
-                    }
-                    ts.next();
-                }
+                parse_model_options(ts, &mut solution)?;
             }
             ts.expect_semi()?;
             model = Some(GlmModel {
@@ -196,12 +393,13 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
                 effects,
                 effect_terms,
                 solution,
-                noprint,
             });
             Ok(true)
         } else if kw == "lsmeans" {
             ts.next();
-            // Read lsmeans vars (idents before `/` or `;`)
+            // Read lsmeans effects (idents before `/` or `;`). J02-P12 —
+            // a non-name token is no longer skipped: an interaction changes
+            // which LS-means are computed.
             let mut vars: Vec<String> = Vec::new();
             loop {
                 if ts.peek().kind == TokenKind::Semi
@@ -210,22 +408,38 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
                 {
                     break;
                 }
-                if let Some(name) = ts.peek().ident().map(str::to_string) {
-                    vars.push(name);
-                    ts.next();
-                } else {
-                    ts.next();
+                let tok = ts.peek().clone();
+                match tok.ident() {
+                    Some(name) => {
+                        vars.push(name.to_string());
+                        ts.next();
+                    }
+                    None if tok.kind == TokenKind::Star => {
+                        return Err(SasError::parse(
+                            format!("An interaction effect in the LSMEANS statement {CANNOT}."),
+                            tok.span,
+                        ));
+                    }
+                    None => {
+                        return Err(SasError::parse(
+                            "expected an effect name in the LSMEANS statement",
+                            tok.span,
+                        ));
+                    }
                 }
             }
-            // Skip options after `/`
+            if vars.is_empty() {
+                return Err(SasError::parse(
+                    "expected an effect name in the LSMEANS statement",
+                    ts.peek().span,
+                ));
+            }
+            // Options after `/`
             if ts.peek().kind == TokenKind::Slash {
-                ts.next();
-                while ts.peek().kind != TokenKind::Semi && ts.peek().kind != TokenKind::Eof {
-                    ts.next();
-                }
+                parse_lsmeans_options(ts)?;
             }
             ts.expect_semi()?;
-            lsmeans_vars = vars;
+            lsmeans_stmts.push(vars);
             Ok(true)
         } else if kw == "estimate" || kw == "contrast" {
             let span = ts.peek().span;
@@ -236,7 +450,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
             };
             ts.next();
             let (label, effect, coefficients) = parse_lincomb_statement(ts, stmt)?;
-            lincombs.push((span, stmt, effect.clone()));
+            lincombs.push((span, stmt, effect.clone(), coefficients.clone()));
             if stmt == "ESTIMATE" {
                 estimates.push(GlmEstimate {
                     label,
@@ -253,7 +467,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
             Ok(true)
         } else if kw == "means" {
             ts.next();
-            means_vars = ts.parse_name_list()?;
+            means_stmts.push(ts.parse_name_list()?);
             ts.expect_semi()?;
             Ok(true)
         } else if kw == "output" {
@@ -274,9 +488,17 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
 
     // J02-P8 — an ESTIMATE/CONTRAST that the executed path cannot produce
     // used to be skipped without output nor NOTE: rejected before execution.
+    // J02-P12 — an ESTIMATE the executed path cannot compute honestly (a
+    // one-way function that is not estimable) used to be printed as
+    // Σ cᵢ ȳᵢ : rejected too.
     if let Some(model) = &model {
-        for (span, stmt, effect) in &lincombs {
+        for (span, stmt, effect, coefficients) in &lincombs {
             if let Some(msg) = lincomb_unsupported(stmt, effect, model, &class_vars) {
+                return Err(SasError::parse(msg, *span));
+            }
+            if *stmt == "ESTIMATE"
+                && let Some(msg) = estimate_nonestimable(effect, coefficients, model, &class_vars)
+            {
                 return Err(SasError::parse(msg, *span));
             }
         }
@@ -286,10 +508,10 @@ pub fn parse(ts: &mut StatementStream) -> Result<GlmAst> {
         data_options: GlmDataOptions { input },
         class_vars,
         model,
-        lsmeans_vars,
+        lsmeans_stmts,
         estimates,
         contrasts,
-        means_vars,
+        means_stmts,
         output,
     })
 }

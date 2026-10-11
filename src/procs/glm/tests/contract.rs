@@ -11,7 +11,7 @@
 // ne nomme d'unité.
 
 /// Exécute un programme complet (mode déterministe) : log, listing, code.
-fn run_sas(src: &str) -> crate::RunOutcome {
+pub(super) fn run_sas(src: &str) -> crate::RunOutcome {
     crate::run(
         src,
         crate::RunOptions {
@@ -22,7 +22,7 @@ fn run_sas(src: &str) -> crate::RunOutcome {
 }
 
 /// g: a (1 2 2) / b (4 7 9) ; h: x (1 4 2) / y (2 7 9).
-const DATA: &str = "data t; input g $ h $ y; datalines;
+pub(super) const DATA: &str = "data t; input g $ h $ y; datalines;
 a x 1
 a y 2
 b x 4
@@ -34,16 +34,17 @@ run;
 ";
 
 /// Contract ERROR suffix shared by the rejected requests.
-const CANNOT: &str = "is not supported in PROC GLM; it can affect results and cannot be ignored";
+pub(super) const CANNOT: &str =
+    "is not supported in PROC GLM; it can affect results and cannot be ignored";
 
 /// `proc glm data=t; <body> run;` after the DATA step.
-fn glm(body: &str) -> crate::RunOutcome {
+pub(super) fn glm(body: &str) -> crate::RunOutcome {
     run_sas(&format!("{DATA}proc glm data=t; {body} run;"))
 }
 
 /// Asserts a step rejected before execution: exit code 2, `needle` in the
 /// log, no GLM output at all.
-fn assert_rejected(out: &crate::RunOutcome, needle: &str, ctx: &str) {
+pub(super) fn assert_rejected(out: &crate::RunOutcome, needle: &str, ctx: &str) {
     assert_eq!(out.exit_code, 2, "{ctx}: {}", out.log);
     assert!(
         out.log.contains(needle),

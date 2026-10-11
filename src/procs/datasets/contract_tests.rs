@@ -12,7 +12,7 @@
 // https://support.sas.com/documentation/cdl/en/proc/65145/HTML/default/p1v2467vdjbp7xn1222c7t3sejz3.htm
 
 /// Exécute un programme complet (mode déterministe) : log, listing, code.
-fn run_sas(src: &str) -> crate::RunOutcome {
+pub(super) fn run_sas(src: &str) -> crate::RunOutcome {
     crate::run(
         src,
         crate::RunOptions {
@@ -23,7 +23,7 @@ fn run_sas(src: &str) -> crate::RunOutcome {
 }
 
 /// Contract ERROR suffix shared by the rejected statements.
-const CANNOT: &str =
+pub(super) const CANNOT: &str =
     "is not supported in PROC DATASETS; it can affect results and cannot be ignored";
 
 fn assert_has(out: &crate::RunOutcome, needle: &str) {
@@ -32,7 +32,7 @@ fn assert_has(out: &crate::RunOutcome, needle: &str) {
 
 /// Whitespace-split listing line whose first two tokens are `n` and `var`
 /// (a row of the PROC CONTENTS variable table).
-fn contents_row(listing: &str, n: &str, var: &str) -> Vec<String> {
+pub(super) fn contents_row(listing: &str, n: &str, var: &str) -> Vec<String> {
     listing
         .lines()
         .map(|l| l.split_whitespace().map(str::to_string).collect::<Vec<_>>())

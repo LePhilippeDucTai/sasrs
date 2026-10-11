@@ -53,7 +53,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DatasetsAst> {
         }
 
         if ts.peek().is_kw("delete") {
-            ops.push(DsOp::Delete(parse_delete_stmt(ts)));
+            ops.push(DsOp::Delete(parse_delete_stmt(ts)?));
             continue;
         }
 
@@ -73,7 +73,7 @@ pub fn parse(ts: &mut StatementStream) -> Result<DatasetsAst> {
         }
 
         if ts.peek().is_kw("save") {
-            ops.push(parse_save_stmt(ts));
+            ops.push(parse_save_stmt(ts)?);
             continue;
         }
 
@@ -222,29 +222,115 @@ pub(super) fn parse_header_options(ts: &mut StatementStream) -> Result<(String, 
     Ok((lib, nolist))
 }
 
-/// `delete m1 m2 ... ;` — uppercased member names.
-pub(super) fn parse_delete_stmt(ts: &mut StatementStream) -> Vec<String> {
-    ts.next(); // consume "delete"
-    let mut deletes: Vec<String> = Vec::new();
-    // Read one or more names until `;`
+/// J02-P12 — member list shared by DELETE, SAVE, CHANGE, EXCHANGE and
+/// SELECT (Base SAS 9.4 Procedures Guide, DATASETS Procedure: `SAS-file-1
+/// <...SAS-file-n> </ ALTER=… GENNUM=… MEMTYPE=mtype>`). Base : tout jeton
+/// autre qu'un nom était sauté jusqu'au `;` — `delete m / memtype=catalog;`
+/// supprimait la TABLE M (perte de données). Désormais :
+/// - `/ MEMTYPE=DATA` (alias `MT=`, `MTYPE=`) est honoré (doc SAS 9.4 DELETE
+///   statement : « restricts processing to one member type », « Alias: MT=,
+///   MTYPE= », « Default: DATA ») : chaque membre d'une bibliothèque sasrs
+///   est une table DATA, le comportement est inchangé ;
+/// - toute autre valeur de MEMTYPE= ou toute autre option, une liste entre
+///   parenthèses (options par fichier : ALTER=, GENNUM=…) et une plage de
+///   noms (`x1-x3`, `x:`) sont une ERROR avant toute exécution du groupe
+///   (aucune table supprimée ni renommée) : les ignorer peut changer quelles
+///   tables sont traitées.
+///
+/// Consumes through the terminating `;`.
+fn parse_member_list(ts: &mut StatementStream, stmt: &str) -> Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
     loop {
-        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-            break;
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi | TokenKind::Eof => break,
+            TokenKind::Slash => parse_member_options(ts, stmt)?,
+            TokenKind::LParen => {
+                return Err(unsupported_construct(
+                    &format!(
+                        "A member list or member options in parentheses in the {stmt} statement"
+                    ),
+                    tok.span,
+                ));
+            }
+            TokenKind::Ident(name) => {
+                if matches!(ts.peek2().kind, TokenKind::Minus | TokenKind::Colon) {
+                    return Err(unsupported_construct(
+                        &format!(
+                            "A member list (range or prefix starting at {}) in the {stmt} \
+                             statement",
+                            name.to_uppercase()
+                        ),
+                        tok.span,
+                    ));
+                }
+                names.push(name.to_uppercase());
+                ts.next();
+            }
+            _ => {
+                return Err(SasError::parse(
+                    format!("expected a member name in the {stmt} statement"),
+                    tok.span,
+                ));
+            }
         }
-        let name_tok = ts.peek().clone();
-        let Some(name) = name_tok.ident().map(str::to_string) else {
-            // non-ident token: skip to `;`
-            ts.skip_to_semi();
-            break;
-        };
-        ts.next();
-        deletes.push(name.to_uppercase());
     }
     // consume trailing `;`
     if ts.peek().kind == TokenKind::Semi {
         ts.next();
     }
-    deletes
+    Ok(names)
+}
+
+/// Options after the `/` of a member list (J02-P12). Only `MEMTYPE=DATA`
+/// (aliases `MT=`, `MTYPE=`) is honored; every other value or option is an
+/// ERROR. Does not consume the terminating `;`.
+fn parse_member_options(ts: &mut StatementStream, stmt: &str) -> Result<()> {
+    ts.next(); // consume `/`
+    loop {
+        if matches!(ts.peek().kind, TokenKind::Semi | TokenKind::Eof) {
+            return Ok(());
+        }
+        let tok = ts.peek().clone();
+        let Some(opt) = tok.ident().map(|s| s.to_ascii_uppercase()) else {
+            return Err(SasError::parse(
+                format!("expected an option after / in the {stmt} statement"),
+                tok.span,
+            ));
+        };
+        if matches!(opt.as_str(), "MEMTYPE" | "MT" | "MTYPE") && ts.peek2().kind == TokenKind::Eq {
+            ts.next(); // option keyword
+            ts.next(); // `=`
+            let val = ts.peek().clone();
+            if val
+                .ident()
+                .map(|v| v.eq_ignore_ascii_case("DATA"))
+                .unwrap_or(false)
+            {
+                ts.next();
+                continue;
+            }
+            let bad = val.ident().unwrap_or("").to_ascii_uppercase();
+            return Err(unsupported_construct(
+                &format!("The {opt}={bad} option of the {stmt} statement"),
+                tok.span,
+            ));
+        }
+        let has_value = ts.peek2().kind == TokenKind::Eq;
+        return Err(unsupported_construct(
+            &format!(
+                "The {opt}{} option of the {stmt} statement",
+                if has_value { "=" } else { "" }
+            ),
+            tok.span,
+        ));
+    }
+}
+
+/// `delete m1 m2 ... ;` — uppercased member names.
+pub(super) fn parse_delete_stmt(ts: &mut StatementStream) -> Result<Vec<String>> {
+    ts.next(); // consume "delete"
+    parse_member_list(ts, "DELETE")
 }
 
 /// `change old=new ... ;` — uppercased (old, new) pairs.
@@ -256,10 +342,25 @@ pub(super) fn parse_change_stmt(ts: &mut StatementStream) -> Result<Vec<(String,
         if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
             break;
         }
+        if ts.peek().kind == TokenKind::Slash {
+            // J02-P12 — options after `/` (MEMTYPE=DATA honored).
+            parse_member_options(ts, "CHANGE")?;
+            continue;
+        }
         let old_tok = ts.peek().clone();
         let Some(old_name) = old_tok.ident().map(str::to_string) else {
-            ts.skip_to_semi();
-            break;
+            // J02-P12 — no silent skip to `;`: a parenthesized list or a
+            // name range can change which tables are renamed.
+            if ts.peek().kind == TokenKind::LParen {
+                return Err(unsupported_construct(
+                    "A member list or member options in parentheses in the CHANGE statement",
+                    old_tok.span,
+                ));
+            }
+            return Err(SasError::parse(
+                "expected a member name in the CHANGE statement",
+                old_tok.span,
+            ));
         };
         ts.next(); // consume old name
         if ts.peek().kind != TokenKind::Eq {
@@ -325,21 +426,7 @@ pub(super) fn parse_copy_stmt(ts: &mut StatementStream) -> Result<DsOp> {
     }
     if ts.peek().is_kw("select") {
         ts.next(); // consume "select"
-        loop {
-            if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-                break;
-            }
-            let tok = ts.peek().clone();
-            let Some(name) = tok.ident().map(str::to_string) else {
-                ts.skip_to_semi();
-                break;
-            };
-            ts.next();
-            select.push(name.to_uppercase());
-        }
-        if ts.peek().kind == TokenKind::Semi {
-            ts.next();
-        }
+        select = parse_member_list(ts, "SELECT")?;
     }
     Ok(DsOp::Copy {
         out,
@@ -355,10 +442,24 @@ pub(super) fn parse_exchange_stmt(ts: &mut StatementStream, ops: &mut Vec<DsOp>)
         if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
             break;
         }
+        if ts.peek().kind == TokenKind::Slash {
+            // J02-P12 — options after `/` (MEMTYPE=DATA honored).
+            parse_member_options(ts, "EXCHANGE")?;
+            continue;
+        }
         let a_tok = ts.peek().clone();
         let Some(a) = a_tok.ident().map(str::to_string) else {
-            ts.skip_to_semi();
-            break;
+            // J02-P12 — no silent skip to `;`.
+            if ts.peek().kind == TokenKind::LParen {
+                return Err(unsupported_construct(
+                    "A member list or member options in parentheses in the EXCHANGE statement",
+                    a_tok.span,
+                ));
+            }
+            return Err(SasError::parse(
+                "expected a member name in the EXCHANGE statement",
+                a_tok.span,
+            ));
         };
         ts.next();
         if ts.peek().kind != TokenKind::Eq {
@@ -385,25 +486,9 @@ pub(super) fn parse_exchange_stmt(ts: &mut StatementStream, ops: &mut Vec<DsOp>)
 }
 
 /// `save m1 m2 ... ;`
-pub(super) fn parse_save_stmt(ts: &mut StatementStream) -> DsOp {
+pub(super) fn parse_save_stmt(ts: &mut StatementStream) -> Result<DsOp> {
     ts.next(); // consume "save"
-    let mut keep: Vec<String> = Vec::new();
-    loop {
-        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-            break;
-        }
-        let tok = ts.peek().clone();
-        let Some(name) = tok.ident().map(str::to_string) else {
-            ts.skip_to_semi();
-            break;
-        };
-        ts.next();
-        keep.push(name.to_uppercase());
-    }
-    if ts.peek().kind == TokenKind::Semi {
-        ts.next();
-    }
-    DsOp::Save(keep)
+    Ok(DsOp::Save(parse_member_list(ts, "SAVE")?))
 }
 
 /// `modify m ; [rename old=new ...;] [label v='..' ...;] [format v fmt. ...;]
@@ -458,11 +543,7 @@ pub(super) fn parse_modify_stmt(ts: &mut StatementStream) -> Result<DsOp> {
                 stmts.push(ModifyStmt::Label(labels));
             }
             "format" => stmts.push(ModifyStmt::Format(parse_modify_formats(ts)?)),
-            "informat" => {
-                let mut informats = Vec::new();
-                parse_modify_informats(ts, &mut informats)?;
-                stmts.push(ModifyStmt::Informat(informats));
-            }
+            "informat" => stmts.push(ModifyStmt::Informat(parse_modify_informats(ts)?)),
             _ => break,
         }
     }
@@ -648,30 +729,89 @@ pub(super) fn parse_modify_labels(
     Ok(())
 }
 
-/// MODIFY sub-statement `informat v <token> ... ;` (J07-P6) — chaque item
-/// associe un token d'informat à une variable. Le token est lu via le même
-/// lecteur que les statements FORMAT/INFORMAT de l'étape DATA (robuste au
-/// découpage du lexer : `date9.` = Ident collé à un `.`).
+/// MODIFY sub-statement `informat v1 v2 fmt. v3 ... ;` (J07-P6, regroupé en
+/// J02-P12) — Base SAS 9.4 Procedures Guide, DATASETS Procedure, INFORMAT
+/// statement : `INFORMAT variable-1 <informat-1> <…variable-n <informat-n>>;`
+/// — l'informat « specifies an informat for the variables immediately
+/// preceding it in the statement. If you do not specify an informat, the
+/// INFORMAT statement removes any existing informats for the variables in
+/// variable-list » (exemple de la doc : `informat a b 2. x1-x3 4.1 c;`).
+///
+/// J02-P12 — base : une variable était lue par informat (`informat a b
+/// date9.;` associait l'informat « b » à A puis échouait). Désormais chaque
+/// liste de variables reçoit l'informat qui la suit, comme le statement
+/// FORMAT ; une liste finale sans informat retire l'informat. Le token est
+/// lu par `read_format_token` (robuste au découpage du lexer) et validé
+/// ici, avant toute exécution de l'étape.
 pub(super) fn parse_modify_informats(
     ts: &mut StatementStream,
-    informats: &mut Vec<(String, String)>,
-) -> Result<()> {
+) -> Result<Vec<(Vec<String>, Option<String>)>> {
     ts.next(); // consume "informat"
+    let mut groups: Vec<(Vec<String>, Option<String>)> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     loop {
-        if ts.peek().kind == TokenKind::Semi || ts.peek().kind == TokenKind::Eof {
-            break;
+        let tok = ts.peek().clone();
+        match &tok.kind {
+            TokenKind::Semi | TokenKind::Eof => {
+                if !names.is_empty() {
+                    groups.push((std::mem::take(&mut names), None));
+                }
+                if groups.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a variable name in the INFORMAT statement",
+                        tok.span,
+                    ));
+                }
+                if tok.kind == TokenKind::Semi {
+                    ts.next();
+                }
+                return Ok(groups);
+            }
+            TokenKind::Ident(name) if !ident_begins_format(ts) => {
+                let upper = name.to_ascii_uppercase();
+                if matches!(
+                    upper.as_str(),
+                    "_ALL_" | "_NUMERIC_" | "_CHARACTER_" | "_CHAR_"
+                ) {
+                    return Err(unsupported_construct(
+                        &format!("The variable list {upper} in the INFORMAT statement"),
+                        tok.span,
+                    ));
+                }
+                if matches!(ts.peek2().kind, TokenKind::Minus | TokenKind::Colon) {
+                    return Err(unsupported_construct(
+                        &format!(
+                            "A variable list (range or prefix starting at {upper}) in the \
+                             INFORMAT statement"
+                        ),
+                        tok.span,
+                    ));
+                }
+                names.push(name.clone());
+                ts.next();
+            }
+            TokenKind::Ident(_) | TokenKind::Dollar | TokenKind::Num(_) | TokenKind::Dot => {
+                if names.is_empty() {
+                    return Err(SasError::parse(
+                        "expected a variable name before the informat in the INFORMAT statement",
+                        tok.span,
+                    ));
+                }
+                let token = crate::parser::expr::read_format_token(ts)?;
+                if crate::formats::FormatSpec::parse(&token).is_none() {
+                    return Err(SasError::parse(
+                        format!("The informat {token} is not valid."),
+                        tok.span,
+                    ));
+                }
+                groups.push((std::mem::take(&mut names), Some(token)));
+            }
+            _ => {
+                return Err(SasError::parse(
+                    "expected a variable name or an informat in the INFORMAT statement",
+                    tok.span,
+                ));
+            }
         }
-        let v_tok = ts.peek().clone();
-        let Some(var) = v_tok.ident().map(str::to_string) else {
-            ts.skip_to_semi();
-            break;
-        };
-        ts.next();
-        let token = crate::parser::expr::read_format_token(ts)?;
-        informats.push((var, token));
     }
-    if ts.peek().kind == TokenKind::Semi {
-        ts.next();
-    }
-    Ok(())
 }

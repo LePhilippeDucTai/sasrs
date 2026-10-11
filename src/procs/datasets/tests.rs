@@ -330,7 +330,7 @@ fn parse_statements_and_modify_group_in_source_order() {
                     ]),
                     ModifyStmt::Label(vec![("x".into(), "X".into())]),
                     ModifyStmt::Rename(vec![("y".into(), "yy".into())]),
-                    ModifyStmt::Informat(vec![("x".into(), "date9.".into())]),
+                    ModifyStmt::Informat(vec![(vec!["x".into()], Some("date9.".into()))]),
                 ],
             },
             DsOp::Delete(vec!["C".into()]),
@@ -607,7 +607,10 @@ fn informat_meta_modify_parses_informat_substatement() {
         ast.ops,
         vec![DsOp::Modify {
             member: "M".into(),
-            stmts: vec![ModifyStmt::Informat(vec![("v".into(), "date9.".into())])],
+            stmts: vec![ModifyStmt::Informat(vec![(
+                vec!["v".into()],
+                Some("date9.".into())
+            )])],
         }]
     );
 }
@@ -623,8 +626,8 @@ fn informat_meta_modify_persists_informat() {
         ops: vec![DsOp::Modify {
             member: "MTAB".into(),
             stmts: vec![ModifyStmt::Informat(vec![(
-                "age".into(),
-                "comma12.2".into(),
+                vec!["age".into()],
+                Some("comma12.2".into()),
             )])],
         }],
         ..base_ast("WORK")
