@@ -442,10 +442,17 @@ pub(super) fn exec_read_all(
     }
     let key = env.open_reads.iter().next().cloned().unwrap();
     let (libref, table) = split_ds_name(&key);
-    let (ds, notes) = session.libs.get(&libref)?.read(&table)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    // J02-P14 — la lecture de `READ ALL VAR … INTO` passe par le helper
+    // commun : la fenêtre OBS=/FIRSTOBS= de la session s'applique (doc SAS
+    // 9.4, System Options, OBS=/FIRSTOBS= : valables pour toute lecture
+    // d'un PROC ; IML `USE`/`READ` lisent la table comme toute proc).
+    let ds = crate::procs::common::open_resolved(
+        &crate::ast::DatasetRef {
+            libref: Some(libref.clone()),
+            name: table.clone(),
+        },
+        session,
+    )?;
     // Indices des colonnes demandées.
     let mut col_idx = Vec::with_capacity(vars.len());
     for vname in vars {

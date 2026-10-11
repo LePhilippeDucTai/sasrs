@@ -132,6 +132,8 @@ fn render_output(ops: &[PrintOp], session: &mut Session) {
 }
 
 #[cfg(test)]
+mod contract_j02_p14;
+#[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
 mod tests;

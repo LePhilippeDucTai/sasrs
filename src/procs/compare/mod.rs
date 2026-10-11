@@ -164,4 +164,6 @@ pub fn execute(ast: &CompareAst, session: &mut Session) -> Result<()> {
 }
 
 #[cfg(test)]
+mod contract_j02_p14;
+#[cfg(test)]
 mod tests;

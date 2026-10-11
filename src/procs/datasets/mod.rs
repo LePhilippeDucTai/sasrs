@@ -26,7 +26,18 @@
 //!   SAS, pas ERROR) ; `change old=new` → rename.
 //! - MODIFY : ses sous-statements RENAME, LABEL, FORMAT (J02-P8) et INFORMAT
 //!   (J07-P6) s'appliquent eux aussi dans l'ordre du source.
+//!
+//! ## Contrat J02-P14 — fenêtre OBS=/FIRSTOBS= (lecture de membres)
+//!
+//! PROC DATASETS est une proc de GESTION de bibliothèque : aucune de ses
+//! instructions ne lit les observations d'une table pour les traiter.
+//! DELETE, CHANGE, SAVE et EXCHANGE ne consultent que le catalogue
+//! (`exists`/`list`) ; COPY recopie le membre ENTIER et MODIFY édite son
+//! descripteur — leurs lectures passent par `procs::common::open_resolved_full`
+//! (SANS fenêtre OBS=/FIRSTOBS=, comme PROC CONTENTS en J02-P9) : fenêtrer
+//! une recopie ou une réécriture de descripteur tronquerait le membre stocké.
 
+use crate::ast::DatasetRef;
 use crate::error::{Result, SasError};
 use crate::listing::Align;
 use crate::parser::StatementStream;
@@ -202,10 +213,19 @@ pub fn execute(ast: &DatasetsAst, session: &mut Session) -> Result<()> {
                             .warning(&format!("Member {}.{} not found; not copied.", src_lib, mu));
                         continue;
                     }
-                    let (ds, notes) = src.read(&mu)?;
-                    for note in notes {
-                        session.log.forward(&note);
-                    }
+                    // J02-P14 — lecture du membre via le helper commun
+                    // `open_resolved_full` (SANS fenêtre OBS=/FIRSTOBS=) :
+                    // COPY recopie le membre ENTIER, c'est une opération de
+                    // gestion de bibliothèque (comme PROC CONTENTS, J02-P9),
+                    // pas une lecture de données au sens des options système
+                    // OBS=/FIRSTOBS= (doc SAS 9.4, System Options).
+                    let ds = crate::procs::common::open_resolved_full(
+                        &DatasetRef {
+                            libref: Some(src_lib.clone()),
+                            name: mu.clone(),
+                        },
+                        session,
+                    )?;
                     dst.write(&mu, &ds)?;
                     session.log.note(&format!(
                         "Copying {}.{} to {}.{} (memtype=DATA).",
@@ -297,6 +317,12 @@ fn print_directory(
 
 /// MODIFY group: read the member once, apply its sub-statements in source
 /// order, write it back (data and metadata sidecar).
+///
+/// J02-P14 — la lecture du membre passe par le helper commun
+/// `open_resolved_full` (SANS fenêtre OBS=/FIRSTOBS=) : MODIFY édite le
+/// DESCRIPTEUR du membre (noms, formats, libellés) — une lecture de
+/// métadonnées au sens de J02-P9 (doc SAS 9.4, DATASETS Procedure) ; l'y
+/// fenêtrer réécrirait le membre TRONQUÉ (perte de données).
 fn modify_member(
     session: &mut Session,
     provider: &dyn crate::library::LibraryProvider,
@@ -311,10 +337,13 @@ fn modify_member(
             .warning(&format!("Member {lib}.{mu} not found; MODIFY skipped."));
         return Ok(());
     }
-    let (mut ds, notes) = provider.read(&mu)?;
-    for note in notes {
-        session.log.forward(&note);
-    }
+    let mut ds = crate::procs::common::open_resolved_full(
+        &DatasetRef {
+            libref: Some(lib.to_uppercase()),
+            name: mu.clone(),
+        },
+        session,
+    )?;
     let position = |ds: &crate::dataset::SasDataset, var: &str| {
         ds.vars
             .iter()
@@ -436,3 +465,6 @@ mod contract_tests;
 
 #[cfg(test)]
 mod contract_j02_p12;
+
+#[cfg(test)]
+mod contract_j02_p14;
