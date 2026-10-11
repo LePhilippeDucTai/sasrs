@@ -13,7 +13,6 @@
   "log": {"forbidden": ["ERROR:"]},
   "exit_code": 0,
   "status": "validated",
-  "issue": "sasrs #11 (sous-issue compat) — PROC TRANSPOSE : instruction COPY (padding a hauteur des observations d'entree) et option SUFFIX= non implementees",
   "data_types": {
     "t.csv": {"grader": "char", "score": "num"}
   }
