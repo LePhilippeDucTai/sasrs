@@ -131,9 +131,7 @@ fn ra_j02_p7_report_compute_unsupported_expressions() {
     );
     assert_rejected(
         &out,
-        &format!(
-            "ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."
-        ),
+        &format!("ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."),
         "age.sum",
     );
 
@@ -596,9 +594,7 @@ fn ra_j02_p11_report_compute_errors_name_lifting_unit() {
         ),
         (
             "compute after; line 'Total ' age.sum best8.; endcomp;",
-            format!(
-                "ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."
-            ),
+            format!("ERROR: The compound name AGE.SUM {CANNOT} (planned: roadmap-avancee J11-P3)."),
         ),
     ] {
         assert_rejected(&report(&format!("{group} {block}")), &needle, block);

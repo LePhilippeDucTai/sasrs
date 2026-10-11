@@ -219,9 +219,7 @@ fn ra_j02_p7_tabulate_errors_before_any_output() {
         ));
         assert_rejected(
             &out,
-            &format!(
-                "ERROR: The {stat} statistic {CANNOT} (planned: roadmap-avancee {unit})."
-            ),
+            &format!("ERROR: The {stat} statistic {CANNOT} (planned: roadmap-avancee {unit})."),
             table,
         );
         assert!(!out.listing.contains("Orphan title"), "{}", out.listing);

@@ -171,9 +171,7 @@ pub(crate) fn parse_response_options_checked(
 /// ajusté) ; ils étaient avalés sans diagnostic. Leur levée (migration vers
 /// [`parse_response_options_checked`] et retrait de cette forme) est planifiée
 /// en J08-P2.
-pub(crate) fn parse_response_options(
-    ts: &mut StatementStream,
-) -> Result<(Option<String>, bool)> {
+pub(crate) fn parse_response_options(ts: &mut StatementStream) -> Result<(Option<String>, bool)> {
     let mut event: Option<String> = None;
     let mut descending = false;
     if ts.peek().kind == TokenKind::LParen {
@@ -195,9 +193,17 @@ pub(crate) fn parse_response_options(
                         ts.next();
                     } else {
                         // J02-P11 — EVENT=FIRST|LAST (ou une autre valeur non
-                        // citée) était avalé : événement par défaut ajusté.
+                        // citée) était avalé : événement par défaut ajusté. Le
+                        // span pointe la valeur non citée (comme la forme
+                        // vérifiée J02-P1 pour son erreur de valeur).
+                        let vspan = ts.peek().span;
                         let bad = match &ts.peek().kind {
-                            TokenKind::Ident(name) => format!("EVENT={}", name.to_ascii_uppercase()),
+                            TokenKind::Ident(name) => {
+                                format!("EVENT={}", name.to_ascii_uppercase())
+                            }
+                            TokenKind::Num(n) => {
+                                format!("EVENT={}", crate::value::format_best(*n, 12))
+                            }
                             _ => "EVENT=".to_string(),
                         };
                         return Err(SasError::parse(
@@ -206,7 +212,7 @@ pub(crate) fn parse_response_options(
                                  GLIMMIX; it can affect results and cannot be ignored (planned: \
                                  roadmap-avancee J08-P2)."
                             ),
-                            span,
+                            vspan,
                         ));
                     }
                 } else {

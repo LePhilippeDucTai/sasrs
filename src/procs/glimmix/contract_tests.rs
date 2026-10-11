@@ -1039,17 +1039,25 @@ fn ra_j02_p11_glimmix_unread_response_options_are_errors() {
         );
     }
 
-    // DESCENDING changes the event level, so the estimates really differ:
-    // the honored options are not accepted-and-ignored.
-    let plain = run_sas(&format!(
-        "{BIN}proc glimmix data=bin; class subj;
-         model y = x / dist=binary; random intercept / subject=subj; run;"
-    ));
-    let desc = run_sas(&format!(
-        "{BIN}proc glimmix data=bin; class subj;
-         model y(descending) = x / dist=binary; random intercept / subject=subj; run;"
-    ));
+    // DESCENDING changes the event level: the intercept solution flips sign
+    // (0 becomes the event instead of 1). The honored options are not
+    // accepted-and-ignored — /solution shows the difference.
+    let sol = |opts: &str| {
+        run_sas(&format!(
+            "{BIN}proc glimmix data=bin; class subj;
+             model y{opts} = x / dist=binary solution;
+             random intercept / subject=subj; run;"
+        ))
+    };
+    let plain = sol("");
+    let desc = sol("(descending)");
+    assert_eq!(plain.exit_code, 0, "{}", plain.log);
     assert_eq!(desc.exit_code, 0, "{}", desc.log);
+    assert!(
+        plain.listing.contains("Solutions for Fixed Effects"),
+        "{}",
+        plain.listing
+    );
     assert_ne!(
         plain.listing, desc.listing,
         "DESCENDING must change the event level (default: first level)"
