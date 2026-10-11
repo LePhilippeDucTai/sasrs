@@ -75,6 +75,12 @@ pub struct StatementStream<'a> {
     toks: Vec<Token>,
     pos: usize,
     proc_effects: Vec<ProcParseEffect>,
+    /// J02-P9 — YEARCUTOFF= en vigueur au parsing de ce segment (constantes
+    /// date 'ddMONyy'd à année sur 2 chiffres). Posé par l'exécuteur après
+    /// `new` (valeur de session du moment, doc SAS 9.4 : la constante est
+    /// figée à la compilation de l'étape) ; défaut = défaut livré SAS 9.4
+    /// (1926, cf. `session::SasOptions`).
+    yearcutoff: u16,
 }
 
 mod dataset;
@@ -87,7 +93,22 @@ impl<'a> StatementStream<'a> {
             toks,
             pos: 0,
             proc_effects: Vec::new(),
+            yearcutoff: crate::session::SasOptions::YEARCUTOFF_DEFAULT,
         })
+    }
+
+    /// J02-P9 — pose la fenêtre YEARCUTOFF= utilisée au parsing des
+    /// constantes date à année sur 2 chiffres. Appelé par l'exécuteur avec la
+    /// valeur de session en vigueur pour le segment (doc SAS 9.4, SAS System
+    /// Options, YEARCUTOFF= et « SAS Date, Time, and Datetime Values »).
+    pub fn set_yearcutoff(&mut self, yearcutoff: u16) {
+        self.yearcutoff = yearcutoff;
+    }
+
+    /// J02-P9 — fenêtre YEARCUTOFF= courante du stream (lecture interne
+    /// parser).
+    pub(crate) fn yearcutoff(&self) -> u16 {
+        self.yearcutoff
     }
 
     pub(crate) fn warn_ignored_display(&mut self, message: String) {

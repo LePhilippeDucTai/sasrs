@@ -190,7 +190,9 @@ fn parse_in_item(ts: &mut StatementStream) -> Result<Expr> {
         }
         TokenKind::Str { value, suffix } => {
             ts.next();
-            literal_from_string(value, *suffix, tok.span)
+            // J02-P9 — fenêtre YEARCUTOFF= du segment pour les littéraux
+            // datés d'une liste IN.
+            literal_from_string(value, *suffix, tok.span, ts.yearcutoff())
         }
         _ => Err(SasError::parse(
             "IN list items must be numeric or character literals",

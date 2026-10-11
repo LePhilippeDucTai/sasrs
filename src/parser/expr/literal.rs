@@ -6,17 +6,33 @@ pub(crate) fn sas_epoch() -> NaiveDate {
 }
 
 /// Convertit un littéral chaîne (avec son suffixe) en `Expr`.
-pub(crate) fn literal_from_string(value: &str, suffix: StrSuffix, span: Span) -> Result<Expr> {
+///
+/// J02-P9 — les constantes DATE/DATETIME à année sur 1 ou 2 chiffres sont
+/// interprétées par la fenêtre YEARCUTOFF= `yearcutoff` (doc SAS 9.4,
+/// YEARCUTOFF= System Option : « The YEARCUTOFF= value is the default that
+/// is used by various date and datetime informats and functions » ; une
+/// constante date est figée à la compilation de l'étape, donc à la valeur
+/// en vigueur au parsing du segment).
+pub(crate) fn literal_from_string(
+    value: &str,
+    suffix: StrSuffix,
+    span: Span,
+    yearcutoff: u16,
+) -> Result<Expr> {
     match suffix {
         StrSuffix::None | StrSuffix::Name => Ok(Expr::Str(value.to_string())),
-        StrSuffix::Date => Ok(Expr::Num(parse_date_literal(value, span)?)),
+        StrSuffix::Date => Ok(Expr::Num(parse_date_literal(value, span, yearcutoff)?)),
         StrSuffix::Time => Ok(Expr::Num(parse_time_literal(value, span)?)),
-        StrSuffix::DateTime => Ok(Expr::Num(parse_datetime_literal(value, span)?)),
+        StrSuffix::DateTime => Ok(Expr::Num(parse_datetime_literal(value, span, yearcutoff)?)),
     }
 }
 
 /// `ddMONyyyy` (insensible à la casse) → NaiveDate.
-pub(crate) fn parse_date_ddmonyyyy(s: &str, span: Span) -> Result<NaiveDate> {
+///
+/// J02-P9 — une année de 1 ou 2 chiffres passe par la fenêtre glissante
+/// YEARCUTOFF= : `base + yy` si `>= cutoff`, sinon `base + 100 + yy`
+/// (cf. `formats::builtin::informat::expand_year_window`, doc SAS 9.4).
+pub(crate) fn parse_date_ddmonyyyy(s: &str, span: Span, yearcutoff: u16) -> Result<NaiveDate> {
     let bytes = s.as_bytes();
     // Au minimum d + mmm + yyyy. Le jour fait 1 ou 2 chiffres.
     // On découpe : digits | 3 lettres | digits.
@@ -62,13 +78,20 @@ pub(crate) fn parse_date_ddmonyyyy(s: &str, span: Span) -> Result<NaiveDate> {
     let year: i32 = year_str
         .parse()
         .map_err(|_| SasError::parse(format!("invalid date literal '{s}'"), span))?;
+    // J02-P9 — fenêtre YEARCUTOFF= pour les années à 1-2 chiffres (comme
+    // SAS, qui ne lit PAS une année 15 de notre ère).
+    let year = if year_str.len() <= 2 {
+        crate::formats::builtin::expand_year_window(year, year_str.len(), yearcutoff)
+    } else {
+        year
+    };
     NaiveDate::from_ymd_opt(year, month, day)
         .ok_or_else(|| SasError::parse(format!("invalid date literal '{s}'"), span))
 }
 
 /// `'ddMONyyyy'd` → jours depuis 1960-01-01 (f64).
-pub(crate) fn parse_date_literal(s: &str, span: Span) -> Result<f64> {
-    let date = parse_date_ddmonyyyy(s.trim(), span)?;
+pub(crate) fn parse_date_literal(s: &str, span: Span, yearcutoff: u16) -> Result<f64> {
+    let date = parse_date_ddmonyyyy(s.trim(), span, yearcutoff)?;
     let days = date.signed_duration_since(sas_epoch()).num_days();
     Ok(days as f64)
 }
@@ -111,7 +134,7 @@ pub(crate) fn parse_time_literal(s: &str, span: Span) -> Result<f64> {
 /// `'ddMONyyyy:hh:mm:ss'dt` ou `'ddMONyyyy hh:mm:ss'dt` → secondes depuis
 /// 1960-01-01T00:00:00 (f64). SAS accepte un ESPACE ou un `:` entre la date
 /// et l'heure ; on découpe au premier des deux.
-pub(crate) fn parse_datetime_literal(s: &str, span: Span) -> Result<f64> {
+pub(crate) fn parse_datetime_literal(s: &str, span: Span, yearcutoff: u16) -> Result<f64> {
     let s = s.trim();
     // Séparateur date/heure : premier espace, sinon premier `:`.
     let split = s
@@ -124,7 +147,7 @@ pub(crate) fn parse_datetime_literal(s: &str, span: Span) -> Result<f64> {
             span,
         ));
     };
-    let date = parse_date_ddmonyyyy(date_part.trim(), span)?;
+    let date = parse_date_ddmonyyyy(date_part.trim(), span, yearcutoff)?;
     let secs_in_day = parse_time_literal(time_part.trim(), span)?;
     let days = date.signed_duration_since(sas_epoch()).num_days();
     Ok(days as f64 * 86400.0 + secs_in_day)

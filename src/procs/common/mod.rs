@@ -51,6 +51,8 @@ pub use dataset::open_input_display;
 
 pub use dataset::open_resolved;
 
+pub use dataset::open_resolved_full;
+
 pub use dataset::resolve_last_dataset;
 
 pub use format::centered;

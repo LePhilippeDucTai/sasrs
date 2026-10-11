@@ -17,10 +17,15 @@
 //! (sans `=`) pour les booléennes à activer (e.g. MPRINT) et `NOMPRINT` pour
 //! les booléennes désactivées.
 //!
-//! # v1 : sous-ensemble représentatif de SasOptions
-//! OBS, FIRSTOBS, LINESIZE (LS=), PAGESIZE (PS=, valeur par défaut=60),
-//! CENTER/NOCENTER (défaut NOCENTER), DATE/NODATE (défaut NODATE),
-//! MPRINT/NOMPRINT, MLOGIC/NOMLOGIC, SYMBOLGEN/NOSYMBOLGEN.
+//! # Sous-ensemble représentatif de SasOptions
+//! OBS, FIRSTOBS, LINESIZE (LS=), PAGESIZE (PS=), CENTER/NOCENTER,
+//! DATE/NODATE, NUMBER/NONUMBER, YEARCUTOFF=, MPRINT/NOMPRINT,
+//! MLOGIC/NOMLOGIC, SYMBOLGEN/NOSYMBOLGEN.
+//!
+//! J02-P9 — toutes les valeurs viennent de l'ÉTAT RÉEL de la session
+//! (`session.options`, `session.ods_options`) : PAGESIZE=60, NOCENTER et
+//! NODATE n'y sont plus codés en dur. Le détail par option (rendu fidèle à
+//! `proc options` SAS) reste J11-P5.
 
 use crate::error::Result;
 use crate::parser::StatementStream;
@@ -60,6 +65,32 @@ pub fn parse(ts: &mut StatementStream) -> Result<OptionsAst> {
         } else if ts.peek().is_kw("long") {
             ts.next();
             long = true;
+        } else if ts.peek().is_kw("option") {
+            // J02-P9 — `OPTION=nom` (et la forme parenthésée `OPTION(nom)`,
+            // doc SAS 9.4 PROC OPTIONS statement) : l'option DÉMANDÉE est
+            // `nom`, pas « OPTION ». L'ancien parse ne lisait que l'ident
+            // `option` et produisait un WARNING trompeur sur OPTION.
+            ts.next(); // consume `option`
+            if ts.peek().kind == TokenKind::Eq {
+                ts.next(); // consume `=`
+            } else if ts.peek().kind == TokenKind::LParen {
+                ts.next(); // consume `(`
+            } else {
+                // `proc options option;` nu : SAS exigerait une valeur ; sans
+                // valeur, l'option demandée reste « OPTION » et produira le
+                // WARNING habituel (comportement inchangé).
+                option_names.push("OPTION".to_string());
+                continue;
+            }
+            let Some(ident) = ts.peek().ident() else {
+                option_names.push("OPTION".to_string());
+                continue;
+            };
+            option_names.push(ident.to_uppercase());
+            ts.next(); // consume the option name
+            if ts.peek().kind == TokenKind::RParen {
+                ts.next(); // consume `)` of OPTION(nom)
+            }
         } else if let Some(ident) = ts.peek().ident() {
             option_names.push(ident.to_uppercase());
             ts.next();
@@ -89,6 +120,13 @@ enum OptionValue<'a> {
 }
 
 /// Build the list of all known options and their current values from the session.
+///
+/// J02-P9 — PAGESIZE, CENTER/NOCENTER et DATE/NODATE sont lus de l'ÉTAT RÉEL
+/// de la session (`session.options.pagesize`, `session.ods_options`), plus
+/// des valeurs codées en dur PAGESIZE=60 / NOCENTER / NODATE (audit d0b4d90 :
+/// le listing imprimait des valeurs de session fausses en silence).
+/// NUMBER/NONUMBER est exposé aussi (dans `session.ods_options`) ; le détail
+/// de rendu de chaque option reste J11-P5.
 fn all_known_options(session: &Session) -> Vec<(&'static str, OptionValue<'_>)> {
     vec![
         ("OBS", OptionValue::NumOrMax(session.options.obs)),
@@ -97,23 +135,34 @@ fn all_known_options(session: &Session) -> Vec<(&'static str, OptionValue<'_>)> 
             OptionValue::Num(session.options.firstobs.to_string()),
         ),
         ("LINESIZE", OptionValue::Num(session.options.ls.to_string())),
-        // PAGESIZE: not in SasOptions yet; use a reasonable default
-        ("PAGESIZE", OptionValue::Num("60".to_string())),
-        // CENTER/NOCENTER: not in SasOptions yet; default NOCENTER (like SAS listing mode)
+        (
+            "PAGESIZE",
+            OptionValue::Num(session.options.pagesize.to_string()),
+        ),
         (
             "CENTER",
             OptionValue::Bool {
                 name: "CENTER",
-                value: false,
+                value: !session.ods_options.nocenter,
             },
         ),
-        // DATE/NODATE: not in SasOptions yet; default NODATE
         (
             "DATE",
             OptionValue::Bool {
                 name: "DATE",
-                value: false,
+                value: session.ods_options.date,
             },
+        ),
+        (
+            "NUMBER",
+            OptionValue::Bool {
+                name: "NUMBER",
+                value: session.ods_options.number,
+            },
+        ),
+        (
+            "YEARCUTOFF",
+            OptionValue::Num(session.options.yearcutoff.to_string()),
         ),
         (
             "MPRINT",

@@ -46,6 +46,7 @@ fn run_globals(srcs: &[&str]) -> crate::session::Session {
 }
 
 mod call;
+mod contract_j02_p9;
 mod end;
 mod options;
 

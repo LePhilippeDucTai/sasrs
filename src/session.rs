@@ -47,10 +47,12 @@ pub struct SasOptions {
     /// previous hard-coded behaviour). Special missings `.A`..`.Z` and `._` are
     /// always rendered with their SAS suffix regardless of this option.
     pub missing_char: char,
-    /// M38.2 — YEARCUTOFF= : lower bound of the 100-year sliding window used
-    /// to interpret 2-digit years. Default **1900** (NOT the SAS 9.4 default of
-    /// 1920) so that the existing DATEJUL logic `0–99 → 1900–1999` is preserved
-    /// byte-for-byte. With yearcutoff=Y, a 2-digit year `yy` maps to the
+    /// M38.2/J02-P9 — YEARCUTOFF= : lower bound of the 100-year sliding window
+    /// used to interpret 2-digit years. Default **1926** (SAS 9.4 shipped
+    /// default — doc SAS 9.4, « What's New in SAS 9.4 System Options » :
+    /// « The default value of the YEARCUTOFF value has been changed from 1920
+    /// to 1926 » ; la page d'option de la Fifth Edition dit 1940, voir le
+    /// constat du plan). With yearcutoff=Y, a 2-digit year `yy` maps to the
     /// century containing Y such that `base + yy >= Y` (sliding window).
     pub yearcutoff: u16,
     /// M38.2 — FMTSEARCH= : ordered list of library references / format
@@ -58,6 +60,15 @@ pub struct SasOptions {
     /// stored here; actual multi-library resolution arrives in M39.  An empty
     /// Vec means "use WORK only" (current behaviour).
     pub fmtsearch: Vec<String>,
+}
+
+impl SasOptions {
+    /// J02-P9 — défaut livré de YEARCUTOFF= (SAS 9.4). Doc SAS 9.4,
+    /// « What's New in SAS 9.4 System Options » :
+    /// « The default value of the YEARCUTOFF value has been changed from
+    /// 1920 to 1926. » Partagé avec le parser (`StatementStream`) : les
+    /// constantes date à année sur 2 chiffres sont figées à la même fenêtre.
+    pub const YEARCUTOFF_DEFAULT: u16 = 1926;
 }
 
 impl Default for SasOptions {
@@ -72,7 +83,7 @@ impl Default for SasOptions {
             symbolgen: false,
             pagesize: 60,
             missing_char: '.',
-            yearcutoff: 1900,
+            yearcutoff: SasOptions::YEARCUTOFF_DEFAULT,
             fmtsearch: Vec::new(),
         }
     }

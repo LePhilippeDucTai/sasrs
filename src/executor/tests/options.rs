@@ -146,38 +146,49 @@ fn options_missing_default_dot_unchanged() {
     );
 }
 
-/// YEARCUTOFF= : défaut 1900 → 0-99 donne 1900-1999 (comportement actuel).
+/// J02-P9 — YEARCUTOFF= : défaut 1926 (doc SAS 9.4, « What's New in SAS 9.4
+/// System Options » : « The default value of the YEARCUTOFF value has been
+/// changed from 1920 to 1926 »). L'ancien test figait le défaut 1900
+/// (datejul(15365) lu comme 1915) ; avec 1926, 15365 (jour 365 de l'an 15
+/// → fenêtre 15 → 2015) reste valide : on vérifie que la valeur ne plante
+/// pas et que le listing contient une valeur.
 #[test]
-fn options_yearcutoff_default_1900_datejul() {
-    // datejul(15365) → day 365 of year 15 → 1915 (avec yearcutoff=1900)
+fn options_yearcutoff_default_1926_datejul() {
+    // datejul(15365) : yy=15 → 1926+... non : base 1900+15=1915 < 1926 →
+    // 2015, jour 365 → 2015-12-31 = SAS 20453.
     let out = run_det(
         "data a; d = datejul(15365); run;\n\
          proc print data=a; run;\n",
     );
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
-    // L'année pleine devrait être 1915 : SAS date = (1915-1960)*365.25 ...
-    // On vérifie juste que ça ne plante pas et que le listing contient une valeur.
-    assert!(!out.listing.is_empty(), "listing empty:\n{}", out.listing);
+    assert!(
+        out.listing.contains("20453"),
+        "expected SAS date 20453 (2015-12-31) in listing:\n{}",
+        out.listing
+    );
 }
 
-/// YEARCUTOFF=2000 : yy=15 → 2015.
+/// J02-P9 — YEARCUTOFF=1950 vs défaut 1926 : fenêtre glissante. yy=30
+/// donne 1930 sous 1926 (1900+30 >= 1926) mais 2030 sous 1950 (1930 < 1950
+/// → +100). L'ancien test comparait yearcutoff=1900 vs 2000 sur
+/// datejul(15365) (yy=15) ; sous le nouveau défaut 1926 les deux lectures
+/// donnaient le même résultat (15 → 2015), la comparaison porte donc sur
+/// 1926 vs 1950 avec yy=30.
 #[test]
-fn options_yearcutoff_2000() {
-    // datejul(15365) avec yearcutoff=2000 → year=2015.
-    // SAS date pour 2015-12-31 = (2015-1960)*365 + bissextiles ≈ 20453
-    // On vérifie que la valeur n'est pas la même qu'avec yearcutoff=1900.
-    let out_1900 = run_det("data a; d = datejul(15365); run; proc print data=a; run;");
-    let out_2000 = run_det(
-        "options yearcutoff=2000;\n\
-         data a; d = datejul(15365); run;\n\
-         proc print data=a; run;\n",
+fn options_yearcutoff_1950_changes_reading() {
+    let out_1926 = run_det("data a; d = datejul(30365); put d=; run;");
+    let out_1950 = run_det(
+        "options yearcutoff=1950;\n\
+         data a; d = datejul(30365); put d=; run;\n",
     );
-    assert_eq!(out_2000.exit_code, 0, "log:\n{}", out_2000.log);
-    // Les listings doivent être différents (année 1915 vs 2015).
+    assert_eq!(out_1950.exit_code, 0, "log:\n{}", out_1950.log);
     assert_ne!(
-        out_1900.listing, out_2000.listing,
-        "expected different dates with yearcutoff=1900 vs 2000"
+        out_1926.log, out_1950.log,
+        "expected different dates with yearcutoff=1926 vs 1950"
     );
+    // 1930-12-31 = SAS -10593 ; 2030-12-31 = SAS 25932.
+    assert!(out_1926.log.contains("-10593"), "log:\n{}", out_1926.log);
+    assert!(out_1950.log.contains("25932"), "log:\n{}", out_1950.log);
 }
 
 /// YEARCUTOFF=1950 : fenêtre glissante — yy=49 → 2049, yy=50 → 1950.

@@ -121,9 +121,10 @@ pub struct EvalCtx {
     /// informats utilisateur. L'évaluateur n'a pas accès à `Session`, donc
     /// on passe le catalogue ici au début de chaque étape DATA.
     pub format_catalog: std::rc::Rc<crate::formats::FormatCatalog>,
-    /// M38.2 — YEARCUTOFF= mirrored from `session.options.yearcutoff`.
-    /// Used by date functions (e.g. DATEJUL) to interpret 2-digit years.
-    /// Default 1900 preserves the pre-M38.2 behaviour (0–99 → 1900–1999).
+    /// M38.2/J02-P9 — YEARCUTOFF= mirrored from `session.options.yearcutoff`.
+    /// Used by date functions (e.g. DATEJUL) and informats to interpret
+    /// 2-digit years. Default 1926 = SAS 9.4 shipped default (doc SAS 9.4,
+    /// « What's New in SAS 9.4 System Options » : changed from 1920 to 1926).
     pub yearcutoff: u16,
     /// Patterns PRX compilés (M40.1) : PRXPARSE y alloue des ids valables
     /// pour la durée de l'étape ; fonctions et CALL routines PRX* y opèrent.
@@ -172,7 +173,7 @@ impl Default for EvalCtx {
             hash_iters: HashMap::new(),
             hash_outputs: Vec::new(),
             format_catalog: std::rc::Rc::new(crate::formats::FormatCatalog::default()),
-            yearcutoff: 1900,
+            yearcutoff: 1926,
             prx: functions::prx::PrxState::default(),
             runtime_errors: Vec::new(),
         }

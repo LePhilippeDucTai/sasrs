@@ -189,7 +189,10 @@ fn fn_input(args: &[Value], ctx: &mut EvalCtx) -> Value {
         return Value::missing();
     };
     // Use the session's format catalog so user-defined informats (PROC FORMAT INVALUE) are resolved.
-    ctx.format_catalog.informat(&source, &spec)
+    // J02-P9 — la fenêtre YEARCUTOFF= de la session sert aux informats à
+    // année sur 2 chiffres (doc SAS 9.4, YEARCUTOFF= : « used by various date
+    // and datetime informats and functions »).
+    ctx.format_catalog.informat(&source, &spec, ctx.yearcutoff)
 }
 
 /// SYMGET (M11.5) : `symget('name')` lit la valeur de la variable macro

@@ -172,7 +172,7 @@ fn informat_empty_gives_missing() {
         w: None,
         d: None,
     };
-    let result = cat.informat("  ", &spec);
+    let result = cat.informat("  ", &spec, 1926);
     assert_eq!(result, Value::missing());
 }
 
@@ -184,7 +184,7 @@ fn informat_dot_gives_missing() {
         w: None,
         d: None,
     };
-    let result = cat.informat(".", &spec);
+    let result = cat.informat(".", &spec, 1926);
     assert_eq!(result, Value::missing());
 }
 
@@ -197,7 +197,7 @@ fn informat_numeric_string_gives_num() {
         w: None,
         d: None,
     };
-    let result = cat.informat("3.14", &spec);
+    let result = cat.informat("3.14", &spec, 1926);
     assert_eq!(result, Value::Num(3.14));
 }
 
@@ -209,7 +209,7 @@ fn informat_text_gives_char() {
         w: None,
         d: None,
     };
-    let result = cat.informat("hello", &spec);
+    let result = cat.informat("hello", &spec, 1926);
     assert_eq!(result, Value::Char("hello".into()));
 }
 
@@ -252,9 +252,9 @@ fn user_informat_registered_and_resolved() {
     let mut cat = catalog();
     cat.define_informat("GRADE", make_grade_informat());
     let spec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(cat.informat("A", &spec), Value::Num(4.0));
-    assert_eq!(cat.informat("B", &spec), Value::Num(3.0));
-    assert_eq!(cat.informat("F", &spec), Value::Num(0.0));
+    assert_eq!(cat.informat("A", &spec, 1926), Value::Num(4.0));
+    assert_eq!(cat.informat("B", &spec, 1926), Value::Num(3.0));
+    assert_eq!(cat.informat("F", &spec, 1926), Value::Num(0.0));
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn user_informat_unmatched_returns_missing() {
     cat.define_informat("GRADE", make_grade_informat());
     let spec = FormatSpec::parse("GRADE.").unwrap();
     // "X" not in any range; other = missing → Value::missing().
-    assert_eq!(cat.informat("X", &spec), Value::missing());
+    assert_eq!(cat.informat("X", &spec, 1926), Value::missing());
 }
 
 #[test]
@@ -290,9 +290,9 @@ fn user_informat_shadows_builtin() {
     );
     let spec = FormatSpec::parse("MYNUM.").unwrap();
     // "one" → 1.0 from user informat (not the fallback which would give Char).
-    assert_eq!(cat.informat("one", &spec), Value::Num(1.0));
+    assert_eq!(cat.informat("one", &spec, 1926), Value::Num(1.0));
     // "two" → no range + no other → missing (user informat claimed the name).
-    assert_eq!(cat.informat("two", &spec), Value::missing());
+    assert_eq!(cat.informat("two", &spec, 1926), Value::missing());
 }
 
 #[test]
@@ -322,10 +322,16 @@ fn char_user_informat_resolved() {
         },
     );
     let spec = FormatSpec::parse("$SIZE.").unwrap();
-    assert_eq!(cat.informat("S", &spec), Value::Char("Small".to_string()));
-    assert_eq!(cat.informat("L", &spec), Value::Char("Large".to_string()));
     assert_eq!(
-        cat.informat("XL", &spec),
+        cat.informat("S", &spec, 1926),
+        Value::Char("Small".to_string())
+    );
+    assert_eq!(
+        cat.informat("L", &spec, 1926),
+        Value::Char("Large".to_string())
+    );
+    assert_eq!(
+        cat.informat("XL", &spec, 1926),
         Value::Char("Unknown".to_string())
     );
 }

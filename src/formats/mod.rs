@@ -390,7 +390,12 @@ impl FormatCatalog {
     ///   1. User informat (M18.2) — checked BEFORE builtins so user can shadow.
     ///   2. builtin::informat_builtin
     ///   3. Fallback: trim; empty/"." → missing; parse as f64 → Num; else Char.
-    pub fn informat(&self, s: &str, spec: &FormatSpec) -> Value {
+    ///
+    /// J02-P9 — `yearcutoff` : fenêtre YEARCUTOFF= de la session, appliquée
+    /// par les informats à année sur 2 chiffres (doc SAS 9.4, YEARCUTOFF=
+    /// System Option : « used by various date and datetime informats and
+    /// functions »).
+    pub fn informat(&self, s: &str, spec: &FormatSpec, yearcutoff: u16) -> Value {
         // 1. Try user informat (M18.2) — shadows builtins.
         let uname = spec.name.to_uppercase();
         if let Some(ui) = self.user_informats.get(&uname) {
@@ -402,7 +407,7 @@ impl FormatCatalog {
         }
 
         // 2. Try builtin.
-        if let Some(v) = builtin::informat_builtin(s, spec) {
+        if let Some(v) = builtin::informat_builtin(s, spec, yearcutoff) {
             return v;
         }
 

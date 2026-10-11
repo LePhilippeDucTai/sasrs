@@ -10,7 +10,10 @@ pub(crate) fn parse_primary(ts: &mut StatementStream) -> Result<Expr> {
         }
         TokenKind::Str { value, suffix } => {
             ts.next();
-            literal_from_string(value, *suffix, tok.span)
+            // J02-P9 — la fenêtre YEARCUTOFF= du segment (posée par
+            // l'exécuteur) sert aux constantes date/datetime à année sur
+            // 2 chiffres.
+            literal_from_string(value, *suffix, tok.span, ts.yearcutoff())
         }
         TokenKind::Dot => parse_dot(ts),
         TokenKind::LParen => {

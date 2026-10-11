@@ -118,13 +118,30 @@ fn run_program_inner(src: &SourceFile, session: &mut Session) -> bool {
         session.call_execute_queue.extend(macro_ce);
         let seg_src = SourceFile::new(expanded);
         let mut stream = match StatementStream::new(&seg_src) {
-            Ok(s) => s,
+            Ok(mut s) => {
+                // J02-P9 — la fenêtre YEARCUTOFF= de la SESSION en vigueur
+                // pour CE segment sert au parsing des constantes date à
+                // année sur 2 chiffres (SAS les fige à la compilation de
+                // l'étape, doc SAS 9.4, YEARCUTOFF=).
+                s.set_yearcutoff(session.options.yearcutoff);
+                s
+            }
             Err(e) => {
                 session.log.error(&e.to_string());
                 continue;
             }
         };
-        while let Some((block, span)) = stream.next_block() {
+        // J02-P9 — la fenêtre YEARCUTOFF= est (re)synchronisée sur la session
+        // AVANT le parsing de chaque bloc : `next_block` parse lui-même le
+        // bloc, et un `OPTIONS YEARCUTOFF=` exécuté plus tôt dans le MÊME
+        // segment doit s'appliquer déjà à la constante date d'un bloc
+        // suivant (SAS exécute le statement global avant de compiler
+        // l'étape suivante).
+        loop {
+            stream.set_yearcutoff(session.options.yearcutoff);
+            let Some((block, span)) = stream.next_block() else {
+                break;
+            };
             let lines = seg_src.lines_of_span(span);
             let line_texts: Vec<&str> = lines.iter().map(|(_, text)| *text).collect();
             session.log.echo_source(&line_texts);

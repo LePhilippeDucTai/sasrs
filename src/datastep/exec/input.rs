@@ -398,8 +398,11 @@ impl Runner {
     }
 
     /// Applique un informat à un champ via le catalogue (clone de session).
+    /// J02-P9 — la fenêtre YEARCUTOFF= de l'étape (session mirror dans
+    /// `EvalCtx`) sert aux informats à année sur 2 chiffres.
     fn format_informat(&self, field: &str, spec: &crate::formats::FormatSpec) -> Value {
-        self.format_catalog.informat(field, spec)
+        self.format_catalog
+            .informat(field, spec, self.ctx.yearcutoff)
     }
 
     // ── FILE / PUT (M14.2) ───────────────────────────────────────────────

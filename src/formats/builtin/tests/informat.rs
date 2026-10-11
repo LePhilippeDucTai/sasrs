@@ -6,59 +6,59 @@ use crate::value::Value;
 #[test]
 fn informat_wd_no_implicit_decimal() {
     // No d, or d=0 — no division
-    let s = informat_builtin("42", &spec("", None, Some(0))).unwrap();
+    let s = informat_builtin("42", &spec("", None, Some(0)), 1926).unwrap();
     assert_eq!(s, Value::Num(42.0));
 }
 
 #[test]
 fn informat_wd_implicit_decimal_pitfall() {
     // THE FAMOUS PITFALL: "123" with informat 5.2 → 1.23
-    let s = informat_builtin("123", &spec("", Some(5), Some(2))).unwrap();
+    let s = informat_builtin("123", &spec("", Some(5), Some(2)), 1926).unwrap();
     assert_eq!(s, Value::Num(1.23));
 }
 
 #[test]
 fn informat_wd_explicit_decimal_ignores_d() {
     // "1.23" with informat 5.2 → 1.23 (d is ignored when point present)
-    let s = informat_builtin("1.23", &spec("", Some(5), Some(2))).unwrap();
+    let s = informat_builtin("1.23", &spec("", Some(5), Some(2)), 1926).unwrap();
     assert_eq!(s, Value::Num(1.23));
 }
 
 #[test]
 fn informat_wd_dot_gives_missing() {
-    let s = informat_builtin(".", &spec("", None, None)).unwrap();
+    let s = informat_builtin(".", &spec("", None, None), 1926).unwrap();
     assert_eq!(s, Value::missing());
 }
 
 #[test]
 fn informat_wd_empty_gives_missing() {
-    let s = informat_builtin("  ", &spec("", None, None)).unwrap();
+    let s = informat_builtin("  ", &spec("", None, None), 1926).unwrap();
     assert_eq!(s, Value::missing());
 }
 
 #[test]
 fn informat_comma_strips_commas() {
-    let s = informat_builtin("1,234.56", &spec("COMMA", Some(10), Some(2))).unwrap();
+    let s = informat_builtin("1,234.56", &spec("COMMA", Some(10), Some(2)), 1926).unwrap();
     assert_eq!(s, Value::Num(1234.56));
 }
 
 #[test]
 fn informat_dollar_strips_dollar_and_commas() {
-    let s = informat_builtin("$1,234", &spec("DOLLAR", Some(10), Some(0))).unwrap();
+    let s = informat_builtin("$1,234", &spec("DOLLAR", Some(10), Some(0)), 1926).unwrap();
     assert_eq!(s, Value::Num(1234.0));
 }
 
 #[test]
 fn informat_date9_epoch() {
     // 01JAN1960 → 0.0
-    let v = informat_builtin("01JAN1960", &spec("DATE", Some(9), None)).unwrap();
+    let v = informat_builtin("01JAN1960", &spec("DATE", Some(9), None), 1926).unwrap();
     assert_eq!(v, Value::Num(0.0));
 }
 
 #[test]
 fn informat_date9_2020() {
     let d = day_num(2020, 1, 1);
-    let v = informat_builtin("01JAN2020", &spec("DATE", Some(9), None)).unwrap();
+    let v = informat_builtin("01JAN2020", &spec("DATE", Some(9), None), 1926).unwrap();
     assert_eq!(v, Value::Num(d));
 }
 
@@ -68,14 +68,14 @@ fn informat_date9_roundtrip_with_format() {
     let original = day_num(2020, 6, 15);
     let v = Value::Num(original);
     let formatted = format_builtin(&v, &spec("DATE", Some(9), None)).unwrap();
-    let parsed = informat_builtin(&formatted, &spec("DATE", Some(9), None)).unwrap();
+    let parsed = informat_builtin(&formatted, &spec("DATE", Some(9), None), 1926).unwrap();
     assert_eq!(parsed, Value::Num(original));
 }
 
 #[test]
 fn informat_mmddyy10() {
     let d = day_num(2020, 3, 15);
-    let v = informat_builtin("03/15/2020", &spec("MMDDYY", Some(10), None)).unwrap();
+    let v = informat_builtin("03/15/2020", &spec("MMDDYY", Some(10), None), 1926).unwrap();
     assert_eq!(v, Value::Num(d));
 }
 
@@ -86,7 +86,7 @@ fn informat_date_non_ascii_is_rejected_not_a_crash() {
     // 8 octets ou plus faisait paniquer sur « byte index is not a char
     // boundary ». Attendu : valeur manquante, comme toute date invalide.
     for spec_name in ["MMDDYY", "DDMMYY", "YYMMDD"] {
-        let v = informat_builtin("€€€€", &spec(spec_name, Some(8), None));
+        let v = informat_builtin("€€€€", &spec(spec_name, Some(8), None), 1926);
         assert!(
             v.is_none() || v == Some(Value::missing()),
             "{spec_name} sur du non-ASCII doit être manquant, obtenu {v:?}"
@@ -97,33 +97,33 @@ fn informat_date_non_ascii_is_rejected_not_a_crash() {
 #[test]
 fn informat_ddmmyy10() {
     let d = day_num(2020, 3, 15);
-    let v = informat_builtin("15/03/2020", &spec("DDMMYY", Some(10), None)).unwrap();
+    let v = informat_builtin("15/03/2020", &spec("DDMMYY", Some(10), None), 1926).unwrap();
     assert_eq!(v, Value::Num(d));
 }
 
 #[test]
 fn informat_yymmdd10() {
     let d = day_num(2020, 3, 15);
-    let v = informat_builtin("2020/03/15", &spec("YYMMDD", Some(10), None)).unwrap();
+    let v = informat_builtin("2020/03/15", &spec("YYMMDD", Some(10), None), 1926).unwrap();
     assert_eq!(v, Value::Num(d));
 }
 
 #[test]
 fn informat_time_hms() {
     // 12:34:56 = 45296 seconds
-    let v = informat_builtin("12:34:56", &spec("TIME", Some(8), None)).unwrap();
+    let v = informat_builtin("12:34:56", &spec("TIME", Some(8), None), 1926).unwrap();
     assert_eq!(v, Value::Num(45296.0));
 }
 
 #[test]
 fn informat_char() {
-    let v = informat_builtin("  hello  ", &spec("$CHAR", Some(10), None)).unwrap();
+    let v = informat_builtin("  hello  ", &spec("$CHAR", Some(10), None), 1926).unwrap();
     assert_eq!(v, Value::Char("hello".into()));
 }
 
 #[test]
 fn informat_unknown_returns_none() {
-    let result = informat_builtin("42", &spec("XYZZY", None, None));
+    let result = informat_builtin("42", &spec("XYZZY", None, None), 1926);
     assert!(result.is_none());
 }
 

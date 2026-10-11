@@ -170,9 +170,38 @@ pub(super) fn exec_global(stmt: &GlobalStmt, session: &mut Session) {
             date,
             number,
         } => {
+            // J02-P9 — le bras historique M22.2 (le parser global actuel ne
+            // produit pas ce variant : les options passent par
+            // GlobalStmt::Options → set_ods_option). Le listing texte est
+            // toujours centré, sans date ni numéro de page : les valeurs qui
+            // demandent autre chose sont stockées mais pas appliquées →
+            // WARNING « stored but not applied to the listing » (NOCENTER,
+            // DATE, NUMBER seulement ; CENTER/NODATE/NONUMBER correspondent
+            // au rendu). Application réelle : J11-P5.
             session.ods_options.nocenter = *nocenter;
             session.ods_options.date = *date;
             session.ods_options.number = *number;
+            if *nocenter {
+                session.log.warning(
+                    "The NOCENTER option is stored but not applied to the listing; the \
+                     listing is always centered in this build (planned: roadmap-avancee \
+                     J11-P5).",
+                );
+            }
+            if *date {
+                session.log.warning(
+                    "The DATE option is stored but not applied to the listing; the \
+                     listing never prints a date header in this build (planned: \
+                     roadmap-avancee J11-P5).",
+                );
+            }
+            if *number {
+                session.log.warning(
+                    "The NUMBER option is stored but not applied to the listing; the \
+                     listing never prints a page number in this build (planned: \
+                     roadmap-avancee J11-P5).",
+                );
+            }
         }
         GlobalStmt::OdsOutput { mappings, close } => {
             if *close {

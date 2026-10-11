@@ -180,6 +180,12 @@ directe, rien à lever).
 | J02-P8 | GLM : options après `/` d'ESTIMATE et de CONTRAST | sautées jusqu'au `;` (`/ divisor=2` : estimation non divisée, code 0) | `DIVISOR=`, `SINGULAR=` (ESTIMATE), `E=`, `ETYPE=`, `SINGULAR=` (CONTRAST) → **ERROR** « The DIVISOR= option of the ESTIMATE statement is not supported in PROC GLM; … » ; `E` (affichage du vecteur L) → **WARNING** d'affichage ; autre → **ERROR** | non planifiée (GLM hors du périmètre fonctionnel du plan) |
 | J02-P8 | GLM : ESTIMATE/CONTRAST sur le chemin multiway (plusieurs effets ou plusieurs variables CLASS) ; sur le chemin une voie, effet autre que celui du MODEL (INTERCEPT compris) ou absent | ignorés sans sortie ni NOTE (multiway : NOTE « skipped » seulement pour un effet hors CLASS) | **ERROR** avant exécution (« An ESTIMATE statement in a model with several effects or CLASS variables is not supported in PROC GLM; … ») ; l'effet du MODEL une voie reste calculé | non planifiée (GLM hors du périmètre fonctionnel du plan) |
 | J02-P8 | GLM : `ABSORB`, `CODE`, `MANOVA`, `RANDOM`, `REPEATED`, `STORE`, `TEST` | « 180-322 … not valid » | **ERROR** « not supported … cannot be ignored » (BY, FREQ, ID, WEIGHT : déjà le message partagé) | non planifiée |
+| J02-P9 | OBS=/FIRSTOBS= en entrée de PROC | appliqués aux seuls SET/MERGE de l'étape DATA (`datastep::compile_io`) ; les PROC lisaient la table entière en silence | appliqués à toute table lue en entrée de PROC (`procs::common::open_input`/`open_input_display`/`open_resolved`, doc SAS 9.4, System Options, OBS=/FIRSTOBS=) ; PROC CONTENTS (métadonnées) continue de rapporter le compte d'observations STOCKÉ | — (procs lisant directement hors `procs::common` : APPEND, IML, COMPARE, DATASETS — constat ci-dessous) |
+| J02-P9 | YEARCUTOFF= : défaut et informats à année sur 2 chiffres | défaut codé 1900 (session, DATEJUL) et informats DATE/MMDDYY/DDMMYY/YYMMDD codés en dur 2000+yy | défaut **1926** (doc SAS 9.4, « What's New in SAS 9.4 System Options » : « The default value of the YEARCUTOFF value has been changed from 1920 to 1926 ») ; les informats suivent la fenêtre glissante de la session (doc SAS 9.4, YEARCUTOFF= : « the first year of a 100-year span that is used by date informats and functions to read a two-digit year ») ; les fonctions (DATEJUL…) suivent déjà la fenêtre | — (la page d'option de la Fifth Edition indique un défaut livré de 1940 : « The shipped default is 1940 » — constat transmis au plan) |
+| J02-P9 | Constantes date `'ddMONyy'd` à année sur 1 ou 2 chiffres | lues comme l'année littérale (l'an 15/26 de notre ère, résultat faux en silence) | fenêtre YEARCUTOFF= en vigueur au parsing du segment, comme SAS à la compilation de l'étape (doc SAS 9.4, SAS System Concepts, « SAS Date, Time, and Datetime Values » et YEARCUTOFF=) ; la valeur de session est resynchronisée avant chaque bloc, un `OPTIONS YEARCUTOFF=` antérieur du même segment s'applique déjà | — |
+| J02-P9 | CENTER/NOCENTER, DATE/NODATE, NUMBER/NONUMBER | stockés sur `session.ods_options`, jamais lus, acceptés sans un mot | **WARNING** « stored but not applied to the listing » pour NOCENTER, DATE et NUMBER (le listing texte est toujours centré, sans date ni numéro de page) ; CENTER, NODATE et NONUMBER correspondent au rendu et restent silencieux | J11-P5 |
+| J02-P9 | PROC OPTIONS : valeurs imprimées | PAGESIZE=60, NOCENTER, NODATE codés en dur, quel que soit l'état de la session ; `OPTION=nom` produisait un WARNING trompeur sur « OPTION » | valeurs RÉELLES de la session (PAGESIZE, CENTER, DATE, NUMBER, YEARCUTOFF…) ; `OPTION=nom` (et `OPTION(nom)`) rend la valeur de l'option demandée (doc SAS 9.4, PROC OPTIONS statement) ; le détail par option reste J11-P5 | J11-P5 (détail du rendu) |
+| J02-P9 | Instruction `OPTION` (singulier) | « Statement 'OPTION' is not valid or it is used out of proper order » | acceptée comme l'alias SAS de `OPTIONS` (doc SAS 9.4, OPTIONS statement : « Aliases: option ») | — |
 
 GLIMMIX partage encore l'ancienne forme `common::parse_response_options`
 (`DESC` y est honoré ; `EVENT=FIRST|LAST`, `ORDER=` et `REF=` y restent
@@ -265,6 +271,21 @@ non estimable — à confirmer contre une sortie SAS ;
 CONTENTS de PROC CATALOG ne liste que les formats VALUE, quel que soit le
 catalogue désigné (J03-P5) ; PROC CONTENTS affiche l'informat sans sa largeur
 (« COMMA » pour `comma12.`).
+
+Les options globales (J02-P9) gardent des écarts hors des périmètres de
+fichiers de l'unité (constats transmis au plan) : la fenêtre OBS=/FIRSTOBS=
+de l'entrée de PROC est appliquée par `procs::common::open_input`,
+`open_input_display` et `open_resolved`, mais les procs qui lisent leur table
+SANS passer par ces helpers ne la voient pas (PROC APPEND
+`src/procs/append.rs`, PROC IML `src/procs/iml/exec.rs`, PROC COMPARE
+`src/procs/compare/analyze.rs`, PROC DATASETS `src/procs/datasets/mod.rs`,
+PROC FORMAT CNTLIN= `src/procs/format/cntl.rs`) ; SQL et l'étape DATA sont
+hors de ce contrat (le DATA step honore déjà la fenêtre, PROC SQL la
+déléguerait à son scan lazy). Le défaut YEARCUTOFF= retenu est 1926 (doc SAS
+9.4, « What's New in SAS 9.4 System Options » : « changed from 1920 to
+1926 ») ; la page d'option de la Fifth Edition de la même doc indique un
+défaut livré postérieur de 1940 (« The shipped default is 1940 ») — l'écart
+entre les deux pages publiées est transmis au plan.
 
 ## Approximations documentées
 

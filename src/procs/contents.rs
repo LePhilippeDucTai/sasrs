@@ -180,7 +180,15 @@ pub fn execute(ast: &ContentsAst, session: &mut Session) -> Result<()> {
     }
 
     // Resolve the dataset reference (data= or _LAST_) and read it (MQ6.1).
-    let (ds, display_name) = common::open_input_display(&ast.data, session)?;
+    // J02-P9 — PROC CONTENTS est une proc de MÉTADONNÉES : la fenêtre
+    // OBS=/FIRSTOBS= ne s'applique PAS, le compte d'observations STOCKÉ est
+    // rapporté (`open_resolved_full`, doc SAS 9.4, CONTENTS statement :
+    // « Observations » est l'attribut du member).
+    let (ds, display_name) = {
+        let in_ref = common::resolve_last_dataset(&ast.data, session)?;
+        let ds = common::open_resolved_full(&in_ref, session)?;
+        (ds, in_ref.display())
+    };
 
     let n_obs = ds.n_obs();
     let n_vars = ds.vars.len();

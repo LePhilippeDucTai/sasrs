@@ -157,12 +157,54 @@ fn execute_ods_rtf_without_file_emits_note() {
 
 #[test]
 fn execute_global_ods_options_no_warning() {
-    // NOCENTER/NODATE/NONUMBER sont reconnues comme options ODS et ne
-    // déclenchent pas de WARNING "not yet supported".
+    // J02-P9 — le listing texte est TOUJOURS centré, sans date ni numéro de
+    // page : NOCENTER, DATE et NUMBER sont stockés mais pas appliqués et
+    // avertissent (WARNING « stored but not applied to the listing ») ;
+    // CENTER, NODATE et NONUMBER correspondent au listing et restent
+    // silencieux. L'ancien test exigeait exit 0 pour
+    // `options nocenter nodate nonumber;` (ancien silence).
+    //
+    // Seule NOCENTER demande un rendu non appliqué : un WARNING, code 1.
     let out = run_det("options nocenter nodate nonumber;\n");
+    assert_eq!(out.exit_code, 1, "log was:\n{}", out.log);
+    assert!(
+        out.log
+            .contains("The NOCENTER option is stored but not applied to the listing"),
+        "log was:\n{}",
+        out.log
+    );
+    // NODATE et NONUMBER correspondent au listing : pas de WARNING.
+    assert!(
+        !out.log.contains("The DATE option is stored"),
+        "unexpected DATE warning:\n{}",
+        out.log
+    );
+    assert!(
+        !out.log.contains("The NUMBER option is stored"),
+        "unexpected NUMBER warning:\n{}",
+        out.log
+    );
+    // DATE et NUMBER demandent le rendu non appliqué : un WARNING chacun.
+    let out = run_det("options date number;\n");
+    assert_eq!(out.exit_code, 1, "log was:\n{}", out.log);
+    assert!(
+        out.log
+            .contains("The DATE option is stored but not applied to the listing"),
+        "log was:\n{}",
+        out.log
+    );
+    assert!(
+        out.log
+            .contains("The NUMBER option is stored but not applied to the listing"),
+        "log was:\n{}",
+        out.log
+    );
+    // CENTER / NODATE / NONUMBER : silencieux, exit 0.
+    let out = run_det("options center nodate nonumber;\n");
     assert_eq!(out.exit_code, 0, "log was:\n{}", out.log);
     assert!(
-        !out.log.contains("is not yet supported"),
+        !out.log.contains("is not yet supported")
+            && !out.log.contains("not applied to the listing"),
         "unexpected warning in log:\n{}",
         out.log
     );

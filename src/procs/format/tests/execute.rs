@@ -182,9 +182,18 @@ fn execute_invalue_numeric_registered_in_catalog() {
     let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
-    assert_eq!(session.format_catalog.informat("B", &spec), Value::Num(3.0));
-    assert_eq!(session.format_catalog.informat("F", &spec), Value::Num(0.0));
+    assert_eq!(
+        session.format_catalog.informat("A", &spec, 1926),
+        Value::Num(4.0)
+    );
+    assert_eq!(
+        session.format_catalog.informat("B", &spec, 1926),
+        Value::Num(3.0)
+    );
+    assert_eq!(
+        session.format_catalog.informat("F", &spec, 1926),
+        Value::Num(0.0)
+    );
 
     // NOTE logged for informat.
     let log = session.log.into_string();
@@ -204,15 +213,15 @@ fn execute_invalue_char_dollar_registered() {
 
     let spec = FormatSpec::parse("$SIZE.").unwrap();
     assert_eq!(
-        session.format_catalog.informat("S", &spec),
+        session.format_catalog.informat("S", &spec, 1926),
         Value::Char("Small".to_string())
     );
     assert_eq!(
-        session.format_catalog.informat("M", &spec),
+        session.format_catalog.informat("M", &spec, 1926),
         Value::Char("Medium".to_string())
     );
     assert_eq!(
-        session.format_catalog.informat("L", &spec),
+        session.format_catalog.informat("L", &spec, 1926),
         Value::Char("Large".to_string())
     );
 }
@@ -227,7 +236,7 @@ fn execute_invalue_unmatched_returns_missing() {
     let spec = FormatSpec::parse("GRADE.").unwrap();
     // "X" not matched, no other → missing.
     assert_eq!(
-        session.format_catalog.informat("X", &spec),
+        session.format_catalog.informat("X", &spec, 1926),
         Value::missing()
     );
 }
@@ -240,9 +249,12 @@ fn execute_invalue_other_fallback() {
     let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 other=.; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &spec), Value::Num(4.0));
     assert_eq!(
-        session.format_catalog.informat("Z", &spec),
+        session.format_catalog.informat("A", &spec, 1926),
+        Value::Num(4.0)
+    );
+    assert_eq!(
+        session.format_catalog.informat("Z", &spec, 1926),
         Value::missing()
     );
 }
@@ -269,7 +281,7 @@ fn execute_invalue_and_value_coexist() {
     // INVALUE informat also works.
     let ispec = FormatSpec::parse("GRADE.").unwrap();
     assert_eq!(
-        session.format_catalog.informat("A", &ispec),
+        session.format_catalog.informat("A", &ispec, 1926),
         Value::Num(4.0)
     );
 }

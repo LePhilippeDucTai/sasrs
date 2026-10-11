@@ -127,11 +127,19 @@ pub(crate) fn apply_option(session: &mut Session, name: &str, value: Option<&str
                 .log
                 .error("The value for the SASAUTOS option is missing."),
         },
-        // M22.2 — options globales ODS booléennes (CENTER/NOCENTER,
+        // M22.2/J02-P9 — options globales ODS booléennes (CENTER/NOCENTER,
         // DATE/NODATE, NUMBER/NONUMBER) posées sur `session.ods_options`.
-        // Stockées seulement (application au rendu différée M22.3+) :
-        // pas d'effet visible sur le listing texte par défaut.
-        _ if value.is_none() && session.set_ods_option(name) => {}
+        // Le listing texte est TOUJOURS centré, sans date ni numéro de page
+        // (src/listing.rs) : les valeurs qui demandent autre chose sont
+        // stockées mais jamais appliquées — WARNING (CONTRIBUTING §5,
+        // repli d'affichage). NOCENTER, DATE et NUMBER avertissent ;
+        // CENTER, NODATE et NONUMBER correspondent au listing et restent
+        // silencieux. Le rendu réel arrive en J11-P5.
+        _ if value.is_none() && session.set_ods_option(name) => {
+            if let Some(msg) = ods_option_unapplied_warning(name) {
+                session.log.warning(&msg);
+            }
+        }
         // M19.3 — options de trace booléennes : MPRINT/MLOGIC/
         // SYMBOLGEN (et leurs formes NO...). Appliquées à la session
         // ET propagées au processeur macro (qui décide de l'écho).
@@ -178,4 +186,30 @@ pub(crate) fn parse_macro_trace_flag(name: &str) -> Option<(&'static str, bool)>
         _ => return None,
     };
     Some((canon, on))
+}
+
+/// J02-P9 — WARNING « stored but not applied to the listing » pour les
+/// options ODS booléennes dont la valeur ne correspond PAS au rendu du
+/// listing texte (toujours centré, sans date ni numéro de page) :
+/// NOCENTER, DATE et NUMBER. CENTER, NODATE et NONUMBER correspondent au
+/// listing et ne warnent pas. L'application réelle arrive en J11-P5.
+pub(crate) fn ods_option_unapplied_warning(name: &str) -> Option<String> {
+    match name.to_ascii_lowercase().as_str() {
+        "nocenter" => Some(
+            "The NOCENTER option is stored but not applied to the listing; the listing \
+             is always centered in this build (planned: roadmap-avancee J11-P5)."
+                .to_string(),
+        ),
+        "date" => Some(
+            "The DATE option is stored but not applied to the listing; the listing \
+             never prints a date header in this build (planned: roadmap-avancee J11-P5)."
+                .to_string(),
+        ),
+        "number" => Some(
+            "The NUMBER option is stored but not applied to the listing; the listing \
+             never prints a page number in this build (planned: roadmap-avancee J11-P5)."
+                .to_string(),
+        ),
+        _ => None,
+    }
 }

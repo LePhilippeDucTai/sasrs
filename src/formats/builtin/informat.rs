@@ -4,8 +4,29 @@ use super::*;
 // informat_builtin
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// J02-P9 — fenêtre glissante YEARCUTOFF= pour une année à 2 chiffres.
+///
+/// Doc SAS 9.4, System Options, YEARCUTOFF= : la valeur fixe la PREMIÈRE
+/// année d'un intervalle de 100 ans utilisé par les informats et fonctions
+/// à année sur 2 chiffres. Pour `yy` (0..99) et une coupure `cutoff` :
+/// `base = (cutoff / 100) * 100` ; si `base + yy < cutoff` alors
+/// `base += 100` (l'année tombe dans la seconde moitié de la fenêtre).
+pub fn expand_year_window(y: i32, len: usize, yearcutoff: u16) -> i32 {
+    if len != 2 {
+        return y;
+    }
+    let cutoff = yearcutoff as i32;
+    let base = (cutoff / 100) * 100;
+    let candidate = base + y;
+    if candidate < cutoff {
+        candidate + 100
+    } else {
+        candidate
+    }
+}
+
 /// Parse a SAS informat. Returns None if the informat name is unknown.
-pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
+pub fn informat_builtin(s: &str, spec: &FormatSpec, yearcutoff: u16) -> Option<Value> {
     let name = spec.name.to_uppercase();
     let trimmed = s.trim();
 
@@ -73,16 +94,11 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
                 .position(|&m| m == mon_str)
                 .map(|p| p as u32 + 1)?;
             let year: i32 = year_str.parse().ok()?;
-            // 2-digit year: 00-99 → 2000-2099 (simple heuristic matching SAS)
-            let year = if year_str.len() == 2 {
-                if (0..100).contains(&year) {
-                    2000 + year
-                } else {
-                    year
-                }
-            } else {
-                year
-            };
+            // J02-P9 — 2-digit year: YEARCUTOFF= sliding window (doc SAS 9.4,
+            // YEARCUTOFF= System Option : « the first year of a 100-year span
+            // that is used by date informats and functions to read a
+            // two-digit year »). Les autres longueurs restent littérales.
+            let year = expand_year_window(year, year_str.len(), yearcutoff);
             let date = NaiveDate::from_ymd_opt(year, month, day)?;
             let days = date.signed_duration_since(sas_epoch()).num_days() as f64;
             Some(Value::Num(days))
@@ -91,7 +107,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
         // ── MMDDYY10. → days since 1960-01-01 ────────────────────────────────
         "MMDDYY" => {
             // Handles both mmddyyyy (8 chars, no sep) and mm/dd/yyyy (10 chars)
-            let (mm, dd, yyyy) = parse_mdy_variants(trimmed)?;
+            let (mm, dd, yyyy) = parse_mdy_variants(trimmed, yearcutoff)?;
             let date = NaiveDate::from_ymd_opt(yyyy, mm, dd)?;
             let days = date.signed_duration_since(sas_epoch()).num_days() as f64;
             Some(Value::Num(days))
@@ -99,7 +115,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
 
         // ── DDMMYY10. → days since 1960-01-01 ────────────────────────────────
         "DDMMYY" => {
-            let (dd, mm, yyyy) = parse_dmy_variants(trimmed)?;
+            let (dd, mm, yyyy) = parse_dmy_variants(trimmed, yearcutoff)?;
             let date = NaiveDate::from_ymd_opt(yyyy, mm, dd)?;
             let days = date.signed_duration_since(sas_epoch()).num_days() as f64;
             Some(Value::Num(days))
@@ -107,7 +123,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
 
         // ── YYMMDD10. → days since 1960-01-01 ────────────────────────────────
         "YYMMDD" => {
-            let (yyyy, mm, dd) = parse_ymd_variants(trimmed)?;
+            let (yyyy, mm, dd) = parse_ymd_variants(trimmed, yearcutoff)?;
             let date = NaiveDate::from_ymd_opt(yyyy, mm, dd)?;
             let days = date.signed_duration_since(sas_epoch()).num_days() as f64;
             Some(Value::Num(days))
@@ -161,7 +177,7 @@ pub fn informat_builtin(s: &str, spec: &FormatSpec) -> Option<Value> {
 // branche `None`, c'est-à-dire une valeur manquante, comme toute date invalide.
 
 /// Parse MM/DD/YYYY or MMDDYYYY or MMDDYY (returns (month, day, year)).
-pub(super) fn parse_mdy_variants(s: &str) -> Option<(u32, u32, i32)> {
+pub(super) fn parse_mdy_variants(s: &str, yearcutoff: u16) -> Option<(u32, u32, i32)> {
     if s.contains('/') {
         // mm/dd/yyyy or mm/dd/yy
         let parts: Vec<&str> = s.split('/').collect();
@@ -170,12 +186,12 @@ pub(super) fn parse_mdy_variants(s: &str) -> Option<(u32, u32, i32)> {
         }
         let mm: u32 = parts[0].parse().ok()?;
         let dd: u32 = parts[1].parse().ok()?;
-        let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len());
+        let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len(), yearcutoff);
         Some((mm, dd, yyyy))
     } else if s.len() >= 8 && s.is_ascii() {
         let mm: u32 = s[..2].parse().ok()?;
         let dd: u32 = s[2..4].parse().ok()?;
-        let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4);
+        let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4, yearcutoff);
         Some((mm, dd, yyyy))
     } else {
         None
@@ -183,7 +199,7 @@ pub(super) fn parse_mdy_variants(s: &str) -> Option<(u32, u32, i32)> {
 }
 
 /// Parse DD/MM/YYYY or DDMMYYYY (returns (day, month, year)).
-pub(super) fn parse_dmy_variants(s: &str) -> Option<(u32, u32, i32)> {
+pub(super) fn parse_dmy_variants(s: &str, yearcutoff: u16) -> Option<(u32, u32, i32)> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() != 3 {
@@ -191,12 +207,12 @@ pub(super) fn parse_dmy_variants(s: &str) -> Option<(u32, u32, i32)> {
         }
         let dd: u32 = parts[0].parse().ok()?;
         let mm: u32 = parts[1].parse().ok()?;
-        let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len());
+        let yyyy: i32 = expand_year(parts[2].parse().ok()?, parts[2].len(), yearcutoff);
         Some((dd, mm, yyyy))
     } else if s.len() >= 8 && s.is_ascii() {
         let dd: u32 = s[..2].parse().ok()?;
         let mm: u32 = s[2..4].parse().ok()?;
-        let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4);
+        let yyyy: i32 = expand_year(s[4..].parse().ok()?, s.len() - 4, yearcutoff);
         Some((dd, mm, yyyy))
     } else {
         None
@@ -204,18 +220,18 @@ pub(super) fn parse_dmy_variants(s: &str) -> Option<(u32, u32, i32)> {
 }
 
 /// Parse YYYY/MM/DD or YYYYMMDD (returns (year, month, day)).
-pub(super) fn parse_ymd_variants(s: &str) -> Option<(i32, u32, u32)> {
+pub(super) fn parse_ymd_variants(s: &str, yearcutoff: u16) -> Option<(i32, u32, u32)> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() != 3 {
             return None;
         }
-        let yyyy: i32 = expand_year(parts[0].parse().ok()?, parts[0].len());
+        let yyyy: i32 = expand_year(parts[0].parse().ok()?, parts[0].len(), yearcutoff);
         let mm: u32 = parts[1].parse().ok()?;
         let dd: u32 = parts[2].parse().ok()?;
         Some((yyyy, mm, dd))
     } else if s.len() >= 8 && s.is_ascii() {
-        let yyyy: i32 = expand_year(s[..4].parse().ok()?, 4);
+        let yyyy: i32 = expand_year(s[..4].parse().ok()?, 4, yearcutoff);
         let mm: u32 = s[4..6].parse().ok()?;
         let dd: u32 = s[6..8].parse().ok()?;
         Some((yyyy, mm, dd))
@@ -224,13 +240,14 @@ pub(super) fn parse_ymd_variants(s: &str) -> Option<(i32, u32, u32)> {
         let yy: i32 = s[..2].parse().ok()?;
         let mm: u32 = s[2..4].parse().ok()?;
         let dd: u32 = s[4..6].parse().ok()?;
-        Some((expand_year(yy, 2), mm, dd))
+        Some((expand_year(yy, 2, yearcutoff), mm, dd))
     } else {
         None
     }
 }
 
-/// Expand a 2-digit year to 4 digits (00-99 → 2000-2099).
-pub(super) fn expand_year(y: i32, len: usize) -> i32 {
-    if len == 2 { 2000 + y } else { y }
+/// Expand a 2-digit year via the YEARCUTOFF= sliding window (J02-P9).
+/// `len` is the number of year digits actually parsed.
+pub(super) fn expand_year(y: i32, len: usize, yearcutoff: u16) -> i32 {
+    expand_year_window(y, len, yearcutoff)
 }
