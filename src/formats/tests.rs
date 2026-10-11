@@ -322,8 +322,14 @@ fn char_user_informat_resolved() {
         },
     );
     let spec = FormatSpec::parse("$SIZE.").unwrap();
-    assert_eq!(cat.informat("S", &spec, 1926), Value::Char("Small".to_string()));
-    assert_eq!(cat.informat("L", &spec, 1926), Value::Char("Large".to_string()));
+    assert_eq!(
+        cat.informat("S", &spec, 1926),
+        Value::Char("Small".to_string())
+    );
+    assert_eq!(
+        cat.informat("L", &spec, 1926),
+        Value::Char("Large".to_string())
+    );
     assert_eq!(
         cat.informat("XL", &spec, 1926),
         Value::Char("Unknown".to_string())

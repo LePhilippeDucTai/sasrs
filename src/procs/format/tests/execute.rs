@@ -182,9 +182,18 @@ fn execute_invalue_numeric_registered_in_catalog() {
     let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 'C'=2 'D'=1 'F'=0; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &spec, 1926), Value::Num(4.0));
-    assert_eq!(session.format_catalog.informat("B", &spec, 1926), Value::Num(3.0));
-    assert_eq!(session.format_catalog.informat("F", &spec, 1926), Value::Num(0.0));
+    assert_eq!(
+        session.format_catalog.informat("A", &spec, 1926),
+        Value::Num(4.0)
+    );
+    assert_eq!(
+        session.format_catalog.informat("B", &spec, 1926),
+        Value::Num(3.0)
+    );
+    assert_eq!(
+        session.format_catalog.informat("F", &spec, 1926),
+        Value::Num(0.0)
+    );
 
     // NOTE logged for informat.
     let log = session.log.into_string();
@@ -240,7 +249,10 @@ fn execute_invalue_other_fallback() {
     let session = run_format_src("proc format; invalue grade 'A'=4 'B'=3 other=.; run;");
 
     let spec = FormatSpec::parse("GRADE.").unwrap();
-    assert_eq!(session.format_catalog.informat("A", &spec, 1926), Value::Num(4.0));
+    assert_eq!(
+        session.format_catalog.informat("A", &spec, 1926),
+        Value::Num(4.0)
+    );
     assert_eq!(
         session.format_catalog.informat("Z", &spec, 1926),
         Value::missing()

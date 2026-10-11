@@ -74,11 +74,7 @@ pub fn open_input(
 ) -> Result<(SasDataset, String, String)> {
     let in_ref = resolve_last_dataset(data, session)?;
     let ds = open_resolved(&in_ref, session)?;
-    Ok((
-        ds,
-        in_ref.libref_or_work(),
-        in_ref.name.to_uppercase(),
-    ))
+    Ok((ds, in_ref.libref_or_work(), in_ref.name.to_uppercase()))
 }
 
 /// Comme [`open_input`] mais renvoie le nom d'affichage `LIBREF.TABLE`

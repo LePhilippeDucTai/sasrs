@@ -37,7 +37,12 @@ fn ra_j02_p9_obs_firstobs_window_proc_inputs() {
     let i_values: Vec<&str> = out
         .listing
         .lines()
-        .filter(|l| l.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .filter(|l| {
+            l.trim_start()
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        })
         .filter_map(|l| l.split_whitespace().last())
         .collect();
     // Les 3 lignes de PROC PRINT (Obs 1..3) portent 2, 3, 4 — jamais 1 ni 5.
@@ -360,9 +365,7 @@ fn ra_j02_p9_option_singular_statement_is_accepted() {
 /// contrat J02).
 #[test]
 fn ra_j02_p9_no_regressions_on_corrected_options() {
-    let out = run_det(
-        "options firstobs=1 obs=max yearcutoff=1926 center nodate nonumber;\n",
-    );
+    let out = run_det("options firstobs=1 obs=max yearcutoff=1926 center nodate nonumber;\n");
     assert_eq!(out.exit_code, 0, "log:\n{}", out.log);
     assert!(
         !out.log.contains("is not yet supported"),

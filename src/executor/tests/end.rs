@@ -168,7 +168,8 @@ fn execute_global_ods_options_no_warning() {
     let out = run_det("options nocenter nodate nonumber;\n");
     assert_eq!(out.exit_code, 1, "log was:\n{}", out.log);
     assert!(
-        out.log.contains("The NOCENTER option is stored but not applied to the listing"),
+        out.log
+            .contains("The NOCENTER option is stored but not applied to the listing"),
         "log was:\n{}",
         out.log
     );
@@ -187,12 +188,14 @@ fn execute_global_ods_options_no_warning() {
     let out = run_det("options date number;\n");
     assert_eq!(out.exit_code, 1, "log was:\n{}", out.log);
     assert!(
-        out.log.contains("The DATE option is stored but not applied to the listing"),
+        out.log
+            .contains("The DATE option is stored but not applied to the listing"),
         "log was:\n{}",
         out.log
     );
     assert!(
-        out.log.contains("The NUMBER option is stored but not applied to the listing"),
+        out.log
+            .contains("The NUMBER option is stored but not applied to the listing"),
         "log was:\n{}",
         out.log
     );

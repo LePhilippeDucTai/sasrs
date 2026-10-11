@@ -40,10 +40,8 @@ pub(crate) fn is_global_statement(kw: &str) -> bool {
     // 9.4, SAS Statements: Reference, OPTIONS statement : « Aliases: option ») ;
     // il était refusé (« Statement 'OPTION' is not valid ») au lieu d'être
     // accepté comme le pluriel.
-    matches!(
-        kw,
-        "libname" | "filename" | "options" | "option" | "ods"
-    ) || title_level(kw).is_some()
+    matches!(kw, "libname" | "filename" | "options" | "option" | "ods")
+        || title_level(kw).is_some()
         || footnote_level(kw).is_some()
 }
 

@@ -135,7 +135,10 @@ fn all_known_options(session: &Session) -> Vec<(&'static str, OptionValue<'_>)> 
             OptionValue::Num(session.options.firstobs.to_string()),
         ),
         ("LINESIZE", OptionValue::Num(session.options.ls.to_string())),
-        ("PAGESIZE", OptionValue::Num(session.options.pagesize.to_string())),
+        (
+            "PAGESIZE",
+            OptionValue::Num(session.options.pagesize.to_string()),
+        ),
         (
             "CENTER",
             OptionValue::Bool {
